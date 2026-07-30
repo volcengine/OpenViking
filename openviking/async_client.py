@@ -109,11 +109,6 @@ class AsyncOpenViking:
                 await cls._instance.close()
                 cls._instance = None
 
-        # Also reset lock manager singleton
-        from openviking.storage.transaction import reset_lock_manager
-
-        reset_lock_manager()
-
     # ============= Session methods =============
 
     def session(self, session_id: Optional[str] = None, must_exist: bool = False) -> Session:

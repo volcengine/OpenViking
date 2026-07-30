@@ -13,6 +13,7 @@ from typing import Any
 
 from openviking.core.peer_id import normalize_peer_id
 from openviking.utils.token_estimation import estimate_text_tokens
+from openviking_cli.exceptions import NotFoundError
 
 
 class InMemoryOpenVikingClient:
@@ -259,6 +260,7 @@ class InMemoryOpenVikingClient:
             "session_id": session_id,
             "role": role,
             "message_count": len(self.sessions[session_id]),
+            "pending_tokens": self.pending_tokens[session_id],
         }
 
     def batch_add_messages(
@@ -282,6 +284,7 @@ class InMemoryOpenVikingClient:
             "session_id": session_id,
             "message_count": len(self.sessions[session_id]),
             "added": added,
+            "pending_tokens": self.pending_tokens[session_id],
         }
 
     def get_session(self, session_id: str, auto_create: bool = False) -> dict[str, Any]:
@@ -301,6 +304,8 @@ class InMemoryOpenVikingClient:
         **_: Any,
     ) -> dict[str, Any]:
         del token_budget
+        if session_id not in self.sessions:
+            raise NotFoundError(session_id, "session")
         latest_archive = self.archives.get(session_id, [])[-1:] or []
         latest = latest_archive[0] if latest_archive else {}
         messages = list(self.sessions.get(session_id, []))

@@ -19,6 +19,7 @@ use serde_json::Value;
 use tokio::sync::{Mutex, Notify};
 
 use super::context::{FsContext, FS_CTX};
+use super::encryption_wrapper::EncryptionWrappedFS;
 use super::errors::{Error, Result};
 use super::filesystem::{normalize_prefix_path, relative_match_file, FileSystem};
 use super::types::{
@@ -29,6 +30,7 @@ use super::types::{
 use crate::core::glob::{
     compare_rel_paths, decode_offset_token, encode_offset_token, PreparedGlob,
 };
+use crate::core::internal_names::is_hidden_internal_name;
 use crate::multibackend::meta::{
     current_required_ctx, file_name, parent_dir, DefaultFsContextResolver, FsContextResolver,
     MetaStateStore, PathSerializer, MULTIWRITE_INTERNAL_NAMES,
@@ -580,6 +582,17 @@ impl MultiWriteWrappedFS {
             quarantine_after_failures: DEFAULT_QUARANTINE_AFTER_FAILURES,
             ctx_resolver: Arc::new(DefaultFsContextResolver),
         }
+    }
+
+    /// Return the raw primary backend for mount-level internal-name operations.
+    pub(crate) fn primary_raw_backend(&self) -> Option<Arc<dyn FileSystem>> {
+        self.inner.primary().raw_backend.clone()
+    }
+
+    /// Return whether encrypted backends own dual-path PathLock acquisition.
+    pub(crate) fn encryption_handles_pathlock(&self) -> bool {
+        let any = self.inner.primary().backend.as_ref() as &dyn std::any::Any;
+        any.downcast_ref::<EncryptionWrappedFS>().is_some()
     }
 }
 
@@ -1290,6 +1303,9 @@ impl MultiWriteWrappedFS {
 #[async_trait]
 impl FileSystem for MultiWriteWrappedFS {
     async fn create(&self, path: &str) -> Result<()> {
+        if is_hidden_internal_name(file_name(path)) {
+            return self.inner.primary().backend.create(path).await;
+        }
         self.execute_simple_write(path, 0, Some(SyncOp::Create), |fs, path| async move {
             fs.create(&path).await
         })
@@ -1307,6 +1323,9 @@ impl FileSystem for MultiWriteWrappedFS {
     }
 
     async fn remove(&self, path: &str) -> Result<()> {
+        if is_hidden_internal_name(file_name(path)) {
+            return self.inner.primary().backend.remove(path).await;
+        }
         self.execute_simple_write(path, 0, Some(SyncOp::Remove), |fs, path| async move {
             fs.remove(&path).await
         })
@@ -1314,6 +1333,9 @@ impl FileSystem for MultiWriteWrappedFS {
     }
 
     async fn remove_all(&self, path: &str) -> Result<()> {
+        if is_hidden_internal_name(file_name(path)) {
+            return self.inner.primary().backend.remove_all(path).await;
+        }
         self.execute_simple_write(path, 0, Some(SyncOp::RemoveAll), |fs, path| async move {
             fs.remove_all(&path).await
         })
@@ -1321,6 +1343,9 @@ impl FileSystem for MultiWriteWrappedFS {
     }
 
     async fn read(&self, path: &str, offset: u64, size: u64) -> Result<Vec<u8>> {
+        if is_hidden_internal_name(file_name(path)) {
+            return self.inner.primary().backend.read(path, offset, size).await;
+        }
         if let Some(fs) = self.inner.resolve_read_backend(path).await {
             return fs.read(path, offset, size).await;
         }
@@ -1328,6 +1353,14 @@ impl FileSystem for MultiWriteWrappedFS {
     }
 
     async fn write(&self, path: &str, data: &[u8], offset: u64, flags: WriteFlag) -> Result<u64> {
+        if is_hidden_internal_name(file_name(path)) {
+            return self
+                .inner
+                .primary()
+                .backend
+                .write(path, data, offset, flags)
+                .await;
+        }
         let inner = &self.inner;
         let data_len = data.len() as u64;
         let path_owned = path.to_string();
@@ -1383,6 +1416,9 @@ impl FileSystem for MultiWriteWrappedFS {
     }
 
     async fn stat(&self, path: &str) -> Result<FileInfo> {
+        if is_hidden_internal_name(file_name(path)) {
+            return self.inner.primary().backend.stat(path).await;
+        }
         if let Some(fs) = self.inner.resolve_read_backend(path).await {
             return fs.stat(path).await;
         }
@@ -1390,6 +1426,11 @@ impl FileSystem for MultiWriteWrappedFS {
     }
 
     async fn rename(&self, old_path: &str, new_path: &str) -> Result<()> {
+        if is_hidden_internal_name(file_name(old_path))
+            || is_hidden_internal_name(file_name(new_path))
+        {
+            return self.inner.primary().backend.rename(old_path, new_path).await;
+        }
         let ctx = current_required_ctx()?;
         let inner = &self.inner;
         let old_owned = old_path.to_string();
@@ -1431,6 +1472,9 @@ impl FileSystem for MultiWriteWrappedFS {
     }
 
     async fn chmod(&self, path: &str, mode: u32) -> Result<()> {
+        if is_hidden_internal_name(file_name(path)) {
+            return self.inner.primary().backend.chmod(path, mode).await;
+        }
         self.execute_simple_write(
             path,
             0,
@@ -1441,6 +1485,9 @@ impl FileSystem for MultiWriteWrappedFS {
     }
 
     async fn truncate(&self, path: &str, size: u64) -> Result<()> {
+        if is_hidden_internal_name(file_name(path)) {
+            return self.inner.primary().backend.truncate(path, size).await;
+        }
         self.execute_simple_write(
             path,
             size,

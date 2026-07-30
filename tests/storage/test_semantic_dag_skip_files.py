@@ -1,30 +1,11 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.queuefs.semantic_dag import SemanticDagExecutor
 from openviking_cli.session.user_id import UserIdentifier
-
-
-def _mock_transaction_layer(monkeypatch):
-    """Patch lock layer to no-op for DAG tests."""
-    mock_handle = MagicMock()
-    monkeypatch.setattr(
-        "openviking.storage.transaction.lock_context.LockContext.__aenter__",
-        AsyncMock(return_value=mock_handle),
-    )
-    monkeypatch.setattr(
-        "openviking.storage.transaction.lock_context.LockContext.__aexit__",
-        AsyncMock(return_value=False),
-    )
-    monkeypatch.setattr(
-        "openviking.storage.transaction.get_lock_manager",
-        lambda: MagicMock(),
-    )
 
 
 class _FakeVikingFS:
@@ -93,7 +74,6 @@ class _DummyTracker:
 )
 async def test_messages_jsonl_excluded_from_summary(monkeypatch, root_uri):
     """messages.jsonl should be skipped by _list_dir and never summarized."""
-    _mock_transaction_layer(monkeypatch)
     tree = {
         root_uri: [
             {"name": "messages.jsonl", "isDir": False},
@@ -134,7 +114,6 @@ async def test_messages_jsonl_excluded_from_summary(monkeypatch, root_uri):
 )
 async def test_messages_jsonl_excluded_in_subdirectory(monkeypatch, root_uri):
     """messages.jsonl in a subdirectory should also be skipped."""
-    _mock_transaction_layer(monkeypatch)
     tree = {
         root_uri: [
             {"name": "subdir", "isDir": True},

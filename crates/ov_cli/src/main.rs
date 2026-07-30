@@ -12,6 +12,7 @@ mod handlers;
 mod health_ui;
 mod help_ui;
 mod i18n;
+mod openviking_assets;
 mod output;
 mod status_ui;
 mod terminal_ui;
@@ -280,17 +281,60 @@ enum Commands {
     /// [Data] Add resources into OpenViking
     AddResource {
         /// Local path or URL to import
-        #[arg(value_name = "path-or-url")]
-        path: String,
+        #[arg(
+            value_name = "path-or-url",
+            required_unless_present = "manifest",
+            conflicts_with = "manifest"
+        )]
+        path: Option<String>,
+        /// Apply an OpenViking Assets manifest (openviking-assets/1): create or sync every selected asset
+        #[arg(
+            short = 'm',
+            long = "manifest",
+            value_name = "file",
+            help_heading = "Manifest mode",
+            conflicts_with_all = [
+                "add_type", "to", "parent", "parent_auto_create", "resource_args",
+                "strict_mode", "ignore_dirs", "include", "exclude",
+                "no_directly_upload_media", "tags", "tag_mode"
+            ]
+        )]
+        manifest: Option<String>,
+        /// Manifest mode: separate catalog file for manifests that select assets by name
+        /// (defaults to assets.yaml next to the manifest; not used when the manifest
+        /// defines assets under 'catalog')
+        #[arg(
+            long = "catalog",
+            value_name = "file",
+            requires = "manifest",
+            conflicts_with = "path",
+            help_heading = "Manifest mode"
+        )]
+        catalog: Option<String>,
+        /// Manifest mode: validate config and source access, then print the plan without submitting
+        #[arg(
+            long = "dry-run",
+            requires = "manifest",
+            help_heading = "Manifest mode"
+        )]
+        dry_run: bool,
+        /// Manifest mode: continue with remaining assets when one fails
+        #[arg(
+            long = "skip-failed",
+            requires = "manifest",
+            help_heading = "Manifest mode"
+        )]
+        skip_failed: bool,
         /// Explicit Connector source type (e.g. "tos", "git"). Routes the import
         /// through the Connector integration (must be enabled server-side); the
         /// path is sent verbatim and never treated as a local file. Requires --to
-        /// and cannot be combined with --parent or --parent-auto-create
+        /// and cannot be combined with Manifest mode, --parent, or
+        /// --parent-auto-create
         #[arg(
             long = "add-type",
             value_name = "type",
             requires = "to",
-            conflicts_with_all = ["parent", "parent_auto_create"],
+            conflicts_with_all = ["manifest", "parent", "parent_auto_create"],
             help_heading = "Common options"
         )]
         add_type: Option<String>,
@@ -354,13 +398,8 @@ enum Commands {
         )]
         no_directly_upload_media: bool,
         /// Watch interval in minutes for automatic resource monitoring (0 = no monitoring)
-        #[arg(
-            long,
-            default_value = "0",
-            value_name = "minutes",
-            help_heading = "Advanced options"
-        )]
-        watch_interval: f64,
+        #[arg(long, value_name = "minutes", help_heading = "Advanced options")]
+        watch_interval: Option<f64>,
         /// Resource processing mode
         #[arg(
             long = "processing-mode",
@@ -2811,6 +2850,10 @@ async fn main() {
         Commands::AddResource {
             path,
             add_type,
+            manifest,
+            catalog,
+            dry_run,
+            skip_failed,
             to,
             parent,
             parent_auto_create,
@@ -2832,29 +2875,50 @@ async fn main() {
         } => {
             let ctx =
                 ctx.with_upload_options(upload_options.merged_with_legacy(legacy_upload_options));
-            handlers::handle_add_resource(
-                path,
-                add_type,
-                to,
-                parent,
-                parent_auto_create,
-                reason,
-                instruction,
-                wait,
-                timeout,
-                strict_mode,
-                ignore_dirs,
-                include,
-                exclude,
-                no_directly_upload_media,
-                watch_interval,
-                processing_mode,
-                resource_args,
-                tags,
-                tag_mode,
-                ctx,
-            )
-            .await
+            if let Some(manifest) = manifest {
+                openviking_assets::handle_manifest_apply(
+                    manifest,
+                    catalog,
+                    openviking_assets::ManifestRunOptions {
+                        dry_run,
+                        skip_failed,
+                        wait,
+                        watch_interval,
+                        processing_mode,
+                    },
+                    timeout,
+                    ctx,
+                )
+                .await
+            } else if let Some(path) = path {
+                handlers::handle_add_resource(
+                    path,
+                    add_type,
+                    to,
+                    parent,
+                    parent_auto_create,
+                    reason,
+                    instruction,
+                    wait,
+                    timeout,
+                    strict_mode,
+                    ignore_dirs,
+                    include,
+                    exclude,
+                    no_directly_upload_media,
+                    watch_interval.unwrap_or(0.0),
+                    processing_mode,
+                    resource_args,
+                    tags,
+                    tag_mode,
+                    ctx,
+                )
+                .await
+            } else {
+                Err(error::Error::Client(
+                    "a path/URL or --manifest is required".to_string(),
+                ))
+            }
         }
         Commands::AddSkill {
             data,
@@ -4833,6 +4897,34 @@ mod tests {
             result.is_err(),
             "removed import force flag should not parse"
         );
+    }
+
+    #[test]
+    fn cli_manifest_mode_accepts_explicit_catalog() {
+        let result = Cli::try_parse_from([
+            "ov",
+            "add-resource",
+            "--manifest",
+            "manifests/code-qa.yaml",
+            "--catalog",
+            "assets.yaml",
+            "--dry-run",
+        ]);
+
+        assert!(result.is_ok(), "manifest and catalog flags should parse");
+    }
+
+    #[test]
+    fn cli_catalog_requires_manifest_mode() {
+        let result = Cli::try_parse_from([
+            "ov",
+            "add-resource",
+            "https://github.com/org/repo",
+            "--catalog",
+            "assets.yaml",
+        ]);
+
+        assert!(result.is_err(), "--catalog without --manifest must fail");
     }
 
     #[test]

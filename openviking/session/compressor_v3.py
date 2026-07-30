@@ -111,10 +111,10 @@ async def _commit_experience_snapshot(
     ]
     if not paths:
         return
-    archive_name = archive_uri.rstrip("/").rsplit("/", 1)[-1] if archive_uri else "unknown"
+    archive_ref = archive_uri.rstrip("/") if archive_uri else "unknown"
     try:
         await commit(
-            message=f"Update experience memories from session commit {archive_name}",
+            message=f"Update experience memories from session commit {archive_ref}",
             paths=paths,
             ctx=ctx,
         )
@@ -184,7 +184,6 @@ class SessionCompressorV3:
         return MemoryUpdater(
             registry=registry,
             vikingdb=self.vikingdb,
-            transaction_handle=transaction_handle,
         )
 
     async def _build_memory_diff(

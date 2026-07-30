@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 
 from openviking import AsyncOpenViking
-from openviking.storage.transaction import release_all_locks
 
 
 class TestRm:
@@ -23,7 +22,6 @@ class TestRm:
             reason="Test rm",
         )
 
-        await release_all_locks()
         uris = await client.tree(result["root_uri"])
         for data in uris:
             if not data["isDir"]:
@@ -37,8 +35,6 @@ class TestRm:
         for f in sample_directory.glob("**/*.txt"):
             await client.add_resource(path=str(f), reason="Test rm dir")
 
-        # Release resource locks held by add_resource before rm
-        await release_all_locks()
         entries = await client.ls("viking://resources/")
         for data in entries:
             if data["isDir"]:
@@ -60,7 +56,6 @@ class TestMv:
         )
         uri = result["root_uri"]
         new_uri = "viking://resources/moved/"
-        await release_all_locks()
         await client.mv(uri, new_uri)
         # Verify original location does not exist
         with pytest.raises(Exception):  # noqa: B017

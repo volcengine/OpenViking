@@ -32,11 +32,12 @@ curl http://localhost:1933/bot/v1/health
 
 ### chat()
 
-发送一条消息并等待完整回复。`session_id` 可省略；省略时 Gateway 会创建新会话。
+发送文本和/或图片并等待完整回复。`session_id` 可省略；省略时 Gateway 会创建新会话。
 
 | 字段 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| `message` | string | 是 | - | 非空的用户消息 |
+| `message` | string | 条件必填 | `""` | 用户文本；`images` 为空时必填 |
+| `images` | array | 条件必填 | `[]` | 最多 4 个 OpenAI 风格的 `image_url`；`message` 为空时必填 |
 | `session_id` | string | 否 | 自动生成 | 继续已有会话时传入 |
 | `context` | array | 否 | `null` | 额外上下文消息，每项包含 `role` 和 `content` |
 | `need_reply` | boolean | 否 | `true` | 是否需要 Bot 回复 |
@@ -51,6 +52,28 @@ curl -X POST http://localhost:1933/bot/v1/chat \
   -H "X-API-Key: your-key" \
   -d '{"message":"总结我的项目进展","session_id":"optional-session-id"}'
 ```
+
+图片可以使用模型可访问的 HTTPS URL，或内联 Base64 Data URL：
+
+```bash
+curl -X POST http://localhost:1933/bot/v1/chat \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "message": "描述这张图片",
+    "images": [{
+      "type": "image_url",
+      "image_url": {
+        "url": "https://example.com/photo.png"
+      }
+    }]
+  }'
+```
+
+内联 Base64 图片支持 JPEG、PNG、GIF 和 WebP，解码后单张最大 10 MiB；内联 SVG 和 MIME
+签名不匹配的图片会被拒绝。对于 HTTPS URL，Gateway 只校验 URL 结构，不会下载或检查远程
+资源，因此远程格式支持及相关错误由具体 provider 决定。本地文件路径仍会被拒绝。可选的
+`detail` 支持 `auto`、`low`、`high`；为获得最好的模型兼容性，建议省略。
 
 **CLI**
 

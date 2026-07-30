@@ -1,0 +1,31 @@
+# OpenViking Assets catalog — the team-wide inventory of ingestable sources.
+# Credentials never appear here; `auth_ref` aliases resolve on each
+# consumer's machine (~/.openviking/openviking_assets_credentials.yaml).
+protocol: openviking-assets/1
+
+defaults:
+  git:
+    watch_interval: 1440   # minutes; refresh every repo daily unless overridden
+
+assets:
+  - name: openviking
+    connector: git
+    description: OpenViking main repository — server, CLI and SDKs
+    params:
+      repo_url: https://github.com/volcengine/OpenViking
+      branch: main
+
+  - name: requests
+    connector: git
+    description: python-requests source, for HTTP client Q&A
+    params:
+      repo_url: https://github.com/psf/requests
+      branch: main
+
+  - name: flask
+    connector: git
+    description: Flask source, small enough for quick pilot runs
+    watch_interval: 0      # override: no automatic refresh for this one
+    params:
+      repo_url: git@github.com:pallets/flask.git
+      branch: main

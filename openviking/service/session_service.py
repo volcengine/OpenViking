@@ -9,13 +9,14 @@ Provides session management operations: session, sessions, add_message, commit, 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.core.namespace import canonical_session_uri
+from openviking.server.agent_evolution_config import AgentEvolutionConfigProvider
 from openviking.server.config import AgentEvolutionConfig, ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory_policy import MemoryPolicy
-from openviking.storage import VikingDBManager
+from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import (
     AlreadyExistsError,
@@ -48,6 +49,7 @@ class SessionService:
         # Agent memory behavior; HTTP servers always override this from
         # server.agent_evolution during app setup.
         self._agent_evolution_enabled = True
+        self._agent_evolution_config_provider: Optional[AgentEvolutionConfigProvider] = None
         self._usage_reporter: Optional["UsageReporter"] = None
 
     def set_dependencies(
@@ -70,6 +72,25 @@ class SessionService:
     def set_agent_evolution_config(self, config: AgentEvolutionConfig) -> None:
         """Set the instance-wide Agent Evolution switch."""
         self._agent_evolution_enabled = config.enabled
+        if self._agent_evolution_config_provider is not None:
+            self._agent_evolution_config_provider.set_default_enabled(config.enabled)
+
+    def set_agent_evolution_config_path(self, config_path: Optional[str]) -> None:
+        """Enable live reload from the HTTP server's resolved ov.conf path."""
+        self._agent_evolution_config_provider = (
+            AgentEvolutionConfigProvider(
+                default_enabled=self._agent_evolution_enabled,
+                config_path=config_path,
+            )
+            if config_path
+            else None
+        )
+
+    def get_agent_evolution_enabled(self) -> bool:
+        """Return the live instance-wide Agent Evolution switch."""
+        if self._agent_evolution_config_provider is None:
+            return self._agent_evolution_enabled
+        return self._agent_evolution_config_provider.is_enabled()
 
     def set_usage_reporter(self, usage_reporter: Optional["UsageReporter"]) -> None:
         """Set the usage reporter for newly created sessions."""
@@ -134,7 +155,8 @@ class SessionService:
             session_id=session_id,
             session_uri=session_uri,
             tool_output_externalization_config=self._tool_output_externalization_config,
-            agent_evolution_enabled=self._agent_evolution_enabled,
+            agent_evolution_enabled=self.get_agent_evolution_enabled(),
+            agent_evolution_enabled_provider=self.get_agent_evolution_enabled,
             usage_reporter=self._usage_reporter,
         )
 
@@ -377,7 +399,7 @@ class SessionService:
             session_id=session_id,
             ctx=ctx,
             archive_uri=archive_uri,
-            agent_evolution_enabled=self._agent_evolution_enabled,
+            agent_evolution_enabled=self.get_agent_evolution_enabled(),
         )
         self._record_lifecycle_metric("extract", "ok")
         return memories

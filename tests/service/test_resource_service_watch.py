@@ -835,6 +835,9 @@ class TestResourceProcessingIndependence:
             skill_processor=MockSkillProcessor(),
             watch_scheduler=scheduler,
         )
+        service._enqueue_add_resource_job = AsyncMock(
+            return_value=SimpleNamespace(task_id="test-task")
+        )
 
         result = await service.add_resource(
             path="/test/path",
@@ -855,6 +858,9 @@ class TestResourceProcessingIndependence:
             resource_processor=MockResourceProcessor(),
             skill_processor=MockSkillProcessor(),
             watch_scheduler=None,
+        )
+        service._enqueue_add_resource_job = AsyncMock(
+            return_value=SimpleNamespace(task_id="test-task")
         )
 
         result = await service.add_resource(

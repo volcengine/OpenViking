@@ -26,7 +26,7 @@ def test_main_keeps_config_host_when_cli_host_is_omitted(monkeypatch):
     monkeypatch.setattr(
         bootstrap,
         "create_app",
-        lambda config: "app",
+        lambda config, **kwargs: "app",
     )
     monkeypatch.setattr(
         bootstrap,
@@ -80,7 +80,7 @@ def test_main_coerces_cli_host_all_to_none(monkeypatch):
     monkeypatch.setattr(
         bootstrap,
         "create_app",
-        lambda config: "app",
+        lambda config, **kwargs: "app",
     )
     monkeypatch.setattr(
         bootstrap,
@@ -128,7 +128,7 @@ def test_main_enables_bot_logging_when_with_bot_comes_from_config(monkeypatch):
     bot_process = object()
 
     monkeypatch.setattr(bootstrap, "load_server_config", lambda config_path: config)
-    monkeypatch.setattr(bootstrap, "create_app", lambda config: "app")
+    monkeypatch.setattr(bootstrap, "create_app", lambda config, **kwargs: "app")
     monkeypatch.setattr(bootstrap, "configure_uvicorn_logging", lambda: None)
     monkeypatch.setattr(
         OpenVikingConfigSingleton,
@@ -187,7 +187,7 @@ def test_bot_alias_propagates_resolved_config_to_workers(monkeypatch):
 
     monkeypatch.setattr(bootstrap.argparse.ArgumentParser, "parse_args", parse_bot_alias)
     monkeypatch.setattr(bootstrap, "load_server_config", lambda config_path: config)
-    monkeypatch.setattr(bootstrap, "create_app", lambda config: "parent-app")
+    monkeypatch.setattr(bootstrap, "create_app", lambda config, **kwargs: "parent-app")
     monkeypatch.setattr(bootstrap, "configure_uvicorn_logging", lambda: None)
     monkeypatch.setattr(bootstrap, "_abort_if_port_in_use", lambda port, label: None)
     monkeypatch.setattr(bootstrap, "_start_vikingbot_gateway", lambda *args, **kwargs: object())
@@ -221,15 +221,40 @@ def test_bot_alias_propagates_resolved_config_to_workers(monkeypatch):
 
 def test_worker_factory_replays_bot_overrides(monkeypatch):
     config = ServerConfig(with_bot=False, bot_api_url="http://from-config")
+    captured = {}
     monkeypatch.setenv(app_module.WORKER_WITH_BOT_ENV, "1")
     monkeypatch.setenv(app_module.WORKER_BOT_API_URL_ENV, "http://127.0.0.1:19000")
-    monkeypatch.setattr(app_module, "load_server_config", lambda: config)
-    monkeypatch.setattr(app_module, "create_app", lambda worker_config: worker_config)
+    monkeypatch.setattr(
+        app_module,
+        "resolve_config_path",
+        lambda config_path, env_var, default_name: "/tmp/worker-ov.conf",
+    )
+    monkeypatch.setattr(
+        app_module,
+        "load_server_config",
+        lambda config_path: captured.update({"load_path": config_path}) or config,
+    )
+    monkeypatch.setattr(
+        app_module,
+        "create_app",
+        lambda worker_config, config_path: captured.update(
+            {
+                "app_config": worker_config,
+                "app_config_path": config_path,
+            }
+        )
+        or worker_config,
+    )
 
     worker_config = app_module.create_worker_app()
 
     assert worker_config.with_bot is True
     assert worker_config.bot_api_url == "http://127.0.0.1:19000"
+    assert captured == {
+        "load_path": "/tmp/worker-ov.conf",
+        "app_config": config,
+        "app_config_path": "/tmp/worker-ov.conf",
+    }
 
 
 def test_resolve_queuefs_mount_point_defaults_to_shared():

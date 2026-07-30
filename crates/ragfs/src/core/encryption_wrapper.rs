@@ -17,6 +17,10 @@ use sha2::{Digest, Sha256};
 use tracing::warn;
 
 use crate::crypto;
+use crate::core::internal_names::is_hidden_runtime_lock_name;
+use crate::lock::{
+    AutoPathLockAction, PathLockKind, PathLockManager, PathLockRequest,
+};
 use crate::shape::SHAPE_MANIFEST_PATH;
 
 use super::context::FsContextView;
@@ -40,6 +44,10 @@ pub struct EncryptionWrappedFS {
     account_keys: RwLock<HashMap<String, [u8; 32]>>,
     /// Lazily-warmed temp root cache, keyed by temp_root path.
     temp_root_ready: RwLock<HashMap<String, Instant>>,
+    /// PathLock manager for dual-path exact lock on encrypted writes.
+    pathlock_manager: Arc<PathLockManager>,
+    /// Backend mount prefix used to restore manager-visible backend paths.
+    backend_prefix: String,
 }
 
 impl EncryptionWrappedFS {
@@ -48,15 +56,35 @@ impl EncryptionWrappedFS {
         &self.inner
     }
 
-    /// Construct an encryption layer over `inner`. Built only when a root key is configured.
-    pub fn new(inner: Arc<dyn FileSystem>, root_key: [u8; 32], provider_type: u8) -> Self {
+    /// Construct an encryption layer with a pathlock manager for dual-path exact lock.
+    pub fn new(
+        inner: Arc<dyn FileSystem>,
+        root_key: [u8; 32],
+        provider_type: u8,
+        pathlock_manager: Arc<PathLockManager>,
+        backend_prefix: String,
+    ) -> Self {
         Self {
             inner,
             root_key,
             provider_type,
             account_keys: RwLock::new(HashMap::new()),
             temp_root_ready: RwLock::new(HashMap::new()),
+            pathlock_manager,
+            backend_prefix,
         }
+    }
+
+    /// Convert one mount-relative path back to the manager's backend path space.
+    fn backend_lock_path(&self, path: &str) -> String {
+        if self.backend_prefix.is_empty() || self.backend_prefix == "/" {
+            return format!("/{}", path.trim_start_matches('/'));
+        }
+        format!(
+            "{}/{}",
+            self.backend_prefix.trim_end_matches('/'),
+            path.trim_start_matches('/')
+        )
     }
 
     /// Derive (and cache) the Account Key for `account_id` via HKDF (L2).
@@ -106,6 +134,14 @@ impl EncryptionWrappedFS {
             || path.starts_with("/queue/")
             || path == "/serverinfo"
             || path.starts_with("/serverinfo/")
+            || Self::is_lock_sidecar(path)
+    }
+
+    /// Return true when `path` is a lock sidecar file that must bypass encryption
+    /// to preserve `CreateNew` atomicity.
+    fn is_lock_sidecar(path: &str) -> bool {
+        let name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or(path);
+        is_hidden_runtime_lock_name(name)
     }
 
     /// Return true when one path points at the backend-shape manifest.
@@ -199,6 +235,47 @@ impl EncryptionWrappedFS {
         Ok(())
     }
 
+    /// Write the encrypted envelope to the temp path, retrying on transient errors.
+    async fn encrypted_write_inner(
+        &self,
+        path: &str,
+        temp_path: &str,
+        envelope: &[u8],
+    ) -> Result<u64> {
+        let written = match self
+            .inner
+            .write(temp_path, envelope, 0, WriteFlag::Create)
+            .await
+        {
+            Ok(written) => written,
+            Err(Error::NotFound(_)) => {
+                let temp_root = Self::encrypted_temp_root(path);
+                self.create_temp_root(&temp_root).await?;
+                self.inner
+                    .write(temp_path, envelope, 0, WriteFlag::Create)
+                    .await?
+            }
+            Err(Error::AlreadyExists(_)) => {
+                match self.inner.remove(temp_path).await {
+                    Ok(()) | Err(Error::NotFound(_)) => {}
+                    Err(err) => return Err(err),
+                }
+                self.inner
+                    .write(temp_path, envelope, 0, WriteFlag::Create)
+                    .await?
+            }
+            Err(err) => return Err(err),
+        };
+        if written != envelope.len() as u64 {
+            return Err(Error::internal(format!(
+                "encrypted temp write incomplete: wrote {} of {} bytes",
+                written,
+                envelope.len()
+            )));
+        }
+        Ok(written)
+    }
+
 }
 
 /// Slice `data` by `(offset, size)` with `size == 0` meaning "to end", matching plugin read semantics.
@@ -281,6 +358,8 @@ impl FileSystem for EncryptionWrappedFS {
         let envelope = crypto::build_envelope(self.provider_type, &enc_key, &key_iv, &data_iv, &ct);
         let temp_root = Self::encrypted_temp_root(path);
         let temp_path = Self::encrypted_temp_path(path);
+
+        // Ensure temp root exists before acquiring locks (lock resolver needs stat).
         let now = Instant::now();
         let temp_root_ready = self
             .temp_root_ready
@@ -291,39 +370,73 @@ impl FileSystem for EncryptionWrappedFS {
         if !temp_root_ready {
             self.create_temp_root(&temp_root).await?;
         }
-        let written = match self
-            .inner
-            .write(&temp_path, &envelope, 0, WriteFlag::Create)
-            .await
-        {
-            Ok(written) => written,
-            Err(Error::NotFound(_)) => {
-                self.create_temp_root(&temp_root).await?;
-                self.inner
-                    .write(&temp_path, &envelope, 0, WriteFlag::Create)
-                    .await?
-            }
-            Err(Error::AlreadyExists(_)) => {
-                match self.inner.remove(&temp_path).await {
-                    Ok(()) | Err(Error::NotFound(_)) => {}
-                    Err(err) => return Err(err),
-                }
-                self.inner
-                    .write(&temp_path, &envelope, 0, WriteFlag::Create)
-                    .await?
-            }
-            Err(err) => return Err(err),
-        };
-        if written != envelope.len() as u64 {
-            return Err(Error::internal(format!(
-                "encrypted temp write incomplete: wrote {} of {} bytes",
-                written,
-                envelope.len()
-            )));
-        }
 
-        self.inner.replace(&temp_path, path).await?;
-        Ok(written)
+        // Acquire dual-path exact lock for the temp publish path and the final visible path.
+        let final_lock_path = self.backend_lock_path(path);
+        let temp_lock_path = self.backend_lock_path(&temp_path);
+        let final_request = PathLockRequest {
+            path: final_lock_path,
+            kind: PathLockKind::Exact,
+        };
+        let requests = vec![
+            PathLockRequest { path: temp_lock_path, kind: PathLockKind::Exact },
+            final_request.clone(),
+        ];
+        let action = self
+            .pathlock_manager
+            .resolve_auto_pathlock_action(&[final_request])
+            .await
+            .map_err(|error| {
+                Error::internal(format!("encrypted write lock context error: {error}"))
+            })?;
+        let lock_guard = match action {
+            AutoPathLockAction::Disabled => None,
+            AutoPathLockAction::Covered(outer) => {
+                let owner_capability = (
+                    outer.lease.lease_ref.as_str(),
+                    outer.ownership_ref.as_str(),
+                );
+                Some(
+                    self.pathlock_manager
+                        .acquire_batch(
+                            &requests,
+                            Duration::from_secs(1),
+                            Some(owner_capability),
+                        )
+                        .await
+                        .map_err(|error| {
+                            Error::internal(format!("encrypted write lock error: {error}"))
+                        })?,
+                )
+            }
+            AutoPathLockAction::Acquire => Some(
+                self.pathlock_manager
+                    .acquire_batch(&requests, Duration::from_secs(1), None)
+                    .await
+                    .map_err(|error| {
+                        Error::internal(format!("encrypted write lock error: {error}"))
+                    })?,
+            ),
+        };
+
+        // Release lock on error. On success, release after replace.
+        let result = self.encrypted_write_inner(path, &temp_path, &envelope).await;
+        let replace_result = match result {
+            Ok(written) => self.inner.replace(&temp_path, path).await.map(|_| written),
+            Err(e) => Err(e),
+        };
+        // Release an acquired dual-path lock even if replace fails.
+        let release_result = match lock_guard.as_ref() {
+            Some(guard) => self.pathlock_manager.release(guard).await,
+            None => Ok(()),
+        };
+        match (replace_result, release_result) {
+            (Err(error), _) => Err(error),
+            (Ok(written), Ok(())) => Ok(written),
+            (Ok(_), Err(error)) => Err(Error::internal(format!(
+                "encrypted write lock release error: {error}"
+            ))),
+        }
     }
 
     async fn grep(
@@ -479,6 +592,9 @@ mod tests {
     use crate::core::context::{FsContextInner, FS_CTX};
     use crate::core::MountableFS;
     use crate::core::PluginConfig;
+    use crate::lock::{
+        MemoryPathLockProvider, PathLockConfig, PathLockManager, PathLockProvider,
+    };
     use crate::plugins::MemFSPlugin;
 
     /// Build a memfs plugin config for encryption wrapper tests.
@@ -499,6 +615,18 @@ mod tests {
         m
     }
 
+    /// Build a PathLock manager for one test mount stack.
+    async fn memfs_pathlock_manager(stack: Arc<MountableFS>) -> Arc<PathLockManager> {
+        let provider: Arc<dyn PathLockProvider> = Arc::new(MemoryPathLockProvider::new());
+        let manager = Arc::new(PathLockManager::new(
+            stack.clone() as Arc<dyn FileSystem>,
+            provider,
+            PathLockConfig::default(),
+        ));
+        stack.set_pathlock_manager(manager.clone()).await;
+        manager
+    }
+
     fn ctx(account: &str) -> Arc<FsContextInner> {
         Arc::new(FsContextInner::new(account))
     }
@@ -506,7 +634,14 @@ mod tests {
     #[tokio::test]
     async fn write_then_read_roundtrip_under_ctx() {
         let inner = memfs_stack().await;
-        let enc = EncryptionWrappedFS::new(inner, [9u8; 32], crypto::PROVIDER_LOCAL);
+        let manager = memfs_pathlock_manager(inner.clone()).await;
+        let enc = EncryptionWrappedFS::new(
+            inner,
+            [9u8; 32],
+            crypto::PROVIDER_LOCAL,
+            manager,
+            "/mem".to_string(),
+        );
 
         FS_CTX
             .scope(ctx("tenant-1"), async {
@@ -522,7 +657,14 @@ mod tests {
     #[tokio::test]
     async fn on_disk_bytes_are_ciphertext_with_envelope() {
         let inner = memfs_stack().await;
-        let enc = EncryptionWrappedFS::new(inner.clone(), [9u8; 32], crypto::PROVIDER_LOCAL);
+        let manager = memfs_pathlock_manager(inner.clone()).await;
+        let enc = EncryptionWrappedFS::new(
+            inner.clone(),
+            [9u8; 32],
+            crypto::PROVIDER_LOCAL,
+            manager,
+            "/mem".to_string(),
+        );
 
         FS_CTX
             .scope(ctx("tenant-1"), async {
@@ -541,7 +683,14 @@ mod tests {
     #[tokio::test]
     async fn read_without_account_id_errors() {
         let inner = memfs_stack().await;
-        let enc = EncryptionWrappedFS::new(inner.clone(), [9u8; 32], crypto::PROVIDER_LOCAL);
+        let manager = memfs_pathlock_manager(inner.clone()).await;
+        let enc = EncryptionWrappedFS::new(
+            inner.clone(),
+            [9u8; 32],
+            crypto::PROVIDER_LOCAL,
+            manager,
+            "/mem".to_string(),
+        );
         // Seed an envelope first.
         FS_CTX
             .scope(ctx("tenant-1"), async {
@@ -558,7 +707,14 @@ mod tests {
     #[tokio::test]
     async fn read_offset_size_slicing() {
         let inner = memfs_stack().await;
-        let enc = EncryptionWrappedFS::new(inner, [1u8; 32], crypto::PROVIDER_LOCAL);
+        let manager = memfs_pathlock_manager(inner.clone()).await;
+        let enc = EncryptionWrappedFS::new(
+            inner,
+            [1u8; 32],
+            crypto::PROVIDER_LOCAL,
+            manager,
+            "/mem".to_string(),
+        );
         FS_CTX
             .scope(ctx("t"), async {
                 enc.write("/mem/a.txt", b"0123456789", 0, WriteFlag::Create)
@@ -574,7 +730,14 @@ mod tests {
     #[tokio::test]
     async fn grep_matches_encrypted_files() {
         let inner = memfs_stack().await;
-        let enc = EncryptionWrappedFS::new(inner, [2u8; 32], crypto::PROVIDER_LOCAL);
+        let manager = memfs_pathlock_manager(inner.clone()).await;
+        let enc = EncryptionWrappedFS::new(
+            inner,
+            [2u8; 32],
+            crypto::PROVIDER_LOCAL,
+            manager,
+            "/mem".to_string(),
+        );
         FS_CTX
             .scope(ctx("t"), async {
                 enc.write(
@@ -598,7 +761,14 @@ mod tests {
     #[tokio::test]
     async fn write_rejects_nonzero_offset() {
         let inner = memfs_stack().await;
-        let enc = EncryptionWrappedFS::new(inner, [2u8; 32], crypto::PROVIDER_LOCAL);
+        let manager = memfs_pathlock_manager(inner.clone()).await;
+        let enc = EncryptionWrappedFS::new(
+            inner,
+            [2u8; 32],
+            crypto::PROVIDER_LOCAL,
+            manager,
+            "/mem".to_string(),
+        );
         FS_CTX
             .scope(ctx("t"), async {
                 let r = enc.write("/mem/a.txt", b"x", 5, WriteFlag::Create).await;
@@ -610,7 +780,14 @@ mod tests {
     #[tokio::test]
     async fn create_writes_encrypted_empty_file() {
         let inner = memfs_stack().await;
-        let enc = EncryptionWrappedFS::new(inner.clone(), [2u8; 32], crypto::PROVIDER_LOCAL);
+        let manager = memfs_pathlock_manager(inner.clone()).await;
+        let enc = EncryptionWrappedFS::new(
+            inner.clone(),
+            [2u8; 32],
+            crypto::PROVIDER_LOCAL,
+            manager,
+            "/mem".to_string(),
+        );
         FS_CTX
             .scope(ctx("t"), async {
                 enc.create("/mem/empty.txt").await.unwrap();
@@ -626,7 +803,14 @@ mod tests {
     #[tokio::test]
     async fn cross_account_cannot_decrypt() {
         let inner = memfs_stack().await;
-        let enc = EncryptionWrappedFS::new(inner, [3u8; 32], crypto::PROVIDER_LOCAL);
+        let manager = memfs_pathlock_manager(inner.clone()).await;
+        let enc = EncryptionWrappedFS::new(
+            inner,
+            [3u8; 32],
+            crypto::PROVIDER_LOCAL,
+            manager,
+            "/mem".to_string(),
+        );
         FS_CTX
             .scope(ctx("acct-A"), async {
                 enc.write("/mem/a.txt", b"owned by A", 0, WriteFlag::Create)
@@ -644,7 +828,14 @@ mod tests {
     #[tokio::test]
     async fn write_rejects_append_flag() {
         let inner = memfs_stack().await;
-        let enc = EncryptionWrappedFS::new(inner, [4u8; 32], crypto::PROVIDER_LOCAL);
+        let manager = memfs_pathlock_manager(inner.clone()).await;
+        let enc = EncryptionWrappedFS::new(
+            inner,
+            [4u8; 32],
+            crypto::PROVIDER_LOCAL,
+            manager,
+            "/mem".to_string(),
+        );
         FS_CTX
             .scope(ctx("t"), async {
                 enc.write("/mem/a.txt", b"first", 0, WriteFlag::Create)
@@ -661,7 +852,14 @@ mod tests {
     #[tokio::test]
     async fn write_rejects_non_replacing_none_flag() {
         let inner = memfs_stack().await;
-        let enc = EncryptionWrappedFS::new(inner, [4u8; 32], crypto::PROVIDER_LOCAL);
+        let manager = memfs_pathlock_manager(inner.clone()).await;
+        let enc = EncryptionWrappedFS::new(
+            inner,
+            [4u8; 32],
+            crypto::PROVIDER_LOCAL,
+            manager,
+            "/mem".to_string(),
+        );
         FS_CTX
             .scope(ctx("t"), async {
                 enc.write("/mem/a.txt", b"first", 0, WriteFlag::Create)
@@ -676,7 +874,14 @@ mod tests {
     #[tokio::test]
     async fn rename_rejects_cross_account_paths() {
         let inner = memfs_stack_at("/local").await;
-        let enc = EncryptionWrappedFS::new(inner, [5u8; 32], crypto::PROVIDER_LOCAL);
+        let manager = memfs_pathlock_manager(inner.clone()).await;
+        let enc = EncryptionWrappedFS::new(
+            inner,
+            [5u8; 32],
+            crypto::PROVIDER_LOCAL,
+            manager,
+            "/local".to_string(),
+        );
         let result = FS_CTX
             .scope(ctx("acct-a"), async {
                 enc.mkdir("/local/acct-a", 0).await.unwrap();
@@ -694,7 +899,14 @@ mod tests {
     #[tokio::test]
     async fn write_replaces_stale_internal_temp_file_before_publish() {
         let inner = memfs_stack().await;
-        let enc = EncryptionWrappedFS::new(inner.clone(), [6u8; 32], crypto::PROVIDER_LOCAL);
+        let manager = memfs_pathlock_manager(inner.clone()).await;
+        let enc = EncryptionWrappedFS::new(
+            inner.clone(),
+            [6u8; 32],
+            crypto::PROVIDER_LOCAL,
+            manager,
+            "/mem".to_string(),
+        );
         let temp_path =
             "/mem/temp/.encrypt_stage/18d3740a61555bfecb941730d4b708dd3090a1b0ba2fcafe8c696d55c5e4b67a.encrypt";
 

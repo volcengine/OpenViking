@@ -179,7 +179,11 @@ def get_registry() -> ParserRegistry:
                 "word": config.markdown,
                 "legacy_doc": config.markdown,
                 "powerpoint": config.markdown,
-                "excel": config.markdown,
+                # Excel had no dedicated config section and reused
+                # ``config.markdown``. Keep unset sectioning fields following
+                # Markdown so existing deployments keep their node structure and
+                # stable URIs after this upgrade.
+                "excel": config.excel.with_sectioning_defaults_from(config.markdown),
                 "epub": config.markdown,
                 "image": config.image,
             }

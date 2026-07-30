@@ -241,7 +241,14 @@ async def test_local_client_batch_add_messages_forwards_to_session():
         ],
     )
 
-    assert result == {"session_id": "batch-session", "message_count": 2, "added": 2}
+    # A lightweight fake session has no ``meta``, so pending_tokens degrades to 0
+    # instead of raising; the field is always present for commit-policy callers.
+    assert result == {
+        "session_id": "batch-session",
+        "message_count": 2,
+        "added": 2,
+        "pending_tokens": 0,
+    }
     assert fake_session.messages[0]["role"] == "user"
     assert fake_session.messages[0]["peer_id"] == "explicit-user"
     assert fake_session.messages[0]["created_at"] == "2026-05-28T00:00:00+00:00"
@@ -290,7 +297,11 @@ async def test_local_client_add_message_accepts_image_parts():
         ],
     )
 
-    assert result == {"session_id": "image-session", "message_count": 1}
+    assert result == {
+        "session_id": "image-session",
+        "message_count": 1,
+        "pending_tokens": 0,
+    }
     assert isinstance(fake_session.messages[0]["parts"][0], TextPart)
     assert isinstance(fake_session.messages[0]["parts"][1], ImagePart)
     assert fake_session.messages[0]["parts"][1].url == "https://example.com/image.png"

@@ -767,7 +767,8 @@ class LocalClient(BaseClient):
 
         async def _search():
             session = None
-            if session_id:
+            # Intent off: skip session.load — SearchService will not scan session either.
+            if session_id and self._service.search.is_intent_enabled():
                 session = self._service.sessions.session(self._ctx, session_id)
                 await session.load()
             return await self._service.search.search(
@@ -1050,6 +1051,9 @@ class LocalClient(BaseClient):
         return {
             "session_id": session_id,
             "message_count": len(session.messages),
+            # Post-write value so a commit policy can decide without a
+            # follow-up get_session round trip.
+            "pending_tokens": self._session_pending_tokens(session),
         }
 
     async def batch_add_messages(
@@ -1113,7 +1117,23 @@ class LocalClient(BaseClient):
             "session_id": session_id,
             "message_count": len(session.messages),
             "added": len(added),
+            # Post-write value so a commit policy can decide without a
+            # follow-up get_session round trip.
+            "pending_tokens": self._session_pending_tokens(session),
         }
+
+    @staticmethod
+    def _session_pending_tokens(session: Any) -> int:
+        """Read the post-write pending-token count from a session.
+
+        Returns 0 when the session object does not expose ``meta`` so callers
+        keep working against lightweight or legacy session implementations.
+        """
+        meta = getattr(session, "meta", None)
+        try:
+            return max(0, int(getattr(meta, "pending_tokens", 0) or 0))
+        except (TypeError, ValueError):
+            return 0
 
     def _resolve_message_peer_id(
         self,

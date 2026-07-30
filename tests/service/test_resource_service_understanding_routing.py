@@ -14,6 +14,7 @@ from openviking_cli.session.user_id import UserIdentifier
 
 
 def mpeg_ts_probe() -> bytes:
+    """Build a minimal MPEG-TS probe payload for routing tests."""
     content = bytearray(MPEG_TS_PROBE_BYTES)
     for offset in range(0, MPEG_TS_PROBE_BYTES, MPEG_TS_PACKET_SIZE):
         content[offset] = 0x47
@@ -25,6 +26,7 @@ async def test_extensionless_remote_url_queues_frozen_understanding_route(
     monkeypatch,
     tmp_path,
 ):
+    """Queue understanding ingestion for extensionless remote URLs after prepare."""
     ctx = RequestContext(
         user=UserIdentifier("acct", "alice"),
         role=Role.USER,
@@ -42,10 +44,11 @@ async def test_extensionless_remote_url_queues_frozen_understanding_route(
         },
         is_temporary=True,
     )
-    lock = SimpleNamespace(
-        to_handoff=lambda: SimpleNamespace(to_dict=lambda: {"handle_id": "lock-1"}),
-        handoff=AsyncMock(),
-        close=AsyncMock(),
+    lock = {"lease_ref": "lock-1"}
+    agfs = SimpleNamespace(
+        pathlock_to_handoff=AsyncMock(return_value={"handle_id": "lock-1"}),
+        pathlock_handoff=AsyncMock(),
+        pathlock_release=AsyncMock(),
     )
     processor = SimpleNamespace(
         understanding_api_enabled=lambda: True,
@@ -66,7 +69,7 @@ async def test_extensionless_remote_url_queues_frozen_understanding_route(
     )
     service = ResourceService(
         vikingdb=object(),
-        viking_fs=object(),
+        viking_fs=SimpleNamespace(_async_agfs=agfs),
         resource_processor=processor,
         skill_processor=object(),
     )
@@ -85,10 +88,6 @@ async def test_extensionless_remote_url_queues_frozen_understanding_route(
     monkeypatch.setattr(
         "openviking.storage.queuefs.get_queue_manager",
         lambda: queue_manager,
-    )
-    monkeypatch.setattr(
-        "openviking.storage.transaction.get_lock_manager",
-        lambda: object(),
     )
 
     result = await service.add_resource(
@@ -114,7 +113,8 @@ async def test_extensionless_remote_url_queues_frozen_understanding_route(
     assert not downloaded.exists()
     processor.submit_understanding.assert_awaited_once_with(prepared)
     processor.process_resource.assert_not_awaited()
-    lock.handoff.assert_awaited_once()
+    agfs.pathlock_to_handoff.assert_awaited_once_with(lock)
+    agfs.pathlock_handoff.assert_awaited_once_with(lock)
 
 
 @pytest.mark.asyncio
@@ -122,6 +122,7 @@ async def test_remote_mpeg_ts_url_queues_understanding_after_prepare(
     monkeypatch,
     tmp_path,
 ):
+    """Route MPEG-TS resources to understanding with video target resolution."""
     ctx = RequestContext(
         user=UserIdentifier("acct", "alice"),
         role=Role.USER,
@@ -139,10 +140,11 @@ async def test_remote_mpeg_ts_url_queues_understanding_after_prepare(
         },
         is_temporary=True,
     )
-    lock = SimpleNamespace(
-        to_handoff=lambda: SimpleNamespace(to_dict=lambda: {"handle_id": "lock-1"}),
-        handoff=AsyncMock(),
-        close=AsyncMock(),
+    lock = {"lease_ref": "lock-1"}
+    agfs = SimpleNamespace(
+        pathlock_to_handoff=AsyncMock(return_value={"handle_id": "lock-1"}),
+        pathlock_handoff=AsyncMock(),
+        pathlock_release=AsyncMock(),
     )
     resolve_target_uri = AsyncMock(
         return_value=(
@@ -164,7 +166,7 @@ async def test_remote_mpeg_ts_url_queues_understanding_after_prepare(
     )
     service = ResourceService(
         vikingdb=object(),
-        viking_fs=object(),
+        viking_fs=SimpleNamespace(_async_agfs=agfs),
         resource_processor=processor,
         skill_processor=object(),
     )
@@ -183,10 +185,6 @@ async def test_remote_mpeg_ts_url_queues_understanding_after_prepare(
     monkeypatch.setattr(
         "openviking.storage.queuefs.get_queue_manager",
         lambda: queue_manager,
-    )
-    monkeypatch.setattr(
-        "openviking.storage.transaction.get_lock_manager",
-        lambda: object(),
     )
 
     result = await service.add_resource(
@@ -214,4 +212,5 @@ async def test_remote_mpeg_ts_url_queues_understanding_after_prepare(
     assert queued.understanding_response_id == "response-1"
     assert queued.source_name == "sample.ts"
     assert not downloaded.exists()
-    lock.handoff.assert_awaited_once()
+    agfs.pathlock_to_handoff.assert_awaited_once_with(lock)
+    agfs.pathlock_handoff.assert_awaited_once_with(lock)

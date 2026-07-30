@@ -63,6 +63,94 @@ class AsyncInMemoryOpenVikingClient:
         return call
 
 
+def test_connection_handle_and_retriever_deepcopy_preserve_injected_clients():
+    class NonCopyableClient:
+        def __deepcopy__(self, _memo: dict[int, Any]) -> None:
+            raise AssertionError("live clients must not be deep-copied")
+
+    client = NonCopyableClient()
+    async_client = NonCopyableClient()
+    connection = OpenVikingConnection(
+        client=client,
+        async_client=async_client,
+        url="http://localhost:1933",
+        extra_headers={"X-Tenant": "tenant-a"},
+    )
+
+    copied_connection = copy.deepcopy(connection)
+
+    assert copied_connection is not connection
+    assert copied_connection.client is client
+    assert copied_connection.async_client is async_client
+    assert copied_connection.extra_headers == connection.extra_headers
+    assert copied_connection.extra_headers is not connection.extra_headers
+
+    async_handle = OpenVikingAsyncClientHandle(connection)
+    async_handle._client = async_client
+    copied_async_handle = copy.deepcopy(async_handle)
+
+    assert copied_async_handle is not async_handle
+    assert copied_async_handle._connection.async_client is async_client
+    assert copied_async_handle._client is None
+
+    retriever = OpenVikingRetriever(
+        client=client,
+        async_client=async_client,
+        extra_headers={"X-Tenant": "tenant-a"},
+        target_uri=["viking://resources"],
+        filter={"category": ["guide"]},
+        tags=["stable"],
+    )
+    copied_retriever = copy.deepcopy(retriever)
+
+    assert copied_retriever is not retriever
+    assert copied_retriever.client is client
+    assert copied_retriever.async_client is async_client
+    assert copied_retriever.extra_headers == retriever.extra_headers
+    assert copied_retriever.extra_headers is not retriever.extra_headers
+    assert copied_retriever.target_uri == retriever.target_uri
+    assert copied_retriever.target_uri is not retriever.target_uri
+    assert copied_retriever.filter == retriever.filter
+    assert copied_retriever.filter is not retriever.filter
+    assert copied_retriever.tags == retriever.tags
+    assert copied_retriever.tags is not retriever.tags
+
+
+def test_retriever_deepcopy_discards_owned_sync_client(monkeypatch):
+    instances: list[Any] = []
+
+    class NonCopyableSyncHTTPClient:
+        def __init__(self, **_kwargs: Any):
+            self.closed = False
+            instances.append(self)
+
+        def __deepcopy__(self, _memo: dict[int, Any]) -> None:
+            raise AssertionError("owned live clients must not be deep-copied")
+
+        def initialize(self) -> None:
+            return None
+
+        def close(self) -> None:
+            self.closed = True
+
+        def find(self, **_kwargs: Any) -> dict[str, Any]:
+            return {"memories": [], "resources": [], "skills": []}
+
+    import openviking.client as client_module
+
+    monkeypatch.setattr(client_module, "SyncHTTPClient", NonCopyableSyncHTTPClient)
+    retriever = OpenVikingRetriever(url="http://localhost:1933")
+
+    assert retriever.invoke("original") == []
+    copied = copy.deepcopy(retriever)
+    assert copied.invoke("copied") == []
+
+    assert len(instances) == 2
+    asyncio.run(copied.aclose())
+    asyncio.run(retriever.aclose())
+    assert all(client.closed for client in instances)
+
+
 @pytest.mark.asyncio
 async def test_ensure_async_client_defaults_to_native_http_client(monkeypatch):
     created: dict[str, Any] = {}
@@ -1205,6 +1293,62 @@ async def test_async_context_assembler_combines_session_and_recall():
     assert "Active async turn." in assembled.block
     assert "Async context is azure." in assembled.block
     assert assembled.context_parts[0]["uri"] == "viking://resources/runbooks/async.md"
+
+
+@pytest.mark.asyncio
+async def test_async_assemble_skips_create_for_existing_session():
+    """The async path must get the same per-turn call reduction as the sync one."""
+    backing = InMemoryOpenVikingClient()
+    backing.add_message("async-existing", "user", content="Existing async turn.")
+    client = AsyncInMemoryOpenVikingClient(backing)
+    assembler = OpenVikingSessionContextAssembler(
+        async_client=client,
+        target_uri="viking://resources",
+        include_recall=False,
+    )
+
+    await assembler.aassemble(session_id="async-existing")
+    await assembler.aassemble(session_id="async-existing")
+
+    assert client.calls == ["get_session_context", "get_session_context"]
+
+
+@pytest.mark.asyncio
+async def test_async_assemble_creates_session_only_on_not_found():
+    """A missing session is still materialized, without a second context read."""
+    backing = InMemoryOpenVikingClient()
+    client = AsyncInMemoryOpenVikingClient(backing)
+    assembler = OpenVikingSessionContextAssembler(
+        async_client=client,
+        target_uri="viking://resources",
+        include_recall=False,
+    )
+
+    await assembler.aassemble(session_id="async-missing")
+
+    assert client.calls == ["get_session_context", "create_session"]
+    assert "async-missing" in backing.sessions
+
+
+@pytest.mark.asyncio
+async def test_async_history_does_not_create_session_on_non_not_found_error():
+    """Only NOT_FOUND may trigger a create, matching the sync error semantics."""
+    backing = InMemoryOpenVikingClient()
+    backing.add_message("async-flaky", "user", content="Existing turn.")
+    client = AsyncInMemoryOpenVikingClient(backing)
+
+    async def failing_get_session_context(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        client.calls.append("get_session_context")
+        raise RuntimeError("upstream 503")
+
+    client.get_session_context = failing_get_session_context
+    history = OpenVikingChatMessageHistory(
+        session_id="async-flaky",
+        async_client=client,
+    )
+
+    assert await history.aget_messages() == []
+    assert "create_session" not in client.calls
 
 
 @pytest.mark.asyncio
