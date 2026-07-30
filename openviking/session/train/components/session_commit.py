@@ -375,6 +375,8 @@ def _task_error(task: dict[str, Any] | None) -> str | None:
         return None
     if task.get("status") == "failed":
         return str(task.get("error") or "task failed")
+    if task.get("status") == "cancelled":
+        return str(task.get("error") or "task cancelled")
     if task.get("status") == "timeout":
         return str(task.get("error") or "task timeout")
     return None

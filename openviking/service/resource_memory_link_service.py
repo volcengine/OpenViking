@@ -353,6 +353,8 @@ class ResourceMemoryLinkService:
                     return task.to_dict()
                 if status == "failed":
                     raise RuntimeError(task.error or f"session commit task failed: {task_id}")
+                if status == "cancelled":
+                    raise RuntimeError(f"session commit task cancelled: {task_id}")
                 await asyncio.sleep(0.1)
 
         return await asyncio.wait_for(

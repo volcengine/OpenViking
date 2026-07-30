@@ -55,13 +55,9 @@ class AddResourceProcessor(DequeueHandlerBase):
     async def _release_cancelled_handoff(self, msg: AddResourceMsg) -> None:
         if msg.lock_handoff is None:
             return
-        from openviking.storage.transaction.lock_lease import LockHandoffRef, OwnedLockLease
-
         try:
-            ref = LockHandoffRef.from_value(msg.lock_handoff)
-            if ref is not None:
-                lock = await OwnedLockLease.from_handoff(ref)
-                await lock.close()
+            lock = await self._viking_fs._async_agfs.pathlock_adopt(msg.lock_handoff)
+            await self._viking_fs._async_agfs.pathlock_release(lock)
         except Exception as exc:
             logger.warning("[AddResource] Failed to release cancelled lock handoff: %s", exc)
 

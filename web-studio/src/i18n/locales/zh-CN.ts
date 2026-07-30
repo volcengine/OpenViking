@@ -169,6 +169,7 @@ const zhCN = {
       noResult: '暂无执行结果',
       noResultDescription: '任务完成后，接口返回的结果会显示在这里。',
       noResultFailedDescription: '该任务未返回结果，请查看上方失败原因。',
+      noResultCancelledDescription: '该任务已取消，未返回执行结果。',
     },
     filters: {
       label: '筛选',
@@ -194,6 +195,8 @@ const zhCN = {
       status: '状态',
     },
     status: {
+      cancelled: '已取消',
+      cancelling: '取消中',
       completed: '已完成',
       failed: '失败',
       pending: '等待中',
@@ -746,6 +749,7 @@ const zhCN = {
         size: '大小',
       },
       status: {
+        cancelled: '已取消',
         processing: '处理中',
         success: '处理成功',
         failed: '处理失败',

@@ -177,6 +177,8 @@ const en = {
         'Results returned by the API will appear here when the task completes.',
       noResultFailedDescription:
         'This task did not return a result. See the failure reason above.',
+      noResultCancelledDescription:
+        'This task was cancelled before it returned a result.',
     },
     filters: {
       label: 'Filter',
@@ -203,6 +205,8 @@ const en = {
       status: 'Status',
     },
     status: {
+      cancelled: 'Cancelled',
+      cancelling: 'Cancelling',
       completed: 'Completed',
       failed: 'Failed',
       pending: 'Pending',
@@ -774,6 +778,7 @@ const en = {
         size: 'Size',
       },
       status: {
+        cancelled: 'Cancelled',
         processing: 'Processing',
         success: 'Processed',
         failed: 'Processing failed',
