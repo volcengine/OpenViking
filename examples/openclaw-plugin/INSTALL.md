@@ -176,7 +176,7 @@ If the `openclaw` CLI cannot run inside the container, merge the following field
 - If `plugins.allow` already exists, append `openviking`; otherwise, do not create an allowlist only for this plugin.
 - `contextEngine` is an exclusive slot. If another context engine is configured, change it only after confirming the replacement. Root API keys also require `accountId` and `userId` in `config`.
 - When connecting to another service from a container, use a `baseUrl` that is reachable from the container rather than `127.0.0.1`.
-- `apiKey` is stored as plaintext. Restrict file permissions or provide the file through a managed Secret volume, then restart the Gateway, container, or Pod.
+- `apiKey` accepts either a plaintext string (with `${ENV_VAR}` interpolation) or a `SecretRef` object resolved through OpenClaw's secret-resolution path. To avoid storing the key in `openclaw.json`, use a `SecretRef` (see [Secret references](#secret-references-for-apikey)). When a plaintext string is still used, restrict file permissions or mount a managed Secret volume, then restart the Gateway, container, or Pod.
 
 ### 3. Restart OpenClaw Gateway
 
@@ -252,6 +252,59 @@ Manual config inspection:
 ```bash
 openclaw config get plugins.entries.openviking.config
 ```
+
+## Secret references for apiKey
+
+Instead of keeping the OpenViking API key as plaintext in `openclaw.json`, `config.apiKey` accepts a `SecretRef` object with the same shape OpenClaw's core provider configs (LLM/TTS/MCP) use for credential fields:
+
+```jsonc
+{
+  "plugins": {
+    "entries": {
+      "openviking": {
+        "enabled": true,
+        "config": {
+          "mode": "remote",
+          "baseUrl": "http://openviking:1933",
+          "apiKey": { "source": "env", "id": "OPENVIKING_API_KEY" }
+        }
+      }
+    }
+  }
+}
+```
+
+Supported `source` values:
+
+| `source` | `id` | Behavior |
+| --- | --- | --- |
+| `env` | Environment variable name | Reads the variable. Fails if unset/empty. |
+| `file` | File path (`~` expanded) | Reads the file (UTF-8, trailing newline/whitespace trimmed). Fails if missing/empty. |
+| `exec` | Provider-specific secret reference | Delegates to the secret-provider plugin named by `provider` (e.g. `@transmitt0r/openclaw-plugin-onepassword`). Requires that plugin to be installed and registered as the exec resolver. |
+
+Examples:
+
+```jsonc
+// env var
+"apiKey": { "source": "env", "id": "OPENVIKING_API_KEY" }
+
+// file on disk (e.g. a mounted Kubernetes Secret)
+"apiKey": { "source": "file", "id": "/etc/openviking-secrets/api-key" }
+
+// exec-backed secret provider (1Password, HashiCorp Vault, …)
+"apiKey": {
+  "source": "exec",
+  "provider": "@transmitt0r/openclaw-plugin-onepassword",
+  "id": "op://Vault/OpenViking/api-key"
+}
+```
+
+Notes:
+
+- A plaintext string (with `${ENV_VAR}` interpolation) remains supported for backward compatibility. Existing setups need no changes.
+- The plaintext string never appears in `openclaw.json` when a `SecretRef` is used; only the reference is stored.
+- For `source: "exec"`, install the corresponding provider plugin (e.g. `openclaw plugins install clawhub:@transmitt0r/openclaw-plugin-onepassword`) and ensure the gateway registers its resolver before this plugin resolves the key. If no resolver is registered, the plugin fails fast with a clear error rather than sending an empty key.
+- The CLI `openclaw openviking setup --api-key <KEY>` path still writes a plaintext string; use a `SecretRef` only when editing `openclaw.json` directly (or via `openclaw config set plugins.entries.openviking.config.apiKey` with a JSON object).
 
 ## Upgrade
 

@@ -98,7 +98,7 @@
       "label": "OpenViking API Key",
       "sensitive": true,
       "placeholder": "${OPENVIKING_API_KEY}",
-      "help": "Optional API key for OpenViking server"
+      "help": "Optional API key for OpenViking server. Accepts a plaintext string with ${ENV_VAR} interpolation, or a SecretRef {\"source\":\"env|file|exec\",\"provider\":\"...\",\"id\":\"...\"} resolved through OpenClaw's secret-resolution path (see INSTALL.md)."
     },
     "headers": {
       "label": "Headers",
@@ -292,7 +292,32 @@
         "description": "Deprecated and ignored. Tenant identity headers are controlled by explicit accountId/userId."
       },
       "apiKey": {
-        "type": "string"
+        "description": "OpenViking API key. Accepts a plaintext string (with ${ENV_VAR} interpolation) or a SecretRef object resolved through OpenClaw's secret-resolution path.",
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "description": "SecretRef: resolve the key from env, file, or an exec-backed secret provider.",
+            "required": ["source", "id"],
+            "additionalProperties": false,
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": ["env", "file", "exec"]
+              },
+              "id": {
+                "type": "string",
+                "description": "Env var name (source=env), file path (source=file), or provider-specific secret reference (source=exec)."
+              },
+              "provider": {
+                "type": "string",
+                "description": "Required when source=exec. Secret-provider plugin name, e.g. @transmitt0r/openclaw-plugin-onepassword."
+              }
+            }
+          }
+        ]
       },
       "headers": {
         "type": "object",

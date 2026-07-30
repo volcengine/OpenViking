@@ -232,7 +232,7 @@ openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --peer
 - 如果配置中已有 `plugins.allow`，把 `openviking` 追加进去；如果没有，不要仅为本插件新建 allowlist。
 - `contextEngine` 是独占 slot；若已有其他 context engine，只有确认替换后再修改该字段。使用 root API key 时，还需在 `config` 中设置 `accountId` 和 `userId`。
 - 容器连接其他服务时，`baseUrl` 应使用容器内可访问的服务地址，而不是 `127.0.0.1`。
-- `apiKey` 会以明文保存；请限制文件权限或使用受控的 Secret 卷。修改后重启 Gateway、容器或 Pod。
+- `apiKey` 既接受明文字符串（支持 `${ENV_VAR}` 插值），也接受通过 OpenClaw 秘密解析路径解析的 `SecretRef` 对象。为避免在 `openclaw.json` 中明文存储 key，推荐使用 `SecretRef`（详见 [为 apiKey 使用秘密引用](#为-apikey-使用秘密引用)）。若仍使用明文字符串，请限制文件权限或使用受控的 Secret 卷，修改后重启 Gateway、容器或 Pod。
 
 ### 3. 重启 OpenClaw Gateway
 
@@ -308,6 +308,59 @@ openclaw openviking setup --reconfigure
 ```bash
 openclaw config get plugins.entries.openviking.config
 ```
+
+## 为 apiKey 使用秘密引用
+
+为避免把 OpenViking API key 以明文写在 `openclaw.json` 中，`config.apiKey` 支持以 `SecretRef` 对象形式配置，与 OpenClaw 核心 provider 配置（LLM/TTS/MCP）使用的凭据字段形状一致：
+
+```jsonc
+{
+  "plugins": {
+    "entries": {
+      "openviking": {
+        "enabled": true,
+        "config": {
+          "mode": "remote",
+          "baseUrl": "http://openviking:1933",
+          "apiKey": { "source": "env", "id": "OPENVIKING_API_KEY" }
+        }
+      }
+    }
+  }
+}
+```
+
+`source` 取值：
+
+| `source` | `id` | 行为 |
+| --- | --- | --- |
+| `env` | 环境变量名 | 读取该环境变量；未设置或为空时报错。 |
+| `file` | 文件路径（支持 `~` 展开） | 读取文件内容（UTF-8，去掉末尾换行/空白）；缺失或为空时报错。 |
+| `exec` | provider 专属秘密引用 | 委托给 `provider` 指定的秘密 provider 插件（如 `@transmitt0r/openclaw-plugin-onepassword`）。需先安装该插件并注册为 exec resolver。 |
+
+示例：
+
+```jsonc
+// 环境变量
+"apiKey": { "source": "env", "id": "OPENVIKING_API_KEY" }
+
+// 文件（例如挂载的 Kubernetes Secret）
+"apiKey": { "source": "file", "id": "/etc/openviking-secrets/api-key" }
+
+// exec 秘密 provider（1Password、HashiCorp Vault 等）
+"apiKey": {
+  "source": "exec",
+  "provider": "@transmitt0r/openclaw-plugin-onepassword",
+  "id": "op://Vault/OpenViking/api-key"
+}
+```
+
+注意事项：
+
+- 明文字符串（含 `${ENV_VAR}` 插值）仍向后兼容，已有配置无需改动。
+- 使用 `SecretRef` 时，`openclaw.json` 中只保存引用，不再出现明文 key。
+- 使用 `source: "exec"` 时，请先安装对应的 provider 插件（例如 `openclaw plugins install clawhub:@transmitt0r/openclaw-plugin-onepassword`），并确保 gateway 在本插件解析 key 之前注册了其 resolver。若未注册 resolver，插件会立即报错，而不是发送空 key。
+- CLI `openclaw openviking setup --api-key <KEY>` 仍写入明文字符串；如需使用 `SecretRef`，请直接编辑 `openclaw.json`（或用 `openclaw config set plugins.entries.openviking.config.apiKey` 传入 JSON 对象）。
 
 ### 配置参数
 

@@ -1,13 +1,161 @@
 import { homedir } from "node:os";
+import { readFileSync } from "node:fs";
 
 import { getEnv } from "./runtime-utils.js";
+
+/**
+ * Reference to a secret resolved through OpenClaw's secret-resolution path,
+ * mirroring the `{ source, provider, id }` shape that OpenClaw core's provider
+ * configs (LLM/TTS/MCP) accept for their credential fields.
+ *
+ * Resolution semantics (compatible with OpenClaw core):
+ *  - `source: "env"`  — read the value from the environment variable named by `id`.
+ *  - `source: "file"` — read the value from the file at path `id` (leading `~` expanded,
+ *                       trailing whitespace/newline trimmed).
+ *  - `source: "exec"` — delegate to a secret-provider plugin keyed by `provider`
+ *                       (e.g. `@transmitt0r/openclaw-plugin-onepassword`). Requires a
+ *                       resolver to be registered via {@link registerSecretExecResolver};
+ *                       the gateway or a provider plugin is expected to supply one.
+ *
+ * NOTE: This plugin does not bundle `@openclaw/sdk` as a direct dependency, so the
+ * env/file sources are resolved inline. The exec source stays extensible so that the
+ * gateway (or a dedicated provider plugin) can register its own resolver, matching how
+ * OpenClaw core routes exec secrets through a provider plugin.
+ */
+export type SecretRef =
+  | { source: "env"; id: string }
+  | { source: "file"; id: string }
+  | { source: "exec"; provider: string; id: string };
+
+/**
+ * Resolver invoked for `SecretRef` entries with `source: "exec"`. The gateway or a
+ * secret-provider plugin (e.g. `@transmitt0r/openclaw-plugin-onepassword`) is expected
+ * to register one during startup. If none is registered, exec refs fail loudly instead
+ * of silently leaking an empty key.
+ */
+export type SecretExecResolver = (provider: string, id: string) => string;
+
+let secretExecResolver: SecretExecResolver | null = null;
+
+/**
+ * Register the resolver used for `source: "exec"` SecretRefs. Intended to be called by
+ * the OpenClaw gateway or a secret-provider plugin at startup. Idempotent: the last
+ * registration wins.
+ */
+export function registerSecretExecResolver(resolver: SecretExecResolver): void {
+  if (typeof resolver !== "function") {
+    throw new Error("registerSecretExecResolver: expected a function");
+  }
+  secretExecResolver = resolver;
+}
+
+/** Reset the exec resolver (primarily for tests). */
+export function resetSecretExecResolver(): void {
+  secretExecResolver = null;
+}
+
+/** Returns true when a value looks like a SecretRef object. */
+export function isSecretRef(value: unknown): value is SecretRef {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const ref = value as Record<string, unknown>;
+  return (
+    typeof ref.source === "string" &&
+    (ref.source === "env" || ref.source === "file" || ref.source === "exec") &&
+    typeof ref.id === "string" &&
+    ref.id.trim() !== "" &&
+    (ref.source !== "exec" || typeof ref.provider === "string")
+  );
+}
+
+function assertSecretRefShape(value: unknown): asserts value is SecretRef {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("openviking config.apiKey SecretRef must be an object");
+  }
+  const ref = value as Record<string, unknown>;
+  const known = new Set(["source", "provider", "id"]);
+  for (const key of Object.keys(ref)) {
+    if (!known.has(key)) {
+      throw new Error(
+        `openviking config.apiKey SecretRef has unknown key: ${key}`,
+      );
+    }
+  }
+  if (typeof ref.source !== "string") {
+    throw new Error('openviking config.apiKey SecretRef.source must be "env", "file", or "exec"');
+  }
+  if (ref.source !== "env" && ref.source !== "file" && ref.source !== "exec") {
+    throw new Error(`openviking config.apiKey SecretRef.source "${ref.source}" is not supported (use env, file, or exec)`);
+  }
+  if (typeof ref.id !== "string" || ref.id.trim() === "") {
+    throw new Error("openviking config.apiKey SecretRef.id must be a non-empty string");
+  }
+  if (ref.source === "exec") {
+    if (typeof ref.provider !== "string" || ref.provider.trim() === "") {
+      throw new Error('openviking config.apiKey SecretRef.provider is required when source is "exec"');
+    }
+  } else if (ref.provider !== undefined && typeof ref.provider !== "string") {
+    throw new Error("openviking config.apiKey SecretRef.provider must be a string when provided");
+  }
+}
+
+/**
+ * Resolve a {@link SecretRef} to its plaintext value. Used for `config.apiKey` so the
+ * OpenViking key never has to sit in `openclaw.json` as plaintext — it can reference
+ * env vars, files on disk, or an exec-backed secret provider (1Password, Vault, …).
+ */
+export function resolveSecret(ref: SecretRef): string {
+  assertSecretRefShape(ref);
+  switch (ref.source) {
+    case "env": {
+      const value = getEnv(ref.id);
+      if (value === undefined || value === "") {
+        throw new Error(`openviking config.apiKey SecretRef env variable "${ref.id}" is not set`);
+      }
+      return value;
+    }
+    case "file": {
+      const path = expandHomeDir(ref.id);
+      let content: string;
+      try {
+        content = readFileSync(path, "utf8");
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw new Error(`openviking config.apiKey SecretRef file "${ref.id}" could not be read: ${message}`);
+      }
+      const trimmed = content.replace(/\r?\n$/, "").trim();
+      if (trimmed === "") {
+        throw new Error(`openviking config.apiKey SecretRef file "${ref.id}" is empty`);
+      }
+      return trimmed;
+    }
+    case "exec": {
+      if (!secretExecResolver) {
+        throw new Error(
+          `openviking config.apiKey SecretRef source "exec" (provider "${ref.provider}") requires a registered secret-provider resolver. ` +
+            'Install/register a provider plugin such as @transmitt0r/openclaw-plugin-onepassword, or have the gateway call registerSecretExecResolver().',
+        );
+      }
+      const value = secretExecResolver(ref.provider, ref.id);
+      if (typeof value !== "string" || value === "") {
+        throw new Error(
+          `openviking config.apiKey SecretRef exec resolver for provider "${ref.provider}" returned an empty value for id "${ref.id}"`,
+        );
+      }
+      return value;
+    }
+  }
+}
 
 export type MemoryOpenVikingConfig = {
   mode?: "remote";
   baseUrl?: string;
   peer_role?: "none" | "assistant" | "person";
   peer_prefix?: string;
-  apiKey?: string;
+  /** OpenViking API key. Accepts a plaintext string (with `${ENV_VAR}` interpolation)
+   *  or a {@link SecretRef} resolved through OpenClaw's secret-resolution path. */
+  apiKey?: string | SecretRef;
   /** Optional HTTP headers merged into every OpenViking request. */
   headers?: Record<string, string>;
   /** Advanced option. Only needed when explicitly sending tenant identity headers. With a user key the server derives identity from the key. */
@@ -102,8 +250,10 @@ export type MemoryOpenVikingConfig = {
 
 /** Runtime config after memoryOpenVikingConfigSchema.parse() has applied defaults. */
 export type ParsedMemoryOpenVikingConfig = Required<
-  Omit<MemoryOpenVikingConfig, "agentExperience" | "recallTargetTypes">
+  Omit<MemoryOpenVikingConfig, "agentExperience" | "apiKey" | "recallTargetTypes">
 > & {
+  /** The parsed runtime always holds the resolved plaintext key (SecretRefs are resolved during parse). */
+  apiKey: string;
   agentExperience: Required<NonNullable<MemoryOpenVikingConfig["agentExperience"]>>;
   recallTargetTypes: Array<"resource" | "user" | "agent">;
 };
@@ -202,6 +352,19 @@ function resolvePeerRole(configured: unknown) {
   return DEFAULT_PEER_ROLE;
 }
 
+function readRawApiKey(value: unknown): string | SecretRef | undefined {
+  if (value === null || value === undefined) {
+    return getEnv("OPENVIKING_API_KEY");
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  // Object form: must be a SecretRef. Validate strictly so a misconfigured ref
+  // surfaces immediately instead of silently falling back to an empty key.
+  assertSecretRefShape(value);
+  return value as SecretRef;
+}
+
 function resolveEnvVars(value: string): string {
   return value.replace(/\$\{([^}]+)\}/g, (_, envVar) => {
     const envValue = getEnv(envVar);
@@ -210,6 +373,23 @@ function resolveEnvVars(value: string): string {
     }
     return envValue;
   });
+}
+
+/**
+ * Resolve the configured apiKey into the plaintext string the runtime client expects.
+ * Accepts:
+ *  - undefined / empty  → ""  (server-side may not require auth)
+ *  - SecretRef object   → resolved via resolveSecret() (env / file / exec)
+ *  - string             → existing ${ENV_VAR} interpolation path (backward compatible)
+ */
+function resolveApiKey(rawApiKey: string | SecretRef | undefined): string {
+  if (rawApiKey === undefined || rawApiKey === "") {
+    return "";
+  }
+  if (isSecretRef(rawApiKey)) {
+    return resolveSecret(rawApiKey);
+  }
+  return resolveEnvVars(rawApiKey);
 }
 
 function expandHomeDir(value: string): string {
@@ -465,7 +645,10 @@ export const memoryOpenVikingConfigSchema = {
     const peerPrefix = resolvePeerPrefix(cfg.peer_prefix);
     const rawBaseUrl = typeof cfg.baseUrl === "string" ? cfg.baseUrl : resolveDefaultBaseUrl();
     const resolvedBaseUrl = resolveEnvVars(rawBaseUrl).replace(/\/+$/, "");
-    const rawApiKey = typeof cfg.apiKey === "string" ? cfg.apiKey : getEnv("OPENVIKING_API_KEY");
+    // apiKey accepts either a plaintext string (with ${ENV_VAR} interpolation, for
+    // parity with existing setups) or a SecretRef resolved via OpenClaw's
+    // secret-resolution path — same shape other OpenClaw provider configs accept.
+    const rawApiKey = readRawApiKey(cfg.apiKey);
     const captureMode = cfg.captureMode;
     if (
       typeof captureMode !== "undefined" &&
@@ -508,7 +691,7 @@ export const memoryOpenVikingConfigSchema = {
       baseUrl: resolvedBaseUrl,
       peer_role: peerRole,
       peer_prefix: peerPrefix,
-      apiKey: rawApiKey ? resolveEnvVars(rawApiKey) : "",
+      apiKey: resolveApiKey(rawApiKey),
       headers: toStringRecord(cfg.headers, "openviking config headers"),
       accountId,
       userId,
@@ -678,7 +861,9 @@ export const memoryOpenVikingConfigSchema = {
       label: "OpenViking API Key",
       sensitive: true,
       placeholder: "${OPENVIKING_API_KEY}",
-      help: "Optional API key for OpenViking server",
+      help:
+        "Optional API key for OpenViking server. Accepts a plaintext string with ${ENV_VAR} interpolation, " +
+        'or a SecretRef {"source":"env|file|exec","provider":"...","id":"..."} resolved through OpenClaw\'s secret-resolution path (see INSTALL.md).',
     },
     headers: {
       label: "Headers",

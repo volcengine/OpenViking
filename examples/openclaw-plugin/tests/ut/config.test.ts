@@ -1,12 +1,20 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
+import { writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { memoryOpenVikingConfigSchema } from "../../config.js";
+import {
+  memoryOpenVikingConfigSchema,
+  registerSecretExecResolver,
+  resetSecretExecResolver,
+} from "../../config.js";
 
 describe("memoryOpenVikingConfigSchema.parse()", () => {
   const originalEnv = { ...process.env };
 
   afterEach(() => {
     process.env = { ...originalEnv };
+    resetSecretExecResolver();
   });
 
   it("empty object uses all defaults", () => {
@@ -229,6 +237,91 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
         apiKey: "${NOT_SET_OV_VAR}",
       }),
     ).toThrow("NOT_SET_OV_VAR");
+  });
+
+  it("resolves apiKey from a SecretRef with source=env", () => {
+    process.env.TEST_OV_SECRET_ENV = "sk-env-ref-key";
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      apiKey: { source: "env", id: "TEST_OV_SECRET_ENV" },
+    });
+    expect(cfg.apiKey).toBe("sk-env-ref-key");
+    delete process.env.TEST_OV_SECRET_ENV;
+  });
+
+  it("throws when source=env references an unset env var", () => {
+    delete process.env.TEST_OV_SECRET_ENV_MISSING;
+    expect(() =>
+      memoryOpenVikingConfigSchema.parse({
+        apiKey: { source: "env", id: "TEST_OV_SECRET_ENV_MISSING" },
+      }),
+    ).toThrow("TEST_OV_SECRET_ENV_MISSING");
+  });
+
+  it("resolves apiKey from a SecretRef with source=file (trims trailing newline)", () => {
+    const keyFile = join(tmpdir(), `ov-secret-${Date.now()}.txt`);
+    writeFileSync(keyFile, "sk-file-ref-key\n");
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      apiKey: { source: "file", id: keyFile },
+    });
+    expect(cfg.apiKey).toBe("sk-file-ref-key");
+  });
+
+  it("throws when source=file points at a missing file", () => {
+    expect(() =>
+      memoryOpenVikingConfigSchema.parse({
+        apiKey: { source: "file", id: join(tmpdir(), "ov-secret-missing.txt") },
+      }),
+    ).toThrow("could not be read");
+  });
+
+  it("resolves apiKey from a SecretRef with source=exec via a registered resolver", () => {
+    registerSecretExecResolver((provider, id) => {
+      if (provider === "test-vault") {
+        return `sk-exec-${id}`;
+      }
+      throw new Error(`unknown provider ${provider}`);
+    });
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      apiKey: {
+        source: "exec",
+        provider: "test-vault",
+        id: "op://Vault/OpenViking/api-key",
+      },
+    });
+    expect(cfg.apiKey).toBe("sk-exec-op://Vault/OpenViking/api-key");
+  });
+
+  it("throws for source=exec when no resolver is registered", () => {
+    resetSecretExecResolver();
+    expect(() =>
+      memoryOpenVikingConfigSchema.parse({
+        apiKey: { source: "exec", provider: "test-vault", id: "op://x/y/z" },
+      }),
+    ).toThrow("registered secret-provider resolver");
+  });
+
+  it("rejects an invalid SecretRef source", () => {
+    expect(() =>
+      memoryOpenVikingConfigSchema.parse({
+        apiKey: { source: "vault", id: "x" },
+      }),
+    ).toThrow("is not supported");
+  });
+
+  it("rejects an exec SecretRef without a provider", () => {
+    expect(() =>
+      memoryOpenVikingConfigSchema.parse({
+        apiKey: { source: "exec", id: "x" },
+      }),
+    ).toThrow("provider is required");
+  });
+
+  it("rejects a SecretRef with an unknown key", () => {
+    expect(() =>
+      memoryOpenVikingConfigSchema.parse({
+        apiKey: { source: "env", id: "X", extra: 1 },
+      }),
+    ).toThrow("unknown key");
   });
 
   it("clamps negative recallScoreThreshold to 0", () => {
