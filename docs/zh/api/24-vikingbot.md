@@ -70,8 +70,10 @@ curl -X POST http://localhost:1933/bot/v1/chat \
   }'
 ```
 
-内联图片支持 JPEG、PNG、GIF 和 WebP，解码后单张最大 10 MiB；不接受本地文件路径和 SVG。
-可选的 `detail` 支持 `auto`、`low`、`high`；为获得最好的模型兼容性，建议省略。
+内联 Base64 图片支持 JPEG、PNG、GIF 和 WebP，解码后单张最大 10 MiB；内联 SVG 和 MIME
+签名不匹配的图片会被拒绝。对于 HTTPS URL，Gateway 只校验 URL 结构，不会下载或检查远程
+资源，因此远程格式支持及相关错误由具体 provider 决定。本地文件路径仍会被拒绝。可选的
+`detail` 支持 `auto`、`low`、`high`；为获得最好的模型兼容性，建议省略。
 
 **CLI**
 

@@ -47,6 +47,21 @@ def test_chat_request_accepts_https_and_base64_images_without_text():
     assert request.images[1].image_url.url == inline_url
 
 
+def test_chat_request_passes_https_url_without_fetching_remote_content():
+    remote_url = "https://example.com/image.svg?version=1"
+
+    request = ChatRequest(
+        images=[
+            {
+                "type": "image_url",
+                "image_url": {"url": remote_url},
+            }
+        ]
+    )
+
+    assert request.images[0].image_url.url == remote_url
+
+
 @pytest.mark.parametrize(
     "url",
     [

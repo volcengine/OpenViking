@@ -10,8 +10,8 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
 MAX_CHAT_IMAGES = 4
-MAX_CHAT_IMAGE_BYTES = 10 * 1024 * 1024
-SUPPORTED_CHAT_IMAGE_MIME_TYPES = {
+MAX_CHAT_INLINE_IMAGE_BYTES = 10 * 1024 * 1024
+SUPPORTED_CHAT_INLINE_IMAGE_MIME_TYPES = {
     "image/gif",
     "image/jpeg",
     "image/png",
@@ -36,6 +36,8 @@ def _validate_chat_image_url(value: str) -> str:
         parsed = urlsplit(value)
         if not parsed.hostname or parsed.username or parsed.password:
             raise ValueError("image URL must be an absolute HTTPS URL without credentials")
+        # Match multimodal model APIs: pass remote URLs through without fetching
+        # them. Content-type and format support are therefore provider-specific.
         return value
 
     if not value.startswith("data:image/"):
@@ -48,20 +50,20 @@ def _validate_chat_image_url(value: str) -> str:
         raise ValueError("invalid image data URL") from exc
 
     media_type = media_type.lower()
-    if media_type not in SUPPORTED_CHAT_IMAGE_MIME_TYPES:
+    if media_type not in SUPPORTED_CHAT_INLINE_IMAGE_MIME_TYPES:
         raise ValueError("unsupported image MIME type; expected JPEG, PNG, GIF, or WebP")
     if encoding.lower() != "base64" or not encoded:
         raise ValueError("image data URL must contain Base64-encoded data")
 
     # Reject oversized payloads before decoding to avoid a large temporary allocation.
-    if len(encoded) > ((MAX_CHAT_IMAGE_BYTES + 2) // 3) * 4:
-        raise ValueError(f"decoded image exceeds {MAX_CHAT_IMAGE_BYTES} bytes")
+    if len(encoded) > ((MAX_CHAT_INLINE_IMAGE_BYTES + 2) // 3) * 4:
+        raise ValueError(f"decoded image exceeds {MAX_CHAT_INLINE_IMAGE_BYTES} bytes")
     try:
         decoded = base64.b64decode(encoded, validate=True)
     except (binascii.Error, ValueError) as exc:
         raise ValueError("image data URL contains invalid Base64") from exc
-    if len(decoded) > MAX_CHAT_IMAGE_BYTES:
-        raise ValueError(f"decoded image exceeds {MAX_CHAT_IMAGE_BYTES} bytes")
+    if len(decoded) > MAX_CHAT_INLINE_IMAGE_BYTES:
+        raise ValueError(f"decoded image exceeds {MAX_CHAT_INLINE_IMAGE_BYTES} bytes")
 
     detected_type = _detect_chat_image_mime(decoded)
     if detected_type is None:
@@ -117,7 +119,10 @@ class ChatImageURL(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    url: str = Field(..., description="HTTPS URL or Base64 image data URL")
+    url: str = Field(
+        ...,
+        description="HTTPS passthrough URL or validated Base64 image data URL",
+    )
     detail: Optional[Literal["auto", "low", "high"]] = Field(
         default=None,
         description="Optional image detail level; omitted for maximum provider compatibility",
@@ -162,7 +167,7 @@ class ChatRequest(BaseModel):
     images: List[ChatImage] = Field(
         default_factory=list,
         max_length=MAX_CHAT_IMAGES,
-        description="HTTPS or Base64 image inputs",
+        description="HTTPS passthrough URLs or validated Base64 image inputs",
     )
     session_id: Optional[str] = Field(
         default=None, description="Session ID (optional, will create new if not provided)"

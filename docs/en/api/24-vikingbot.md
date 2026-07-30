@@ -71,9 +71,12 @@ curl -X POST http://localhost:1933/bot/v1/chat \
   }'
 ```
 
-Supported inline image types are JPEG, PNG, GIF, and WebP. Each decoded image is limited to
-10 MiB. Local filesystem paths and SVG images are rejected. The optional `detail` field accepts
-`auto`, `low`, or `high`; omit it for maximum provider compatibility.
+Inline Base64 images support JPEG, PNG, GIF, and WebP. Each decoded inline image is limited to
+10 MiB; inline SVG and mismatched MIME signatures are rejected. For HTTPS URLs, the Gateway
+validates the URL structure but does not fetch or inspect the remote resource, so remote format
+support and related errors are provider-specific. Local filesystem paths are rejected. The
+optional `detail` field accepts `auto`, `low`, or `high`; omit it for maximum provider
+compatibility.
 
 **CLI**
 
