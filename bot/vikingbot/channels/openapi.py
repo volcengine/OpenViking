@@ -13,7 +13,8 @@ from urllib.parse import urlsplit
 
 import httpx
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import Response, StreamingResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from loguru import logger
 
 from vikingbot.bus.events import InboundMessage, OutboundEventType, OutboundMessage
@@ -64,6 +65,35 @@ HOP_BY_HOP_HEADERS = {
     "transfer-encoding",
     "upgrade",
 }
+
+
+def _public_validation_error(error: Any) -> dict[str, Any]:
+    """Keep validation diagnostics without reflecting request data."""
+    if not isinstance(error, dict):
+        return {
+            "type": "value_error",
+            "loc": ["request"],
+            "msg": "Invalid request value",
+        }
+
+    location = error.get("loc", ("request",))
+    if not isinstance(location, (list, tuple)):
+        location = (location,)
+    return {
+        "type": str(error.get("type") or "value_error"),
+        "loc": [item if isinstance(item, (str, int)) else str(item) for item in location],
+        "msg": str(error.get("msg") or "Invalid request value"),
+    }
+
+
+async def _request_validation_error_handler(
+    _request: Request,
+    exc: RequestValidationError,
+) -> JSONResponse:
+    # Pydantic validation errors include the original `input` by default. Never
+    # return it here: image inputs may contain large or sensitive Base64 data.
+    errors = [_public_validation_error(error) for error in exc.errors()]
+    return JSONResponse(status_code=422, content={"detail": errors})
 
 
 @dataclass(frozen=True)
@@ -1197,6 +1227,11 @@ class OpenAPIChannel(BaseChannel):
         if self._app is None:
             logger.warning("No external FastAPI app provided, cannot setup routes")
             return
+
+        self._app.add_exception_handler(
+            RequestValidationError,
+            _request_validation_error_handler,
+        )
 
         # Get the router and include it at root path
         # Note: openviking-server adds its own /bot/v1 prefix when proxying

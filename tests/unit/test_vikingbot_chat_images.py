@@ -1,9 +1,12 @@
 import base64
 
+import httpx
 import pytest
+from fastapi import FastAPI
 from pydantic import ValidationError
 from vikingbot.agent.context import ContextBuilder
-from vikingbot.channels.openapi import OpenAPIChannel
+from vikingbot.bus.queue import MessageBus
+from vikingbot.channels.openapi import OpenAPIChannel, OpenAPIChannelConfig
 from vikingbot.channels.openapi_models import ChatRequest
 
 from openviking.utils.multimodal import redact_image_data_urls
@@ -75,6 +78,48 @@ def test_chat_request_limits_image_count():
 
     with pytest.raises(ValidationError):
         ChatRequest(images=images)
+
+
+@pytest.mark.asyncio
+async def test_chat_route_does_not_reflect_invalid_base64_input(tmp_path):
+    secret = "sensitive-image-content-" * 10_000
+    data_url = _data_url("image/png", secret.encode())
+    app = FastAPI()
+    channel = OpenAPIChannel(
+        config=OpenAPIChannelConfig(),
+        bus=MessageBus(),
+        workspace_path=tmp_path,
+        app=app,
+    )
+    channel._setup_routes()
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
+        response = await client.post(
+            "/bot/v1/chat",
+            json={
+                "images": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": data_url},
+                    }
+                ]
+            },
+        )
+
+    assert response.status_code == 422
+    assert data_url not in response.text
+    assert base64.b64encode(secret.encode()).decode() not in response.text
+    assert len(response.content) < 2_000
+    assert response.json() == {
+        "detail": [
+            {
+                "type": "value_error",
+                "loc": ["body", "images", 0, "image_url", "url"],
+                "msg": "Value error, image data does not have a supported image signature",
+            }
+        ]
+    }
 
 
 def test_openapi_request_media_preserves_openai_image_parts():
