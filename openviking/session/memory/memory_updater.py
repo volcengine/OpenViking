@@ -578,7 +578,14 @@ class MessageRange:
             if not current_messages:
                 return
             content = self._format_merged_content(current_messages)
-            formatted.append(f"**{self._speaker_for(current_messages[0])}**: {content}")
+            # Defect #3598-4: tool-call-only turns carry no TextPart, so the
+            # merged content can be empty. Writing a bare "**speaker**: " line
+            # wastes 36 bytes/turn with no semantic value; observed 55% blank
+            # turns across 17 production event documents, accounting for ~40% of
+            # some documents' bytes. Those bytes then leak into the embedding
+            # template as well (embedding_template uses the rendered transcript).
+            if content.strip():
+                formatted.append(f"**{self._speaker_for(current_messages[0])}**: {content}")
             current_messages = []
 
         for msg in msg_group:

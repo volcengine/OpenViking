@@ -218,10 +218,30 @@ def _filename_from_uri(uri: str) -> str:
 
 
 def _extract_event_summary(content: str, fallback: str = "") -> str:
+    """Extract only the summary section from an events memory document.
+
+    The extractor writes the document in two shapes depending on whether the
+    session had externally-provided ``resource_event_content``. The common
+    (larger) ``else`` branch in ``events.yaml`` emits ``# Summary`` followed
+    by ``# <date> (<weekday>) ChatLog:``; the resource branch produces a
+    single prose string without a ChatLog. The legacy regex expected the
+    long-superseded ``Summary:`` prefix (no ``#``) paired with a terminator
+    that had no heading marker, so neither anchor matched and the fallback
+    was always used (issue #3598, defect #1 + correction #1).
+
+    The relaxed pattern accepts:
+    * an optional leading ``#`` on the summary anchor, optional colon
+      (supports both the current ``# Summary`` title form and any legacy
+      ``Summary:`` field form that may still appear in older documents).
+    * an optional leading ``#`` before the date/ChatLog terminator so the
+      current markdown heading style terminates the capture correctly.
+    * the usual MEMORY_FIELDS sentinel and end-of-string for resource-event
+      or summary-only documents that lack a ChatLog block.
+    """
     if content:
         match = re.search(
-            r"(?is)^\s*Summary:\s*(.*?)(?:\n\s*\d{4}-\d{2}-\d{2}"
-            r"(?:\s*\([^)]+\))?\s*ChatLog:|\n\s*ChatLog:|\n\s*<!--\s*MEMORY_FIELDS|$)",
+            r"(?is)^\s*\#*\s*Summary:?\s*(.*?)(?:\n\s*\#*\s*\d{4}-\d{2}-\d{2}"
+            r"(?:\s*\([^)]+\))?\s*ChatLog:|\n\s*\#*\s*ChatLog:|\n\s*<!--\s*MEMORY_FIELDS|$)",
             content,
         )
         if match:

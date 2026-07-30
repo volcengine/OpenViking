@@ -100,7 +100,7 @@ content_template: |
   # Summary
   {{ summary }}
   # {{extract_context.get_first_message_time_with_weekday_from_ranges(ranges|default(''))|default('N/A')}} ChatLog:
-  {{ extract_context.get_event_content(ranges, summary, 0) }}
+  {{ extract_context.get_event_content(ranges, summary) }}
   {% endif %}
 embedding_template: |-
   EventName: {{ event_name }}
