@@ -125,10 +125,10 @@ async def test_add_resource_keeps_explicit_args():
     assert payload["args"] == {"feishu_access_token": "u-x"}
 
 
-async def test_add_resource_keeps_explicit_no_parse_mode():
+async def test_add_resource_keeps_explicit_no_split_mode():
     client, fake = _client_with_fake()
 
-    await client.add_resource("https://example.com/doc", parse_mode="no_parse")
+    await client.add_resource("https://example.com/doc", parse_mode="no_split")
 
     payload = fake.calls[-1]["json"]
-    assert payload["parse_mode"] == "no_parse"
+    assert payload["parse_mode"] == "no_split"

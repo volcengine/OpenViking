@@ -66,7 +66,7 @@ ERROR_CODE_TO_EXCEPTION = {
 GATEWAY_MARKER_HEADER = "X-VikingBot-Gateway"
 GATEWAY_TOKEN_HEADER = "X-Gateway-Token"
 
-ParseMode: TypeAlias = Literal["default", "no_parse"]
+ParseMode: TypeAlias = Literal["default", "no_split"]
 
 
 def _image_mime_type(file_name: str = "") -> str:

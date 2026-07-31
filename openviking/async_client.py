@@ -360,8 +360,9 @@ class AsyncOpenViking:
                 On a sitemap/feed URL this keeps the whole site refreshed.
             args: Parser/accessor-specific options (e.g. ``site``, ``max_pages``).
             telemetry: Whether to attach operation telemetry data to the result.
-            parse_mode: ``default`` keeps current parser behavior; ``no_parse`` preserves
-                source files without parser-driven splitting.
+            parse_mode: ``default`` keeps current parser behavior; ``no_split`` still
+                parses and converts documents to Markdown while keeping each document
+                body in one file.
         """
         await self._ensure_initialized()
 

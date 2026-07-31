@@ -5,6 +5,7 @@
 
 import inspect
 from types import SimpleNamespace
+from typing import get_args
 from unittest.mock import AsyncMock
 
 import pytest
@@ -34,7 +35,7 @@ def test_openviking_exports_parse_mode():
 
 
 @pytest.mark.asyncio
-async def test_async_embedded_client_forwards_no_parse():
+async def test_async_embedded_client_forwards_no_split():
     downstream = AsyncMock(return_value={"root_uri": "viking://resources/test"})
     client = object.__new__(AsyncOpenViking)
     client._client = SimpleNamespace(add_resource=downstream)
@@ -43,13 +44,13 @@ async def test_async_embedded_client_forwards_no_parse():
     await AsyncOpenViking.add_resource(
         client,
         path="/tmp/manual.pdf",
-        parse_mode=ParseMode.NO_PARSE,
+        parse_mode=ParseMode.NO_SPLIT,
     )
 
-    assert downstream.await_args.kwargs["parse_mode"] is ParseMode.NO_PARSE
+    assert downstream.await_args.kwargs["parse_mode"] is ParseMode.NO_SPLIT
 
 
-def test_sync_embedded_client_forwards_no_parse():
+def test_sync_embedded_client_forwards_no_split():
     downstream = AsyncMock(return_value={"root_uri": "viking://resources/test"})
     client = object.__new__(SyncOpenViking)
     client._async_client = SimpleNamespace(add_resource=downstream)
@@ -57,14 +58,14 @@ def test_sync_embedded_client_forwards_no_parse():
     SyncOpenViking.add_resource(
         client,
         path="/tmp/manual.pdf",
-        parse_mode=ParseMode.NO_PARSE,
+        parse_mode=ParseMode.NO_SPLIT,
     )
 
-    assert downstream.await_args.kwargs["parse_mode"] is ParseMode.NO_PARSE
+    assert downstream.await_args.kwargs["parse_mode"] is ParseMode.NO_SPLIT
 
 
 @pytest.mark.asyncio
-async def test_local_client_forwards_no_parse():
+async def test_local_client_forwards_no_split():
     downstream = AsyncMock(return_value={"root_uri": "viking://resources/test"})
     client = object.__new__(LocalClient)
     client._ctx = RequestContext(
@@ -76,13 +77,13 @@ async def test_local_client_forwards_no_parse():
     await LocalClient.add_resource(
         client,
         path="/tmp/manual.pdf",
-        parse_mode=ParseMode.NO_PARSE,
+        parse_mode=ParseMode.NO_SPLIT,
     )
 
-    assert downstream.await_args.kwargs["parse_mode"] is ParseMode.NO_PARSE
+    assert downstream.await_args.kwargs["parse_mode"] is ParseMode.NO_SPLIT
 
 
 def test_standalone_sdk_exports_parse_mode_type():
     import openviking_sdk
 
-    assert openviking_sdk.ParseMode is not None
+    assert get_args(openviking_sdk.ParseMode) == ("default", "no_split")
