@@ -14,7 +14,7 @@ from openviking_cli.session.user_id import UserIdentifier
 
 
 @pytest.mark.asyncio
-async def test_ingest_temp_upload_forwards_no_parse(monkeypatch: pytest.MonkeyPatch):
+async def test_ingest_temp_upload_forwards_no_split(monkeypatch: pytest.MonkeyPatch):
     resolved = SimpleNamespace(
         local_path="/tmp/upload.bin",
         original_filename="upload.bin",
@@ -42,7 +42,7 @@ async def test_ingest_temp_upload_forwards_no_parse(monkeypatch: pytest.MonkeyPa
         store,
         "upload-id",
         ctx,
-        parse_mode="no_parse",
+        parse_mode="no_split",
     )
 
-    assert add_resource.await_args.kwargs["parse_mode"] == "no_parse"
+    assert add_resource.await_args.kwargs["parse_mode"] == "no_split"

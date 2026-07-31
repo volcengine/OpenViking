@@ -581,8 +581,8 @@ async def add_resource(
         tag_mode: Tag update mode, "replace" or "append". Defaults to "replace".
         args: Parser-specific options, e.g. {"feishu_access_token": "..."} for Feishu imports,
             or {"site": true} for whole-site ingestion.
-        parse_mode: ``default`` keeps current parser behavior; ``no_parse`` preserves source
-            files without parser-driven splitting before vectorization.
+        parse_mode: ``default`` keeps current parser behavior; ``no_split`` still parses
+            and converts documents to Markdown while keeping each document body in one file.
     """
     from openviking.server.local_input_guard import require_remote_resource_source
 

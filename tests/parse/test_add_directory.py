@@ -65,8 +65,9 @@ class FakeVikingFS:
     async def read(self, uri: str, offset: int = 0, size: int = -1) -> bytes:
         return self.files.get(uri, b"")
 
-    async def ls(self, uri: str) -> List[Dict[str, Any]]:
+    async def ls(self, uri: str, **kw: Any) -> List[Dict[str, Any]]:
         """List direct children of *uri* (mirrors real AGFS entry format)."""
+        del kw
         prefix = uri.rstrip("/") + "/"
         children: Dict[str, bool] = {}  # name → is_dir
         for key in list(self.files.keys()) + self.dirs:
@@ -391,6 +392,32 @@ class TestParserDelegation:
         # After merging, the content should appear under our temp.
         assert result.meta["file_count"] == 1
         assert len(fake_fs.files) > 0
+
+    @pytest.mark.asyncio
+    async def test_no_split_keeps_each_nested_markdown_as_one_file(
+        self,
+        tmp_path: Path,
+        parser,
+        fake_fs: FakeVikingFS,
+    ) -> None:
+        nested = tmp_path / "scripts"
+        nested.mkdir()
+        content = "\n\n".join(
+            f"paragraph {index} " + "x" * 1000 for index in range(20)
+        )
+        (nested / "screenplay.md").write_text(content, encoding="utf-8")
+
+        result = await parser.parse(str(tmp_path), split_content=False)
+
+        root = f"{result.temp_dir_path}/{tmp_path.name}"
+        body_files = {
+            uri: value
+            for uri, value in fake_fs.files.items()
+            if uri.startswith(root) and uri.endswith(".md")
+        }
+        assert body_files == {
+            f"{root}/scripts/screenplay/screenplay.md": content.encode("utf-8")
+        }
 
     @pytest.mark.asyncio
     async def test_txt_file_goes_through_parser(self, tmp_path: Path, parser, fake_fs) -> None:

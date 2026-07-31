@@ -102,6 +102,22 @@ async def test_word_parser_forwards_original_name_to_markdown(monkeypatch, tmp_p
 
 
 @pytest.mark.asyncio
+async def test_word_parser_forwards_no_split_to_markdown(monkeypatch, tmp_path: Path):
+    parser = word.WordParser()
+    seen = _stub_markdown_parse(parser)
+    _patch_to_thread(monkeypatch, word)
+    monkeypatch.setitem(sys.modules, "docx", SimpleNamespace())
+    monkeypatch.setattr(parser, "_convert_to_markdown", lambda *args, **kwargs: "# converted docx")
+
+    upload = tmp_path / "screenplay.docx"
+    upload.write_bytes(b"placeholder")
+
+    await parser.parse(upload, split_content=False)
+
+    assert seen["kwargs"]["split_content"] is False
+
+
+@pytest.mark.asyncio
 async def test_excel_parser_offloads_xlsx_conversion(monkeypatch, tmp_path: Path):
     parser = excel.ExcelParser()
     seen = _stub_markdown_parse(parser)

@@ -204,6 +204,7 @@ class DirectoryParser(BaseParser):
                         warnings,
                         preserve_structure=preserve_structure,
                         import_root=str(source_path),
+                        split_content=kwargs.get("split_content", True),
                     )
 
                 if ok:
@@ -358,6 +359,7 @@ class DirectoryParser(BaseParser):
         warnings: List[str],
         preserve_structure: bool = True,
         import_root: Optional[str] = None,
+        split_content: bool = True,
     ) -> bool:
         """Process one file into the VikingFS directory temp.
 
@@ -388,6 +390,7 @@ class DirectoryParser(BaseParser):
                     # an md may reference shared images outside its own directory
                     # (e.g. ../images/x.gif) that still live inside the import.
                     allowed_media_dirs=[Path(import_root)] if import_root else None,
+                    split_content=split_content,
                 )
                 if sub_result.temp_dir_path:
                     if preserve_structure:

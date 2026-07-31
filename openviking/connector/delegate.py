@@ -249,8 +249,8 @@ class ConnectorDelegate:
         Returns an empty list when the request is fully supported.
         """
         unsupported: List[str] = []
-        if parse_mode is ParseMode.NO_PARSE:
-            unsupported.append("parse_mode=no_parse")
+        if parse_mode is ParseMode.NO_SPLIT:
+            unsupported.append("parse_mode=no_split")
         if wait:
             unsupported.append("wait=true (Connector imports run asynchronously)")
         if parent:

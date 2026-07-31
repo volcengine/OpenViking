@@ -75,7 +75,7 @@ def service(monkeypatch: pytest.MonkeyPatch) -> ResourceService:
 
 
 @pytest.mark.asyncio
-async def test_no_parse_is_forwarded_and_persisted_for_watch_replay(
+async def test_no_split_is_forwarded_and_persisted_for_watch_replay(
     service: ResourceService,
     ctx: RequestContext,
 ):
@@ -89,15 +89,15 @@ async def test_no_parse_is_forwarded_and_persisted_for_watch_replay(
     await service.add_resource(
         path="/test/path",
         ctx=ctx,
-        to="viking://resources/no_parse_watch",
+        to="viking://resources/no_split_watch",
         watch_interval=30.0,
-        parse_mode="no_parse",
+        parse_mode="no_split",
     )
 
     processor = service._resource_processor
-    assert processor.calls[-1]["parse_mode"] == "no_parse"
+    assert processor.calls[-1]["parse_mode"] == "no_split"
     assert watch_manager.create_task.await_args.kwargs["processor_kwargs"]["parse_mode"] == (
-        "no_parse"
+        "no_split"
     )
 
 
@@ -108,7 +108,7 @@ async def test_rejects_parse_mode_inside_args(service: ResourceService, ctx: Req
             path="/test/path",
             ctx=ctx,
             to="viking://resources/test",
-            args={"parse_mode": "no_parse"},
+            args={"parse_mode": "no_split"},
         )
 
 
@@ -124,28 +124,34 @@ async def test_rejects_invalid_parse_mode(service: ResourceService, ctx: Request
 
 
 @pytest.mark.asyncio
-async def test_no_parse_rejects_flattening(service: ResourceService, ctx: RequestContext):
-    with pytest.raises(InvalidArgumentError, match="preserve_structure"):
-        await service.add_resource(
-            path="/test/path",
-            ctx=ctx,
-            to="viking://resources/test",
-            parse_mode="no_parse",
-            preserve_structure=False,
-        )
+async def test_no_split_allows_directory_flattening(
+    service: ResourceService,
+    ctx: RequestContext,
+):
+    await service.add_resource(
+        path="/test/path",
+        ctx=ctx,
+        to="viking://resources/test",
+        parse_mode="no_split",
+        preserve_structure=False,
+    )
+
+    processor = service._resource_processor
+    assert processor.calls[-1]["parse_mode"] == "no_split"
+    assert processor.calls[-1]["preserve_structure"] is False
 
 
 @pytest.mark.asyncio
-async def test_no_parse_bypasses_understanding_shortcut(
+async def test_no_split_bypasses_understanding_shortcut(
     monkeypatch: pytest.MonkeyPatch,
     service: ResourceService,
     ctx: RequestContext,
 ):
     direct_probe = MagicMock(
-        side_effect=AssertionError("Understanding shortcut must not run in no_parse mode")
+        side_effect=AssertionError("Understanding shortcut must not run in no_split mode")
     )
     api_probe = MagicMock(
-        side_effect=AssertionError("Understanding shortcut must not run in no_parse mode")
+        side_effect=AssertionError("Understanding shortcut must not run in no_split mode")
     )
     monkeypatch.setattr(
         service._resource_processor,
@@ -164,7 +170,7 @@ async def test_no_parse_bypasses_understanding_shortcut(
         path="https://example.com/manual.pdf",
         ctx=ctx,
         to="viking://resources/manual",
-        parse_mode="no_parse",
+        parse_mode="no_split",
         allow_local_path_resolution=False,
     )
 

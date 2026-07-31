@@ -24,24 +24,24 @@ def test_add_resource_request_defaults_to_current_parse_behavior():
 
 
 def test_add_resource_request_rejects_invalid_parse_mode():
-    with pytest.raises(ValidationError, match="default.*no_parse"):
+    with pytest.raises(ValidationError, match="default.*no_split"):
         AddResourceRequest(
             path="https://example.com/demo.md",
             parse_mode="unsupported",
         )
 
 
-def test_add_resource_request_no_parse_rejects_flattening():
-    with pytest.raises(ValidationError, match="requires preserve_structure"):
-        AddResourceRequest(
-            path="https://example.com/demo.md",
-            parse_mode="no_parse",
-            preserve_structure=False,
-        )
+def test_add_resource_request_no_split_allows_flattening():
+    request = AddResourceRequest(
+        path="https://example.com/demo.md",
+        parse_mode="no_split",
+        preserve_structure=False,
+    )
+    assert request.parse_mode is ParseMode.NO_SPLIT
 
 
 @pytest.mark.asyncio
-async def test_add_resource_route_forwards_no_parse_mode(monkeypatch: pytest.MonkeyPatch):
+async def test_add_resource_route_forwards_no_split_mode(monkeypatch: pytest.MonkeyPatch):
     add_resource = AsyncMock(
         return_value={"status": "success", "root_uri": "viking://resources/demo"}
     )
@@ -56,12 +56,12 @@ async def test_add_resource_route_forwards_no_parse_mode(monkeypatch: pytest.Mon
         SimpleNamespace(),
         AddResourceRequest(
             path="https://example.com/demo.md",
-            parse_mode="no_parse",
+            parse_mode="no_split",
         ),
         ctx,
     )
 
-    assert add_resource.await_args.kwargs["parse_mode"] is ParseMode.NO_PARSE
+    assert add_resource.await_args.kwargs["parse_mode"] is ParseMode.NO_SPLIT
 
 
 @pytest.mark.asyncio
@@ -74,7 +74,7 @@ async def test_signed_temp_upload_forwards_token_bound_parse_mode(
         to="",
         reason="",
         actor_peer_id="",
-        parse_mode="no_parse",
+        parse_mode="no_split",
     )
     request = SimpleNamespace(
         state=SimpleNamespace(signed_upload=signed),
@@ -101,4 +101,4 @@ async def test_signed_temp_upload_forwards_token_bound_parse_mode(
         ),
     )
 
-    assert ingest.await_args.kwargs["parse_mode"] == "no_parse"
+    assert ingest.await_args.kwargs["parse_mode"] == "no_split"

@@ -44,12 +44,12 @@ async def test_mcp_add_resource_schema_exposes_parse_mode_enum(mcp_context):
     if "$ref" in parse_mode_schema:
         parse_mode_schema = schema["$defs"][parse_mode_schema["$ref"].rsplit("/", 1)[-1]]
 
-    assert parse_mode_schema["enum"] == ["default", "no_parse"]
+    assert parse_mode_schema["enum"] == ["default", "no_split"]
     assert schema["properties"]["parse_mode"]["default"] == "default"
 
 
 @pytest.mark.asyncio
-async def test_mcp_remote_add_forwards_no_parse(
+async def test_mcp_remote_add_forwards_no_split(
     monkeypatch: pytest.MonkeyPatch,
     mcp_context,
 ):
@@ -57,17 +57,17 @@ async def test_mcp_remote_add_forwards_no_parse(
 
     result = await mcp_endpoint.add_resource(
         path="https://example.com/manual.pdf",
-        parse_mode=ParseMode.NO_PARSE,
+        parse_mode=ParseMode.NO_SPLIT,
     )
 
     assert "Resource added" in result
     assert mcp_context.resources.add_resource.await_args.kwargs["parse_mode"] is (
-        ParseMode.NO_PARSE
+        ParseMode.NO_SPLIT
     )
 
 
 @pytest.mark.asyncio
-async def test_mcp_temp_file_id_forwards_no_parse(
+async def test_mcp_temp_file_id_forwards_no_split(
     monkeypatch: pytest.MonkeyPatch,
     mcp_context,
 ):
@@ -81,15 +81,15 @@ async def test_mcp_temp_file_id_forwards_no_parse(
 
     result = await mcp_endpoint.add_resource(
         temp_file_id="upload_abcdef123.md",
-        parse_mode=ParseMode.NO_PARSE,
+        parse_mode=ParseMode.NO_SPLIT,
     )
 
     assert "Resource added" in result
-    assert ingest.await_args.kwargs["parse_mode"] is ParseMode.NO_PARSE
+    assert ingest.await_args.kwargs["parse_mode"] is ParseMode.NO_SPLIT
 
 
 @pytest.mark.asyncio
-async def test_mcp_local_upload_token_binds_no_parse(
+async def test_mcp_local_upload_token_binds_no_split(
     monkeypatch: pytest.MonkeyPatch,
     mcp_context,
 ):
@@ -101,12 +101,12 @@ async def test_mcp_local_upload_token_binds_no_parse(
 
     await mcp_endpoint.add_resource(
         path="/tmp/manual.pdf",
-        parse_mode=ParseMode.NO_PARSE,
+        parse_mode=ParseMode.NO_SPLIT,
     )
 
     assert len(upload_token_store._store) == 1
     token_info = next(iter(upload_token_store._store.values()))
-    assert token_info.parse_mode == "no_parse"
+    assert token_info.parse_mode == "no_split"
 
 
 @pytest.mark.asyncio

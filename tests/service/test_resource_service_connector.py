@@ -490,10 +490,10 @@ def test_connector_only_route_rejects_disabled_or_unsupported_requests(
     with pytest.raises(InvalidArgumentError, match="args keys"):
         service._connector.should_delegate("tos://bucket/prefix", connector_args={"parser": "pdf"})
 
-    with pytest.raises(InvalidArgumentError, match="parse_mode=no_parse"):
+    with pytest.raises(InvalidArgumentError, match="parse_mode=no_split"):
         service._connector.should_delegate(
             "tos://bucket/prefix",
-            parse_mode=ParseMode.NO_PARSE,
+            parse_mode=ParseMode.NO_SPLIT,
         )
 
     connector_config.enable = False
@@ -541,13 +541,13 @@ def test_git_connector_detection_accepts_explicit_protocol_repo(monkeypatch, pat
     assert detect_connector_add_type(path) == ("git", False)
 
 
-def test_shared_connector_source_falls_back_for_no_parse(connector_config, service):
+def test_shared_connector_source_falls_back_for_no_split(connector_config, service):
     connector_config.allowed_add_types = ["https"]
 
     assert (
         service._connector.should_delegate(
             "https://example.com/manual.pdf",
-            parse_mode=ParseMode.NO_PARSE,
+            parse_mode=ParseMode.NO_SPLIT,
         )
         is False
     )

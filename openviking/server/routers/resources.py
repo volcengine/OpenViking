@@ -57,8 +57,9 @@ class AddResourceRequest(BaseModel):
         exclude: Glob pattern for files to exclude during parsing.
         directly_upload_media: Whether to directly upload media files. Default is True.
         preserve_structure: Whether to preserve directory structure when adding directories.
-        parse_mode: Resource staging strategy. ``default`` keeps the current parser behavior;
-            ``no_parse`` stores files without parser-driven splitting.
+        parse_mode: Parsing layout. ``default`` keeps the current parser behavior;
+            ``no_split`` still parses and converts documents to Markdown but keeps
+            each document body in one Markdown file.
         args: Parser-specific import options. For Feishu one-time user-token imports,
             pass {"feishu_access_token": "..."}. For Feishu user-token watches,
             pass {"feishu_access_token": "...", "feishu_refresh_token": "..."}.
@@ -106,8 +107,6 @@ class AddResourceRequest(BaseModel):
     def check_path_or_temp_file_id(self):
         if not self.path and not self.temp_file_id:
             raise ValueError("Either 'path' or 'temp_file_id' must be provided")
-        if self.parse_mode is ParseMode.NO_PARSE and self.preserve_structure is False:
-            raise ValueError("parse_mode='no_parse' requires preserve_structure=True")
         return self
 
     @model_validator(mode="after")

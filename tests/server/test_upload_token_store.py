@@ -44,14 +44,14 @@ def test_consume_returns_bound_business_params(store):
         reason="quarterly",
         actor_peer_id="bot-a",
         processing_mode="vectors_only",
-        parse_mode="no_parse",
+        parse_mode="no_split",
     )
     consumed = store.consume(token)
     assert consumed.to == "viking://resources/team/proj"
     assert consumed.reason == "quarterly"
     assert consumed.actor_peer_id == "bot-a"
     assert consumed.processing_mode == "vectors_only"
-    assert consumed.parse_mode == "no_parse"
+    assert consumed.parse_mode == "no_split"
 
 
 def test_consume_burns_token(store):

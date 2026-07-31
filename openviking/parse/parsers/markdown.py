@@ -374,7 +374,15 @@ class MarkdownParser(BaseParser):
 
         # The temp dir is the first thing materialized on apply.
         ops: List[_LayoutOp] = [_LayoutOp("mkdir", temp_uri)]
-        await self._build_structure(ops, content, headings, root_dir, source_path, doc_name)
+        await self._build_structure(
+            ops,
+            content,
+            headings,
+            root_dir,
+            source_path,
+            doc_name,
+            split_content=kwargs.get("split_content", True),
+        )
 
         return _Layout(
             temp_uri=temp_uri,
@@ -1165,6 +1173,7 @@ class MarkdownParser(BaseParser):
         root_dir: str,
         source_path: Optional[str] = None,
         doc_name: Optional[str] = None,
+        split_content: bool = True,
     ) -> None:
         """
         Plan the document's directory/file layout into ``ops`` (no VikingFS writes).
@@ -1182,6 +1191,7 @@ class MarkdownParser(BaseParser):
             headings: List of (start, end, title, level) tuples
             root_dir: Root directory URI
             source_path: Source file path for naming
+            split_content: Whether large Markdown may be split into multiple files
         """
         max_size = self.config.max_section_size or self.DEFAULT_MAX_SECTION_SIZE
         max_chars = self.config.max_section_chars
@@ -1197,6 +1207,12 @@ class MarkdownParser(BaseParser):
         doc_name = doc_name or self._sanitize_for_path(
             _smart_stem(source_path) if source_path else "content"
         )
+
+        if not split_content:
+            file_path = f"{root_dir}/{doc_name}.md"
+            ops.append(_LayoutOp("write", file_path, content))
+            logger.debug(f"[MarkdownParser] No-split document planned as: {file_path}")
+            return
 
         # Small document: save as single file (check both token and char limits)
         if estimated_tokens <= max_size and len(content) <= max_chars:

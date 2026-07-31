@@ -594,8 +594,6 @@ class ResourceService:
         self._ensure_initialized()
         processing_mode = normalize_processing_mode(processing_mode)
         mode = normalize_parse_mode(parse_mode)
-        if mode is ParseMode.NO_PARSE and kwargs.get("preserve_structure") is False:
-            raise InvalidArgumentError("parse_mode='no_parse' requires preserve_structure=True.")
         self._validate_add_resource_tag_policy(tags=tags, tag_mode=tag_mode)
         normalized_args = self._normalize_add_resource_args(args, watch_interval=watch_interval)
         kwargs.update(normalized_args.processor_kwargs)
@@ -950,8 +948,6 @@ class ResourceService:
         self._ensure_initialized()
         processing_mode = normalize_processing_mode(processing_mode)
         mode = normalize_parse_mode(parse_mode)
-        if mode is ParseMode.NO_PARSE and kwargs.get("preserve_structure") is False:
-            raise InvalidArgumentError("parse_mode='no_parse' requires preserve_structure=True.")
         self._validate_add_resource_tag_policy(tags=tags, tag_mode=tag_mode)
         normalized_args = self._normalize_add_resource_args(args, watch_interval=watch_interval)
         kwargs.update(normalized_args.processor_kwargs)
@@ -1110,7 +1106,7 @@ class ResourceService:
         """Execute an already-routed resource ingestion."""
         self._ensure_initialized()
         mode = normalize_parse_mode(parse_mode)
-        if mode is ParseMode.NO_PARSE:
+        if mode is ParseMode.NO_SPLIT:
             kwargs["parse_mode"] = mode.value
         request_start = time.perf_counter()
         telemetry = get_current_telemetry()

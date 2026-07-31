@@ -189,26 +189,18 @@ class UnifiedResourceProcessor:
         """
 
         mode = normalize_parse_mode(parse_mode)
-        if mode is ParseMode.NO_PARSE and kwargs.get("preserve_structure") is False:
-            from openviking_cli.exceptions import InvalidArgumentError
-
-            raise InvalidArgumentError(
-                "preserve_structure=false is not supported when parse_mode='no_parse'."
-            )
 
         # First check if source is raw content (not URL/path)
         is_potential_path = (
             allow_local_path_resolution and len(source) <= 1024 and "\n" not in source
         )
         if not is_potential_path and not self._is_url(source):
-            if mode is ParseMode.NO_PARSE:
-                from openviking_cli.exceptions import InvalidArgumentError
-
-                raise InvalidArgumentError(
-                    "parse_mode='no_parse' requires a file, directory, or remote resource source."
-                )
             # Treat as raw content
-            return await parse(source, instruction=instruction)
+            return await parse(
+                source,
+                instruction=instruction,
+                split_content=mode is ParseMode.DEFAULT,
+            )
 
         if (
             mode is ParseMode.DEFAULT
@@ -295,10 +287,8 @@ class UnifiedResourceProcessor:
                     else:
                         parse_kwargs.setdefault("resource_name", _smart_stem(local_resource.path))
 
-            if mode is ParseMode.NO_PARSE:
-                from openviking.parse.parsers.direct import DirectResourceStager
-
-                return await DirectResourceStager().stage(local_resource, **parse_kwargs)
+            if mode is ParseMode.NO_SPLIT:
+                parse_kwargs["split_content"] = False
 
             parse_kwargs["vlm_processor"] = self._get_vlm_processor()
             parse_kwargs["storage"] = self.storage
