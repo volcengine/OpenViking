@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { loadConfig } from "../config.ts";
 
-async function withConfigFile(body, fn, env = {}) {
+async function withConfigFile(body, fn, env = {}, cliConfig = null) {
   const dir = await mkdtemp(join(tmpdir(), "ov-pi-config-"));
   const oldEnv = {
     OPENVIKING_URL: process.env.OPENVIKING_URL,
@@ -21,14 +21,14 @@ async function withConfigFile(body, fn, env = {}) {
   };
   process.env.OPENVIKING_CREDENTIAL_SOURCE = "env";
   process.env.OPENVIKING_URL = "http://127.0.0.1:1933";
+  process.env.OPENVIKING_CLI_CONFIG_FILE = join(dir, "ovcli.conf");
+  process.env.OPENVIKING_CONFIG_FILE = join(dir, "ov.conf");
   delete process.env.OPENVIKING_API_KEY;
   delete process.env.OPENVIKING_ACCOUNT;
   delete process.env.OPENVIKING_USER;
   delete process.env.OPENVIKING_PEER_ID;
   delete process.env.OPENVIKING_WORKSPACE_PEER;
   delete process.env.OPENVIKING_RECALL_PEER_SCOPE;
-  delete process.env.OPENVIKING_CLI_CONFIG_FILE;
-  delete process.env.OPENVIKING_CONFIG_FILE;
   for (const [key, value] of Object.entries(env)) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
@@ -36,6 +36,9 @@ async function withConfigFile(body, fn, env = {}) {
 
   try {
     await writeFile(join(dir, "config.json"), JSON.stringify(body), "utf8");
+    if (cliConfig !== null) {
+      await writeFile(join(dir, "ovcli.conf"), JSON.stringify(cliConfig), "utf8");
+    }
     return await fn(loadConfig(dir));
   } finally {
     for (const [key, value] of Object.entries(oldEnv)) {
@@ -116,8 +119,28 @@ test("loadConfig derives workspace peer by default", async () => {
   });
 });
 
-test("loadConfig keeps explicit peer and actor recall scope", async () => {
+test("loadConfig prefers config peer over workspace derivation", async () => {
   await withConfigFile({
+    peerId: " pi ",
+    workspacePeer: true,
+  }, (cfg) => {
+    assert.equal(cfg.peerId, "pi");
+  });
+});
+
+test("loadConfig keeps config peer when workspace derivation is disabled", async () => {
+  await withConfigFile({
+    peerId: "pi",
+    workspacePeer: false,
+  }, (cfg) => {
+    assert.equal(cfg.peerId, "pi");
+    assert.equal(cfg.workspacePeer, false);
+  });
+});
+
+test("loadConfig gives environment peer precedence over config peer", async () => {
+  await withConfigFile({
+    peerId: "config-peer",
     recallPeerScope: "actor",
     workspacePeer: false,
   }, (cfg) => {
@@ -125,4 +148,18 @@ test("loadConfig keeps explicit peer and actor recall scope", async () => {
     assert.equal(cfg.workspacePeer, false);
     assert.equal(cfg.recallPeerScope, "actor");
   }, { OPENVIKING_PEER_ID: "explicit-peer" });
+});
+
+test("loadConfig gives ovcli peer precedence over config peer", async () => {
+  await withConfigFile({
+    peerId: "config-peer",
+  }, (cfg) => {
+    assert.equal(cfg.peerId, "ovcli-peer");
+  }, {
+    OPENVIKING_CREDENTIAL_SOURCE: "cli",
+    OPENVIKING_URL: undefined,
+  }, {
+    url: "http://127.0.0.1:1933",
+    actor_peer_id: "ovcli-peer",
+  });
 });

@@ -96,7 +96,7 @@ export function loadConfig(extensionDir: string): OVConfig {
     apiKey: creds.apiKey,
     account: creds.account,
     user: creds.user,
-    peerId: creds.peerId,
+    peerId: creds.peerId || (typeof file.peerId === "string" ? file.peerId : DEFAULT_CONFIG.peerId),
     userAgent: buildUserAgent("pi", EXTENSION_VERSION),
     recallTokenBudget: file.recallTokenBudget ?? file.recallBudget ?? DEFAULT_CONFIG.recallTokenBudget,
     scoreThreshold: file.scoreThreshold ?? file.recallScoreThreshold ?? DEFAULT_CONFIG.scoreThreshold,
