@@ -169,6 +169,7 @@ const zhCN = {
       noResult: '暂无执行结果',
       noResultDescription: '任务完成后，接口返回的结果会显示在这里。',
       noResultFailedDescription: '该任务未返回结果，请查看上方失败原因。',
+      noResultCancelledDescription: '该任务已取消，未返回执行结果。',
     },
     filters: {
       label: '筛选',
@@ -194,6 +195,8 @@ const zhCN = {
       status: '状态',
     },
     status: {
+      cancelled: '已取消',
+      cancelling: '取消中',
       completed: '已完成',
       failed: '失败',
       pending: '等待中',
@@ -746,6 +749,7 @@ const zhCN = {
         size: '大小',
       },
       status: {
+        cancelled: '已取消',
         processing: '处理中',
         success: '处理成功',
         failed: '处理失败',
@@ -817,9 +821,12 @@ const zhCN = {
       edit: '编辑',
       emptyFile: '(空文件)',
       emptyPrompt: '选择文件后在这里预览',
+      formattingJson: '正在格式化 JSON...',
       imageFailed: '图片加载失败。',
       imageLoading: '正在加载图片...',
       largeFileSkipped: '文件较大，默认不自动加载。',
+      jsonFormatFailed: 'JSON 格式化失败，已显示原始内容。',
+      loadFile: '仍然加载',
       loadingContent: '正在读取内容...',
       loadingEditor: '加载编辑器...',
       markdownPreview: '预览',

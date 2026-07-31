@@ -30,7 +30,7 @@ X-API-Key: <your-api-key>
 | `manifest_yaml` | string | 是 | — | Manifest 的完整 YAML 内容，长度为 1～4,000,000 字符 |
 | `catalog_yaml` | string | 否 | — | Catalog 的完整 YAML 内容，长度为 1～4,000,000 字符。Manifest 按名称选择资产时必填；Manifest 在 `catalog` 中定义资产时必须省略。 |
 | `manifest_label` | string | 否 | `manifest.yaml` | Manifest 的来源标签，用于错误信息，长度为 1～1,024 字符 |
-| `catalog_label` | string | 否 | `assets.yaml` | Catalog 的来源标签，用于错误信息，长度为 1～1,024 字符 |
+| `catalog_label` | string | 否 | `catalog.yaml` | Catalog 的来源标签，用于错误信息，长度为 1～1,024 字符 |
 
 单文件 Manifest 示例：
 

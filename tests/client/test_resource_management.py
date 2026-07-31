@@ -36,7 +36,6 @@ class TestAddResource:
 
         print(result)
         assert "root_uri" in result
-        assert "queue_status" in result
 
     async def test_local_client_add_resource_with_wait_preserves_queue_status(self):
         """Local SDK add_resource(wait=True) should keep queue_status and internal telemetry."""

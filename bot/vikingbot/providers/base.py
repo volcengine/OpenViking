@@ -149,7 +149,7 @@ class LLMProvider(ABC):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
-        max_tokens: int = 4096,
+        max_tokens: int | None = None,
         temperature: float = 0.7,
         session_id: str | None = None,
     ) -> LLMResponse:
@@ -160,7 +160,7 @@ class LLMProvider(ABC):
             messages: List of message dicts with 'role' and 'content'.
             tools: Optional list of tool definitions.
             model: Model identifier (provider-specific).
-            max_tokens: Maximum tokens in response.
+            max_tokens: Maximum tokens in response. None uses the model provider default.
             temperature: Sampling temperature.
             session_id: Optional session ID for tracing.
 
@@ -174,7 +174,7 @@ class LLMProvider(ABC):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
-        max_tokens: int = 4096,
+        max_tokens: int | None = None,
         temperature: float = 0.7,
         session_id: str | None = None,
     ) -> AsyncIterator[LLMStreamEvent]:

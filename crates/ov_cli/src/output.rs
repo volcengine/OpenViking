@@ -919,7 +919,7 @@ fn table_value_tone(trimmed: &str) -> TableValueTone {
             TableValueTone::Success
         }
         "running" | "in_progress" | "in-progress" | "pending" | "queued" | "processing"
-        | "checking" | "warning" => TableValueTone::Warning,
+        | "cancelling" | "checking" | "warning" => TableValueTone::Warning,
         "unhealthy" | "failed" | "error" | "false" | "cancelled" | "canceled" | "timeout"
         | "timed_out" | "unreachable" => TableValueTone::Error,
         "unknown" | "null" | "(empty)" => TableValueTone::Muted,
@@ -1045,6 +1045,7 @@ mod tests {
 
         assert_eq!(table_value_tone("running"), TableValueTone::Warning);
         assert_eq!(table_value_tone("pending"), TableValueTone::Warning);
+        assert_eq!(table_value_tone("cancelling"), TableValueTone::Warning);
         assert_eq!(table_value_tone("queued"), TableValueTone::Warning);
         assert_eq!(table_value_tone("processing"), TableValueTone::Warning);
 

@@ -451,6 +451,11 @@ class BaseClient(ABC):
         ...
 
     @abstractmethod
+    async def cancel_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Cancel a background task."""
+        ...
+
+    @abstractmethod
     async def list_tasks(
         self,
         task_type: Optional[str] = None,

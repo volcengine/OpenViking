@@ -16,6 +16,7 @@ class AddResourceMsg:
     user_id: str
     role: str
     path: str = ""
+    source_path: str = ""
     telemetry_id: Optional[str] = None
     prepared: Optional[Dict[str, Any]] = None
     lock_handoff: Optional[Dict[str, Any]] = None
@@ -80,6 +81,7 @@ class AddResourceMsg:
         return cls(
             task_id=str(task_id),
             path=str(path or ""),
+            source_path=str(data.get("source_path") or path or ""),
             root_uri=str(root_uri),
             account_id=str(data.get("account_id", "default")),
             user_id=str(data.get("user_id", "default")),

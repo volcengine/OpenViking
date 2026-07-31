@@ -9,6 +9,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tokio::sync::RwLock;
 
+use crate::crypto;
 use crate::core::internal_names::is_hidden_runtime_lock_name;
 use crate::core::FileSystem;
 
@@ -191,6 +192,71 @@ impl FilesystemPathLockProvider {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use crate::core::{Error, FileSystem, WriteFlag};
+    use crate::plugins::memfs::MemFileSystem;
+
+    use super::*;
+
+    /// Verify legacy encrypted lock files are treated as removable upgrade leftovers.
+    #[tokio::test]
+    async fn read_token_cleans_up_legacy_encrypted_lock() {
+        let fs = Arc::new(MemFileSystem::new());
+        fs.mkdir("/data", 0o755).await.unwrap();
+        fs.write("/data/.path.ovlock", b"OVE1legacy-ciphertext", 0, WriteFlag::Create)
+            .await
+            .unwrap();
+        let provider = FilesystemPathLockProvider::new(fs.clone());
+
+        let token = provider.read_token("/data/.path.ovlock").await.unwrap();
+
+        assert!(token.is_none());
+        assert!(matches!(
+            fs.read("/data/.path.ovlock", 0, 0).await,
+            Err(Error::NotFound(_))
+        ));
+    }
+
+    /// Verify malformed non-legacy lock files still surface as invalid tokens.
+    #[tokio::test]
+    async fn read_token_rejects_non_legacy_invalid_lock() {
+        let fs = Arc::new(MemFileSystem::new());
+        fs.mkdir("/data", 0o755).await.unwrap();
+        fs.write("/data/.path.ovlock", b"not-a-token", 0, WriteFlag::Create)
+            .await
+            .unwrap();
+        let provider = FilesystemPathLockProvider::new(fs.clone());
+
+        let err = provider.read_token("/data/.path.ovlock").await.unwrap_err();
+
+        assert!(matches!(err, PathLockError::InvalidToken(_)));
+        assert_eq!(
+            fs.read("/data/.path.ovlock", 0, 0).await.unwrap(),
+            b"not-a-token"
+        );
+    }
+
+    /// Verify valid plaintext lock files continue to decode unchanged.
+    #[tokio::test]
+    async fn read_token_accepts_plaintext_lock() {
+        let fs = Arc::new(MemFileSystem::new());
+        fs.mkdir("/data", 0o755).await.unwrap();
+        fs.write("/data/.path.ovlock", b"owner:123:E", 0, WriteFlag::Create)
+            .await
+            .unwrap();
+        let provider = FilesystemPathLockProvider::new(fs);
+
+        let token = provider.read_token("/data/.path.ovlock").await.unwrap().unwrap();
+
+        assert_eq!(token.owner_id, "owner");
+        assert_eq!(token.time_ns, 123);
+        assert_eq!(token.lock_type, crate::lock::PathLockKind::Exact);
+    }
+}
+
 #[async_trait]
 impl PathLockProvider for FilesystemPathLockProvider {
     fn name(&self) -> &'static str {
@@ -198,15 +264,36 @@ impl PathLockProvider for FilesystemPathLockProvider {
     }
 
     async fn read_token(&self, lock_path: &str) -> PathLockResult<Option<LockToken>> {
-        match self.read_token_raw(lock_path).await? {
-            Some(data) => {
-                let raw = String::from_utf8_lossy(&data).trim().to_string();
-                if raw.is_empty() {
-                    return Ok(None);
+        let mut current = self.read_token_raw(lock_path).await?;
+        loop {
+            match current {
+                Some(data) => {
+                    let raw = String::from_utf8_lossy(&data).trim().to_string();
+                    if raw.is_empty() {
+                        return Ok(None);
+                    }
+                    match LockTokenCodec::decode(&raw) {
+                        Ok(token) => return Ok(Some(token)),
+                        Err(error) if crypto::is_encrypted(&data) => {
+                            if self
+                                .fs
+                                .compare_and_remove(lock_path, &data)
+                                .await
+                                .map_err(|e| {
+                                    PathLockError::Io(format!(
+                                        "legacy encrypted lock cleanup failed: {e}"
+                                    ))
+                                })?
+                            {
+                                return Ok(None);
+                            }
+                            current = self.read_token_raw(lock_path).await?;
+                        }
+                        Err(error) => return Err(error),
+                    }
                 }
-                LockTokenCodec::decode(&raw).map(Some)
+                None => return Ok(None),
             }
-            None => Ok(None),
         }
     }
 

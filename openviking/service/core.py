@@ -23,7 +23,7 @@ from openviking.service.resource_memory_link_service import ResourceMemoryLinkSe
 from openviking.service.resource_service import ResourceService
 from openviking.service.search_service import SearchService
 from openviking.service.session_service import SessionService
-from openviking.service.task_tracker import set_task_tracker
+from openviking.service.task_tracker import get_task_tracker, set_task_tracker
 from openviking.session import create_session_compressor
 from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.storage.collection_schemas import init_context_collection
@@ -365,8 +365,6 @@ class OpenVikingService:
             resource_service=self._resource_service,
             viking_fs=self._viking_fs,
         )
-        await self._watch_scheduler.start()
-        logger.info("WatchScheduler started")
 
         # Wire up sub-services
         self._fs_service.set_dependencies(
@@ -429,6 +427,14 @@ class OpenVikingService:
                 ),
                 allow_create=True,
             )
+            await self._queue_manager.prepare_task_tracking(get_task_tracker())
+
+        # Do not let watches produce queue work while task ownership is being
+        # rebuilt from QueueFS. Consumers start only after the scheduler is ready.
+        await self._watch_scheduler.start()
+        logger.info("WatchScheduler started")
+
+        if self._queue_manager:
             self._queue_manager.start()
             logger.info("QueueManager workers started")
 

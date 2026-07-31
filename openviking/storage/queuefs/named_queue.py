@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 import abc
+import asyncio
 import json
 import threading
 from dataclasses import dataclass, field
@@ -9,6 +10,13 @@ from typing import Any, Callable, Dict, List, Optional, Union
 
 from openviking.pyagfs import AGFSSyncClientProtocol, AsyncAGFSClient
 from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
+from openviking.service.task_work_index import (
+    TaskWorkIndex,
+    TaskWorkRejected,
+    bind_task_context,
+    extract_task_metadata,
+    prepare_task_payload,
+)
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -89,6 +97,11 @@ class DequeueHandlerBase(abc.ABC):
         if self._error_callback:
             self._error_callback(error_msg, data)
 
+    async def on_cancelled(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Discard task work cancelled before its handler starts."""
+        self.report_success()
+        return None
+
     @abc.abstractmethod
     async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """Called after message dequeue. Returns None to discard message."""
@@ -109,6 +122,7 @@ class NamedQueue:
         name: str,
         enqueue_hook: Optional[EnqueueHookBase] = None,
         dequeue_handler: Optional[DequeueHandlerBase] = None,
+        task_work_index: Optional[TaskWorkIndex] = None,
     ):
         self.name = name
         self.path = f"{mount_point}/{name}"
@@ -116,6 +130,7 @@ class NamedQueue:
         self._async_agfs = AsyncAGFSClient(agfs)
         self._enqueue_hook = enqueue_hook
         self._dequeue_handler = dequeue_handler
+        self._task_work_index = task_work_index
         self._initialized = False
 
         # Status tracking
@@ -152,6 +167,10 @@ class NamedQueue:
 
     def _on_process_error(self, error_msg: str, data: Optional[Dict[str, Any]] = None) -> None:
         """Called on processing failure."""
+        if self._task_work_index is not None and data is not None:
+            metadata = extract_task_metadata(data)
+            if metadata is not None:
+                self._task_work_index.record_failure(metadata.task_id, error_msg)
         with self._lock:
             self._in_progress -= 1
             self._error_count += 1
@@ -210,24 +229,57 @@ class NamedQueue:
             data = await self._enqueue_hook.on_enqueue(data)
 
         if isinstance(data, dict):
-            data = json.dumps(data)
+            data, task_metadata = prepare_task_payload(data)
+        else:
+            task_metadata = None
 
-        msg_id = await self._async_agfs.write(enqueue_file, data.encode("utf-8"))
+        if self._task_work_index is not None and not self._task_work_index.register(
+            self.name, task_metadata
+        ):
+            logger.info(
+                "[NamedQueue] Skip enqueue for cancelling task %s on %s",
+                task_metadata.task_id,
+                self.name,
+            )
+            raise TaskWorkRejected(
+                f"Task {task_metadata.task_id} is cancelling; rejected work for {self.name}"
+            )
+
+        try:
+            if isinstance(data, dict):
+                data = json.dumps(data)
+
+            msg_id = await self._async_agfs.write(enqueue_file, data.encode("utf-8"))
+        except BaseException:
+            if self._task_work_index is not None and task_metadata is not None:
+                await self._task_work_index.discard(self.name, task_metadata)
+            raise
         return msg_id if isinstance(msg_id, str) else str(msg_id)
 
-    async def ack(self, msg_id: str) -> None:
+    async def ack(self, msg_id: str, message: Optional[Dict[str, Any]] = None) -> None:
         """Acknowledge successful processing of a message (deletes it from persistent storage).
 
         Must be called after the dequeue handler finishes processing a message.
+        Task-owned work is provisionally removed from the runtime index first so
+        the last message can persist its task's terminal state before deletion.
         If not called (e.g. process crashes), the message will be automatically
         re-queued on the next startup via RecoverStale.
         """
         if not msg_id:
             return
         ack_file = f"{self.path}/ack"
+        prepared = None
         try:
+            if self._task_work_index is not None and message is not None:
+                prepared = await self._task_work_index.prepare_ack(self.name, message)
             await self._async_agfs.write(ack_file, msg_id.encode("utf-8"))
+        except asyncio.CancelledError:
+            if self._task_work_index is not None and prepared is not None:
+                self._task_work_index.rollback_ack(self.name, prepared)
+            raise
         except Exception as e:
+            if self._task_work_index is not None and prepared is not None:
+                self._task_work_index.rollback_ack(self.name, prepared)
             logger.warning(f"[NamedQueue] Ack failed for {self.name} msg_id={msg_id}: {e}")
 
     async def _read_queue_message(self) -> Optional[Dict[str, Any]]:
@@ -266,13 +318,14 @@ class NamedQueue:
                 return None
             # Capture message ID before passing data to handler (handler may modify it)
             msg_id = data.get("id", "") if isinstance(data, dict) else ""
+            raw_data = data
             if self._dequeue_handler:
                 self._on_dequeue_start()
-                data = await self._dequeue_handler.on_dequeue(data)
+                data = await self.process_dequeued(data)
             # Ack unconditionally after handler returns (success or handled error).
             # If on_dequeue raises, the exception propagates and ack is skipped —
             # the message will be recovered on next startup.
-            await self.ack(msg_id)
+            await self.ack(msg_id, raw_data)
             return data
         except Exception as e:
             logger.debug(f"[NamedQueue] Dequeue failed for {self.name}: {e}")
@@ -293,9 +346,29 @@ class NamedQueue:
         NOTE: caller must call _on_dequeue_start() before invoking this method
         so that in_progress is incremented atomically with the dequeue.
         """
-        if self._dequeue_handler:
+        if self._dequeue_handler is None:
+            return data
+
+        metadata = extract_task_metadata(data)
+        if metadata is None or self._task_work_index is None:
             return await self._dequeue_handler.on_dequeue(data)
-        return data
+
+        active_task = asyncio.current_task()
+        with bind_task_context(metadata.task_id, metadata.account_id, metadata.user_id):
+            if self._task_work_index.cancellation_requested(metadata.task_id):
+                return await self._dequeue_handler.on_cancelled(data)
+            if active_task is not None:
+                self._task_work_index.register_active(metadata.task_id, active_task)
+            try:
+                return await self._dequeue_handler.on_dequeue(data)
+            except asyncio.CancelledError:
+                if self._task_work_index.cancellation_requested(metadata.task_id):
+                    self._on_process_success()
+                    return None
+                raise
+            finally:
+                if active_task is not None:
+                    self._task_work_index.unregister_active(metadata.task_id, active_task)
 
     async def peek(self) -> Optional[Dict[str, Any]]:
         """Peek at head message without removing."""
@@ -336,14 +409,45 @@ class NamedQueue:
         except (AGFSNotFoundError, FileNotFoundError):
             return 0
 
+    async def snapshot(self) -> List[Dict[str, Any]]:
+        """Return all unacknowledged messages without changing queue state."""
+        await self._ensure_initialized()
+        try:
+            content = await self._async_agfs.read(f"{self.path}/messages")
+        except (AGFSNotFoundError, FileNotFoundError):
+            return []
+        if not content:
+            return []
+        if isinstance(content, bytes):
+            content = content.decode("utf-8")
+        elif hasattr(content, "content") and content.content is not None:
+            content = content.content.decode("utf-8")
+        parsed = json.loads(content)
+        return parsed if isinstance(parsed, list) else []
+
     async def clear(self) -> bool:
         """Clear queue."""
         await self._ensure_initialized()
         clear_file = f"{self.path}/clear"
 
+        messages = await self.snapshot() if self._task_work_index is not None else []
+        prepared = []
         try:
+            if self._task_work_index is not None:
+                for message in messages:
+                    metadata = await self._task_work_index.prepare_ack(self.name, message)
+                    if metadata is not None:
+                        prepared.append(metadata)
             await self._async_agfs.write(clear_file, b"")
             return True
+        except asyncio.CancelledError:
+            if self._task_work_index is not None:
+                for metadata in prepared:
+                    self._task_work_index.rollback_ack(self.name, metadata)
+            raise
         except Exception as e:
+            if self._task_work_index is not None:
+                for metadata in prepared:
+                    self._task_work_index.rollback_ack(self.name, metadata)
             logger.error(f"[NamedQueue] Clear failed for {self.name}: {e}")
             return False

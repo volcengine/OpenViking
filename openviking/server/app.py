@@ -32,7 +32,6 @@ from openviking.server.request_id import REQUEST_ID_HEADER, RequestIdMiddleware
 from openviking.server.routers import (
     admin_router,
     bot_router,
-    code_router,
     console_router,
     content_router,
     debug_router,
@@ -578,7 +577,6 @@ def create_app(
     app.include_router(content_router)
     app.include_router(console_router)
     app.include_router(search_router)
-    app.include_router(code_router)
     app.include_router(relations_router)
     app.include_router(privacy_configs_router)
     app.include_router(skills_router)

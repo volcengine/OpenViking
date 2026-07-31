@@ -65,7 +65,11 @@ export function TaskDetailSheet({
     queryKey: ['task-detail', identityScopeKey, taskId],
     refetchInterval: (query) => {
       const status = normalizeTaskStatus(query.state.data?.status)
-      return status === 'pending' || status === 'running' ? 3_000 : false
+      return status === 'pending' ||
+        status === 'running' ||
+        status === 'cancelling'
+        ? 3_000
+        : false
     },
   })
   const task = detailQuery.data
@@ -177,7 +181,9 @@ export function TaskDetailSheet({
                       {t(
                         normalizeTaskStatus(task.status) === 'failed'
                           ? 'detail.noResultFailedDescription'
-                          : 'detail.noResultDescription',
+                          : normalizeTaskStatus(task.status) === 'cancelled'
+                            ? 'detail.noResultCancelledDescription'
+                            : 'detail.noResultDescription',
                       )}
                     </p>
                   </div>

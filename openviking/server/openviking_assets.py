@@ -64,10 +64,17 @@ class _CatalogAsset(_StrictModel):
 class _Catalog(_StrictModel):
     protocol: str
     defaults: _Defaults | None = None
-    assets: list[_CatalogAsset]
+    catalog: list[_CatalogAsset]
 
 
 class _Manifest(_StrictModel):
+    """One build: asset definitions under ``catalog``, chosen names under ``assets``.
+
+    ``catalog`` holds the definitions themselves, inline here or supplied as a
+    separate catalog file. ``assets`` names which of them this build applies;
+    omitting it applies every defined asset.
+    """
+
     protocol: str | None = None
     defaults: _Defaults | None = None
     catalog: list[_CatalogAsset] | str | None = None
@@ -312,7 +319,7 @@ def resolve_openviking_assets(
     manifest_yaml: str,
     catalog_yaml: str | None = None,
     manifest_label: str = "manifest.yaml",
-    catalog_label: str = "assets.yaml",
+    catalog_label: str = "catalog.yaml",
 ) -> ResolveResult:
     """Parse and resolve one flat manifest, optionally against a separate catalog.
 
@@ -352,7 +359,9 @@ def resolve_openviking_assets(
                 f"manifest '{manifest_label}': 'protocol' is required when the manifest "
                 f"defines 'catalog' (expected '{PROTOCOL}')"
             )
-        catalog = _Catalog(protocol=PROTOCOL, defaults=manifest.defaults, assets=manifest.catalog)
+        catalog = _Catalog(
+            protocol=PROTOCOL, defaults=manifest.defaults, catalog=manifest.catalog
+        )
         catalog_label = manifest_label
     else:
         if manifest.defaults is not None:
@@ -387,7 +396,7 @@ def resolve_openviking_assets(
     if manifest.assets is None and manifest.catalog is not None:
         # A single-file manifest without an explicit selection applies everything
         # it defines; duplicate definition names are rejected below.
-        names = [asset.name for asset in catalog.assets]
+        names = [asset.name for asset in catalog.catalog]
     if not names:
         raise InvalidArgumentError(f"manifest '{manifest_label}' selects no assets")
 
@@ -403,7 +412,7 @@ def resolve_openviking_assets(
         default_watch = 0.0
 
     catalog_by_name: dict[str, _CatalogAsset] = {}
-    for asset in catalog.assets:
+    for asset in catalog.catalog:
         where = f"catalog '{catalog_label}' asset '{asset.name}'"
         if not _ASSET_NAME_RE.fullmatch(asset.name):
             raise InvalidArgumentError(

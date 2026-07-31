@@ -1,24 +1,20 @@
-from types import SimpleNamespace
 
 from openviking.telemetry.operation import OperationTelemetry
 
 
-def test_record_resource_wait_metrics_collects_queue_and_dag_stats(monkeypatch):
-    from openviking.telemetry.resource_summary import record_resource_wait_metrics
+def test_record_resource_queue_metrics_collects_queue_and_dag_stats(monkeypatch):
+    from openviking.telemetry.resource_summary import record_resource_queue_metrics
 
     telemetry = OperationTelemetry(operation="resources.add_resource", enabled=True)
     telemetry_id = telemetry.telemetry_id
-    queue_status = {
-        "Semantic": SimpleNamespace(processed=3, error_count=1, errors=[]),
-        "Embedding": SimpleNamespace(processed=5, error_count=0, errors=[]),
-    }
-
     class _SemanticStats:
         processed = 7
+        requeue_count = 0
         error_count = 2
 
     class _EmbeddingStats:
         processed = 11
+        requeue_count = 0
         error_count = 1
 
     class _DagStats:
@@ -40,10 +36,9 @@ def test_record_resource_wait_metrics_collects_queue_and_dag_stats(monkeypatch):
         lambda _tid, _uri: _DagStats(),
     )
 
-    record_resource_wait_metrics(
+    record_resource_queue_metrics(
         telemetry=telemetry,
         telemetry_id=telemetry_id,
-        queue_status=queue_status,
         root_uri="viking://resources/demo",
     )
 

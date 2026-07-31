@@ -1,21 +1,10 @@
-# Self-contained OpenViking Assets manifest: assets are defined right here
-# under `catalog:`, so no separate catalog file is needed.
-#   ov add-resource --manifest manifest.yaml --dry-run
-# Credentials never appear here; `auth_ref` aliases resolve on each consumer's
-# machine (~/.openviking/openviking_assets_credentials.yaml).
-protocol: openviking-assets/1
-
-catalog:
-  - name: openviking
-    connector: git
-    description: OpenViking main repository — server, CLI and SDKs
-    params:
-      repo_url: https://github.com/volcengine/OpenViking
-      branch: main
-
-  - name: flask
-    connector: git
-    description: Flask source, small enough for quick pilot runs
-    watch_interval: 0      # no automatic refresh for this one
-    params:
-      repo_url: git@github.com:pallets/flask.git
+# OpenViking Assets manifest: selects assets by name from the catalog.yaml
+# next to it (found automatically; override with --args catalog:<file>).
+# Validate first, then apply:
+#   ov add-resource -m manifest.yaml --args dry_run:true
+#   ov add-resource -m manifest.yaml
+# Simple setups can skip the separate catalog file and define assets inline
+# under `catalog:` — see the OpenViking Assets guide.
+assets:
+  - openviking
+  - flask

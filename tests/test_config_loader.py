@@ -269,6 +269,30 @@ def test_openviking_config_ignores_deprecated_agent_memory_enabled(monkeypatch):
     OpenVikingConfigSingleton.reset_instance()
 
 
+def test_openviking_config_ignores_deprecated_code_summary_mode(monkeypatch):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
+
+    from openviking_cli.utils.config import parser_config
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        parser_config.logger,
+        "warning",
+        lambda message, *args, **kwargs: warnings.append(message % args if args else message),
+    )
+
+    config = OpenVikingConfig.from_dict({"code": {"code_summary_mode": "llm"}})
+
+    assert not hasattr(config.code, "code_summary_mode")
+    assert any("code.code_summary_mode is deprecated and ignored" in item for item in warnings)
+
+    OpenVikingConfigSingleton.reset_instance()
+
+
 def test_openviking_config_retrieval_hotness_alpha_defaults_to_zero(monkeypatch):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 

@@ -104,13 +104,13 @@ async def _commit_experience_snapshot(
     commit = getattr(viking_fs, "commit", None)
     if not callable(commit):
         return
-    paths = [
-        uri
+    has_experience_changes = any(
+        "/memories/experiences/" in uri and uri.endswith(".md")
         for uri in dict.fromkeys(str(uri or "") for uri in experience_uris)
-        if "/memories/experiences/" in uri and uri.endswith(".md")
-    ]
-    if not paths:
+    )
+    if not has_experience_changes:
         return
+    paths = [_experience_root_uri(ctx)]
     archive_ref = archive_uri.rstrip("/") if archive_uri else "unknown"
     try:
         await commit(

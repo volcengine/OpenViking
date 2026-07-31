@@ -80,6 +80,9 @@ pub async fn handle_add_resource(
     let effective_include = merge_csv_options(ctx.config.upload.include.clone(), include);
     let effective_exclude = merge_csv_options(ctx.config.upload.exclude.clone(), exclude);
     let add_resource_args = parse_add_resource_args(resource_args.as_deref())?;
+    if let Some(args) = &add_resource_args {
+        reject_manifest_run_keys(args)?;
+    }
 
     let effective_timeout = if wait {
         timeout.unwrap_or(60.0).max(ctx.config.timeout)
@@ -127,7 +130,26 @@ pub async fn handle_add_resource(
     .await
 }
 
-fn parse_add_resource_args(raw: Option<&str>) -> Result<Option<Map<String, Value>>> {
+/// Single-resource `--args` go to the server as parser options; a manifest-run
+/// key here almost always means a forgotten `-m`. Fail instead of forwarding —
+/// the server treats unknown args keys of shared Connector sources by silently
+/// degrading to the standard pipeline, which would bury the mistake.
+fn reject_manifest_run_keys(args: &Map<String, Value>) -> Result<()> {
+    let run_keys: Vec<&str> = args
+        .keys()
+        .map(String::as_str)
+        .filter(|key| crate::openviking_assets::MANIFEST_RUN_ARG_KEYS.contains(key))
+        .collect();
+    if run_keys.is_empty() {
+        return Ok(());
+    }
+    Err(Error::Client(format!(
+        "--args {} are manifest-run options and need -m/--manifest.",
+        run_keys.join(", ")
+    )))
+}
+
+pub(crate) fn parse_add_resource_args(raw: Option<&str>) -> Result<Option<Map<String, Value>>> {
     let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
         return Ok(None);
     };
@@ -242,6 +264,48 @@ fn parse_add_resource_arg_value(raw: &str) -> Value {
         })
         .unwrap_or(raw);
     Value::String(unquoted.to_string())
+}
+
+#[cfg(test)]
+mod add_resource_args_tests {
+    use super::*;
+
+    #[test]
+    fn single_resource_mode_rejects_manifest_run_keys() {
+        let args = parse_add_resource_args(Some("dry_run:true,external_connector:true"))
+            .unwrap()
+            .unwrap();
+        let err = reject_manifest_run_keys(&args).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("dry_run"), "{message}");
+        assert!(message.contains("--manifest"), "{message}");
+
+        let server_args = parse_add_resource_args(Some("feishu_access_token:u-xxx"))
+            .unwrap()
+            .unwrap();
+        assert!(reject_manifest_run_keys(&server_args).is_ok());
+    }
+
+    #[test]
+    fn manifest_run_args_share_single_resource_args_syntax() {
+        // Both --args forms of single-resource mode must drive manifest mode
+        // identically: the colon list and the JSON object go through the same
+        // parser, so neither mode grows its own syntax.
+        let colon = parse_add_resource_args(Some(
+            "catalog:shared/catalog.yaml,dry_run:true,skip_failed:false",
+        ))
+        .unwrap();
+        let json = parse_add_resource_args(Some(
+            r#"{"catalog": "shared/catalog.yaml", "dry_run": true, "skip_failed": false}"#,
+        ))
+        .unwrap();
+        assert_eq!(colon, json);
+
+        let run = crate::openviking_assets::parse_manifest_run_args(colon.as_ref()).unwrap();
+        assert_eq!(run.catalog.as_deref(), Some("shared/catalog.yaml"));
+        assert!(run.dry_run);
+        assert!(!run.skip_failed);
+    }
 }
 
 pub async fn handle_add_skill(

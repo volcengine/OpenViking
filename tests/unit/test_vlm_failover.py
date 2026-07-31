@@ -121,6 +121,33 @@ class TestVLMBackupConfig:
         # Falls back to parent model when credential.model is not set.
         assert dict_b["model"] == "parent-model"
 
+    def test_per_credential_max_tokens_overrides_parent_value(self):
+        from openviking_cli.utils.config.vlm_config import VLMCredential
+
+        config = VLMConfig(
+            model="parent-model",
+            max_tokens=8192,
+            credentials=[
+                VLMCredential(
+                    id="cred-a",
+                    provider="volcengine",
+                    api_key="key-a",
+                    max_tokens=2048,
+                ),
+                VLMCredential(
+                    id="cred-b",
+                    provider="volcengine",
+                    api_key="key-b",
+                ),
+            ],
+        )
+
+        dict_a = config._build_vlm_config_dict_for_credential(config.credentials[0])
+        dict_b = config._build_vlm_config_dict_for_credential(config.credentials[1])
+
+        assert dict_a["max_tokens"] == 2048
+        assert dict_b["max_tokens"] == 8192
+
 
 class TestLegacyProvidersDictMigration:
     """Tests for migrating legacy ``providers: {name: {...}}`` configs into credentials.

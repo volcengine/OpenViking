@@ -3,8 +3,7 @@
 """MCP (Model Context Protocol) endpoint for OpenViking server.
 
 Exposes tools to Claude Code (or any MCP client) via streamable HTTP:
-  find, search, read, list, remember, add_resource, grep, glob,
-  code_outline, code_search, code_expand, forget, health
+  find, search, read, list, remember, add_resource, grep, glob, forget, health
 
 Mounted on the FastAPI app at /mcp. The MCP session manager lifecycle is
 tied to the FastAPI app lifespan (not a sub-app lifespan) so the task group
@@ -31,13 +30,6 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from openviking.parse.parsers.code.ast.code_tools import (
-    CODE_SEARCH_CONCURRENCY,
-    expand_symbol,
-    filter_code_uris,
-    outline_file,
-    search_symbols,
-)
 from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.retrieve.type_quota_recall import (
     DEFAULT_MAX_CHARS,
@@ -64,9 +56,6 @@ from openviking_cli.exceptions import (
 )
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
-
-# Backwards-compatible alias for existing tests that import this private name.
-_filter_code_uris = filter_code_uris
 
 logger = get_logger(__name__)
 
@@ -931,97 +920,6 @@ async def forget(uri: str, recursive: bool = False) -> str:
     return f"Deleted: {uri}"
 
 
-# -- code navigation -------------------------------------------------------
-
-
-def _require_viking_uri(uri: str) -> Optional[str]:
-    """Return error message if uri is not a viking:// URI, else None."""
-    if not isinstance(uri, str) or not uri.startswith("viking://"):
-        return (
-            "Error: only viking:// URIs are supported; "
-            "use add_resource to ingest local code as a viking:// resource first."
-        )
-    return None
-
-
-@mcp.tool()
-async def code_outline(uri: str) -> str:
-    """Show symbol structure (classes, functions, methods, line ranges) of a viking:// source file without reading full content."""
-    err = _require_viking_uri(uri)
-    if err:
-        return err
-    service = get_service()
-    ctx = _get_ctx()
-    try:
-        content = await service.fs.read(uri, ctx=ctx)
-    except Exception as exc:
-        return f"Error: failed to read {uri}: {exc}"
-    if not isinstance(content, str):
-        return f"Error: {uri} is not text"
-    return outline_file(content, uri)
-
-
-@mcp.tool()
-async def code_search(query: str, uri: str) -> str:
-    """Search symbol names (class/function/method) by substring across a viking:// code repository. Returns symbol type, class context, file URI, and line range. Scans up to 200 source files — narrow uri for deeper coverage."""
-    err = _require_viking_uri(uri)
-    if err:
-        return err
-    if not query:
-        return "Error: empty query"
-
-    service = get_service()
-    ctx = _get_ctx()
-    try:
-        entries = await service.fs.ls(uri, ctx=ctx, recursive=True, output="original")
-    except Exception as exc:
-        return f"Error: failed to list {uri}: {exc}"
-
-    code_uris, capped = filter_code_uris(entries or [])
-    if not code_uris:
-        return f"No supported source files found under {uri}"
-
-    semaphore = asyncio.Semaphore(CODE_SEARCH_CONCURRENCY)
-
-    async def _read(u: str) -> Optional[tuple[str, str]]:
-        async with semaphore:
-            try:
-                body = await service.fs.read(u, ctx=ctx)
-            except Exception as exc:
-                logger.warning("code_search: read failed for %s: %s", u, exc)
-                return None
-            if isinstance(body, str):
-                return body, u
-            return None
-
-    fetched = await asyncio.gather(*[_read(u) for u in code_uris])
-    files = [pair for pair in fetched if pair is not None]
-    result = search_symbols(query, files)
-    if capped:
-        result += "\n\n(scanning stopped at 200-file cap; narrow uri to search more)"
-    return result
-
-
-@mcp.tool()
-async def code_expand(uri: str, symbol: str) -> str:
-    """Return the full source of a single named symbol from a viking:// source file. symbol accepts 'bar' (top-level) or 'Foo.bar' (method)."""
-    err = _require_viking_uri(uri)
-    if err:
-        return err
-    if not symbol:
-        return "Error: empty symbol"
-
-    service = get_service()
-    ctx = _get_ctx()
-    try:
-        content = await service.fs.read(uri, ctx=ctx)
-    except Exception as exc:
-        return f"Error: failed to read {uri}: {exc}"
-    if not isinstance(content, str):
-        return f"Error: {uri} is not text"
-    return expand_symbol(content, uri, symbol)
-
-
 # -- health ----------------------------------------------------------------
 
 
@@ -1133,9 +1031,8 @@ async def mcp_lifespan():
     """Run the MCP session manager. Call this inside the FastAPI lifespan."""
     async with mcp.session_manager.run():
         logger.info(
-            "MCP endpoint ready (16 tools: find, search, recall, read, list, remember, "
-            "add_resource, list_watches, cancel_watch, grep, glob, forget, code_outline, "
-            "code_search, code_expand, health)"
+            "MCP endpoint ready (13 tools: find, search, recall, read, list, remember, "
+            "add_resource, list_watches, cancel_watch, grep, glob, forget, health)"
         )
         yield
 
