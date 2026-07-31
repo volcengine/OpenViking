@@ -8,6 +8,7 @@ and that _convert_local injects them as markdown headings.
 """
 
 from contextlib import nullcontext
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -328,6 +329,106 @@ class TestConvertLocalBookmarks:
         assert meta["bookmarks_unresolved"] == 1
         assert meta["headings_found"] == 1
         assert meta["heading_source"] == "font_analysis"
+
+    @pytest.mark.asyncio
+    async def test_convert_local_skips_images_stacked_on_same_bbox(self):
+        """Two image XObjects at the same spot must render (and save) only once."""
+        parser = PDFParser()
+        stacked = {"x0": 0.0, "top": 0.1, "x1": 595.0, "bottom": 841.9}
+        page = _FakePage("Page one")
+        page.images = [dict(stacked), dict(stacked)]
+        fake_pdf = SimpleNamespace(pages=[page])
+        fake_pdfplumber = SimpleNamespace(open=lambda _path: nullcontext(fake_pdf))
+        storage = MagicMock()
+        storage.save_image.return_value = Path("/media/dummy/images/page1_img1.png")
+        storage.media_dir = Path("/media")
+
+        with (
+            patch("openviking.parse.parsers.pdf.lazy_import", return_value=fake_pdfplumber),
+            patch.object(parser, "_extract_bookmarks", return_value=[]),
+            patch.object(parser, "_detect_headings_by_font", return_value=[]),
+            patch.object(parser, "_extract_image_from_page", return_value=b"png") as extract,
+        ):
+            markdown, meta = await parser._convert_local(
+                "dummy.pdf", storage=storage, resource_name="dummy"
+            )
+
+        # The duplicate is dropped before rendering, so it never costs a render.
+        assert extract.call_count == 1
+        assert storage.save_image.call_count == 1
+        assert meta["images_extracted"] == 1
+        assert meta["images_deduplicated"] == 1
+        assert markdown.count("![Page 1 Image") == 1
+
+    @pytest.mark.asyncio
+    async def test_convert_local_skips_images_rendering_to_same_bytes(self):
+        """Distinct bboxes that still render identically are caught by the hash."""
+        parser = PDFParser()
+        page = _FakePage("Page one")
+        page.images = [
+            {"x0": 0.0, "top": 0.0, "x1": 100.0, "bottom": 100.0},
+            {"x0": 5.0, "top": 5.0, "x1": 105.0, "bottom": 105.0},
+        ]
+        fake_pdf = SimpleNamespace(pages=[page])
+        fake_pdfplumber = SimpleNamespace(open=lambda _path: nullcontext(fake_pdf))
+        storage = MagicMock()
+        storage.save_image.return_value = Path("/media/dummy/images/page1_img1.png")
+        storage.media_dir = Path("/media")
+
+        with (
+            patch("openviking.parse.parsers.pdf.lazy_import", return_value=fake_pdfplumber),
+            patch.object(parser, "_extract_bookmarks", return_value=[]),
+            patch.object(parser, "_detect_headings_by_font", return_value=[]),
+            patch.object(parser, "_extract_image_from_page", return_value=b"png") as extract,
+        ):
+            _markdown, meta = await parser._convert_local(
+                "dummy.pdf", storage=storage, resource_name="dummy"
+            )
+
+        # Both are rendered (bboxes differ), but only one is saved.
+        assert extract.call_count == 2
+        assert storage.save_image.call_count == 1
+        assert meta["images_extracted"] == 1
+        assert meta["images_deduplicated"] == 1
+
+    @pytest.mark.asyncio
+    async def test_convert_local_keeps_distinct_images_and_repeats_across_pages(self):
+        """Dedup is per-page: a logo on every page survives on every page."""
+        parser = PDFParser()
+        logo = {"x0": 0.0, "top": 0.0, "x1": 50.0, "bottom": 50.0}
+        figure = {"x0": 0.0, "top": 200.0, "x1": 300.0, "bottom": 400.0}
+        page1, page2 = _FakePage("Page one"), _FakePage("Page two")
+        page1.images = [dict(logo), dict(figure)]
+        page2.images = [dict(logo)]
+        fake_pdf = SimpleNamespace(pages=[page1, page2])
+        fake_pdfplumber = SimpleNamespace(open=lambda _path: nullcontext(fake_pdf))
+        storage = MagicMock()
+        storage.save_image.return_value = Path("/media/dummy/images/img.png")
+        storage.media_dir = Path("/media")
+
+        renders = {
+            (0.0, 0.0, 50.0, 50.0): b"logo-png",
+            (0.0, 200.0, 300.0, 400.0): b"figure-png",
+        }
+
+        with (
+            patch("openviking.parse.parsers.pdf.lazy_import", return_value=fake_pdfplumber),
+            patch.object(parser, "_extract_bookmarks", return_value=[]),
+            patch.object(parser, "_detect_headings_by_font", return_value=[]),
+            patch.object(
+                parser,
+                "_extract_image_from_page",
+                side_effect=lambda _page, img: renders[
+                    (img["x0"], img["top"], img["x1"], img["bottom"])
+                ],
+            ),
+        ):
+            _markdown, meta = await parser._convert_local(
+                "dummy.pdf", storage=storage, resource_name="dummy"
+            )
+
+        assert meta["images_extracted"] == 3
+        assert meta["images_deduplicated"] == 0
 
     @pytest.mark.asyncio
     async def test_convert_local_closes_page_after_each_page(self):
