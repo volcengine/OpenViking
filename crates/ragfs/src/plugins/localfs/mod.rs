@@ -93,38 +93,69 @@ impl LocalFileSystem {
         }
     }
 
-    /// Return whether an open file still identifies the file currently stored at `path`.
-    fn open_file_matches_path(file: &fs::File, path: &Path) -> Result<bool> {
-        let open_metadata = file
-            .metadata()
-            .map_err(|e| Error::plugin(format!("failed to stat open CAS file: {}", e)))?;
-        let path_metadata = match fs::metadata(path) {
-            Ok(metadata) => metadata,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-            Err(e) => {
-                return Err(Error::plugin(format!(
-                    "failed to stat CAS path '{}': {}",
-                    path.display(),
-                    e
-                )));
-            }
+    #[cfg(windows)]
+    fn windows_file_identity(file: &fs::File) -> Result<(u32, u64)> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
         };
 
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        // SAFETY: `file` owns a live OS handle and `info` points to valid,
+        // writable storage for the duration of this call.
+        let succeeded =
+            unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info as *mut _) };
+        if succeeded == 0 {
+            return Err(Error::plugin(format!(
+                "failed to inspect open CAS file: {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+
+        let file_index = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
+        Ok((info.dwVolumeSerialNumber, file_index))
+    }
+
+    /// Return whether an open file still identifies the file currently stored at `path`.
+    fn open_file_matches_path(file: &fs::File, path: &Path) -> Result<bool> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
+            let open_metadata = file
+                .metadata()
+                .map_err(|e| Error::plugin(format!("failed to stat open CAS file: {}", e)))?;
+            let path_metadata = match fs::metadata(path) {
+                Ok(metadata) => metadata,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                Err(e) => {
+                    return Err(Error::plugin(format!(
+                        "failed to stat CAS path '{}': {}",
+                        path.display(),
+                        e
+                    )));
+                }
+            };
             Ok(open_metadata.dev() == path_metadata.dev()
                 && open_metadata.ino() == path_metadata.ino())
         }
         #[cfg(windows)]
         {
-            use std::os::windows::fs::MetadataExt;
-            Ok(open_metadata.volume_serial_number() == path_metadata.volume_serial_number()
-                && open_metadata.file_index() == path_metadata.file_index())
+            let path_file = match fs::File::open(path) {
+                Ok(path_file) => path_file,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                Err(e) => {
+                    return Err(Error::plugin(format!(
+                        "failed to open CAS path '{}': {}",
+                        path.display(),
+                        e
+                    )));
+                }
+            };
+            Ok(Self::windows_file_identity(file)? == Self::windows_file_identity(&path_file)?)
         }
         #[cfg(not(any(unix, windows)))]
         {
-            let _ = (open_metadata, path_metadata);
+            let _ = (file, path);
             Err(Error::invalid_operation(
                 "CAS file identity checks are unsupported on this platform",
             ))
@@ -1370,6 +1401,28 @@ mod tests {
             std::fs::create_dir_all(parent).unwrap();
         }
         std::fs::write(path, content).unwrap();
+    }
+
+    #[test]
+    fn test_open_file_identity_matches_only_the_current_path_entry() {
+        let dir = TempDir::new().unwrap();
+        write_file(dir.path(), "first.txt", "same content");
+        write_file(dir.path(), "second.txt", "same content");
+
+        let first_path = dir.path().join("first.txt");
+        let first_file = std::fs::File::open(&first_path).unwrap();
+
+        assert!(LocalFileSystem::open_file_matches_path(&first_file, &first_path).unwrap());
+        assert!(!LocalFileSystem::open_file_matches_path(
+            &first_file,
+            &dir.path().join("second.txt")
+        )
+        .unwrap());
+        assert!(!LocalFileSystem::open_file_matches_path(
+            &first_file,
+            &dir.path().join("missing.txt")
+        )
+        .unwrap());
     }
 
     #[tokio::test]
