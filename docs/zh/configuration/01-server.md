@@ -77,30 +77,37 @@ API 型 `embedding`、`vlm`、`query_planner` 和 `rerank` 配置会复用部分
 {
   "embedding": {
     "dense": {
-      "provider": "openai",
-      "model": "text-embedding-3-large",
-      "dimension": 3072,
-      "input": "text",
-      "encoding_format": "float",
-      "api_key": "<embedding-api-key>"
+      "provider": "volcengine",
+      "model": "doubao-embedding-vision-251215",
+      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+      "api_key": "<your-ark-api-key>",
+      "dimension": 1024,
+      "input": "multimodal"
     }
   },
   "vlm": {
-    "provider": "openai",
-    "model": "gpt-4.1-mini",
-    "api_key": "<vlm-api-key>",
+    "provider": "volcengine",
+    "model": "doubao-seed-2-0-code-preview-260215",
+    "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+    "api_key": "<your-ark-api-key>",
     "temperature": 0,
-    "max_retries": 3
+    "max_retries": 3,
+    "thinking": false
   },
   "query_planner": {
-    "provider": "openai",
-    "model": "gpt-4.1-mini",
-    "api_key": "<vlm-api-key>"
+    "provider": "volcengine",
+    "model": "doubao-seed-2-0-code-preview-260215",
+    "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+    "api_key": "<your-ark-api-key>",
+    "thinking": false
   },
   "rerank": {
-    "provider": "cohere",
-    "model": "rerank-v3.5",
-    "api_key": "<rerank-api-key>",
+    "provider": "vikingdb",
+    "ak": "<your-volcengine-ak>",
+    "sk": "<your-volcengine-sk>",
+    "host": "api-vikingdb.vikingdb.cn-beijing.volces.com",
+    "model_name": "doubao-seed-rerank",
+    "model_version": "251028",
     "threshold": 0.1,
     "max_input_tokens": 0
   }
@@ -340,16 +347,20 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
 {
   "embedding": {
     "dense": {
-      "provider": "openai",
-      "model": "text-embedding-3-large",
-      "dimension": 3072,
-      "api_key": "<embedding-api-key>"
+      "provider": "volcengine",
+      "model": "doubao-embedding-vision-251215",
+      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+      "api_key": "<your-ark-api-key>",
+      "dimension": 1024,
+      "input": "multimodal"
     }
   },
   "vlm": {
-    "provider": "openai",
-    "model": "gpt-4.1-mini",
-    "api_key": "<vlm-api-key>"
+    "provider": "volcengine",
+    "model": "doubao-seed-2-0-code-preview-260215",
+    "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+    "api_key": "<your-ark-api-key>",
+    "thinking": false
   },
   "storage": {
     "workspace": "./data"
