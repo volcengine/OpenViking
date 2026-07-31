@@ -187,6 +187,161 @@ def test_fetch_all_blocks_uses_user_access_token_option(monkeypatch):
     assert option.user_access_token == "u-test"
 
 
+def test_feishu_url_detection_supports_drive_folder_and_file_paths():
+    assert FeishuAccessor._is_feishu_url(
+        "https://bytedance.larkoffice.com/drive/folder/ZihPfsmbBlK4iCdFK8ocMA0Onre"
+    )
+    assert FeishuAccessor._is_feishu_url(
+        "https://bytedance.larkoffice.com/file/G0wKbPjCooZ7LUxktDOc56Ysnlg"
+    )
+
+    assert FeishuAccessor._parse_feishu_url(
+        "https://bytedance.larkoffice.com/drive/folder/ZihPfsmbBlK4iCdFK8ocMA0Onre"
+    ) == ("folder", "ZihPfsmbBlK4iCdFK8ocMA0Onre")
+    assert FeishuAccessor._parse_feishu_url(
+        "https://bytedance.larkoffice.com/file/G0wKbPjCooZ7LUxktDOc56Ysnlg"
+    ) == ("file", "G0wKbPjCooZ7LUxktDOc56Ysnlg")
+
+
+def test_access_downloads_lark_file_url(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+    request = MagicMock(
+        return_value=_FakeMediaResponse(
+            b"%PDF-1.7",
+            headers={"content-type": "application/pdf"},
+        )
+    )
+    accessor = FeishuAccessor()
+    accessor._config = SimpleNamespace(download_images=False)
+    accessor._user_token_client = SimpleNamespace(request=request)
+
+    resource = asyncio.run(
+        accessor.access(
+            "https://bytedance.larkoffice.com/file/G0wKbPjCooZ7LUxktDOc56Ysnlg",
+            feishu_access_token="u-test",
+        )
+    )
+    try:
+        assert resource.path.read_bytes() == b"%PDF-1.7"
+        assert resource.path.suffix == ".pdf"
+        assert resource.meta["feishu_doc_type"] == "file"
+        assert resource.meta["feishu_token"] == "G0wKbPjCooZ7LUxktDOc56Ysnlg"
+        assert resource.meta["original_filename"] == "G0wKbPjCooZ7LUxktDOc56Ysnlg.pdf"
+        raw_request, option = request.call_args.args
+        assert raw_request.http_method == "GET"
+        assert raw_request.uri == "/open-apis/drive/v1/files/G0wKbPjCooZ7LUxktDOc56Ysnlg/download"
+        assert raw_request.token_types == {"user"}
+        assert option.user_access_token == "u-test"
+    finally:
+        resource.cleanup()
+
+
+def test_access_expands_drive_folder_recursively(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+    folder_children = {
+        "root_folder": [
+            SimpleNamespace(token="doc_token", name="Spec Doc", type="docx", url=""),
+            SimpleNamespace(token="versioned_doc", name="Spec v1.2", type="docx", url=""),
+            SimpleNamespace(token="child_folder", name="Nested Folder", type="folder", url=""),
+            SimpleNamespace(token="file_token", name="Design.pdf", type="file", url=""),
+        ],
+        "child_folder": [
+            SimpleNamespace(token="sheet_token", name="Metrics", type="sheet", url=""),
+        ],
+    }
+    request = MagicMock(
+        return_value=_FakeMediaResponse(
+            b"%PDF-1.7",
+            headers={"content-type": "application/pdf"},
+        )
+    )
+    accessor = FeishuAccessor()
+    accessor._config = SimpleNamespace(download_images=False)
+    accessor._user_token_client = SimpleNamespace(request=request)
+
+    def fake_list_children(folder_token, **_kwargs):
+        return folder_children[folder_token]
+
+    async def fake_fetch_document(url, **_kwargs):
+        from openviking.parse.accessors.feishu_accessor import FeishuDocument
+
+        doc_type, token = accessor._parse_feishu_url(url)
+        return FeishuDocument(
+            doc_type=doc_type,
+            token=token,
+            markdown_content=f"# {token}",
+            title=f"{token} title",
+            meta={},
+        )
+
+    monkeypatch.setattr(accessor, "_list_drive_folder_children", fake_list_children)
+    monkeypatch.setattr(accessor, "_fetch_document", fake_fetch_document)
+
+    resource = asyncio.run(
+        accessor.access(
+            "https://bytedance.larkoffice.com/drive/folder/root_folder",
+            feishu_access_token="u-test",
+        )
+    )
+    try:
+        assert resource.path.is_dir()
+        assert (resource.path / "Spec Doc.md").read_text(encoding="utf-8") == "# doc_token"
+        assert (resource.path / "Spec v1.2.md").read_text(encoding="utf-8") == "# versioned_doc"
+        assert (resource.path / "Nested Folder" / "Metrics.md").read_text(
+            encoding="utf-8"
+        ) == "# sheet_token"
+        assert (resource.path / "Design.pdf").read_bytes() == b"%PDF-1.7"
+        assert resource.meta["feishu_doc_type"] == "folder"
+        assert resource.meta["feishu_token"] == "root_folder"
+        assert resource.meta["original_filename"] == "root_folder"
+    finally:
+        resource.cleanup()
+
+
+def test_list_drive_folder_children_paginates_with_user_token(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+    request = MagicMock(
+        side_effect=[
+            _SuccessResponse(
+                SimpleNamespace(
+                    files=[SimpleNamespace(token="doc_token")],
+                    has_more=True,
+                    next_page_token="page-2",
+                )
+            ),
+            _SuccessResponse(
+                SimpleNamespace(
+                    files=[SimpleNamespace(token="file_token")],
+                    has_more=False,
+                    next_page_token=None,
+                )
+            ),
+        ]
+    )
+    accessor = FeishuAccessor()
+    accessor._user_token_client = SimpleNamespace(request=request)
+
+    children = accessor._list_drive_folder_children(
+        "folder_token",
+        feishu_access_token="u-test",
+    )
+
+    assert [child.token for child in children] == ["doc_token", "file_token"]
+    first_request, first_option = request.call_args_list[0].args
+    second_request, second_option = request.call_args_list[1].args
+    assert first_request.http_method == "GET"
+    assert first_request.uri == "/open-apis/drive/v1/files"
+    assert first_request.token_types == {"user"}
+    assert first_request.queries == {"folder_token": "folder_token", "page_size": 200}
+    assert second_request.queries == {
+        "folder_token": "folder_token",
+        "page_size": 200,
+        "page_token": "page-2",
+    }
+    assert first_option.user_access_token == "u-test"
+    assert second_option.user_access_token == "u-test"
+
+
 def test_resolve_image_refs_respects_download_images_disabled():
     accessor = FeishuAccessor()
     accessor._config = SimpleNamespace(download_images=False)
