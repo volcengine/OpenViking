@@ -9,6 +9,8 @@ export type ClientHeaders =
 export type UploadMode = "local" | "shared";
 /** Resource post-ingest processing modes accepted by addResource. */
 export type ProcessingMode = "semantic_and_vectors" | "vectors_only";
+/** Resource staging strategy supported by addResource. */
+export type ParseMode = "default" | "no_parse";
 /** Conflict policy accepted when importing an OVPack. */
 export type PackConflictPolicy = "fail" | "overwrite" | "skip";
 /** Vector handling strategy accepted when importing an OVPack. */
@@ -84,6 +86,7 @@ export interface AddResourceOptions extends WaitOptions {
   exclude?: string;
   directlyUploadMedia?: boolean;
   preserveStructure?: boolean;
+  parseMode?: ParseMode;
   watchInterval?: number;
   processingMode?: ProcessingMode;
   args?: JsonObject;

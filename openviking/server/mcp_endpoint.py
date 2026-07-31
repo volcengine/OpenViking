@@ -29,6 +29,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from openviking.parse.mode import ParseMode, normalize_parse_mode
 from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.retrieve.type_quota_recall import (
     DEFAULT_MAX_CHARS,
@@ -544,6 +545,7 @@ async def add_resource(
     tags: Optional[list[str]] = None,
     tag_mode: str = "replace",
     args: Optional[dict[str, Any]] = None,
+    parse_mode: ParseMode = ParseMode.DEFAULT,
 ) -> str:
     """Add a resource to OpenViking. Asynchronous — processing happens in the background.
 
@@ -579,11 +581,18 @@ async def add_resource(
         tag_mode: Tag update mode, "replace" or "append". Defaults to "replace".
         args: Parser-specific options, e.g. {"feishu_access_token": "..."} for Feishu imports,
             or {"site": true} for whole-site ingestion.
+        parse_mode: ``default`` keeps current parser behavior; ``no_parse`` preserves source
+            files without parser-driven splitting before vectorization.
     """
     from openviking.server.local_input_guard import require_remote_resource_source
 
     service = get_service()
     ctx = _get_ctx()
+
+    try:
+        mode = normalize_parse_mode(parse_mode)
+    except InvalidArgumentError as exc:
+        return f"Error: {exc}"
 
     if watch_interval < 0:
         return (
@@ -619,6 +628,7 @@ async def add_resource(
                 processing_mode=processing_mode,
                 tags=tags,
                 tag_mode=tag_mode,
+                parse_mode=mode,
             )
         except (PermissionDeniedError, InvalidArgumentError) as exc:
             return f"Error: {exc}"
@@ -673,6 +683,7 @@ async def add_resource(
                 args=args,
                 tags=tags,
                 tag_mode=tag_mode,
+                parse_mode=mode,
             )
         except Exception as exc:
             return f"Error adding resource: {exc}"
@@ -717,6 +728,7 @@ async def add_resource(
         processing_mode=processing_mode,
         tags=tags,
         tag_mode=tag_mode,
+        parse_mode=mode.value,
     )
     base_url, url_source = _resolve_public_base_url()
     upload_url = f"{base_url}/api/v1/resources/temp_upload?token={quote(token, safe='')}"

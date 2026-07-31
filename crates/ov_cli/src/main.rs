@@ -20,7 +20,7 @@ mod theme;
 mod tui;
 mod utils;
 
-use clap::{ArgAction, Args, CommandFactory, Parser, Subcommand};
+use clap::{ArgAction, Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use colored::Colorize;
 use config::Config;
 use error::{Error, Result};
@@ -29,6 +29,22 @@ use std::{
     ffi::OsString,
     io::{self, IsTerminal},
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum ParseMode {
+    Default,
+    #[value(name = "no_parse", alias = "no-parse")]
+    NoParse,
+}
+
+impl ParseMode {
+    pub(crate) fn api_value(self) -> Option<&'static str> {
+        match self {
+            Self::Default => None,
+            Self::NoParse => Some("no_parse"),
+        }
+    }
+}
 
 /// CLI context shared across commands
 #[derive(Debug, Clone)]
@@ -389,6 +405,15 @@ enum Commands {
             help_heading = "Advanced options"
         )]
         processing_mode: String,
+        /// Resource staging strategy: default parser behavior or no parser-driven splitting
+        #[arg(
+            long,
+            value_enum,
+            default_value = "default",
+            value_name = "mode",
+            help_heading = "Advanced options"
+        )]
+        parse_mode: ParseMode,
         /// Extra options as key:value pairs or a JSON object. With a path/URL:
         /// parser-specific import options sent to the server, e.g.
         /// --args feishu_access_token:u-xxx. With --manifest: run options consumed
@@ -2928,6 +2953,7 @@ async fn main() {
             no_directly_upload_media,
             watch_interval,
             processing_mode,
+            parse_mode,
             resource_args,
             tags,
             tag_mode,
@@ -2976,6 +3002,7 @@ async fn main() {
                     no_directly_upload_media,
                     watch_interval.unwrap_or(0.0),
                     processing_mode,
+                    parse_mode,
                     resource_args,
                     tags,
                     tag_mode,
@@ -3495,8 +3522,8 @@ async fn main() {
 mod tests {
     use super::{
         Cli, CliContext, Commands, ConfigAddTarget, ConfigCommands, LanguageGateAction,
-        ObserverCommands, PrivacyCommands, SkillCommands, SnapshotCmd, UploadCliOptions,
-        find_command_index, first_command_token, is_language_command_request,
+        ObserverCommands, ParseMode, PrivacyCommands, SkillCommands, SnapshotCmd,
+        UploadCliOptions, find_command_index, first_command_token, is_language_command_request,
         language_command_can_run_picker, language_gate_action, language_required_message,
         legacy_upload_option_error, plain_help_misuse, pre_parse_output_options,
         pre_parse_requires_cli_config_file, preprocess_cli_args, preprocess_privacy_args,
@@ -4118,6 +4145,40 @@ mod tests {
         assert!(help.contains("--progress"));
         assert!(help.contains("--no-progress"));
         assert!(help.contains("--verbose"));
+        assert!(help.contains("--parse-mode"));
+    }
+
+    #[test]
+    fn cli_add_resource_parses_no_parse_mode() {
+        let cli = Cli::try_parse_from([
+            "ov",
+            "add-resource",
+            "./README.md",
+            "--parse-mode",
+            "no_parse",
+        ])
+        .expect("no_parse should be accepted");
+
+        match cli.command {
+            Commands::AddResource { parse_mode, .. } => {
+                assert_eq!(parse_mode, ParseMode::NoParse);
+            }
+            _ => panic!("expected add-resource command"),
+        }
+    }
+
+    #[test]
+    fn cli_add_resource_rejects_unknown_parse_mode() {
+        assert!(
+            Cli::try_parse_from([
+                "ov",
+                "add-resource",
+                "./README.md",
+                "--parse-mode",
+                "unsupported",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

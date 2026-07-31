@@ -19,6 +19,7 @@ from uuid import uuid4
 
 from openviking.core.content_targets import ContentTargetSpec
 from openviking.core.uri_validation import validate_optional_content_target_uri
+from openviking.parse.mode import ParseMode, normalize_parse_mode
 from openviking.parse.parsers.constants import MPEG_TS_EXTENSION_ALIAS
 from openviking.resource.feishu_watch_auth import (
     FEISHU_ACCESS_TOKEN_ARG,
@@ -100,6 +101,7 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "exclude",
         "directly_upload_media",
         "preserve_structure",
+        "parse_mode",
         "create_parent",
         "telemetry",
         "request_validator",
@@ -510,6 +512,7 @@ class ResourceService:
                 build_index=msg.build_index,
                 summarize=msg.summarize,
                 processing_mode=msg.processing_mode,
+                parse_mode=msg.parse_mode,
                 watch_interval=msg.watch_interval,
                 manage_watch=not msg.skip_watch_management,
                 tags=msg.tags,
@@ -581,6 +584,7 @@ class ResourceService:
         manage_watch: bool = True,
         tags: Optional[List[str]] = None,
         tag_mode: str = "replace",
+        parse_mode: ParseMode | str = ParseMode.DEFAULT,
         allow_local_path_resolution: bool = True,
         enforce_public_remote_targets: bool = False,
         args: Optional[Dict[str, Any]] = None,
@@ -589,6 +593,9 @@ class ResourceService:
         """Start background ingestion for Git repositories while reserving the target URI."""
         self._ensure_initialized()
         processing_mode = normalize_processing_mode(processing_mode)
+        mode = normalize_parse_mode(parse_mode)
+        if mode is ParseMode.NO_PARSE and kwargs.get("preserve_structure") is False:
+            raise InvalidArgumentError("parse_mode='no_parse' requires preserve_structure=True.")
         self._validate_add_resource_tag_policy(tags=tags, tag_mode=tag_mode)
         normalized_args = self._normalize_add_resource_args(args, watch_interval=watch_interval)
         kwargs.update(normalized_args.processor_kwargs)
@@ -659,6 +666,7 @@ class ResourceService:
                 build_index=build_index,
                 summarize=summarize,
                 processing_mode=processing_mode,
+                parse_mode=mode.value,
                 watch_interval=watch_interval,
                 skip_watch_management=not manage_watch,
                 tags=tags,
@@ -794,6 +802,7 @@ class ResourceService:
         watch_interval: float = 0,
         tags: Optional[List[str]] = None,
         tag_mode: str = "replace",
+        parse_mode: ParseMode | str = ParseMode.DEFAULT,
         allow_local_path_resolution: bool = True,
         enforce_public_remote_targets: bool = False,
         add_type: Optional[str] = None,
@@ -822,6 +831,7 @@ class ResourceService:
             build_index=build_index,
             summarize=summarize,
             processing_mode=processing_mode,
+            parse_mode=parse_mode,
             watch_interval=watch_interval,
             manage_watch=True,
             tags=tags,
@@ -888,6 +898,7 @@ class ResourceService:
         manage_watch: bool = True,
         tags: Optional[List[str]] = None,
         tag_mode: str = "replace",
+        parse_mode: ParseMode | str = ParseMode.DEFAULT,
         allow_local_path_resolution: bool = True,
         enforce_public_remote_targets: bool = False,
         args: Optional[Dict[str, Any]] = None,
@@ -938,6 +949,9 @@ class ResourceService:
         """
         self._ensure_initialized()
         processing_mode = normalize_processing_mode(processing_mode)
+        mode = normalize_parse_mode(parse_mode)
+        if mode is ParseMode.NO_PARSE and kwargs.get("preserve_structure") is False:
+            raise InvalidArgumentError("parse_mode='no_parse' requires preserve_structure=True.")
         self._validate_add_resource_tag_policy(tags=tags, tag_mode=tag_mode)
         normalized_args = self._normalize_add_resource_args(args, watch_interval=watch_interval)
         kwargs.update(normalized_args.processor_kwargs)
@@ -976,6 +990,7 @@ class ResourceService:
             build_index=build_index,
             summarize=summarize,
             processing_mode=processing_mode,
+            parse_mode=mode,
             watch_interval=watch_interval,
             connector_args=args or {},
             kwargs=kwargs,
@@ -1004,6 +1019,7 @@ class ResourceService:
                 build_index=build_index,
                 summarize=summarize,
                 processing_mode=processing_mode,
+                parse_mode=mode,
                 watch_interval=watch_interval,
                 manage_watch=manage_watch,
                 tags=tags,
@@ -1025,6 +1041,7 @@ class ResourceService:
                 build_index=build_index,
                 summarize=summarize,
                 processing_mode=processing_mode,
+                parse_mode=mode,
                 watch_interval=watch_interval,
                 manage_watch=manage_watch,
                 tags=tags,
@@ -1077,6 +1094,7 @@ class ResourceService:
         build_index: bool = True,
         summarize: bool = False,
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
+        parse_mode: ParseMode | str = ParseMode.DEFAULT,
         watch_interval: float = 0,
         manage_watch: bool = True,
         tags: Optional[List[str]] = None,
@@ -1091,6 +1109,9 @@ class ResourceService:
     ) -> Dict[str, Any]:
         """Execute an already-routed resource ingestion."""
         self._ensure_initialized()
+        mode = normalize_parse_mode(parse_mode)
+        if mode is ParseMode.NO_PARSE:
+            kwargs["parse_mode"] = mode.value
         request_start = time.perf_counter()
         telemetry = get_current_telemetry()
         telemetry_id = telemetry.telemetry_id
@@ -1124,7 +1145,8 @@ class ResourceService:
                 kwargs["resource_lock"] = resource_lock
 
             async_understanding_candidate = (
-                defer_post_processing
+                mode is ParseMode.DEFAULT
+                and defer_post_processing
                 and not is_git_repo_url(path)
                 and not allow_local_path_resolution
                 and self._resource_processor is not None

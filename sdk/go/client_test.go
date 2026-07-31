@@ -576,7 +576,7 @@ func TestAddResourceUploadsLocalFile(t *testing.T) {
 			// args must be omitted when the caller does not pass any, so the
 			// request is accepted by pre-#2549 instances whose resources route
 			// uses model_config=ConfigDict(extra="forbid").
-			requireBodyKeysAbsent(t, body, "args")
+			requireBodyKeysAbsent(t, body, "args", "parse_mode")
 			writeOK(t, w, map[string]any{"uri": "viking://resources/note.md"})
 		default:
 			t.Fatalf("unexpected path %s", r.URL.Path)
@@ -590,6 +590,25 @@ func TestAddResourceUploadsLocalFile(t *testing.T) {
 	}
 	if result["uri"] != "viking://resources/note.md" {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestAddResourceSendsNoParseMode(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		if body["parse_mode"] != "no_parse" {
+			t.Fatalf("parse_mode = %#v", body["parse_mode"])
+		}
+		writeOK(t, w, map[string]any{"uri": "viking://resources/manual"})
+	}))
+	defer closeServer()
+
+	if _, err := client.AddResource(
+		context.Background(),
+		"https://example.com/manual.pdf",
+		&AddResourceOptions{ParseMode: ParseModeNoParse},
+	); err != nil {
+		t.Fatal(err)
 	}
 }
 

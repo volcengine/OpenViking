@@ -707,6 +707,7 @@ impl HttpClient {
         directly_upload_media: bool,
         watch_interval: f64,
         processing_mode: String,
+        parse_mode: Option<String>,
         resource_args: Option<Map<String, Value>>,
         tags: Vec<String>,
         tag_mode: String,
@@ -775,6 +776,7 @@ impl HttpClient {
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
                     "processing_mode": processing_mode.as_str(),
+                    "parse_mode": parse_mode.as_deref(),
                     "args": args.clone(),
                 }));
 
@@ -811,6 +813,7 @@ impl HttpClient {
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
                     "processing_mode": processing_mode.as_str(),
+                    "parse_mode": parse_mode.as_deref(),
                     "args": args.clone(),
                 }));
 
@@ -835,6 +838,7 @@ impl HttpClient {
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
                     "processing_mode": processing_mode.as_str(),
+                    "parse_mode": parse_mode.as_deref(),
                     "args": args.clone(),
                 }));
 
@@ -857,6 +861,7 @@ impl HttpClient {
                 "directly_upload_media": directly_upload_media,
                 "watch_interval": watch_interval,
                 "processing_mode": processing_mode.as_str(),
+                "parse_mode": parse_mode.as_deref(),
                 "args": args,
             }));
 
@@ -1856,6 +1861,78 @@ mod tests {
         let mut body = json!({"path": "x", "args": {"feishu_access_token": "u-x"}});
         super::compact_request_body(&mut body);
         assert!(body.as_object().unwrap().contains_key("args"));
+    }
+
+    #[tokio::test]
+    async fn add_resource_only_sends_non_default_parse_mode() {
+        let (default_url, default_request_rx) = spawn_request_capture_server().await;
+        let default_client = HttpClient::new(default_url, None, None, None, None, 5.0, false, None);
+        default_client
+            .add_resource(
+                "https://example.com/default.md",
+                None,
+                None,
+                None,
+                None,
+                "",
+                "",
+                false,
+                None,
+                false,
+                None,
+                None,
+                None,
+                true,
+                0.0,
+                "semantic_and_vectors".to_string(),
+                None,
+                None,
+                Vec::new(),
+                "replace".to_string(),
+                false,
+                false,
+            )
+            .await
+            .expect("default add-resource request should succeed");
+        let default_request = default_request_rx
+            .await
+            .expect("request should be captured");
+        assert!(!default_request.contains("parse_mode"));
+
+        let (no_parse_url, no_parse_request_rx) = spawn_request_capture_server().await;
+        let no_parse_client =
+            HttpClient::new(no_parse_url, None, None, None, None, 5.0, false, None);
+        no_parse_client
+            .add_resource(
+                "https://example.com/manual.pdf",
+                None,
+                None,
+                None,
+                None,
+                "",
+                "",
+                false,
+                None,
+                false,
+                None,
+                None,
+                None,
+                true,
+                0.0,
+                "semantic_and_vectors".to_string(),
+                Some("no_parse".to_string()),
+                None,
+                Vec::new(),
+                "replace".to_string(),
+                false,
+                false,
+            )
+            .await
+            .expect("no_parse add-resource request should succeed");
+        let no_parse_request = no_parse_request_rx
+            .await
+            .expect("request should be captured");
+        assert!(no_parse_request.contains(r#""parse_mode":"no_parse""#));
     }
 
     #[test]

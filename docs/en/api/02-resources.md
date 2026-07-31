@@ -143,7 +143,7 @@ This endpoint is the core entry point for resource management, supporting adding
 **Processing Flow**:
 1. Identify and validate the resource source (URL or uploaded temporary file)
 2. Resolve the target URI
-3. Call the corresponding Parser to parse content
+3. Based on `parse_mode`, call the corresponding Parser or stage source files with their original structure
 4. Build the directory tree and write to AGFS
 5. Run post-ingest processing according to `processing_mode`: `semantic_and_vectors` generates semantic artifacts and vectors; `vectors_only` skips semantic understanding and only enqueues file vectorization
 6. Wait for semantic processing/vectorization completion when `wait=true`; with `wait=false`, return a `task_id` for queue tracking
@@ -178,6 +178,7 @@ This endpoint is the core entry point for resource management, supporting adding
 | exclude | string | No | None | File patterns to exclude (glob) |
 | directly_upload_media | bool | No | True | Whether to directly upload media files |
 | preserve_structure | bool | No | None | Whether to preserve directory structure |
+| parse_mode | `default` \| `no_parse` | No | `default` | Ingestion strategy. `default` keeps the existing Parser and splitting behavior. `no_parse` skips format Parsers and file splitting, preserves original names, bytes, and relative paths, then continues semantic processing and vectorization |
 | args | object | No | `{}` | Parser-specific import options forwarded to the source parser/accessor. E.g. `args.site=true/false` forces/opts out of whole-site (sitemap/RSS) ingestion, `args.max_pages` etc. override the `webfeed` config; the recursive web crawler accepts `args.depth`, `args.max_pages`, `args.include_paths`, `args.exclude_paths`, `args.allow_external_links`, `args.skip_download_links`; Feishu user-token imports pass `args.feishu_access_token`. Core `add_resource` fields such as `path`, `to`, `watch_interval`, `include`, and `exclude` are not allowed inside `args` |
 | watch_interval | float | No | 0 | Scheduled update interval (minutes). >0 creates a task for a re-readable URL/sitemap/RSS source; uploaded `temp_file_id` content is a one-time snapshot and must be re-added when it changes. <=0 cancels a task; explicit `to` wins, otherwise binds to the imported `root_uri` |
 | processing_mode | string | No | `semantic_and_vectors` | Post-ingest processing mode. `semantic_and_vectors` is the normal flow: generate semantic artifacts (`.abstract.md`, `.overview.md`) and vectors. `vectors_only` skips semantic understanding/VLM summarization and only vectorizes current resource files |
@@ -204,6 +205,8 @@ This endpoint is the core entry point for resource management, supporting adding
 - Feishu/Lark user-token watches require `FEISHU_APP_ID` and `FEISHU_APP_SECRET` (or `feishu.app_id` and `feishu.app_secret` in `ov.conf`) because Feishu refresh tokens are bound to the app that issued them. The supplied user token must come from the same Feishu app configured in OpenViking.
 - Watch task token state is stored in the internal `viking://resources/.watch_tasks.json` control file and is hidden from watch API/MCP/CLI responses. If VikingFS file encryption is enabled, this control file is encrypted at rest; otherwise the server-side control file contains plaintext token state.
 - For local directory inputs, scanning respects `.gitignore` files (root and nested) with standard Git semantics; `ignore_dirs`, `include`, and `exclude` further refine what is ingested.
+- `parse_mode=no_parse` applies one rule to a single file and every file in a directory: no format Parser or section splitting runs, and original bytes are preserved. Directory imports still honor `.gitignore` and the filters above, while unknown extensions are also eligible. This mode requires directory structure preservation and is rejected with `preserve_structure=false`.
+- `no_parse` changes only file staging; downstream semantic processing and vectorization still run. PDFs and unknown binary files do not receive extra text extraction in this mode, so the existing vectorizer may skip a leaf when no usable summary is available.
 - To create or update plain text directly, use [content/write](03-filesystem.md#write) instead of `add_resource`. Semantic processing and embeddings are refreshed automatically after resource ingestion and content writes.
 
 #### 3. Usage Examples
@@ -322,6 +325,12 @@ result = client.add_resource(
 )
 print(f"Added: {result['root_uri']}")
 
+# Preserve files without parser-driven splitting, then continue vectorization
+result = client.add_resource(
+    "./documents",
+    parse_mode="no_parse",
+)
+
 # Add from URL to specific location
 result = client.add_resource(
     "https://example.com/api-docs.md",
@@ -390,6 +399,7 @@ client.add_resource(
 const task = await client.addResource("https://example.com/docs", {
   to: "viking://resources/docs/",
   wait: true,
+  parseMode: "no_parse",
 });
 console.log(task);
 ```
@@ -400,6 +410,7 @@ console.log(task);
 result, err := client.AddResource(ctx, "./documents/guide.md", &openviking.AddResourceOptions{
     Reason: "User guide documentation",
     Wait:   true,
+    ParseMode: openviking.ParseModeNoParse,
 })
 if err != nil {
     return err
@@ -412,6 +423,9 @@ fmt.Println(result["root_uri"])
 ```bash
 # Add local file
 ov add-resource ./documents/guide.md --reason "User guide"
+
+# Preserve directory files without parser-driven splitting
+ov add-resource ./documents --parse-mode no_parse
 
 # Add from URL
 ov add-resource https://example.com/guide.md --to viking://resources/guide.md

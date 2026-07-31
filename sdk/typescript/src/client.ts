@@ -118,6 +118,10 @@ export class OpenVikingClient {
       exclude: options.exclude,
       directly_upload_media: options.directlyUploadMedia ?? true,
       preserve_structure: options.preserveStructure,
+      parse_mode:
+        options.parseMode && options.parseMode !== "default"
+          ? options.parseMode
+          : undefined,
       watch_interval: options.watchInterval ?? 0,
       processing_mode: options.processingMode,
       args:

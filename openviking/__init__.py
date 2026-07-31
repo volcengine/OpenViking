@@ -28,6 +28,7 @@ except ImportError as exc:
 
 if TYPE_CHECKING:
     from openviking.async_client import AsyncOpenViking
+    from openviking.parse.mode import ParseMode
     from openviking.session import Session
     from openviking.sync_client import SyncOpenViking
     from openviking_cli.client.http import AsyncHTTPClient
@@ -66,6 +67,10 @@ def __getattr__(name: str):
         from openviking_cli.session.user_id import UserIdentifier
 
         return UserIdentifier
+    if name == "ParseMode":
+        from openviking.parse.mode import ParseMode
+
+        return ParseMode
     raise AttributeError(name)
 
 
@@ -77,4 +82,5 @@ __all__ = [
     "AsyncHTTPClient",
     "Session",
     "UserIdentifier",
+    "ParseMode",
 ]

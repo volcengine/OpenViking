@@ -379,6 +379,26 @@ describe("OpenVikingClient", () => {
     }
   });
 
+  it("only serializes non-default resource parse mode", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => ok({}));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await client.addResource("https://example.com/default.md");
+    await client.addResource("https://example.com/raw.pdf", {
+      parseMode: "no_parse",
+    });
+
+    const defaultBody = JSON.parse(String(fetcher.mock.calls[0]![1]?.body));
+    const noParseBody = JSON.parse(String(fetcher.mock.calls[1]![1]?.body));
+    expect(defaultBody).not.toHaveProperty("parse_mode");
+    expect(noParseBody.parse_mode).toBe("no_parse");
+  });
+
   it("streams OVPack exports to a normalized local file", async () => {
     const directory = await mkdtemp(join(tmpdir(), "openviking-sdk-pack-"));
     try {

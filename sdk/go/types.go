@@ -5,6 +5,14 @@ import (
 	"time"
 )
 
+// ParseMode controls whether add-resource parsers split source files.
+type ParseMode string
+
+const (
+	ParseModeDefault ParseMode = "default"
+	ParseModeNoParse ParseMode = "no_parse"
+)
+
 // Config configures an HTTP OpenViking client.
 type Config struct {
 	BaseURL     string
@@ -34,6 +42,7 @@ type AddResourceOptions struct {
 	Exclude             string
 	DirectlyUploadMedia *bool
 	PreserveStructure   *bool
+	ParseMode           ParseMode
 	WatchInterval       float64
 	Args                map[string]any
 	Tags                []string

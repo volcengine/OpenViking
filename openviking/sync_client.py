@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from openviking.snapshot_namespace import SyncSnapshotNamespace
 
 from openviking.async_client import AsyncOpenViking
+from openviking.parse.mode import ParseMode, ParseModeInput
 from openviking.telemetry import TelemetryRequest
 from openviking.utils.search_filters import SearchContextTypeInput
 from openviking_cli.utils import run_async
@@ -245,6 +246,7 @@ class SyncOpenViking:
         add_type: Optional[str] = None,
         tags: Optional[List[str]] = None,
         tag_mode: str = "replace",
+        parse_mode: ParseModeInput = ParseMode.DEFAULT,
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking (resources scope only)
@@ -290,6 +292,7 @@ class SyncOpenViking:
                 tags=tags,
                 tag_mode=tag_mode,
                 telemetry=telemetry,
+                parse_mode=parse_mode,
                 **kwargs,
             )
         )

@@ -9,7 +9,7 @@ import uuid
 import zipfile
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, TypeAlias, Union
 from urllib.parse import quote
 
 import httpx
@@ -65,6 +65,8 @@ ERROR_CODE_TO_EXCEPTION = {
 
 GATEWAY_MARKER_HEADER = "X-VikingBot-Gateway"
 GATEWAY_TOKEN_HEADER = "X-Gateway-Token"
+
+ParseMode: TypeAlias = Literal["default", "no_parse"]
 
 
 def _image_mime_type(file_name: str = "") -> str:
@@ -649,6 +651,7 @@ class AsyncHTTPClient:
         add_type: Optional[str] = None,
         tags: Optional[List[str]] = None,
         tag_mode: str = "replace",
+        parse_mode: ParseMode = "default",
     ) -> Dict[str, Any]:
         if add_type is not None:
             add_type = add_type.strip() or None
@@ -683,6 +686,8 @@ class AsyncHTTPClient:
             request_data["tag_mode"] = tag_mode
         if preserve_structure is not None:
             request_data["preserve_structure"] = preserve_structure
+        if parse_mode != "default":
+            request_data["parse_mode"] = parse_mode
 
         path_obj = Path(path)
         if not add_type and path_obj.exists():
@@ -1868,6 +1873,7 @@ class SyncHTTPClient:
         add_type: Optional[str] = None,
         tags: Optional[List[str]] = None,
         tag_mode: str = "replace",
+        parse_mode: ParseMode = "default",
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.add_resource(
@@ -1891,6 +1897,7 @@ class SyncHTTPClient:
                 tags=tags,
                 tag_mode=tag_mode,
                 telemetry=telemetry,
+                parse_mode=parse_mode,
             )
         )
 

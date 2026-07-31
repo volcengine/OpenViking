@@ -22,6 +22,19 @@ func (c *Client) AddResource(ctx context.Context, path string, opts *AddResource
 		"directly_upload_media": boolValue(opts.DirectlyUploadMedia, true),
 		"watch_interval":        opts.WatchInterval,
 	}
+	switch opts.ParseMode {
+	case "", ParseModeDefault:
+		// Omit the default for compatibility with servers predating parse_mode.
+	case ParseModeNoParse:
+		payload["parse_mode"] = string(opts.ParseMode)
+	default:
+		return nil, fmt.Errorf(
+			"openviking: invalid ParseMode %q (expected %q or %q)",
+			opts.ParseMode,
+			ParseModeDefault,
+			ParseModeNoParse,
+		)
+	}
 	setString(payload, "to", opts.To)
 	setString(payload, "parent", opts.Parent)
 	setString(payload, "ignore_dirs", opts.IgnoreDirs)

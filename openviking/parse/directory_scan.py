@@ -180,6 +180,7 @@ def scan_directory(
     ignore_dirs: Optional[Set[str]] = None,
     include: Optional[str] = None,
     exclude: Optional[str] = None,
+    allow_unsupported: bool = False,
 ) -> DirectoryScanResult:
     """
     Traverse directory tree and classify every file (phase-one validation).
@@ -203,6 +204,8 @@ def scan_directory(
                  (e.g. "*.pdf,*.md"). If not set, all files (subject to exclude) are considered.
         exclude: Comma-separated patterns: trailing '/' = path prefix (e.g. "drafts/"),
                  else glob on file name (e.g. "*.tmp").
+        allow_unsupported: If True, keep unsupported files in the result without raising or
+            warning. Used by no-parse staging, where parser availability is irrelevant.
 
     Returns:
         DirectoryScanResult with processable, unsupported, warnings.
@@ -292,7 +295,7 @@ def scan_directory(
             else:
                 result.unsupported.append(classified)
 
-    if result.unsupported:
+    if result.unsupported and not allow_unsupported:
         unsupported_paths = [f.rel_path for f in result.unsupported]
         msg = (
             f"Directory contains {len(result.unsupported)} unsupported file(s). "

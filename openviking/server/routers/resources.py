@@ -7,6 +7,7 @@ from typing import Any, Dict, Literal, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from openviking.parse.mode import ParseMode
 from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.server.auth import get_request_context, get_upload_request_context
 from openviking.server.dependencies import get_service
@@ -56,6 +57,8 @@ class AddResourceRequest(BaseModel):
         exclude: Glob pattern for files to exclude during parsing.
         directly_upload_media: Whether to directly upload media files. Default is True.
         preserve_structure: Whether to preserve directory structure when adding directories.
+        parse_mode: Resource staging strategy. ``default`` keeps the current parser behavior;
+            ``no_parse`` stores files without parser-driven splitting.
         args: Parser-specific import options. For Feishu one-time user-token imports,
             pass {"feishu_access_token": "..."}. For Feishu user-token watches,
             pass {"feishu_access_token": "...", "feishu_refresh_token": "..."}.
@@ -91,6 +94,7 @@ class AddResourceRequest(BaseModel):
     exclude: Optional[str] = None
     directly_upload_media: bool = True
     preserve_structure: Optional[bool] = None
+    parse_mode: ParseMode = ParseMode.DEFAULT
     args: Dict[str, Any] = Field(default_factory=dict)
     telemetry: TelemetryRequest = False
     watch_interval: float = 0
@@ -102,6 +106,8 @@ class AddResourceRequest(BaseModel):
     def check_path_or_temp_file_id(self):
         if not self.path and not self.temp_file_id:
             raise ValueError("Either 'path' or 'temp_file_id' must be provided")
+        if self.parse_mode is ParseMode.NO_PARSE and self.preserve_structure is False:
+            raise ValueError("parse_mode='no_parse' requires preserve_structure=True")
         return self
 
     @model_validator(mode="after")
@@ -182,6 +188,7 @@ async def temp_upload(
             processing_mode=signed.processing_mode,
             tags=signed.tags,
             tag_mode=signed.tag_mode,
+            parse_mode=signed.parse_mode,
         )
 
     try:
@@ -277,6 +284,7 @@ async def add_resource(
                 allow_local_path_resolution=allow_local_path_resolution,
                 enforce_public_remote_targets=True,
                 args=request.args,
+                parse_mode=request.parse_mode,
                 **kwargs,
             )
         except Exception:
