@@ -53,7 +53,7 @@ class VLMProviderAdapter(LLMProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
-        max_tokens: int = 4096,
+        max_tokens: int | None = None,
         temperature: float = 0.7,
         session_id: str | None = None,
     ) -> LLMResponse:
@@ -129,7 +129,7 @@ class VLMProviderAdapter(LLMProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
-        max_tokens: int = 4096,
+        max_tokens: int | None = None,
         temperature: float = 0.7,
         session_id: str | None = None,
     ) -> AsyncIterator[LLMStreamEvent]:
@@ -165,20 +165,25 @@ class VLMProviderAdapter(LLMProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
         model: str | None,
-        max_tokens: int,
+        max_tokens: int | None,
         temperature: float,
     ) -> AsyncIterator[LLMStreamEvent]:
+        configured_max_tokens = getattr(self._vlm, "max_tokens", None)
+        effective_max_tokens = (
+            configured_max_tokens if configured_max_tokens is not None else max_tokens
+        )
         kwargs: dict[str, Any] = {
             "model": model or getattr(self._vlm, "model", None) or self._default_model,
             "messages": messages,
             "temperature": getattr(self._vlm, "temperature", temperature),
-            "max_tokens": getattr(self._vlm, "max_tokens", None) or max_tokens,
             "thinking": {
                 "type": "enabled" if getattr(self._vlm, "thinking", False) else "disabled"
             },
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        if effective_max_tokens is not None:
+            kwargs["max_tokens"] = effective_max_tokens
         extra_headers = getattr(self._vlm, "extra_headers", None)
         if extra_headers:
             kwargs["extra_headers"] = extra_headers

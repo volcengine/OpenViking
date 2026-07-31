@@ -455,6 +455,14 @@ class AgentsConfig(BaseModel):
             "inherits vlm.timeout from ov.conf if present."
         ),
     )
+    max_tokens: Optional[int] = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Maximum completion output tokens for VikingBot agent calls. "
+            "None leaves the limit to the model provider."
+        ),
+    )
     max_tool_iterations: int = 50
     memory_window: int = 50
     subagent_enabled: bool = Field(

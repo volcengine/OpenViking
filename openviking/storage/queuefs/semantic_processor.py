@@ -1102,12 +1102,6 @@ class SemanticProcessor(DequeueHandlerBase):
                 if len(skeleton_text) > max_skeleton_chars:
                     skeleton_text = skeleton_text[:max_skeleton_chars]
                 return result(skeleton_text)
-            logger.info(
-                "Code skeleton fallback to LLM for '%s': %s",
-                file_path,
-                extraction.reason,
-            )
-
             if not vlm.is_available():
                 logger.warning("VLM not available for code summary fallback: %s", file_path)
                 return result("")
