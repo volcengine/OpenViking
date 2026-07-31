@@ -15,6 +15,7 @@ from openviking.service.task_work_index import bind_task_context, extract_task_m
 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.telemetry import bind_telemetry, resolve_telemetry, unregister_telemetry
+from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import record_resource_queue_metrics
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.logger import get_logger
@@ -130,6 +131,8 @@ class AddResourceProcessor(DequeueHandlerBase):
             telemetry = OperationTelemetry(operation="add_resource_job", enabled=False)
             if telemetry_id:
                 telemetry.telemetry_id = telemetry_id
+        request_wait_tracker = get_request_wait_tracker()
+        request_wait_tracker.register_request(telemetry_id)
 
         async def _set_stage(stage: str) -> None:
             await tracker.update_stage(
@@ -169,6 +172,7 @@ class AddResourceProcessor(DequeueHandlerBase):
                     self.report_error("resource processing failed", data)
                     return None
                 await tracker.wait_for_descendants(msg.task_id, metadata.work_id)
+                result["queue_status"] = request_wait_tracker.build_queue_status(telemetry_id)
                 record_resource_queue_metrics(
                     telemetry=telemetry,
                     telemetry_id=telemetry_id,
@@ -200,6 +204,7 @@ class AddResourceProcessor(DequeueHandlerBase):
                 self.report_error(str(exc), data)
                 return None
             finally:
+                request_wait_tracker.cleanup(telemetry_id)
                 unregister_telemetry(telemetry_id)
                 with suppress(Exception):
                     if resource_lock is not None:
