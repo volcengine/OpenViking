@@ -172,8 +172,8 @@ Because the two documents share a shape, a Catalog can also be applied directly 
 
 The CLI locates the Catalog file as follows:
 
-1. The path passed to `--catalog <file>`, resolved from the current working directory.
-2. `catalog.yaml` next to the Manifest when `--catalog` is omitted.
+1. The path passed to `--args catalog:<file>`, resolved from the current working directory.
+2. `catalog.yaml` next to the Manifest when `catalog` is omitted.
 
 A Manifest that defines `catalog` itself never uses a separate Catalog file; passing one with it
 fails resolution.
@@ -230,10 +230,10 @@ catalog:
 Validate it first:
 
 ```bash
-ov add-resource --manifest manifest.yaml --dry-run
+ov add-resource --manifest manifest.yaml --args dry_run:true
 ```
 
-`--dry-run`:
+`dry_run`:
 
 - reads the local YAML file, plus the Catalog file when one is used;
 - asks the configured OpenViking service to resolve and validate the protocol;
@@ -248,7 +248,7 @@ produce an executable plan.
 
 ### Apply the Manifest
 
-Remove `--dry-run` after reviewing the plan:
+Remove `dry_run` after reviewing the plan:
 
 ```bash
 ov add-resource --manifest manifest.yaml
@@ -260,8 +260,8 @@ Wait for each resource to finish processing:
 ov add-resource --manifest manifest.yaml --wait --timeout 600
 ```
 
-The repository contains a complete example, including a shared Catalog with several Manifests,
-under
+The repository contains a complete example — a shared Catalog plus a Manifest that selects from
+it — under
 [`examples/openviking-assets`](https://github.com/volcengine/OpenViking/tree/main/examples/openviking-assets).
 
 ## Credentials
@@ -310,7 +310,7 @@ After a non-dry-run application, the CLI writes this file next to the Manifest:
 For example:
 
 ```text
-code-qa.yaml.state.json
+manifest.yaml.state.json
 ```
 
 State uses the `openviking-assets-state/1` protocol and records:
@@ -366,7 +366,7 @@ Permission preflight runs before every resource submission. If any asset fails p
 1. the command exits immediately with the original error code, such as `PERMISSION_DENIED`;
 2. no asset is submitted and no background task is created;
 3. State is not written;
-4. `--skip-failed` does not bypass the preflight failure.
+4. `skip_failed` does not bypass the preflight failure.
 
 Per-asset execution starts only after all preflights succeed.
 
@@ -377,45 +377,50 @@ The default behavior is fail-fast:
 3. successful assets and the failure are written to State;
 4. the command exits non-zero.
 
-Use `--skip-failed` to continue with the remaining assets:
+Use `skip_failed` to continue with the remaining assets:
 
 ```bash
-ov add-resource --manifest manifest.yaml --skip-failed
+ov add-resource --manifest manifest.yaml --args skip_failed:true
 ```
 
-`--skip-failed` does not turn a partial failure into success. The command still exits non-zero when
+`skip_failed` does not turn a partial failure into success. The command still exits non-zero when
 any asset fails, and successfully created resources are not rolled back. If every asset fails, the
 command reports that nothing was applied successfully.
 
 ## CLI Options
 
-Primary Manifest-mode options:
+Options used with `--manifest`:
 
 | Option | Description |
 | --- | --- |
 | `-m, --manifest <file>` | Manifest file. |
-| `--catalog <file>` | Separate Catalog file for Manifests that select assets by name; defaults to `catalog.yaml` next to the Manifest. Not used when the Manifest defines `catalog` itself. |
-| `--dry-run` | Resolve the protocol and validate read access to every repository without submitting resources, creating tasks, or writing State. |
-| `--skip-failed` | Continue processing after an asset fails. |
+| `--args <key:value,...>` | Manifest-run options, comma-separated; supported keys below. |
 | `--wait` | Wait for each resource to finish processing. |
 | `--timeout <seconds>` | Timeout used with `--wait`. |
 | `--watch-interval <minutes>` | Override the refresh interval for all assets. |
 | `--processing-mode <mode>` | Use `semantic_and_vectors` or `vectors_only` for every asset. |
 
-`--to`, `--parent`, `--parent-auto-create`, `--args`, `--strict`, `--ignore-dirs`, `--include`,
-and `--exclude` belong to single-resource mode and cannot be combined with `--manifest`.
+Run options supported by `--args`:
 
-`--reason`, `--instruction`, `--no-directly-upload-media`, `--progress`, `--no-progress`, and
-`--verbose` are not currently applied to assets in Manifest mode. Do not rely on them in Manifest
-commands.
+| Key | Description |
+| --- | --- |
+| `catalog:<file>` | Separate Catalog file for Manifests that select assets by name; defaults to `catalog.yaml` next to the Manifest. Not used when the Manifest defines `catalog` itself. |
+| `dry_run:true` | Resolve the protocol and validate read access to every repository without submitting resources, creating tasks, or writing State. |
+| `skip_failed:true` | Continue processing after an asset fails. |
+
+`--args` accepts the comma-separated `key:value,...` form and a full JSON object, e.g.
+`--args '{"dry_run": true, "catalog": "shared/catalog.yaml"}'`.
+
+Run options are consumed locally by the CLI and are never sent to the server as resource
+arguments; an unknown key is an error.
 
 ## Structured Output
 
-Default output is intended for terminal use. With JSON output, Manifest mode emits NDJSON: one
+Default output is intended for terminal use. With JSON output, `--manifest` runs emit NDJSON: one
 complete JSON event per line rather than one JSON document.
 
 ```bash
-ov --output json add-resource --manifest manifest.yaml --dry-run
+ov --output json add-resource --manifest manifest.yaml --args dry_run:true
 ```
 
 Events can include:

@@ -283,6 +283,59 @@ impl Default for ManifestRunOptions {
     }
 }
 
+/// `--args` keys that are manifest-run options, consumed entirely by the CLI.
+/// They never reach the server: the submitted per-asset args come only from
+/// the catalog's params and credential resolution. Single-resource mode
+/// rejects these keys outright so a forgotten `-m` fails instead of sending
+/// them to the server as parser options.
+pub const MANIFEST_RUN_ARG_KEYS: &[&str] =
+    &["catalog", "dry_run", "skip_failed", EXTERNAL_CONNECTOR_KEY];
+
+/// Internal switch, deliberately absent from help and user docs.
+const EXTERNAL_CONNECTOR_KEY: &str = "external_connector";
+
+/// Manifest-run options carried by `--args` in manifest mode.
+#[derive(Debug, Default)]
+pub struct ManifestArgs {
+    pub catalog: Option<String>,
+    pub dry_run: bool,
+    pub skip_failed: bool,
+    pub external_connector: bool,
+}
+
+pub fn parse_manifest_run_args(args: Option<&Map<String, Value>>) -> Result<ManifestArgs> {
+    let mut run = ManifestArgs::default();
+    let Some(args) = args else {
+        return Ok(run);
+    };
+    for (key, value) in args {
+        match key.as_str() {
+            "catalog" => match value {
+                Value::String(path) if !path.trim().is_empty() => {
+                    run.catalog = Some(path.clone());
+                }
+                _ => return Err(client_err("--args catalog expects a file path.")),
+            },
+            "dry_run" => run.dry_run = manifest_bool_arg(key, value)?,
+            "skip_failed" => run.skip_failed = manifest_bool_arg(key, value)?,
+            EXTERNAL_CONNECTOR_KEY => run.external_connector = manifest_bool_arg(key, value)?,
+            _ => {
+                return Err(client_err(format!(
+                    "unknown manifest-run option '{key}' in --args; supported: \
+                     catalog, dry_run, skip_failed"
+                )));
+            }
+        }
+    }
+    Ok(run)
+}
+
+fn manifest_bool_arg(key: &str, value: &Value) -> Result<bool> {
+    value
+        .as_bool()
+        .ok_or_else(|| client_err(format!("--args {key} expects true or false.")))
+}
+
 #[derive(Debug, Default)]
 pub struct ApplySummary {
     pub total: usize,
@@ -866,6 +919,43 @@ mod tests {
         assert_eq!(effective_add_type(false, "git"), None);
         assert_eq!(effective_add_type(true, "git"), Some("git".to_string()));
         assert_eq!(effective_add_type(true, "tos"), Some("tos".to_string()));
+    }
+
+    #[test]
+    fn manifest_run_args_parse_known_keys() {
+        let args = serde_json::json!({
+            "catalog": "shared/catalog.yaml",
+            "dry_run": true,
+            "skip_failed": true,
+            "external_connector": true,
+        });
+        let run = parse_manifest_run_args(args.as_object()).unwrap();
+        assert_eq!(run.catalog.as_deref(), Some("shared/catalog.yaml"));
+        assert!(run.dry_run && run.skip_failed && run.external_connector);
+
+        let run = parse_manifest_run_args(None).unwrap();
+        assert_eq!(run.catalog, None);
+        assert!(!run.dry_run && !run.skip_failed && !run.external_connector);
+    }
+
+    #[test]
+    fn manifest_run_args_reject_unknown_keys_and_bad_types() {
+        // Catalog params (e.g. git branch) belong in the catalog file, not
+        // here; an unknown key must not silently do nothing.
+        let unknown = serde_json::json!({"branch": "main"});
+        let err = parse_manifest_run_args(unknown.as_object()).unwrap_err();
+        assert!(err.to_string().contains("branch"), "{err}");
+        assert!(
+            err.to_string().contains("skip_failed"),
+            "should list keys: {err}"
+        );
+        // The internal switch stays out of the supported-keys hint.
+        assert!(!err.to_string().contains("external_connector"), "{err}");
+
+        let bad_bool = serde_json::json!({"dry_run": "yes"});
+        assert!(parse_manifest_run_args(bad_bool.as_object()).is_err());
+        let bad_catalog = serde_json::json!({"catalog": true});
+        assert!(parse_manifest_run_args(bad_catalog.as_object()).is_err());
     }
 
     #[test]
