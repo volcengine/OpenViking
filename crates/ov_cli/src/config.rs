@@ -105,7 +105,7 @@ fn default_timeout() -> f64 {
     60.0
 }
 
-fn timeout_is_valid(timeout: f64) -> bool {
+pub(crate) fn timeout_is_valid(timeout: f64) -> bool {
     timeout > 0.0 && std::time::Duration::try_from_secs_f64(timeout).is_ok()
 }
 

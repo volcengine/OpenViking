@@ -1038,7 +1038,12 @@ enum Commands {
         #[arg(long)]
         wait: bool,
         /// Local wait timeout in seconds; does not cancel the task
-        #[arg(long, requires = "wait", value_name = "seconds")]
+        #[arg(
+            long,
+            requires = "wait",
+            value_parser = config::parse_positive_timeout,
+            value_name = "seconds"
+        )]
         timeout: Option<f64>,
     },
 
@@ -4550,6 +4555,18 @@ mod tests {
                 "viking://resources/item",
                 "--content",
                 "value",
+                "--timeout",
+            ],
+            vec![
+                "ov",
+                "compile",
+                "--from",
+                "viking://resources/source",
+                "--to",
+                "viking://resources/target",
+                "--skill",
+                "viking://user/skills/compiler",
+                "--wait",
                 "--timeout",
             ],
             vec!["ov", "wait", "--timeout"],
