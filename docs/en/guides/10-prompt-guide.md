@@ -324,12 +324,6 @@ These prompts are mainly used to understand user intent before retrieval and dec
 
 These prompts are mainly used to generate file-level and directory-level summaries and are an important part of semantic indexing.
 
-- `semantic.code_ast_summary`
-  - Effective stage: AST skeleton summarization for large code files
-  - Affects: code file summaries, code retrieval, and structural understanding
-  - Purpose: generates code summaries from an AST skeleton instead of the full source
-  - Key inputs: `file_name`, `skeleton`, `output_language`
-
 - `semantic.code_summary`
   - Effective stage: code file summarization stage
   - Affects: semantic indexing for code files, code retrieval, and understanding results

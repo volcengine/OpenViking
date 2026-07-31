@@ -13,8 +13,10 @@ Query background task status for APIs that return `task_id`, such as session com
 **Task Statuses:**
 - `pending`: Task waiting to execute
 - `running`: Task in progress
+- `cancelling`: Cancellation requested; waiting for the task's durable queue messages and in-process work to settle
 - `completed`: Task successfully completed
 - `failed`: Task failed
+- `cancelled`: Task cancelled
 
 **Code Entries:**
 - `openviking/server/routers/tasks.py:get_task()` - HTTP route
@@ -138,6 +140,102 @@ ov task status uuid-xxx
 
 ---
 
+### cancel_task()
+
+#### 1. API Implementation Introduction
+
+Request cooperative cancellation of a background task. The operation immediately prevents the task from creating new QueueFS work and cancels its active in-process work; writes that already completed are not rolled back. If durable messages or in-process work remain, the operation first returns `cancelling`. The task becomes `cancelled` only after all owned work settles.
+
+Repeated cancellation of a task in `cancelling` or `cancelled` is idempotent.
+
+**Supported Task Types:**
+- `add_resource`
+- `session_commit`
+- `admin_reindex`
+- `snapshot_restore_reindex`
+
+**Code Entries:**
+- `openviking/server/routers/tasks.py:cancel_task()` - HTTP route
+- `openviking/service/task_tracker.py:TaskTracker.cancel()` - task lifecycle
+- `crates/ov_cli/src/commands/task.rs:cancel()` - CLI command
+
+#### 2. Interface and Parameter Description
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| task_id | str | Yes | - | Background task ID to cancel |
+
+Only the current user who owns the task can cancel it. ROOT identities cannot cancel tasks.
+
+#### 3. Usage Examples
+
+**Python SDK**
+
+```python
+task = await client.cancel_task("uuid-xxx")
+print(task["status"])
+```
+
+**TypeScript SDK**
+
+```typescript
+const task = await client.cancelTask("uuid-xxx");
+console.log(task.status);
+```
+
+**Go SDK**
+
+```go
+task, err := client.CancelTask(ctx, "uuid-xxx")
+if err != nil {
+    return err
+}
+fmt.Println(task["status"])
+```
+
+**HTTP API**
+
+```http
+POST /api/v1/tasks/{task_id}/cancel
+```
+
+```bash
+curl -X POST http://localhost:1933/api/v1/tasks/uuid-xxx/cancel \
+  -H "X-API-Key: your-key"
+```
+
+**CLI**
+
+```bash
+ov task cancel uuid-xxx
+```
+
+**Response Example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "task_id": "uuid-xxx",
+    "task_type": "add_resource",
+    "status": "cancelling",
+    "resource_id": "viking://resources/guide",
+    "stage": "processing_queue",
+    "result": null,
+    "error": null
+  }
+}
+```
+
+If the task has no remaining work, the response status can be `cancelled` immediately. Otherwise, continue polling with `get_task()` until the status becomes `cancelled`.
+
+**Error Handling:**
+- `NOT_FOUND` (404): the task does not exist, has expired, or belongs to another user
+- `PERMISSION_DENIED` (403): a ROOT identity attempts to cancel a task
+- `FAILED_PRECONDITION` (412): the task type does not support cancellation, or the task is already `completed`/`failed`
+
+---
+
 ### list_tasks()
 
 #### 1. API Implementation Introduction
@@ -155,7 +253,7 @@ List background tasks visible to the current caller, supporting filtering by typ
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | task_type | str | No | None | Filter by task type, for example `session_commit` |
-| status | str | No | None | Filter by task status: `pending`, `running`, `completed`, `failed` |
+| status | str | No | None | Filter by task status: `pending`, `running`, `cancelling`, `completed`, `failed`, `cancelled` |
 | resource_id | str | No | None | Filter by task resource ID, for example a session ID |
 | limit | int | No | 50 | Maximum number of task records to return |
 

@@ -9,13 +9,14 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import pytest_asyncio
 
-from openviking.utils.ingest_options import IngestOptions
 from openviking.resource.watch_manager import WatchManager
 from openviking.server.identity import RequestContext, Role
 from openviking.service import resource_service as resource_service_module
 from openviking.service.resource_service import ResourceService
+from openviking.service.task_tracker import TaskStatus
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
+from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.exceptions import ConflictError, InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -82,6 +83,9 @@ class NoopTaskTracker:
     async def complete(self, *_args, **_kwargs):
         pass
 
+    async def wait(self, *_args, **_kwargs):
+        return SimpleNamespace(status=TaskStatus.COMPLETED, result={})
+
     def count(self):
         return self._count
 
@@ -101,6 +105,7 @@ def isolate_service_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda: task_tracker,
     )
     monkeypatch.setattr(resource_service_module, "is_git_repo_url", lambda _path: False)
+    monkeypatch.setattr("openviking.connector.routing.is_git_repo_url", lambda _path: False)
 
 
 @pytest_asyncio.fixture
@@ -331,31 +336,7 @@ class TestWatchTaskCreation:
             finish_calls.append({"args": args, "kwargs": kwargs})
             return {"root_uri": "viking://resources/queued"}
 
-        class FakeRequestWaitTracker:
-            def register_request(self, *_args, **_kwargs):
-                pass
-
-            async def wait_for_request(self, *_args, **_kwargs):
-                pass
-
-            def build_queue_status(self, *_args, **_kwargs):
-                return {}
-
-            def cleanup(self, *_args, **_kwargs):
-                pass
-
         monkeypatch.setattr(ContentWriteCoordinator, "set_tags", fake_set_tags)
-        monkeypatch.setattr(
-            resource_service_module,
-            "get_request_wait_tracker",
-            lambda: FakeRequestWaitTracker(),
-        )
-        monkeypatch.setattr(
-            resource_service_module,
-            "unregister_wait_telemetry",
-            lambda *_args, **_kwargs: None,
-        )
-        resource_service._link_resource_reason_memory = AsyncMock()
         resource_service._resource_processor.finish_prepared_resource = AsyncMock(
             side_effect=fake_finish_prepared_resource
         )

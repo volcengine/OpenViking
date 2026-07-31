@@ -916,6 +916,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 label: "ov task status <task-id>",
                 description: "Inspect one task.",
             },
+            HelpItem {
+                label: "ov task cancel <task-id>",
+                description: "Cancel one task.",
+            },
         ],
         next_steps: &[HelpItem {
             label: "ov wait",
@@ -3119,6 +3123,7 @@ mod tests {
                 .expect("task help should render"),
         );
         assert!(task.contains("status <task-id>"));
+        assert!(task.contains("cancel <task-id>"));
         assert!(task.contains("list"));
     }
 

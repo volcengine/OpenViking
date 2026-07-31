@@ -6,7 +6,14 @@ import asyncio
 import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecutor
+from openviking.service.task_work_index import TaskWorkIndex, TaskWorkRejected
+from openviking.storage.queuefs.named_queue import NamedQueue
+from openviking.storage.queuefs.semantic_dag import (
+    DagStats,
+    DagWork,
+    SemanticDagExecutor,
+    SemanticNodeScheduler,
+)
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -19,7 +26,7 @@ class _FakeVikingFS:
         del node_limit
         return self._tree.get(uri, [])
 
-    async def write_file(self, path, content, ctx=None):
+    async def write_file(self, path, content, ctx=None, lock_handle=None):
         self.writes.append((path, content))
 
     def _uri_to_path(self, uri, ctx=None):
@@ -84,6 +91,25 @@ class _DummyTracker:
     async def register(self, **_kwargs):
         self.register_calls.append(_kwargs)
         return None
+
+
+class _ScheduledExecutor:
+    def __init__(self, run) -> None:
+        self.closed = False
+        self.failure = None
+        self._run = run
+
+    def _start_scheduled_work(self) -> None:
+        return None
+
+    def _finish_scheduled_work(self) -> None:
+        return None
+
+    async def _run_work(self, _work) -> None:
+        await self._run()
+
+    def fail(self, exc: Exception) -> None:
+        self.failure = exc
 
 
 @pytest.mark.asyncio
@@ -209,6 +235,54 @@ async def test_semantic_dag_shares_node_scheduler_across_roots(monkeypatch):
     assert processor.max_active_summaries <= 4
     assert executor_a.get_stats().done_nodes == 21
     assert executor_b.get_stats().done_nodes == 21
+
+
+@pytest.mark.asyncio
+async def test_task_work_rejection_does_not_stop_shared_semantic_worker():
+    work_index = TaskWorkIndex()
+
+    async def finalize_before_ack(_metadata):
+        return None
+
+    work_index.set_callbacks(
+        finalize_before_ack=finalize_before_ack,
+        is_cancellation_requested=lambda _task_id: True,
+    )
+    embedding_queue = NamedQueue(
+        None,
+        "/queue",
+        "Embedding",
+        task_work_index=work_index,
+    )
+    embedding_queue._initialized = True
+    unrelated_ran = asyncio.Event()
+
+    async def rejected_work() -> None:
+        await embedding_queue.enqueue(
+            {
+                "task_id": "task-a",
+                "account_id": "account-a",
+                "user_id": "user-a",
+            }
+        )
+
+    async def unrelated_work() -> None:
+        unrelated_ran.set()
+
+    rejected = _ScheduledExecutor(rejected_work)
+    unrelated = _ScheduledExecutor(unrelated_work)
+    scheduler = SemanticNodeScheduler(max_workers=1)
+    scheduler.submit(rejected, DagWork(kind="vectorize", dir_uri="a"))
+    scheduler.submit(unrelated, DagWork(kind="vectorize", dir_uri="b"))
+
+    await asyncio.wait_for(unrelated_ran.wait(), timeout=0.5)
+    await asyncio.wait_for(scheduler._queue.join(), timeout=0.5)
+    await asyncio.sleep(scheduler._idle_timeout * 2)
+
+    assert isinstance(rejected.failure, TaskWorkRejected)
+    assert unrelated.failure is None
+    assert scheduler._queue.empty()
+    assert all(worker.done() for worker in scheduler._workers)
 
 
 @pytest.mark.asyncio

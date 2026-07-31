@@ -286,48 +286,25 @@ enum Commands {
             conflicts_with = "manifest"
         )]
         path: Option<String>,
-        /// Apply an OpenViking Assets manifest (openviking-assets/1): create or sync every selected asset
+        /// Apply an OpenViking Assets manifest (openviking-assets/1): create or sync every selected
+        /// asset. Run options go into --args (supported keys: catalog, dry_run, skip_failed)
         #[arg(
             short = 'm',
             long = "manifest",
             value_name = "file",
-            help_heading = "Manifest mode",
+            help_heading = "Common options",
             conflicts_with_all = [
-                "add_type", "to", "parent", "parent_auto_create", "resource_args",
+                "add_type", "to", "parent", "parent_auto_create",
                 "strict_mode", "ignore_dirs", "include", "exclude",
-                "no_directly_upload_media", "tags", "tag_mode"
+                "no_directly_upload_media", "tags", "tag_mode",
+                "reason", "instruction"
             ]
         )]
         manifest: Option<String>,
-        /// Manifest mode: separate catalog file for manifests that select assets by name
-        /// (defaults to assets.yaml next to the manifest; not used when the manifest
-        /// defines assets under 'catalog')
-        #[arg(
-            long = "catalog",
-            value_name = "file",
-            requires = "manifest",
-            conflicts_with = "path",
-            help_heading = "Manifest mode"
-        )]
-        catalog: Option<String>,
-        /// Manifest mode: validate config and source access, then print the plan without submitting
-        #[arg(
-            long = "dry-run",
-            requires = "manifest",
-            help_heading = "Manifest mode"
-        )]
-        dry_run: bool,
-        /// Manifest mode: continue with remaining assets when one fails
-        #[arg(
-            long = "skip-failed",
-            requires = "manifest",
-            help_heading = "Manifest mode"
-        )]
-        skip_failed: bool,
         /// Explicit Connector source type (e.g. "tos", "git"). Routes the import
         /// through the Connector integration (must be enabled server-side); the
         /// path is sent verbatim and never treated as a local file. Requires --to
-        /// and cannot be combined with Manifest mode, --parent, or
+        /// and cannot be combined with --manifest, --parent, or
         /// --parent-auto-create
         #[arg(
             long = "add-type",
@@ -412,7 +389,10 @@ enum Commands {
             help_heading = "Advanced options"
         )]
         processing_mode: String,
-        /// Parser-specific import options, e.g. --args feishu_access_token:u-xxx
+        /// Extra options as key:value pairs or a JSON object. With a path/URL:
+        /// parser-specific import options sent to the server, e.g.
+        /// --args feishu_access_token:u-xxx. With --manifest: run options consumed
+        /// locally, e.g. --args dry_run:true (supported keys: catalog, dry_run, skip_failed)
         #[arg(long = "args")]
         resource_args: Option<String>,
         /// Explicit k=v retrieval tag to apply after import. Can be repeated.
@@ -1191,12 +1171,18 @@ enum TaskCommands {
         #[arg(value_name = "task-id")]
         task_id: String,
     },
+    /// Cancel a task
+    Cancel {
+        /// Task ID returned by add-resource/add-skill
+        #[arg(value_name = "task-id")]
+        task_id: String,
+    },
     /// List all tracked tasks
     List {
         /// Filter by task type (e.g. add_resource, add_skill, session_commit, reindex)
         #[arg(long, value_name = "type")]
         task_type: Option<String>,
-        /// Filter by status (pending, running, completed, failed)
+        /// Filter by status (pending, running, cancelling, completed, failed, cancelled)
         #[arg(long, value_name = "status")]
         status: Option<String>,
     },
@@ -2309,7 +2295,7 @@ fn command_tokens_for_config_gate(args: &[OsString]) -> Vec<String> {
 
 fn known_task_command_requires_config(tokens: &[String]) -> bool {
     match tokens.get(1).map(String::as_str) {
-        Some("status" | "list") => true,
+        Some("status" | "cancel" | "list") => true,
         Some("watch") => match tokens.get(2).map(String::as_str) {
             None => true,
             Some(token) => is_watch_subcommand(token),
@@ -2923,9 +2909,6 @@ async fn main() {
             path,
             add_type,
             manifest,
-            catalog,
-            dry_run,
-            skip_failed,
             to,
             parent,
             parent_auto_create,
@@ -2948,20 +2931,28 @@ async fn main() {
             let ctx =
                 ctx.with_upload_options(upload_options.merged_with_legacy(legacy_upload_options));
             if let Some(manifest) = manifest {
-                openviking_assets::handle_manifest_apply(
-                    manifest,
-                    catalog,
-                    openviking_assets::ManifestRunOptions {
-                        dry_run,
-                        skip_failed,
-                        wait,
-                        watch_interval,
-                        processing_mode,
-                    },
-                    timeout,
-                    ctx,
-                )
-                .await
+                match handlers::parse_add_resource_args(resource_args.as_deref())
+                    .and_then(|args| openviking_assets::parse_manifest_run_args(args.as_ref()))
+                {
+                    Err(e) => Err(e),
+                    Ok(run) => {
+                        openviking_assets::handle_manifest_apply(
+                            manifest,
+                            run.catalog,
+                            openviking_assets::ManifestRunOptions {
+                                dry_run: run.dry_run,
+                                skip_failed: run.skip_failed,
+                                wait,
+                                watch_interval,
+                                processing_mode,
+                                external_connector: run.external_connector,
+                            },
+                            timeout,
+                            ctx,
+                        )
+                        .await
+                    }
+                }
             } else if let Some(path) = path {
                 handlers::handle_add_resource(
                     path,
@@ -3165,6 +3156,10 @@ async fn main() {
             TaskCommands::Status { task_id } => {
                 let client = ctx.get_client();
                 commands::task::status(&client, &task_id, ctx.output_format, ctx.compact).await
+            }
+            TaskCommands::Cancel { task_id } => {
+                let client = ctx.get_client();
+                commands::task::cancel(&client, &task_id, ctx.output_format, ctx.compact).await
             }
             TaskCommands::List { task_type, status } => {
                 let client = ctx.get_client();
@@ -3913,6 +3908,7 @@ mod tests {
         for args in [
             &["ov", "find"][..],
             &["ov", "task", "status"],
+            &["ov", "task", "cancel"],
             &["ov", "task", "watch", "show"],
             &["ov", "config", "validate"],
             &["ov", "config", "show"],
@@ -3975,6 +3971,7 @@ mod tests {
             &["ov", "config", "show"],
             &["ov", "config", "validate"],
             &["ov", "task", "status"],
+            &["ov", "task", "cancel"],
             &["ov", "task", "list"],
             &["ov", "task", "watch"],
             &["ov", "task", "watch", "ls"],
@@ -5139,31 +5136,54 @@ mod tests {
     }
 
     #[test]
-    fn cli_manifest_mode_accepts_explicit_catalog() {
+    fn cli_manifest_mode_takes_run_options_via_args() {
         let result = Cli::try_parse_from([
             "ov",
             "add-resource",
             "--manifest",
             "manifests/code-qa.yaml",
-            "--catalog",
-            "assets.yaml",
-            "--dry-run",
+            "--args",
+            "catalog:catalog.yaml,dry_run:true,skip_failed:true",
         ]);
 
-        assert!(result.is_ok(), "manifest and catalog flags should parse");
+        assert!(result.is_ok(), "manifest mode with --args should parse");
     }
 
     #[test]
-    fn cli_catalog_requires_manifest_mode() {
-        let result = Cli::try_parse_from([
-            "ov",
-            "add-resource",
-            "https://github.com/org/repo",
-            "--catalog",
-            "assets.yaml",
-        ]);
+    fn cli_manifest_mode_dropped_dedicated_run_flags() {
+        for flag in [
+            "--catalog=catalog.yaml",
+            "--dry-run",
+            "--skip-failed",
+            "--external-connector",
+        ] {
+            let result =
+                Cli::try_parse_from(["ov", "add-resource", "--manifest", "code-qa.yaml", flag]);
+            assert!(
+                result.is_err(),
+                "removed manifest flag {flag} should not parse"
+            );
+        }
+    }
 
-        assert!(result.is_err(), "--catalog without --manifest must fail");
+    #[test]
+    fn cli_manifest_mode_rejects_silently_ignored_single_resource_options() {
+        for args in [
+            ["--reason", "why"],
+            ["--instruction", "how"],
+            ["--no-directly-upload-media", "--wait"],
+        ] {
+            let result = Cli::try_parse_from(
+                ["ov", "add-resource", "--manifest", "code-qa.yaml"]
+                    .into_iter()
+                    .chain(args),
+            );
+            assert!(
+                result.is_err(),
+                "{} must conflict with --manifest instead of being ignored",
+                args[0]
+            );
+        }
     }
 
     #[test]

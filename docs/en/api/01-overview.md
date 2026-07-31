@@ -472,7 +472,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/api/v1/sessions/{session_id}/used` | Record context or skills actually used |
 | POST | `/api/v1/search/recall` | Recall memory as injection-ready context |
 
-### [Retrieval](06-retrieval.md), [Code Retrieval](21-code.md), and [Relations](13-relations.md)
+### [Retrieval](06-retrieval.md) and [Relations](13-relations.md)
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -480,9 +480,6 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/api/v1/search/search` | Context-aware search |
 | POST | `/api/v1/search/grep` | Content pattern search |
 | POST | `/api/v1/search/glob` | File pattern matching |
-| POST | `/api/v1/code/outline` | Extract code structure |
-| POST | `/api/v1/code/search` | Search code |
-| POST | `/api/v1/code/expand` | Expand code context |
 | GET | `/api/v1/relations` | Get resource relations |
 | POST | `/api/v1/relations/link` | Create a resource link |
 | DELETE | `/api/v1/relations/link` | Delete a resource link |
@@ -518,6 +515,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v1/tasks/{task_id}` | Get a background task |
+| POST | `/api/v1/tasks/{task_id}/cancel` | Cancel a background task |
 | GET | `/api/v1/tasks` | List background tasks |
 | GET | `/api/v1/observer/queue` | Queue status |
 | GET | `/api/v1/observer/vikingdb` | VikingDB status |
@@ -540,7 +538,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/api/v1/admin/accounts/{account_id}/users` | Register a user |
 | GET | `/api/v1/admin/accounts/{account_id}/users` | List users |
 | DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | Remove a user |
-| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | Change a user role |
+| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | Promote a user to ADMIN |
 | POST | `/api/v1/admin/accounts/{account_id}/users/{user_id}/key` | Regenerate a user key |
 | GET | `/api/v1/privacy-configs` | List privacy configuration categories |
 | GET | `/api/v1/privacy-configs/{category}` | List category targets |

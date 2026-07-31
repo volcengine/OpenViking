@@ -161,6 +161,9 @@ pub trait QueueBackend: Send + Sync {
     /// Get the number of messages in the queue
     fn size(&self, queue_name: &str) -> Result<usize>;
 
+    /// List every unacknowledged message without changing queue state
+    fn list_unacked(&self, queue_name: &str) -> Result<Vec<Message>>;
+
     /// Clear all messages from the queue
     fn clear(&mut self, queue_name: &str) -> Result<()>;
 
@@ -287,6 +290,14 @@ impl QueueBackend for MemoryBackend {
             .ok_or_else(|| Error::NotFound(format!("queue '{}' not found", queue_name)))?;
 
         Ok(queue.messages.len())
+    }
+
+    fn list_unacked(&self, queue_name: &str) -> Result<Vec<Message>> {
+        let queue = self
+            .queues
+            .get(queue_name)
+            .ok_or_else(|| Error::NotFound(format!("queue '{}' not found", queue_name)))?;
+        Ok(queue.messages.iter().cloned().collect())
     }
 
     fn clear(&mut self, queue_name: &str) -> Result<()> {
@@ -691,6 +702,34 @@ impl QueueBackend for SQLiteQueueBackend {
         Ok(count as usize)
     }
 
+    fn list_unacked(&self, queue_name: &str) -> Result<Vec<Message>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::internal(format!("sqlite mutex poisoned: {}", e)))?;
+
+        Self::require_queue_exists(&conn, queue_name)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT data FROM queue_messages
+                 WHERE queue_name = ?1 AND status IN ('pending', 'processing')
+                 ORDER BY id",
+            )
+            .map_err(|e| Error::internal(format!("sqlite list unacked prepare error: {}", e)))?;
+        let rows = stmt
+            .query_map(params![queue_name], |row| read_sqlite_text(row, 0))
+            .map_err(|e| Error::internal(format!("sqlite list unacked query error: {}", e)))?;
+
+        let mut messages = Vec::new();
+        for row in rows {
+            let raw_data =
+                row.map_err(|e| Error::internal(format!("sqlite list unacked row error: {}", e)))?;
+            let stored: StoredMessage = serde_json::from_str(&raw_data)?;
+            messages.push(stored.into_message());
+        }
+        Ok(messages)
+    }
+
     fn clear(&mut self, queue_name: &str) -> Result<()> {
         let conn = self
             .conn
@@ -920,6 +959,9 @@ mod tests {
         let first = backend.dequeue("test").unwrap().unwrap();
         assert_eq!(first.data, b"message 1");
         assert_eq!(backend.size("test").unwrap(), 1);
+        let unacked = backend.list_unacked("test").unwrap();
+        assert_eq!(unacked.len(), 2);
+        assert_eq!(unacked[0].id, msg1_id);
         assert!(backend.ack("test", &msg1_id).unwrap());
 
         let second = backend.dequeue("test").unwrap().unwrap();

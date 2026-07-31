@@ -1499,7 +1499,7 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
                 "Update experience memories from session commit "
                 "viking://user/u/sessions/session-1/history/archive_001"
             ),
-            "paths": [exp_uri, deleted_exp_uri],
+            "paths": ["viking://user/u/memories/experiences"],
             "ctx": _ctx(),
         }
     ]

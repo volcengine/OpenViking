@@ -190,6 +190,10 @@ class SyncOpenViking:
         """Query background task status."""
         return run_async(self._async_client.get_task(task_id))
 
+    def cancel_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Cancel a background task."""
+        return run_async(self._async_client.cancel_task(task_id))
+
     def list_tasks(
         self,
         task_type: Optional[str] = None,

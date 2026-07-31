@@ -324,12 +324,6 @@ peer_enabled: true
 
 这一类 prompt 主要用于文件级和目录级摘要生成，是语义索引构建的重要部分。
 
-- `semantic.code_ast_summary`
-  - 生效环节：大型代码文件 AST 骨架总结阶段
-  - 影响能力：代码文件摘要、代码检索和结构理解效果
-  - 作用：基于 AST 骨架而不是完整源码生成代码摘要
-  - 关键输入：`file_name`、`skeleton`、`output_language`
-
 - `semantic.code_summary`
   - 生效环节：代码文件摘要阶段
   - 影响能力：代码文件语义索引、代码检索与理解结果

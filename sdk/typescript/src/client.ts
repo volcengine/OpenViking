@@ -754,6 +754,13 @@ export class OpenVikingClient {
       throw error;
     }
   }
+
+  cancelTask(taskId: string): Promise<JsonObject> {
+    return this.request(
+      "POST",
+      `/api/v1/tasks/${pathPart(taskId)}/cancel`,
+    ) as Promise<JsonObject>;
+  }
   /** List background tasks. */
   listTasks(options: TaskListOptions = {}): Promise<unknown[]> {
     return this.request("GET", "/api/v1/tasks", {
