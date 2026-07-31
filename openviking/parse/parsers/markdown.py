@@ -263,8 +263,6 @@ class MarkdownParser(BaseParser):
         start_time = time.time()
 
         try:
-            logger.debug(f"[MarkdownParser] Starting parse for: {source_path or 'content string'}")
-
             # Phase 1 — parse only: turn the markdown into an ordered VikingFS write
             # plan, touching nothing. The temp URI is allocated here (the one
             # FS-scoped step) and threaded in so layout planning stays side-effect free.
@@ -295,7 +293,6 @@ class MarkdownParser(BaseParser):
             )
 
             parse_time = time.time() - start_time
-            logger.info(f"[MarkdownParser] Parse completed in {parse_time:.2f}s")
 
             # Create dummy root node for compatibility
             root = ResourceNode(
@@ -341,7 +338,6 @@ class MarkdownParser(BaseParser):
         link-rewrite probe passes a throwaway), keeping this method pure so the probe
         can learn a target's split layout with zero side effects.
         """
-        logger.debug(f"[MarkdownParser] Computing layout for: {source_path or 'content string'}")
         meta: Dict[str, Any] = {}
         warnings: List[str] = []
 
@@ -350,7 +346,6 @@ class MarkdownParser(BaseParser):
             content, frontmatter = self._extract_frontmatter(content)
             if frontmatter:
                 meta["frontmatter"] = frontmatter
-                logger.debug(f"[MarkdownParser] Extracted frontmatter: {list(frontmatter.keys())}")
 
         explicit_name = kwargs.get("resource_name")
         if not explicit_name and kwargs.get("source_name"):
@@ -376,7 +371,6 @@ class MarkdownParser(BaseParser):
 
         # Find all headings
         headings = self._find_headings(content)
-        logger.info(f"[MarkdownParser] Found {len(headings)} headings")
 
         # The temp dir is the first thing materialized on apply.
         ops: List[_LayoutOp] = [_LayoutOp("mkdir", temp_uri)]
@@ -715,7 +709,6 @@ class MarkdownParser(BaseParser):
                     # Write next to the markdown file
                     viking_path = f"{md_dir}/{unique_filename}"
                     await viking_fs.write_file_bytes(viking_path, image_bytes)
-                    logger.debug(f"[MarkdownParser] Copied image to VikingFS: {viking_path}")
 
                     # Record mapping for post-commit rewrite
                     file_mappings[origin_link] = unique_filename
@@ -1196,7 +1189,6 @@ class MarkdownParser(BaseParser):
 
         # Estimate document size
         estimated_tokens = self._estimate_token_count(content)
-        logger.info(f"[MarkdownParser] Document size: {estimated_tokens} tokens")
 
         # Create root directory
         ops.append(_LayoutOp("mkdir", root_dir))
@@ -1210,16 +1202,13 @@ class MarkdownParser(BaseParser):
         if estimated_tokens <= max_size and len(content) <= max_chars:
             file_path = f"{root_dir}/{doc_name}.md"
             ops.append(_LayoutOp("write", file_path, content))
-            logger.debug(f"[MarkdownParser] Small document planned as: {file_path}")
             return
 
         # No headings: split by paragraphs
         if not headings:
-            logger.info("[MarkdownParser] No headings, splitting by paragraphs")
             parts = self._smart_split_content(content, max_size)
             for part_idx, part in enumerate(parts, 1):
                 ops.append(_LayoutOp("write", f"{root_dir}/{doc_name}_{part_idx}.md", part))
-            logger.debug(f"[MarkdownParser] Split into {len(parts)} parts")
             return
 
         # Build virtual section list (pre-heading content as first virtual section)
@@ -1406,7 +1395,6 @@ class MarkdownParser(BaseParser):
         # Fits in one file (check both token and char limits)
         if tokens <= max_size and len(content_text) <= self.config.max_section_chars:
             ops.append(_LayoutOp("write", f"{parent_dir}/{name}.md", content_text))
-            logger.debug(f"[MarkdownParser] Planned: {name}.md")
             return
 
         # Create directory and handle children or split
@@ -1454,7 +1442,6 @@ class MarkdownParser(BaseParser):
         self, ops: List[_LayoutOp], section_dir: str, name: str, content: str, max_size: int
     ) -> None:
         """Split content by paragraphs, planning each part as a write into ``ops``."""
-        logger.info(f"[MarkdownParser] Splitting: {name}")
         parts = self._smart_split_content(content, max_size)
         for i, part in enumerate(parts, 1):
             ops.append(_LayoutOp("write", f"{section_dir}/{name}_{i}.md", part))
@@ -1514,12 +1501,8 @@ class MarkdownParser(BaseParser):
             parts = self._smart_split_content(content, max_size)
             for i, part in enumerate(parts, 1):
                 ops.append(_LayoutOp("write", f"{parent_dir}/{name}_{i}.md", part))
-            logger.debug(
-                f"[MarkdownParser] Merged then split: {name} ({len(sections)} sections → {len(parts)} parts)"
-            )
         else:
             ops.append(_LayoutOp("write", f"{parent_dir}/{name}.md", content))
-            logger.debug(f"[MarkdownParser] Merged: {name}.md ({len(sections)} sections)")
 
     def _get_section_info(
         self,

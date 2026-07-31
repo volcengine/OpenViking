@@ -319,6 +319,7 @@ def _make_provider(config, langfuse_client: Any = None):
     provider_name = p.provider if p else None
     extra_headers = p.extra_headers if p else {}
     timeout = p.timeout if p else None
+    max_tokens = getattr(p, "max_tokens", None) if p else None
     credentials = list(getattr(p, "credentials", None) or [])
 
     if not model and not credentials:
@@ -345,6 +346,8 @@ def _make_provider(config, langfuse_client: Any = None):
         root_vlm_data["thinking"] = thinking
         if timeout is not None:
             root_vlm_data["timeout"] = timeout
+        if max_tokens is not None:
+            root_vlm_data["max_tokens"] = max_tokens
         if extra_headers:
             root_vlm_data["extra_headers"] = extra_headers
         effective_vlm = VLMConfig.model_validate(root_vlm_data)
@@ -385,6 +388,8 @@ def _make_provider(config, langfuse_client: Any = None):
             bot_vlm_data["provider"] = provider_name
         if timeout is not None:
             bot_vlm_data["timeout"] = timeout
+        if max_tokens is not None:
+            bot_vlm_data["max_tokens"] = max_tokens
         if api_key:
             bot_vlm_data["api_key"] = api_key
         if api_base:
@@ -415,6 +420,8 @@ def _make_provider(config, langfuse_client: Any = None):
         }
         if timeout is not None:
             vlm_config["timeout"] = timeout
+        if max_tokens is not None:
+            vlm_config["max_tokens"] = max_tokens
         if api_key:
             vlm_config["api_key"] = api_key
         if api_base:
