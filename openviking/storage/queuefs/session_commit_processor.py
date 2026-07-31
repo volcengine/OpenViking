@@ -41,7 +41,6 @@ class SessionCommitProcessor(DequeueHandlerBase):
         ctx = RequestContext(
             user=UserIdentifier.from_dict(msg.user),
             role=Role.USER,
-            actor_peer_id=msg.actor_peer_id,
         )
         return msg, ctx
 

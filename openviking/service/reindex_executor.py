@@ -134,7 +134,6 @@ class ReindexExecutor:
             user=UserIdentifier(ctx.account_id, owner),
             role=ctx.role,
             actor_peer_id=ctx.actor_peer_id,
-            legacy_agent_id=ctx.legacy_agent_id,
             from_oauth=ctx.from_oauth,
         )
 
@@ -854,7 +853,6 @@ class ReindexExecutor:
             user=UserIdentifier(ctx.account_id, str(owner)),
             role=ctx.role,
             actor_peer_id=ctx.actor_peer_id,
-            legacy_agent_id=ctx.legacy_agent_id,
             from_oauth=ctx.from_oauth,
         )
 

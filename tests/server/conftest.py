@@ -101,7 +101,6 @@ def _install_session_commit_queue_fallback(service: OpenVikingService, monkeypat
             ctx = RequestContext(
                 user=UserIdentifier.from_dict(msg.user),
                 role=Role.USER,
-                actor_peer_id=msg.actor_peer_id,
             )
             queued_session = service.sessions.session(
                 ctx,

@@ -1882,7 +1882,6 @@ class Session:
                 session_uri=self._session_uri,
                 archive_uri=archive_uri,
                 user=self.ctx.user.to_dict(),
-                actor_peer_id=self.ctx.actor_peer_id,
                 memory_policy=effective_memory_policy,
                 usage_uris=list(dict.fromkeys(u.uri for u in usage_snapshot if u.uri)),
             )

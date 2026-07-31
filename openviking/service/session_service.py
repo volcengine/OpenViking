@@ -6,6 +6,7 @@ Session Service for OpenViking.
 Provides session management operations: session, sessions, add_message, commit, delete.
 """
 
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.core.namespace import canonical_session_uri
@@ -16,8 +17,8 @@ from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory_policy import MemoryPolicy
-from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.storage.viking_fs import VikingFS
+from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking_cli.exceptions import (
     AlreadyExistsError,
     NotFoundError,
@@ -146,6 +147,7 @@ class SessionService:
             Session instance
         """
         self._ensure_initialized()
+        ctx = replace(ctx, actor_peer_id=None)
         return Session(
             viking_fs=self._viking_fs,
             vikingdb_manager=self._vikingdb,

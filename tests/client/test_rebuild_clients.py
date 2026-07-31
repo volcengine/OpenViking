@@ -225,7 +225,6 @@ async def test_local_client_batch_add_messages_forwards_to_session():
     client = LocalClient.__new__(LocalClient)
     client._service = SimpleNamespace(sessions=FakeSessions())
     client._ctx = SimpleNamespace(user=SimpleNamespace(user_id="user-1"))
-    client._legacy_agent_id = None
 
     result = await LocalClient.batch_add_messages(
         client,
@@ -285,7 +284,6 @@ async def test_local_client_add_message_accepts_image_parts():
     client = LocalClient.__new__(LocalClient)
     client._service = SimpleNamespace(sessions=FakeSessions())
     client._ctx = SimpleNamespace(user=SimpleNamespace(user_id="user-1"))
-    client._legacy_agent_id = None
 
     result = await LocalClient.add_message(
         client,

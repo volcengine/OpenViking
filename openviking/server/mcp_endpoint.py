@@ -15,7 +15,6 @@ are extracted from HTTP request scope and propagated via contextvars.
 
 from __future__ import annotations
 
-import asyncio
 import contextvars
 import os
 from contextlib import asynccontextmanager
@@ -37,7 +36,7 @@ from openviking.retrieve.type_quota_recall import (
     DEFAULT_QUOTAS,
     search_type_quota_recall,
 )
-from openviking.server.auth import _extract_api_key, resolve_actor_peer_headers, resolve_identity
+from openviking.server.auth import _extract_api_key, normalize_actor_peer_header, resolve_identity
 from openviking.server.dependencies import get_server_config, get_service
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import (
@@ -151,9 +150,8 @@ class _IdentityASGIMiddleware:
                 x_openviking_account=request.headers.get("x-openviking-account"),
                 x_openviking_user=request.headers.get("x-openviking-user"),
             )
-            actor_peer_id, legacy_agent_id = resolve_actor_peer_headers(
-                request.headers.get("x-openviking-actor-peer"),
-                request.headers.get("x-openviking-agent"),
+            actor_peer_id = normalize_actor_peer_header(
+                request.headers.get("x-openviking-actor-peer")
             )
         except (UnauthenticatedError, PermissionDeniedError, InvalidArgumentError) as exc:
             status = (
@@ -200,7 +198,6 @@ class _IdentityASGIMiddleware:
             ),
             role=identity.role,
             actor_peer_id=actor_peer_id,
-            legacy_agent_id=legacy_agent_id,
             from_oauth=identity.from_oauth,
             api_key=_extract_api_key(x_api_key, authorization),
         )
