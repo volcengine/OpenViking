@@ -13,7 +13,10 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from openviking.models.embedder.base import EmbedResult  # noqa: E402
+from openviking.models.embedder.base import (  # noqa: E402
+    EmbedResult,
+    extract_text_from_content,
+)
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV  # noqa: E402
 
 
@@ -27,6 +30,9 @@ class _FakeEmbedder:
 
     def get_dimension(self):
         return self._dimension
+
+    def prepare_embedding_input(self, content):
+        return extract_text_from_content(content)
 
     def _generate_pseudo_embedding(self, text: str):
         """
@@ -64,6 +70,10 @@ class _FakeEmbedder:
 
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         return EmbedResult(dense_vector=self._generate_pseudo_embedding(text))
+
+    async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+        return self.embed(text, is_query=is_query)
+
 
 class TestQuickStartLite(unittest.TestCase):
     def setUp(self):
