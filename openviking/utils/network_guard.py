@@ -12,10 +12,8 @@ from urllib.parse import urlparse
 
 import httpx
 
-from openviking.utils.code_hosting_utils import get_configured_code_hosting_domains
 from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.utils.config import get_openviking_config
-from openviking_cli.utils.config.parser_config import CodeHostingConfig
 
 RequestValidator = Callable[[str], Optional[str]]
 
@@ -23,20 +21,6 @@ _LOCAL_HOSTNAMES = {
     "localhost",
     "localhost.localdomain",
 }
-
-
-def _get_allowed_code_hosting_domains() -> set[str]:
-    """Get allowed code hosting domains from config."""
-    try:
-        config = get_openviking_config()
-        if hasattr(config, "code"):
-            return get_configured_code_hosting_domains(config.code)
-    except Exception:
-        pass
-
-    # Derive the fallback from the config object instead of maintaining a
-    # second hard-coded allowlist in the network layer.
-    return get_configured_code_hosting_domains(CodeHostingConfig())
 
 
 def _is_allow_private_networks() -> bool:

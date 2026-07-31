@@ -65,10 +65,15 @@ def _build_settings(config: CrawlConfig):
             "ROBOTSTXT_OBEY": True,
             "LOG_ENABLED": False,
             "TELNETCONSOLE_ENABLED": False,
+            # A proxy could resolve the original hostname independently and
+            # bypass the validated address selected by the crawler resolver.
+            "HTTPPROXY_ENABLED": False,
             "USER_AGENT": "OpenViking/0.4 (+recursive-web-crawler)",
+            "DNS_RESOLVER": (
+                "openviking.parse.accessors.web_crawler.resolver.ValidatedAddressResolver"
+            ),
             "DOWNLOADER_MIDDLEWARES": {
-                "openviking.parse.accessors.web_crawler.middlewares."
-                "RequestValidatorMiddleware": 50,
+                "openviking.parse.accessors.web_crawler.middlewares.RequestValidatorMiddleware": 50,
             },
         }
     )

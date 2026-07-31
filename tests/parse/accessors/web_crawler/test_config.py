@@ -1,6 +1,7 @@
 import pytest
 
 from openviking.parse.accessors.web_crawler.config import CrawlConfig
+from openviking.parse.accessors.web_crawler.web_crawler import _build_settings
 
 
 class TestCrawlConfigValidation:
@@ -47,3 +48,13 @@ class TestCrawlConfigValidation:
     def test_max_html_bytes_zero_rejected(self):
         with pytest.raises(ValueError):
             CrawlConfig(max_html_bytes=0)
+
+
+def test_crawler_uses_validated_address_resolver_without_proxy():
+    settings = _build_settings(CrawlConfig())
+
+    assert (
+        settings["DNS_RESOLVER"]
+        == "openviking.parse.accessors.web_crawler.resolver.ValidatedAddressResolver"
+    )
+    assert settings.getbool("HTTPPROXY_ENABLED") is False

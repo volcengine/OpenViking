@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -12,7 +11,6 @@ import pytest
 
 from openviking.utils.network_guard import (
     ValidatedAsyncHTTPTransport,
-    _get_allowed_code_hosting_domains,
     _is_public_ip,
     _normalize_host,
     _resolve_host_addresses,
@@ -182,25 +180,6 @@ class TestEnsurePublicRemoteTarget:
     def test_rejects_git_ssh_without_colon(self) -> None:
         with pytest.raises(PermissionDeniedError, match="valid destination host"):
             ensure_public_remote_target("git@github.com")
-
-    def test_generic_code_hosting_domains_are_allowlisted(self) -> None:
-        domains = [
-            "gitcode.example.com",
-            "gitee.example.com",
-            "bitbucket.example.com",
-            "codeberg.example.com",
-            "gitea.example.com",
-            "atomgit.example.com",
-            "sourcehut.example.com",
-        ]
-        code_config = SimpleNamespace(code_hosting_domains=domains)
-        config = SimpleNamespace(code=code_config)
-
-        with patch(
-            "openviking.utils.network_guard.get_openviking_config",
-            return_value=config,
-        ):
-            assert _get_allowed_code_hosting_domains() == set(domains)
 
     # -- Rejection: localhost variants --
 
