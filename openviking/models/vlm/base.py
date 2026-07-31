@@ -944,6 +944,7 @@ class MultiCredentialVLM(VLMBase):
         start = self._switcher.maybe_failback()
         errors = []
         attempted = False
+        active_credential_failed = False
 
         for offset in range(self._switcher.n):
             idx = (start + offset) % self._switcher.n
@@ -964,12 +965,17 @@ class MultiCredentialVLM(VLMBase):
                     filename=filename,
                     media_type=media_type,
                 )
-                self._switcher.commit_success(idx)
+                # Capability routing alone must not change the credential used
+                # by text and vision calls.
+                if idx == start or active_credential_failed:
+                    self._switcher.commit_success(idx)
                 return result
             except Exception as error:
                 _annotate_vlm_error(error, vlm)
                 error_class = classify_api_error(error)
                 errors.append((credential_id, error_class, error, idx))
+                if idx == start:
+                    active_credential_failed = True
                 if self._switcher.is_fail_fast(error_class):
                     raise
                 self._logger.warning(
