@@ -176,7 +176,8 @@ class ChatRequest(BaseModel):
     user_id: Optional[str] = Field(default=None, description="User identifier (optional)")
     stream: bool = Field(default=False, description="Whether to stream the response")
     context: Optional[List[ChatMessage]] = Field(
-        default=None, description="Additional context messages"
+        default=None,
+        description="Non-empty context messages are not supported and are rejected",
     )
     need_reply: bool = True
     channel_id: Optional[str] = Field(
@@ -192,9 +193,11 @@ class ChatRequest(BaseModel):
     )
 
     @model_validator(mode="after")
-    def validate_message_or_images(self) -> "ChatRequest":
+    def validate_request(self) -> "ChatRequest":
         if not self.message.strip() and not self.images:
             raise ValueError("message or at least one image is required")
+        if self.context:
+            raise ValueError("context is not supported")
         return self
 
 

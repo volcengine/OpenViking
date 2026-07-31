@@ -65,7 +65,7 @@ Bot API 位于 `/bot/v1`：
 | GET/POST | `/bot/v1/sessions` | 列出或创建 API Session |
 | GET/DELETE | `/bot/v1/sessions/{id}` | 查询或删除 API Session |
 
-ChatRequest 支持 session ID、额外上下文、是否回复、请求级禁用工具和渠道 ID。ChatResponse 返回 response ID、最终文本、中间事件、相关记忆和 token usage。
+ChatRequest 支持 session ID、是否回复、请求级禁用工具和渠道 ID。`context` 字段不接受非空消息；请省略该字段或传入空列表，否则 API 返回 HTTP 422。同一个 session 同时只能有一个进行中的请求；使用相同 session ID 的并发请求会返回 HTTP 409，因此客户端应串行发送同 session 请求，并在当前请求完成后重试。ChatResponse 返回 response ID、最终文本、中间事件、相关记忆和 token usage。
 
 SSE 会发送 reasoning、content delta、tool call、tool result、iteration 和最终 response 等事件。
 
