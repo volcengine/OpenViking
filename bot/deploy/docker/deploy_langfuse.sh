@@ -91,15 +91,16 @@ generate_env_file() {
 }
 
 COMPOSE_PROJECT="${COMPOSE_PROJECT_NAME:-$(basename "$LANGFUSE_DIR")}"
-existing_postgres_volumes="$(
+list_project_volumes() {
   docker volume ls \
     --quiet \
-    --filter "label=com.docker.compose.project=$COMPOSE_PROJECT" \
-    --filter "label=com.docker.compose.volume=langfuse_postgres_data"
-)"
+    --filter "label=com.docker.compose.project=$COMPOSE_PROJECT"
+}
+
+existing_data_volumes="$(list_project_volumes)"
 
 if [ ! -e "$LANGFUSE_ENV_FILE" ] \
-  && [ -n "$existing_postgres_volumes" ] \
+  && [ -n "$existing_data_volumes" ] \
   && [ "$RESET_EXISTING" = false ]; then
   echo "Error: existing Langfuse data was detected, but $LANGFUSE_ENV_FILE is missing." >&2
   echo "Refusing to generate new credentials because they would not match the existing data." >&2
@@ -122,20 +123,13 @@ if [ "$RESET_EXISTING" = true ]; then
   temporary_env_file="$(mktemp "$LANGFUSE_DIR/.env.tmp.XXXXXX")"
   generate_env_file "$temporary_env_file"
   echo "⚠️  Reset requested: deleting existing local Langfuse containers and data volumes."
-  if [ -e "$LANGFUSE_ENV_FILE" ]; then
-    "${COMPOSE_CMD[@]}" down --volumes --remove-orphans
-  else
-    "${COMPOSE_CMD[@]}" --env-file "$temporary_env_file" down --volumes --remove-orphans
-  fi
+  "${COMPOSE_CMD[@]}" \
+    --env-file "$temporary_env_file" \
+    down --volumes --remove-orphans
 
-  remaining_postgres_volumes="$(
-    docker volume ls \
-      --quiet \
-      --filter "label=com.docker.compose.project=$COMPOSE_PROJECT" \
-      --filter "label=com.docker.compose.volume=langfuse_postgres_data"
-  )"
-  if [ -n "$remaining_postgres_volumes" ]; then
-    echo "Error: the existing Langfuse Postgres volume was not removed; reset aborted." >&2
+  remaining_data_volumes="$(list_project_volumes)"
+  if [ -n "$remaining_data_volumes" ]; then
+    echo "Error: existing Langfuse data volumes were not removed; reset aborted." >&2
     exit 1
   fi
 

@@ -154,6 +154,32 @@ def test_launcher_reset_replaces_existing_local_data_explicitly(tmp_path):
     assert "up -d" in docker_calls
 
 
+def test_launcher_reset_does_not_depend_on_existing_env_file(tmp_path):
+    launcher, mock_bin, docker_log = _stage_launcher(tmp_path)
+    env_file = launcher.parent / "langfuse/.env"
+    env_file.write_text("INCOMPLETE=old\n", encoding="utf-8")
+    env_file.chmod(0o600)
+
+    result = subprocess.run(
+        [str(launcher), "--reset"],
+        cwd=launcher.parent,
+        env=_launcher_env(
+            mock_bin,
+            docker_log,
+            volume="langfuse_langfuse_clickhouse_data",
+        ),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "INCOMPLETE=old" not in env_file.read_text(encoding="utf-8")
+    docker_calls = docker_log.read_text(encoding="utf-8")
+    assert "--env-file" in docker_calls
+    assert "down --volumes --remove-orphans" in docker_calls
+
+
 def test_launcher_generates_credentials_for_a_fresh_install(tmp_path):
     launcher, mock_bin, docker_log = _stage_launcher(tmp_path)
 
