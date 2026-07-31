@@ -544,8 +544,9 @@ class SessionCompressorV3:
 
         registry = create_default_registry()
         if allow_self_memory:
-            await registry.initialize_memory_files(
-                ctx,
+            await MemoryUpdater.initialize_and_vectorize_default_files(
+                vikingdb=self.vikingdb,
+                ctx=ctx,
                 allowed_memory_types=allowed_memory_types,
             )
 
