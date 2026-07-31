@@ -2,9 +2,9 @@ import types
 
 import pytest
 
-from openviking.utils.ingest_options import IngestOptions
 from openviking.core.context import Context, ResourceContentType
 from openviking.utils import embedding_utils
+from openviking.utils.ingest_options import IngestOptions
 
 
 class DummyQueue:
@@ -100,7 +100,9 @@ def test_get_resource_content_type_media_extensions_are_case_insensitive():
 
 @pytest.mark.parametrize("extension", [".cu", ".cuh"])
 def test_get_resource_content_type_recognizes_cuda_extensions_as_text(extension):
-    assert embedding_utils.get_resource_content_type(f"kernel{extension}") == ResourceContentType.TEXT
+    assert (
+        embedding_utils.get_resource_content_type(f"kernel{extension}") == ResourceContentType.TEXT
+    )
 
 
 def test_get_resource_content_type_keeps_ts_as_text():
