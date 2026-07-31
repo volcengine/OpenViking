@@ -177,7 +177,6 @@ OpenCode sees the OpenViking MCP server as `openviking`, so tool names are names
 - `openviking_add_resource`: add a URL, local file, sitemap, or feed.
 - `openviking_forget`: delete a `viking://` URI after explicit user confirmation.
 - `openviking_list_watches` / `openviking_cancel_watch`: inspect or cancel resource watches.
-- `openviking_code_search`, `openviking_code_outline`, `openviking_code_expand`: inspect indexed code symbols.
 - `openviking_health`: check OpenViking server health.
 
 The proxy forwards the server's real `tools/list` response; the plugin does not maintain a separate native tool list.

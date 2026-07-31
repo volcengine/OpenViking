@@ -19,6 +19,7 @@ from openviking.core.namespace import (
     owner_space_for_uri,
 )
 from openviking.server.identity import RequestContext
+from openviking.service.task_work_index import TaskWorkRejected
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
@@ -174,6 +175,8 @@ def get_resource_content_type(file_name: str) -> Optional[ResourceContentType]:
         ".java",
         ".cpp",
         ".c",
+        ".cu",
+        ".cuh",
         ".h",
         ".go",
         ".rs",
@@ -385,6 +388,9 @@ async def vectorize_directory_meta(
                 await embedding_queue.enqueue(msg_abstract)
                 enqueued += 1
                 logger.debug(f"Enqueued directory L0 (abstract) for vectorization: {uri}")
+            except TaskWorkRejected:
+                logger.debug("Skipped directory vectorization for cancelling task: %s", uri)
+                return
             except Exception as e:
                 logger.error(
                     f"Failed to enqueue directory L0 (abstract) for vectorization: {uri}: {e}",
@@ -420,6 +426,9 @@ async def vectorize_directory_meta(
                     await embedding_queue.enqueue(msg_overview)
                     enqueued += 1
                     logger.debug(f"Enqueued directory L1 (overview) for vectorization: {uri}")
+                except TaskWorkRejected:
+                    logger.debug("Skipped directory vectorization for cancelling task: %s", uri)
+                    return
                 except Exception as e:
                     logger.error(
                         f"Failed to enqueue directory L1 (overview) for vectorization: {uri}: {e}",
@@ -588,6 +597,14 @@ async def vectorize_file(
         enqueued = True
         logger.debug(f"Enqueued file for vectorization: {file_path}")
 
+    except TaskWorkRejected:
+        logger.debug("Skipped file vectorization for cancelling task: %s", file_path)
+        if registered_wait_root is not None:
+            get_request_wait_tracker().mark_embedding_failed(
+                registered_wait_root[0],
+                registered_wait_root[1],
+                f"Task cancellation skipped file vector for {file_path}",
+            )
     except Exception as e:
         logger.error(f"Failed to vectorize file {file_path}: {e}", exc_info=True)
         if registered_wait_root is not None:

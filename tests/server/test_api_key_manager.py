@@ -19,6 +19,7 @@ from openviking_cli.exceptions import (
     AlreadyExistsError,
     InvalidArgumentError,
     NotFoundError,
+    PermissionDeniedError,
     UnauthenticatedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
@@ -303,6 +304,10 @@ async def test_set_role(manager: APIKeyManager):
     assert manager.resolve(bob_key).role == Role.USER
 
     await manager.set_role(acct, "bob", "admin")
+    assert manager.resolve(bob_key).role == Role.ADMIN
+
+    with pytest.raises(PermissionDeniedError, match="server.root_api_key"):
+        await manager.set_role(acct, "bob", Role.ROOT)
     assert manager.resolve(bob_key).role == Role.ADMIN
 
 

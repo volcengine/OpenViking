@@ -32,6 +32,14 @@ function TaskStatusBadge({ status }: { status: ResourceUploadTask['status'] }) {
     )
   }
 
+  if (status === 'cancelled') {
+    return (
+      <Badge variant="secondary" className="text-muted-foreground">
+        {t('processingTasks.status.cancelled')}
+      </Badge>
+    )
+  }
+
   return (
     <Badge variant="secondary" className="bg-amber-500/12 text-amber-300">
       {t('processingTasks.status.processing')}

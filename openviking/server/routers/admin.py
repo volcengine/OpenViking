@@ -7,6 +7,7 @@ import asyncio
 from fastapi import APIRouter, Body, Depends, Path, Request
 from pydantic import BaseModel
 
+from openviking.server.api_keys.models import validate_account_user_role
 from openviking.server.auth import (
     get_api_key_manager_or_raise,
     get_request_context,
@@ -137,23 +138,6 @@ async def _write_initial_user_config(
     if not _has_initial_user_config(user_config):
         return
     await write_user_config(service.viking_fs, user_ctx, user_config)
-
-
-def _validate_register_user_role(ctx: RequestContext, role: str) -> Role:
-    """Validate which roles may be minted through register_user.
-
-    register_user is the user-creation path, not the privileged role-escalation path.
-    - ROOT may create USER or ADMIN accounts here.
-    - ADMIN may create USER or ADMIN accounts in their own account.
-    - ROOT role assignment must go through the dedicated ROOT-only set_role endpoint.
-    """
-    resolved_role = Role(role)
-
-    if resolved_role == Role.ROOT:
-        raise PermissionDeniedError(
-            "register_user cannot mint ROOT users; use the ROOT-only set_role endpoint instead."
-        )
-    return resolved_role
 
 
 async def _run_legacy_migration_task(
@@ -330,7 +314,7 @@ async def register_user(
 ):
     """Register a new user in an account."""
     _check_account_access(ctx, account_id)
-    resolved_role = _validate_register_user_role(ctx, body.role)
+    resolved_role = validate_account_user_role(body.role)
     service = get_service()
     user_ctx = RequestContext(
         user=UserIdentifier(account_id, body.user_id),
@@ -391,7 +375,7 @@ async def remove_user(
 
 
 @router.put("/accounts/{account_id}/users/{user_id}/role")
-@require_auth_root
+@require_auth_root_or_admin
 async def set_user_role(
     body: SetRoleRequest,
     request: Request,
@@ -399,15 +383,18 @@ async def set_user_role(
     user_id: str = Path(..., description="User ID"),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """Change a user's role (ROOT only)."""
+    """Promote an account user to ADMIN."""
+    _check_account_access(ctx, account_id)
+    if body.role != Role.ADMIN:
+        raise InvalidArgumentError("set_user_role only supports promotion to admin.")
     manager = _get_api_key_manager(request)
-    await manager.set_role(account_id, user_id, body.role)
+    await manager.set_role(account_id, user_id, Role.ADMIN)
     return Response(
         status="ok",
         result={
             "account_id": account_id,
             "user_id": user_id,
-            "role": body.role,
+            "role": Role.ADMIN,
         },
     )
 

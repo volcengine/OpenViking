@@ -4,11 +4,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict
 
-from .context import get_current_telemetry
 from .operation import OperationTelemetry
-from .registry import register_telemetry, unregister_telemetry
 
 
 def _consume_semantic_request_stats(telemetry_id: str):
@@ -38,21 +36,6 @@ def _consume_semantic_dag_stats(telemetry_id: str, root_uri: str | None):
         return None
 
 
-def register_wait_telemetry(wait: bool) -> str:
-    """Register current telemetry collector for async queue consumers when needed."""
-    handle = get_current_telemetry()
-    if not handle.telemetry_id:
-        return ""
-    if handle.enabled:
-        register_telemetry(handle)
-    return handle.telemetry_id
-
-
-def unregister_wait_telemetry(telemetry_id: str) -> None:
-    """Unregister request-scoped telemetry handle."""
-    unregister_telemetry(telemetry_id)
-
-
 def build_queue_status_payload(status: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     """Convert queue status objects to response payload format."""
     return {
@@ -66,93 +49,28 @@ def build_queue_status_payload(status: Dict[str, Any]) -> Dict[str, Dict[str, An
     }
 
 
-def summarize_queue_errors(queue_status: Dict[str, Any] | None) -> List[str]:
-    """Return human-readable summaries for queue groups with recorded errors."""
-    if not queue_status:
-        return []
-
-    summaries: List[str] = []
-    for name, status in queue_status.items():
-        if isinstance(status, dict):
-            raw_error_count = status.get("error_count", 0)
-            raw_errors = status.get("errors") or []
-        else:
-            raw_error_count = getattr(status, "error_count", 0)
-            raw_errors = getattr(status, "errors", []) or []
-
-        try:
-            error_count = int(raw_error_count or 0)
-        except (TypeError, ValueError):
-            error_count = 0
-        if error_count <= 0:
-            continue
-
-        messages: List[str] = []
-        for error in raw_errors[:3]:
-            if isinstance(error, dict):
-                message = error.get("message")
-            else:
-                message = getattr(error, "message", None) or str(error)
-            if message:
-                messages.append(str(message))
-
-        summary = f"{name} error_count={error_count}"
-        if messages:
-            summary = f"{summary}: {', '.join(messages)}"
-        summaries.append(summary)
-
-    return summaries
-
-
-def _resolve_queue_group(
-    *,
-    explicit_stats: Any,
-    fallback_status: Any,
-) -> Dict[str, int]:
-    if explicit_stats is not None:
-        return {
-            "processed": explicit_stats.processed,
-            "requeue_count": getattr(explicit_stats, "requeue_count", 0),
-            "error_count": explicit_stats.error_count,
-        }
-    if fallback_status is None:
+def _queue_metrics(stats: Any) -> Dict[str, int]:
+    if stats is None:
         return {"processed": 0, "requeue_count": 0, "error_count": 0}
-    if isinstance(fallback_status, dict):
-        return {
-            "processed": int(fallback_status.get("processed", 0) or 0),
-            "requeue_count": int(fallback_status.get("requeue_count", 0) or 0),
-            "error_count": int(fallback_status.get("error_count", 0) or 0),
-        }
     return {
-        "processed": fallback_status.processed,
-        "requeue_count": getattr(fallback_status, "requeue_count", 0),
-        "error_count": fallback_status.error_count,
+        "processed": stats.processed,
+        "requeue_count": stats.requeue_count,
+        "error_count": stats.error_count,
     }
 
 
-def record_resource_wait_metrics(
+def record_resource_queue_metrics(
     *,
-    telemetry: OperationTelemetry | None = None,
+    telemetry: OperationTelemetry,
     telemetry_id: str,
-    queue_status: Dict[str, Any],
     root_uri: str | None,
-) -> Dict[str, Dict[str, int]]:
+) -> None:
     """Apply queue and DAG metrics to a resource operation collector."""
-    telemetry = telemetry or get_current_telemetry()
     if not telemetry.enabled:
-        return {
-            "semantic": {"processed": 0, "requeue_count": 0, "error_count": 0},
-            "embedding": {"processed": 0, "requeue_count": 0, "error_count": 0},
-        }
+        return
 
-    semantic = _resolve_queue_group(
-        explicit_stats=_consume_semantic_request_stats(telemetry_id),
-        fallback_status=queue_status.get("Semantic"),
-    )
-    embedding = _resolve_queue_group(
-        explicit_stats=_consume_embedding_request_stats(telemetry_id),
-        fallback_status=queue_status.get("Embedding"),
-    )
+    semantic = _queue_metrics(_consume_semantic_request_stats(telemetry_id))
+    embedding = _queue_metrics(_consume_embedding_request_stats(telemetry_id))
 
     telemetry.set("queue.semantic.processed", semantic["processed"])
     telemetry.set("queue.semantic.requeue_count", semantic["requeue_count"])
@@ -168,16 +86,7 @@ def record_resource_wait_metrics(
         telemetry.set("semantic_nodes.pending", dag_stats.pending_nodes)
         telemetry.set("semantic_nodes.running", dag_stats.in_progress_nodes)
 
-    return {
-        "semantic": semantic,
-        "embedding": embedding,
-    }
-
-
 __all__ = [
     "build_queue_status_payload",
-    "record_resource_wait_metrics",
-    "register_wait_telemetry",
-    "summarize_queue_errors",
-    "unregister_wait_telemetry",
+    "record_resource_queue_metrics",
 ]

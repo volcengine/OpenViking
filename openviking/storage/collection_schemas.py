@@ -849,6 +849,28 @@ class TextEmbeddingHandler(DequeueHandlerBase):
             elif report_success:
                 self.report_success()
 
+    async def on_cancelled(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Settle semantic joins when a queued embedding is cancelled."""
+        embedding_msg: Optional[EmbeddingMsg] = None
+        try:
+            if data:
+                payload = data.get("data", data)
+                if isinstance(payload, str):
+                    payload = json.loads(payload)
+                embedding_msg = EmbeddingMsg.from_dict(payload)
+        except (KeyError, TypeError, ValueError) as exc:
+            self.report_error(str(exc), data)
+            return None
+
+        if embedding_msg is not None:
+            self._record_request_success(embedding_msg)
+            if embedding_msg.semantic_msg_id:
+                from openviking.storage.queuefs.embedding_tracker import EmbeddingTaskTracker
+
+                await EmbeddingTaskTracker.get_instance().decrement(embedding_msg.semantic_msg_id)
+        self.report_success()
+        return None
+
     @staticmethod
     def _record_request_success(embedding_msg: EmbeddingMsg) -> None:
         tracker = get_request_wait_tracker()

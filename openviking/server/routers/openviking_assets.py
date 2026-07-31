@@ -26,7 +26,7 @@ class ResolveOpenVikingAssetsRequest(BaseModel):
     manifest_yaml: str = Field(min_length=1, max_length=4_000_000)
     catalog_yaml: str | None = Field(default=None, min_length=1, max_length=4_000_000)
     manifest_label: str = Field(default="manifest.yaml", min_length=1, max_length=1024)
-    catalog_label: str = Field(default="assets.yaml", min_length=1, max_length=1024)
+    catalog_label: str = Field(default="catalog.yaml", min_length=1, max_length=1024)
 
 
 class GitAuthConfig(BaseModel):

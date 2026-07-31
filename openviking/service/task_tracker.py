@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from openviking.service.task_store import TaskStore
+from openviking.service.task_work_index import QueueTaskMetadata, TaskWorkIndex
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -35,11 +36,21 @@ class TaskStatus(str, Enum):
 
     PENDING = "pending"
     RUNNING = "running"
+    CANCELLING = "cancelling"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
-_TERMINAL_STATUSES = (TaskStatus.COMPLETED, TaskStatus.FAILED)
+_TERMINAL_STATUSES = (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED)
+_ACTIVE_STATUSES = (TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.CANCELLING)
+
+_CANCELLABLE_TASK_TYPES = {
+    "add_resource",
+    "session_commit",
+    "admin_reindex",
+    "snapshot_restore_reindex",
+}
 
 
 @dataclass
@@ -54,6 +65,7 @@ class TaskRecord:
     resource_id: Optional[str] = None  # e.g. session_id
     account_id: Optional[str] = None
     user_id: Optional[str] = None
+    meta: Dict[str, Any] = field(default_factory=dict)
     stage: Optional[str] = None
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
@@ -65,6 +77,7 @@ class TaskRecord:
         d["created_at_iso"] = datetime.fromtimestamp(self.created_at, tz=timezone.utc).isoformat()
         d["updated_at_iso"] = datetime.fromtimestamp(self.updated_at, tz=timezone.utc).isoformat()
         d["result"] = _sanitize_task_result(d.get("result"))
+        d["meta"] = _sanitize_task_result(d.get("meta"))
         d.pop("account_id", None)
         d.pop("user_id", None)
         return d
@@ -153,6 +166,9 @@ class TaskTracker:
         self._lock = threading.Lock()
         self._async_lock = asyncio.Lock()
         self._cleanup_task: Optional[asyncio.Task] = None
+        self._runtime_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._work_index = TaskWorkIndex()
+        self._install_work_index_callbacks()
         logger.info(
             "[TaskTracker] Initialized (store=%s, max_tasks=%d)",
             self._store.__class__.__name__,
@@ -160,6 +176,54 @@ class TaskTracker:
         )
 
     # ── Lifecycle ──
+
+    def _install_work_index_callbacks(self) -> None:
+        self._work_index.set_callbacks(
+            finalize_before_ack=self._finalize_before_ack,
+            is_cancellation_requested=self.is_cancellation_requested,
+        )
+
+    def attach_work_index(self, work_index: TaskWorkIndex) -> None:
+        """Use the QueueManager-owned index as the task lifecycle authority."""
+        self._work_index = work_index
+        self._runtime_loop = asyncio.get_running_loop()
+        self._install_work_index_callbacks()
+
+    async def restore_work_tasks(self, owners: Dict[str, tuple[str, str]]) -> None:
+        """Restore task records referenced by rebuilt QueueFS work."""
+        for task_id, (account_id, user_id) in owners.items():
+            await self.get(task_id, account_id=account_id, user_id=user_id)
+
+    async def _finalize_before_ack(self, metadata: QueueTaskMetadata) -> None:
+        """Persist the terminal state before QueueFS removes the last recovery message."""
+        loop = self._runtime_loop
+        if loop is None or loop.is_closed():
+            raise RuntimeError("TaskTracker runtime loop is unavailable during QueueFS ACK")
+        if asyncio.get_running_loop() is loop:
+            await self._finalize_task(
+                metadata.task_id,
+                account_id=metadata.account_id or None,
+                user_id=metadata.user_id or None,
+            )
+            return
+        future = asyncio.run_coroutine_threadsafe(
+            self._finalize_task(
+                metadata.task_id,
+                account_id=metadata.account_id or None,
+                user_id=metadata.user_id or None,
+            ),
+            loop,
+        )
+        await asyncio.wrap_future(future)
+
+    def is_cancellation_requested(self, task_id: str) -> bool:
+        """Fast thread-safe status check used by queue workers."""
+        with self._lock:
+            task = self._tasks.get(task_id)
+            return task is not None and task.status in (
+                TaskStatus.CANCELLING,
+                TaskStatus.CANCELLED,
+            )
 
     def start_cleanup_loop(self) -> None:
         """Start the background TTL cleanup coroutine.
@@ -169,6 +233,7 @@ class TaskTracker:
         """
         if self._cleanup_task is not None and not self._cleanup_task.done():
             return
+        self._runtime_loop = asyncio.get_running_loop()
         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
         logger.debug("[TaskTracker] Cleanup loop started")
 
@@ -195,10 +260,9 @@ class TaskTracker:
             with self._lock:
                 expired_ids = []
                 for tid, t in self._tasks.items():
-                    if (
-                        t.status == TaskStatus.COMPLETED
-                        and (now - t.updated_at) > self.TTL_COMPLETED
-                    ):
+                    if t.status in (TaskStatus.COMPLETED, TaskStatus.CANCELLED) and (
+                        now - t.updated_at
+                    ) > self.TTL_COMPLETED:
                         expired_ids.append(tid)
                     elif t.status == TaskStatus.FAILED and (now - t.updated_at) > self.TTL_FAILED:
                         expired_ids.append(tid)
@@ -244,6 +308,7 @@ class TaskTracker:
         account_id: str,
         user_id: str,
         task_id: Optional[str] = None,
+        meta: Optional[Dict[str, Any]] = None,
     ) -> TaskRecord:
         """Register a new pending task. Returns a snapshot copy."""
         self._validate_owner(account_id, user_id)
@@ -253,6 +318,7 @@ class TaskTracker:
             resource_id=resource_id,
             account_id=account_id,
             user_id=user_id,
+            meta=dict(meta or {}),
         )
         async with self._async_lock:
             if task_id:
@@ -303,7 +369,7 @@ class TaskTracker:
                 t.task_type == task_type
                 and t.resource_id == resource_id
                 and self._matches_owner(t, account_id, user_id)
-                and t.status in (TaskStatus.PENDING, TaskStatus.RUNNING)
+                and t.status in _ACTIVE_STATUSES
                 for t in tasks
             )
             if has_active:
@@ -336,7 +402,7 @@ class TaskTracker:
         """Transition task to RUNNING."""
         async with self._async_lock:
             task = await self._load_for_update(task_id, account_id, user_id)
-            if task and task.status not in _TERMINAL_STATUSES:
+            if task and task.status in (TaskStatus.PENDING, TaskStatus.RUNNING):
                 task.status = TaskStatus.RUNNING
                 if stage is not None:
                     task.stage = stage
@@ -355,7 +421,7 @@ class TaskTracker:
         """Update task stage without changing its lifecycle status."""
         async with self._async_lock:
             task = await self._load_for_update(task_id, account_id, user_id)
-            if task and task.status not in _TERMINAL_STATUSES:
+            if task and task.status in (TaskStatus.PENDING, TaskStatus.RUNNING):
                 task.stage = stage
                 task.updated_at = time.time()
                 await self._store.update(task)
@@ -365,29 +431,20 @@ class TaskTracker:
     async def complete(
         self,
         task_id: str,
-        result: Optional[Dict[str, Any]] = None,
+        result: Dict[str, Any],
         account_id: Optional[str] = None,
         user_id: Optional[str] = None,
         *,
         resource_id: Optional[str] = None,
     ) -> None:
-        """Transition task to COMPLETED with optional result."""
-        transitioned = False
-        async with self._async_lock:
-            task = await self._load_for_update(task_id, account_id, user_id)
-            if task and task.status not in _TERMINAL_STATUSES:
-                task.status = TaskStatus.COMPLETED
-                task.stage = "completed"
-                task.result = result
-                if resource_id is not None:
-                    task.resource_id = resource_id
-                task.updated_at = time.time()
-                await self._store.update(task)
-                with self._lock:
-                    self._tasks[task.task_id] = task
-                transitioned = True
-        if transitioned:
-            logger.info("[TaskTracker] Task %s completed", task_id)
+        """Record successful completion and finalize after owned work settles."""
+        await self._record_outcome(
+            task_id,
+            account_id,
+            user_id,
+            result=result,
+            resource_id=resource_id,
+        )
 
     async def fail(
         self,
@@ -396,21 +453,142 @@ class TaskTracker:
         account_id: Optional[str] = None,
         user_id: Optional[str] = None,
     ) -> None:
-        """Transition task to FAILED with sanitized error."""
-        transitioned = False
+        """Record failure and finalize after owned work settles."""
+        await self._record_outcome(task_id, account_id, user_id, error=error)
+
+    async def _record_outcome(
+        self,
+        task_id: str,
+        account_id: Optional[str],
+        user_id: Optional[str],
+        *,
+        result: Optional[Dict[str, Any]] = None,
+        error: Optional[str] = None,
+        resource_id: Optional[str] = None,
+    ) -> None:
         async with self._async_lock:
             task = await self._load_for_update(task_id, account_id, user_id)
-            if task and task.status not in _TERMINAL_STATUSES:
-                task.status = TaskStatus.FAILED
-                task.stage = "failed"
-                task.error = _sanitize_error(error)
+            if task and task.status in (TaskStatus.PENDING, TaskStatus.RUNNING):
+                if result is not None:
+                    task.result = result
+                    if resource_id is not None:
+                        task.resource_id = resource_id
+                if error is not None and task.error is None:
+                    task.error = _sanitize_error(error)
+                work_error = self._work_index.failure(task_id)
+                if work_error and task.error is None:
+                    task.error = _sanitize_error(work_error)
                 task.updated_at = time.time()
                 await self._store.update(task)
                 with self._lock:
                     self._tasks[task.task_id] = task
-                transitioned = True
-        if transitioned:
-            logger.warning("[TaskTracker] Task %s failed: %s", task_id, _sanitize_error(error))
+        await self._finalize_task(task_id, account_id=account_id, user_id=user_id)
+
+    async def cancel(
+        self,
+        task_id: str,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> Optional[TaskRecord]:
+        """Request cooperative cancellation and return the current task snapshot."""
+        async with self._async_lock:
+            task = await self._load_for_update(task_id, account_id, user_id)
+            if task is None:
+                return None
+            if task.status == TaskStatus.CANCELLED:
+                return self._copy(task)
+            if task.status != TaskStatus.CANCELLING:
+                if task.task_type not in _CANCELLABLE_TASK_TYPES:
+                    raise ValueError(f"Task type '{task.task_type}' does not support cancellation")
+                if task.status in _TERMINAL_STATUSES:
+                    raise ValueError(f"Task is already {task.status.value}")
+
+                task.status = TaskStatus.CANCELLING
+                task.updated_at = time.time()
+                await self._store.update(task)
+                with self._lock:
+                    self._tasks[task.task_id] = task
+        self._work_index.cancel_active(task_id)
+        await self._finalize_task(
+            task_id,
+            account_id=account_id,
+            user_id=user_id,
+        )
+        return await self.get(task_id, account_id=account_id, user_id=user_id)
+
+    async def _finalize_task(
+        self,
+        task_id: str,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> None:
+        """Apply the task's terminal outcome after all owned work is settled."""
+        if self._work_index.has_work(task_id):
+            return
+        async with self._async_lock:
+            task = await self._load_for_update(task_id, account_id, user_id)
+            if task and task.status in _ACTIVE_STATUSES:
+                if self._work_index.has_work(task_id):
+                    return
+                updated = deepcopy(task)
+                if updated.status != TaskStatus.CANCELLING:
+                    work_error = self._work_index.failure(task_id)
+                    if work_error and updated.error is None:
+                        updated.error = _sanitize_error(work_error)
+                if updated.status == TaskStatus.CANCELLING:
+                    updated.status = TaskStatus.CANCELLED
+                elif updated.error is not None:
+                    updated.status = TaskStatus.FAILED
+                elif updated.result is not None:
+                    updated.status = TaskStatus.COMPLETED
+                else:
+                    return
+                updated.stage = updated.status.value
+                updated.updated_at = time.time()
+                await self._store.update(updated)
+                with self._lock:
+                    self._tasks[updated.task_id] = updated
+                self._work_index.clear_failure(task_id)
+                logger.info("[TaskTracker] Task %s %s", task_id, updated.status.value)
+
+    async def wait(
+        self,
+        task_id: str,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        timeout: Optional[float] = None,
+        poll_interval: float = 0.05,
+    ) -> TaskRecord:
+        """Wait for one task's terminal state without changing its lifecycle."""
+        async def _poll() -> TaskRecord:
+            while True:
+                task = await self.get(task_id, account_id=account_id, user_id=user_id)
+                if task.status in _TERMINAL_STATUSES:
+                    return task
+                await asyncio.sleep(poll_interval)
+
+        if timeout is None:
+            return await _poll()
+        return await asyncio.wait_for(_poll(), timeout)
+
+    async def wait_for_descendants(self, task_id: str, current_work_id: str) -> None:
+        """Wait on the same durable work index used by completion and cancellation."""
+        while self._work_index.has_work(task_id, exclude_work_id=current_work_id):
+            await asyncio.sleep(0.05)
+
+    def register_running_task(self, task_id: str) -> None:
+        """Register the current asyncio task so cancellation can interrupt it."""
+        self._runtime_loop = self._runtime_loop or asyncio.get_running_loop()
+        active_task = asyncio.current_task()
+        if active_task is not None:
+            self._work_index.register_active(task_id, active_task)
+
+    async def unregister_running_task(self, task_id: str) -> None:
+        """Release direct background work and persist its terminal outcome."""
+        active_task = asyncio.current_task()
+        if active_task is not None:
+            self._work_index.unregister_active(task_id, active_task)
+        await self._finalize_task(task_id)
 
     async def get(
         self,
@@ -481,7 +659,7 @@ class TaskTracker:
                 t.task_type == task_type
                 and t.resource_id == resource_id
                 and self._matches_owner(t, account_id, user_id)
-                and t.status in (TaskStatus.PENDING, TaskStatus.RUNNING)
+                and t.status in _ACTIVE_STATUSES
                 for t in tasks
             )
 
@@ -528,6 +706,7 @@ class TaskTracker:
     def _copy(task: TaskRecord) -> TaskRecord:
         """Return a defensive copy of a TaskRecord."""
         copied = deepcopy(task)
+        copied.meta = _sanitize_task_result(copied.meta)
         copied.result = _sanitize_task_result(copied.result)
         return copied
 

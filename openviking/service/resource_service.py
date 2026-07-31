@@ -40,16 +40,13 @@ from openviking.server.user_config import (
     effective_resource_add_target,
     effective_skill_add_target,
 )
-from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.storage.queuefs import QueueManager, get_queue_manager
 from openviking.storage.viking_fs import VikingFS
-from openviking.telemetry import get_current_telemetry
+from openviking.storage.vikingdb_manager import VikingDBManager
+from openviking.telemetry import get_current_telemetry, register_telemetry, unregister_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import (
     build_queue_status_payload,
-    record_resource_wait_metrics,
-    register_wait_telemetry,
-    unregister_wait_telemetry,
 )
 from openviking.utils import is_git_repo_url, parse_code_hosting_url
 from openviking.utils.ingest_options import IngestOptions
@@ -455,6 +452,7 @@ class ResourceService:
                 account_id=msg.account_id,
                 user_id=msg.user_id,
                 task_id=msg.task_id,
+                meta={"source_path": msg.source_path},
             )
             await tracker.update_stage(
                 task.task_id,
@@ -500,14 +498,14 @@ class ResourceService:
                 from openviking.parse.understanding_api import PREPARED_RESPONSE_ID_ARG
 
                 internal_kwargs[PREPARED_RESPONSE_ID_ARG] = msg.understanding_response_id
-            return await self._execute_resource_ingestion(
+            result = await self._execute_resource_ingestion(
                 path=msg.path,
                 ctx=ctx,
                 to=target_uri,
                 parent=parent_uri,
                 reason=msg.reason,
                 instruction=msg.instruction,
-                wait=True,
+                defer_post_processing=False,
                 timeout=msg.timeout,
                 build_index=msg.build_index,
                 summarize=msg.summarize,
@@ -531,46 +529,26 @@ class ResourceService:
                 create_parent=msg.create_parent,
                 **internal_kwargs,
             )
-
-        telemetry_id = get_current_telemetry().telemetry_id
-        ingest_tag_kwargs = self._add_resource_ingest_tag_kwargs(
-            tags=msg.tags,
-            tag_mode=msg.tag_mode,
-        )
-        request_wait_tracker = get_request_wait_tracker()
-        request_wait_tracker.register_request(telemetry_id)
-        try:
             stage_result = stage_callback("processing_queue")
             if inspect.isawaitable(stage_result):
                 await stage_result
-            result = await self._resource_processor.finish_prepared_resource(
-                msg.prepared,
-                ctx=ctx,
-                resource_lock=resource_lock,
-                summarize=msg.summarize,
-                build_index=msg.build_index,
-                processing_mode=msg.processing_mode,
-                **ingest_tag_kwargs,
-            )
-            await request_wait_tracker.wait_for_request(
-                telemetry_id,
-                timeout=msg.timeout,
-            )
-            status = request_wait_tracker.build_queue_status(telemetry_id)
-            result["queue_status"] = status
-            await self._link_resource_reason_memory(
-                result=result,
-                ctx=ctx,
-                reason=msg.reason,
-                source_name=msg.source_name,
-                timeout=msg.timeout,
-            )
             return result
-        except TimeoutError as exc:
-            raise DeadlineExceededError("queue processing", msg.timeout) from exc
-        finally:
-            request_wait_tracker.cleanup(telemetry_id)
-            unregister_wait_telemetry(telemetry_id)
+
+        stage_result = stage_callback("processing_queue")
+        if inspect.isawaitable(stage_result):
+            await stage_result
+        return await self._resource_processor.finish_prepared_resource(
+            msg.prepared,
+            ctx=ctx,
+            resource_lock=resource_lock,
+            summarize=msg.summarize,
+            build_index=msg.build_index,
+            processing_mode=msg.processing_mode,
+            **self._add_resource_ingest_tag_kwargs(
+                tags=msg.tags,
+                tag_mode=msg.tag_mode,
+            ),
+        )
 
     async def reacquire_add_resource_job_lock(
         self,
@@ -667,6 +645,7 @@ class ResourceService:
             msg = AddResourceMsg(
                 task_id=task_id,
                 path=path,
+                source_path=(source_name or "") if kwargs.get("temp_file_id") else path,
                 root_uri=root_uri,
                 telemetry_id=get_current_telemetry().telemetry_id or None,
                 account_id=ctx.account_id,
@@ -1013,8 +992,8 @@ class ResourceService:
                 **kwargs,
             )
 
-        if not wait and is_git_repo_url(path):
-            return await self.enqueue_git_add_resource(
+        if is_git_repo_url(path):
+            result = await self.enqueue_git_add_resource(
                 path=path,
                 ctx=ctx,
                 to=to,
@@ -1033,39 +1012,65 @@ class ResourceService:
                 enforce_public_remote_targets=enforce_public_remote_targets,
                 **kwargs,
             )
+        else:
+            result = await self._execute_resource_ingestion(
+                path=path,
+                ctx=ctx,
+                to=to,
+                parent=parent,
+                reason=reason,
+                instruction=instruction,
+                defer_post_processing=True,
+                timeout=timeout,
+                build_index=build_index,
+                summarize=summarize,
+                processing_mode=processing_mode,
+                watch_interval=watch_interval,
+                manage_watch=manage_watch,
+                tags=tags,
+                tag_mode=tag_mode,
+                allow_local_path_resolution=allow_local_path_resolution,
+                enforce_public_remote_targets=enforce_public_remote_targets,
+                watch_auth_state=normalized_args.watch_auth_state,
+                parser_args=normalized_args.processor_kwargs,
+                **kwargs,
+            )
+        get_current_telemetry().set("resource.flags.wait", wait)
+        if not wait:
+            return result
+        from openviking.service.task_tracker import TaskStatus, get_task_tracker
 
-        return await self._execute_resource_ingestion(
-            path=path,
-            ctx=ctx,
-            to=to,
-            parent=parent,
-            reason=reason,
-            instruction=instruction,
-            wait=wait,
-            timeout=timeout,
-            build_index=build_index,
-            summarize=summarize,
-            processing_mode=processing_mode,
-            watch_interval=watch_interval,
-            manage_watch=manage_watch,
-            tags=tags,
-            tag_mode=tag_mode,
-            allow_local_path_resolution=allow_local_path_resolution,
-            enforce_public_remote_targets=enforce_public_remote_targets,
-            watch_auth_state=normalized_args.watch_auth_state,
-            parser_args=normalized_args.processor_kwargs,
-            **kwargs,
-        )
+        task_id = result["task_id"]
+        try:
+            task = await get_task_tracker().wait(
+                task_id,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+                timeout=timeout,
+            )
+        except TimeoutError as exc:
+            raise DeadlineExceededError("add resource task", timeout) from exc
+
+        if task.status == TaskStatus.COMPLETED:
+            completed = dict(task.result)
+            completed.pop("task_id", None)
+            return completed
+        if task.status == TaskStatus.CANCELLED:
+            return {"status": "cancelled"}
+        return {
+            "status": "error",
+            "errors": [task.error],
+        }
 
     async def _execute_resource_ingestion(
         self,
         path: str,
         ctx: RequestContext,
+        defer_post_processing: bool,
         to: Optional[str] = None,
         parent: Optional[str] = None,
         reason: str = "",
         instruction: str = "",
-        wait: bool = False,
         timeout: Optional[float] = None,
         build_index: bool = True,
         summarize: bool = False,
@@ -1086,20 +1091,17 @@ class ResourceService:
         self._ensure_initialized()
         request_start = time.perf_counter()
         telemetry = get_current_telemetry()
-        telemetry_id = register_wait_telemetry(wait)
-        request_wait_tracker = get_request_wait_tracker()
+        telemetry_id = telemetry.telemetry_id
+        register_telemetry(telemetry)
         job_enqueued = False
         deferred_lock: Optional[Dict[str, Any]] = None
         ingest_tag_kwargs = self._add_resource_ingest_tag_kwargs(
             tags=tags,
             tag_mode=tag_mode,
         )
-        if telemetry_id:
-            request_wait_tracker.register_request(telemetry_id)
         watch_manager = self._get_watch_manager()
         watch_enabled = bool(watch_manager and manage_watch and watch_interval > 0)
 
-        telemetry.set("resource.flags.wait", wait)
         telemetry.set("resource.flags.build_index", build_index)
         telemetry.set("resource.flags.summarize", summarize)
         telemetry.set("resource.flags.watch_enabled", watch_enabled)
@@ -1120,7 +1122,7 @@ class ResourceService:
                 kwargs["resource_lock"] = resource_lock
 
             async_understanding_candidate = (
-                not wait
+                defer_post_processing
                 and not is_git_repo_url(path)
                 and not allow_local_path_resolution
                 and self._resource_processor is not None
@@ -1248,6 +1250,7 @@ class ResourceService:
                         task_id=str(uuid4()),
                         telemetry_id=telemetry_id or None,
                         path=path,
+                        source_path=(source_name or "") if kwargs.get("temp_file_id") else path,
                         root_uri=root_uri,
                         account_id=ctx.account_id,
                         user_id=ctx.user.user_id,
@@ -1333,7 +1336,7 @@ class ResourceService:
                 stage_callback=stage_callback,
                 allow_local_path_resolution=allow_local_path_resolution,
                 prepared_resource=prepared_resource,
-                defer_post_processing=not wait,
+                defer_post_processing=defer_post_processing,
                 **ingest_tag_kwargs,
                 **kwargs,
             )
@@ -1343,54 +1346,7 @@ class ResourceService:
                 return result
             prepared = result.pop("_post_process", None)
             deferred_lock = result.pop("_resource_lock", None)
-            if wait:
-                if stage_callback is not None:
-                    stage_result = stage_callback("processing_queue")
-                    if inspect.isawaitable(stage_result):
-                        await stage_result
-                wait_start = time.perf_counter()
-                try:
-                    with telemetry.measure("resource.wait"):
-                        if telemetry_id:
-                            await request_wait_tracker.wait_for_request(
-                                telemetry_id,
-                                timeout=timeout,
-                                poll_interval=0.05,
-                            )
-                            status = request_wait_tracker.build_queue_status(telemetry_id)
-                        else:
-                            qm = get_queue_manager()
-                            status = build_queue_status_payload(
-                                await qm.wait_complete(timeout=timeout)
-                            )
-                except TimeoutError as exc:
-                    telemetry.set_error(
-                        "resource_service.wait_complete",
-                        "DEADLINE_EXCEEDED",
-                        str(exc),
-                    )
-                    raise DeadlineExceededError("queue processing", timeout) from exc
-                queue_wait_duration_ms = round((time.perf_counter() - wait_start) * 1000, 3)
-                try:
-                    from openviking.metrics.datasources.resource import (
-                        ResourceIngestionEventDataSource,
-                    )
-
-                    ResourceIngestionEventDataSource.record_wait(
-                        operation="queue_processing",
-                        duration_seconds=float(queue_wait_duration_ms) / 1000.0,
-                        account_id=getattr(ctx, "account_id", None),
-                    )
-                except Exception:
-                    pass
-                result["queue_status"] = status
-                record_resource_wait_metrics(
-                    telemetry_id=telemetry_id,
-                    queue_status=status,
-                    root_uri=result.get("root_uri"),
-                )
-                telemetry.set("queue.wait.duration_ms", queue_wait_duration_ms)
-            if not wait:
+            if defer_post_processing:
                 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 
                 root_uri = result.get("root_uri", "")
@@ -1401,6 +1357,11 @@ class ResourceService:
                     task_id=str(uuid4()),
                     root_uri=root_uri,
                     prepared=prepared,
+                    source_path=str(
+                        (kwargs.get("source_name") or "")
+                        if kwargs.get("temp_file_id")
+                        else result.get("source_path") or ""
+                    ),
                     telemetry_id=telemetry_id or None,
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
@@ -1452,14 +1413,6 @@ class ResourceService:
                 watch_auth_state=watch_auth_state,
                 ctx=ctx,
             )
-            if wait:
-                await self._link_resource_reason_memory(
-                    result=result,
-                    ctx=ctx,
-                    reason=reason,
-                    source_name=kwargs.get("source_name"),
-                    timeout=timeout,
-                )
             return result
         except Exception as exc:
             telemetry.set_error(
@@ -1475,9 +1428,8 @@ class ResourceService:
                 "resource.request.duration_ms",
                 round((time.perf_counter() - request_start) * 1000, 3),
             )
-            if wait or not telemetry_id or not job_enqueued:
-                get_request_wait_tracker().cleanup(telemetry_id)
-                unregister_wait_telemetry(telemetry_id)
+            if not telemetry_id or (defer_post_processing and not job_enqueued):
+                unregister_telemetry(telemetry_id)
             if deferred_lock is not None:
                 await self._release_lock_ref(deferred_lock)
 
@@ -1544,7 +1496,7 @@ class ResourceService:
             await task_tracker.fail(task_id, str(exc), account_id=account_id, user_id=user_id)
         finally:
             request_wait_tracker.cleanup(telemetry_id)
-            unregister_wait_telemetry(telemetry_id)
+            unregister_telemetry(telemetry_id)
 
     # ── Connector routing ──
 
@@ -1794,7 +1746,7 @@ class ResourceService:
         finally:
             if wait or not telemetry_id or not monitor_started:
                 request_wait_tracker.cleanup(telemetry_id)
-                unregister_wait_telemetry(telemetry_id)
+                unregister_telemetry(telemetry_id)
 
     async def build_index(
         self, resource_uris: List[str], ctx: RequestContext, **kwargs

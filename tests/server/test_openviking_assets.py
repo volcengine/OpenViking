@@ -25,7 +25,7 @@ defaults:
   git:
     watch_interval: 30
 
-assets:
+catalog:
   - name: alpha
     connector: git
     description: alpha repo
@@ -74,7 +74,7 @@ def _request(**overrides):
         "manifest_yaml": MANIFEST,
         "catalog_yaml": CATALOG,
         "manifest_label": "manifests/code-qa.yaml",
-        "catalog_label": "assets.yaml",
+        "catalog_label": "catalog.yaml",
     }
     body.update(overrides)
     return body
@@ -85,7 +85,7 @@ def test_resolver_normalizes_and_resolves_defaults():
         manifest_yaml=MANIFEST,
         catalog_yaml=CATALOG,
         manifest_label="manifests/code-qa.yaml",
-        catalog_label="assets.yaml",
+        catalog_label="catalog.yaml",
     )
 
     assert [asset.name for asset in result.assets] == ["alpha", "beta"]
@@ -152,7 +152,7 @@ def test_normalize_repo_url_forms(url: str, expected: str):
             ),
             "same source",
         ),
-        ("catalog: ../assets.yaml\nassets:\n  - alpha\n", CATALOG, "not a file path"),
+        ("catalog: ../catalog.yaml\nassets:\n  - alpha\n", CATALOG, "not a file path"),
         (SINGLE_FILE_MANIFEST, CATALOG, "do not pass a separate catalog"),
         (
             SINGLE_FILE_MANIFEST.replace("protocol: openviking-assets/1\n\n", ""),

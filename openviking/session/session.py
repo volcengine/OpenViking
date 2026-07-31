@@ -2014,6 +2014,14 @@ class Session:
             "budget_exceeded": retention_plan.budget_exceeded if retention_plan else False,
         }
 
+    async def finalize_cancelled_commit(self, archive_uri: str) -> None:
+        """Make a cancelled queued commit terminal without discarding its raw archive."""
+        await self._write_failed_marker(
+            archive_uri,
+            stage="cancelled",
+            error="session commit cancelled",
+        )
+
     async def resume_queued_commit(self, msg: "SessionCommitMsg") -> None:
         """Run one durable Phase 2 job from its archived messages."""
         from openviking.service.task_tracker import get_task_tracker
@@ -2650,6 +2658,11 @@ class Session:
             )
             logger.info(f"Session {self.session_id} memory extraction completed")
         except asyncio.CancelledError:
+            await self._write_failed_marker(
+                archive_uri,
+                stage="cancelled",
+                error="session commit cancelled",
+            )
             raise
         except Exception as e:
             await self._write_failed_marker(

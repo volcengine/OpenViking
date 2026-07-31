@@ -33,7 +33,7 @@ X-API-Key: <your-api-key>
 | `manifest_yaml` | string | Yes | — | Complete Manifest YAML, 1–4,000,000 characters |
 | `catalog_yaml` | string | No | — | Complete Catalog YAML, 1–4,000,000 characters. Required when the Manifest selects assets by name; must be omitted when the Manifest defines assets under `catalog`. |
 | `manifest_label` | string | No | `manifest.yaml` | Manifest source label used in errors, 1–1,024 characters |
-| `catalog_label` | string | No | `assets.yaml` | Catalog source label used in errors, 1–1,024 characters |
+| `catalog_label` | string | No | `catalog.yaml` | Catalog source label used in errors, 1–1,024 characters |
 
 Example with a self-contained Manifest:
 
