@@ -277,7 +277,7 @@ class SessionCommitPolicyTrainer:
         )
         while True:
             task = await self.client.get_task(task_id)
-            if task and task.get("status") in {"completed", "failed"}:
+            if task and task.get("status") in {"completed", "failed", "cancelled"}:
                 return task
             if deadline is not None and asyncio.get_running_loop().time() >= deadline:
                 return {"task_id": task_id, "status": "timeout", "error": "commit task timeout"}
@@ -375,6 +375,8 @@ def _task_error(task: dict[str, Any] | None) -> str | None:
         return None
     if task.get("status") == "failed":
         return str(task.get("error") or "task failed")
+    if task.get("status") == "cancelled":
+        return str(task.get("error") or "task cancelled")
     if task.get("status") == "timeout":
         return str(task.get("error") or "task timeout")
     return None

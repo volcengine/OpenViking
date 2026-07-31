@@ -19,7 +19,8 @@ fn pathlock_err_to_py(err: PathLockError) -> PyErr {
     match &err {
         PathLockError::Conflict { .. }
         | PathLockError::Timeout { .. }
-        | PathLockError::HandoffFailed(_) => {
+        | PathLockError::HandoffFailed(_)
+        | PathLockError::Io(_) => {
             #[allow(deprecated)]
             Python::with_gil(|py| {
                 let ty = LOCK_ACQUISITION_ERROR_TYPE
@@ -1166,10 +1167,18 @@ impl RAGFSBindingClient {
                     pl_value
                         .get("lock_expire_secs")
                         .and_then(|v| v.as_f64())
-                        .unwrap_or(300.0),
+                        .unwrap_or(1800.0),
                 )?;
+                let lock_timeout_secs = validate_timeout_secs(
+                    pl_value
+                        .get("lock_timeout_secs")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.0),
+                )?
+                .as_secs_f64();
                 ragfs_cfg.pathlock = PathLockConfig {
                     provider: provider.to_string(),
+                    lock_timeout_secs,
                     lock_expire_secs,
                 };
             }
@@ -2592,6 +2601,25 @@ mod tests {
         Python::attach(|py| {
             let value: i32 = py_detach_blocking(py, || 40 + 2);
             assert_eq!(value, 42);
+        });
+    }
+
+    #[test]
+    fn pathlock_io_error_maps_to_lock_acquisition_error() {
+        Python::initialize();
+        Python::attach(|py| {
+            let errors_mod = py.import("openviking.storage.errors").unwrap();
+            let lock_error_type: Py<PyType> = errors_mod
+                .getattr("LockAcquisitionError")
+                .unwrap()
+                .extract()
+                .unwrap();
+            let _ = LOCK_ACQUISITION_ERROR_TYPE.set(lock_error_type.clone_ref(py));
+
+            let error =
+                pathlock_err_to_py(PathLockError::Io("failed to create lock dir".to_string()));
+
+            assert!(error.is_instance(py, lock_error_type.bind(py)));
         });
     }
 

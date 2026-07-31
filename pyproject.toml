@@ -87,6 +87,8 @@ dependencies = [
     "lark-oapi>=1.5.3",
     "mcp>=1.27,<2",
     "pathspec>=1.1.1",
+    "grep-ast>=0.9.0",
+    "tree-sitter-language-pack>=1.12,<2.0",
 ]
 
 

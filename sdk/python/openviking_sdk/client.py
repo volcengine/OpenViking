@@ -1368,6 +1368,10 @@ class AsyncHTTPClient:
             return None
         return self._handle_response(response)
 
+    async def cancel_task(self, task_id: str) -> Dict[str, Any]:
+        response = await self._request("POST", f"/api/v1/tasks/{task_id}/cancel")
+        return self._handle_response(response)
+
     async def list_tasks(
         self,
         task_type: Optional[str] = None,
@@ -2326,6 +2330,9 @@ class SyncHTTPClient:
 
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         return run_async(self._async_client.get_task(task_id))
+
+    def cancel_task(self, task_id: str) -> Dict[str, Any]:
+        return run_async(self._async_client.cancel_task(task_id))
 
     def list_tasks(
         self,

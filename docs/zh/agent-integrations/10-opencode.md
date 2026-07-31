@@ -136,7 +136,6 @@ API key 会由 hooks 和 MCP proxy 作为 `Authorization: Bearer ...` 发送；`
 - `openviking_recall`、`openviking_search`、`openviking_find`
 - `openviking_read`、`openviking_list`、`openviking_grep`、`openviking_glob`
 - `openviking_remember`、`openviking_add_resource`、`openviking_forget`、`openviking_health`
-- `openviking_code_search`、`openviking_code_outline`、`openviking_code_expand`
 
 可以让 OpenCode 搜索或浏览 OpenViking memory。运行时状态和错误日志会写入：
 

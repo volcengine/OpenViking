@@ -3635,16 +3635,7 @@ class VikingFS:
         path = self._uri_to_path(temp_uri, ctx=ctx)
         fs_ctx = self._pathlock_fs_ctx(ctx, lease_ref)
         try:
-            for entry in await self._ls_entries(path, ctx=ctx):
-                name = entry.get("name", "")
-                if name in [".", ".."]:
-                    continue
-                entry_path = f"{path}/{name}"
-                if entry.get("isDir"):
-                    await self.delete_temp(f"{temp_uri}/{name}", ctx=ctx, lease_ref=lease_ref)
-                else:
-                    await self._async_agfs.rm(entry_path, fs_ctx=fs_ctx)
-            await self._async_agfs.rm(path, fs_ctx=fs_ctx)
+            await self._async_agfs.rm(path, recursive=True, fs_ctx=fs_ctx)
         except Exception as e:
             logger.warning(f"[VikingFS] Failed to delete temp {temp_uri}: {e}")
 
@@ -4400,28 +4391,36 @@ class VikingFS:
         the "failures do not block" semantics.
         """
         from openviking.service.task_tracker import get_task_tracker
+        from openviking.service.task_work_index import bind_task_context
 
         tracker = get_task_tracker()
-        await tracker.start(
-            task_id,
-            account_id=ctx.account_id,
-            user_id=ctx.user.user_id,
-            stage="reindexing",
-        )
+        tracker.register_running_task(task_id)
         try:
+            await tracker.start(
+                task_id,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+                stage="reindexing",
+            )
             from openviking.service.reindex_executor import get_reindex_executor
 
             executor = get_reindex_executor()
-            await asyncio.gather(*[
-                self._run_vector_rebuild(executor, op, uri, level, ctx)
-                for (op, uri, level) in tasks
-            ])
+            with bind_task_context(task_id, ctx.account_id, ctx.user.user_id):
+                await asyncio.gather(
+                    *[
+                        self._run_vector_rebuild(executor, op, uri, level, ctx)
+                        for (op, uri, level) in tasks
+                    ]
+                )
             await tracker.complete(
                 task_id,
                 {"status": "completed", "task_count": len(tasks)},
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
             )
+        except asyncio.CancelledError:
+            # TaskWorkIndex finalizes after this active task and its queue work settle.
+            return
         except Exception as exc:
             await tracker.fail(
                 task_id,
@@ -4429,6 +4428,8 @@ class VikingFS:
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
             )
+        finally:
+            await tracker.unregister_running_task(task_id)
 
     async def _run_vector_rebuild(
         self,

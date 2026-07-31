@@ -177,6 +177,8 @@ const en = {
         'Results returned by the API will appear here when the task completes.',
       noResultFailedDescription:
         'This task did not return a result. See the failure reason above.',
+      noResultCancelledDescription:
+        'This task was cancelled before it returned a result.',
     },
     filters: {
       label: 'Filter',
@@ -203,6 +205,8 @@ const en = {
       status: 'Status',
     },
     status: {
+      cancelled: 'Cancelled',
+      cancelling: 'Cancelling',
       completed: 'Completed',
       failed: 'Failed',
       pending: 'Pending',
@@ -774,6 +778,7 @@ const en = {
         size: 'Size',
       },
       status: {
+        cancelled: 'Cancelled',
         processing: 'Processing',
         success: 'Processed',
         failed: 'Processing failed',
@@ -846,9 +851,12 @@ const en = {
       edit: 'Edit',
       emptyFile: '(empty file)',
       emptyPrompt: 'Select a file to preview it here',
+      formattingJson: 'Formatting JSON...',
       imageFailed: 'Image failed to load.',
       imageLoading: 'Loading image...',
       largeFileSkipped: 'This file is large and was not loaded automatically.',
+      jsonFormatFailed: 'JSON formatting failed. Showing the raw content.',
+      loadFile: 'Load anyway',
       loadingContent: 'Reading content...',
       loadingEditor: 'Loading editor...',
       markdownPreview: 'Preview',

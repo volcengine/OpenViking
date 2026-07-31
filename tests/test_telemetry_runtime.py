@@ -20,8 +20,6 @@ from openviking.observability.context import (
     reset_operation_observability_context,
     reset_root_observability_context,
 )
-from openviking.server.identity import RequestContext, Role
-from openviking.service.resource_service import ResourceService
 from openviking.storage.collection_schemas import TextEmbeddingHandler
 from openviking.storage.queuefs.semantic_dag import DagStats
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
@@ -36,7 +34,6 @@ from openviking.telemetry.backends.memory import MemoryOperationTelemetry
 from openviking.telemetry.context import bind_telemetry, bind_telemetry_stage
 from openviking.telemetry.snapshot import TelemetrySnapshot
 from openviking.telemetry.span_models import OperationSpanAttributes, RootSpanAttributes
-from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import logger as logger_module
 
 
@@ -879,89 +876,6 @@ async def test_embedding_handler_binds_registered_operation_telemetry(monkeypatc
     result = telemetry.finish()
     summary = result.summary
     assert summary["tokens"]["embedding"] == {"total": 9}
-
-
-@pytest.mark.asyncio
-async def test_resource_service_add_resource_reports_queue_summary(monkeypatch):
-    telemetry = MemoryOperationTelemetry(operation="resources.add_resource", enabled=True)
-    queue_status = {
-        "Semantic": {
-            "processed": 2,
-            "requeue_count": 0,
-            "error_count": 1,
-            "errors": [],
-        },
-        "Embedding": {
-            "processed": 5,
-            "requeue_count": 0,
-            "error_count": 0,
-            "errors": [],
-        },
-    }
-
-    class _DummyProcessor:
-        async def process_resource(self, **kwargs):
-            return {
-                "status": "success",
-                "root_uri": "viking://resources/demo",
-            }
-
-    class _DummyRequestWaitTracker:
-        def register_request(self, telemetry_id: str) -> None:
-            del telemetry_id
-
-        async def wait_for_request(self, telemetry_id: str, timeout=None) -> None:
-            del telemetry_id, timeout
-
-        def build_queue_status(self, telemetry_id: str):
-            del telemetry_id
-            return queue_status
-
-        def cleanup(self, telemetry_id: str) -> None:
-            del telemetry_id
-
-    monkeypatch.setattr(
-        "openviking.service.resource_service.get_request_wait_tracker",
-        lambda: _DummyRequestWaitTracker(),
-        raising=False,
-    )
-
-    class _DagStats:
-        total_nodes = 3
-        done_nodes = 2
-        pending_nodes = 1
-        in_progress_nodes = 0
-
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.SemanticProcessor.consume_dag_stats",
-        classmethod(lambda cls, telemetry_id="", uri=None: _DagStats()),
-    )
-
-    service = ResourceService(
-        vikingdb=object(),
-        viking_fs=object(),
-        resource_processor=_DummyProcessor(),
-        skill_processor=object(),
-    )
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
-
-    with bind_telemetry(telemetry):
-        result = await service.add_resource(path="/tmp/demo.md", ctx=ctx, wait=True)
-
-    assert result["root_uri"] == "viking://resources/demo"
-    telemetry_result = telemetry.finish()
-    summary = telemetry_result.summary
-    assert summary["queue"] == {
-        "semantic": {"processed": 2, "error_count": 1},
-        "embedding": {"processed": 5},
-    }
-    assert summary["semantic_nodes"] == {
-        "total": 3,
-        "done": 2,
-        "pending": 1,
-    }
-    assert "memory" not in summary
-    assert "errors" not in summary
 
 
 def test_telemetry_summary_includes_only_memory_group_when_memory_metrics_exist():

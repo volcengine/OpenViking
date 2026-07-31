@@ -12,7 +12,11 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Union
 
+from openviking_cli.utils.logger import get_logger
+
 from .config_utils import raise_unknown_config_fields
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -245,20 +249,18 @@ class CodeConfig(CodeHostingConfig):
     Configuration for code parsing.
 
     Attributes:
-        code_summary_mode: Summary generation mode ("llm" | "ast" | "ast_llm")
-        extract_functions: Whether to extract function definitions
-        extract_classes: Whether to extract class definitions
-        extract_imports: Whether to extract import statements
-        include_comments: Whether to include comments in L1/L2
-        max_line_length: Maximum line length before splitting
-        language_hint: Optional language hint (auto-detected if None)
-        max_token_limit: Maximum tokens to process per file
-        truncation_strategy: "head", "tail", or "balanced"
-        warn_on_truncation: Whether to warn when truncation occurs
+        extract_functions: Legacy compatibility field; ignored by the fixed skeleton route
+        extract_classes: Legacy compatibility field; ignored by the fixed skeleton route
+        extract_imports: Legacy compatibility field; ignored by the fixed skeleton route
+        include_comments: Legacy compatibility field; ignored by the fixed skeleton route
+        max_line_length: Legacy compatibility field; ignored by the fixed skeleton route
+        language_hint: Legacy compatibility field; ignored by the fixed skeleton route
+        max_token_limit: Legacy compatibility field; ignored by the fixed skeleton route
+        truncation_strategy: Legacy compatibility field; ignored by the fixed skeleton route
+        warn_on_truncation: Legacy compatibility field; ignored by the fixed skeleton route
         github_raw_domain: Domain for GitHub raw content (raw.githubusercontent.com)
     """
 
-    code_summary_mode: str = "ast"  # "llm" | "ast" | "ast_llm"
     extract_functions: bool = True
     extract_classes: bool = True
     extract_imports: bool = True
@@ -269,6 +271,22 @@ class CodeConfig(CodeHostingConfig):
     truncation_strategy: str = "head"  # "head", "tail", or "balanced"
     warn_on_truncation: bool = True
     github_raw_domain: str = "raw.githubusercontent.com"
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "CodeConfig":
+        """Create code configuration, accepting removed fields for upgrade compatibility."""
+
+        data = dict(data)
+        if "code_summary_mode" in data:
+            data.pop("code_summary_mode", None)
+            logger.warning(
+                "code.code_summary_mode is deprecated and ignored; "
+                "code summaries now always use the fixed skeleton route with LLM fallback"
+            )
+
+        valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
+        raise_unknown_config_fields(data=data, valid_fields=valid_fields, context_name=cls.__name__)
+        return cls(**data)
 
     def validate(self) -> None:
         """
@@ -281,12 +299,6 @@ class CodeConfig(CodeHostingConfig):
         super().validate()
 
         # Validate code-specific fields
-        if self.code_summary_mode not in ("llm", "ast", "ast_llm"):
-            raise ValueError(
-                f"Invalid code_summary_mode '{self.code_summary_mode}'. "
-                "Must be 'llm', 'ast', or 'ast_llm'"
-            )
-
         if self.max_line_length <= 0:
             raise ValueError("max_line_length must be positive")
 
@@ -728,7 +740,7 @@ class SemanticConfig:
     """Maximum characters of file content sent to LLM for summary generation."""
 
     max_skeleton_chars: int = 12000
-    """Maximum characters of AST skeleton used for embedding (~3000 tokens)."""
+    """Maximum characters of code skeleton used for embedding (~3000 tokens)."""
 
     max_overview_prompt_chars: int = 60000
     """Maximum characters allowed in the overview generation prompt.
@@ -798,8 +810,7 @@ def get_parser_config(
 
         >>> # Get custom code configuration
         >>> code_config = get_parser_config("code", {
-        ...     "enable_ast": False,
-        ...     "max_token_limit": 10000
+        ...     "github_raw_domain": "raw.githubusercontent.com"
         ... })
     """
     if parser_type not in PARSER_CONFIG_REGISTRY:
@@ -827,7 +838,7 @@ def load_parser_configs_from_dict(config_dict: Dict[str, Any]) -> Dict[str, Pars
     Examples:
         >>> configs = load_parser_configs_from_dict({
         ...     "pdf": {"strategy": "auto"},
-        ...     "code": {"enable_ast": false}
+        ...     "code": {"github_raw_domain": "raw.githubusercontent.com"}
         ... })
         >>> pdf_config = configs["pdf"]
         >>> code_config = configs["code"]

@@ -28,7 +28,7 @@ from openviking.utils.image_search import normalize_client_image_input
 from openviking.utils.search_filters import SearchContextTypeInput, merge_search_filter
 from openviking.utils.tags import build_search_tags_filter
 from openviking_cli.client.base import BaseClient
-from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import run_async
 
@@ -941,6 +941,17 @@ class LocalClient(BaseClient):
     async def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Query background task status."""
         return await self._service.sessions.get_commit_task(task_id, self._ctx)
+
+    async def cancel_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Cancel a background task."""
+        if self._ctx.role == Role.ROOT:
+            raise PermissionDeniedError("ROOT may not cancel tasks")
+        task = await get_task_tracker().cancel(
+            task_id,
+            account_id=self._ctx.account_id,
+            user_id=self._ctx.user.user_id,
+        )
+        return task.to_dict() if task else None
 
     async def list_tasks(
         self,

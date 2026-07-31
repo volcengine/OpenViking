@@ -26,8 +26,7 @@ const mcpEndpointPath = join(repoRoot, "openviking", "server", "mcp_endpoint.py"
 const PLUGIN_NAME = "openviking-memory";
 const REAL_MCP_TOOLS = [
   "find", "search", "recall", "read", "list", "remember", "add_resource",
-  "list_watches", "cancel_watch", "grep", "glob", "forget", "code_outline",
-  "code_search", "code_expand", "health",
+  "list_watches", "cancel_watch", "grep", "glob", "forget", "health",
 ];
 const LEGACY_TOOL_NAMES = ["openviking_recall", "openviking_store", "openviking_forget", "openviking_health"];
 

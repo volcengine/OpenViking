@@ -98,6 +98,11 @@ def test_get_resource_content_type_media_extensions_are_case_insensitive():
     assert embedding_utils.get_resource_content_type("RECORDING.WEBM") == ResourceContentType.VIDEO
 
 
+@pytest.mark.parametrize("extension", [".cu", ".cuh"])
+def test_get_resource_content_type_recognizes_cuda_extensions_as_text(extension):
+    assert embedding_utils.get_resource_content_type(f"kernel{extension}") == ResourceContentType.TEXT
+
+
 def test_get_resource_content_type_keeps_ts_as_text():
     assert embedding_utils.get_resource_content_type("source.ts") == ResourceContentType.TEXT
 

@@ -322,8 +322,12 @@ class AGFSPathLockConfig(BaseModel):
         default="filesystem",
         description="PathLock provider: 'filesystem' | 'memory'",
     )
+    lock_timeout_secs: float = Field(
+        default=0.0,
+        description="Default wait timeout for auto-acquired path locks in seconds.",
+    )
     lock_expire_secs: float = Field(
-        default=300.0,
+        default=1800.0,
         description="Seconds before an unrefreshed lock token becomes stale.",
     )
 
@@ -331,9 +335,11 @@ class AGFSPathLockConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_config(self):
-        """Validate provider and stale-lock expiry."""
+        """Validate provider and timeout/expiry ranges."""
         if self.provider not in {"filesystem", "memory"}:
             raise ValueError("pathlock provider must be one of: 'filesystem', 'memory'")
+        if self.lock_timeout_secs < 0.0:
+            raise ValueError("pathlock lock_timeout_secs must be >= 0.0")
         if self.lock_expire_secs < 1.0:
             raise ValueError("pathlock lock_expire_secs must be >= 1.0")
         return self

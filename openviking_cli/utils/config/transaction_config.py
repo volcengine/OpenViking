@@ -4,36 +4,35 @@ from pydantic import BaseModel, Field
 
 
 class TransactionConfig(BaseModel):
-    """Configuration for the transaction mechanism.
+    """Deprecated compatibility settings for legacy transaction fields.
 
-    By default, lock acquisition does not wait (``lock_timeout=0``): if a
-    conflicting lock is held the operation fails immediately with
-    ``LockAcquisitionError``.  Set ``lock_timeout`` to a positive value to
-    allow the caller to block and retry for up to that many seconds.
+    Prefer ``storage.agfs.pathlock`` for active PathLock configuration.
     """
 
     lock_timeout: float = Field(
         default=0.0,
         description=(
-            "Path lock acquisition timeout (seconds). "
-            "0 = fail immediately if locked (default). "
-            "> 0 = wait/retry up to this many seconds before raising LockAcquisitionError."
+            "Deprecated compatibility field. "
+            "Use storage.agfs.pathlock.lock_timeout_secs instead. "
+            "When the new field is unset, this value is mapped to it."
         ),
     )
 
     lock_expire: float = Field(
         default=1800.0,
         description=(
-            "Lock inactivity threshold (seconds). "
-            "Locks not refreshed within this window are treated as stale and reclaimed."
+            "Deprecated compatibility field. "
+            "Use storage.agfs.pathlock.lock_expire_secs instead. "
+            "When the new field is unset, this value is mapped to it."
         ),
     )
 
     redo_recovery_enabled: bool = Field(
         default=True,
         description=(
-            "Enable session commit phase-2 crash-recovery redo. "
-            "When false, pending redo markers are not written and startup redo recovery is skipped."
+            "Deprecated compatibility flag for the legacy session commit phase-2 redo recovery. "
+            "Ignored in the current implementation, which resumes phase-2 work from the "
+            "persistent session_commit queue."
         ),
     )
 

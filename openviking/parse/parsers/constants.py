@@ -104,6 +104,8 @@ CODE_EXTENSIONS = {
     ".cpp",
     ".cc",
     ".c",
+    ".cu",
+    ".cuh",
     ".h",
     ".hpp",
     ".inl",

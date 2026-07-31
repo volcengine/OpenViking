@@ -98,7 +98,6 @@ class URLTypeDetector:
         **dict.fromkeys(VIDEO_EXTENSIONS, URLType.DOWNLOAD_VIDEO),
         **dict.fromkeys(DOCUMENT_EXTENSIONS, URLType.DOWNLOAD_DOCUMENT),
     }
-
     # === IANA Media Type to URL type mapping ===
     # Maps IANA registered media types to our internal URLType
     # Patterns can be:
@@ -646,7 +645,10 @@ class HTTPAccessor(DataAccessor):
             get_meta,
             detected_by_prefix="get_",
         )
-        if get_url_type != URLType.UNKNOWN and self._should_refine_url_type(url_type, get_url_type):
+        if get_url_type != URLType.UNKNOWN and self._should_refine_url_type(
+            url_type,
+            get_url_type,
+        ):
             url_type = get_url_type
             meta.update(get_meta)
             meta["refined_by_get_headers"] = True
@@ -687,7 +689,10 @@ class HTTPAccessor(DataAccessor):
         return meta
 
     @staticmethod
-    def _should_refine_url_type(current: URLType, candidate: URLType) -> bool:
+    def _should_refine_url_type(
+        current: URLType,
+        candidate: URLType,
+    ) -> bool:
         """Only replace ambiguous/default webpage guesses with file types."""
         if candidate in (URLType.UNKNOWN, URLType.WEBPAGE):
             return False
