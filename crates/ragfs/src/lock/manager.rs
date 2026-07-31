@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use rand::Rng;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
 use uuid::Uuid;
@@ -41,6 +42,41 @@ impl Default for PathLockConfig {
             lock_timeout_secs: 0.0,
             lock_expire_secs: 1800.0,
         }
+    }
+}
+
+/// Lock-poll backoff constants used by conflict-retry loops.
+///
+/// These mirror the Python values that were removed when `path_lock.py` was
+/// rewritten in Rust (see PR #3602 + PR #3582). The key rule is: exponential
+/// base, then **jitter, then clamp** — clamping *after* jitter is important
+/// because the old code clamped first and then added jitter, which would
+/// occasionally bust the intended `MAX_POLL_INTERVAL_MS` ceiling.
+const MIN_POLL_INTERVAL_MS: u64 = 10;
+const MAX_POLL_INTERVAL_MS: u64 = 500;
+const BACKOFF_FACTOR: f64 = 1.5;
+const JITTER_MS_RANGE: std::ops::Range<u64> = 0..50;
+
+impl PathLockManager {
+    /// Compute the poll interval for one retry attempt inside a lock-wait
+    /// loop.
+    ///
+    /// * `attempt` — 0-based number of prior conflict retries. Passing `0`
+    ///   yields `MIN_POLL_INTERVAL_MS + small_jitter`, i.e. the first sleep
+    ///   after a conflict is still very short.
+    ///
+    /// Formula (deliberately ordered this way):
+    ///   1. `base = MIN * (BACKOFF_FACTOR ^ attempt)`
+    ///   2. `base + uniform_random_jitter(0..50ms)`
+    ///   3. `clamp(base, MIN, MAX)` — clamp LAST, after jitter.
+    fn poll_interval_for_attempt(attempt: u32) -> Duration {
+        let base = MIN_POLL_INTERVAL_MS as f64 * BACKOFF_FACTOR.powi(attempt as i32);
+        let jitter = rand::thread_rng().gen_range(JITTER_MS_RANGE) as f64;
+        let jittered = base + jitter;
+        let clamped = jittered
+            .clamp(MIN_POLL_INTERVAL_MS as f64, MAX_POLL_INTERVAL_MS as f64)
+            .round();
+        Duration::from_millis(clamped as u64)
     }
 }
 
@@ -573,6 +609,7 @@ impl PathLockManager {
         let start = Instant::now();
         let mut acquired_lock_paths: Vec<(String, AcquisitionChange)> = Vec::new();
         let mut is_waiting = false;
+        let mut retry_attempt: u32 = 0;
 
         loop {
             let mut conflict: Option<PathLockError> = None;
@@ -726,7 +763,8 @@ impl PathLockManager {
                     }
                 }
 
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                tokio::time::sleep(Self::poll_interval_for_attempt(retry_attempt)).await;
+                retry_attempt = retry_attempt.saturating_add(1);
                 continue;
             }
 
@@ -828,7 +866,8 @@ impl PathLockManager {
                     });
                 }
 
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                tokio::time::sleep(Self::poll_interval_for_attempt(retry_attempt)).await;
+                retry_attempt = retry_attempt.saturating_add(1);
                 continue;
             }
 
@@ -2112,5 +2151,108 @@ mod tests {
 
         assert_eq!(provider.busy_remove_count.load(Ordering::SeqCst), 1);
         mgr.release(&lease).await.unwrap();
+    }
+
+    // -------------------------------------------------------------------------
+    // Poll-interval backoff tests
+    //
+    // These tests exercise `poll_interval_for_attempt()` to match the removed
+    // Python `_poll_interval_for_attempt()` semantics (PR #3582): exponential
+    // base → uniform jitter → clamp. Attempt 0 should be cheap; large
+    // attempts must saturate at MAX_POLL_INTERVAL_MS even after jitter.
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn poll_interval_attempt_zero_is_cheap() {
+        // attempt 0: base=10ms + 0..50ms jitter, clamped afterwards.
+        // Must never exceed ~60ms (10 + 50), but clamp to MIN=10ms bottom.
+        let mut saw_above_10 = false;
+        for _ in 0..200 {
+            let d = PathLockManager::poll_interval_for_attempt(0);
+            let ms = d.as_millis() as u64;
+            assert!(
+                (10..=60).contains(&ms),
+                "attempt 0 poll interval {ms}ms out of expected [10..=60]ms"
+            );
+            if ms > 10 {
+                saw_above_10 = true;
+            }
+        }
+        assert!(saw_above_10, "jitter never applied in 200 attempt-0 samples");
+    }
+
+    #[test]
+    fn poll_interval_grows_with_attempt_then_saturates_at_max() {
+        // Median estimate (skip jitter by averaging). Using ~100 samples the
+        // average should *roughly* follow 10*1.5^n + 25ms, then flatten.
+        const SAMPLES: u32 = 120;
+        let avg_ms = |attempt: u32| -> u64 {
+            let mut acc: u64 = 0;
+            for _ in 0..SAMPLES {
+                acc += PathLockManager::poll_interval_for_attempt(attempt).as_millis() as u64;
+            }
+            acc / SAMPLES as u64
+        };
+
+        // Small attempt numbers show clear growth:
+        let a0 = avg_ms(0); // ~35ms    (10 + jitter 25)
+        let a3 = avg_ms(3); // ~10*1.5^3 + 25 = ~33.75+25 = ~59ms
+        let a7 = avg_ms(7); // 10 * 1.5^7 ~ 171ms + 25ms jitter ≈ 196ms
+        let a12 = avg_ms(12); // 10 * 1.5^12 ≈ 1297ms, already over MAX
+        let a30 = avg_ms(30);
+
+        assert!(a3 > a0, "avg attempt 3 ({a3}ms) should be > attempt 0 ({a0}ms)");
+        assert!(a7 > a3, "avg attempt 7 ({a7}ms) should be > attempt 3 ({a3}ms)");
+        assert!(
+            a12 <= MAX_POLL_INTERVAL_MS + 50,
+            "avg attempt 12 ({a12}ms) should be saturated near MAX={MAX_POLL_INTERVAL_MS}ms"
+        );
+        // High attempt numbers strictly ≤ MAX_POLL_INTERVAL_MS: clamp *after* jitter guarantees this.
+        for attempt in [30, 100, 1000] {
+            for _ in 0..300 {
+                let ms = PathLockManager::poll_interval_for_attempt(attempt).as_millis() as u64;
+                assert!(
+                    ms <= MAX_POLL_INTERVAL_MS,
+                    "attempt {attempt} polled {ms}ms which exceeds MAX={MAX_POLL_INTERVAL_MS}ms — clamp should be applied AFTER jitter"
+                );
+                assert!(
+                    ms >= MIN_POLL_INTERVAL_MS,
+                    "attempt {attempt} polled {ms}ms below MIN={MIN_POLL_INTERVAL_MS}ms"
+                );
+            }
+            let _ = a30; // silence unused if a30 moved
+        }
+    }
+
+    #[test]
+    fn poll_interval_saturates_individually_for_large_attempts() {
+        // Defensive single-value check (without relying on averaging): take a
+        // high attempt and run 500 times. Every result ∈ [MIN, MAX].
+        for attempt in [50u32, 250u32, 10_000u32, u32::MAX - 1] {
+            for _ in 0..500 {
+                let d = PathLockManager::poll_interval_for_attempt(attempt);
+                let ms = d.as_millis() as u64;
+                assert!((MIN_POLL_INTERVAL_MS..=MAX_POLL_INTERVAL_MS).contains(&ms),
+                    "attempt={attempt} produced out-of-range poll interval {ms}ms (expected [{MIN_POLL_INTERVAL_MS}..={MAX_POLL_INTERVAL_MS}])");
+            }
+        }
+    }
+
+    #[test]
+    fn poll_interval_jitter_applies_across_attempts() {
+        // Jitter makes equal-attempt samples not all identical. Try attempt 5
+        // where base=10*1.5^5 ≈ 75.9ms, so values span [76..=126ms]. 200 samples
+        // should definitely produce more than 2 distinct outcomes.
+        let mut distinct = std::collections::BTreeSet::new();
+        for _ in 0..200 {
+            distinct.insert(
+                PathLockManager::poll_interval_for_attempt(5).as_millis() as u64
+            );
+        }
+        assert!(
+            distinct.len() >= 5,
+            "expected jitter to produce 5+ distinct intervals for attempt 5, got {}",
+            distinct.len()
+        );
     }
 }
