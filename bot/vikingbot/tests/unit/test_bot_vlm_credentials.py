@@ -58,6 +58,33 @@ def test_bot_inherits_root_vlm_credentials_when_agents_model_is_omitted(tmp_path
     ]
 
 
+def test_agent_max_tokens_overrides_inherited_root_limit(tmp_path, monkeypatch):
+    config = _write_config(
+        tmp_path,
+        monkeypatch,
+        {
+            "vlm": {
+                "provider": "openai",
+                "model": "root-model",
+                "api_key": "root-key",
+                "max_tokens": 4096,
+            },
+            "bot": {
+                "agents": {
+                    "max_tokens": 8192,
+                }
+            },
+        },
+    )
+
+    from vikingbot.cli.commands import _make_provider
+
+    provider = _make_provider(config)
+
+    assert config.agents.inherits_root_vlm() is True
+    assert provider._vlm.max_tokens == 8192
+
+
 def test_explicit_bot_model_uses_bot_credentials_instead_of_root(tmp_path, monkeypatch):
     config = _write_config(
         tmp_path,
@@ -237,6 +264,66 @@ def test_explicit_bot_model_without_credentials_keeps_single_model_behavior(tmp_
     assert isinstance(provider, VLMProviderAdapter)
     assert not isinstance(provider._vlm, MultiCredentialVLM)
     assert provider._vlm.model == "bot-model"
+
+
+def test_explicit_bot_model_passes_agent_max_tokens(tmp_path, monkeypatch):
+    config = _write_config(
+        tmp_path,
+        monkeypatch,
+        {
+            "bot": {
+                "agents": {
+                    "provider": "openai",
+                    "model": "bot-model",
+                    "api_key": "bot-key",
+                    "max_tokens": 8192,
+                }
+            }
+        },
+    )
+
+    from vikingbot.cli.commands import _make_provider
+
+    provider = _make_provider(config)
+
+    assert config.agents.max_tokens == 8192
+    assert provider._vlm.max_tokens == 8192
+
+
+def test_bot_credentials_override_or_inherit_agent_max_tokens(tmp_path, monkeypatch):
+    config = _write_config(
+        tmp_path,
+        monkeypatch,
+        {
+            "bot": {
+                "agents": {
+                    "max_tokens": 8192,
+                    "credentials": [
+                        {
+                            "id": "bot-primary",
+                            "provider": "openai",
+                            "model": "bot-primary",
+                            "api_key": "bot-primary-key",
+                            "max_tokens": 2048,
+                        },
+                        {
+                            "id": "bot-backup",
+                            "provider": "openai",
+                            "model": "bot-backup",
+                            "api_key": "bot-backup-key",
+                        },
+                    ],
+                }
+            }
+        },
+    )
+
+    from vikingbot.cli.commands import _make_provider
+
+    provider = _make_provider(config)
+
+    assert isinstance(provider._vlm, MultiCredentialVLM)
+    assert [vlm.max_tokens for vlm in provider._vlm._vlm_instances] == [2048, 8192]
 
 
 def test_explicit_litellm_provider_uses_vlm_adapter(tmp_path, monkeypatch):

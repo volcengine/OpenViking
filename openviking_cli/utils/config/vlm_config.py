@@ -42,6 +42,14 @@ class VLMCredential(BaseModel):
         default=None, description="Extra JSON body fields"
     )
     stream: Optional[bool] = Field(default=None, description="Enable streaming mode")
+    max_tokens: Optional[int] = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Maximum completion output tokens for this credential. "
+            "Overrides the parent max_tokens when set."
+        ),
+    )
 
     model_config = {"extra": "forbid"}
 
@@ -282,6 +290,7 @@ class VLMConfig(BaseModel):
                     if primary_cfg.get("stream") is not None
                     else self.stream
                 ),
+                max_tokens=self.max_tokens,
             )
             migrated_credentials.append(primary_cred)
 
@@ -310,6 +319,7 @@ class VLMConfig(BaseModel):
                     if backup_cfg.get("stream") is not None
                     else self.backup.stream
                 ),
+                max_tokens=self.backup.max_tokens,
             )
             migrated_credentials.append(backup_cred)
 
@@ -549,7 +559,9 @@ class VLMConfig(BaseModel):
             "timeout": self.timeout,
             "provider": credential.provider,
             "thinking": self.thinking,
-            "max_tokens": self.max_tokens,
+            "max_tokens": (
+                credential.max_tokens if credential.max_tokens is not None else self.max_tokens
+            ),
             "stream": credential.stream if credential.stream is not None else self.stream,
             "api_version": credential.api_version,
         }
