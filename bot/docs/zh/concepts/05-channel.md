@@ -216,7 +216,7 @@ vikingbot gateway
       "botName": "",
       "encryptKey": "",
       "verificationToken": "",
-      "allowFrom": [],
+      "allowFrom": ["ou_xxx"],
       "threadRequireMention": true
     }
   ]
@@ -224,7 +224,8 @@ vikingbot gateway
 ```
 
 > 长连接模式下，`encryptKey` 和 `verificationToken` 是可选的。
-> `allowFrom`：留空以允许所有用户，或添加 `["ou_xxx"]` 以限制访问。
+> `allowFrom`：空列表会拒绝所有用户。请添加允许的用户 ID（例如 `["ou_xxx"]`）；
+> 只有确实需要公开访问时才使用 `["*"]`。
 > `botName`：用于在传给模型的群聊上下文中把 `@<open_id>` 提及替换为机器人名称，以及标注机器人自身发出的消息；留空则回退为 `"Bot"`。
 > `threadRequireMention`：群聊是否需要 `@` 机器人才响应。默认 `true` —— 普通群和话题群的所有消息都需要 `@`；设为 `false` 时，普通群无需 `@`，话题群仅首条消息无需 `@`，非 `DEBUG` 模式下后续回复仍需 `@`。
 
@@ -256,7 +257,8 @@ vikingbot gateway
 
 **3. 配置**
 
-> - `allowFrom`：留空以供公开访问，或添加用户 openid 以限制。您可以在用户向机器人发消息时在 vikingbot 日志中找到 openid。
+> - `allowFrom`：空列表会拒绝所有用户。请添加允许的用户 openid；只有确实需要公开访问时才使用
+>   `["*"]`。用户向机器人发送消息后，可以在 vikingbot 日志中找到对应的 openid。
 > - 生产环境：在机器人控制台提交审核并发布。查看 [QQ 机器人文档](https://bot.q.qq.com/wiki/) 了解完整发布流程。
 
 ```json
@@ -267,7 +269,7 @@ vikingbot gateway
       "enabled": true,
       "appId": "YOUR_APP_ID",
       "secret": "YOUR_APP_SECRET",
-      "allowFrom": []
+      "allowFrom": ["YOUR_USER_OPENID"]
     }
   ]
 }
@@ -307,13 +309,14 @@ vikingbot gateway
       "enabled": true,
       "clientId": "YOUR_APP_KEY",
       "clientSecret": "YOUR_APP_SECRET",
-      "allowFrom": []
+      "allowFrom": ["staffId"]
     }
   ]
 }
 ```
 
-> `allowFrom`：留空以允许所有用户，或添加 `["staffId"]` 以限制访问。
+> `allowFrom`：空列表会拒绝所有用户。请添加允许的员工 ID（例如 `["staffId"]`）；
+> 只有确实需要公开访问时才使用 `["*"]`。
 
 **3. 运行**
 
@@ -389,7 +392,8 @@ vikingbot gateway
 **2. 配置**
 
 > - `consentGranted` 必须为 `true` 以允许邮箱访问。这是一个安全门 —— 设置为 `false` 以完全禁用。
-> - `allowFrom`：留空以接受来自任何人的邮件，或限制到特定发件人。
+> - `allowFrom`：空列表会拒绝所有发件人。请添加允许的邮箱地址；只有确实需要接收任何人的邮件时才使用
+>   `["*"]`。
 > - `smtpUseTls` 和 `smtpUseSsl` 分别默认为 `true` / `false`，这对 Gmail（端口 587 + STARTTLS）是正确的。无需显式设置它们。
 > - 如果您只想读取/分析邮件而不发送自动回复，请设置 `"autoReplyEnabled": false`。
 

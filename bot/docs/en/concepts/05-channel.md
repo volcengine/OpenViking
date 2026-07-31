@@ -220,7 +220,7 @@ Feishu uses a persistent **WebSocket** connection, so no public IP address is re
       "botName": "",
       "encryptKey": "",
       "verificationToken": "",
-      "allowFrom": [],
+      "allowFrom": ["ou_xxx"],
       "threadRequireMention": true
     }
   ]
@@ -228,7 +228,8 @@ Feishu uses a persistent **WebSocket** connection, so no public IP address is re
 ```
 
 > In long-connection mode, `encryptKey` and `verificationToken` are optional.
-> `allowFrom`: leave it empty to allow every user, or add `["ou_xxx"]` to restrict access.
+> `allowFrom`: an empty list denies every user. Add allowed user IDs such as
+> `["ou_xxx"]`, or use `["*"]` only when public access is intentional.
 > `botName`: replaces `@<open_id>` mentions with the bot name in group-chat context sent to the model, and labels messages sent by the bot itself. When empty, it falls back to `"Bot"`.
 > `threadRequireMention`: controls whether group messages must mention the bot. The default is `true`, meaning every message in regular groups and topic groups requires an `@` mention. When set to `false`, regular groups do not require a mention, and only the first message in a topic group can omit it; later replies still require an `@` mention outside `DEBUG` mode.
 
@@ -262,7 +263,9 @@ QQ uses the **botpy SDK** over WebSocket, so no public IP address is required. C
 
 **3. Configure it**
 
-> - `allowFrom`: leave it empty for public access, or add user openids to restrict access. You can find a user's openid in the vikingbot logs after that user messages the bot.
+> - `allowFrom`: an empty list denies every user. Add allowed user openids, or use
+>   `["*"]` only when public access is intentional. You can find a user's openid in
+>   the vikingbot logs after that user messages the bot.
 > - For production, submit the bot for review and publish it in the console. See the [QQ Bot documentation](https://bot.q.qq.com/wiki/) for the complete release process.
 
 ```json
@@ -273,7 +276,7 @@ QQ uses the **botpy SDK** over WebSocket, so no public IP address is required. C
       "enabled": true,
       "appId": "YOUR_APP_ID",
       "secret": "YOUR_APP_SECRET",
-      "allowFrom": []
+      "allowFrom": ["YOUR_USER_OPENID"]
     }
   ]
 }
@@ -313,13 +316,14 @@ DingTalk uses **Stream Mode**, so no public IP address is required.
       "enabled": true,
       "clientId": "YOUR_APP_KEY",
       "clientSecret": "YOUR_APP_SECRET",
-      "allowFrom": []
+      "allowFrom": ["staffId"]
     }
   ]
 }
 ```
 
-> `allowFrom`: leave it empty to allow every user, or add `["staffId"]` to restrict access.
+> `allowFrom`: an empty list denies every user. Add allowed staff IDs such as
+> `["staffId"]`, or use `["*"]` only when public access is intentional.
 
 **3. Run it**
 
@@ -399,7 +403,8 @@ Give vikingbot its own email account. It polls the inbox over **IMAP** and repli
 **2. Configure it**
 
 > - `consentGranted` must be `true` to allow mailbox access. This is a safety gate; set it to `false` to disable access completely.
-> - `allowFrom`: leave it empty to accept email from anyone, or restrict it to specific senders.
+> - `allowFrom`: an empty list rejects every sender. Add allowed email addresses, or
+>   use `["*"]` only when accepting mail from anyone is intentional.
 > - `smtpUseTls` and `smtpUseSsl` default to `true` and `false`, respectively. Those defaults are correct for Gmail on port 587 with STARTTLS, so you do not need to set them explicitly.
 > - If you only want to read and analyze email without sending automatic replies, set `"autoReplyEnabled": false`.
 
