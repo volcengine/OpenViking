@@ -44,7 +44,7 @@ Optional sections use their defaults when omitted. Unknown fields are rejected.
 |---|---|---|---|
 | `default_account` | string | `"default"` | Default account in embedded SDK mode |
 | `default_user` | string | `"default"` | Default user in embedded SDK mode |
-| `embedding` | object | empty config | Dense, sparse, and hybrid embedding; configure a working model before using these capabilities |
+| `embedding` | object | built-in local dense model | Dense, sparse, and hybrid embedding; defaults to `local` / `bge-small-zh-v1.5-f16` |
 | `vlm` | object | empty config | Content understanding, summaries, and memory extraction; configure a working model before using these capabilities |
 | `query_planner` | object / `null` | `null` | Retrieval intent model; falls back to `vlm` |
 | `rerank` | object | disabled | Retrieval result reranking |
@@ -64,16 +64,14 @@ Optional sections use their defaults when omitted. Unknown fields are rejected.
 | `oauth` | object | disabled | MCP OAuth 2.1 |
 | `prompts` | object | built-in templates | Custom prompt template directory |
 | `ingest` | object | built-in defaults | Conversation-log ingestion |
-| `auto_generate_l0` | boolean | `true` | Generate an abstract when missing |
-| `auto_generate_l1` | boolean | `true` | Generate an overview when missing |
-| `default_search_mode` | `"fast"` / `"thinking"` | `"thinking"` | Default search mode |
-| `default_search_limit` | integer | `3` | Default result count |
 | `output_language_override` | string | `""` | Force summary/memory language; empty means auto-detect |
 | `allow_private_networks` | boolean | `false` | Allow fetching private-network resources |
 
+`auto_generate_l0`, `auto_generate_l1`, `default_search_mode`, and `default_search_limit` are deprecated compatibility fields. They are accepted when loading older configuration files but have no runtime effect.
+
 ## Model Settings
 
-API-based `embedding`, `vlm`, `query_planner`, and `rerank` models share common fields:
+API-based `embedding`, `vlm`, `query_planner`, and `rerank` configurations reuse some field names, but each module has its own schema. Use only fields supported by the applicable module below.
 
 ```json
 {
@@ -109,17 +107,15 @@ API-based `embedding`, `vlm`, `query_planner`, and `rerank` models share common 
 }
 ```
 
-| Field | Type / common values | Default | Purpose |
-|---|---|---|---|
-| `provider` | `openai`, `volcengine`, `azure`, `ollama`, etc. | module-specific | Model service |
-| `model` | string | none | Model name or endpoint ID |
-| `api_base` | URL | provider default | Model endpoint |
-| `api_key` | string | `null` | Model credential |
-| `api_version` | string | provider default | API version for providers such as Azure |
-| `extra_headers` | object | `{}` | Additional request headers |
-| `extra_request_body` | object | `null` | Additional VLM request fields; Embedding uses `extra_body` |
-| `timeout` | number, seconds | module default | VLM and Rerank request timeout |
-| `max_retries` | integer, `>= 0` | module default | Retry count |
+| Field / path | Applies to | Purpose |
+|---|---|---|
+| `provider`, `model`, `api_base`, `api_key` | Embedding, VLM, Query Planner, Rerank | Model service, endpoint, and credential |
+| `api_version` | Embedding, VLM, Query Planner | API version for providers such as Azure |
+| `extra_headers` | Embedding, VLM, Query Planner, Rerank | Additional request headers |
+| `extra_request_body` | VLM, Query Planner | Additional completion request fields |
+| `extra_body` | `embedding.dense` / `sparse` / `hybrid` | Additional embedding request fields |
+| `timeout` | VLM, Query Planner, Rerank | Per-request timeout in seconds |
+| `embedding.max_retries`, `vlm.max_retries`, `query_planner.max_retries` | Embedding, VLM, Query Planner | Retry count; Rerank has no `max_retries` field |
 
 ### `embedding.dense`
 
@@ -151,9 +147,7 @@ Rerank has no separate `enabled` field. It becomes available when the required p
     "hotness_alpha": 0,
     "score_propagation_alpha": 1,
     "enable_intent": true
-  },
-  "default_search_mode": "thinking",
-  "default_search_limit": 3
+  }
 }
 ```
 
@@ -165,12 +159,7 @@ Rerank has no separate `enabled` field. It becomes available when the required p
 | `score_propagation_alpha` | number, `0`–`1` | `1` | Child-result score weight in hierarchical retrieval |
 | `enable_intent` | boolean | `true` | Run intent analysis/query planning when `session_id` is present |
 
-### `default_search_mode`
-
-| Value | Behavior |
-|---|---|
-| `"fast"` | Vector retrieval only |
-| `"thinking"` | Vector retrieval plus LLM query planning/reranking |
+Search and Find requests default to `limit: 10`; override the limit on each API or SDK request. `retrieval.enable_intent` controls LLM query planning for session-aware Search, while result reranking is enabled only when `rerank` has a usable provider configuration.
 
 ## Storage Settings
 
@@ -183,8 +172,7 @@ Rerank has no separate `enabled` field. It becomes available when the required p
       "backend": "local"
     },
     "vectordb": {
-      "backend": "local",
-      "dimension": 3072
+      "backend": "local"
     }
   }
 }
@@ -236,8 +224,28 @@ Remote backends also require endpoint, bucket/collection, credentials, and timeo
 | `public_base_url` | URL / `null` | `null` | Externally visible base URL |
 | `upload_signed_ttl_seconds` | integer | `600` | Signed upload URL lifetime |
 | `temp_upload.default_mode` | `"local"` / `"shared"` | `"local"` | Temporary upload storage |
-| `api_key_hashing_enabled` | boolean | `false` | Store API keys with Argon2id |
-| `encryption_enabled` | boolean | `false` | Enable file-level AES encryption |
+
+### Encryption and API Key Hashing
+
+File encryption and API key hashing are configured in the top-level `encryption` section, not under `server`:
+
+```json
+{
+  "encryption": {
+    "enabled": false,
+    "api_key_hashing": {
+      "enabled": false
+    }
+  }
+}
+```
+
+| Field | Type / values | Default | Purpose |
+|---|---|---|---|
+| `encryption.enabled` | boolean | `false` | Enable file-level AES encryption |
+| `encryption.api_key_hashing.enabled` | boolean | `false` | Store API keys with Argon2id |
+
+See [Encryption](../guides/08-encryption.md) for provider and key-management settings.
 
 ### Authentication Modes
 

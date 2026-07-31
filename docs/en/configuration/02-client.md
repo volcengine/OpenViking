@@ -146,13 +146,16 @@ Variables such as `OPENVIKING_AUTO_RECALL`, `OPENVIKING_RECALL_LIMIT`, `OPENVIKI
 
 ## Multiple Servers
 
-The active configuration is always:
+Normal `ov` commands, plus `ov config show` and `ov config validate`, resolve the effective configuration in this order:
+
+1. When `OPENVIKING_CLI_CONFIG_FILE` is set, that path is authoritative; a missing file is an error.
+2. When the variable is unset, the default active file:
 
 ```text
 ~/.openviking/ovcli.conf
 ```
 
-Named configurations live next to it:
+The interactive manager and `ov config list`, `switch`, `add`, `edit`, and `delete` always manage the default store. Named configurations in that store live next to the default active file:
 
 ```text
 ~/.openviking/ovcli.conf.<name>
@@ -178,6 +181,6 @@ ov config validate
 ov config show
 ```
 
-`ov config switch <name>` copies the named configuration to the active file. New `ov` commands read the latest file; already-running Agent clients must restart before reading it.
+`ov config switch <name>` copies the named configuration to the default active file. If `OPENVIKING_CLI_CONFIG_FILE` remains set, normal `ov` commands continue to use the environment-selected file; unset it to use the switched default. New `ov` commands reread the effective file, while already-running Agent clients must restart before reading changes.
 
 See [OpenViking CLI Setup](../getting-started/05-cli-setup.md) for interactive and agent-assisted configuration workflows.

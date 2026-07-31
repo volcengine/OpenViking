@@ -44,7 +44,7 @@ openviking-server --config /path/to/ov.conf
 |---|---|---|---|
 | `default_account` | string | `"default"` | SDK 嵌入模式使用的默认账号 |
 | `default_user` | string | `"default"` | SDK 嵌入模式使用的默认用户 |
-| `embedding` | object | 空配置 | 向量化模型和稀疏/混合检索配置；使用相关能力前需要配置可用模型 |
+| `embedding` | object | 内置本地 Dense 模型 | 向量化模型和稀疏/混合检索配置；默认使用 `local` / `bge-small-zh-v1.5-f16` |
 | `vlm` | object | 空配置 | 内容理解、摘要和记忆抽取使用的模型；使用相关能力前需要配置可用模型 |
 | `query_planner` | object / `null` | `null` | 检索意图分析模型；未配置时回退到 `vlm` |
 | `rerank` | object | disabled | 检索结果重排模型 |
@@ -64,16 +64,14 @@ openviking-server --config /path/to/ov.conf
 | `oauth` | object | disabled | MCP OAuth 2.1 配置 |
 | `prompts` | object | 内置模板 | 自定义 Prompt 模板目录 |
 | `ingest` | object | 内置默认值 | 会话日志导入配置 |
-| `auto_generate_l0` | boolean | `true` | 缺少 abstract 时是否自动生成 |
-| `auto_generate_l1` | boolean | `true` | 缺少 overview 时是否自动生成 |
-| `default_search_mode` | `"fast"` / `"thinking"` | `"thinking"` | 默认检索模式 |
-| `default_search_limit` | integer | `3` | 默认返回结果数量 |
 | `output_language_override` | string | `""` | 强制摘要和记忆输出语言；空值表示自动识别 |
 | `allow_private_networks` | boolean | `false` | 是否允许抓取内网或私有地址资源 |
 
+`auto_generate_l0`、`auto_generate_l1`、`default_search_mode` 和 `default_search_limit` 是已弃用的兼容字段。旧配置文件仍可加载这些字段，但它们不会影响运行时行为。
+
 ## 模型配置
 
-`embedding`、`vlm`、`query_planner` 和 `rerank` 的 API 型模型使用相似字段：
+API 型 `embedding`、`vlm`、`query_planner` 和 `rerank` 配置会复用部分字段名，但各模块使用独立 schema。请只使用下表中对应模块支持的字段。
 
 ```json
 {
@@ -109,17 +107,15 @@ openviking-server --config /path/to/ov.conf
 }
 ```
 
-| 字段 | 类型 / 常用值 | 默认值 | 作用 |
-|---|---|---|---|
-| `provider` | `openai`、`volcengine`、`azure`、`ollama` 等 | 由模块决定 | 模型服务类型 |
-| `model` | string | 无 | 模型名称或 Endpoint ID |
-| `api_base` | URL | provider 默认地址 | 模型服务地址 |
-| `api_key` | string | `null` | 模型服务凭证 |
-| `api_version` | string | provider 默认值 | Azure 等服务的 API 版本 |
-| `extra_headers` | object | `{}` | 附加请求头 |
-| `extra_request_body` | object | `null` | VLM 的附加请求参数；Embedding 使用 `extra_body` |
-| `timeout` | number，秒 | 模块默认值 | VLM 和 Rerank 的单次请求超时 |
-| `max_retries` | integer，`>= 0` | 模块默认值 | 请求失败重试次数 |
+| 字段 / 路径 | 适用模块 | 作用 |
+|---|---|---|
+| `provider`、`model`、`api_base`、`api_key` | Embedding、VLM、Query Planner、Rerank | 模型服务、地址和凭证 |
+| `api_version` | Embedding、VLM、Query Planner | Azure 等服务的 API 版本 |
+| `extra_headers` | Embedding、VLM、Query Planner、Rerank | 附加请求头 |
+| `extra_request_body` | VLM、Query Planner | 附加的 Completion 请求参数 |
+| `extra_body` | `embedding.dense` / `sparse` / `hybrid` | 附加的 Embedding 请求参数 |
+| `timeout` | VLM、Query Planner、Rerank | 单次请求超时，单位为秒 |
+| `embedding.max_retries`、`vlm.max_retries`、`query_planner.max_retries` | Embedding、VLM、Query Planner | 请求失败重试次数；Rerank 没有 `max_retries` 字段 |
 
 ### `embedding.dense`
 
@@ -151,9 +147,7 @@ Rerank 没有单独的 `enabled` 字段；配置了对应 provider 所需的凭�
     "hotness_alpha": 0,
     "score_propagation_alpha": 1,
     "enable_intent": true
-  },
-  "default_search_mode": "thinking",
-  "default_search_limit": 3
+  }
 }
 ```
 
@@ -165,12 +159,7 @@ Rerank 没有单独的 `enabled` 字段；配置了对应 provider 所需的凭�
 | `score_propagation_alpha` | number，`0`–`1` | `1` | 层级检索时子结果自身分数的权重 |
 | `enable_intent` | boolean | `true` | 有 `session_id` 时是否进行意图分析和查询规划 |
 
-### `default_search_mode`
-
-| 值 | 作用 |
-|---|---|
-| `"fast"` | 仅执行向量检索，延迟更低 |
-| `"thinking"` | 执行向量检索和 LLM 查询规划/重排 |
+Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK 请求中覆盖。`retrieval.enable_intent` 控制带 Session 的 Search 是否执行 LLM 查询规划；只有配置了可用的 `rerank` provider 时才会执行结果重排。
 
 ## 存储配置
 
@@ -183,8 +172,7 @@ Rerank 没有单独的 `enabled` 字段；配置了对应 provider 所需的凭�
       "backend": "local"
     },
     "vectordb": {
-      "backend": "local",
-      "dimension": 3072
+      "backend": "local"
     }
   }
 }
@@ -236,8 +224,28 @@ Rerank 没有单独的 `enabled` 字段；配置了对应 provider 所需的凭�
 | `public_base_url` | URL / `null` | `null` | 外部访问使用的服务基准地址 |
 | `upload_signed_ttl_seconds` | integer | `600` | 签名上传 URL 有效期 |
 | `temp_upload.default_mode` | `"local"` / `"shared"` | `"local"` | 临时上传存储模式 |
-| `api_key_hashing_enabled` | boolean | `false` | 是否使用 Argon2id 保存 API Key |
-| `encryption_enabled` | boolean | `false` | 是否启用文件级 AES 加密 |
+
+### 文件加密与 API Key 哈希
+
+文件加密和 API Key 哈希在顶层 `encryption` 中配置，不属于 `server`：
+
+```json
+{
+  "encryption": {
+    "enabled": false,
+    "api_key_hashing": {
+      "enabled": false
+    }
+  }
+}
+```
+
+| 字段 | 类型 / 可选值 | 默认值 | 作用 |
+|---|---|---|---|
+| `encryption.enabled` | boolean | `false` | 是否启用文件级 AES 加密 |
+| `encryption.api_key_hashing.enabled` | boolean | `false` | 是否使用 Argon2id 保存 API Key |
+
+Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
 
 ### 鉴权模式
 
