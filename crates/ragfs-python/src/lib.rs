@@ -20,7 +20,7 @@ fn pathlock_err_to_py(err: PathLockError) -> PyErr {
         PathLockError::Conflict { .. }
         | PathLockError::Timeout { .. }
         | PathLockError::HandoffFailed(_)
-        | PathLockError::Io(_) => {
+        | PathLockError::Busy { .. } => {
             #[allow(deprecated)]
             Python::with_gil(|py| {
                 let ty = LOCK_ACQUISITION_ERROR_TYPE
@@ -30,7 +30,9 @@ fn pathlock_err_to_py(err: PathLockError) -> PyErr {
             })
         }
         PathLockError::InvalidRequest(_) => PyValueError::new_err(err.to_string()),
-        _ => PyRuntimeError::new_err(err.to_string()),
+        PathLockError::Io(_) | PathLockError::InvalidToken(_) | PathLockError::Internal(_) => {
+            PyRuntimeError::new_err(err.to_string())
+        }
     }
 }
 use std::fs;
@@ -642,6 +644,7 @@ fn to_py_err(e: ragfs::core::Error) -> PyErr {
         ragfs::core::Error::Serialization(_) => new_py_err("AGFSSerializationError", msg),
         ragfs::core::Error::Network(_) => new_py_err("AGFSNetworkError", msg),
         ragfs::core::Error::Timeout(_) => new_py_err("AGFSTimeoutError", msg),
+        ragfs::core::Error::WouldBlock(_) => new_py_err("AGFSTimeoutError", msg),
         ragfs::core::Error::SyncWriteQuorum { .. } => new_py_err("AGFSInternalError", msg),
         ragfs::core::Error::ContextMissing(_) => new_py_err("AGFSInternalError", msg),
         ragfs::core::Error::Internal(_) => new_py_err("AGFSInternalError", msg),
@@ -2605,7 +2608,7 @@ mod tests {
     }
 
     #[test]
-    fn pathlock_io_error_maps_to_lock_acquisition_error() {
+    fn pathlock_io_error_maps_to_runtime_error() {
         Python::initialize();
         Python::attach(|py| {
             let errors_mod = py.import("openviking.storage.errors").unwrap();
@@ -2618,6 +2621,27 @@ mod tests {
 
             let error =
                 pathlock_err_to_py(PathLockError::Io("failed to create lock dir".to_string()));
+
+            assert!(error.is_instance_of::<PyRuntimeError>(py));
+        });
+    }
+
+    #[test]
+    fn pathlock_busy_error_maps_to_lock_acquisition_error() {
+        Python::initialize();
+        Python::attach(|py| {
+            let errors_mod = py.import("openviking.storage.errors").unwrap();
+            let lock_error_type: Py<PyType> = errors_mod
+                .getattr("LockAcquisitionError")
+                .unwrap()
+                .extract()
+                .unwrap();
+            let _ = LOCK_ACQUISITION_ERROR_TYPE.set(lock_error_type.clone_ref(py));
+
+            let error = pathlock_err_to_py(PathLockError::Busy {
+                lock_path: "/data/.path.ovlock".to_string(),
+                operation: "remove".to_string(),
+            });
 
             assert!(error.is_instance(py, lock_error_type.bind(py)));
         });

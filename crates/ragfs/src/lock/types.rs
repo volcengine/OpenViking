@@ -175,6 +175,15 @@ pub enum PathLockError {
         elapsed_ms: u64,
     },
 
+    /// Lock token mutation is temporarily blocked and should be retried.
+    #[error("lock busy at '{lock_path}' during {operation}")]
+    Busy {
+        /// Lock path whose token mutation is temporarily blocked.
+        lock_path: String,
+        /// Mutation operation being attempted.
+        operation: String,
+    },
+
     /// I/O error during lock operation.
     #[error("lock I/O error: {0}")]
     Io(String),

@@ -65,7 +65,7 @@ The Bot API is available under `/bot/v1`:
 | GET/POST | `/bot/v1/sessions` | List or create API Sessions |
 | GET/DELETE | `/bot/v1/sessions/{id}` | Retrieve or delete an API Session |
 
-ChatRequest supports a session ID, additional context, reply control, request-level disabled tools, and a channel ID. ChatResponse returns a response ID, final text, intermediate events, relevant memories, and token usage.
+ChatRequest supports a session ID, reply control, request-level disabled tools, and a channel ID. The `context` field does not accept non-empty messages; omit it or send an empty list, otherwise the API returns HTTP 422. Only one request may be in flight for a session at a time. A concurrent request with the same session ID returns HTTP 409, so clients should serialize same-session requests and retry after the active request completes. ChatResponse returns a response ID, final text, intermediate events, relevant memories, and token usage.
 
 SSE emits reasoning, content delta, tool call, tool result, iteration, and final response events.
 
