@@ -12,7 +12,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { loadConfig, type OVConfig } from "./config.js";
+import { loadConfigFromModuleUrl, type OVConfig } from "./config.js";
 import { OVClient } from "./client.js";
 import { RecallManager } from "./recall.js";
 import { SyncManager } from "./sync.js";
@@ -23,7 +23,7 @@ import { createTakeoverManager } from "./takeover.js";
 
 export default async function (pi: ExtensionAPI) {
   // --- Load config ---
-  const config = loadConfig(dirname(new URL(import.meta.url).pathname));
+  const config = loadConfigFromModuleUrl(import.meta.url);
   if (!config.enabled) return;
 
   // Env overrides
