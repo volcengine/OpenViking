@@ -58,14 +58,17 @@ Edit `~/.openviking/ov.conf`:
 ```python
 import openviking as ov
 import asyncio
+from pathlib import Path
 
 
 async def test():
     client = ov.AsyncOpenViking(path="./data")
     await client.initialize()
 
-    # Add resource (automatically encrypted)
-    await client.add_resource("Hello, encrypted world!", reason="Test encryption")
+    # add_resource expects a file path or URL
+    sample = Path("./encrypted-sample.txt")
+    sample.write_text("Hello, encrypted world!", encoding="utf-8")
+    await client.add_resource(str(sample), reason="Test encryption")
 
     # Read resource (automatically decrypted)
     results = await client.find("encrypted")
@@ -394,33 +397,24 @@ except Exception as e:
 
 ### Migrating from Unencrypted to Encrypted
 
-1. Back up existing data
-2. Enable encryption (see above)
-3. Re-import all resources:
+Enabling encryption does not rewrite existing plaintext files. They remain readable for backward compatibility, while new writes use encryption. To encrypt existing public scopes, migrate them through OVPack into a new, empty encrypted storage environment:
 
-```python
-import openviking as ov
-import asyncio
+1. Stop application writes and create a logical backup while the original unencrypted environment is running:
 
-
-async def migrate():
-    client = ov.AsyncOpenViking(path="./data")
-    await client.initialize()
-
-    # List all resources
-    resources = await client.list_resources()
-
-    for resource in resources:
-        # Read old resource (unencrypted)
-        content = await client.read_resource(resource["uri"])
-        # Re-write (automatically encrypted)
-        await client.add_resource(content, reason="Migrate to encrypted storage")
-
-    await client.close()
-
-
-asyncio.run(migrate())
+```bash
+ov backup ./backups/before-encryption.ovpack
 ```
+
+2. Stop OpenViking. Enable encryption and point the storage configuration at a **new, empty** workspace/backend. Keep the original data and encryption key backup until verification is complete.
+3. Start the encrypted environment and restore the logical backup. Restore writes the package content through the encrypted storage layer:
+
+```bash
+ov restore ./backups/before-encryption.ovpack --on-conflict fail
+```
+
+4. Verify resource, user, session, and index data before switching traffic. OVPack excludes runtime/internal state such as queues, uploads, locks, watches, and relation files; recreate or validate those separately.
+
+See [OVPack Import and Export](09-ovpack.md#full-backup-and-restore) for supported scopes and restore options.
 
 ### Switching Key Providers
 

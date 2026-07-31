@@ -24,13 +24,16 @@ class ToolContext:
             and session_key. This determines the sandbox directory for the session.
         sender_id: Optional identifier for the message sender, used for tracking
             and permission checks.
+        actor_peer_id: Authenticated OpenViking peer identity for memory and file tools.
         memory_peer_ids: Optional list of peer IDs for memory retrieval inside
             the current OpenViking user scope.
         memory_owner_user_ids: Optional list of explicit OpenViking user IDs
-            for legacy root-key fanout searches.
+            for trusted-mode owner-user memory lookup.
         openviking_connection: Optional request-scoped OpenViking identity. Studio
             requests use this so tools call OpenViking with the same connection
             selected in the browser.
+        channel_metadata: Channel-specific metadata from the inbound message. Tools
+            that publish outbound messages can reuse this to preserve delivery context.
 
     Example:
         >>> context = ToolContext(
@@ -44,16 +47,20 @@ class ToolContext:
     sandbox_manager: SandboxManager | None = None
     workspace_id: str = sandbox_manager.to_workspace_id(session_key) if sandbox_manager else None
     sender_id: str | None = None
+    actor_peer_id: str | None = None
     memory_peer_ids: list[str] | None = None
     memory_owner_user_ids: list[str] | None = None
     memory_user_ids: list[str] | None = None  # Deprecated alias for memory_owner_user_ids.
     openviking_connection: dict[str, Any] | None = None
+    channel_metadata: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if self.memory_owner_user_ids is None and self.memory_user_ids is not None:
             self.memory_owner_user_ids = self.memory_user_ids
         elif self.memory_user_ids is None and self.memory_owner_user_ids is not None:
             self.memory_user_ids = self.memory_owner_user_ids
+        if self.channel_metadata is None:
+            self.channel_metadata = {}
 
 
 class Tool(ABC):

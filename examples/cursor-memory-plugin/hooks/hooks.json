@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "node ${CURSOR_PLUGIN_ROOT}/scripts/session-start.mjs",
+        "timeout": 30
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "node ${CURSOR_PLUGIN_ROOT}/scripts/auto-recall.mjs",
+        "timeout": 20
+      }
+    ],
+    "beforeReadFile": [
+      {
+        "command": "node ${CURSOR_PLUGIN_ROOT}/scripts/uri-guard.mjs",
+        "timeout": 5
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "command": "node ${CURSOR_PLUGIN_ROOT}/scripts/uri-guard.mjs",
+        "timeout": 5
+      }
+    ],
+    "stop": [
+      {
+        "command": "node ${CURSOR_PLUGIN_ROOT}/scripts/auto-capture.mjs",
+        "timeout": 30
+      }
+    ],
+    "preCompact": [
+      {
+        "command": "node ${CURSOR_PLUGIN_ROOT}/scripts/pre-compact.mjs",
+        "timeout": 30
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": "node ${CURSOR_PLUGIN_ROOT}/scripts/session-end.mjs",
+        "timeout": 30
+      }
+    ]
+  }
+}

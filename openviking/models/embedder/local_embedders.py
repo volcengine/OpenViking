@@ -178,11 +178,6 @@ class LocalDenseEmbedder(DenseEmbedderBase):
             return f"{self.query_instruction}{text}"
         return text
 
-    def _supports_native_batch_embeddings(self) -> bool:
-        context_params = getattr(self._llama, "context_params", None)
-        n_seq_max = getattr(context_params, "n_seq_max", 1)
-        return n_seq_max > 1
-
     @staticmethod
     def _extract_embedding(payload: Any) -> List[float]:
         if isinstance(payload, dict):
@@ -195,34 +190,9 @@ class LocalDenseEmbedder(DenseEmbedderBase):
                 return list(payload["embedding"])
         raise RuntimeError("Unexpected llama-cpp-python embedding response format")
 
-    @staticmethod
-    def _extract_embeddings(payload: Any) -> List[List[float]]:
-        if isinstance(payload, dict):
-            data = payload.get("data")
-            if isinstance(data, list):
-                vectors: List[List[float]] = []
-                for item in data:
-                    if not isinstance(item, dict) or "embedding" not in item:
-                        raise RuntimeError(
-                            "Unexpected llama-cpp-python batch embedding response format"
-                        )
-                    vectors.append(list(item["embedding"]))
-                return vectors
-        raise RuntimeError("Unexpected llama-cpp-python batch embedding response format")
-
     def _embed_formatted_text(self, formatted: str) -> EmbedResult:
         payload = self._llama.create_embedding(formatted)
         return EmbedResult(dense_vector=self._extract_embedding(payload))
-
-    def _embed_formatted_texts_sequential(self, formatted: List[str]) -> List[EmbedResult]:
-        return [
-            self._run_with_retry(
-                lambda formatted_text=text: self._embed_formatted_text(formatted_text),
-                logger=logger,
-                operation_name="local sequential batch embedding",
-            )
-            for text in formatted
-        ]
 
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         formatted = self._format_text(text, is_query=is_query)
@@ -244,59 +214,6 @@ class LocalDenseEmbedder(DenseEmbedderBase):
             completion_tokens=0,
         )
         return result
-
-    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
-        if not texts:
-            return []
-
-        formatted = [self._format_text(text, is_query=is_query) for text in texts]
-        if len(formatted) > 1 and not self._supports_native_batch_embeddings():
-            logger.info(
-                "Local model %s does not support native multi-sequence batch embedding "
-                "(n_seq_max <= 1); using sequential mode",
-                self.model_name,
-            )
-            results = self._embed_formatted_texts_sequential(formatted)
-            estimated_tokens = sum(self._estimate_tokens(text) for text in formatted)
-            self.update_token_usage(
-                model_name=self.model_name,
-                provider="local",
-                prompt_tokens=estimated_tokens,
-                completion_tokens=0,
-            )
-            return results
-
-        def _call_batch() -> List[EmbedResult]:
-            payload = self._llama.create_embedding(formatted)
-            return [
-                EmbedResult(dense_vector=vector) for vector in self._extract_embeddings(payload)
-            ]
-
-        try:
-            results = self._run_with_retry(
-                _call_batch,
-                logger=logger,
-                operation_name="local batch embedding",
-            )
-        except Exception as batch_exc:
-            logger.warning(
-                "Local batch embedding failed for model=%s (%s); falling back to sequential embedding",
-                self.model_name,
-                batch_exc,
-            )
-            try:
-                results = self._embed_formatted_texts_sequential(formatted)
-            except Exception as exc:
-                raise RuntimeError(f"Local batch embedding failed: {exc}") from exc
-
-        estimated_tokens = sum(self._estimate_tokens(text) for text in formatted)
-        self.update_token_usage(
-            model_name=self.model_name,
-            provider="local",
-            prompt_tokens=estimated_tokens,
-            completion_tokens=0,
-        )
-        return results
 
     def get_dimension(self) -> int:
         return self._dimension

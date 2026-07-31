@@ -4,7 +4,6 @@
 
 import asyncio
 import os
-import re
 from pathlib import Path
 from typing import Any, List, Optional, Set, Tuple, Union
 
@@ -13,11 +12,10 @@ from openviking.parse.parsers.constants import (
     ADDITIONAL_TEXT_EXTENSIONS,
     CODE_EXTENSIONS,
     DOCUMENTATION_EXTENSIONS,
-    IGNORE_DIRS,
     IGNORE_EXTENSIONS,
-    TEXT_ENCODINGS,
-    UTF8_VARIANTS,
 )
+from openviking.parse.parsers.text_encoding import normalize_text_bytes
+from openviking.utils.path_safety import safe_join_viking_uri
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -25,6 +23,7 @@ logger = get_logger(__name__)
 
 # Common text files that have no extension but should be treated as text.
 _EXTENSIONLESS_TEXT_NAMES: Set[str] = {
+    "README",
     "LICENSE",
     "LICENCE",
     "MAKEFILE",
@@ -50,11 +49,16 @@ def is_text_file(file_path: Union[str, Path]) -> bool:
     p = Path(file_path)
     extension = p.suffix.lower()
     if extension:
-        return (
+        if (
             extension in CODE_EXTENSIONS
             or extension in DOCUMENTATION_EXTENSIONS
             or extension in ADDITIONAL_TEXT_EXTENSIONS
-        )
+        ):
+            return True
+
+        from openviking.parse.parsers.code.ast.providers import supports_code_skeleton
+
+        return supports_code_skeleton(str(p))
     # Extensionless files: check against known text file names (case-insensitive).
     return p.name.upper() in _EXTENSIONLESS_TEXT_NAMES
 
@@ -63,50 +67,7 @@ def detect_and_convert_encoding(content: bytes, file_path: Union[str, Path] = ""
     """Detect text encoding and normalize content to UTF-8 when needed."""
     if not is_text_file(file_path):
         return content
-
-    try:
-        # Check for potential binary content (null bytes in first 8KB)
-        # Binary files often contain null bytes which can cause issues
-        sample_size = min(8192, len(content))
-        if b"\x00" in content[:sample_size]:
-            null_count = content[:sample_size].count(b"\x00")
-            # If more than 5% null bytes in sample, likely binary - don't process
-            if null_count / sample_size > 0.05:
-                logger.debug(
-                    f"Detected binary content in {file_path} (null bytes: {null_count}), skipping encoding detection"
-                )
-                return content
-
-        detected_encoding: Optional[str] = None
-        for encoding in TEXT_ENCODINGS:
-            try:
-                decoded = content.decode(encoding)
-                # Additional validation: check for control characters that suggest binary
-                control_chars = sum(1 for c in decoded[:1000] if ord(c) < 32 and c not in "\t\n\r")
-                if control_chars / min(1000, len(decoded)) > 0.05:  # More than 5% control chars
-                    continue
-                detected_encoding = encoding
-                break
-            except UnicodeDecodeError:
-                continue
-
-        if detected_encoding is None:
-            logger.warning(f"Encoding detection failed for {file_path}: no matching encoding found")
-            return content
-
-        if detected_encoding not in UTF8_VARIANTS:
-            decoded_content = content.decode(detected_encoding, errors="replace")
-            # Remove null bytes from decoded content as they can cause issues downstream
-            if "\x00" in decoded_content:
-                decoded_content = decoded_content.replace("\x00", "")
-                logger.debug(f"Removed null bytes from decoded content in {file_path}")
-            content = decoded_content.encode("utf-8")
-            logger.debug(f"Converted {file_path} from {detected_encoding} to UTF-8")
-
-        return content
-    except Exception as exc:
-        logger.warning(f"Encoding detection failed for {file_path}: {exc}")
-        return content
+    return normalize_text_bytes(content, file_path)
 
 
 def should_skip_file(
@@ -141,65 +102,6 @@ def should_skip_file(
     return False, ""
 
 
-def should_skip_directory(
-    dir_name: str,
-    ignore_dirs: Optional[Set[str]] = None,
-) -> bool:
-    """Return True when a directory should be skipped during traversal."""
-    effective_ignore_dirs = ignore_dirs if ignore_dirs is not None else IGNORE_DIRS
-    return dir_name in effective_ignore_dirs or dir_name.startswith(".")
-
-
-_UNSAFE_PATH_RE = re.compile(r"(^|[\\/])\.\.($|[\\/])")
-_DRIVE_RE = re.compile(r"^[A-Za-z]:")
-
-
-def _sanitize_rel_path(rel_path: str) -> str:
-    """Normalize a relative path and reject unsafe components.
-
-    Uses OS-independent checks so that Windows-style drive prefixes and
-    backslash separators are rejected even when running on Linux/macOS.
-    """
-    if not rel_path:
-        raise ValueError(f"Unsafe relative path rejected: {rel_path!r}")
-    # Reject absolute paths (Unix or Windows style)
-    if rel_path.startswith("/") or rel_path.startswith("\\"):
-        raise ValueError(f"Unsafe relative path rejected: {rel_path}")
-    # Reject Windows drive letters (C:\..., C:foo)
-    if _DRIVE_RE.match(rel_path):
-        raise ValueError(f"Unsafe relative path rejected: {rel_path}")
-    # Reject parent-directory traversal (../ or ..\)
-    if _UNSAFE_PATH_RE.search(rel_path):
-        raise ValueError(f"Unsafe relative path rejected: {rel_path}")
-    # Normalize to forward slashes
-    return rel_path.replace("\\", "/")
-
-
-async def upload_text_files(
-    file_paths: List[Tuple[Path, str]],
-    viking_uri_base: str,
-    viking_fs: Any,
-) -> Tuple[int, List[str]]:
-    """Upload text files to VikingFS and return uploaded count with warnings."""
-    uploaded_count = 0
-    warnings: List[str] = []
-
-    for file_path, rel_path in file_paths:
-        try:
-            safe_rel = _sanitize_rel_path(rel_path)
-            target_uri = f"{viking_uri_base}/{safe_rel}"
-            content = file_path.read_bytes()
-            content = detect_and_convert_encoding(content, file_path)
-            await viking_fs.write_file_bytes(target_uri, content)
-            uploaded_count += 1
-        except Exception as exc:
-            warning = f"Failed to upload {file_path}: {exc}"
-            warnings.append(warning)
-            logger.warning(warning)
-
-    return uploaded_count, warnings
-
-
 _UPLOAD_CONCURRENCY = 8
 
 
@@ -207,20 +109,38 @@ async def upload_directory(
     local_dir: Path,
     viking_uri_base: str,
     viking_fs: Any,
-    ignore_dirs: Optional[Set[str]] = None,
+    ignore_dirs: Optional[Union[Set[str], List[str], str]] = None,
     ignore_extensions: Optional[Set[str]] = None,
     max_file_size: int = 10 * 1024 * 1024,
+    include: Optional[str] = None,
+    exclude: Optional[str] = None,
 ) -> Tuple[int, List[str]]:
     """Upload an entire directory recursively and return uploaded count with warnings.
 
     Optimized: collects all files in one pass, pre-creates directories upfront,
     then uploads all files concurrently (up to _UPLOAD_CONCURRENCY at a time).
     """
-    effective_ignore_dirs = ignore_dirs if ignore_dirs is not None else IGNORE_DIRS
     effective_ignore_extensions = (
         ignore_extensions if ignore_extensions is not None else IGNORE_EXTENSIONS
     )
     gitignore_matcher = GitignoreMatcher(local_dir)
+    # Keep repository uploads aligned with DirectoryParser's public filtering
+    # contract without duplicating its path/glob semantics.
+    from openviking.parse.directory_scan import (
+        _matches_exclude,
+        _matches_include,
+        _parse_patterns,
+        _should_skip_directory,
+    )
+
+    if isinstance(ignore_dirs, str):
+        parsed_ignore_dirs: Optional[Set[str]] = set(_parse_patterns(ignore_dirs)) or None
+    elif ignore_dirs:
+        parsed_ignore_dirs = {str(item) for item in ignore_dirs}
+    else:
+        parsed_ignore_dirs = None
+    include_patterns = _parse_patterns(include)
+    exclude_patterns = _parse_patterns(exclude)
 
     warnings: List[str] = []
 
@@ -236,7 +156,11 @@ async def upload_directory(
         kept = []
         for d in dirs:
             sub_dir_path = dir_path / d
-            should_skip = should_skip_directory(d, ignore_dirs=effective_ignore_dirs)
+            should_skip, _ = _should_skip_directory(
+                sub_dir_path,
+                local_dir,
+                parsed_ignore_dirs,
+            )
             if should_skip:
                 continue
 
@@ -261,14 +185,21 @@ async def upload_directory(
                 continue
 
             rel_path_str = str(file_path.relative_to(local_dir)).replace(os.sep, "/")
+            if include_patterns and not _matches_include(file_name, include_patterns):
+                continue
+            if exclude_patterns and _matches_exclude(
+                rel_path_str,
+                file_name,
+                exclude_patterns,
+            ):
+                continue
             try:
-                safe_rel = _sanitize_rel_path(rel_path_str)
+                target_uri = safe_join_viking_uri(viking_uri_base, rel_path_str)
             except ValueError as exc:
                 warning = f"Skipping {file_path}: {exc}"
                 warnings.append(warning)
                 logger.warning(warning)
                 continue
-            target_uri = f"{viking_uri_base}/{safe_rel}"
             files_to_upload.append((file_path, target_uri))
             parent_uris.add(target_uri.rsplit("/", 1)[0])
 

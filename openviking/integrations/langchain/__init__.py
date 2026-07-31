@@ -13,12 +13,18 @@ from typing import Any
 __all__ = [
     "InMemoryOpenVikingClient",
     "OpenVikingChatMessageHistory",
+    "OpenVikingCancellationProgress",
     "OpenVikingCommitPolicy",
+    "OpenVikingContextRunnable",
     "OpenVikingContextMiddleware",
+    "OpenVikingPartialWriteError",
+    "OpenVikingRecordResult",
     "OpenVikingRetriever",
     "OpenVikingSessionContextAssembler",
+    "OpenVikingSessionRecorder",
     "OpenVikingStore",
     "create_openviking_tools",
+    "get_openviking_cancellation_progress",
     "with_openviking_context",
 ]
 
@@ -44,6 +50,34 @@ def __getattr__(name: str) -> Any:
         from openviking.integrations.langchain.context import OpenVikingSessionContextAssembler
 
         return OpenVikingSessionContextAssembler
+    if name == "OpenVikingContextRunnable":
+        from openviking.integrations.langchain.context import OpenVikingContextRunnable
+
+        return OpenVikingContextRunnable
+    if name == "OpenVikingSessionRecorder":
+        from openviking.integrations.langchain.recording import OpenVikingSessionRecorder
+
+        return OpenVikingSessionRecorder
+    if name == "OpenVikingPartialWriteError":
+        from openviking.integrations.langchain.recording import OpenVikingPartialWriteError
+
+        return OpenVikingPartialWriteError
+    if name == "OpenVikingRecordResult":
+        from openviking.integrations.langchain.recording import OpenVikingRecordResult
+
+        return OpenVikingRecordResult
+    if name == "OpenVikingCancellationProgress":
+        from openviking.integrations.langchain.recording import (
+            OpenVikingCancellationProgress,
+        )
+
+        return OpenVikingCancellationProgress
+    if name == "get_openviking_cancellation_progress":
+        from openviking.integrations.langchain.recording import (
+            get_openviking_cancellation_progress,
+        )
+
+        return get_openviking_cancellation_progress
     if name == "OpenVikingCommitPolicy":
         from openviking.integrations.langchain.client import OpenVikingCommitPolicy
 

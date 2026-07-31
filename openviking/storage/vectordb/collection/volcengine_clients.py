@@ -7,6 +7,8 @@ from volcengine.auth.SignerV4 import SignerV4
 from volcengine.base.Request import Request
 from volcengine.Credentials import Credentials
 
+import openviking
+
 # Default request timeout (seconds)
 DEFAULT_TIMEOUT = 30
 
@@ -47,6 +49,7 @@ class ClientForConsoleApi:
             "Accept": "application/json",
             "Content-Type": "application/json",
             "Host": self.host,
+            "User-Agent": f"openviking/{openviking.__version__}",
         }
         r.set_headers(mheaders)
         if params:
@@ -111,6 +114,7 @@ class ClientForDataApi:
             "Accept": "application/json",
             "Content-Type": "application/json",
             "Host": self.host,
+            "User-Agent": f"openviking/{openviking.__version__}",
         }
         r.set_headers(mheaders)
         if params:
@@ -170,6 +174,7 @@ class ClientForDataApiWithApiKey:
             "Content-Type": "application/json",
             "Host": self.host,
             "Authorization": f"Bearer {self.api_key}",
+            "User-Agent": f"openviking/{openviking.__version__}",
         }
         r.set_headers(mheaders)
         if params:

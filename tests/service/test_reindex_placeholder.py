@@ -27,7 +27,9 @@ def test_real_overview_sentinel_is_detected():
 
 def test_sentinel_detection_is_uri_agnostic():
     for uri in ("viking://a/b/", "viking://x%20y/z", "viking://"):
-        assert _is_not_ready_sentinel(f"# {uri} [Directory abstract is not ready]", _ABSTRACT_NOT_READY_SUFFIX)
+        assert _is_not_ready_sentinel(
+            f"# {uri} [Directory abstract is not ready]", _ABSTRACT_NOT_READY_SUFFIX
+        )
 
 
 def test_content_mentioning_phrase_mid_body_is_preserved():
@@ -42,7 +44,9 @@ def test_authored_content_ending_with_marker_is_preserved():
 
 
 def test_real_content_preserved():
-    assert not _is_not_ready_sentinel("# Project\n\nReal abstract body.", _ABSTRACT_NOT_READY_SUFFIX)
+    assert not _is_not_ready_sentinel(
+        "# Project\n\nReal abstract body.", _ABSTRACT_NOT_READY_SUFFIX
+    )
 
 
 def test_empty_is_not_a_sentinel():

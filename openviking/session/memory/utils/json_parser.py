@@ -37,7 +37,6 @@ logger = get_logger(__name__)
 # Exported for testing
 __all__ = [
     "extract_json_content",
-    "remove_json_trailing_content",
     "parse_json_with_stability",
     "value_fault_tolerance",
     "parse_value_with_tolerance",
@@ -136,21 +135,6 @@ def extract_json_content(s: str) -> str:
         return s
 
     return result
-
-
-def remove_json_trailing_content(s: str) -> str:
-    """
-    Layer 1: Remove extra content after JSON closing brace.
-
-    DEPRECATED: Use extract_json_content() instead which handles both leading and trailing content.
-
-    Args:
-        s: Raw LLM response string
-
-    Returns:
-        String with only the JSON part
-    """
-    return extract_json_content(s)
 
 
 def _get_origin_type(annotation) -> Type:
@@ -429,8 +413,10 @@ def parse_json_with_stability(
     if isinstance(parsed_data, list) and len(parsed_data) > 0:
         parsed_data = parsed_data[0]
         tracer.info("Extracted first item from list response")
-    elif isinstance(parsed_data, list) and len(parsed_data) == 0 and getattr(
-        model_class, "_allow_empty_list_response", False
+    elif (
+        isinstance(parsed_data, list)
+        and len(parsed_data) == 0
+        and getattr(model_class, "_allow_empty_list_response", False)
     ):
         # The operations model opts in (via _allow_empty_list_response) to treating a
         # bare `[]` as a valid "no operations" outcome: every field is default_factory=list,

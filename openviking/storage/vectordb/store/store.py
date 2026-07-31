@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Any, List, Tuple, Union
+from typing import Any, Iterator, List, Tuple, Union
 
 
 class IKVStore(ABC):
@@ -188,6 +188,15 @@ class IMutiTableStore(ABC):
             NotImplementedError: If not implemented by subclass.
         """
         pass
+
+    def iter_all(self, table_name: str) -> Iterator[Tuple[str, bytes]]:
+        """Iterate over a table, with a materializing compatibility fallback.
+
+        Store implementations with a cursor or paged range API should override
+        this method.  Keeping the default in terms of ``read_all`` preserves
+        existing third-party and test-store behavior.
+        """
+        yield from self.read_all(table_name)
 
     @abstractmethod
     def seek_to_end(self, key: str, table_name: str) -> List[Tuple[str, bytes]]:

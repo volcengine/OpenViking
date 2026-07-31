@@ -8,8 +8,8 @@ import { cn } from '#/lib/utils'
 import { normalizeDirUri, fileNameFromUri } from '../-lib/normalize'
 import { useVikingFsList, useDebouncedValue } from '../-hooks/viking-fm'
 import type { VikingFsEntry } from '../-types/viking-fm'
-import { FilePreview } from './file-preview'
 import { ItemColumn } from './item-column'
+import { LazyFilePreview } from './lazy-file-preview'
 
 const VIKING_ROOT_URI = 'viking://'
 
@@ -174,7 +174,7 @@ function DetailPane({
   switch (detail.kind) {
     case 'preview':
       return (
-        <FilePreview
+        <LazyFilePreview
           file={detail.file}
           onClose={() => {}}
           showCloseButton={false}

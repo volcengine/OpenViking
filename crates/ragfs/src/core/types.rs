@@ -58,6 +58,37 @@ pub struct TreeEntry {
     pub extra: HashMap<String, serde_json::Value>,
 }
 
+/// Flat glob match entry.
+///
+/// Represents one path matched by `glob_directory`, preserving enough metadata
+/// for Python-side visibility and URI alias handling without reconstructing a
+/// full `TreeEntry`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GlobEntry {
+    /// Plugin-root-relative absolute path, matching the `TreeEntry.path`
+    /// contract after mount rewriting.
+    pub path: String,
+
+    /// Path relative to the glob query root.
+    pub rel_path: String,
+
+    /// Final path component.
+    pub name: String,
+
+    /// Whether the matched entry is a directory.
+    pub is_dir: bool,
+}
+
+/// One page of glob results.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GlobPage {
+    /// Matched entries for this page.
+    pub entries: Vec<GlobEntry>,
+
+    /// Opaque continuation token for the next page.
+    pub next_token: Option<String>,
+}
+
 impl GrepResult {
     /// Create a new empty GrepResult
     pub fn new() -> Self {
@@ -156,8 +187,15 @@ impl FileInfo {
 /// Write operation flags
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WriteFlag {
-    /// Create new file or truncate existing
+    /// Create new file or truncate existing.
+    ///
+    /// Follows POSIX `O_CREAT` / Rust `OpenOptions::create(true)` convention:
+    /// create-or-open (non-exclusive). For exclusive create-if-absent, use
+    /// `CreateNew` (POSIX `O_CREAT | O_EXCL` / Rust `create_new(true)`).
     Create,
+
+    /// Create new file, fail if already exists
+    CreateNew,
 
     /// Append to existing file
     Append,

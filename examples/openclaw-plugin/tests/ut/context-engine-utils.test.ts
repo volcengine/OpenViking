@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   openClawSessionToOvStorageId,
   openClawSessionRefToOvStorageId,
+} from "../../routing/identity-routing.js";
+import {
   formatMessageFaithful,
-} from "../../context-engine.js";
+} from "../../services/context-message-adapter.js";
 
 describe("openClawSessionToOvStorageId", () => {
   it("passes through UUID sessionId as lowercase", () => {

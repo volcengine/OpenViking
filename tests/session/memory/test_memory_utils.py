@@ -354,7 +354,28 @@ Content"""
 
         assert parsed["memory_type"] == "preferences"
         assert parsed["topic"] == "code_style"
+        assert parsed["version"] == 1
         assert parsed["content"] == "Prefers concise responses."
+
+    def test_write_strips_user_identity_fields_from_memory_fields_comment(self):
+        memory_file = MemoryFile(
+            uri="viking://user/alice/memories/preferences/code_style.md",
+            memory_type="preferences",
+            content="Prefers concise responses.",
+            extra_fields={
+                "topic": "code_style",
+                "user_id": "alice",
+                "user_ids": ["alice", "bob"],
+            },
+        )
+
+        written = MemoryFileUtils.write(memory_file)
+        parsed = parse_memory_file_with_fields(written)
+
+        assert "user_id" not in parsed
+        assert "user_ids" not in parsed
+        assert parsed["version"] == 1
+        assert parsed["topic"] == "code_style"
 
     def test_read_preserves_markdown_links_in_content(self):
         raw_content = """2023-08-22 ChatLog\n\n[Calvin]: Worked with [Frank Ocean](../../../../entities/personal/calvin.md).\n\n<!-- MEMORY_FIELDS\n{\"memory_type\": \"events\", \"links\": [{\"to_uri\": \"viking://user/Calvin/memories/entities/personal/calvin.md\", \"link_type\": \"related_to\", \"match_text\": \"Frank\"}]}\n-->"""
@@ -380,3 +401,25 @@ Content"""
         )
 
         assert memory_file.plain_content() == "Worked with Frank Ocean."
+
+    def test_write_does_not_put_uri_in_memory_fields_metadata(self):
+        memory_file = MemoryFile(
+            uri="viking://user/default/memories/experiences/source.md",
+            memory_type="experiences",
+            content="Source content mentions Target.",
+            extra_fields={"_uri": "viking://stale/should-not-persist"},
+            links=[
+                {
+                    "from_uri": "viking://user/default/memories/experiences/source.md",
+                    "to_uri": "viking://user/default/memories/trajectories/target.md",
+                    "link_type": "derived_from",
+                    "match_text": "Target",
+                }
+            ],
+        )
+
+        written = MemoryFileUtils.write(memory_file)
+        parsed = parse_memory_file_with_fields(written)
+
+        assert "_uri" not in parsed
+        assert "[Target](../trajectories/target.md)" in written

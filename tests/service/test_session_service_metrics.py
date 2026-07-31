@@ -90,16 +90,27 @@ async def test_sessions_merges_canonical_and_legacy_session_scope():
     service = SessionService(viking_fs=Mock())
     ctx = _make_ctx()
 
-    async def _ls(uri, ctx):
+    async def _ls(uri, ctx, **kwargs):
+        assert kwargs == {"sort_by": "mtime", "sort_order": "desc"}
         if uri == "viking://user/alice/sessions":
             return [
-                {"name": "duplicate", "isDir": True},
-                {"name": "new-session", "isDir": True},
+                {"name": "duplicate", "isDir": True, "modTime": "2026-07-13T01:00:00Z"},
+                {"name": "new-session", "isDir": True, "modTime": "2026-07-13T02:00:00Z"},
             ]
         if uri == "viking://session":
             return [
-                {"name": "duplicate", "uri": "viking://session/duplicate", "isDir": True},
-                {"name": "legacy-session", "uri": "viking://session/legacy-session", "isDir": True},
+                {
+                    "name": "duplicate",
+                    "uri": "viking://session/duplicate",
+                    "isDir": True,
+                    "modTime": "2026-07-13T01:00:00Z",
+                },
+                {
+                    "name": "legacy-session",
+                    "uri": "viking://session/legacy-session",
+                    "isDir": True,
+                    "modTime": "2026-07-12T01:00:00Z",
+                },
             ]
         raise AssertionError(uri)
 
@@ -112,15 +123,18 @@ async def test_sessions_merges_canonical_and_legacy_session_scope():
             "session_id": "duplicate",
             "uri": "viking://user/alice/sessions/duplicate",
             "is_dir": True,
+            "mod_time": "2026-07-13T01:00:00Z",
         },
         {
             "session_id": "new-session",
             "uri": "viking://user/alice/sessions/new-session",
             "is_dir": True,
+            "mod_time": "2026-07-13T02:00:00Z",
         },
         {
             "session_id": "legacy-session",
             "uri": "viking://session/legacy-session",
             "is_dir": True,
+            "mod_time": "2026-07-12T01:00:00Z",
         },
     ]

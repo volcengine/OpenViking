@@ -49,6 +49,24 @@ OpenViking supports various resource types, categorized by functionality:
 |------|-------------|
 | Feishu/Lark | URL-based, supports docx, wiki, sheets, bitable. By default uses app credentials from FEISHU_APP_ID and FEISHU_APP_SECRET; user-token imports can pass `args.feishu_access_token`, and user-token watches also pass `args.feishu_refresh_token` |
 
+**Web Pages (recursive web crawler)**
+
+| Type | Resource Name | Description |
+|------|---------------|-------------|
+| Single page / recursive crawl | `https://host/path` | By default only the entry page is fetched. Set `args.depth > 0` to crawl same-host links breadth-first; `args.max_pages` only bounds how many pages are collected. Each page is extracted to Markdown with trafilatura. Supported `args`: `depth`, `max_pages`, `include_paths`, `exclude_paths`, `allow_external_links`, `skip_download_links`. Download links discovered on pages are skipped by default (`skip_download_links=true`) to avoid importing sidecar files such as `llms.txt`; set it to `false` to download same-host file links and count them toward `max_pages`. `include_paths`/`exclude_paths` use **path-prefix** matching (e.g. `/docs/` matches only paths starting with `/docs/`, never substrings like `/blog/docs-tips`). |
+
+> Routing: sitemap-looking URLs (`https://host/sitemap.xml`, `https://host/feed.xml`, `*.atom`, ...) and explicit `args.site=true` are delegated to the whole-website ingestion below; Git hosting URLs such as `https://github.com/{org}/{repo}` are delegated to the Code section above.
+
+**Whole Website (sitemap / RSS / Atom)**
+
+| Type | Resource Name | Description |
+|------|---------------|-------------|
+| Sitemap | `https://host/sitemap.xml`, `https://host/sitemap-index.xml` | Parses the sitemap and ingests every listed page as a single resource tree (one child node per page). Nested `<sitemapindex>` is followed recursively. The whole site becomes one resource under `viking://resources/<host>`. |
+| RSS / Atom feed | `https://host/rss.xml`, `https://host/atom.xml`, `https://host/feed` | Parses RSS 2.0 / Atom and ingests each entry as a tree node; the article body is fetched from its link (or taken inline when the feed carries full content). |
+| Whole-site auto-discovery | `https://host` + `args.site=true` | Forces whole-site ingestion for a bare domain or ordinary page: discovers the site's sitemap/RSS via robots.txt, HTML `<link rel="alternate">` autodiscovery, and conventional paths, then ingests it. |
+
+Crawling is bounded and non-recursive beyond the listed pages, and is governed by the `parsers.webfeed` config (`max_pages`, `max_concurrency`, `politeness_delay`, `same_host_only`, `respect_robots`, `max_depth`); robots.txt is honored. Set `watch_interval` on a sitemap/feed URL to keep the **whole site** refreshed: on each run new pages are added and removed pages drop automatically. When adding a single homepage (without `args.site`), the response may append a one-line hint suggesting whole-site ingestion — it never auto-crawls.
+
 ### Resource Processing Pipeline
 
 Resources go through the following processing stages when added:
@@ -93,8 +111,10 @@ Source Input -> Parse -> Resource Tree Build -> Persistence -> Semantic Processi
 Resource incremental updates are implemented via the **Watch Task** mechanism:
 
 #### Watch Task Creation
-- Set `watch_interval > 0` (in minutes) when calling `add_resource` to create a watch task
+- Set `watch_interval > 0` (in minutes) when calling `add_resource` with a re-readable source, such as a URL, sitemap, or RSS feed, to create a watch task
+- Uploaded content referenced by `temp_file_id` is consumed as a one-time snapshot and cannot be watched; re-add it when the local source changes
 - You may specify `to` to define the target URI; if omitted, the task binds to the `root_uri` returned by this import
+- Pointing a watch at a sitemap/RSS/Atom URL keeps the **whole site** in sync: each refresh re-reads the feed and rebuilds the tree, so newly published pages are added and removed pages drop automatically
 - `WatchManager` handles task persistence
 - Supports multi-tenant permission control (ROOT/ADMIN/USER permission levels)
 
@@ -114,19 +134,21 @@ Resource incremental updates are implemented via the **Watch Task** mechanism:
 
 ### add_resource
 
-Add a resource to the knowledge base. The SDK supports local files/directories, URLs, and other sources. Raw HTTP calls accept remote URLs through `path` or uploaded local files through `temp_file_id`.
+Add a resource to the knowledge base. The SDK supports local files/directories, URLs, and other sources. Raw HTTP calls accept remote URLs through `path` or uploaded local files through `temp_file_id`. Uploaded content is a one-time snapshot, so it cannot be combined with `watch_interval > 0`.
 
 #### 1. API Implementation Overview
 
-This endpoint is the core entry point for resource management, supporting adding resources from various sources with optional waiting for semantic processing completion.
+This endpoint is the core entry point for resource management, supporting adding resources from various sources with optional waiting for semantic processing and vectorization completion.
 
 **Processing Flow**:
 1. Identify and validate the resource source (URL or uploaded temporary file)
 2. Resolve the target URI
 3. Call the corresponding Parser to parse content
 4. Build the directory tree and write to AGFS
-5. Wait for semantic processing completion when `wait=true`; with `wait=false`, return a `task_id` for queue tracking
-6. Set up scheduled update task if `watch_interval` is specified
+5. Run post-ingest processing according to `processing_mode`: `semantic_and_vectors` generates semantic artifacts and vectors; `vectors_only` skips semantic understanding and only enqueues file vectorization
+6. Wait for semantic processing/vectorization completion when `wait=true`; with `wait=false`, return a `task_id` for queue tracking
+7. If `reason` is non-empty, append it to the fixed resource reason session and commit through the normal memory extraction pipeline so suitable user memories can reference the resource URI
+8. Set up scheduled update task if `watch_interval` is specified
 
 **Code Entry Points**:
 - `openviking/client/local.py:LocalClient.add_resource` - SDK entry (embedded)
@@ -146,7 +168,7 @@ This endpoint is the core entry point for resource management, supporting adding
 | to | string | No | - | Target Viking URI (exact location). Mutually exclusive with `parent` |
 | parent | string | No | - | Parent Viking URI (resource placed under this directory). Mutually exclusive with `to` |
 | create_parent | bool | No | False | Automatically create parent directory if it does not exist (server-side flag) |
-| reason | string | No | "" | Reason for adding the resource (for documentation and relevance improvement, experimental feature) |
+| reason | string | No | "" | Reason for adding the resource. When non-empty, OpenViking runs it through the normal session memory extraction pipeline with the resource URI and records resource references in the resulting memory |
 | instruction | string | No | "" | Processing instructions for semantic extraction (experimental feature) |
 | wait | bool | No | False | Whether to wait for semantic processing and vectorization to complete before returning |
 | timeout | float | No | None | Timeout in seconds, only effective when `wait=True` |
@@ -156,19 +178,25 @@ This endpoint is the core entry point for resource management, supporting adding
 | exclude | string | No | None | File patterns to exclude (glob) |
 | directly_upload_media | bool | No | True | Whether to directly upload media files |
 | preserve_structure | bool | No | None | Whether to preserve directory structure |
-| args | object | No | `{}` | Parser-specific import options forwarded to the source parser/accessor. Core `add_resource` fields such as `path`, `to`, `watch_interval`, `include`, and `exclude` are not allowed inside `args` |
-| watch_interval | float | No | 0 | Scheduled update interval (minutes). >0 creates task; <=0 cancels task; explicit `to` wins, otherwise binds to the imported `root_uri` |
+| args | object | No | `{}` | Parser-specific import options forwarded to the source parser/accessor. E.g. `args.site=true/false` forces/opts out of whole-site (sitemap/RSS) ingestion, `args.max_pages` etc. override the `webfeed` config; the recursive web crawler accepts `args.depth`, `args.max_pages`, `args.include_paths`, `args.exclude_paths`, `args.allow_external_links`, `args.skip_download_links`; Feishu user-token imports pass `args.feishu_access_token`. Core `add_resource` fields such as `path`, `to`, `watch_interval`, `include`, and `exclude` are not allowed inside `args` |
+| watch_interval | float | No | 0 | Scheduled update interval (minutes). >0 creates a task for a re-readable URL/sitemap/RSS source; uploaded `temp_file_id` content is a one-time snapshot and must be re-added when it changes. <=0 cancels a task; explicit `to` wins, otherwise binds to the imported `root_uri` |
+| processing_mode | string | No | `semantic_and_vectors` | Post-ingest processing mode. `semantic_and_vectors` is the normal flow: generate semantic artifacts (`.abstract.md`, `.overview.md`) and vectors. `vectors_only` skips semantic understanding/VLM summarization and only vectorizes current resource files |
 | telemetry | TelemetryRequest | No | False | Whether to return telemetry data |
 
 **Additional Notes**:
 - `to` and `parent` cannot be specified together. Use `create_parent=true` with `parent` when the parent directory should be created automatically.
+- If both `to` and `parent` are omitted, the server may use the current user's `add_targets.resource_uri` override, then `server.user_config_defaults.add_targets.resource_uri`. If neither is set, legacy target resolution is unchanged.
 - Resource targets may use public `viking://resources/...`, current-user shorthand `viking://user/resources/...`, explicit user `viking://user/{user_id}/resources/...`, or peer `viking://user/{user_id}/peers/{peer_id}/resources/...` paths. Current-user shorthand is canonicalized with the authenticated request identity.
 - `user_id` and `peer_id` path segments must be safe single-segment identifiers, for example `alice` or `web-visitor-alice`. Values with path separators, `.`, `..`, `:`, or `+` are rejected.
 - `path` and `temp_file_id` cannot be specified together
 - Raw HTTP calls for local files require first uploading via [temp_upload](#temp_upload) to obtain `temp_file_id`
 - When `to` is specified and the target already exists, triggers incremental update
 - Only Git repository sources use full background import when `wait=false`; OpenViking performs repository preflight and target planning before returning the `task_id`.
+- Memory generated from `reason` is extracted through the same pipeline as `session.commit`. It uses `reason`, the resource URI, available source name, and available directory abstract; it does not inspect or expand the full resource content. OpenViking writes to existing memory types such as `entities`, `events`, or `preferences`, not a dedicated resource memory directory.
+- When deleting a resource, OpenViking scans the self or peer memories targeted by the current context before deletion, removes the matching resource URI and content introduced by that `reason`, and refreshes the semantic index for the affected memories.
 - Other sources with `wait=false` finish source parsing, target resolution, and AGFS writes before returning. Only semantic and embedding queues continue asynchronously.
+- `processing_mode=vectors_only` does not call the VLM semantic-understanding stage and does not generate or refresh `.abstract.md` / `.overview.md`. For existing targets, it preserves existing semantic artifacts and existing semantic vectors. It still updates the resource tree, vectorizes current non-hidden files when `build_index=true`, and removes detail vectors for files deleted during refresh.
+- `processing_mode` belongs to `add_resource`. The admin `reindex` API/CLI continues to use `mode` (`vectors_only`, `semantic_and_vectors`, `prune_orphans`) for maintenance operations on already-ingested data.
 - When `watch_interval > 0`, the watch task binds to `to` if provided; otherwise it binds to the `root_uri` returned by this import. If no stable `root_uri` is available, the request fails and asks for an explicit `to`.
 - Feishu/Lark app-token imports do not pass `args.feishu_access_token`. OpenViking keeps the existing app credential flow and the SDK obtains an app/tenant token from `app_id` and `app_secret`. This mode supports both one-time imports and `watch_interval > 0`.
 - Feishu/Lark one-time user-token imports pass `args={"feishu_access_token": "u-..."}` with `watch_interval <= 0`. OpenViking uses that user token only for the current import and does not store it.
@@ -196,6 +224,29 @@ curl -X POST http://localhost:1933/api/v1/resources \
     "path": "https://example.com/guide.md",
     "reason": "User guide documentation",
     "wait": true
+  }'
+
+# Add a resource and only build vectors, without VLM semantic understanding
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "https://example.com/guide.md",
+    "to": "viking://resources/guide",
+    "processing_mode": "vectors_only",
+    "wait": true
+  }'
+
+# Recursively crawl a site: expand along same-host links; depth bounds
+# how many levels, max_pages bounds how many pages are collected
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "https://docs.openviking.ai/getting-started/01-introduction",
+    "wait": true,
+    "timeout": 60,
+    "args": { "depth": 1, "max_pages": 10 }
   }'
 
 # Add from local file (requires temp_upload first)
@@ -278,6 +329,26 @@ result = client.add_resource(
     reason="External API documentation"
 )
 
+# Recursively crawl a site (same-host BFS; depth levels, max_pages cap)
+result = client.add_resource(
+    "https://docs.openviking.ai/getting-started/01-introduction",
+    wait=True,
+    timeout=180,
+    args={"depth": 1, "max_pages": 10},
+)
+
+# Recursive crawl with path-prefix filters, also downloading file links
+result = client.add_resource(
+    "https://docs.openviking.ai/",
+    args={
+        "depth": 2,
+        "max_pages": 50,
+        "include_paths": ["/docs/"],
+        "exclude_paths": ["/changelog"],
+        "skip_download_links": False,
+    },
+)
+
 # Add to the current user's private resource root
 result = client.add_resource(
     "./documents/guide.md",
@@ -313,6 +384,29 @@ client.add_resource(
 )
 ```
 
+**TypeScript SDK**
+
+```typescript
+const task = await client.addResource("https://example.com/docs", {
+  to: "viking://resources/docs/",
+  wait: true,
+});
+console.log(task);
+```
+
+**Go SDK**
+
+```go
+result, err := client.AddResource(ctx, "./documents/guide.md", &openviking.AddResourceOptions{
+    Reason: "User guide documentation",
+    Wait:   true,
+})
+if err != nil {
+    return err
+}
+fmt.Println(result["root_uri"])
+```
+
 **CLI**
 
 ```bash
@@ -321,6 +415,18 @@ ov add-resource ./documents/guide.md --reason "User guide"
 
 # Add from URL
 ov add-resource https://example.com/guide.md --to viking://resources/guide.md
+
+# Recursively crawl a site: only the entry page is fetched unless depth>0
+ov add-resource "https://docs.openviking.ai/getting-started/01-introduction" \
+  --args="depth:1,max_pages:10"
+
+# Recursive crawl with path-prefix filters (only /docs/, exclude changelog)
+ov add-resource "https://docs.openviking.ai/" \
+  --args='{"depth":2,"max_pages":50,"include_paths":["/docs/"],"exclude_paths":["/changelog"]}'
+
+# Download links on pages are skipped by default; opt in to fetch PDF/TXT/MD etc.
+ov add-resource "https://example.com/docs" \
+  --args="depth:1,max_pages:20,skip_download_links:false"
 
 # Wait for processing to complete
 ov add-resource ./documents/guide.md --wait
@@ -446,261 +552,7 @@ For Git repository sources with `wait=false`, the background task has `task_type
 
 ---
 
-### Watch Management
-
-List, inspect, update, and trigger watch tasks created via [`add_resource`](#add_resource) with `watch_interval > 0`. The control plane is mirrored across REST (`/api/v1/watches`), the `ov task watch` CLI subcommand group, and a minimum-closure MCP surface (`list_watches` / `cancel_watch`) for agents.
-
-#### 1. API Implementation Overview
-
-This control plane wraps the `WatchManager` primitives without changing any server-side behavior. Every endpoint and CLI command resolves the target task by either its `task_id` (path) or its `to_uri` (query). The two keys are interchangeable; if both are supplied they must refer to the same task, otherwise the request is rejected with 400.
-
-**Operations**:
-- **List** (`GET /api/v1/watches`) — returns `{tasks, total}`; pass `?active_only=true` to filter; pass `?to_uri=...` to collapse to a single-task lookup
-- **Show** (`GET /api/v1/watches/{task_id}`) — inspect one task; optional `?to_uri=` performs a cross-key sanity check
-- **Update** (`PATCH /api/v1/watches/{task_id}` or `PATCH /api/v1/watches?to_uri=...`) — partial update of `watch_interval`, `is_active`, `reason`, `instruction`. `is_active` is orthogonal to `watch_interval`: flip `is_active` to pause/resume without losing the configured cadence.
-- **Delete** (`DELETE /api/v1/watches/{task_id}` or `DELETE /api/v1/watches?to_uri=...`)
-- **Trigger** (`POST /api/v1/watches/{task_id}/trigger` or `POST /api/v1/watches/trigger?to_uri=...`) — fire-and-forget refresh; returns immediately while the underlying re-ingest runs in the background
-
-**Code Entry Points**:
-- `openviking/server/routers/watches.py` — REST router for `/api/v1/watches`
-- `crates/ov_cli/src/commands/watch.rs` — `ov task watch` CLI subcommand group
-- `openviking/server/mcp_endpoint.py` — MCP `list_watches` / `cancel_watch` tools and the `watch_interval` / `to` parameters on `add_resource`
-- `openviking/resource/watch_manager.py:WatchManager` — task persistence and scheduling primitives
-
-#### 2. Interface and Parameter Description
-
-For every single-task endpoint the path `{task_id}` can be replaced with a `?to_uri=` query argument. The CLI `<key>` argument is auto-classified: any value starting with `viking://` routes to the by-URI path, anything else is treated as a task ID (other URI schemes such as `http://` are rejected locally to avoid silent 404s).
-
-**`PATCH /watches` body** (all fields optional; at least one is required)
-
-| Field | Type | Description |
-|-------|------|-------------|
-| watch_interval | float | New cadence in minutes. Must be `> 0`; use `is_active=false` to pause without losing the cadence. |
-| is_active | bool | Toggle activation without losing the cadence (pause / resume). |
-| reason | string | Update the recorded reason for the watch. |
-| instruction | string | Update the semantic processing instruction. |
-
-Unrecognized fields are rejected with 422 (`extra="forbid"`). Fields left unset preserve their current values.
-
-#### 3. Usage Examples
-
-**HTTP API**
-
-```bash
-# List active watch tasks (drop ?active_only to include paused ones)
-curl -s "http://localhost:1933/api/v1/watches?active_only=true" \
-  -H "X-API-Key: your-key"
-
-# Pause a watch without losing its cadence
-curl -X PATCH "http://localhost:1933/api/v1/watches/<task_id>" \
-  -H "X-API-Key: your-key" -H "Content-Type: application/json" \
-  -d '{"is_active": false}'
-
-# Trigger an immediate refresh (fire-and-forget; returns before the re-ingest finishes)
-curl -X POST "http://localhost:1933/api/v1/watches/<task_id>/trigger" \
-  -H "X-API-Key: your-key"
-
-# Resolve by URI instead of task ID
-curl -X DELETE "http://localhost:1933/api/v1/watches?to_uri=viking://resources/guide.md" \
-  -H "X-API-Key: your-key"
-```
-
-**CLI** (subcommands of `ov task watch`)
-
-```bash
-# List active watches (drop --active-only to include paused ones)
-ov task watch ls --active-only
-
-# Inspect a single watch (key may be either a viking:// URI or a task_id)
-ov task watch show viking://resources/guide.md
-
-# Pause / resume without losing the cadence
-ov task watch pause viking://resources/guide.md
-ov task watch resume viking://resources/guide.md
-
-# Update the cadence (or any combination of --active / --reason / --instruction)
-ov task watch update viking://resources/guide.md --interval 30
-
-# Trigger an immediate fire-and-forget refresh
-ov task watch trigger viking://resources/guide.md
-
-# Remove a watch task entirely
-ov task watch rm viking://resources/guide.md
-```
-
-**MCP** (agent control plane — minimum closure only)
-
-```text
-list_watches()                                            # one line per task; URIs only, no task_ids surfaced
-cancel_watch(to_uri="viking://resources/guide.md")        # idempotent removal by URI
-```
-
-Pause / resume / trigger / update are intentionally not exposed via MCP — those power-user operations live on the CLI/REST surface to keep the agent system prompt compact. Creating a watch or changing its cadence from the agent side still goes through [`add_resource`](#add_resource) with `watch_interval`; pass `to` explicitly or let the system bind to the `root_uri` returned by this import.
-
----
-
-### add_skill
-
-Add a skill to the knowledge base.
-
-#### 1. API Implementation Overview
-
-Skills are special resources used to define operations or tools that agents can execute.
-
-**Processing Flow**:
-1. Receive skill data or uploaded temporary file
-2. Parse skill definition
-3. Store to skill directory
-4. Wait for skill processing completion if `wait=true`
-
-**Code Entry Points**:
-- `openviking/client/local.py:LocalClient.add_skill` - SDK entry (embedded)
-- `openviking_cli/client/http.py:AsyncHTTPClient.add_skill` - SDK entry (HTTP)
-- `openviking/server/routers/resources.py:add_skill` - HTTP router
-- `openviking/service/resource_service.py` - Core service implementation
-- `crates/ov_cli/src/handlers.rs:handle_add_skill` - CLI handler
-
-#### 2. Interface and Parameter Description
-
-**Parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| data | Any | No | - | Inline skill content or structured data. Mutually exclusive with `temp_file_id` |
-| temp_file_id | string | No | - | Temporary upload file ID (obtained via [temp_upload](#temp_upload)). Mutually exclusive with `data` |
-| wait | bool | No | False | Whether to wait for skill processing to complete |
-| timeout | float | No | None | Timeout in seconds, only effective when `wait=True` |
-| telemetry | TelemetryRequest | No | False | Whether to return telemetry data |
-
-Skills are always installed under the current user's skills root. The public short form
-`viking://user/skills` is accepted for filesystem/search operations and resolves to
-`viking://user/{user_id}/skills`; `add_skill` does not accept `to`, `parent`,
-`root_uri`, or peer-scoped skill targets.
-
-#### 3. Usage Examples
-
-**HTTP API**
-
-```
-POST /api/v1/skills
-Content-Type: application/json
-```
-
-```bash
-# Using inline data
-curl -X POST http://localhost:1933/api/v1/skills \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "data": {
-      "name": "my-skill",
-      "description": "My custom skill",
-      "steps": []
-    }
-  }'
-
-# Using local file (requires temp_upload first)
-TEMP_FILE_ID=$(
-  curl -s -X POST http://localhost:1933/api/v1/resources/temp_upload \
-    -H "X-API-Key: your-key" \
-    -F "file=@./skills/my-skill.json" \
-  | jq -r '.result.temp_file_id'
-)
-
-curl -X POST http://localhost:1933/api/v1/skills \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d "{
-    \"temp_file_id\": \"$TEMP_FILE_ID\"
-  }"
-```
-
-**Python SDK**
-
-```python
-import openviking as ov
-
-client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-client.initialize()
-
-# Add skill from local file
-result = client.add_skill("./skills/my-skill.json")
-
-# Wait for processing to complete
-client.wait_processed()
-```
-
-**CLI**
-
-```bash
-# Add skill
-ov add-skill ./skills/my-skill.json
-
-# Wait for processing to complete
-ov add-skill ./skills/my-skill.json --wait
-```
-
-#### 4. Response Example
-
-**HTTP API Response (JSON)**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "status": "success",
-    "root_uri": "viking://user/alice/skills/my-skill",
-    "uri": "viking://user/alice/skills/my-skill",
-    "name": "my-skill",
-    "auxiliary_files": 2,
-    "queue_status": {
-      "pending": 0,
-      "processing": 0,
-      "completed": 1
-    }
-  },
-  "telemetry": {
-    "operation_id": "550e8400-e29b-41d4-a716-446655440000"
-  }
-}
-```
-
-**CLI Response (Default Table Format)**
-
-```
-Note: Skill is being processed in the background.
-Use 'ov wait' to wait for completion, or 'ov observer queue' to check status.
-status          success
-root_uri        viking://user/alice/skills/my-skill
-uri             viking://user/alice/skills/my-skill
-name            my-skill
-auxiliary_files 2
-```
-
-**CLI Response (JSON Format, using -o json)**
-
-```json
-{
-  "status": "success",
-  "root_uri": "viking://user/alice/skills/my-skill",
-  "uri": "viking://user/alice/skills/my-skill",
-  "name": "my-skill",
-  "auxiliary_files": 2
-}
-```
-
-**Field Description**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `status` | string | Processing status: "success" or "error" |
-| `root_uri` | string | Canonical final URI of the skill in OpenViking (same as `uri`) |
-| `uri` | string | Canonical final URI of the skill in OpenViking (same as `root_uri`) |
-| `name` | string | Skill name |
-| `auxiliary_files` | number | Number of auxiliary files attached to the skill |
-| `queue_status` | object | (Optional, only when `wait=true`) Queue processing status with `pending`, `processing`, `completed` counts |
-
----
+<a id="watch-management"></a><a id="add_skill"></a>
 
 ### temp_upload
 
@@ -765,6 +617,12 @@ curl -X POST http://localhost:1933/api/v1/resources/temp_upload \
 
 The `add_resource`, `add_skill` and other endpoints in the Python SDK automatically handle local file uploads, no need to call this endpoint manually. To opt into distributed shared temporary uploads in HTTP client mode, set `upload.mode` to `"shared"` in `ovcli.conf`.
 
+**Go SDK**
+
+`client.AddResource`, `client.AddSkill`, `client.ImportOVPack`, and
+`client.RestoreOVPack` automatically call `temp_upload` for local files. Set
+`openviking.Config{UploadMode: "shared"}` to request shared temporary uploads.
+
 **CLI**
 
 CLI commands also automatically handle local file uploads, no need to call this endpoint manually.
@@ -802,3 +660,4 @@ Possible shared response:
 - [Skills](04-skills.md) - Skill management APIs
 - [Retrieval](06-retrieval.md) - Search and context acquisition
 - [ovpack Guide](../guides/09-ovpack.md) - Detailed ovpack import/export documentation
+- [OpenViking Assets](../guides/18-openviking-assets.md) - Declarative resource-set protocol and usage guide

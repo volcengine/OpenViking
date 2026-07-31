@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, afterEach } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { memoryOpenVikingConfigSchema } from "../../config.js";
 
@@ -19,12 +19,12 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.recallPreferAbstract).toBe(false);
     expect(cfg.recallMaxInjectedChars).toBe(4000);
     expect(cfg.recallTokenBudget).toBe(4000);
-    expect(cfg.commitTokenThreshold).toBe(20000);
+    expect(cfg.commitTokenThresholdRatio).toBe(0.5);
     expect(cfg.captureMode).toBe("semantic");
     expect(cfg.captureMaxLength).toBe(24000);
     expect(cfg.autoRecallTimeoutMs).toBe(5000);
     expect(cfg.recallMaxContentChars).toBe(5000);
-    expect(cfg.peer_role).toBe("none");
+    expect(cfg.peer_role).toBe("assistant");
     expect(cfg.peer_prefix).toBe("");
     expect(cfg.emitStandardDiagnostics).toBe(false);
     expect(cfg.traceRecall).toBe(false);
@@ -40,12 +40,18 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.traceRecallIncludeContentByDefault).toBe(false);
     expect(cfg.traceRecallIncludeRawUserPreview).toBe(false);
     expect(cfg.recallTargetTypes).toEqual(["user", "agent"]);
+    expect(cfg.headers).toEqual({});
     expect(cfg.enableAddResourceTool).toBe(false);
     expect(cfg.enabledTools).toContain("ov_search");
     expect(cfg.enabledTools).toContain("ov_read");
     expect(cfg.enabledTools).not.toContain("add_resource");
     expect(cfg.disabledTools).toContain("add_resource");
     expect(cfg.agentExperience.enabled).toBe(false);
+  });
+
+  it("tolerates the deprecated commitTokenThreshold key and ignores it", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ commitTokenThreshold: 20000 });
+    expect(cfg.commitTokenThresholdRatio).toBe(0.5);
   });
 
   it("enables add_resource only when explicitly allowed", () => {
@@ -175,6 +181,30 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     ).toThrow("unknown keys");
   });
 
+  it("parses string-valued configured headers", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      headers: {
+        openviking: "i18n-instance",
+        token: "root-token",
+      },
+    });
+
+    expect(cfg.headers).toEqual({
+      openviking: "i18n-instance",
+      token: "root-token",
+    });
+  });
+
+  it("throws on non-string configured header values", () => {
+    expect(() =>
+      memoryOpenVikingConfigSchema.parse({
+        headers: {
+          openviking: 123,
+        },
+      }),
+    ).toThrow("openviking config headers.openviking must be a string");
+  });
+
   it("throws on unknown agentExperience keys", () => {
     expect(() =>
       memoryOpenVikingConfigSchema.parse({
@@ -293,7 +323,7 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
 
   it("resolves peer_prefix from configured value", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({ peer_prefix: "  my-agent  " });
-    expect(cfg.peer_role).toBe("none");
+    expect(cfg.peer_role).toBe("assistant");
     expect(cfg.peer_prefix).toBe("my-agent");
   });
 
@@ -402,3 +432,110 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.recallTargetTypes).toEqual(["resource"]);
   });
 });
+
+describe("memoryOpenVikingConfigSchema.parse() — apiKey SecretRef (#3522)", () => {
+  const originalEnv = { ...process.env };
+  let tmpDir: string | undefined;
+
+  afterEach(async () => {
+    process.env = { ...originalEnv };
+    vi.restoreAllMocks();
+    if (tmpDir) {
+      await import("node:fs/promises").then((fs) =>
+        fs.rm(tmpDir, { recursive: true, force: true }).catch(() => void 0),
+      );
+    }
+  });
+
+  it("plain string + ${ENV_VAR} interpolation still works (backward compat)", () => {
+    process.env.OV_KEY = "plain-old-key";
+    const cfg = memoryOpenVikingConfigSchema.parse({ apiKey: "${OV_KEY}" });
+    expect(cfg.apiKey).toBe("plain-old-key");
+  });
+
+  it("SecretRef env source reads the named env var", () => {
+    process.env.MY_OV_KEY = "from-env-secret";
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      apiKey: { source: "env", id: "MY_OV_KEY" },
+    });
+    expect(cfg.apiKey).toBe("from-env-secret");
+  });
+
+  it("SecretRef env source errors when the variable is missing instead of silently empty", () => {
+    expect(() =>
+      memoryOpenVikingConfigSchema.parse({
+        apiKey: { source: "env", id: "UNDEFINED_VAR_XYZ" },
+      }),
+    ).toThrow(/UNDEFINED_VAR_XYZ.*not set or empty/);
+  });
+
+  it("SecretRef file source reads the file, expands ~, and trims whitespace", async () => {
+    const fs = await import("node:fs/promises");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "ov-secret-"));
+    const keyPath = path.join(tmpDir, "ov.key");
+    await fs.writeFile(keyPath, "  the-file-secret\n\n");
+
+    const cfg = memoryOpenVikingConfigSchema.parse({ apiKey: { source: "file", id: keyPath } });
+    expect(cfg.apiKey).toBe("the-file-secret");
+  });
+
+  it("SecretRef file source surfaces a readable error when the file is missing", () => {
+    expect(() =>
+      memoryOpenVikingConfigSchema.parse({
+        apiKey: { source: "file", id: "/no/such/path/openviking-3522.key" },
+      }),
+    ).toThrow(/file source.*no\/such\/path/);
+  });
+
+  it("SecretRef exec source runs <provider> <id> and trims stdout", () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const cp = require("node:child_process") as typeof import("node:child_process");
+    const spy = vi
+      .spyOn(cp, "execFileSync")
+      .mockImplementation(((cmd: string, args: readonly string[]): unknown => {
+        expect(cmd).toBe("my-vault");
+        expect(args).toEqual(["secret/openviking/apiKey"]);
+        return "  provider-returned-key  \n";
+      }) as typeof cp.execFileSync);
+
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      apiKey: { source: "exec", provider: "my-vault", id: "secret/openviking/apiKey" },
+    });
+    expect(cfg.apiKey).toBe("provider-returned-key");
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("SecretRef exec source errors without a provider field", () => {
+    expect(() =>
+      memoryOpenVikingConfigSchema.parse({
+        apiKey: { source: "exec", id: "some-id" } as unknown as { source: "exec"; provider: string; id: string },
+      }),
+    ).toThrow(/exec source requires a "provider" field/);
+  });
+
+  it("SecretRef validates required fields (unknown source, missing id)", () => {
+    expect(() =>
+      memoryOpenVikingConfigSchema.parse({
+        apiKey: { source: "magic", id: "x" } as unknown as import("../../config.js").OpenVikingSecretRef,
+      }),
+    ).toThrow(/unknown source.*magic/);
+    expect(() =>
+      memoryOpenVikingConfigSchema.parse({
+        apiKey: { source: "env" } as unknown as import("../../config.js").OpenVikingSecretRef,
+      }),
+    ).toThrow(/SecretRef requires a non-empty string "id"/);
+  });
+
+  it("falls back to OPENVIKING_API_KEY env var only when apiKey key is absent", () => {
+    process.env.OPENVIKING_API_KEY = "fallback-key";
+    // Explicitly present but empty string → still used as-is, NOT replaced by env fallback.
+    const cfg1 = memoryOpenVikingConfigSchema.parse({ apiKey: "" });
+    expect(cfg1.apiKey).toBe("");
+    // Completely missing → env fallback kicks in.
+    const cfg2 = memoryOpenVikingConfigSchema.parse({});
+    expect(cfg2.apiKey).toBe("fallback-key");
+  });
+});
+

@@ -1,12 +1,14 @@
 use std::ffi::OsString;
 
 use colored::Colorize;
+use serde_json::{Map, Value};
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
     error::Error,
-    error_classifier::looks_like_auth_error,
     i18n::{Language, copy},
+    output::OutputFormat,
+    terminal_ui::{fit_to_display_width, truncate_to_display_width},
     theme,
 };
 
@@ -79,6 +81,42 @@ impl ErrorReport {
 
 pub(crate) fn print_report(report: &ErrorReport, verbose: bool) {
     eprint!("{}", render_report(report, verbose));
+}
+
+pub(crate) fn print_runtime_error(
+    command: &str,
+    error: &Error,
+    format: OutputFormat,
+    compact: bool,
+    verbose: bool,
+) {
+    if matches!(format, OutputFormat::Json) {
+        eprintln!("{}", render_json_error(error, compact));
+    } else {
+        print_report(&report_for_runtime_error(command, error), verbose);
+    }
+}
+
+fn render_json_error(error: &Error, compact: bool) -> String {
+    let (message, details): (String, Option<&Value>) = match error {
+        Error::Api {
+            message, details, ..
+        } => (message.clone(), details.as_ref()),
+        _ => (error.to_string(), None),
+    };
+
+    let mut body = Map::new();
+    body.insert("code".to_string(), Value::String(error.code().to_string()));
+    body.insert("message".to_string(), Value::String(message));
+    if let Some(details) = details {
+        body.insert("details".to_string(), details.clone());
+    }
+    let envelope = serde_json::json!({"ok": false, "error": body});
+    if compact {
+        envelope.to_string()
+    } else {
+        serde_json::to_string_pretty(&envelope).unwrap_or_else(|_| envelope.to_string())
+    }
 }
 
 pub(crate) fn report_for_clap_error(args: &[OsString], clap_output: &str) -> ErrorReport {
@@ -215,6 +253,20 @@ pub(crate) fn report_for_runtime_error(command: impl Into<String>, error: &Error
                 ErrorAction::new("ov language en", copy(language, "Use English", "使用英文")),
                 ErrorAction::new("ov language zh-CN", copy(language, "Use Simplified Chinese", "使用简体中文")),
             ]),
+        Error::Timeout(message) => ErrorReport::new(
+            copy(language, "Request Timeout", "请求超时"),
+            copy(
+                language,
+                "OpenViking did not respond before the configured timeout expired.",
+                "OpenViking 未在配置的超时时间内响应。",
+            ),
+        )
+        .with_command(command)
+        .with_detail(message)
+        .with_actions(vec![
+            ErrorAction::new("ov config", copy(language, "Increase the request timeout", "提高请求超时时间")),
+            ErrorAction::new("ov config show", copy(language, "Show the active config", "查看当前配置")),
+        ]),
         Error::Network(message) => ErrorReport::new(
             copy(language, "Connection Error", "连接错误"),
             copy(
@@ -230,26 +282,58 @@ pub(crate) fn report_for_runtime_error(command: impl Into<String>, error: &Error
             ErrorAction::new("ov health", copy(language, "Run a quick server health check", "快速检查服务器健康状态")),
             ErrorAction::new("ov config switch", copy(language, "Switch to another config", "切换到其他配置")),
         ]),
-        Error::Api { message, .. } if looks_like_auth_error(message) => ErrorReport::new(
+        Error::Api {
+            message, details, ..
+        } if error.code() == "REFRESH_FAILED" => {
+            let retry_command = command.clone();
+            let mut report = ErrorReport::new(
+                copy(language, "Compile Refresh Failed", "Compile 刷新失败"),
+                api_error_message(error.code(), message),
+            )
+            .with_command(command)
+            .with_actions(vec![
+                ErrorAction::new(
+                    retry_command,
+                    copy(
+                        language,
+                        "Retry safely; matching files stay unchanged and refresh runs again",
+                        "安全重试；相同内容不会重复写入，并会重新执行刷新",
+                    ),
+                ),
+                ErrorAction::new(
+                    "ov status",
+                    copy(
+                        language,
+                        "Check OpenViking service status",
+                        "检查 OpenViking 服务状态",
+                    ),
+                ),
+            ]);
+            if let Some(details) = details {
+                report = report.with_detail(details.to_string());
+            }
+            report
+        }
+        Error::Api { message, .. } if error.code() == "UNAUTHENTICATED" => ErrorReport::new(
             copy(language, "Authentication Error", "认证错误"),
-            copy(language, "OpenViking rejected the API key for the active config.", "OpenViking 拒绝了当前配置的 API Key。"),
+            api_error_message(error.code(), message),
         )
         .with_command(command)
-        .with_detail(message)
         .with_actions(vec![
             ErrorAction::new("ov config", copy(language, "Edit this config", "编辑这个配置")),
             ErrorAction::new("ov config switch", copy(language, "Use another config", "使用其他配置")),
         ]),
-        Error::Api { message, .. } => ErrorReport::new(
-            copy(language, "OpenViking API Error", "OpenViking API 错误"),
-            api_error_message(language, message),
-        )
-        .with_command(command)
-        .with_detail(message)
-        .with_actions(vec![
-            ErrorAction::new("ov config validate", copy(language, "Check the active config", "检查当前配置")),
-            ErrorAction::new("ov status", copy(language, "Check OpenViking status", "查看 OpenViking 状态")),
-        ]),
+        Error::Api { message, details, .. } => {
+            let mut report = ErrorReport::new(
+                copy(language, "OpenViking API Error", "OpenViking API 错误"),
+                api_error_message(error.code(), message),
+            )
+            .with_command(command);
+            if let Some(details) = details {
+                report = report.with_detail(details.to_string());
+            }
+            report
+        }
         Error::Client(message) => ErrorReport::new(
             copy(language, "Command Error", "命令错误"),
             sentence_case_error(message),
@@ -427,7 +511,7 @@ fn task_help_command(program: &str, tokens: &[&str]) -> String {
             }
             _ => format!("{program} task watch --help"),
         },
-        Some("status" | "list") => format!("{program} task {} --help", tokens[2]),
+        Some("status" | "cancel" | "list") => format!("{program} task {} --help", tokens[2]),
         _ => format!("{program} task --help"),
     }
 }
@@ -489,120 +573,65 @@ fn is_contextual_top_level_command(command: &str) -> bool {
     )
 }
 
-fn api_error_message(language: Language, raw: &str) -> String {
-    let Some(summary) = summarize_api_error(raw) else {
-        return copy(
-            language,
-            "OpenViking returned an error for this request.",
-            "OpenViking 返回了请求错误。",
-        )
-        .to_string();
-    };
-
-    match language {
-        Language::En => format!("OpenViking returned an error: {summary}"),
-        Language::ZhCn => format!("OpenViking 返回了请求错误：{summary}"),
+fn api_error_message(code: &str, message: &str) -> String {
+    if message.is_empty() {
+        format!("[{code}] OpenViking returned an error")
+    } else {
+        format!("[{code}] {message}")
     }
-}
-
-fn summarize_api_error(raw: &str) -> Option<String> {
-    let raw = raw.trim();
-    if raw.is_empty() {
-        return None;
-    }
-
-    if let Some(summary) = summarize_json_api_error(raw) {
-        return Some(summary);
-    }
-
-    let cleaned = strip_request_id(raw);
-    let cleaned = cleaned.trim();
-    if cleaned.is_empty() {
-        return None;
-    }
-
-    if let Some((code, message)) = bracketed_error(cleaned) {
-        return Some(format_summary(Some(code), message));
-    }
-
-    Some(ensure_sentence(
-        cleaned.lines().next().unwrap_or(cleaned).trim(),
-    ))
-}
-
-fn summarize_json_api_error(raw: &str) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(raw).ok()?;
-    let error = value.get("error").unwrap_or(&value);
-    let code = error
-        .get("code")
-        .and_then(serde_json::Value::as_str)
-        .filter(|value| !value.trim().is_empty());
-    let message = error
-        .get("message")
-        .and_then(serde_json::Value::as_str)
-        .or_else(|| error.get("detail").and_then(serde_json::Value::as_str))
-        .filter(|value| !value.trim().is_empty())?;
-    Some(format_summary(code, message))
-}
-
-fn bracketed_error(value: &str) -> Option<(&str, &str)> {
-    let rest = value.strip_prefix('[')?;
-    let end = rest.find(']')?;
-    let code = rest[..end].trim();
-    let message = rest[end + 1..].trim();
-    if code.is_empty() || message.is_empty() {
-        return None;
-    }
-    Some((code, message))
-}
-
-fn format_summary(code: Option<&str>, message: &str) -> String {
-    let message = ensure_sentence(strip_request_id(message).trim());
-    match code {
-        Some(code) => format!("{code}: {message}"),
-        None => message,
-    }
-}
-
-fn strip_request_id(value: &str) -> &str {
-    for marker in ["Request ID:", "Request Id:", "request ID:", "request id:"] {
-        if let Some(index) = value.find(marker) {
-            return value[..index].trim_end();
-        }
-    }
-    value
-}
-
-fn ensure_sentence(value: &str) -> String {
-    let value = value.trim().trim_end_matches('.').trim();
-    if value.is_empty() {
-        return "OpenViking returned an error.".to_string();
-    }
-    format!("{value}.")
 }
 
 pub(crate) fn render_report(report: &ErrorReport, verbose: bool) -> String {
+    render_report_with_width(report, verbose, error_output_width())
+}
+
+fn render_report_with_width(report: &ErrorReport, verbose: bool, width: usize) -> String {
     let mut output = String::new();
     let language = Language::current();
     let try_command = try_command_for_report(report);
 
     if let Some(command) = report.command.as_deref() {
-        output.push_str(&format!("{}\n\n", theme::strong(command)));
+        if width >= CARD_WIDTH {
+            output.push_str(&format!("{}\n\n", theme::strong(command)));
+        } else {
+            output.push_str(&format!(
+                "{}\n\n",
+                theme::strong(truncate_to_display_width(command, width))
+            ));
+        }
     }
     if let Some(usage) = report.usage.as_deref() {
-        output.push_str(&format!(
-            "{} {}\n",
-            theme::warning(copy(language, "Usage:", "用法：")).bold(),
-            theme::strong(usage)
-        ));
-        output.push_str(&format!(
-            "{} {}\n\n",
-            theme::muted(copy(language, "Try:", "可尝试：")),
-            theme::command(&try_command)
-        ));
+        if width >= CARD_WIDTH {
+            output.push_str(&format!(
+                "{} {}\n",
+                theme::warning(copy(language, "Usage:", "用法：")).bold(),
+                theme::strong(usage)
+            ));
+            output.push_str(&format!(
+                "{} {}\n\n",
+                theme::muted(copy(language, "Try:", "可尝试：")),
+                theme::command(&try_command)
+            ));
+        } else {
+            output.push_str(&format!(
+                "{}\n",
+                theme::warning(truncate_to_display_width(
+                    &format!("{} {usage}", copy(language, "Usage:", "用法：")),
+                    width
+                ))
+                .bold()
+            ));
+            output.push_str(&format!(
+                "{}\n\n",
+                theme::muted(truncate_to_display_width(
+                    &format!("{} {try_command}", copy(language, "Try:", "可尝试：")),
+                    width
+                ))
+            ));
+        }
     }
 
-    output.push_str(&render_card(report, verbose));
+    output.push_str(&render_card(report, verbose, width));
 
     if !report.actions.is_empty() {
         output.push_str("\n\n");
@@ -610,19 +639,10 @@ pub(crate) fn render_report(report: &ErrorReport, verbose: bool) -> String {
             "{}\n",
             theme::strong(copy(language, "Next:", "下一步："))
         ));
-        let command_width = report
-            .actions
-            .iter()
-            .map(|action| action.command.width())
-            .max()
-            .unwrap_or_default();
+        let command_width = action_command_width(&report.actions, width);
         for action in &report.actions {
-            output.push_str(&format!(
-                "  {}{}  {}\n",
-                theme::command(action.command.clone()).bold(),
-                " ".repeat(command_width.saturating_sub(action.command.width())),
-                theme::muted(&action.description)
-            ));
+            output.push_str(&render_action_line(action, command_width, width));
+            output.push('\n');
         }
     } else {
         output.push('\n');
@@ -645,11 +665,12 @@ impl OptionalUsage for ErrorReport {
     }
 }
 
-fn render_card(report: &ErrorReport, verbose: bool) -> String {
+fn render_card(report: &ErrorReport, verbose: bool, width: usize) -> String {
     let language = Language::current();
-    let inner_width = CARD_WIDTH.saturating_sub(4);
+    let inner_width = width.saturating_sub(4).max(1);
     let title = format!("─ {} ", report.title);
-    let fill = CARD_WIDTH.saturating_sub(2 + title.width());
+    let title = truncate_to_display_width(&title, width.saturating_sub(2));
+    let fill = width.saturating_sub(2 + title.width());
     let mut lines = Vec::new();
 
     lines.extend(wrap_text(&report.message, inner_width));
@@ -657,11 +678,9 @@ fn render_card(report: &ErrorReport, verbose: bool) -> String {
         lines.push(String::new());
         lines.extend(wrap_text(&did_you_mean(language, suggestion), inner_width));
     }
-    if verbose {
-        if let Some(detail) = report.detail.as_deref() {
-            lines.push(String::new());
-            lines.extend(wrap_text(&detail_line(language, detail), inner_width));
-        }
+    if verbose && let Some(detail) = report.detail.as_deref() {
+        lines.push(String::new());
+        lines.extend(wrap_text(&detail_line(language, detail), inner_width));
     }
 
     let mut rendered = String::new();
@@ -679,10 +698,49 @@ fn render_card(report: &ErrorReport, verbose: bool) -> String {
     rendered.push_str(&format!(
         "{}{}{}",
         theme::error("╰"),
-        theme::error("─".repeat(CARD_WIDTH.saturating_sub(2))),
+        theme::error("─".repeat(width.saturating_sub(2))),
         theme::error("╯")
     ));
     rendered
+}
+
+#[cfg(not(test))]
+fn error_output_width() -> usize {
+    crossterm::terminal::size()
+        .map(|(columns, _)| crate::terminal_ui::terminal_width(columns as usize, CARD_WIDTH))
+        .unwrap_or(CARD_WIDTH)
+}
+
+#[cfg(test)]
+fn error_output_width() -> usize {
+    CARD_WIDTH
+}
+
+fn action_command_width(actions: &[ErrorAction], width: usize) -> usize {
+    let available = width.saturating_sub(4);
+    let preferred = actions
+        .iter()
+        .map(|action| action.command.width())
+        .max()
+        .unwrap_or_default();
+
+    preferred.min(available / 2).max(1)
+}
+
+fn render_action_line(action: &ErrorAction, command_width: usize, width: usize) -> String {
+    if width <= 4 {
+        return truncate_to_display_width(&action.command, width);
+    }
+
+    let description_width = width.saturating_sub(command_width + 4);
+    let command = fit_to_display_width(&action.command, command_width);
+    let description = truncate_to_display_width(&action.description, description_width);
+
+    format!(
+        "  {}  {}",
+        theme::command(command).bold(),
+        theme::muted(description)
+    )
 }
 
 fn did_you_mean(language: Language, suggestion: &str) -> String {
@@ -720,6 +778,11 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
     let mut current = String::new();
 
     for word in text.split_whitespace() {
+        if current.is_empty() && word.width() > width {
+            lines.push(word.to_string());
+            continue;
+        }
+
         let separator = if current.is_empty() { 0 } else { 1 };
         if !current.is_empty() && current.width() + separator + word.width() > width {
             lines.push(current);
@@ -898,9 +961,7 @@ fn help_command_from_usage(usage: &str) -> Option<String> {
         }
         parts.push(token);
     }
-    let Some(program) = parts.first() else {
-        return None;
-    };
+    let program = parts.first()?;
     if !program.starts_with("ov") {
         return None;
     }
@@ -914,7 +975,8 @@ fn help_command_from_usage(usage: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CARD_WIDTH, ErrorReport, render_report, report_for_clap_error, report_for_runtime_error,
+        CARD_WIDTH, ErrorAction, ErrorReport, render_json_error, render_report,
+        render_report_with_width, report_for_clap_error, report_for_runtime_error,
     };
     use crate::error::Error;
     use std::ffi::OsString;
@@ -1036,56 +1098,54 @@ Usage: ov config [OPTIONS] [COMMAND]
     }
 
     #[test]
-    fn runtime_api_error_hides_raw_detail_by_default() {
-        let error = Error::api(
-            "[AuthenticationError] API key invalid. Request ID: 02177930089909800000000000000000"
-                .to_string(),
+    fn structured_api_errors_are_not_reclassified_from_message_text() {
+        let error = Error::api_response(
+            Some("FAILED_PRECONDITION".to_string()),
+            "Apply permission at https://open.feishu.cn/app/auth?token=abc",
+            Some(serde_json::json!({"feishu_code": 99991672})),
+            412,
         );
-        let report = report_for_runtime_error("ov status", &error);
-        let normal = strip_ansi(&render_report(&report, false));
-        let verbose = strip_ansi(&render_report(&report, true));
 
-        assert!(normal.contains("Authentication Error"));
-        assert!(normal.contains("OpenViking rejected the API key"));
-        assert!(normal.contains("ov config"));
-        assert!(!normal.contains("Request ID"));
-        assert!(!normal.contains("AuthenticationError"));
+        let report = report_for_runtime_error("ov add-resource", &error);
+        let rendered = strip_ansi(&render_report(&report, false));
+        assert!(rendered.contains("OpenViking API Error"));
+        assert!(rendered.contains("[FAILED_PRECONDITION]"));
+        assert!(!rendered.contains("Authentication Error"));
 
-        assert!(verbose.contains("Detail:"));
-        assert!(verbose.contains("Request ID"));
+        let json: serde_json::Value =
+            serde_json::from_str(&render_json_error(&error, true)).unwrap();
+        assert_eq!(json["error"]["code"], "FAILED_PRECONDITION");
+        assert_eq!(json["error"]["details"]["feishu_code"], 99991672);
     }
 
     #[test]
-    fn runtime_api_error_shows_sanitized_detail_by_default() {
-        let error = Error::api(
-            "[InvalidRequest] resource not found. Request ID: 02177930089909800000000000000000"
-                .to_string(),
+    fn compile_refresh_failure_explains_safe_retry() {
+        let command = "ov compile --from viking://resources/source --to viking://resources/wiki --skill viking://agent/skills/wiki --wait";
+        let error = Error::api_response(
+            Some("REFRESH_FAILED".to_string()),
+            "Content is already at the requested state, but semantic/index refresh failed: injected overview failure. Re-run the same batch-write or ov compile command; matching files will remain unchanged and refresh will be retried.",
+            Some(serde_json::json!({"root_uri": "viking://resources/wiki"})),
+            500,
         );
-        let report = report_for_runtime_error("ov read viking://missing", &error);
+        let report = report_for_runtime_error(command, &error);
         let normal = strip_ansi(&render_report(&report, false));
-        let verbose = strip_ansi(&render_report(&report, true));
 
-        assert!(normal.contains("OpenViking API Error"));
-        assert!(normal.contains("InvalidRequest: resource not found."));
-        assert!(!normal.contains("Request ID"));
-        assert!(!normal.contains("02177930089909800000000000000000"));
-
-        assert!(verbose.contains("Detail:"));
-        assert!(verbose.contains("Request ID"));
+        assert!(normal.contains("Compile Refresh Failed"));
+        assert!(normal.contains("injected"));
+        assert!(normal.contains("overview"));
+        assert!(normal.contains("matching files"));
+        assert!(normal.contains("unchanged"));
+        assert!(normal.contains(command));
+        assert!(!normal.contains("ov config validate"));
     }
 
     #[test]
-    fn runtime_api_error_summarizes_json_error_envelope() {
-        let error = Error::api(
-            r#"{"error":{"code":"PermissionDenied","message":"root key required","request_id":"abc"}}"#
-                .to_string(),
-        );
-        let report = report_for_runtime_error("ov admin list-users --sudo", &error);
-        let normal = strip_ansi(&render_report(&report, false));
+    fn local_runtime_json_error_always_has_code() {
+        let error = Error::Config("Failed to parse config file".to_string());
+        let json: serde_json::Value =
+            serde_json::from_str(&render_json_error(&error, true)).unwrap();
 
-        assert!(normal.contains("PermissionDenied: root key required."));
-        assert!(!normal.contains("request_id"));
-        assert!(!normal.contains("abc"));
+        assert_eq!(json["error"]["code"], "FAILED_PRECONDITION");
     }
 
     #[test]
@@ -1199,6 +1259,30 @@ Usage: ov config [OPTIONS] [COMMAND]
             .filter(|line| line.starts_with('╭') || line.starts_with('│') || line.starts_with('╰'))
         {
             assert_eq!(line.width(), CARD_WIDTH, "{line}");
+        }
+    }
+
+    #[test]
+    fn error_report_respects_narrow_terminal_width() {
+        let report = ErrorReport::new(
+            "Command Error",
+            "Plain help is not supported for this command. Use prefixed help instead.",
+        )
+        .with_command("ov very-long-command-name with many extra positional values")
+        .with_usage("ov very-long-command-name --with-a-long-option <long-value>")
+        .with_suggestion("ov --help")
+        .with_actions(vec![ErrorAction::new(
+            "ov --help",
+            "Show this command's help",
+        )]);
+        let width = 32;
+        let rendered = strip_ansi(&render_report_with_width(&report, false, width));
+
+        for line in rendered.lines() {
+            assert!(
+                line.width() <= width,
+                "line exceeded narrow width: {line:?}"
+            );
         }
     }
 }

@@ -54,9 +54,11 @@ OpenViking 提供多种检索方法，包括简单的向量相似度搜索、带
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| query | str | 是 | - | 搜索查询字符串 |
+| query | str | 否 | "" | 搜索查询字符串；未提供 `image_url` 时必填 |
+| image_url | str | 否 | None | 图片查询，支持 `data:image/...;base64,...`、`http(s)://` 或 `viking://` URI；需要 multimodal embedding 模型 |
 | target_uri | str \| List[str] | 否 | "" | 限制搜索范围到指定的 URI 前缀 |
 | context_type | str \| List[str] | 否 | None | 限定一个或多个 `ContextType` 取值：`memory`、`resource` 或 `skill` |
+| tags | List[str] | 否 | None | 显式检索标签，必须是严格的 `k=v` 格式。多个 tags 之间是 AND 关系，结果必须同时包含所有请求的标签 |
 | limit | int | 否 | 10 | 最大返回结果数 |
 | node_limit | int | 否 | None | 可选 HTTP 别名；如果提供，会覆盖 limit |
 | score_threshold | float | 否 | None | 最低相关性分数阈值 |
@@ -72,6 +74,11 @@ OpenViking 提供多种检索方法，包括简单的向量相似度搜索、带
 - `target_uri` 为空时，非 ROOT 检索默认搜索当前用户根 `viking://user/{user}` 和公共 `viking://resources`。
 - 如需在文件系统和检索操作中把当前用户的 peer 集合过滤到某一个 peer，发送 `X-OpenViking-Actor-Peer: <peer_id>`，或用 SDK/CLI client 的 `actor_peer_id` 初始化。见 [多租户：Peer 集合过滤](../concepts/11-multi-tenant.md#peer-restricted-view)。
 - `viking://user/memories`、`viking://user/resources`、`viking://user/skills` 等当前用户短写 target URI 会按认证请求身份 canonicalize。
+
+**图片搜索说明**：
+- 图片查询会以图片向量作为 query，默认检索目标范围内的 L2 resource 叶子节点；结果不限于图片文件，图片与文本/图片资源的相似度由 multimodal embedding 模型决定。
+- 纯文本 embedding 模型仍会索引图片 summary，但会拒绝图片查询输入。
+- 已有图片资源保持现有向量不变；图片向量召回只作用于开启该能力后向量化的图片，或之后手动 reindex 的图片。
 
 **FindResult 结构**
 
@@ -141,8 +148,34 @@ curl -X POST http://localhost:1933/api/v1/search/find \
     -d '{
         "query": "authentication",
         "context_type": ["memory", "resource"]
+}'
+```
+
+**图片搜索**
+
+```bash
+curl -X POST http://localhost:1933/api/v1/search/find \
+    -H "Content-Type: application/json" \
+    -H "X-API-Key: your-key" \
+    -d '{
+        "image_url": "viking://resources/images/cat.png",
+        "limit": 10
     }'
 ```
+
+**按显式检索标签搜索**
+
+```bash
+curl -X POST http://localhost:1933/api/v1/search/find \
+    -H "Content-Type: application/json" \
+    -H "X-API-Key: your-key" \
+    -d '{
+        "query": "rollback runbook",
+        "tags": ["env=prod", "team=search"]
+    }'
+```
+
+Tags 必须使用严格的 `k=v` 字符串。传入多个 tags 时，`find()` 会要求全部命中；上面的例子只返回显式检索标签同时包含 `env=prod` 和 `team=search` 的上下文。
 
 **Python SDK**
 
@@ -168,6 +201,15 @@ recent_emails = client.find(
 typed_results = client.find(
     "authentication",
     context_type=[ContextType.MEMORY, ContextType.RESOURCE],
+)
+
+# 按本地图片、bytes、data URI、HTTP URL 或 viking:// URI 搜索
+image_results = client.find(image="/path/to/photo.png")
+
+# 按显式检索标签搜索。多个 tags 之间是 AND 关系。
+tagged_results = client.find(
+    "rollback runbook",
+    tags=["env=prod", "team=search"],
 )
 
 # 遍历结果
@@ -221,6 +263,28 @@ results = client.find(
 )
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.find("authentication", { targetUri: "viking://resources/docs/" }));
+```
+
+**Go SDK**
+
+```go
+result, err := client.Find(ctx, "how to authenticate users", &openviking.FindOptions{
+    TargetURI:   "viking://resources/docs",
+    Limit:       10,
+    ContextType: []string{"resource"},
+})
+if err != nil {
+    return err
+}
+for _, item := range result.Resources {
+    fmt.Println(item.URI, item.Score)
+}
+```
+
 **CLI**
 
 ```bash
@@ -244,6 +308,18 @@ openviking find "how to authenticate users" --level 0
 
 # 限定层级范围 (L1 和 L2)，使用短选项
 openviking find "how to authenticate users" -L 1,2
+
+# 图片查询统一使用 --image；可传本地路径、viking://、http(s):// 或 data:image URI
+openviking find --image ./query.png --uri "viking://resources/images" --limit 5
+
+# 使用已入库图片搜索
+openviking find --image "viking://resources/images/cat.png" --uri "viking://resources/images" --limit 5
+
+# 使用公网图片 URL 搜索
+openviking find --image "https://example.com/images/cat.png" --uri "viking://resources/images" --limit 5
+
+# 图文联合检索
+openviking find "红色海报风格" --image ./poster.png --uri "viking://resources/images"
 ```
 
 **响应示例**
@@ -312,11 +388,13 @@ openviking find "how to authenticate users" -L 1,2
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| query | str | 是 | - | 搜索查询字符串 |
+| query | str | 否 | "" | 搜索查询字符串；未提供 `image_url` 时必填 |
+| image_url | str | 否 | None | 图片查询，支持 `data:image/...;base64,...`、`http(s)://` 或 `viking://` URI；需要 multimodal embedding 模型 |
 | target_uri | str \| List[str] | 否 | "" | 限制搜索范围到指定的 URI 前缀 |
 | session | Session | 否 | None | 用于上下文感知搜索的会话（SDK）|
 | session_id | str | 否 | None | 用于上下文感知搜索的会话 ID（HTTP）|
 | context_type | str \| List[str] | 否 | None | 限定一个或多个 `ContextType` 取值：`memory`、`resource` 或 `skill` |
+| tags | List[str] | 否 | None | 显式检索标签，必须是严格的 `k=v` 格式。多个 tags 之间是 AND 关系，结果必须同时包含所有请求的标签 |
 | limit | int | 否 | 10 | 最大返回结果数 |
 | node_limit | int | 否 | None | 可选 HTTP 别名；如果提供，会覆盖 limit |
 | score_threshold | float | 否 | None | 最低相关性分数阈值 |
@@ -328,7 +406,7 @@ openviking find "how to authenticate users" -L 1,2
 | include_provenance | bool | 否 | False | 在序列化结果中附带 provenance / query-plan 细节 |
 | telemetry | bool \| object | 否 | False | 在响应中附带遥测数据 |
 
-`search()` 使用和 `find()` 相同的目标解析规则，包括由 `X-OpenViking-Actor-Peer` 或 SDK `actor_peer_id` 选择的 peer 集合过滤。
+`search()` 使用和 `find()` 相同的目标解析和显式标签过滤规则，包括由 `X-OpenViking-Actor-Peer` 或 SDK `actor_peer_id` 选择的 peer 集合过滤。提供 `image_url` 时，`search()` 会直接执行图片检索并跳过会话 query planning。
 
 #### 3. 使用示例
 
@@ -360,6 +438,19 @@ curl -X POST http://localhost:1933/api/v1/search/search \
     -H "X-API-Key: your-key" \
     -d '{
         "query": "how to implement OAuth 2.0 authorization code flow"
+}'
+```
+
+**图片搜索**
+
+```bash
+curl -X POST http://localhost:1933/api/v1/search/search \
+    -H "Content-Type: application/json" \
+    -H "X-API-Key: your-key" \
+    -d '{
+        "query": "similar poster",
+        "image_url": "data:image/png;base64,...",
+        "limit": 10
     }'
 ```
 
@@ -408,6 +499,32 @@ for ctx in results.resources:
     print(f"Found: {ctx.uri} (score: {ctx.score:.3f})")
 ```
 
+**图片搜索**
+
+```python
+results = client.search("similar poster", image="/path/to/poster.png")
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.search("authentication", { targetUri: "viking://resources/docs/" }));
+```
+
+**Go SDK**
+
+```go
+result, err := client.Search(ctx, "best practices", &openviking.SearchOptions{
+    SessionID:   "abc123",
+    ContextType: "skill",
+    Limit:       10,
+})
+if err != nil {
+    return err
+}
+fmt.Println(result.Total)
+```
+
 **CLI**
 
 ```bash
@@ -428,6 +545,9 @@ openviking search "best practices" --level 0
 
 # 限定层级范围（L1 和 L2），使用短选项
 openviking search "how to implement OAuth" -L 1,2
+
+# 图片查询同样使用 --image；会直接检索并跳过 session planning
+openviking search "similar poster" --image ./poster.png --uri "viking://resources/images"
 ```
 
 **响应示例**
@@ -503,9 +623,9 @@ openviking search "how to implement OAuth" -L 1,2
 | uri | str | 是 | - | 要搜索的 Viking URI |
 | pattern | str | 是 | - | 搜索模式（正则表达式）|
 | case_insensitive | bool | 否 | False | 忽略大小写 |
-| node_limit | int | 否 | None | 最大返回节点数 |
+| node_limit | int | 否 | 256 | 最大返回节点数。省略时默认使用 256；如需更多结果，请显式传入更大的整数 |
 | exclude_uri | str | 否 | None | 要排除在搜索之外的 URI 前缀 |
-| level_limit | int | 否 | 5 | 最大目录遍历深度 |
+| level_limit | int | 否 | Python SDK: 5；HTTP API / CLI / Go SDK: 10 | 最大目录遍历深度。Go SDK 当前使用 HTTP API 默认值。 |
 
 #### 3. 使用示例
 
@@ -537,7 +657,8 @@ client.initialize()
 results = client.grep(
     "viking://resources",
     "authentication",
-    case_insensitive=True
+    case_insensitive=True,
+    node_limit=1024,
 )
 
 print(f"Found {results['count']} matches")
@@ -546,17 +667,37 @@ for match in results['matches']:
     print(f"    {match['content']}")
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.grep("viking://resources/docs/", "authentication"));
+```
+
+**Go SDK**
+
+```go
+nodeLimit := 1024
+result, err := client.Grep(ctx, "viking://resources", "authentication", &openviking.GrepOptions{
+    CaseInsensitive: true,
+    NodeLimit:       &nodeLimit,
+})
+if err != nil {
+    return err
+}
+fmt.Println(result["count"])
+```
+
 **CLI**
 
 ```bash
 # 基础搜索
-openviking grep viking://resources "authentication"
+openviking grep "authentication" --uri viking://resources
 
 # 忽略大小写
-openviking grep viking://resources "authentication" --ignore-case
+openviking grep "authentication" --uri viking://resources --ignore-case
 
 # 指定深度限制
-openviking grep viking://resources "TODO" --level-limit 3
+openviking grep "TODO" --uri viking://resources --level-limit 3
 ```
 
 **响应示例**
@@ -595,7 +736,7 @@ openviking grep viking://resources "TODO" --level-limit 3
 - `[]` 匹配字符范围
 
 **代码入口**：
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.glob()` - Python SDK 入口（HTTP）
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.glob()` - Python SDK 入口（HTTP）
 - `openviking/server/routers/search.py:glob()` - HTTP 路由
 - `crates/ov_cli/src/commands/search.rs:glob()` - Rust CLI 命令
 
@@ -607,7 +748,7 @@ openviking grep viking://resources "TODO" --level-limit 3
 |------|------|------|--------|------|
 | pattern | str | 是 | - | Glob 模式（例如 `**/*.md`）|
 | uri | str | 否 | "viking://" | 起始 URI |
-| node_limit | int | 否 | None | 最大返回匹配数 |
+| node_limit | int | 否 | 256 | 最大返回匹配数。省略时默认使用 256；如需更多结果，请显式传入更大的整数 |
 
 #### 3. 使用示例
 
@@ -635,15 +776,33 @@ import openviking as ov
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
-# 查找所有 markdown 文件
+# 查找所有 markdown 文件（默认最多返回 256 条）
 results = client.glob("**/*.md", "viking://resources")
 print(f"Found {results['count']} markdown files:")
 for uri in results['matches']:
     print(f"  {uri}")
 
-# 查找所有 Python 文件
-results = client.glob("**/*.py", "viking://resources")
+# 查找所有 Python 文件，并显式放宽返回上限
+results = client.glob("**/*.py", "viking://resources", node_limit=1024)
 print(f"Found {results['count']} Python files")
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.glob("**/*.md", "viking://resources/docs/"));
+```
+
+**Go SDK**
+
+```go
+result, err := client.Glob(ctx, "**/*.md", "viking://resources", &openviking.GlobOptions{
+    NodeLimit: openviking.Int(1024),
+})
+if err != nil {
+    return err
+}
+fmt.Println(result["count"])
 ```
 
 **CLI**

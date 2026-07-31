@@ -7,13 +7,14 @@ OpenViking uses a virtual filesystem where all directories are data records.
 This module defines the preset directory structure that is created on initialization.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Dict, List, Optional
 
 from openviking.core.context import Context, Vectorize
 from openviking.core.namespace import (
     canonical_user_root,
     context_type_for_uri,
+    is_session_uri,
     user_space_fragment,
 )
 from openviking.server.identity import RequestContext
@@ -22,6 +23,8 @@ from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConve
 if TYPE_CHECKING:
     from openviking.storage import VikingDBManager
     from openviking.storage.viking_fs import VikingFS
+
+from openviking_cli.exceptions import NotFoundError
 
 
 @dataclass
@@ -183,41 +186,45 @@ class DirectoryInitializer:
         return count
 
     async def initialize_user_directories(self, ctx: RequestContext) -> int:
-        """Initialize only the user namespace root for the current user.
+        """Initialize the current user's root and first-level entry directories.
 
-        Child directories under ``viking://user/{user_space}`` are created lazily on
-        first write. This avoids materializing empty namespaces such as
-        ``memories/patterns`` or ``skills`` before any actual content exists.
+        Concrete leaf namespaces under entries such as ``memories`` or ``sessions``
+        are still created lazily when content is written. This keeps a new user
+        root discoverable without materializing the full empty taxonomy.
         """
         if "user" not in PRESET_DIRECTORIES:
             return 0
         user_space_root = canonical_user_root(ctx)
+        # Preset initialization is a server-controlled write to the current
+        # user's own root and first-level directories.  Actor-peer view must
+        # still protect peer subtrees during normal filesystem mutations, but
+        # it must not prevent a fresh user from creating the container that
+        # owns those subtrees in the first place.
+        initialization_ctx = replace(ctx, actor_peer_id=None, legacy_agent_id=None)
         user_tree = PRESET_DIRECTORIES["user"]
         parent_uri = "viking://user"
-        created = await self._ensure_directory(
+        count = 0
+        if await self._ensure_directory(
             uri=user_space_root,
             parent_uri=parent_uri,
             defn=user_tree,
             scope="user",
-            ctx=ctx,
-        )
-        return 1 if created else 0
+            ctx=initialization_ctx,
+        ):
+            count += 1
 
-    async def initialize_agent_directories(self, ctx: RequestContext) -> int:
-        """Deprecated compatibility hook; agent directories are no longer initialized."""
-        return 0
+        for child in user_tree.children:
+            child_uri = f"{user_space_root}/{child.path}"
+            if await self._ensure_directory(
+                uri=child_uri,
+                parent_uri=user_space_root,
+                defn=child,
+                scope="user",
+                ctx=initialization_ctx,
+            ):
+                count += 1
 
-    async def _ensure_container_directory(
-        self,
-        uri: str,
-        parent_uri: Optional[str],
-        ctx: RequestContext,
-    ) -> None:
-        """Ensure an intermediate namespace container exists without seeding vectors."""
-        try:
-            await self._get_viking_fs().mkdir(uri, exist_ok=True, ctx=ctx)
-        except Exception:
-            pass
+        return count
 
     async def _ensure_directory(
         self,
@@ -244,7 +251,7 @@ class DirectoryInitializer:
 
         # 2. Seed directory L0/L1 vectors only during fresh initialization.
         owner_space = self._owner_space_for_scope(scope=scope, ctx=ctx)
-        if agfs_created:
+        if agfs_created and not is_session_uri(uri):
             await self._ensure_directory_l0_l1_vectors(
                 uri=uri,
                 parent_uri=parent_uri,
@@ -303,7 +310,7 @@ class DirectoryInitializer:
             viking_fs = self._get_viking_fs()
             await viking_fs.abstract(uri, ctx=ctx)
             return True
-        except Exception:
+        except (FileNotFoundError, NotFoundError):
             return False
 
     async def _initialize_children(

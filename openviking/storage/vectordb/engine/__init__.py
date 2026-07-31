@@ -22,6 +22,7 @@ _BACKEND_MODULES = {
 }
 _X86_DISPLAY_ORDER = ("x86_sse3", "x86_avx2", "x86_avx512")
 _X86_PRIORITY = ("x86_avx512", "x86_avx2", "x86_sse3")
+_WINDOWS_X86_PRIORITY = ("x86_avx2", "x86_sse3")
 _REQUEST_ALIASES = {
     "sse3": "x86_sse3",
     "avx2": "x86_avx2",
@@ -32,11 +33,29 @@ _WINDOWS_DLL_DIR_HANDLES = []
 
 def _is_x86_machine(machine: str | None = None) -> bool:
     normalized = (machine or platform.machine() or "").strip().lower()
+    # platform.machine() returns empty string on some Windows 11 builds.
+    # Default to x86 on Windows since ARM is not yet widely deployed.
+    if not normalized:
+        return sys.platform == "win32"
     return any(token in normalized for token in ("x86_64", "amd64", "x64", "i386", "i686"))
 
 
 def _module_exists(module_name: str) -> bool:
-    return importlib.util.find_spec(f".{module_name}", __name__) is not None
+    try:
+        return importlib.util.find_spec(f".{module_name}", __name__) is not None
+    except ModuleNotFoundError:
+        # During module initialization find_spec may fail because __path__
+        # is not yet assigned. Fall back to checking the filesystem.
+        module_path = Path(__file__).resolve().parent
+        if not module_path.is_dir():
+            return False
+        try:
+            for fn in os.listdir(str(module_path)):
+                if fn in (f"{module_name}.pyd", f"{module_name}.abi3.pyd"):
+                    return True
+        except OSError:
+            return False
+        return False
 
 
 def _available_variants(is_x86: bool) -> tuple[str, ...]:
@@ -109,7 +128,8 @@ def _select_variant() -> tuple[str | None, tuple[str, ...], str | None]:
         return "native", available, None
 
     supported_x86 = _supported_x86_variants()
-    for variant in _X86_PRIORITY:
+    priority = _WINDOWS_X86_PRIORITY if sys.platform == "win32" else _X86_PRIORITY
+    for variant in priority:
         if variant in available and variant in supported_x86:
             return variant, available, None
 

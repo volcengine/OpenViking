@@ -115,7 +115,11 @@ class DirectBackend(SandboxBackend):
         return await asyncio.to_thread(sandbox_path.read_bytes)
 
     async def read_file(self, path: str) -> str:
-        return (await self.read_file_bytes(path)).decode("utf-8")
+        data = await self.read_file_bytes(path)
+        try:
+            return data.decode("utf-8")
+        except UnicodeDecodeError:
+            return data.decode("utf-8", errors="replace")
 
     async def write_file(self, path: str, content: str) -> None:
         sandbox_path = Path(path)
@@ -155,11 +159,9 @@ class DirectBackend(SandboxBackend):
         workspace = self.workspace.resolve()
         resolved = path.resolve()
 
+        allowed_roots = [workspace]
         if self.restrict_workspaces and self.session_key in self.restrict_workspaces:
-            restrict_path = Path(self.restrict_workspaces[self.session_key]).resolve()
-            if resolved != restrict_path and restrict_path not in resolved.parents:
-                raise PermissionError(f"Path outside restricted workspace: {path}")
-            return
+            allowed_roots.append(Path(self.restrict_workspaces[self.session_key]).resolve())
 
-        if resolved != workspace and workspace not in resolved.parents:
-            raise PermissionError(f"Path outside workspace: {path}")
+        if not any(resolved == root or root in resolved.parents for root in allowed_roots):
+            raise PermissionError(f"Path outside allowed workspaces: {path}")

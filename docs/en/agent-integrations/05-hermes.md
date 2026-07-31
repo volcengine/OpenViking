@@ -2,6 +2,17 @@
 
 [Hermes Agent](https://hermes-agent.nousresearch.com/) by Nous Research has a first-class OpenViking memory provider built in. No plugin to install — just point Hermes at your OpenViking server and it handles memory storage, recall, and extraction natively.
 
+## Keep the Python environments separate
+
+Hermes connects to OpenViking over HTTP, so OpenViking does not need to be
+installed in the Hermes Python environment. Run the OpenViking server in its
+own virtual environment or container. Do not use `--force-reinstall` to add or
+upgrade OpenViking in an existing Hermes environment: a Hermes release may pin
+dependency versions that differ from OpenViking's supported, security-patched
+versions. If you intentionally combine both applications in one environment,
+resolve them together and run `python -m pip check` before starting either
+service.
+
 ## Setup
 
 Run the Hermes memory setup wizard:
@@ -14,7 +25,7 @@ The wizard prompts for:
 
 - **OpenViking server URL** — your self-hosted server (default `http://127.0.0.1:1933`) or OpenViking Service (VolcEngine Cloud)
 - **API key** — leave blank for local dev mode
-- **Tenant account / user / agent IDs** — for multi-tenant deployments
+- **Tenant account / user / peer IDs** — for multi-tenant deployments. Legacy `agent_id` settings map to the request actor peer during migration.
 
 Configuration is saved to Hermes's `config.yaml` and `.env` files.
 

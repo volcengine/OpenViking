@@ -30,6 +30,9 @@ def _make_request(
     extra_headers: Optional[dict[str, str]] = None,
     path: str = "/api/v1/system/status",
 ) -> Request:
+    from openviking.server.auth.plugins import ApiKeyAuthPlugin
+    from openviking.server.auth.registry import get_registry
+
     raw_headers = []
     if bearer:
         raw_headers.append((b"authorization", f"Bearer {bearer}".encode()))
@@ -40,6 +43,11 @@ def _make_request(
     app.state.api_key_manager = api_key_manager
     if oauth_provider is not None:
         app.state.oauth_provider = oauth_provider
+    # Set auth plugin (lifespan not triggered in ASGI tests)
+    registry = get_registry()
+    if registry.get("api_key") is None:
+        registry.register(ApiKeyAuthPlugin)
+    app.state.auth_plugin = registry.get("api_key")()
     scope = {
         "type": "http",
         "path": path,

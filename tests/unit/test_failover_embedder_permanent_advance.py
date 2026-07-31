@@ -13,7 +13,6 @@ every credential of the same model.
 """
 
 import time
-from typing import List
 
 import pytest
 
@@ -43,17 +42,8 @@ class _StubEmbedder(EmbedderBase):
             raise self._error
         return EmbedResult(dense_vector=[0.0] * self._dim)
 
-    def embed_batch(self, contents, is_query: bool = False) -> List[EmbedResult]:
-        self.calls += 1
-        if self._error is not None:
-            raise self._error
-        return [EmbedResult(dense_vector=[0.0] * self._dim) for _ in contents]
-
     async def embed_async(self, content, is_query: bool = False) -> EmbedResult:
         return self.embed(content, is_query=is_query)
-
-    async def embed_batch_async(self, contents, is_query: bool = False) -> List[EmbedResult]:
-        return self.embed_batch(contents, is_query=is_query)
 
 
 def _make_400_error() -> Exception:

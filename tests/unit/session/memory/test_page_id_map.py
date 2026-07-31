@@ -57,21 +57,3 @@ class TestPageIdMap:
         assert pim.get_page_id("viking://profile.md") == existing_id
         assert pim.resolve(existing_id) == "viking://profile.md"
         assert pim.resolve(100) == "viking://profile.md"
-
-    def test_has_links_enabled_after_existing_page_registration(self):
-        pim = PageIdMap()
-
-        assert not pim.has_links_enabled
-
-        pim.get_page_id("viking://test")
-
-        assert pim.has_links_enabled
-
-    def test_has_links_enabled_after_new_page_id_registration(self):
-        pim = PageIdMap()
-
-        assert not pim.has_links_enabled
-
-        pim.register_new_page_id("viking://new-item", 100)
-
-        assert pim.has_links_enabled

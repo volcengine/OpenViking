@@ -17,6 +17,7 @@ from litellm import acompletion, completion
 
 from openviking.telemetry import tracer
 from openviking.utils.model_retry import retry_async, retry_sync
+from openviking.utils.multimodal import redact_image_data_urls
 from openviking_cli.utils import get_logger
 
 from ..base import ToolCall, VLMBase, VLMResponse
@@ -98,6 +99,17 @@ PROVIDER_CONFIGS: Dict[str, Dict[str, Any]] = {
 }
 
 
+# Ollama defaults to a 4096-token context window and silently truncates any
+# longer prompt to fit. OV prompts (memory extraction is ~5k+ tokens) overflow
+# it, so the model never sees the real input and returns empty/garbage with no
+# error. Default to a larger window for Ollama models; callers can override via
+# ``extra_request_body["num_ctx"]``.
+OLLAMA_DEFAULT_NUM_CTX = 16384
+
+# LiteLLM routes that address a local Ollama server.
+OLLAMA_LITELLM_PREFIXES: tuple[str, ...] = ("ollama/", "ollama_chat/")
+
+
 # Prefixes that are already complete LiteLLM routes. Keep them authoritative
 # so keyword-based auto-detection does not rewrite cross-provider model names.
 EXPLICIT_LITELLM_PREFIXES: tuple[str, ...] = (
@@ -109,6 +121,7 @@ EXPLICIT_LITELLM_PREFIXES: tuple[str, ...] = (
     "sagemaker_chat/",
     "sagemaker_nova/",
     "vertex_ai/",
+    "github_copilot/",
 )
 
 # These explicit routes normally authenticate through cloud-native credential
@@ -262,7 +275,7 @@ class LiteLLMVLMProvider(VLMBase):
         messages: list,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
     ) -> dict[str, Any]:
         """Build kwargs for LiteLLM call."""
         kwargs: dict[str, Any] = {
@@ -271,8 +284,8 @@ class LiteLLMVLMProvider(VLMBase):
             "temperature": self.temperature,
             "timeout": self.timeout,
         }
-        max_tokens = self.max_tokens or 32768
-        kwargs["max_tokens"] = max_tokens
+        if self.max_tokens is not None:
+            kwargs["max_tokens"] = self.max_tokens
 
         if self._should_forward_api_key(model):
             kwargs["api_key"] = self.api_key
@@ -288,11 +301,21 @@ class LiteLLMVLMProvider(VLMBase):
         if self.extra_request_body:
             kwargs["extra_body"] = dict(self.extra_request_body)
 
+        # Ollama-specific request options. Without an explicit num_ctx the server
+        # truncates long prompts to its 4096-token default; thinking models left
+        # in thinking mode emit only reasoning and stall on CPU. Set safe
+        # defaults, but let extra_request_body override either.
+        if _has_litellm_prefix(model, OLLAMA_LITELLM_PREFIXES):
+            extra = kwargs.get("extra_body", {})
+            extra.setdefault("num_ctx", OLLAMA_DEFAULT_NUM_CTX)
+            extra.setdefault("think", self._effective_thinking(thinking))
+            kwargs["extra_body"] = extra
+
         # Only send enable_thinking to DashScope-compatible providers
         provider = self._detected_provider or detect_provider_by_model(model)
         if provider == "dashscope":
             extra = kwargs.get("extra_body", {})
-            extra["enable_thinking"] = thinking
+            extra["enable_thinking"] = self._effective_thinking(thinking)
             kwargs["extra_body"] = extra
 
         # Workaround for LiteLLM bug where Gemini context-caching path emits
@@ -311,6 +334,9 @@ class LiteLLMVLMProvider(VLMBase):
 
         return kwargs
 
+    def _effective_thinking(self, thinking: Optional[bool]) -> bool:
+        return bool(self._thinking if thinking is None else thinking)
+
     def _parse_tool_calls(self, message) -> List[ToolCall]:
         """Parse tool calls from LiteLLM response message."""
         tool_calls = []
@@ -327,6 +353,9 @@ class LiteLLMVLMProvider(VLMBase):
 
     def _build_vlm_response(self, response, has_tools: bool) -> Union[str, VLMResponse]:
         """Build response from LiteLLM response. Returns str or VLMResponse based on has_tools."""
+        if isinstance(response, str):
+            return VLMResponse(content=response) if has_tools else response
+
         choice = response.choices[0]
         message = choice.message
 
@@ -351,7 +380,7 @@ class LiteLLMVLMProvider(VLMBase):
     def _build_text_kwargs(
         self,
         prompt: str = "",
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
@@ -364,7 +393,7 @@ class LiteLLMVLMProvider(VLMBase):
         self,
         prompt: str = "",
         images: Optional[List[Union[str, Path, bytes]]] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
@@ -384,7 +413,7 @@ class LiteLLMVLMProvider(VLMBase):
     def get_completion(
         self,
         prompt: str = "",
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
@@ -413,7 +442,7 @@ class LiteLLMVLMProvider(VLMBase):
     async def get_completion_async(
         self,
         prompt: str = "",
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
@@ -421,7 +450,9 @@ class LiteLLMVLMProvider(VLMBase):
         """Get text completion asynchronously."""
         kwargs = self._build_text_kwargs(prompt, thinking, tools, tool_choice, messages)
         # 用 tracer.info 打印请求
-        tracer.info(f"request: {json.dumps(kwargs, ensure_ascii=False, indent=2)}")
+        tracer.info(
+            f"request: {json.dumps(redact_image_data_urls(kwargs), ensure_ascii=False, indent=2)}"
+        )
 
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
@@ -444,7 +475,7 @@ class LiteLLMVLMProvider(VLMBase):
         self,
         prompt: str = "",
         images: Optional[List[Union[str, Path, bytes]]] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
@@ -472,7 +503,7 @@ class LiteLLMVLMProvider(VLMBase):
         self,
         prompt: str = "",
         images: Optional[List[Union[str, Path, bytes]]] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,

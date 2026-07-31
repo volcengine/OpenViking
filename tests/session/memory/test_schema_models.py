@@ -81,14 +81,33 @@ class TestSchemaModelGenerator:
     @pytest.fixture
     def real_registry(self):
         """Create a registry with real schemas."""
-        schemas_dir = (
-            Path(__file__).parent.parent.parent.parent
-            / "openviking"
-            / "prompts"
-            / "templates"
-            / "memory"
+        return create_default_registry()
+
+
+    def test_peer_enabled_false_omits_peer_id_field(self):
+        memory_type = MemoryTypeSchema(
+            memory_type="cases",
+            description="Case memory",
+            fields=[
+                MemoryField(
+                    name="case_name",
+                    field_type=FieldType.STRING,
+                    description="Case name",
+                    merge_op=MergeOp.IMMUTABLE,
+                )
+            ],
+            filename_template="{{ case_name }}.md",
+            directory="viking://user/{{ user_space }}/memories/cases",
+            peer_enabled=False,
         )
-        return create_default_registry(str(schemas_dir))
+        role_scope = type("RoleScope", (), {"peer_ids": ["web-visitor-alice"]})()
+
+        model = SchemaModelGenerator([memory_type]).create_flat_data_model(
+            memory_type,
+            role_scope=role_scope,
+        )
+
+        assert "peer_id" not in model.model_fields
 
     def test_render_description_template_with_language(self):
         memory_type = MemoryTypeSchema(
@@ -159,23 +178,13 @@ class TestSchemaModelGenerator:
         # Check model name
         assert model.__name__ == "TestTypeData"
 
-        # Check model has the memory_type field
-        assert "memory_type" in model.model_fields
-        # memory_type is a required field with literal type
+        # memory_type is represented by the top-level structured output field.
+        assert "memory_type" not in model.model_fields
 
         # Check business fields
         assert "field1" in model.model_fields
         assert "field2" in model.model_fields
 
-        # Check metadata fields are present
-        assert "uri" in model.model_fields
-        assert "name" in model.model_fields
-        assert "abstract" in model.model_fields
-        assert "overview" in model.model_fields
-        assert "content" in model.model_fields
-        assert "tags" in model.model_fields
-        assert "created_at" in model.model_fields
-        assert "updated_at" in model.model_fields
 
     def test_page_id_field_is_emitted_before_mutable_content(self, registry_with_sample):
         """page_id should appear before mutable fields so the model anchors target page first."""
@@ -307,42 +316,6 @@ class TestSchemaModelGenerator:
         profile_model = models["profile"]
         assert "content" in profile_model.model_fields
 
-    def test_create_discriminated_union_model(self, real_registry):
-        """Test creating the union model wrapper."""
-        generator = SchemaModelGenerator(real_registry)
-        union_model = generator.create_discriminated_union_model()
-
-        # The union model is a wrapper BaseModel
-        assert hasattr(union_model, "model_fields")
-        assert "data" in union_model.model_fields
-
-    def test_get_llm_json_schema(self, real_registry):
-        """Test getting the LLM JSON schema."""
-        generator = SchemaModelGenerator(real_registry)
-        json_schema = generator.get_llm_json_schema()
-
-        # Check it's a valid JSON schema
-        assert "$defs" in json_schema or "definitions" in json_schema
-        assert "properties" in json_schema
-
-        # Check it includes operations
-        assert "write_uris" in json_schema["properties"]
-        assert "edit_uris" in json_schema["properties"]
-        assert "delete_uris" in json_schema["properties"]
-
-        # Check delete_uris is an array of strings
-        delete_props = json_schema["properties"]["delete_uris"]
-        assert delete_props.get("items", {}).get("type") == "string"
-
-    def test_get_memory_data_json_schema(self, real_registry):
-        """Test getting just the MemoryData JSON schema."""
-        generator = SchemaModelGenerator(real_registry)
-        json_schema = generator.get_memory_data_json_schema()
-
-        # Check it's a valid JSON schema
-        assert "$defs" in json_schema or "definitions" in json_schema
-        assert "properties" in json_schema
-
     def test_model_caching(self, registry_with_sample, sample_memory_type):
         """Test that models are cached."""
         generator = SchemaModelGenerator(registry_with_sample)
@@ -393,8 +366,7 @@ class TestSchemaModelGenerator:
 
             # Verify the model has the custom field
             assert "custom_field" in model.model_fields
-            assert "memory_type" in model.model_fields
-            assert "uri" in model.model_fields
+            assert "memory_type" not in model.model_fields
 
 
 class TestWikiLink:
@@ -421,28 +393,3 @@ class TestWikiLink:
 
 class TestIntegration:
     """Integration tests for the complete schema system."""
-
-    def test_end_to_end_model_generation_and_validation(self):
-        """Test end-to-end: load schemas, generate models, validate data."""
-        schemas_dir = (
-            Path(__file__).parent.parent.parent.parent
-            / "openviking"
-            / "prompts"
-            / "templates"
-            / "memory"
-        )
-        registry = create_default_registry(str(schemas_dir))
-
-        # Create generator
-        generator = SchemaModelGenerator(registry)
-
-        # Get the operations model
-        generator.create_structured_operations_model()
-
-        # Get JSON schema
-        json_schema = generator.get_llm_json_schema()
-
-        # Verify the schema includes descriptions from YAML
-        # Check that $defs has entries
-        defs = json_schema.get("$defs", {})
-        assert len(defs) > 0, "No definitions found in JSON schema"

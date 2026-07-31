@@ -221,44 +221,6 @@ class TestJinaDenseEmbedder:
         assert call_kwargs["extra_body"]["late_chunking"] is True
 
     @patch("openviking.models.embedder.jina_embedders.openai.OpenAI")
-    def test_embed_batch(self, mock_openai_class):
-        """Test batch embedding"""
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
-
-        mock_embeddings = [MagicMock(embedding=[0.1] * 1024) for _ in range(3)]
-
-        mock_response = MagicMock()
-        mock_response.data = mock_embeddings
-        mock_client.embeddings.create.return_value = mock_response
-
-        embedder = JinaDenseEmbedder(
-            model_name="jina-embeddings-v5-text-small",
-            api_key="test-api-key",
-        )
-        results = embedder.embed_batch(["Hello", "World", "Test"])
-
-        assert len(results) == 3
-        for result in results:
-            assert result.dense_vector is not None
-            assert len(result.dense_vector) == 1024
-
-    @patch("openviking.models.embedder.jina_embedders.openai.OpenAI")
-    def test_embed_batch_empty(self, mock_openai_class):
-        """Test batch embedding with empty list"""
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
-
-        embedder = JinaDenseEmbedder(
-            model_name="jina-embeddings-v5-text-small",
-            api_key="test-api-key",
-        )
-        results = embedder.embed_batch([])
-
-        assert results == []
-        mock_client.embeddings.create.assert_not_called()
-
-    @patch("openviking.models.embedder.jina_embedders.openai.OpenAI")
     def test_embed_api_error(self, mock_openai_class):
         """Test embedding with API error"""
         import openai

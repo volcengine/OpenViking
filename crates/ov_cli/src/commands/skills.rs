@@ -1,6 +1,10 @@
 use crate::client::HttpClient;
 use crate::error::{Error, Result};
 use crate::output::{OutputFormat, output_success};
+use crate::terminal_ui::{
+    RenderedRegion as RenderedSkillSelectRegion, clear_rendered_lines, live_select_block,
+    truncate_to_display_width,
+};
 use crate::theme;
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
@@ -10,7 +14,6 @@ use std::io::{self, IsTerminal, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use url::Url;
 
 enum PreparedSource {
@@ -87,6 +90,7 @@ pub async fn add(
     verbose: bool,
     output_format: OutputFormat,
     compact: bool,
+    parent: Option<&str>,
 ) -> Result<()> {
     let source = prepare_source(data)?;
     if list_only {
@@ -122,6 +126,7 @@ pub async fn add(
                 show_progress,
                 verbose,
                 source_metadata,
+                parent,
             )
             .await?;
         installed.push(result);
@@ -155,9 +160,10 @@ pub async fn list(
     node_limit: i32,
     output_format: OutputFormat,
     compact: bool,
+    parent: Option<&str>,
 ) -> Result<()> {
-    let result = client.skills_list(node_limit).await?;
-    output_success(result, output_format, compact);
+    let result = client.skills_list(node_limit, parent).await?;
+    super::search::output_skills_list_results(&result, output_format, compact);
     Ok(())
 }
 
@@ -169,10 +175,18 @@ pub async fn show(
     include_source: bool,
     output_format: OutputFormat,
     compact: bool,
+    parent: Option<&str>,
 ) -> Result<()> {
     let include_content = level.is_none() || level == Some(2);
     let mut result = client
-        .skill_show(name, include_content, include_files, include_source, level)
+        .skill_show(
+            name,
+            include_content,
+            include_files,
+            include_source,
+            level,
+            parent,
+        )
         .await?;
     if let Some(level) = level {
         filter_skill_show_level(&mut result, level);
@@ -189,11 +203,12 @@ pub async fn find(
     level: Option<Vec<i32>>,
     output_format: OutputFormat,
     compact: bool,
+    parent: Option<&str>,
 ) -> Result<()> {
     let result = client
-        .skill_find(query, node_limit, threshold, level)
+        .skill_find(query, node_limit, threshold, level, parent)
         .await?;
-    output_success(result, output_format, compact);
+    super::search::output_skills_find_results(&result, output_format, compact, node_limit);
     Ok(())
 }
 
@@ -204,6 +219,7 @@ pub async fn update(
     yes: bool,
     output_format: OutputFormat,
     compact: bool,
+    parent: Option<&str>,
 ) -> Result<()> {
     let update_all = skill_names.is_empty();
     let names = resolve_installed_skill_names(client, skill_names).await?;
@@ -250,6 +266,7 @@ pub async fn update(
                 false,
                 false,
                 source_metadata,
+                parent,
             )
             .await?;
         updated.push(result);
@@ -276,6 +293,7 @@ pub async fn remove(
     yes: bool,
     output_format: OutputFormat,
     compact: bool,
+    parent: Option<&str>,
 ) -> Result<()> {
     if all && !skill_names.is_empty() {
         return Err(Error::Client(
@@ -328,7 +346,7 @@ pub async fn remove(
     let removed_names = names.clone();
     let mut removed = Vec::new();
     for name in names {
-        removed.push(client.skill_remove(&name).await?);
+        removed.push(client.skill_remove(&name, parent).await?);
     }
     let total = removed.len();
     output_message_result(
@@ -1141,10 +1159,8 @@ async fn resolve_update_target(
         return update_target_from_record(&record, name, allow_prompt);
     }
 
-    if allow_prompt {
-        if let Some(target) = prompt_update_source(name)? {
-            return Ok(target);
-        }
+    if allow_prompt && let Some(target) = prompt_update_source(name)? {
+        return Ok(target);
     }
 
     Err(Error::Client(format!(
@@ -1157,7 +1173,9 @@ async fn read_skill_source_record(
     client: &HttpClient,
     name: &str,
 ) -> Result<Option<SkillSourceRecord>> {
-    let result = client.skill_show(name, false, false, true, Some(0)).await?;
+    let result = client
+        .skill_show(name, false, false, true, Some(0), None)
+        .await?;
     let Some(source) = result.get("source") else {
         return Ok(None);
     };
@@ -1347,7 +1365,7 @@ async fn resolve_installed_skill_names(
 }
 
 async fn list_installed_skills(client: &HttpClient) -> Result<Vec<InstalledSkillSummary>> {
-    let result = client.skills_list(10000).await?;
+    let result = client.skills_list(10000, None).await?;
     let skills = result
         .get("skills")
         .and_then(Value::as_array)
@@ -1385,9 +1403,8 @@ fn prompt_multi_select_skills(
 ) -> Result<Option<Vec<String>>> {
     use crossterm::{
         cursor,
-        event::{self, Event, KeyCode, KeyModifiers},
-        execute,
-        terminal::{self, Clear, ClearType},
+        event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+        execute, terminal,
     };
 
     if skills.is_empty() {
@@ -1422,74 +1439,67 @@ fn prompt_multi_select_skills(
     let _raw_guard = RawGuard::enter()?;
     let mut current = 0usize;
     let mut checked = vec![false; skills.len()];
-    let mut rendered_lines = 0usize;
+
+    // Initial render
+    let lines = skill_multi_select_lines(prompt, skills, current, &checked);
+    let mut rendered_region =
+        RenderedSkillSelectRegion::from_lines(&lines, live_skill_select_columns());
+    print!("{}", live_select_block(&lines));
+    io::stdout().flush()?;
 
     loop {
-        clear_rendered_lines(rendered_lines)?;
-        let lines = skill_multi_select_lines(prompt, skills, current, &checked);
-        rendered_lines = lines.len();
-        print!("{}", live_select_block(&lines));
-        io::stdout().flush()?;
-
-        if let Event::Key(key) = event::read()? {
-            match key.code {
-                KeyCode::Up => {
-                    current = if current == 0 {
-                        skills.len().saturating_sub(1)
-                    } else {
-                        current - 1
-                    };
+        match event::read()? {
+            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                match key.code {
+                    KeyCode::Up => {
+                        current = if current == 0 {
+                            skills.len().saturating_sub(1)
+                        } else {
+                            current - 1
+                        };
+                    }
+                    KeyCode::Down => current = (current + 1) % skills.len(),
+                    KeyCode::Char(' ') => checked[current] = !checked[current],
+                    KeyCode::Char('a') | KeyCode::Char('A') => {
+                        let select_all = checked.iter().any(|value| !*value);
+                        checked.fill(select_all);
+                    }
+                    KeyCode::Enter | KeyCode::Char('\n') | KeyCode::Char('\r') => {
+                        clear_rendered_region(&rendered_region)?;
+                        let selected = selected_skill_names(skills, current, &checked);
+                        return Ok(Some(selected));
+                    }
+                    KeyCode::Esc => {
+                        clear_rendered_region(&rendered_region)?;
+                        return Ok(None);
+                    }
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        clear_rendered_region(&rendered_region)?;
+                        return Err(Error::Client("Aborted.".to_string()));
+                    }
+                    _ => continue,
                 }
-                KeyCode::Down => current = (current + 1) % skills.len(),
-                KeyCode::Char(' ') => checked[current] = !checked[current],
-                KeyCode::Char('a') | KeyCode::Char('A') => {
-                    let select_all = checked.iter().any(|value| !*value);
-                    checked.fill(select_all);
-                }
-                KeyCode::Enter | KeyCode::Char('\n') | KeyCode::Char('\r') => {
-                    clear_rendered_lines(rendered_lines)?;
-                    let selected = selected_skill_names(skills, current, &checked);
-                    return Ok(Some(selected));
-                }
-                KeyCode::Esc => {
-                    clear_rendered_lines(rendered_lines)?;
-                    return Ok(None);
-                }
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    clear_rendered_lines(rendered_lines)?;
-                    return Err(Error::Client("Aborted.".to_string()));
-                }
-                _ => {}
+                clear_rendered_region(&rendered_region)?;
+                let lines = skill_multi_select_lines(prompt, skills, current, &checked);
+                rendered_region =
+                    RenderedSkillSelectRegion::from_lines(&lines, live_skill_select_columns());
+                print!("{}", live_select_block(&lines));
+                io::stdout().flush()?;
             }
+            Event::Resize(_, _) => {
+                clear_rendered_region(&rendered_region)?;
+                let lines = skill_multi_select_lines(prompt, skills, current, &checked);
+                rendered_region =
+                    RenderedSkillSelectRegion::from_lines(&lines, live_skill_select_columns());
+                print!("{}", live_select_block(&lines));
+                io::stdout().flush()?;
+            }
+            _ => {}
         }
     }
 
-    fn clear_rendered_lines(lines: usize) -> Result<()> {
-        if lines == 0 {
-            return Ok(());
-        }
-        let mut stdout = io::stdout();
-        execute!(
-            stdout,
-            cursor::MoveUp(lines as u16),
-            cursor::MoveToColumn(0)
-        )?;
-        for line in 0..lines {
-            execute!(
-                stdout,
-                cursor::MoveToColumn(0),
-                Clear(ClearType::CurrentLine)
-            )?;
-            if line + 1 < lines {
-                execute!(stdout, cursor::MoveDown(1))?;
-            }
-        }
-        execute!(
-            stdout,
-            cursor::MoveUp(lines.saturating_sub(1) as u16),
-            cursor::MoveToColumn(0)
-        )?;
-        Ok(())
+    fn clear_rendered_region(region: &RenderedSkillSelectRegion) -> Result<()> {
+        clear_rendered_lines(region.rows_to_clear(live_skill_select_columns()))
     }
 }
 
@@ -1501,7 +1511,8 @@ fn selected_skill_names(
     let mut selected = skills
         .iter()
         .zip(checked)
-        .filter_map(|(skill, checked)| checked.then(|| skill.name.clone()))
+        .filter(|(_, checked)| **checked)
+        .map(|(skill, _)| skill.name.clone())
         .collect::<Vec<_>>();
     if selected.is_empty()
         && let Some(skill) = skills.get(current)
@@ -1558,38 +1569,19 @@ fn skill_selection_label(skill: &InstalledSkillSummary, width: usize) -> String 
     } else {
         format!("{} - {}", skill.name, skill.description)
     };
-    truncate_display_width(&label, width)
+    truncate_to_display_width(&label, width)
 }
 
-fn truncate_display_width(text: &str, max_width: usize) -> String {
-    if UnicodeWidthStr::width(text) <= max_width {
-        return text.to_string();
-    }
-
-    let ellipsis = "...";
-    let target_width = max_width.saturating_sub(ellipsis.len());
-    let mut width = 0usize;
-    let mut out = String::new();
-    for ch in text.chars() {
-        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
-        if width + ch_width > target_width {
-            break;
-        }
-        out.push(ch);
-        width += ch_width;
-    }
-    out.push_str(ellipsis);
-    out
+fn live_skill_select_columns() -> usize {
+    crossterm::terminal::size()
+        .map(|(columns, _)| columns as usize)
+        .unwrap_or(100)
+        .max(1)
 }
 
-fn live_select_block(lines: &[String]) -> String {
-    if lines.is_empty() {
-        return String::new();
-    }
-
-    let mut rendered = lines.join("\r\n");
-    rendered.push_str("\r\n");
-    rendered
+#[cfg(test)]
+fn rendered_skill_select_rows(lines: &[String], columns: usize) -> usize {
+    crate::terminal_ui::rendered_row_count(lines, columns)
 }
 
 fn confirm_action(action: &str, names: &[String]) -> Result<bool> {
@@ -1783,9 +1775,10 @@ fn output_message_result(
 #[cfg(test)]
 mod tests {
     use super::{
-        PreparedSource, SkillSourceRecord, SourceOrigin, filter_skill_show_level,
-        parse_github_tree_source, parse_skill_md, prepare_source_from_git_record,
-        render_skill_show_for_table, resolve_add_targets, update_target_from_record,
+        PreparedSource, RenderedSkillSelectRegion, SkillSourceRecord, SourceOrigin,
+        filter_skill_show_level, parse_github_tree_source, parse_skill_md,
+        prepare_source_from_git_record, render_skill_show_for_table, rendered_skill_select_rows,
+        resolve_add_targets, update_target_from_record,
     };
     use serde_json::json;
     use std::path::Path;
@@ -2024,5 +2017,25 @@ mod tests {
                 .iter()
                 .any(|target| target.data.ends_with("skill-b"))
         );
+    }
+
+    #[test]
+    fn skill_remove_selector_counts_wrapped_ansi_rows() {
+        let lines = vec![
+            "\u{1b}[32m12345678901\u{1b}[0m".to_string(),
+            "short".to_string(),
+        ];
+
+        assert_eq!(rendered_skill_select_rows(&lines, 10), 3);
+    }
+
+    #[test]
+    fn skill_remove_selector_recomputes_clear_rows_after_resize() {
+        let lines = vec!["x".repeat(90)];
+        let region = RenderedSkillSelectRegion::from_lines(&lines, 90);
+
+        assert_eq!(rendered_skill_select_rows(&lines, 90), 1);
+        assert_eq!(rendered_skill_select_rows(&lines, 30), 3);
+        assert_eq!(region.rows_to_clear(30), 3);
     }
 }

@@ -21,12 +21,18 @@
  */
 
 import { readFile } from "node:fs/promises";
+import {
+  extractCaptureTurns,
+} from "./capture-utils.mjs";
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { loadState, resolveOvSessionId, saveState } from "./session-state.mjs";
+import { sendSessionMessages } from "./shared/batch-send.mjs";
+import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
 const cfg = loadConfig();
 const { log, logError } = createLogger("pre-compact");
+let activePeerId = cfg.peerId || "";
 
 function output(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
@@ -36,39 +42,40 @@ function noop(message) {
   output(message ? { systemMessage: message } : {});
 }
 
-async function fetchJSON(path, init = {}) {
+function makeHeaders() {
+  const headers = { "Content-Type": "application/json" };
+  if (cfg.apiKey) {
+    headers["Authorization"] = `Bearer ${cfg.apiKey}`;
+    headers["X-API-Key"] = cfg.apiKey;
+  }
+  if (cfg.sendIdentityHeaders && cfg.account) headers["X-OpenViking-Account"] = cfg.account;
+  if (cfg.sendIdentityHeaders && cfg.user) headers["X-OpenViking-User"] = cfg.user;
+  if (activePeerId) headers["X-OpenViking-Actor-Peer"] = activePeerId;
+  if (cfg.userAgent) headers["User-Agent"] = cfg.userAgent;
+  return headers;
+}
+
+async function fetchJSONRes(path, init = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), cfg.captureTimeoutMs);
   try {
-    const headers = { "Content-Type": "application/json" };
-    if (cfg.apiKey) {
-      headers["Authorization"] = `Bearer ${cfg.apiKey}`;
-      headers["X-API-Key"] = cfg.apiKey;
-    }
-    if (cfg.account) headers["X-OpenViking-Account"] = cfg.account;
-    if (cfg.user) headers["X-OpenViking-User"] = cfg.user;
-    const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
+    const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers: makeHeaders(), signal: controller.signal });
     const body = await res.json().catch(() => null);
-    if (!body) return null;
-    if (!res.ok || body.status === "error") return null;
-    return body.result ?? body;
-  } catch {
-    return null;
+    if (!body) return { ok: false, status: res.status, error: { message: "empty or invalid JSON response" } };
+    if (!res.ok || body.status === "error") {
+      return { ok: false, status: res.status, error: body.error || body };
+    }
+    return { ok: true, status: res.status, result: body.result ?? body };
+  } catch (err) {
+    return { ok: false, status: 0, error: { message: err?.message || String(err) } };
   } finally {
     clearTimeout(timer);
   }
 }
 
-function extractTextFromContent(content) {
-  if (!content) return "";
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .filter((b) => b && (b.type === "text" || b.type === "input_text" || b.type === "output_text"))
-      .map((b) => b.text || "")
-      .join("\n");
-  }
-  return "";
+async function fetchJSON(path, init = {}) {
+  const r = await fetchJSONRes(path, init);
+  return r.ok ? (r.result ?? null) : null;
 }
 
 function parseTranscript(content) {
@@ -85,35 +92,7 @@ function parseTranscript(content) {
 }
 
 function extractTurns(entries) {
-  const turns = [];
-  for (const entry of entries) {
-    if (!entry || typeof entry !== "object") continue;
-    const payload = entry.payload && typeof entry.payload === "object" ? entry.payload : entry;
-    let role = payload.role;
-    let text = "";
-
-    if (typeof payload.content === "string") {
-      text = payload.content;
-    } else if (Array.isArray(payload.content)) {
-      text = extractTextFromContent(payload.content);
-    } else if (payload.message && typeof payload.message === "object") {
-      role = payload.message.role || role;
-      text = typeof payload.message.content === "string"
-        ? payload.message.content
-        : extractTextFromContent(payload.message.content);
-    }
-
-    if (role !== "user" && role !== "assistant") continue;
-    if (role === "assistant" && !cfg.captureAssistantTurns) continue;
-    const trimmed = text.trim();
-    if (!trimmed) continue;
-
-    const capped = trimmed.length > cfg.captureMaxLength
-      ? trimmed.slice(0, cfg.captureMaxLength)
-      : trimmed;
-    turns.push({ role, text: capped });
-  }
-  return turns;
+  return extractCaptureTurns(entries, cfg);
 }
 
 async function readTranscriptTurns(transcriptPath) {
@@ -129,18 +108,15 @@ async function readTranscriptTurns(transcriptPath) {
 }
 
 async function appendTurns(ovSessionId, turns) {
-  let appended = 0;
-  for (const turn of turns) {
-    const body = { role: turn.role, content: turn.text };
-    if (cfg.peerId) body.peer_id = cfg.peerId;
-    const result = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}/messages`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
-    if (!result) break;
-    appended += 1;
-  }
-  return appended;
+  const payloads = turns.map((turn) => {
+    const body = turn.parts?.length
+      ? { role: turn.role, parts: turn.parts }
+      : { role: turn.role, content: turn.text };
+    if (activePeerId) body.peer_id = activePeerId;
+    return body;
+  });
+  const r = await sendSessionMessages(fetchJSONRes, ovSessionId, payloads);
+  return r.sent;
 }
 
 async function main() {
@@ -164,7 +140,9 @@ async function main() {
   const sessionId = input.session_id || "unknown";
   const transcriptPath = input.transcript_path || null;
   const trigger = input.trigger || "auto";
-  log("start", { sessionId, transcriptPath, trigger });
+  const state = await loadState(sessionId);
+  activePeerId = cfg.peerId || state.workspacePeerId || resolveEffectivePeerId({ cfg, cwd: process.cwd() }).peerId;
+  log("start", { sessionId, transcriptPath, trigger, hasPeer: Boolean(activePeerId) });
 
   const health = await fetchJSON("/health");
   if (!health) {
@@ -173,7 +151,6 @@ async function main() {
     return;
   }
 
-  const state = await loadState(sessionId);
   const allTurns = await readTranscriptTurns(transcriptPath);
   const newTurns = allTurns.slice(state.capturedTurnCount);
 

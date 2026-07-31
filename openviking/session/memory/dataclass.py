@@ -135,6 +135,40 @@ class StoredLink(BaseModel):
     created_at: str = ""
 
 
+class DeleteId(BaseModel):
+    """Delete request by page_id, optionally remapped to a replacement page_id."""
+
+    delete_page_id: Annotated[Optional[int], WithJsonSchema({"type": "integer"})] = Field(
+        ..., description="Page_id of the memory item to delete."
+    )
+    replacement_page_id: Annotated[
+        Optional[int],
+        WithJsonSchema({"anyOf": [{"type": "integer"}, {"type": "null"}]}),
+    ] = Field(
+        ...,
+        description=(
+            "Replacement page_id that should inherit this deleted page's existing links/backlinks; "
+            "use null for a pure delete."
+        ),
+    )
+
+
+class MemoryOperationSource(BaseModel):
+    """Runtime and persisted provenance for one extracted memory operation.
+
+    ``extraction_id`` identifies one archive/commit extraction run, not an
+    entire chat session.  Streaming memory merge uses it to detect batches that
+    combine patches produced from different extraction snapshots.
+    """
+
+    extraction_id: Optional[str] = None
+    session_id: Optional[str] = None
+    archive_uri: Optional[str] = None
+    task_id: Optional[str] = None
+    trace_id: Optional[str] = None
+    extracted_at: Optional[str] = None
+
+
 # ============================================================================
 # Memory Field and Schema Definitions
 # ============================================================================
@@ -166,9 +200,13 @@ class MemoryTypeSchema(BaseModel):
     operation_mode: str = Field(
         "upsert", description="Operation mode: 'upsert' (default), 'add_only', or 'update_only'"
     )
-    agent_only: bool = Field(
-        False,
-        description="If true, only used by execution-derived extraction, not long-term memory",
+    stage: str = Field(
+        "user",
+        description="Extraction stage: 'user' for long-term user memory, 'agent' for execution-derived memory.",
+    )
+    peer_enabled: bool = Field(
+        True,
+        description="Whether this memory type is stored separately under peer directories.",
     )
     overview_template: Optional[str] = Field(
         None, description="Overview template for auto-generating .overview.md files"
@@ -237,7 +275,12 @@ class MemoryFile(BaseModel):
 
     def to_metadata(self) -> Dict[str, Any]:
         """Flatten to a dict suitable for serialize_with_metadata."""
-        metadata = dict(self.extra_fields)
+        metadata = {
+            key: value
+            for key, value in dict(self.extra_fields).items()
+            if key not in {"user_id", "user_ids", "_uri"}
+        }
+        metadata.setdefault("version", 1)
         metadata["content"] = self.content
         if self.links:
             metadata["links"] = self.links
@@ -254,6 +297,7 @@ class ResolvedOperation(BaseModel):
     memory_type: str  # The memory type (e.g., 'tools', 'skills', 'events')
     uris: List[str]
     page_id: Optional[int] = None  # Temporary page_id for link resolution (not persisted)
+    source: Optional[MemoryOperationSource] = None
 
     def is_edit(self):
         return self.old_memory_file_content is not None
@@ -264,6 +308,7 @@ class ResolvedOperations(BaseModel):
     delete_file_contents: List[MemoryFile]
     errors: List[str]
     resolved_links: List[StoredLink] = Field(default_factory=list)
+    delete_replacements: Dict[str, str] = Field(default_factory=dict)
 
     def has_errors(self) -> bool:
         return len(self.errors) > 0
@@ -398,7 +443,7 @@ class MemoryOperationsProtocol(Protocol):
     reasoning: str
     write_uris: List[Any]
     edit_uris: List[Any]
-    delete_uris: List[str]
+    delete_ids: List[DeleteId]
 
     def is_empty(self) -> bool: ...
 
@@ -423,21 +468,21 @@ class StructuredMemoryOperations(FaultTolerantBaseModel):
         default_factory=list,
         description="Edit operations with flat data format",
     )
-    delete_uris: List[str] = Field(
+    delete_ids: List[DeleteId] = Field(
         default_factory=list,
-        description="Delete operations as URI strings",
+        description="Delete operations by page_id, with optional replacement_page_id",
     )
 
     def is_empty(self) -> bool:
         """Check if there are any operations."""
-        return len(self.write_uris) == 0 and len(self.edit_uris) == 0 and len(self.delete_uris) == 0
+        return len(self.write_uris) == 0 and len(self.edit_uris) == 0 and len(self.delete_ids) == 0
 
     def to_legacy_operations(self) -> Dict[str, Any]:
         """Convert to legacy format (identity for fallback)."""
         return {
             "write_uris": self.write_uris,
             "edit_uris": self.edit_uris,
-            "delete_uris": self.delete_uris,
+            "delete_ids": self.delete_ids,
         }
 
     model_config = {"extra": "ignore"}

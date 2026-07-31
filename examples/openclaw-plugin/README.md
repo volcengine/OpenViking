@@ -74,7 +74,11 @@ openclaw config get plugins.slots.contextEngine  # should output: openviking
 | [INSTALL.md](./INSTALL.md) | Full install, upgrade, and uninstall guide |
 | [INSTALL-ZH.md](./INSTALL-ZH.md) | Chinese install guide |
 | [INSTALL-AGENT.md](./INSTALL-AGENT.md) | Agent-oriented operator guide |
+| [docs/openviking-tos-install-guide.md](./docs/openviking-tos-install-guide.md) | TOS release bundle publishing and installer guide |
 | [docs/openviking-openclaw-plugin-guide.md](./docs/openviking-openclaw-plugin-guide.md) | Comprehensive Chinese guide for usage, configuration, debugging, testing, build, release, deployment, and rollback |
+| [docs/openviking-websocket-rpc-api.md](./docs/openviking-websocket-rpc-api.md) | Gateway WebSocket RPC usage for OpenViking tools |
+| [docs/openviking-runtime-query-config.md](./docs/openviking-runtime-query-config.md) | Runtime query config scopes, fields, and commands |
+| [docs/openviking-install-package-contract.md](./docs/openviking-install-package-contract.md) | Package and install contract verification notes |
 
 > **Plugin vs Skill**: This page is for `@openviking/openclaw-plugin` (the context-engine plugin). Do **not** use `clawhub install openviking` — that installs a different AgentSkill.
 
@@ -120,8 +124,8 @@ The main rules are:
 - reuse `sessionId` directly when it is already a UUID
 - prefer `sessionKey` when deriving a stable `ovSessionId`
 - normalize unsafe path characters, or fall back to a stable SHA-256 when needed
-- `peer_role=none` is the default and does not write `peer_id` on session messages
-- `peer_role=assistant` writes assistant messages with `peer_id=<sessionAgent>`; if `peer_prefix` is set, the value becomes `<peer_prefix>_<sessionAgent>`
+- `peer_role=assistant` is the default and writes assistant messages with `peer_id=<sessionAgent>`; if `peer_prefix` is set, the value becomes `<peer_prefix>_<sessionAgent>`
+- `peer_role=none` disables peer message attribution and actor-peer routing
 - `peer_role=person` writes user messages with `peer_id` derived from OpenClaw sender identity; assistant messages do not get `peer_id`
 - data-plane recall/search/read/import/delete sends the same resolved peer identity as `X-OpenViking-Actor-Peer` when `peer_role` is `assistant` or `person`
 - when OpenClaw does not provide a session agent, use its default agent `main` for local session and assistant peer metadata
@@ -139,12 +143,12 @@ The recommended remote-mode configuration only needs:
 In this setup:
 
 - `apiKey` should usually be a user key
-- new installs default to `peer_role=none`
+- new installs default to `peer_role=assistant`
 - `accountId` / `userId` are advanced options only when the deployment needs explicit identity headers, such as root-key or trusted-server flows
 
 ### User namespace
 
-The plugin writes and searches user-scoped memory through `viking://user/...`; OpenViking resolves that alias from the request tenant and actor-peer context. `viking://agent/...` is deprecated by OpenViking and is not used by the plugin.
+The plugin writes and searches user-scoped memory through `viking://user/...`; OpenViking resolves that alias from the request tenant and actor-peer context. Deprecated agent URI paths are not used by the plugin.
 
 ## assemble Recall Flow
 
@@ -200,7 +204,7 @@ That means OpenClaw sees "compressed history summary + archive index + active me
 - it strips injected `<openviking-context>` blocks, historical `<relevant-memories>` blocks, and metadata noise before capture
 - it appends the sanitized turn text into the OpenViking session
 
-After that, the plugin checks `pending_tokens`. Once the session crosses `commitTokenThreshold`, it triggers `commit(wait=false)`:
+After that, the plugin checks `pending_tokens`. Once it reaches `commitTokenThresholdRatio` of the model context window (`tokenBudget`), it triggers `commit(wait=false)`:
 
 - archive generation and Phase 2 memory extraction continue asynchronously on the server
 - the current turn is not blocked waiting for extraction

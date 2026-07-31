@@ -9,10 +9,13 @@ from typing import AsyncGenerator, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
-from openviking.server.auth import get_request_context
-from openviking.server.identity import AuthMode, RequestContext
+from openviking.server.auth import _auth_mode, get_request_context
+from openviking.server.config import get_server_url_from_server_data
+from openviking.server.identity import RequestContext
+from openviking.server.models import Response
+from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.utils.logger import get_logger
 
 router = APIRouter(prefix="", tags=["bot"])
@@ -71,10 +74,33 @@ def _extract_forward_api_key(request: Request) -> str:
     return ""
 
 
+def _build_openviking_connection(
+    *,
+    api_key: str,
+    ctx: RequestContext,
+    effective_auth_mode: str,
+    server_url: str,
+) -> dict:
+    connection = {
+        "account_id": ctx.user.account_id,
+        "user_id": ctx.user.user_id,
+        "agent_id": DEFAULT_BOT_AGENT_ID,
+        "role": getattr(ctx.role, "value", str(ctx.role)),
+        "api_key_type": "root" if effective_auth_mode == "trusted" else "user",
+        "server_url": server_url,
+        "namespace_policy": dict(DEFAULT_NAMESPACE_POLICY),
+    }
+    if api_key:
+        connection["api_key"] = api_key
+    return connection
+
+
 def _attach_openviking_connection(
     body: dict,
     request: Request,
     ctx: RequestContext,
+    *,
+    include_legacy_user_id: bool = True,
 ) -> dict:
     """Attach the authenticated Studio connection to the bot request body.
 
@@ -84,27 +110,138 @@ def _attach_openviking_connection(
     """
     enriched = dict(body)
     api_key = _extract_forward_api_key(request)
-    auth_mode = AuthMode.API_KEY
-    config = getattr(request.app.state, "config", None)
-    if config is not None and hasattr(config, "get_effective_auth_mode"):
-        auth_mode = config.get_effective_auth_mode()
+    plugin = getattr(request.app.state, "auth_plugin", None)
+    effective_auth_mode = _auth_mode(request)
+    server_url = get_server_url_from_server_data(getattr(request.app.state, "config", None))
     if not api_key:
-        if auth_mode == AuthMode.DEV:
-            enriched.setdefault("user_id", ctx.user.user_id)
+        if plugin is not None and plugin.can_skip_api_key_for_bot_proxy():
+            if effective_auth_mode == "trusted":
+                enriched["openviking_connection"] = _build_openviking_connection(
+                    api_key="",
+                    ctx=ctx,
+                    effective_auth_mode=effective_auth_mode,
+                    server_url=server_url,
+                )
+                return enriched
+            if include_legacy_user_id:
+                enriched.setdefault("user_id", ctx.user.user_id)
             return enriched
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Bot proxy requires a forwardable OpenViking API key.",
         )
-    enriched["openviking_connection"] = {
-        "api_key": api_key,
-        "account_id": ctx.user.account_id,
-        "user_id": ctx.user.user_id,
-        "agent_id": DEFAULT_BOT_AGENT_ID,
-        "role": getattr(ctx.role, "value", str(ctx.role)),
-        "namespace_policy": dict(DEFAULT_NAMESPACE_POLICY),
-    }
+    enriched["openviking_connection"] = _build_openviking_connection(
+        api_key=api_key,
+        ctx=ctx,
+        effective_auth_mode=effective_auth_mode,
+        server_url=server_url,
+    )
     return enriched
+
+
+def _bot_gateway_headers(*, connection: dict | None = None) -> dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    if BOT_API_KEY:
+        headers["X-Gateway-Token"] = BOT_API_KEY
+    if connection:
+        mapping = {
+            "api_key": "X-API-Key",
+            "account_id": "X-OpenViking-Account",
+            "user_id": "X-OpenViking-User",
+            "actor_peer_id": "X-OpenViking-Actor-Peer",
+        }
+        for field, header in mapping.items():
+            value = str(connection.get(field) or "").strip()
+            if value:
+                headers[header] = value
+    return headers
+
+
+def _raise_compile_proxy_error(response: httpx.Response) -> None:
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+    detail = payload.get("detail") if isinstance(payload, dict) else None
+    if isinstance(detail, dict):
+        code = str(detail.get("code") or "UNAVAILABLE")
+        message = str(detail.get("message") or "Bot service error")
+    else:
+        code = "UNAVAILABLE" if response.status_code >= 500 else "INVALID_ARGUMENT"
+        message = str(detail or response.text or "Bot service error")
+    raise OpenVikingError(message, code=code)
+
+
+@router.post("/compile", status_code=status.HTTP_202_ACCEPTED)
+async def create_compile(
+    request: Request,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Create a VikingBot compile task with the authenticated OV identity."""
+    bot_url = get_bot_url()
+    try:
+        body = await request.json()
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid JSON in request body",
+        ) from exc
+    enriched = _attach_openviking_connection(
+        body,
+        request,
+        _ctx,
+        include_legacy_user_id=False,
+    )
+    try:
+        async with _create_bot_proxy_client() as client:
+            response = await client.post(
+                f"{bot_url}/bot/v1/compile",
+                json=enriched,
+                headers=_bot_gateway_headers(),
+                timeout=30.0,
+            )
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Bot service unavailable: {exc}",
+        ) from exc
+    if not response.is_success:
+        _raise_compile_proxy_error(response)
+    return JSONResponse(
+        status_code=status.HTTP_202_ACCEPTED,
+        content=Response(status="ok", result=response.json()).model_dump(mode="json"),
+    )
+
+
+@router.get("/compile/{task_id}")
+async def get_compile(
+    task_id: str,
+    request: Request,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Read compile status without exposing tasks owned by another principal."""
+    bot_url = get_bot_url()
+    connection = _attach_openviking_connection(
+        {},
+        request,
+        _ctx,
+        include_legacy_user_id=False,
+    ).get("openviking_connection")
+    try:
+        async with _create_bot_proxy_client() as client:
+            response = await client.get(
+                f"{bot_url}/bot/v1/compile/{task_id}",
+                headers=_bot_gateway_headers(connection=connection),
+                timeout=30.0,
+            )
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Bot service unavailable: {exc}",
+        ) from exc
+    if not response.is_success:
+        _raise_compile_proxy_error(response)
+    return Response(status="ok", result=response.json())
 
 
 @router.get("/health")
@@ -119,8 +256,10 @@ async def health_check(request: Request):
     try:
         async with _create_bot_proxy_client() as client:
             # Forward to Vikingbot OpenAPIChannel health endpoint
+            headers = {"X-Gateway-Token": BOT_API_KEY} if BOT_API_KEY else None
             response = await client.get(
                 f"{bot_url}/bot/v1/health",
+                headers=headers,
                 timeout=5.0,
             )
             response.raise_for_status()
@@ -219,7 +358,7 @@ async def feedback(
 
             response = await client.post(
                 f"{bot_url}/bot/v1/feedback",
-                json=body,
+                json=_attach_openviking_connection(body, request, _ctx),
                 headers=headers,
                 timeout=30.0,
             )
@@ -284,10 +423,8 @@ async def chat_stream(
                     response.raise_for_status()
 
                     # Stream the response content
-                    async for line in response.aiter_lines():
-                        if line:
-                            # Forward the SSE line as-is
-                            yield f"{line}\n"
+                    async for chunk in response.aiter_text():
+                        yield chunk
         except httpx.RequestError as e:
             logger.error(f"Failed to connect to bot service: {e}")
             error_event = {

@@ -21,6 +21,9 @@ from .consts import (
 )
 from .embedding_config import EmbeddingConfig
 from .encryption_config import EncryptionConfig
+from .git_config import GitConfig
+from .grep_config import GrepConfig
+from .ingest_config import IngestConfig
 from .log_config import LogConfig
 from .memory_config import MemoryConfig
 from .oauth_config import OAuthConfig
@@ -28,6 +31,7 @@ from .parser_config import (
     AudioConfig,
     CodeConfig,
     DirectoryConfig,
+    ExcelConfig,
     FeishuConfig,
     HTMLConfig,
     ImageConfig,
@@ -36,6 +40,7 @@ from .parser_config import (
     SemanticConfig,
     TextConfig,
     VideoConfig,
+    WebFeedConfig,
 )
 from .prompts_config import PromptsConfig
 from .rerank_config import RerankConfig
@@ -50,6 +55,36 @@ def _get_config_warning_logger():
     return logging.getLogger(__name__)
 
 
+class ConnectorConfig(BaseModel):
+    """Configuration for external Connector service."""
+
+    enable: bool = False
+    connector: str = ""
+    tracker: str = ""
+    timeout_seconds: int = 3600
+    poll_interval_ms: int = 5000
+    allowed_add_types: List[str] = Field(default_factory=lambda: ["tos"])
+
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def _validate(self) -> "ConnectorConfig":
+        if self.enable:
+            for name, url in (("connector", self.connector), ("tracker", self.tracker)):
+                if not url.strip():
+                    raise ValueError(f"connector.{name} is required when connector.enable=true")
+                if "://" not in url:
+                    raise ValueError(
+                        f"connector.{name} must be a full endpoint URL including scheme "
+                        "(e.g., http://...)"
+                    )
+        if self.timeout_seconds <= 0:
+            raise ValueError("connector.timeout_seconds must be > 0")
+        if self.poll_interval_ms <= 0:
+            raise ValueError("connector.poll_interval_ms must be > 0")
+        return self
+
+
 class ParserApiConfig(BaseModel):
     """Configuration for the Understanding files/responses API."""
 
@@ -57,6 +92,7 @@ class ParserApiConfig(BaseModel):
     extensions: List[str] = Field(default_factory=list)
     host: str = ""
     api_key: str = ""
+    enable_feishu_url: bool = False
     enable_resumable_upload: bool = False
     upload_simple_max_bytes: int = 512 * 1024 * 1024
     upload_part_size_bytes: int = 8 * 1024 * 1024
@@ -135,9 +171,18 @@ class OpenVikingConfig(BaseModel):
         description="Retrieval ranking configuration",
     )
 
+    grep: GrepConfig = Field(
+        default_factory=GrepConfig,
+        description="Grep engine configuration",
+    )
+
     # Encryption configuration
     encryption: EncryptionConfig = Field(
         default_factory=EncryptionConfig, description="Encryption configuration"
+    )
+
+    git: GitConfig = Field(
+        default_factory=GitConfig, description="Git version control configuration"
     )
 
     # Parser configurations
@@ -161,6 +206,14 @@ class OpenVikingConfig(BaseModel):
         default_factory=MarkdownConfig, description="Markdown parsing configuration"
     )
 
+    excel: ExcelConfig = Field(
+        # from_dict on an empty mapping, not the bare constructor: an absent
+        # parsers.excel section must record that no key was set, so sectioning
+        # still follows parsers.markdown for deployments predating this section.
+        default_factory=lambda: ExcelConfig.from_dict({}),
+        description="Excel parsing configuration",
+    )
+
     html: HTMLConfig = Field(default_factory=HTMLConfig, description="HTML parsing configuration")
 
     text: TextConfig = Field(default_factory=TextConfig, description="Text parsing configuration")
@@ -174,6 +227,11 @@ class OpenVikingConfig(BaseModel):
         description="Feishu/Lark document parsing configuration",
     )
 
+    webfeed: WebFeedConfig = Field(
+        default_factory=WebFeedConfig,
+        description="Whole-site ingestion via sitemap / RSS / Atom feeds",
+    )
+
     semantic: SemanticConfig = Field(
         default_factory=SemanticConfig,
         description="Semantic processing configuration (overview/abstract limits)",
@@ -182,6 +240,11 @@ class OpenVikingConfig(BaseModel):
     parser_api: ParserApiConfig = Field(
         default_factory=ParserApiConfig,
         description="Third-party parser API configuration (files/responses)",
+    )
+
+    connector: ConnectorConfig = Field(
+        default_factory=ConnectorConfig,
+        description="External Connector service configuration for data import",
     )
 
     auto_generate_l0: bool = Field(
@@ -227,6 +290,58 @@ class OpenVikingConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="before")
+    @classmethod
+    def _inherit_git_defaults_from_agfs(cls, data: Any) -> Any:
+        """Let the `git` section inherit unset defaults from `storage.agfs`.
+
+        - `git.backend` defaults to `storage.agfs.backend` (a 'memory' storage
+          backend maps to 'local') when not set explicitly.
+        - When the effective git backend is 's3', the `git.s3` fields
+          bucket/region/endpoint/access_key/secret_key default to the matching
+          `storage.agfs.s3` values when not set explicitly and the source value
+          is non-empty.
+
+        Injecting into the raw dict keeps GitConfig's own validation intact.
+        """
+        if not isinstance(data, dict):
+            return data
+
+        storage = data.get("storage")
+        agfs = storage.get("agfs", {}) if isinstance(storage, dict) else {}
+        if not isinstance(agfs, dict):
+            agfs = {}
+
+        git = data.get("git")
+        if not isinstance(git, dict):
+            if git is not None:
+                # git provided as a model instance; respect it as-is.
+                return data
+            git = {}
+        git = dict(git)
+
+        if "backend" not in git:
+            agfs_backend = agfs.get("backend", "local")
+            if agfs_backend == "memory":
+                agfs_backend = "local"
+            if agfs_backend in ("local", "s3"):
+                git["backend"] = agfs_backend
+
+        if git.get("backend", "local") == "s3":
+            agfs_s3 = agfs.get("s3", {})
+            if not isinstance(agfs_s3, dict):
+                agfs_s3 = {}
+            git_s3 = git.get("s3")
+            git_s3 = dict(git_s3) if isinstance(git_s3, dict) else {}
+            for field in ("bucket", "region", "endpoint", "access_key", "secret_key"):
+                if field not in git_s3 and agfs_s3.get(field):
+                    git_s3[field] = agfs_s3[field]
+            git["s3"] = git_s3
+
+        data = dict(data)
+        data["git"] = git
+        return data
+
     allow_private_networks: bool = Field(
         default=False,
         description=(
@@ -252,6 +367,11 @@ class OpenVikingConfig(BaseModel):
         description="Prompt template configuration",
     )
 
+    ingest: IngestConfig = Field(
+        default_factory=IngestConfig,
+        description="Conversation-log ingest (openviking-server ingest) configuration",
+    )
+
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid"}
 
     @classmethod
@@ -268,10 +388,12 @@ class OpenVikingConfig(BaseModel):
                 "audio",
                 "video",
                 "markdown",
+                "excel",
                 "html",
                 "text",
                 "directory",
                 "feishu",
+                "webfeed",
             ]
             raise_unknown_config_fields(
                 data=config_copy,

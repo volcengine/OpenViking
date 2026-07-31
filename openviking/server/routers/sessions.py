@@ -4,15 +4,15 @@
 
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request
-from pydantic import BaseModel, Field, model_validator
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
-from openviking.core.peer_id import normalize_peer_selector
+from openviking.core.peer_id import normalize_peer_id
 from openviking.message.part import Part, TextPart, part_from_dict
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
-from openviking.server.identity import AuthMode, RequestContext
+from openviking.server.identity import RequestContext
 from openviking.server.models import ErrorInfo, Response
 from openviking.server.responses import error_response
 from openviking.server.telemetry import run_operation
@@ -90,17 +90,22 @@ class AddMessageRequest(BaseModel):
     content: Optional[str] = None
     parts: Optional[List[Dict[str, Any]]] = None
     created_at: Optional[str] = None
+    turn_id: Optional[str] = None
+    message_kind: Optional[
+        Literal["user_query", "assistant_step", "tool_transport", "checkpoint"]
+    ] = None
+    source_message_ids: Optional[List[str]] = None
     telemetry: TelemetryRequest = False
+
+    @field_validator("peer_id")
+    @classmethod
+    def validate_peer_id(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_peer_id(value)
 
     @model_validator(mode="after")
     def validate_content_or_parts(self) -> "AddMessageRequest":
         if self.content is None and self.parts is None:
             raise ValueError("Either 'content' or 'parts' must be provided")
-        self.peer_id = normalize_peer_selector(
-            self.peer_id,
-            agent_id=self.agent_id,
-            agent_uri=self.agent_uri,
-        )
         return self
 
 
@@ -131,6 +136,27 @@ def _resolve_message_parts(msg_request: AddMessageRequest) -> List[Part]:
     if msg_request.parts is not None:
         return [_part_request_to_part(p) for p in msg_request.parts]
     return [TextPart(text=msg_request.content or "")]
+
+
+def _session_pending_tokens(session: Any) -> int:
+    """Read the post-write pending-token count from a session.
+
+    Returns 0 when the session object does not expose ``meta`` so the response
+    stays well-formed against lightweight or legacy session implementations.
+    """
+    meta = getattr(session, "meta", None)
+    try:
+        return max(0, int(getattr(meta, "pending_tokens", 0) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _resolve_message_peer_id(msg_request: AddMessageRequest, ctx: RequestContext) -> Optional[str]:
+    if msg_request.peer_id is not None:
+        return msg_request.peer_id
+    if ctx.legacy_agent_id is not None and msg_request.role == "assistant":
+        return ctx.legacy_agent_id
+    return None
 
 
 def _part_request_to_part(raw_part: Dict[str, Any]) -> Part:
@@ -170,13 +196,6 @@ def _to_jsonable(value: Any) -> Any:
     if isinstance(value, dict):
         return {k: _to_jsonable(v) for k, v in value.items()}
     return value
-
-
-def _request_auth_mode(request: Request) -> AuthMode:
-    config = getattr(request.app.state, "config", None)
-    if config is not None and hasattr(config, "get_effective_auth_mode"):
-        return config.get_effective_auth_mode()
-    return AuthMode.API_KEY
 
 
 @router.post("")
@@ -376,7 +395,45 @@ class CommitRequest(BaseModel):
             "(default 10); compact path passes 0 to archive everything."
         ),
     )
+    retention_mode: Optional[Literal["turn_budget"]] = Field(
+        default=None,
+        description=(
+            "Opt in to logical Turn retention. Omit to preserve keep_recent_count semantics."
+        ),
+    )
+    keep_recent_turn_count: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=10_000,
+        description="Maximum number of newest logical user Turns to retain.",
+    )
+    retained_message_token_budget: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Token budget for retained raw messages and checkpoint.",
+    )
+    min_raw_tail_steps: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=10_000,
+        description="Minimum number of latest atomic assistant Steps kept raw.",
+    )
     telemetry: TelemetryRequest = False
+
+    @model_validator(mode="after")
+    def validate_turn_retention_opt_in(self) -> "CommitRequest":
+        if self.retention_mode is None and any(
+            value is not None
+            for value in (
+                self.keep_recent_turn_count,
+                self.retained_message_token_budget,
+                self.min_raw_tail_steps,
+            )
+        ):
+            raise ValueError(
+                "retention_mode='turn_budget' is required when Turn retention fields are set"
+            )
+        return self
 
 
 @router.post("/{session_id}/commit")
@@ -392,13 +449,23 @@ async def commit_session(
     polling progress via ``GET /tasks/{task_id}``.
     """
     service = get_service()
+    commit_kwargs: Dict[str, Any] = {"keep_recent_count": body.keep_recent_count}
+    optional_retention = {
+        "retention_mode": body.retention_mode,
+        "keep_recent_turn_count": body.keep_recent_turn_count,
+        "retained_message_token_budget": body.retained_message_token_budget,
+        "min_raw_tail_steps": body.min_raw_tail_steps,
+    }
+    commit_kwargs.update(
+        {key: value for key, value in optional_retention.items() if value is not None}
+    )
     execution = await run_operation(
         operation="session.commit",
         telemetry=body.telemetry,
         fn=lambda: service.sessions.commit_async(
             session_id,
             _ctx,
-            keep_recent_count=body.keep_recent_count,
+            **commit_kwargs,
         ),
     )
     return Response(
@@ -446,19 +513,28 @@ async def add_message(
         session = await service.sessions.get(session_id, _ctx, auto_create=True)
         parts = _resolve_message_parts(request)
 
-        session.add_messages(
-            [
-                {
-                    "role": request.role,
-                    "parts": parts,
-                    "peer_id": request.peer_id,
-                    "created_at": request.created_at,
-                }
-            ]
-        )
+        specs = [
+            {
+                "role": request.role,
+                "parts": parts,
+                "peer_id": _resolve_message_peer_id(request, _ctx),
+                "created_at": request.created_at,
+                "turn_id": request.turn_id,
+                "message_kind": request.message_kind,
+                "source_message_ids": request.source_message_ids,
+            }
+        ]
+        add_many_async = getattr(session, "add_messages_async", None)
+        if callable(add_many_async):
+            await add_many_async(specs)
+        else:
+            session.add_messages(specs)
         return {
             "session_id": session_id,
             "message_count": len(session.messages),
+            # Post-write value so a commit policy can decide without a
+            # follow-up get_session round trip.
+            "pending_tokens": _session_pending_tokens(session),
         }
 
     execution = await run_operation(
@@ -491,15 +567,25 @@ async def batch_add_messages(
                 {
                     "role": msg_request.role,
                     "parts": parts,
-                    "peer_id": msg_request.peer_id,
+                    "peer_id": _resolve_message_peer_id(msg_request, _ctx),
                     "created_at": msg_request.created_at,
+                    "turn_id": msg_request.turn_id,
+                    "message_kind": msg_request.message_kind,
+                    "source_message_ids": msg_request.source_message_ids,
                 }
             )
-        msgs = session.add_messages(specs)
+        add_many_async = getattr(session, "add_messages_async", None)
+        if callable(add_many_async):
+            msgs = await add_many_async(specs)
+        else:
+            msgs = session.add_messages(specs)
         return {
             "session_id": session_id,
             "message_count": len(session.messages),
             "added": len(msgs),
+            # Post-write value so a commit policy can decide without a
+            # follow-up get_session round trip.
+            "pending_tokens": _session_pending_tokens(session),
         }
 
     execution = await run_operation(

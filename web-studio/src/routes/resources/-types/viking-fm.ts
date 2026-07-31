@@ -27,6 +27,8 @@ export interface VikingListQueryOptions {
   absLimit?: number
   recursive?: boolean
   simple?: boolean
+  sortBy?: 'name' | 'mtime'
+  sortOrder?: 'asc' | 'desc'
 }
 
 export interface VikingTreeQueryOptions {
@@ -65,13 +67,14 @@ export interface VikingReadResult {
 export interface VikingPreviewPolicy {
   maxAutoReadBytes?: number
   defaultReadLimit?: number
+  requireKnownSize?: boolean
 }
 
 export interface VikingPreviewResult {
   entry: VikingFsEntry
   fileType: VikingFileType
   shouldAutoRead: boolean
-  reason?: 'binary' | 'too-large'
+  reason?: 'binary' | 'too-large' | 'unknown-size'
   content: string
   offset: number
   limit: number

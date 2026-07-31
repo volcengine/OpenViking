@@ -2,7 +2,11 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for config_loader utilities."""
 
+import json
 import logging
+import re
+from logging.handlers import QueueHandler
+from pathlib import Path
 
 import pytest
 
@@ -14,6 +18,7 @@ from openviking_cli.utils.config.config_loader import (
     require_config,
     resolve_config_path,
 )
+from openviking_cli.utils.config.parser_config import CodeHostingConfig
 
 
 class TestResolveConfigPath:
@@ -114,6 +119,44 @@ class TestRequireConfig:
             require_config(None, "TEST_MISSING_ENV", "nonexistent_file.conf", "test")
 
 
+def test_generic_code_hosting_domains_include_supported_platforms():
+    config = CodeHostingConfig()
+
+    assert config.code_hosting_domains == [
+        "github.com",
+        "gitlab.com",
+        "gitcode.com",
+        "gitee.com",
+        "bitbucket.org",
+        "codeberg.org",
+        "gitea.com",
+        "atomgit.com",
+        "git.sr.ht",
+    ]
+
+
+def test_example_code_hosting_domains_match_runtime_defaults():
+    example_path = Path(__file__).resolve().parents[1] / "examples" / "ov.conf.example"
+    example_text = example_path.read_text(encoding="utf-8")
+    domains_match = re.search(
+        r'"code_hosting_domains"\s*:\s*(\[[^\]]*\])',
+        example_text,
+    )
+
+    assert domains_match is not None
+    assert json.loads(domains_match.group(1)) == CodeHostingConfig().code_hosting_domains
+
+
+def test_generic_code_hosting_domains_load_from_config():
+    config = CodeHostingConfig.from_dict(
+        {
+            "code_hosting_domains": ["git.generic.example.com"],
+        }
+    )
+
+    assert config.code_hosting_domains == ["git.generic.example.com"]
+
+
 def test_openviking_config_rejects_unknown_nested_parser_section(monkeypatch):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 
@@ -185,7 +228,7 @@ def test_openviking_config_rejects_unknown_memory_field(monkeypatch):
     OpenVikingConfigSingleton.reset_instance()
 
 
-def test_openviking_config_rejects_memory_v1(monkeypatch):
+def test_openviking_config_ignores_deprecated_memory_version(monkeypatch):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 
     from openviking_cli.utils.config.open_viking_config import (
@@ -193,8 +236,12 @@ def test_openviking_config_rejects_memory_v1(monkeypatch):
         OpenVikingConfigSingleton,
     )
 
-    with pytest.raises(ValueError, match="legacy memory v1 has been removed"):
-        OpenVikingConfig.from_dict({"memory": {"version": "v1"}})
+    config = OpenVikingConfig.from_dict({})
+    assert config.memory.version == "v3"
+
+    for configured_version in ("v1", "v2", "v3", "unsupported"):
+        config = OpenVikingConfig.from_dict({"memory": {"version": configured_version}})
+        assert config.memory.version == "v3"
 
     OpenVikingConfigSingleton.reset_instance()
 
@@ -208,12 +255,40 @@ def test_openviking_config_ignores_deprecated_agent_memory_enabled(monkeypatch):
     )
 
     legacy_config = OpenVikingConfig.from_dict({"memory": {"agent_memory_enabled": False}})
+    working_memory_config = OpenVikingConfig.from_dict(
+        {"memory": {"working_memory_enabled": False}}
+    )
     experimental_config = OpenVikingConfig.from_dict(
         {"memory": {"experimental_memory_switch": True}}
     )
 
     assert not hasattr(legacy_config.memory, "agent_memory_enabled")
+    assert not hasattr(working_memory_config.memory, "working_memory_enabled")
     assert experimental_config.memory.experimental_memory_switch is True
+
+    OpenVikingConfigSingleton.reset_instance()
+
+
+def test_openviking_config_ignores_deprecated_code_summary_mode(monkeypatch):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
+
+    from openviking_cli.utils.config import parser_config
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        parser_config.logger,
+        "warning",
+        lambda message, *args, **kwargs: warnings.append(message % args if args else message),
+    )
+
+    config = OpenVikingConfig.from_dict({"code": {"code_summary_mode": "llm"}})
+
+    assert not hasattr(config.code, "code_summary_mode")
+    assert any("code.code_summary_mode is deprecated and ignored" in item for item in warnings)
 
     OpenVikingConfigSingleton.reset_instance()
 
@@ -389,6 +464,7 @@ def test_early_logger_initialization_is_reconfigured_to_file_output(tmp_path, mo
         logger.propagate = True
     logger_module._shared_log_handler = None
     logger_module._shared_log_handler_key = None
+    logger_module._stop_std_stream_listeners()
 
     OpenVikingConfigSingleton.reset_instance()
     monkeypatch.setenv("OPENVIKING_CONFIG_FILE", "/tmp/codex-no-config.json")
@@ -396,7 +472,7 @@ def test_early_logger_initialization_is_reconfigured_to_file_output(tmp_path, mo
     early_logger = logger_module.get_logger(logger_name)
     openviking_root = logging.getLogger("openviking")
     assert early_logger.handlers == []
-    assert any(isinstance(h, logging.StreamHandler) for h in openviking_root.handlers)
+    assert any(isinstance(h, QueueHandler) for h in openviking_root.handlers)
 
     config_path = tmp_path / "ov.conf"
     config_path.write_text(
@@ -442,4 +518,5 @@ def test_early_logger_initialization_is_reconfigured_to_file_output(tmp_path, mo
             logger.propagate = True
         logger_module._shared_log_handler = None
         logger_module._shared_log_handler_key = None
+        logger_module._stop_std_stream_listeners()
         OpenVikingConfigSingleton.reset_instance()

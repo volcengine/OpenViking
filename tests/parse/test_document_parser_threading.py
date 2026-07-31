@@ -3,6 +3,7 @@
 """Regression tests for offloading synchronous document conversions."""
 
 import sys
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable
@@ -80,9 +81,7 @@ async def test_word_parser_offloads_docx_conversion(monkeypatch, tmp_path: Path)
 
 
 @pytest.mark.asyncio
-async def test_word_parser_forwards_original_name_to_markdown(
-    monkeypatch, tmp_path: Path
-):
+async def test_word_parser_forwards_original_name_to_markdown(monkeypatch, tmp_path: Path):
     # On single-file upload the on-disk path is a temp name (upload_<uuid>.docx)
     # and the user's original filename arrives via source_name. WordParser must
     # forward that name to MarkdownParser explicitly; otherwise parse_content can
@@ -91,9 +90,7 @@ async def test_word_parser_forwards_original_name_to_markdown(
     seen = _stub_markdown_parse(parser)
     _patch_to_thread(monkeypatch, word)
     monkeypatch.setitem(sys.modules, "docx", SimpleNamespace())
-    monkeypatch.setattr(
-        parser, "_convert_to_markdown", lambda *args, **kwargs: "# converted docx"
-    )
+    monkeypatch.setattr(parser, "_convert_to_markdown", lambda *args, **kwargs: "# converted docx")
 
     upload = tmp_path / "upload_abc123.docx"
     upload.write_bytes(b"placeholder")
@@ -213,3 +210,52 @@ async def test_legacy_doc_parser_offloads_doc_extraction(monkeypatch, tmp_path: 
     assert seen["content"] == "# converted doc"
     assert result.source_format == "doc"
     assert result.parser_name == "LegacyDocParser"
+
+
+@pytest.mark.asyncio
+async def test_legacy_doc_parser_routes_ooxml_payload_to_word_parser(monkeypatch, tmp_path: Path):
+    parser = legacy_doc.LegacyDocParser()
+    _stub_markdown_parse(parser)
+    source = tmp_path / "mislabeled.doc"
+    with zipfile.ZipFile(source, "w") as archive:
+        archive.writestr("[Content_Types].xml", "<Types />")
+        archive.writestr("word/document.xml", "<w:document />")
+
+    seen: dict[str, Any] = {}
+
+    async def parse_word(self, source_path, instruction="", **kwargs):
+        seen["source"] = source_path
+        seen["instruction"] = instruction
+        seen["kwargs"] = kwargs
+        return create_parse_result(
+            root=ResourceNode(type=NodeType.ROOT),
+            source_path=str(source_path),
+            source_format="docx",
+            parser_name="WordParser",
+        )
+
+    monkeypatch.setattr(word.WordParser, "parse", parse_word)
+
+    result = await parser.parse(
+        source,
+        instruction="preserve tables",
+        source_name="mislabeled.doc",
+    )
+
+    assert seen == {
+        "source": source,
+        "instruction": "preserve tables",
+        "kwargs": {"source_name": "mislabeled.doc"},
+    }
+    assert result.source_format == "docx"
+    assert result.parser_name == "WordParser"
+
+
+@pytest.mark.asyncio
+async def test_legacy_doc_parser_rejects_non_word_zip_payload(tmp_path: Path):
+    source = tmp_path / "not-a-word-document.doc"
+    with zipfile.ZipFile(source, "w") as archive:
+        archive.writestr("payload.bin", b"binary")
+
+    with pytest.raises(ValueError, match="ZIP package"):
+        await legacy_doc.LegacyDocParser().parse(source)

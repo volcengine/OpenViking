@@ -4,6 +4,11 @@ import * as path from "node:path";
 import * as readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import { getEnv } from "../runtime-utils.js";
+import {
+  cleanOpenVikingRequestHeaders,
+  resolveOpenVikingRequestHeaders,
+  type OpenVikingRequestHeaders,
+} from "../request-headers.js";
 
 const HOME = os.homedir();
 const OPENCLAW_DIR = getEnv("OPENCLAW_STATE_DIR") || path.join(HOME, ".openclaw");
@@ -58,6 +63,7 @@ const PLUGIN_VERSION = readPluginVersion();
 const { min: COMPATIBLE_SERVER_MIN, max: COMPATIBLE_SERVER_MAX } = readCompatRangeFromManifest();
 const CONFIG_KEYS_TO_PRESERVE = [
   "targetUri",
+  "headers",
   "timeoutMs",
   "autoCapture",
   "captureMode",
@@ -71,7 +77,7 @@ const CONFIG_KEYS_TO_PRESERVE = [
   "recallMaxContentChars",
   "recallPreferAbstract",
   "recallTokenBudget",
-  "commitTokenThreshold",
+  "commitTokenThresholdRatio",
   "commitKeepRecentCount",
   "bypassSessionPatterns",
   "emitStandardDiagnostics",
@@ -79,6 +85,7 @@ const CONFIG_KEYS_TO_PRESERVE = [
 ] as const;
 
 type PeerRole = "none" | "assistant" | "person";
+const DEFAULT_SETUP_PEER_ROLE: PeerRole = "assistant";
 type RecallTargetType = "resource" | "user" | "agent";
 const ALLOWED_RECALL_TARGET_TYPES = ["resource", "user", "agent"] as const;
 
@@ -106,6 +113,11 @@ function maskKey(key: string): string {
   return `${key.slice(0, 4)}...${key.slice(-4)}`;
 }
 
+function nonEmptyOpenVikingRequestHeaders(value: unknown): OpenVikingRequestHeaders | undefined {
+  const headers = cleanOpenVikingRequestHeaders(value);
+  return Object.keys(headers).length > 0 ? headers : undefined;
+}
+
 function isValidPeerPrefixInput(value: string): boolean {
   const trimmed = value.trim();
   return !trimmed || /^[a-zA-Z0-9_-]+$/.test(trimmed);
@@ -121,7 +133,7 @@ function normalizePeerRole(value: unknown): PeerRole | undefined {
 function resolveExistingPeerRole(existing: Record<string, unknown> | null | undefined): PeerRole {
   const explicit = normalizePeerRole(existing?.peer_role);
   if (explicit) return explicit;
-  return "none";
+  return DEFAULT_SETUP_PEER_ROLE;
 }
 
 function resolveExistingPeerPrefix(existing: Record<string, unknown> | null | undefined): string {
@@ -132,7 +144,7 @@ function resolveExistingPeerPrefix(existing: Record<string, unknown> | null | un
 }
 
 function resolveSetupPeerRole(value: unknown): PeerRole {
-  if (value === undefined) return "none";
+  if (value === undefined) return DEFAULT_SETUP_PEER_ROLE;
   const role = normalizePeerRole(value);
   if (role) return role;
   throw new Error('peer_role must be "none", "assistant", or "person"');
@@ -300,14 +312,21 @@ type ApiKeyProbeResult = {
   detail: string;
 };
 
-async function probeApiKeyType(baseUrl: string, apiKey?: string): Promise<ApiKeyProbeResult> {
+async function probeApiKeyType(
+  baseUrl: string,
+  apiKey?: string,
+  configuredHeaders?: OpenVikingRequestHeaders,
+): Promise<ApiKeyProbeResult> {
   if (!apiKey) return { keyType: "no_key", needsAccountId: false, needsUserId: false, detail: "No API key configured" };
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 10_000);
   const sessionsUrl = `${baseUrl.replace(/\/+$/, "")}/api/v1/sessions?limit=1`;
   try {
-    const headers: Record<string, string> = { "X-API-Key": apiKey };
+    const configuredRequestHeaders = resolveOpenVikingRequestHeaders({ headers: configuredHeaders });
+    const headers: Record<string, string> = {};
+    headers["X-API-Key"] = apiKey;
+    Object.assign(headers, configuredRequestHeaders);
     const response = await fetch(sessionsUrl, {
       headers,
       signal: controller.signal,
@@ -346,6 +365,7 @@ async function probeApiKeyType(baseUrl: string, apiKey?: string): Promise<ApiKey
           "X-API-Key": apiKey,
           "X-OpenViking-Account": "__probe__",
           "X-OpenViking-User": "__probe__",
+          ...configuredRequestHeaders,
         };
         const probe2 = await fetch(sessionsUrl, {
           headers: probeHeaders,
@@ -375,12 +395,20 @@ async function probeApiKeyType(baseUrl: string, apiKey?: string): Promise<ApiKey
   }
 }
 
-async function checkServiceHealth(baseUrl: string, apiKey?: string): Promise<HealthResult> {
+async function checkServiceHealth(
+  baseUrl: string,
+  apiKey?: string,
+  configuredHeaders?: OpenVikingRequestHeaders,
+): Promise<HealthResult> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 10_000);
   try {
+    const configuredRequestHeaders = resolveOpenVikingRequestHeaders({ headers: configuredHeaders });
     const headers: Record<string, string> = {};
-    if (apiKey) headers["X-API-Key"] = apiKey;
+    if (apiKey) {
+      headers["X-API-Key"] = apiKey;
+    }
+    Object.assign(headers, configuredRequestHeaders);
     const response = await fetch(`${baseUrl.replace(/\/+$/, "")}/health`, {
       headers,
       signal: controller.signal,
@@ -771,8 +799,9 @@ async function runRemoteCheck(
 ): Promise<void> {
   const baseUrl = String(existing.baseUrl ?? DEFAULT_REMOTE_URL);
   const apiKey = existing.apiKey ? String(existing.apiKey) : undefined;
+  const headers = nonEmptyOpenVikingRequestHeaders(existing.headers);
   console.log(tr(zh, `Testing connectivity to ${baseUrl}...`, `正在测试连接 ${baseUrl}...`));
-  const health = await checkServiceHealth(baseUrl, apiKey);
+  const health = await checkServiceHealth(baseUrl, apiKey, headers);
   if (health.ok) {
     const ver = health.version ? ` (version: ${health.version})` : "";
     console.log(`  ✓ ${tr(zh, `Connected successfully${ver}`, `连接成功${ver}`)}`);
@@ -911,7 +940,7 @@ function printSetupResult(zh: boolean, result: SetupResult): void {
       console.log(`  mode:    ${result.config.mode}`);
       console.log(`  baseUrl: ${result.config.baseUrl}`);
       if (result.config.apiKey) console.log(`  apiKey:  ${result.config.apiKey}`);
-      console.log(`  peer_role: ${result.config.peer_role ?? "none"}`);
+      console.log(`  peer_role: ${result.config.peer_role ?? DEFAULT_SETUP_PEER_ROLE}`);
       if (result.config.peer_prefix) console.log(`  peer_prefix: ${result.config.peer_prefix}`);
       if (result.config.accountId) console.log(`  accountId: ${result.config.accountId}`);
       if (result.config.userId) console.log(`  userId:  ${result.config.userId}`);
@@ -954,8 +983,9 @@ async function getStatus(configPath: string): Promise<StatusResult> {
 
   const baseUrl = String(existing.baseUrl ?? DEFAULT_REMOTE_URL);
   const apiKey = existing.apiKey ? String(existing.apiKey) : undefined;
-  const health = await checkServiceHealth(baseUrl, apiKey);
-  const keyProbe = health.ok ? await probeApiKeyType(baseUrl, apiKey) : undefined;
+  const headers = nonEmptyOpenVikingRequestHeaders(existing.headers);
+  const health = await checkServiceHealth(baseUrl, apiKey, headers);
+  const keyProbe = health.ok ? await probeApiKeyType(baseUrl, apiKey, headers) : undefined;
 
   const peerPrefix = resolveExistingPeerPrefix(existing);
   return {
@@ -1067,6 +1097,7 @@ async function setupRemote(
   const defaultApiKey = existing?.apiKey ? String(existing.apiKey) : "";
   const defaultPeerRole = resolveExistingPeerRole(existing);
   const defaultPeerPrefix = resolveExistingPeerPrefix(existing);
+  const headers = nonEmptyOpenVikingRequestHeaders(existing?.headers);
 
   const baseUrl = await q(tr(zh, "OpenViking server URL", "OpenViking 服务器地址"), defaultUrl);
   const apiKey = await q(tr(zh, "API Key (optional)", "API Key（可选）"), defaultApiKey);
@@ -1076,7 +1107,7 @@ async function setupRemote(
 
   if (apiKey) {
     console.log(tr(zh, "  Detecting API key type...", "  正在检测 API Key 类型..."));
-    const probe = await probeApiKeyType(baseUrl, apiKey);
+    const probe = await probeApiKeyType(baseUrl, apiKey, headers);
     if (probe.keyType === "root_key") {
       console.log(tr(zh,
         "  ⚠ Root API key detected. accountId and userId are required.",
@@ -1097,7 +1128,7 @@ async function setupRemote(
   console.log("");
 
   console.log(tr(zh, `Testing connectivity to ${baseUrl}...`, `正在测试连接 ${baseUrl}...`));
-  const health = await checkServiceHealth(baseUrl, apiKey || undefined);
+  const health = await checkServiceHealth(baseUrl, apiKey || undefined, headers);
   if (health.ok) {
     const ver = health.version ? ` (version: ${health.version})` : "";
     console.log(`  ✓ ${tr(zh, `Connected successfully${ver}`, `连接成功${ver}`)}`);

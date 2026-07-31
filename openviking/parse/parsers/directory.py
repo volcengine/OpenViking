@@ -103,7 +103,7 @@ class DirectoryParser(BaseParser):
             # Don't add git metadata if we already have _source_meta from DataAccessor
             # This is crucial:
             #   1. _source_meta already contains repo_name in org/repo format from GitAccessor
-            #   2. kwargs also has original_source with the full GitHub/GitLab URL
+            #   2. kwargs also has original_source with the full code-hosting URL
             #   3. Calling _add_git_metadata would overwrite repo_name with just directory name
             #      and lose the org prefix!
             if "_source_meta" not in kwargs:

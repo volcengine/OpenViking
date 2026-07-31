@@ -27,11 +27,12 @@ from openviking.privacy import (
 )
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import deny_direct_local_skill_input
-from openviking.storage import VikingDBManager
+from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+from openviking.utils.path_safety import safe_join_viking_uri
 from openviking.utils.zip_safe import safe_extract_zip
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils import get_logger
@@ -117,6 +118,7 @@ class SkillProcessor:
         source_path_hint: Optional[str] = None,
         apply_privacy: bool = True,
         privacy_change_reason: str = "auto-extracted from add_skill",
+        target_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Process and store a skill.
@@ -125,6 +127,8 @@ class SkillProcessor:
             data: Skill data (directory, file path, string, or dict)
             viking_fs: VikingFS instance for storage
             user: Username for context
+            target_uri: Optional root URI override (e.g. ``viking://agent/skills``).
+                When omitted, defaults to ``{user_root}/skills``.
 
         Returns:
             Processing result with status and metadata
@@ -150,6 +154,7 @@ class SkillProcessor:
             ctx=ctx,
             apply_privacy=apply_privacy,
             privacy_change_reason=privacy_change_reason,
+            target_uri=target_uri,
         )
 
     async def process_prepared_skill(
@@ -160,6 +165,7 @@ class SkillProcessor:
         *,
         apply_privacy: bool = True,
         privacy_change_reason: str = "auto-extracted from add_skill",
+        target_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         config = get_openviking_config()
         cleanup_path = preparation.cleanup_path
@@ -178,10 +184,10 @@ class SkillProcessor:
                 )
             skill_abstract = self._build_skill_abstract(skill_dict)
 
-            skill_root_uri = f"{canonical_user_root(ctx)}/skills"
+            effective_root_uri = self._resolve_skill_root_uri(ctx, target_uri)
             context = Context(
-                uri=f"{skill_root_uri}/{skill_dict['name']}",
-                parent_uri=skill_root_uri,
+                uri=f"{effective_root_uri}/{skill_dict['name']}",
+                parent_uri=effective_root_uri,
                 is_leaf=False,
                 abstract=skill_abstract,
                 context_type=ContextType.SKILL.value,
@@ -389,6 +395,35 @@ class SkillProcessor:
         return normalized
 
     @staticmethod
+    def _resolve_skill_root_uri(
+        ctx: RequestContext, target_uri: Optional[str]
+    ) -> str:
+        """Resolve the skill storage root URI.
+
+        Defaults to the per-user private skills root.  Callers may pass
+        ``viking://agent/skills`` (or a future agent-scope subpath) to publish
+        the skill under the account-global ``/agent`` scope.
+        """
+        if target_uri:
+            normalized = target_uri.rstrip("/")
+            if normalized.startswith("viking://agent/skills"):
+                return "viking://agent/skills"
+            user_root = f"{canonical_user_root(ctx)}/skills"
+            if normalized == user_root.rstrip("/"):
+                return user_root
+            raise InvalidArgumentError(
+                f"Unsupported skill root URI: {target_uri}",
+                details={
+                    "field": "target_uri",
+                    "allowed": [
+                        f"{canonical_user_root(ctx)}/skills",
+                        "viking://agent/skills",
+                    ],
+                },
+            )
+        return f"{canonical_user_root(ctx)}/skills"
+
+    @staticmethod
     def _validate_skill_dict(skill_dict: Dict[str, Any]) -> None:
         """Validate normalized skill metadata before storage/indexing."""
         skill_dict["name"] = validate_skill_name(skill_dict.get("name"))
@@ -526,9 +561,10 @@ class SkillProcessor:
         for aux_file in auxiliary_files:
             if base_path:
                 rel_path = aux_file.relative_to(base_path)
-                aux_uri = f"{skill_dir_uri}/{rel_path}"
+                rel_uri_path = rel_path.as_posix()
             else:
-                aux_uri = f"{skill_dir_uri}/{aux_file.name}"
+                rel_uri_path = aux_file.name
+            aux_uri = safe_join_viking_uri(skill_dir_uri, rel_uri_path)
 
             file_bytes = aux_file.read_bytes()
             try:

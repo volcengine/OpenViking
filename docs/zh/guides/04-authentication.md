@@ -1,6 +1,6 @@
 # 认证
 
-OpenViking Server 支持三种认证模式，并带有基于角色的访问控制：`api_key`、`trusted` 和 `dev`。如果未显式配置，模式会自动推导。
+OpenViking Server 支持三种内置认证模式，并带有基于角色的访问控制：`api_key`、`trusted` 和 `dev`。如果未显式配置，模式会自动推导。此外，系统支持自定义认证插件，可对接任意身份源（如 LDAP、OIDC、mTLS 等）。
 
 ## 概述
 
@@ -11,7 +11,9 @@ OpenViking 使用两层 API Key 体系：
 | Root Key | 服务端配置（`root_api_key`） | ROOT | 账户管理 + 少量 system/monitoring 操作 |
 | User Key | Admin API | ADMIN 或 USER | 租户内数据访问；ADMIN 还可管理本 account 下的用户 |
 
-所有 API Key 均为纯随机 token，不携带身份信息。服务端通过先比对 root key、再查 user key 索引的方式确定身份。
+User key 由 Admin API 生成。默认使用随机 secret；Admin API 调用方也可以传入
+`seed`，用 `sha256(user_id + "\0" + seed)` 生成可预测的 key secret。服务端仍然
+会用存储的 key 或 key hash 校验最终 API Key。
 
 ## 认证模式
 
@@ -46,9 +48,60 @@ OpenViking 使用两层 API Key 体系：
 openviking-server
 ```
 
+### 自定义认证插件
+
+服务端采用插件化认证架构。每种 `auth_mode` 对应一个 `AuthPlugin` 实现。内置插件（`dev`、`api_key`、`trusted`）会自动注册；第三方插件可通过继承 `AuthPlugin` 并在启动前注册来扩展。
+
+**插件接口（`openviking.server.auth.plugin.AuthPlugin`）**
+
+| 方法 | 用途 |
+|------|------|
+| `resolve_identity(request, api_key, x_openviking_account, x_openviking_user)` | 将凭据解析为 `ResolvedIdentity`。 |
+| `validate_config(config)` | 在启动时校验 `ServerConfig`；遇到致命错误应调用 `sys.exit(1)`。 |
+| `initialize(app, service, config)` | 在 `app.state` 上初始化运行时状态（如 `APIKeyManager`）。 |
+| `get_request_context_checks(path, identity)` | 可选的认证后路径/身份检查。 |
+| `requires_api_key_manager()` | Admin API 路由是否需要 `APIKeyManager`。 |
+| `can_skip_api_key_for_bot_proxy()` | Bot 代理是否可以跳过 API Key 校验（如 `dev` 模式）。 |
+
+**注册自定义插件**
+
+```python
+from openviking.server.auth.plugin import AuthPlugin
+from openviking.server.auth.registry import register_auth_plugin
+from openviking.server.identity import ResolvedIdentity, Role
+
+@register_auth_plugin
+class LDAPAuthPlugin(AuthPlugin):
+    auth_mode = "ldap"
+
+    async def resolve_identity(self, request, *, api_key=None, x_openviking_account=None, x_openviking_user=None):
+        # ... LDAP 绑定与身份解析 ...
+        return ResolvedIdentity(role=Role.USER, account_id="...", user_id="...")
+
+    def validate_config(self, config):
+        pass
+
+    async def initialize(self, app, service, config):
+        pass
+```
+
+然后在 `ov.conf` 中设置 `server.auth_mode = "ldap"`。
+
+**自定义角色**
+
+内置的 `Role` 类支持动态注册自定义角色及权限等级：
+
+```python
+from openviking.server.identity import Role
+
+Role.register("operator", rank=1)  # 权限介于 USER (0) 与 ADMIN (1) 之间
+```
+
+自定义角色可直接用于 `require_role()` 和 `require_auth_role()` 装饰器。
+
 ## 管理账户和用户
 
-普通读写、检索、会话等数据请求在 `api_key` 和 `trusted` 两种模式下都不依赖 Admin API 预注册。Admin API 仍然负责创建 account、注册用户、修改角色以及签发 user key。
+普通读写、检索、会话等数据请求在 `api_key` 和 `trusted` 两种模式下都不依赖 Admin API 预注册。Admin API 仍然负责创建 account、注册用户、将用户提升为 admin，以及签发或重新生成 user key。
 
 使用 root key 通过 Admin API 创建工作区和用户：
 
@@ -82,13 +135,7 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
   -H "Content-Type: application/json" \
   -d '{"account_id": "platform", "admin_user_id": "gateway-admin"}'
 
-# 如果它需要跨 account 的管理权限，再提升为 root
-curl -X PUT http://localhost:1933/api/v1/admin/accounts/platform/users/gateway-admin/role \
-  -H "X-API-Key: your-secret-root-key" \
-  -H "Content-Type: application/json" \
-  -d '{"role": "root"}'
-
-# 然后，在 trusted 模式下使用该身份调用 Admin API
+# 然后，在 trusted 模式下使用该身份调用 Admin API；管理权限来自 root_api_key
 curl -X POST http://localhost:1933/api/v1/admin/accounts \
   -H "X-API-Key: your-secret-root-key" \
   -H "X-OpenViking-Account: platform" \
@@ -217,8 +264,9 @@ Trusted 模式规则：
 
 - 普通数据访问不需要先注册 user key，也不依赖 user key 分发流程
 - 租户级请求必须包含 `X-OpenViking-Account` 和 `X-OpenViking-User`
+- 受信上游也可以发送 `X-OpenViking-Role: user` 或 `X-OpenViking-Role: admin` 断言请求角色。该请求头只有在配置了 `root_api_key` 且请求携带匹配 API Key 时才会生效。`root` 不是允许的断言值；ROOT 只保留给已校验的 Admin API 回退路径
 - `/api/v1/admin/*` 是特例：当请求携带已配置的 `root_api_key` 时，trusted 模式会将请求视为 ROOT。显式 account/user header 只有在完整且与目标 URL 匹配时才允许
-- 普通 trusted 数据 API 的角色通过在 APIKeyManager 中查找 account/user 确定。如果用户存在，使用其配置的角色；否则默认为 `USER`
+- 普通 trusted 数据 API 的角色优先使用经过授权的 `X-OpenViking-Role`；未提供该请求头时，通过在 APIKeyManager 中查找 account/user 确定。如果用户存在，使用其配置的角色；否则默认为 `USER`
 - trusted 身份完全来自请求头，而不是 user key；如果同时配置了 `root_api_key`，它表示“这个上游是被允许的 trusted 调用方”
 - 如果同时配置了 `root_api_key`，每个请求仍然必须带匹配的 API Key
 - 只应部署在受信网络边界之后，或由身份注入网关统一转发
@@ -229,7 +277,7 @@ Trusted 模式规则：
 - `trusted` 下的普通读写、检索、会话访问不需要先走 Admin API 注册流程
 - `trusted` 模式下，携带已配置 `root_api_key` 的受信上游可以调用 Admin API
 - `trusted` 模式下，创建 account 或注册用户的 Admin API 响应不会返回 `user_key`
-- `root` 可以创建/删除 account 并修改角色；`admin` 可以管理自己 account 下的用户；`user` 不能调用 Admin API
+- `root` 可以创建/删除 account 并提升用户为 admin；`admin` 可以管理自己 account 下的用户并将其提升为 admin；`user` 不能调用 Admin API
 - 非 localhost 部署要在 trusted 模式下使用 Admin API，需要配置 `root_api_key`，并在每个管理请求中携带它
 
 **curl**
@@ -287,7 +335,7 @@ client = ov.SyncHTTPClient(
 | ADMIN | 所属 account | 常规操作 + 管理所属 account 的用户 |
 | USER | 所属 account | 常规操作（ls、read、find、sessions 等） |
 
-在 `trusted` 模式下，普通租户请求默认会解析为 `USER`；如果该 account/user 已注册更高角色，则使用注册角色。对于 Admin 路由，在没有显式身份时还支持 trusted ROOT 回退。
+在 `trusted` 模式下，普通租户请求默认会解析为 `USER`；如果该 account/user 已注册更高角色，或网关在携带已配置 root API key 的请求中断言 `X-OpenViking-Role: admin`，则使用更高角色。`X-OpenViking-Role: root` 会被拒绝。对于 Admin 路由，在没有显式身份时还支持 trusted ROOT 回退。
 
 ## 无需认证的端点
 
@@ -307,7 +355,7 @@ curl http://localhost:1933/health
 | POST | `/api/v1/admin/accounts/{id}/users` | ROOT, ADMIN | 注册用户 |
 | GET | `/api/v1/admin/accounts/{id}/users` | ROOT, ADMIN | 列出用户 |
 | DELETE | `/api/v1/admin/accounts/{id}/users/{uid}` | ROOT, ADMIN | 移除用户 |
-| PUT | `/api/v1/admin/accounts/{id}/users/{uid}/role` | ROOT | 修改用户角色 |
+| PUT | `/api/v1/admin/accounts/{id}/users/{uid}/role` | ROOT, ADMIN | 将用户提升为 ADMIN；ADMIN 仅限本账户 |
 | POST | `/api/v1/admin/accounts/{id}/users/{uid}/key` | ROOT, ADMIN | 重新生成 user key |
 
 ## 相关文档

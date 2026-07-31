@@ -12,14 +12,15 @@ from openviking.session.memory.utils.json_parser import (
     extract_json_content,
     parse_json_with_stability,
     parse_value_with_tolerance,
-    remove_json_trailing_content,
     value_fault_tolerance,
 )
 from openviking.session.memory.utils.language import (
     detect_language_from_conversation,
     resolve_output_language,
     resolve_output_language_from_conversation,
+    resolve_output_language_from_text,
     resolve_with_override,
+    strip_language_detection_noise,
 )
 from openviking.session.memory.utils.line_numbers import (
     add_line_numbers,
@@ -46,7 +47,9 @@ __all__ = [
     "detect_language_from_conversation",
     "resolve_output_language",
     "resolve_output_language_from_conversation",
+    "resolve_output_language_from_text",
     "resolve_with_override",
+    "strip_language_detection_noise",
     "add_line_numbers",
     "every_line_has_line_numbers",
     "extract_start_line_number",
@@ -63,7 +66,6 @@ __all__ = [
     "is_uri_allowed",
     # JSON Parser
     "extract_json_content",
-    "remove_json_trailing_content",
     "parse_json_with_stability",
     "value_fault_tolerance",
     "parse_value_with_tolerance",

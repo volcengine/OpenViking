@@ -14,10 +14,10 @@ Thank you for your interest in OpenViking! We welcome contributions of all kinds
 ### Prerequisites
 
 - **Python**: 3.10+
-- **Go**: 1.22+ (Required for building AGFS components from source)
+- **Go**: 1.22+ (Required only for Go SDK development under `sdk/go`)
 - **Rust**: 1.91.1+ (Required for source builds because the bundled `ov` CLI is built during packaging)
 - **C++ Compiler**: GCC 9+ or Clang 11+ (Required for building core extensions, must support C++17)
-- **CMake**: 3.12+
+- **CMake**: 3.15+
 
 #### Platform-Specific Native Build Tools
 
@@ -58,43 +58,28 @@ source .venv/bin/activate  # Linux/macOS
 
 #### Local Development & Native Rebuilds
 
-OpenViking defaults to `binding-client` mode for AGFS, which requires pre-built native artifacts. If you modify the **AGFS (Go)** code, the bundled **Rust CLI**, or the **C++ extensions**, or if the pre-built artifacts are not found, you need to re-compile and re-install them. Run the following command in the project root:
+OpenViking defaults to `binding-client` mode for AGFS/RAGFS, which requires pre-built native artifacts. If you modify the **RAGFS Rust binding**, the bundled **Rust CLI**, or the **C++ extensions**, or if the pre-built artifacts are not found, you need to re-compile and re-install them. Run the following command in the project root:
 
 ```bash
 uv pip install -e . --force-reinstall
 ```
 
-This command ensures that `setup.py` is re-executed, triggering rebuilds for AGFS, the bundled `ov` CLI, and the C++ components.
+This command ensures that `setup.py` is re-executed, triggering rebuilds for AGFS/RAGFS, the bundled `ov` CLI, and the C++ components.
 
 ### 3. Configure Environment
 
-Create a configuration file `~/.openviking/ov.conf`:
+Run the interactive wizard to pick providers and write `~/.openviking/ov.conf`, then
+validate the result:
 
-```json
-{
-  "embedding": {
-    "dense": {
-      "provider": "volcengine",
-      "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-251215",
-      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-      "dimension": 1024,
-      "input": "multimodal"
-    }
-  },
-  "vlm": {
-    "api_key": "your-api-key",
-    "model": "doubao-seed-2-0-pro-260215",
-    "api_base": "https://ark.cn-beijing.volces.com/api/v3"
-  }
-}
+```console
+openviking-server init
+openviking-server doctor
 ```
 
-Set the environment variable:
-
-```bash
-export OPENVIKING_CONFIG_FILE=~/.openviking/ov.conf
-```
+Manual `ov.conf` templates, per-provider examples, and environment variables are in the
+[Configuration guide](https://docs.openviking.ai/en/guides/01-configuration). The default
+config file is loaded automatically; set `OPENVIKING_CONFIG_FILE` only when using a
+non-default path.
 
 ### 4. Verify Installation
 
@@ -133,56 +118,44 @@ After installation, run `ov --help` to see all available commands. CLI connectio
 
 ```
 openviking/
-├── pyproject.toml        # Project configuration
+├── pyproject.toml        # Python project and tooling configuration
 ├── Cargo.toml            # Rust workspace configuration
-├── third_party/          # Third-party dependencies
-│   └── agfs/             # AGFS filesystem
-│
-├── openviking/           # Python SDK
-│   ├── async_client.py   # AsyncOpenViking client
-│   ├── sync_client.py    # SyncOpenViking client
+├── openviking/           # Python SDK and server implementation
 │   ├── client/           # Local and HTTP client implementations
-│   ├── console/          # Standalone console UI and proxy service
+│   ├── connector/        # Data connectors
 │   ├── core/             # Core data models and directory abstractions
-│   ├── message/          # Session message and part models
+│   ├── ingest/           # Ingestion pipeline
+│   ├── integrations/     # Agent integrations
 │   ├── models/           # Embedding and VLM backends
 │   ├── parse/            # Resource parsers and detectors
 │   ├── resource/         # Resource processing and watch management
 │   ├── retrieve/         # Retrieval system
 │   ├── server/           # HTTP server
-│   ├── service/          # Shared service layer
 │   ├── session/          # Session management and compression
-│   ├── storage/          # Storage layer
-│   ├── telemetry/        # Operation telemetry
-│   ├── trace/            # Trace and runtime tracing helpers
-│   ├── utils/            # Utilities and configuration helpers
-│   └── prompts/          # Prompt templates
-│
+│   └── storage/          # Storage layer
+├── openviking_cli/       # Server bootstrap and Python CLI support
+├── bot/                  # VikingBot agent framework
+├── sdk/                  # Go, Python, and TypeScript client SDKs
+├── web-studio/           # Studio web frontend
 ├── crates/               # Rust components
-│   └── ov_cli/           # Rust CLI client
-│       ├── src/          # CLI source code
-│       └── install.sh    # Deprecated stub (use npm package; see Install)
-│
+│   ├── ov_cli/           # Rust CLI client
+│   ├── ragfs/            # Rust implementation of AGFS
+│   ├── ragfs-python/     # Python binding for RAGFS
+│   ├── ragfs-python-native/       # Native Python binding package
+│   ├── ragfs-cache-redis/         # Redis cache backend
+│   ├── ragfs-cache-mooncake/      # Mooncake cache backend
+│   ├── ragfs-cache-yuanrong/      # YuanRong cache backend
+│   └── ragfs-cache-yuanrong-sys/  # YuanRong FFI bindings
 ├── src/                  # C++ extension sources (Python abi3)
-│
-├── tests/                # Test suite
-│   ├── client/           # Client tests
-│   ├── console/          # Console tests
-│   ├── core/             # Core logic tests
-│   ├── parse/            # Parser tests
-│   ├── resource/         # Resource processing tests
-│   ├── retrieve/         # Retrieval tests
-│   ├── server/           # Server tests
-│   ├── service/          # Service layer tests
-│   ├── session/          # Session tests
-│   ├── storage/          # Storage tests
-│   ├── telemetry/        # Telemetry tests
-│   ├── vectordb/         # Vector database tests
-│   └── integration/      # End-to-end tests
-│
-└── docs/                 # Documentation
-    ├── en/               # English docs
-    └── zh/               # Chinese docs
+├── third_party/          # Native third-party dependencies
+├── examples/             # Usage and integration examples
+├── benchmark/            # Benchmark suites
+├── tests/                # Python and integration test suites
+├── deploy/               # Deployment assets
+├── docker/               # Docker build files
+├── npm/                  # npm CLI package
+├── scripts/              # Development and maintenance scripts
+└── docs/                 # English, Chinese, and Japanese documentation
 ```
 
 ---
@@ -195,22 +168,6 @@ We use the following tools to maintain code consistency:
 |------|---------|--------|
 | **Ruff** | Linting, Formatting, Import sorting | `pyproject.toml` |
 | **mypy** | Type checking | `pyproject.toml` |
-
-### Automated Checks (Recommended)
-
-We use [pre-commit](https://pre-commit.com/) to automatically run these checks before every commit. This ensures your code always meets the standards without manual effort.
-
-1. **Install pre-commit**:
-   ```bash
-   pip install pre-commit
-   ```
-
-2. **Install the git hooks**:
-   ```bash
-   pre-commit install
-   ```
-
-Now, `ruff` (check & format) will run automatically when you run `git commit`. If any check fails, it may automatically fix the file. You just need to add the changes and commit again.
 
 ### Running Checks
 
@@ -505,29 +462,24 @@ Other repository workflows also exist for PR review automation, Docker image bui
 
 Maintainers can manually trigger the following workflows from the "Actions" tab to perform specific tasks or debug issues.
 
-#### A. Lint Checks (`11. _Lint Checks`)
-Runs code style checks (Ruff) and type checks (Mypy). No arguments required.
-
-> **Tip**: It is recommended to install [pre-commit](https://pre-commit.com/) locally to run these checks automatically before committing (see [Automated Checks](#automated-checks-recommended) section above).
-
-#### B. Test Suite (Lite) (`12. _Test Suite (Lite)`)
+#### A. Test Suite (Lite) (`12. _Test Suite (Lite)`)
 Runs fast integration tests, supports custom matrix configuration.
 
 *   **Inputs**:
     *   `os_json`: JSON string array of OS to run on (e.g., `["ubuntu-24.04"]`).
     *   `python_json`: JSON string array of Python versions (e.g., `["3.10"]`).
 
-#### C. Test Suite (Full) (`13. _Test Suite (Full)`)
+#### B. Test Suite (Full) (`13. _Test Suite (Full)`)
 Runs the full test suite on all supported platforms (Linux/Mac/Win) and Python versions (3.10-3.14). Supports custom matrix configuration when triggered manually.
 
 *   **Inputs**:
     *   `os_json`: List of OS to run on (Default: `["ubuntu-24.04", "macos-14", "windows-latest"]`).
     *   `python_json`: List of Python versions (Default: `["3.10", "3.11", "3.12", "3.13", "3.14"]`).
 
-#### D. Security Scan (`14. _CodeQL Scan`)
+#### C. Security Scan (`14. _CodeQL Scan`)
 Runs CodeQL security analysis. No arguments required.
 
-#### E. Build Distribution (`15. _Build Distribution`)
+#### D. Build Distribution (`15. _Build Distribution`)
 Builds Python wheel packages only, does not publish.
 
 *   **Inputs**:
@@ -536,14 +488,14 @@ Builds Python wheel packages only, does not publish.
     *   `build_sdist`: Whether to build source distribution (Default: `true`).
     *   `build_wheels`: Whether to build wheel distribution (Default: `true`).
 
-#### F. Publish Distribution (`16. _Publish Distribution`)
+#### E. Publish Distribution (`16. _Publish Distribution`)
 Publishes built packages (requires build Run ID) to PyPI.
 
 *   **Inputs**:
     *   `target`: Select publish target (`testpypi`, `pypi`, `both`).
     *   `build_run_id`: Build Workflow Run ID (Required, get it from the Build run URL).
 
-#### G. Manual Release (`03. Release`)
+#### F. Manual Release (`03. Release`)
 One-stop build and publish (includes build and publish steps).
 
 > **Version Numbering & Tag Convention**:

@@ -8,7 +8,7 @@
 |------|------|----------|--------|
 | **Resource** | 知识和规则 | 长期，相对静态 | 用户添加 |
 | **Memory** | Agent 的认知 | 长期，动态更新 | Agent 记录 |
-| **Skill** | 可调用的能力 | 长期，静态 | Agent 调用 |
+| **Skill** | 可声明的 agent 能动性配置（AgentDefinedContextType） | 长期，静态 | 用户或系统添加 |
 
 ## Resource（资源）
 
@@ -44,7 +44,7 @@ results = client.find(
 
 ## Memory（记忆）
 
-记忆分为用户记忆和Agent记忆，是 Agent 关于用户和世界的学习知识。
+记忆是 Agent 从交互和任务执行中学到的持久化知识。记忆存储在当前用户或 Peer 命名空间，不使用独立的 `viking://agent/memories` 目录。
 
 ### 特点
 
@@ -52,18 +52,23 @@ results = client.find(
 - **动态更新：**由 Agent 从交互中持续更新
 - **个性化：**针对特定用户和稳定 peer 学习记录
 
-### 8 种分类
+### 内置记忆类型
 
-| 分类 | 位置 | 说明 | 更新策略 |
-|------|------|------|----------|
-| **profile** | `user/memories/profile.md` | 用户基本信息 | ✅ 合并到单文件 |
-| **preferences** | `user/memories/preferences/` | 按主题的用户偏好 | ✅ 可追加 |
-| **entities** | `user/memories/entities/` | 实体记忆（人物、项目） | ✅ 可追加 |
-| **events** | `user/memories/events/` | 事件记录（决策、里程碑） | ❌ 不更新 |
-| **trajectories** | `user/memories/trajectories/` | 可复用的操作契约 | ❌ 不更新 |
-| **experiences** | `user/memories/experiences/` | 可复用的执行经验 | ✅ 可合并 |
-| **tools** | `user/memories/tools/` | 工具使用经验与最佳实践 | ✅ 可合并 |
-| **skills** | `user/memories/skills/` | 技能执行经验与工作流策略 | ✅ 可合并 |
+| 类型 | 默认位置 | 说明 |
+|------|----------|------|
+| **profile** | `user/memories/profile.md` | 用户基本信息 |
+| **preferences** | `user/memories/preferences/` | 按主题组织的用户偏好 |
+| **entities** | `user/memories/entities/` | 人物、项目、组织等实体知识 |
+| **events** | `user/memories/events/` | 决策、里程碑等事件记录 |
+| **identity** | `user/memories/identity.md` | 助手的名称、形象、气质和自我介绍 |
+| **soul** | `user/memories/soul.md` | 助手的核心原则、边界、风格和连续性 |
+| **cases** | `user/memories/cases/` | 用于训练和评估的任务案例 |
+| **trajectories** | `user/memories/trajectories/` | 可复用的任务执行轨迹 |
+| **experiences** | `user/memories/experiences/` | 从执行结果中提炼的可复用经验 |
+| **tools** | `user/memories/tools/` | 工具使用经验与最佳实践 |
+| **skills** | `user/memories/skills/` | 技能执行经验与工作流策略 |
+
+表中的 `user/...` 是当前用户短路径，服务端会将其解析为 `viking://user/{user_id}/...`。当记忆策略允许 Peer 记忆时，支持 Peer 的类型会写入 `viking://user/{user_id}/peers/{peer_id}/memories/...`。记忆类型可通过自定义模板扩展或调整。
 
 ### 使用
 
@@ -81,9 +86,9 @@ results = await client.find(
 )
 ```
 
-## Skill（技能）
+## Skill（技能 / AgentDefinedContextType）
 
-技能是 Agent 可以调用的能力，比如目前的Skills、MCP等均属于此类。
+技能（Skill）是 Agent 可以调用的能力，属于 AgentDefinedContextType 范畴。包括传统工作流定义、通信端点、工具配置和支付能力等。它们的共同特征是：**定义了 agent 如何与外部系统交互**，运行时定义相对静态，但调用经验会在 Memory 中更新。
 
 ### 特点
 
@@ -94,27 +99,51 @@ results = await client.find(
 ### 存储位置
 
 ```
-viking://user/skills/{skill-name}/
+viking://user/skills/{skill-name}/  # 默认存储路径
 ├── .abstract.md          # L0: 简短描述
-├── SKILL.md   						# L1: 详细概览
-└── scripts           		# L2: 完整定义
+├── SKILL.md              # L1: 详细概览
+└── scripts               # L2: 完整定义
 
+viking://agent/skills/{skill-name}/  # 通过 --uri 覆盖，公开共享（account 全局）
+├── .abstract.md          # L0: 简短描述
+├── SKILL.md              # L1: 详细概览
+└── scripts               # L2: 完整定义
 ```
+
+### AgentDefinedContextType 子类型
+
+AgentDefinedContextType 包含以下子类型，均存储于 `viking://agent/` 作用域：
+
+| 子类型 | 位置 | 说明 |
+|--------|------|------|
+| **Skill** | `agent/skills/` | 传统工作流定义，如搜索、代码生成 |
+| **Endpoint** | `agent/endpoints/` | 通信端点配置（a2a, anp 等）（规划中） |
+| **Tool** | `agent/tools/` | 工具配置（mcp 等）（规划中） |
+| **Payment** | `agent/payments/` | 支付能力配置（ap2 等）（规划中） |
 
 ### 使用
 
 ```python
-# 添加技能
+# 添加技能（默认写入 viking://user/skills/）
 await client.add_skill({
     "name": "search-web",
     "description": "搜索网络获取信息",
     "content": "# search-web\n..."
 })
 
-# 搜索技能
+# 通过 -p 指定写入全局 agent 技能根（公开共享）
+ov skills add search-web -p viking://agent/skills
+
+# 搜索用户技能
 results = await client.find(
     "网络搜索",
     target_uri="viking://user/skills/"
+)
+
+# 搜索全局 agent 技能
+results = await client.find(
+    "网络搜索",
+    target_uri="viking://agent/skills/"
 )
 ```
 

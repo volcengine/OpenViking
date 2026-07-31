@@ -2,6 +2,7 @@
   "url": "http://localhost:1933",
   "api_key": null,
   "root_api_key": null,
+  "gateway_token": null,
   "account": null,
   "user": null,
   "timeout": 60.0,

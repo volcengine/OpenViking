@@ -43,8 +43,9 @@ permissions:
 
 jobs:
   build:
-    # Skip this workflow for CLI releases (tags starting with cli-)
-    if: "!startsWith(github.event.release.tag_name, 'cli-')"
+    # Only GitHub Releases for main package tags should run this workflow.
+    # Component releases such as python-sdk@* and cli@* have dedicated workflows.
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'v')
     uses: ./.github/workflows/_build.yml
     with:
       os_json: ${{ inputs.os_json || '["ubuntu-24.04", "ubuntu-24.04-arm", "macos-14", "macos-15-intel", "windows-latest"]' }}
@@ -375,4 +376,3 @@ jobs:
                 "${dockerhub_image_refs[@]}"
             fi
           done <<< "$SOURCE_TAGS"
-

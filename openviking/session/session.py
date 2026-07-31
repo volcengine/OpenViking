@@ -10,17 +10,29 @@ import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Literal, Optional
 from uuid import uuid4
 
 from openviking.core.namespace import canonical_session_uri
 from openviking.core.peer_id import normalize_peer_id, safe_peer_id
 from openviking.message import Message, Part
 from openviking.message.part import ContextPart, TextPart, ToolPart
+from openviking.pyagfs.exceptions import AGFSClientError, AGFSHTTPError, AGFSNotFoundError
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext, Role
-from openviking.session.memory.constants import EXECUTION_MEMORY_TYPES
+from openviking.session.memory.constants import (
+    AGENT_EVOLUTION_MEMORY_TYPES,
+    EXECUTION_MEMORY_TYPES,
+)
 from openviking.session.memory_policy import MemoryPolicy
+from openviking.session.retention import (
+    RETENTION_MODE_TURN_BUDGET,
+    RetentionPlan,
+    build_turns,
+    fit_active_messages_to_budget,
+    is_user_query,
+    plan_retention,
+)
 from openviking.session.tool_result_store import (
     ToolResultStore,
     build_tool_result_id,
@@ -34,9 +46,13 @@ from openviking.session.tool_result_synopsis import (
 )
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+from openviking.utils.model_retry import is_retryable_api_error, retry_async
 from openviking.utils.time_utils import get_current_timestamp
-from openviking.utils.token_estimation import estimate_text_tokens
-from openviking_cli.exceptions import FailedPreconditionError
+from openviking.utils.token_estimation import estimate_text_tokens, truncate_text_to_token_budget
+from openviking_cli.exceptions import (
+    FailedPreconditionError,
+    NotFoundError,
+)
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger, run_async
 from openviking_cli.utils.config import get_openviking_config
@@ -44,12 +60,35 @@ from openviking_cli.utils.config import get_openviking_config
 if TYPE_CHECKING:
     from openviking.session.compressor_v2 import SessionCompressorV2 as SessionCompressor
     from openviking.storage import VikingDBManager
+    from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
     from openviking.storage.viking_fs import VikingFS
+    from openviking.usage_reporter import UsageReporter
 
 logger = get_logger(__name__)
 
 _ARCHIVE_WAIT_POLL_SECONDS = 0.1
 _PHASE2_QUEUE_WAIT_TIMEOUT_SECONDS = 1800.0
+_MEMORY_EXTRACTION_MAX_RETRIES = 3
+_MEMORY_EXTRACTION_RETRY_BASE_DELAY_SECONDS = 1.0
+_MEMORY_EXTRACTION_RETRY_MAX_DELAY_SECONDS = 8.0
+_AGENT_TRAINING_REQUIRED_MEMORY_TYPES = frozenset({"cases", "trajectories"})
+_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS = 30.0
+_MEMORY_STEP_NAMES = ("long_term", "execution")
+
+
+class _ArchiveMessagesCorruptError(ValueError):
+    """Raised when an archive messages file cannot be deserialized."""
+
+
+def _is_storage_not_found(exc: BaseException) -> bool:
+    if isinstance(exc, AGFSClientError):
+        return isinstance(exc, AGFSNotFoundError) or (
+            isinstance(exc, AGFSHTTPError) and exc.status_code == 404
+        )
+    if isinstance(exc, (FileNotFoundError, NotFoundError)):
+        nested = exc.__cause__ or exc.__context__
+        return nested is None or _is_storage_not_found(nested)
+    return False
 
 
 def _wm_debug(msg: str) -> None:
@@ -68,6 +107,46 @@ def _validate_memory_policy_types(policy: MemoryPolicy) -> None:
     if policy.memory_types is None:
         return
     policy.validate_memory_types(_enabled_memory_types())
+
+
+def _apply_agent_evolution_setting(
+    policy: MemoryPolicy,
+    *,
+    agent_evolution_enabled: bool,
+) -> MemoryPolicy:
+    if agent_evolution_enabled:
+        return policy
+    effective_types = (
+        _enabled_memory_types() if policy.memory_types is None else set(policy.memory_types)
+    )
+    effective_types -= AGENT_EVOLUTION_MEMORY_TYPES
+    return MemoryPolicy(
+        self_enabled=policy.self_enabled,
+        peer_enabled=policy.peer_enabled,
+        memory_types=effective_types,
+        working_memory_enabled=policy.working_memory_enabled,
+    )
+
+
+def _effective_memory_types(policy: MemoryPolicy) -> set[str]:
+    if policy.memory_types is None:
+        return _enabled_memory_types()
+    return set(policy.memory_types)
+
+
+def _agent_memory_skip_reason(
+    *,
+    agent_evolution_enabled: bool,
+    effective_memory_types: set[str],
+    user_config_error: Optional[str] = None,
+) -> Optional[str]:
+    if user_config_error:
+        return "invalid_user_config"
+    if not agent_evolution_enabled:
+        return "agent_evolution_disabled"
+    if not _AGENT_TRAINING_REQUIRED_MEMORY_TYPES.issubset(effective_memory_types):
+        return "memory_types_filtered"
+    return None
 
 
 def _split_policy_memory_types(
@@ -122,10 +201,13 @@ def _resolve_memory_extraction_scope(
 # Phase 2 of a commit generates / updates a structured 7-section Working
 # Memory document stored at archive_NNN/.overview.md.
 #
-# First commit: call `compression.ov_wm_v2` with a plain completion.
+# First commit: call `compression.ov_wm_v2` with a plain completion unless
+# partial-Turn retention also needs checkpoint summaries. In that case the
+# same call uses `create_working_memory` and returns both products.
 # Subsequent commits: call `compression.ov_wm_v2_update` with the
-# `update_working_memory` tool to get a per-section decision, then let
-# the server do section-level merge against the previous WM.
+# `update_working_memory` tool to get a per-section decision plus any requested
+# checkpoint summaries, then let the server do section-level merge against the
+# previous WM.
 # =====================================================================
 
 WM_SEVEN_SECTIONS: List[str] = [
@@ -199,11 +281,67 @@ WM_UPDATE_TOOL: Dict[str, Any] = {
                     "required": list(WM_SEVEN_SECTIONS),
                     "additionalProperties": False,
                     "properties": dict.fromkeys(WM_SEVEN_SECTIONS, _WM_SECTION_OP_SCHEMA),
-                }
+                },
+                "checkpoint_summaries": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "When checkpoint sources are present, one concise continuation "
+                        "summary per checkpoint_source index, in ascending index order."
+                    ),
+                },
             },
         },
     },
 }
+
+WM_CREATE_WITH_CHECKPOINTS_TOOL: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "create_working_memory",
+        "description": (
+            "Create the complete Working Memory and the requested checkpoint summaries "
+            "from the same model pass."
+        ),
+        "parameters": {
+            "type": "object",
+            "required": ["working_memory", "checkpoint_summaries"],
+            "additionalProperties": False,
+            "properties": {
+                "working_memory": {
+                    "type": "string",
+                    "description": "Complete 7-section Working Memory markdown.",
+                },
+                "checkpoint_summaries": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "One concise continuation summary per checkpoint_source index, "
+                        "in ascending index order."
+                    ),
+                },
+            },
+        },
+    },
+}
+
+
+@dataclass(frozen=True)
+class _CheckpointRequest:
+    """Server-owned mapping for one checkpoint summary requested from Phase 2."""
+
+    turn_anchor_message_id: str
+    source_message_ids: tuple[str, ...]
+    retained_message_token_budget: int
+    estimated_active_tokens: int
+
+
+@dataclass(frozen=True)
+class _ArchiveSummaryResult:
+    """The two products emitted by the existing Working-Memory model call."""
+
+    overview: str
+    checkpoint_summaries: tuple[str, ...] = ()
 
 
 @dataclass
@@ -226,6 +364,37 @@ class SessionStats:
     contexts_used: int = 0
     skills_used: int = 0
     memories_extracted: int = 0
+
+
+@dataclass
+class ArchiveState:
+    """Filesystem-derived state for one archive directory."""
+
+    archive_id: str
+    archive_uri: str
+    index: int
+    state: Literal["pending", "completed", "failed"]
+    overview: str = ""
+    done: Dict[str, Any] = field(default_factory=dict)
+    failed: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def coverage_start_index(self) -> int:
+        raw = self.done.get("coverage_start_archive")
+        if isinstance(raw, str):
+            match = re.fullmatch(r"archive_(\d+)", raw)
+            if match:
+                return int(match.group(1))
+        return self.index
+
+    @property
+    def coverage_end_index(self) -> int:
+        raw = self.done.get("coverage_end_archive")
+        if isinstance(raw, str):
+            match = re.fullmatch(r"archive_(\d+)", raw)
+            if match:
+                return int(match.group(1))
+        return self.index
 
 
 @dataclass
@@ -266,6 +435,12 @@ class SessionMeta:
     # add_message calls can maintain pending_tokens consistently across
     # process restarts.
     keep_recent_count: int = 0
+    # Opt-in Turn-aware retention. Empty mode preserves the physical-message
+    # keep_recent_count behavior for existing integrations.
+    retention_mode: str = ""
+    keep_recent_turn_count: int = 0
+    retained_message_token_budget: int = 0
+    min_raw_tail_steps: int = 1
     memory_policy: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
@@ -283,6 +458,10 @@ class SessionMeta:
             "embedding_token_usage": dict(self.embedding_token_usage),
             "pending_tokens": self.pending_tokens,
             "keep_recent_count": self.keep_recent_count,
+            "retention_mode": self.retention_mode,
+            "keep_recent_turn_count": self.keep_recent_turn_count,
+            "retained_message_token_budget": self.retained_message_token_budget,
+            "min_raw_tail_steps": self.min_raw_tail_steps,
             "memory_policy": dict(self.memory_policy) if self.memory_policy is not None else None,
         }
         if self.total_message_count is not None:
@@ -326,6 +505,12 @@ class SessionMeta:
             },
             pending_tokens=max(0, int(data.get("pending_tokens", 0) or 0)),
             keep_recent_count=max(0, int(data.get("keep_recent_count", 0) or 0)),
+            retention_mode=str(data.get("retention_mode", "") or ""),
+            keep_recent_turn_count=max(0, int(data.get("keep_recent_turn_count", 0) or 0)),
+            retained_message_token_budget=max(
+                0, int(data.get("retained_message_token_budget", 0) or 0)
+            ),
+            min_raw_tail_steps=max(0, int(data.get("min_raw_tail_steps", 1) or 0)),
             memory_policy=data.get("memory_policy"),
         )
 
@@ -357,19 +542,25 @@ class Session:
         session_uri: Optional[str] = None,
         auto_commit_threshold: int = 8000,
         tool_output_externalization_config: Optional[ToolOutputExternalizationConfig] = None,
+        agent_evolution_enabled: bool = True,
+        usage_reporter: Optional["UsageReporter"] = None,
+        agent_evolution_enabled_provider: Optional[Callable[[], bool]] = None,
     ):
         self._viking_fs = viking_fs
         self._vikingdb_manager = vikingdb_manager
         self._session_compressor = session_compressor
         self.user = user or UserIdentifier.the_default_user()
         self.ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)
-        self.session_id = session_id or str(uuid4())
+        self.session_id = (
+            session_id or f"{datetime.now(timezone.utc):%Y%m%d-%H%M%S}-{uuid4().hex[:16]}"
+        )
         self.created_at = int(datetime.now(timezone.utc).timestamp() * 1000)
         self._auto_commit_threshold = auto_commit_threshold
         self._session_uri = session_uri or canonical_session_uri(self.ctx, self.session_id)
 
         self._messages: List[Message] = []
         self._usage_records: List[Usage] = []
+        self._archive_meta_merge_lock = asyncio.Lock()
         self._compression: SessionCompression = SessionCompression()
         self._stats: SessionStats = SessionStats()
         self._meta = SessionMeta(
@@ -384,6 +575,9 @@ class Session:
             if tool_output_externalization_config is not None
             else ToolOutputExternalizationConfig()
         )
+        self._agent_evolution_enabled = agent_evolution_enabled
+        self._agent_evolution_enabled_provider = agent_evolution_enabled_provider
+        self._usage_reporter = usage_reporter
 
         logger.info(f"Session created: {self.session_id} for user {self.user}")
 
@@ -402,7 +596,9 @@ class Session:
                 if line.strip()
             ]
             logger.info(f"Session loaded: {self.session_id} ({len(self._messages)} messages)")
-        except (FileNotFoundError, Exception):
+        except Exception as exc:
+            if not _is_storage_not_found(exc):
+                raise
             logger.debug(f"Session {self.session_id} not found, starting fresh")
 
         # Restore compression_index (scan history directory)
@@ -416,8 +612,9 @@ class Session:
                 self._compression.compression_index = max_index
                 self._stats.compression_count = len(archives)
                 logger.debug(f"Restored compression_index: {max_index}")
-        except Exception:
-            pass
+        except Exception as exc:
+            if not _is_storage_not_found(exc):
+                raise
 
         # Load .meta.json
         try:
@@ -425,7 +622,9 @@ class Session:
                 f"{self._session_uri}/.meta.json", ctx=self.ctx
             )
             self._meta = SessionMeta.from_dict(json.loads(meta_content))
-        except Exception:
+        except Exception as exc:
+            if not _is_storage_not_found(exc):
+                raise
             # Old session without meta — derive from existing data
             self._meta.message_count = len(self._messages)
             self._meta.commit_count = self._compression.compression_index
@@ -449,6 +648,26 @@ class Session:
         Used on load and as a safety net after rollbacks. Respects the
         currently remembered ``keep_recent_count`` from meta.
         """
+        if (
+            self._meta.retention_mode == RETENTION_MODE_TURN_BUDGET
+            and self._meta.keep_recent_turn_count > 0
+            and self._meta.retained_message_token_budget > 0
+        ):
+            plan = plan_retention(
+                self._messages,
+                keep_recent_turn_count=self._meta.keep_recent_turn_count,
+                token_budget=self._meta.retained_message_token_budget,
+                min_raw_tail_steps=self._meta.min_raw_tail_steps,
+            )
+            retained_ids = {message.id for message in plan.retained_messages}
+            self._meta.pending_tokens = sum(
+                int(message.estimated_tokens or 0)
+                for message in plan.archive_messages
+                if message.id not in retained_ids
+            )
+            self._meta.pending_tokens = max(0, self._meta.pending_tokens)
+            return
+
         keep = max(0, int(self._meta.keep_recent_count or 0))
         total = len(self._messages)
         if keep <= 0:
@@ -466,7 +685,9 @@ class Session:
         try:
             await self._viking_fs.stat(self._session_uri, ctx=self.ctx)
             return True
-        except Exception:
+        except Exception as exc:
+            if not _is_storage_not_found(exc):
+                raise
             return False
 
     async def ensure_exists(self) -> None:
@@ -477,8 +698,8 @@ class Session:
         await self._viking_fs.write_file(f"{self._session_uri}/messages.jsonl", "", ctx=self.ctx)
         await self._save_meta()
 
-    async def _save_meta(self) -> None:
-        """Persist .meta.json to storage."""
+    async def _save_meta(self, lease_ref: Optional[Any] = None) -> None:
+        """Persist .meta.json to storage using an optional held PathLock lease."""
         if not self._viking_fs:
             return
         self._meta.updated_at = get_current_timestamp()
@@ -486,13 +707,8 @@ class Session:
             uri=f"{self._session_uri}/.meta.json",
             content=json.dumps(self._meta.to_dict(), ensure_ascii=False),
             ctx=self.ctx,
+            lease_ref=lease_ref,
         )
-
-    def _save_meta_sync(self) -> None:
-        """Sync wrapper for _save_meta()."""
-        if not self._viking_fs:
-            return
-        run_async(self._save_meta())
 
     @property
     def messages(self) -> List[Message]:
@@ -761,7 +977,16 @@ class Session:
             return
 
         group_id = messages[0].id
-        group_original_chars = sum(len(p.tool_output or "") for _, p in tool_parts)
+        group_original_chars = sum(
+            (
+                int(p.tool_output_original_chars)
+                if p.tool_output_ref
+                and p.tool_output_truncated
+                and p.tool_output_original_chars is not None
+                else len(p.tool_output or "")
+            )
+            for _, p in tool_parts
+        )
         normal_indices: List[int] = []
         selected: set[int] = set()
         externalized_preview_cache: Dict[tuple[int, int, str], tuple[ToolResultSynopsis, int]] = {}
@@ -834,7 +1059,7 @@ class Session:
             reverse=True,
         )
         while (
-            projected_inline_chars(selected) > cfg.assistant_turn_inline_budget_chars and remaining
+            projected_inline_chars(selected) >= cfg.assistant_turn_inline_budget_chars and remaining
         ):
             baseline = projected_inline_chars(selected)
             chosen_pos = None
@@ -877,38 +1102,126 @@ class Session:
         )
 
     def _append_messages(self, messages: List[Message]) -> None:
-        """Append multiple messages: update lists, stats, JSONL, meta."""
+        """Append messages through the same authoritative lock as commit Phase 1."""
+        run_async(self._append_messages_authoritatively(messages))
+
+    async def _append_messages_authoritatively(self, messages: List[Message]) -> None:
+        """Reload and append under the session path lock.
+
+        Different workers can hold stale Session objects. Without sharing the
+        commit lock, an append between commit's root read and root rewrite can
+        be overwritten even though add_message already returned successfully.
+        """
+        if not messages:
+            return
+        if not self._viking_fs:
+            self._apply_appended_messages_to_state(messages)
+            return
+
+        uri_to_path = getattr(self._viking_fs, "_uri_to_path", None)
+        if not callable(uri_to_path):
+            # Minimal/embedded VikingFS implementations predate transaction
+            # locks. Preserve their existing append contract; production
+            # VikingFS always takes the authoritative path-lock branch below.
+            await self._append_messages_without_path_lock(messages)
+            return
+
+        session_path = uri_to_path(self._session_uri, ctx=self.ctx)
+        lease = await self._viking_fs._async_agfs.pathlock_acquire_tree(
+            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
+        )
+        try:
+            self._messages = await self._read_live_messages_strict()
+            in_memory_meta = self._meta
+            try:
+                meta_content = await self._viking_fs.read_file(
+                    f"{self._session_uri}/.meta.json",
+                    ctx=self.ctx,
+                )
+                self._meta = SessionMeta.from_dict(json.loads(meta_content))
+            except Exception:
+                # Legacy/malformed metadata must not prevent an otherwise safe
+                # append. Message correctness remains rooted in messages.jsonl.
+                self._meta = in_memory_meta
+
+            self._apply_appended_messages_to_state(messages)
+            batch_content = "".join(message.to_jsonl() + "\n" for message in messages)
+            await self._viking_fs.append_file(
+                f"{self._session_uri}/messages.jsonl",
+                batch_content,
+                ctx=self.ctx,
+                lease_ref=lease,
+            )
+            await self._save_meta(lease_ref=lease)
+        finally:
+            await self._viking_fs._async_agfs.pathlock_release(lease)
+
+    async def _append_messages_without_path_lock(self, messages: List[Message]) -> None:
+        """Compatibility append for storage adapters without path locking."""
+        from openviking_cli.exceptions import NotFoundError
+
+        try:
+            self._messages = await self._read_live_messages_strict()
+        except (FileNotFoundError, NotFoundError):
+            # A fresh lightweight adapter may not materialize messages.jsonl
+            # until its first append.
+            pass
+
+        in_memory_meta = self._meta
+        try:
+            meta_content = await self._viking_fs.read_file(
+                f"{self._session_uri}/.meta.json",
+                ctx=self.ctx,
+            )
+            self._meta = SessionMeta.from_dict(json.loads(meta_content))
+        except Exception:
+            # Keep the in-memory legacy metadata if the lightweight adapter
+            # has no metadata file or cannot decode an older one.
+            self._meta = in_memory_meta
+
+        self._apply_appended_messages_to_state(messages)
+        batch_content = "".join(message.to_jsonl() + "\n" for message in messages)
+        await self._viking_fs.append_file(
+            f"{self._session_uri}/messages.jsonl",
+            batch_content,
+            ctx=self.ctx,
+        )
+        await self._save_meta()
+
+    def _apply_appended_messages_to_state(self, messages: List[Message]) -> None:
+        """Update in-memory counters after an authoritative root reload."""
         for msg in messages:
             self._messages.append(msg)
 
-            if msg.role == "user":
+            if is_user_query(msg):
                 self._stats.total_turns += 1
             msg_tokens = int(msg.estimated_tokens or 0)
             self._stats.total_tokens += msg_tokens
 
-            keep = int(self._meta.keep_recent_count or 0)
-            if keep <= 0:
-                self._meta.pending_tokens += msg_tokens
-            elif len(self._messages) > keep:
-                pushed_out = self._messages[-(keep + 1)]
-                self._meta.pending_tokens += int(pushed_out.estimated_tokens or 0)
+            if self._meta.retention_mode != RETENTION_MODE_TURN_BUDGET:
+                keep = int(self._meta.keep_recent_count or 0)
+                if keep <= 0:
+                    self._meta.pending_tokens += msg_tokens
+                elif len(self._messages) > keep:
+                    pushed_out = self._messages[-(keep + 1)]
+                    self._meta.pending_tokens += int(pushed_out.estimated_tokens or 0)
 
-        self._append_messages_to_jsonl_batch(messages)
+        if self._meta.retention_mode == RETENTION_MODE_TURN_BUDGET:
+            self._rebuild_pending_tokens()
 
         self._meta.message_count = len(self._messages)
         if self._meta.total_message_count is not None:
             self._meta.total_message_count += len(messages)
-        self._save_meta_sync()
 
-    def add_messages(
+    def _build_messages(
         self,
         messages_spec: List[dict],
     ) -> List[Message]:
-        """Add multiple messages in a single batch.
+        """Validate message specs and build their durable Message objects.
 
         Args:
             messages_spec: List of dicts, each with keys:
-                role, parts, peer_id (optional), created_at (optional)
+                role, parts, peer_id/created_at and optional semantic fields.
         """
         all_messages = []
         for i, spec in enumerate(messages_spec):
@@ -919,6 +1232,9 @@ class Session:
             role = spec["role"]
             parts = spec["parts"]
             created_at = spec.get("created_at") or datetime.now(timezone.utc).isoformat()
+            turn_id = spec.get("turn_id")
+            message_kind = spec.get("message_kind")
+            source_message_ids = spec.get("source_message_ids")
 
             try:
                 peer_id = normalize_peer_id(spec.get("peer_id"))
@@ -935,6 +1251,11 @@ class Session:
                         parts=[part],
                         peer_id=peer_id,
                         created_at=created_at,
+                        turn_id=turn_id,
+                        message_kind=message_kind or "tool_transport",
+                        source_message_ids=(
+                            list(source_message_ids) if source_message_ids is not None else None
+                        ),
                     )
                     for part in parts
                 ]
@@ -947,12 +1268,34 @@ class Session:
                     parts=parts,
                     peer_id=peer_id,
                     created_at=created_at,
+                    turn_id=turn_id,
+                    message_kind=message_kind,
+                    source_message_ids=(
+                        list(source_message_ids) if source_message_ids is not None else None
+                    ),
                 )
                 self._externalize_large_tool_outputs(msg)
                 all_messages.append(msg)
 
-        self._append_messages(all_messages)
         return all_messages
+
+    def add_messages(
+        self,
+        messages_spec: List[dict],
+    ) -> List[Message]:
+        """Synchronously add multiple messages in one authoritative batch."""
+        messages = self._build_messages(messages_spec)
+        self._append_messages(messages)
+        return messages
+
+    async def add_messages_async(
+        self,
+        messages_spec: List[dict],
+    ) -> List[Message]:
+        """Asynchronously add multiple messages without blocking the caller loop."""
+        messages = self._build_messages(messages_spec)
+        await self._append_messages_authoritatively(messages)
+        return messages
 
     def add_message(
         self,
@@ -960,6 +1303,9 @@ class Session:
         parts: List[Part],
         peer_id: Optional[str] = None,
         created_at: str = None,
+        turn_id: Optional[str] = None,
+        message_kind: Optional[str] = None,
+        source_message_ids: Optional[List[str]] = None,
     ) -> Message:
         """Add a message.
 
@@ -973,45 +1319,39 @@ class Session:
                     "parts": parts,
                     "peer_id": peer_id,
                     "created_at": created_at,
+                    "turn_id": turn_id,
+                    "message_kind": message_kind,
+                    "source_message_ids": source_message_ids,
                 }
             ]
         )
         return msgs[0]
 
-    def update_tool_part(
+    async def add_message_async(
         self,
-        message_id: str,
-        tool_id: str,
-        output: str,
-        status: str = "completed",
-    ) -> None:
-        """Update tool status."""
-        msg = next((m for m in self._messages if m.id == message_id), None)
-        if not msg:
-            return
-
-        tool_part = msg.find_tool_part(tool_id)
-        if not tool_part:
-            return
-
-        tool_part.tool_output = output
-        tool_part.tool_status = status
-        tool_part.tool_output_ref = ""
-        tool_part.tool_output_truncated = False
-        tool_part.tool_output_original_chars = None
-        tool_part.tool_output_preview_chars = None
-        tool_part.tool_output_sha256 = ""
-        tool_part.tool_output_storage_uri = ""
-        tool_part.tool_output_source_ref = ""
-        tool_part.tool_output_source_offset = None
-        tool_part.tool_output_source_limit = None
-        tool_part.tool_output_externalization_error = ""
-        tool_part.tool_output_externalized_reason = ""
-        self._externalize_large_tool_outputs(msg)
-
-        self._save_tool_result(tool_id, msg, tool_part.tool_output, status)
-        self._update_message_in_jsonl()
-        self._rebuild_pending_tokens()
+        role: str,
+        parts: List[Part],
+        peer_id: Optional[str] = None,
+        created_at: str = None,
+        turn_id: Optional[str] = None,
+        message_kind: Optional[str] = None,
+        source_message_ids: Optional[List[str]] = None,
+    ) -> Message:
+        """Asynchronously add one message through the authoritative path lock."""
+        msgs = await self.add_messages_async(
+            [
+                {
+                    "role": role,
+                    "parts": parts,
+                    "peer_id": peer_id,
+                    "created_at": created_at,
+                    "turn_id": turn_id,
+                    "message_kind": message_kind,
+                    "source_message_ids": source_message_ids,
+                }
+            ]
+        )
+        return msgs[0]
 
     async def read_tool_result(
         self,
@@ -1064,23 +1404,278 @@ class Session:
             return {"tool_results": []}
         return await store.list(tool_name=tool_name, limit=limit)
 
-    def commit(self, keep_recent_count: int = 0) -> Dict[str, Any]:
+    def _remember_retention_policy(
+        self,
+        *,
+        keep_recent_count: int,
+        retention_mode: Optional[str],
+        keep_recent_turn_count: int,
+        retained_message_token_budget: int,
+        min_raw_tail_steps: int,
+    ) -> None:
+        """Persist the policy used by the latest Phase 1 decision."""
+        self._meta.keep_recent_count = keep_recent_count
+        self._meta.retention_mode = retention_mode or ""
+        self._meta.keep_recent_turn_count = keep_recent_turn_count
+        self._meta.retained_message_token_budget = retained_message_token_budget
+        self._meta.min_raw_tail_steps = min_raw_tail_steps
+
+    async def _merge_archive_meta(
+        self,
+        archive_uri: str,
+        updates: Dict[str, Any],
+        lease_ref: Optional[Any] = None,
+    ) -> None:
+        """Merge archive metadata so Phase 2 cannot erase Phase 1 planning data."""
+        if not self._viking_fs:
+            return
+        # Summary generation and memory extraction run concurrently. Serialize
+        # their read/merge/write cycles so overview token metadata, retention
+        # planning and extraction progress cannot overwrite one another.
+        async with self._archive_meta_merge_lock:
+            meta: Dict[str, Any] = {}
+            try:
+                content = await self._viking_fs.read_file(f"{archive_uri}/.meta.json", ctx=self.ctx)
+                parsed = json.loads(content)
+                if isinstance(parsed, dict):
+                    meta = parsed
+            except Exception:
+                pass
+            meta.update(updates)
+            await self._viking_fs.write_file(
+                uri=f"{archive_uri}/.meta.json",
+                content=json.dumps(meta, ensure_ascii=False),
+                ctx=self.ctx,
+                lease_ref=lease_ref,
+            )
+
+    @staticmethod
+    def _retention_plan_meta(
+        plan: RetentionPlan,
+        *,
+        keep_recent_turn_count: int,
+        retained_message_token_budget: int,
+        min_raw_tail_steps: int,
+    ) -> Dict[str, Any]:
+        return {
+            "mode": RETENTION_MODE_TURN_BUDGET,
+            "keep_recent_turn_count": keep_recent_turn_count,
+            "retained_message_token_budget": retained_message_token_budget,
+            "min_raw_tail_steps": min_raw_tail_steps,
+            "partial_turn": plan.partial_turn,
+            "turn_anchor_message_id": plan.turn_anchor.id if plan.turn_anchor else None,
+            "checkpoint_source_message_ids": list(plan.checkpoint_source_message_ids),
+            "raw_tail_start_message_id": plan.raw_tail_start_message_id,
+            "estimated_active_tokens": plan.estimated_active_tokens,
+            "budget_exceeded": plan.budget_exceeded,
+        }
+
+    async def _write_phase1_marker(
+        self,
+        archive_uri: str,
+        *,
+        queue_message: Dict[str, Any],
+        original_messages: List[Message],
+        archived_messages: List[Message],
+        retained_messages: List[Message],
+        keep_recent_count: int,
+        retention_mode: Optional[str],
+        keep_recent_turn_count: int,
+        retained_message_token_budget: int,
+        min_raw_tail_steps: int,
+        agent_evolution_enabled: bool = True,
+        agent_memory_skip_reason: Optional[str] = None,
+        lease_ref: Optional[Any] = None,
+    ) -> None:
+        """Persist the Phase 1 intent before any destructive root rewrite."""
+        payload = {
+            "version": 1,
+            "status": "preparing",
+            "created_at": get_current_timestamp(),
+            "queue_message": queue_message,
+            "original_message_ids": [message.id for message in original_messages],
+            "archived_message_ids": [message.id for message in archived_messages],
+            "retained_message_ids": [message.id for message in retained_messages],
+            "keep_recent_count": keep_recent_count,
+            "retention_mode": retention_mode or "",
+            "keep_recent_turn_count": keep_recent_turn_count,
+            "retained_message_token_budget": retained_message_token_budget,
+            "min_raw_tail_steps": min_raw_tail_steps,
+        }
+        await self._merge_archive_meta(
+            archive_uri,
+            {
+                "phase1": payload,
+                "agent_evolution": {
+                    "enabled": agent_evolution_enabled,
+                    "skip_reason": agent_memory_skip_reason,
+                },
+            },
+            lease_ref=lease_ref,
+        )
+
+    async def _write_phase1_ready_marker(
+        self,
+        archive_uri: str,
+        lease_ref: Optional[Any] = None,
+    ) -> None:
+        """Persist that Phase 1 is ready using an optional held PathLock lease."""
+        phase1 = await self._read_phase1_meta(archive_uri)
+        phase1.update(
+            {
+                "status": "ready",
+                "ready_at": get_current_timestamp(),
+            }
+        )
+        await self._merge_archive_meta(archive_uri, {"phase1": phase1}, lease_ref=lease_ref)
+
+    async def _archive_file_exists(self, archive_uri: str, file_name: str) -> bool:
+        try:
+            return await self._viking_fs.exists(f"{archive_uri}/{file_name}", ctx=self.ctx)
+        except Exception:
+            return False
+
+    async def _read_phase1_meta(self, archive_uri: str) -> Dict[str, Any]:
+        phase1 = (await self._read_archive_meta(archive_uri)).get("phase1")
+        return dict(phase1) if isinstance(phase1, dict) else {}
+
+    async def _ensure_phase1_ready(self, archive_uri: str) -> bool:
+        """Verify or recover a queued Phase 1 before Phase 2 consumes it.
+
+        New commits enqueue while holding the session lock and before rewriting
+        root messages. A consumer therefore acquires the same lock, then either
+        observes ``phase1.status=ready`` in archive metadata or
+        deterministically reconciles a process crash from the persisted intent.
+        """
+        marker = await self._read_phase1_meta(archive_uri)
+        if not marker:
+            # Archives created by older OpenViking versions have no Phase 1
+            # metadata and keep their previous processing contract.
+            return True
+        if marker.get("status") == "ready":
+            return True
+        if await self._archive_file_exists(archive_uri, ".failed.json"):
+            return False
+
+        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
+        lease = await self._viking_fs._async_agfs.pathlock_acquire_tree(
+            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
+        )
+        try:
+            marker = await self._read_phase1_meta(archive_uri)
+            if marker.get("status") == "ready":
+                return True
+            if await self._archive_file_exists(archive_uri, ".failed.json"):
+                return False
+
+            try:
+                if not marker:
+                    raise ValueError("Phase 1 metadata is missing")
+                retained_ids = marker.get("retained_message_ids")
+                archived_ids = marker.get("archived_message_ids")
+                if not isinstance(retained_ids, list) or not isinstance(archived_ids, list):
+                    raise ValueError("Phase 1 metadata has invalid message ID lists")
+                retained_ids = [item for item in retained_ids if isinstance(item, str)]
+                archived_ids = [item for item in archived_ids if isinstance(item, str)]
+                live_messages = await self._read_live_messages_strict()
+            except Exception as exc:
+                await self._write_failed_marker(
+                    archive_uri,
+                    stage="phase1_recovery",
+                    error=f"Cannot verify Phase 1 state: {exc}",
+                    lease_ref=lease,
+                )
+                return False
+
+            live_ids = [message.id for message in live_messages]
+            archived_only_ids = set(archived_ids) - set(retained_ids)
+            phase1_applied = live_ids[
+                : len(retained_ids)
+            ] == retained_ids and not archived_only_ids.intersection(live_ids)
+            if not phase1_applied:
+                await self._write_failed_marker(
+                    archive_uri,
+                    stage="phase1_recovery",
+                    error="Root rewrite was not durably completed before process interruption",
+                    lease_ref=lease,
+                )
+                return False
+
+            # Root is authoritative and proves the rewrite completed. Reconcile
+            # metadata that may have been interrupted immediately afterwards.
+            try:
+                meta_content = await self._viking_fs.read_file(
+                    f"{self._session_uri}/.meta.json",
+                    ctx=self.ctx,
+                )
+                self._meta = SessionMeta.from_dict(json.loads(meta_content))
+            except Exception:
+                pass
+            self._messages = live_messages
+            self._remember_retention_policy(
+                keep_recent_count=max(0, int(marker.get("keep_recent_count", 0) or 0)),
+                retention_mode=str(marker.get("retention_mode", "") or "") or None,
+                keep_recent_turn_count=max(0, int(marker.get("keep_recent_turn_count", 0) or 0)),
+                retained_message_token_budget=max(
+                    0, int(marker.get("retained_message_token_budget", 0) or 0)
+                ),
+                min_raw_tail_steps=max(0, int(marker.get("min_raw_tail_steps", 1) or 0)),
+            )
+            self._meta.message_count = len(live_messages)
+            self._meta.commit_count = max(
+                self._meta.commit_count,
+                self._archive_index_from_uri(archive_uri),
+            )
+            self._meta.last_commit_at = get_current_timestamp()
+            self._rebuild_pending_tokens()
+            await self._save_meta(lease_ref=lease)
+            await self._write_phase1_ready_marker(archive_uri, lease_ref=lease)
+            logger.warning("Recovered interrupted Session Phase 1: %s", archive_uri)
+            return True
+        finally:
+            await self._viking_fs._async_agfs.pathlock_release(lease)
+
+    def commit(
+        self,
+        keep_recent_count: int = 0,
+        *,
+        memory_policy: Optional[Dict[str, Any]] = None,
+        retention_mode: Optional[str] = None,
+        keep_recent_turn_count: Optional[int] = None,
+        retained_message_token_budget: Optional[int] = None,
+        min_raw_tail_steps: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """Sync wrapper for commit_async()."""
-        return run_async(self.commit_async(keep_recent_count=keep_recent_count))
+        return run_async(
+            self.commit_async(
+                keep_recent_count=keep_recent_count,
+                memory_policy=memory_policy,
+                retention_mode=retention_mode,
+                keep_recent_turn_count=keep_recent_turn_count,
+                retained_message_token_budget=retained_message_token_budget,
+                min_raw_tail_steps=min_raw_tail_steps,
+            )
+        )
 
     @tracer("session.commit.phase1")
     async def commit_async(
         self,
         keep_recent_count: int = 0,
+        *,
+        memory_policy: Optional[Dict[str, Any]] = None,
+        retention_mode: Optional[str] = None,
+        keep_recent_turn_count: Optional[int] = None,
+        retained_message_token_budget: Optional[int] = None,
+        min_raw_tail_steps: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """Async commit session: archive immediately, extract memories in background.
+        """Archive immediately and enqueue restart-safe Phase 2 processing.
 
         Phase 1 (Archive prep, path-lock protected): Split messages into
-        archive/retain parts, write the retained tail back to messages.jsonl,
-        then persist the archive. Uses a distributed filesystem lock
-        so this works across workers and processes.
-        Phase 2 (Memory extraction): Always runs in background via
-        asyncio.create_task().
+        archive/retain parts, persist a recoverable intent and archive raw,
+        enqueue Phase 2, then atomically publish the retained root state with
+        ``phase1.status=ready``. Uses a distributed filesystem lock across
+        workers and processes.
+        Phase 2 (Memory extraction): Runs through the persistent QueueFS queue.
 
         Args:
             keep_recent_count: Number of most-recent messages to keep in the
@@ -1092,129 +1687,313 @@ class Session:
         Returns a task_id for tracking Phase 2 progress.
         """
         from openviking.service.task_tracker import get_task_tracker
-        from openviking.storage.transaction import LockContext, get_lock_manager
-        from openviking_cli.exceptions import FailedPreconditionError
+        from openviking.storage.queuefs import QueueManager, get_queue_manager
+        from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
 
         trace_id = tracer.get_trace_id()
         keep_recent_count = max(0, int(keep_recent_count or 0))
-        effective_policy = MemoryPolicy.from_dict(self._meta.memory_policy)
+        if retention_mode not in (None, RETENTION_MODE_TURN_BUDGET):
+            raise ValueError(f"Unsupported retention_mode: {retention_mode}")
+        if retention_mode is None and any(
+            value is not None
+            for value in (
+                keep_recent_turn_count,
+                retained_message_token_budget,
+                min_raw_tail_steps,
+            )
+        ):
+            raise ValueError(
+                "retention_mode='turn_budget' is required when Turn retention fields are set"
+            )
+        turn_mode = retention_mode == RETENTION_MODE_TURN_BUDGET
+        effective_keep_turns = max(
+            0, int(3 if keep_recent_turn_count is None else keep_recent_turn_count)
+        )
+        effective_token_budget = max(
+            0,
+            int(12_000 if retained_message_token_budget is None else retained_message_token_budget),
+        )
+        effective_min_tail = max(0, int(1 if min_raw_tail_steps is None else min_raw_tail_steps))
+        if turn_mode and effective_token_budget <= 0:
+            raise ValueError("retained_message_token_budget must be greater than 0")
+        in_memory_default_memory_policy = self._meta.memory_policy
+        effective_policy = MemoryPolicy.from_dict(
+            memory_policy if memory_policy is not None else self._meta.memory_policy
+        )
         _validate_memory_policy_types(effective_policy)
+        agent_evolution_enabled = (
+            self._agent_evolution_enabled_provider()
+            if self._agent_evolution_enabled_provider is not None
+            else self._agent_evolution_enabled
+        )
+        effective_policy = _apply_agent_evolution_setting(
+            effective_policy,
+            agent_evolution_enabled=agent_evolution_enabled,
+        )
         effective_memory_policy = effective_policy.to_dict()
+        effective_memory_types = sorted(_effective_memory_types(effective_policy))
+        agent_memory_skip_reason = _agent_memory_skip_reason(
+            agent_evolution_enabled=agent_evolution_enabled,
+            effective_memory_types=set(effective_memory_types),
+        )
         logger.info(
             f"[TRACER] session_commit started, trace_id={trace_id}, "
-            f"keep_recent_count={keep_recent_count}"
+            f"keep_recent_count={keep_recent_count}, retention_mode={retention_mode}, "
+            f"keep_recent_turn_count={effective_keep_turns}, "
+            f"retained_message_token_budget={effective_token_budget}"
         )
 
-        # ===== Phase 1: Snapshot + clear (path-lock protected) =====
-        # Fast pre-check: skip lock entirely if no messages (common case avoids
-        # unnecessary filesystem lock acquisition).
-        if not self._messages:
-            self._meta.pending_tokens = 0
-            self._meta.keep_recent_count = keep_recent_count
-            await self._save_meta()
-            get_current_telemetry().set("memory.extracted", 0)
-            return {
-                "session_id": self.session_id,
-                "status": "accepted",
-                "task_id": None,
-                "archive_uri": None,
-                "archived": False,
-                "trace_id": trace_id,
-            }
-
-        blocking_archive = await self._get_blocking_failed_archive_ref()
-        if blocking_archive:
-            raise FailedPreconditionError(
-                f"Session {self.session_id} has unresolved failed archive "
-                f"{blocking_archive['archive_id']}; fix it before committing again.",
-                details={"archive_id": blocking_archive["archive_id"]},
-            )
-
-        # Use filesystem-based distributed lock so this works across workers/processes.
+        # ===== Phase 1: authoritative snapshot + split (path-lock protected) =====
+        # Use a waiting filesystem lock and reload inside it. Different workers
+        # can hold stale Session objects, so in-memory emptiness is never a
+        # correctness boundary.
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
-        async with LockContext(get_lock_manager(), [session_path], lock_mode="exact"):
-            # Authoritative check under lock: handles the race where two concurrent
-            # callers both passed the pre-check but only the first should archive.
+        lease = await self._viking_fs._async_agfs.pathlock_acquire_tree(
+            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
+        )
+        try:
+            self._messages = await self._read_live_messages_strict()
+            try:
+                meta_content = await self._viking_fs.read_file(
+                    f"{self._session_uri}/.meta.json",
+                    ctx=self.ctx,
+                )
+                self._meta = SessionMeta.from_dict(json.loads(meta_content))
+                if (
+                    memory_policy is None
+                    and self._meta.memory_policy is None
+                    and in_memory_default_memory_policy is not None
+                ):
+                    self._meta.memory_policy = in_memory_default_memory_policy
+            except Exception:
+                # The root JSONL remains authoritative for message correctness;
+                # legacy sessions may not have metadata yet.
+                pass
+
+            # A Session object may have been loaded by another worker before a
+            # different worker updated the persisted default policy. Phase 2
+            # must use the policy from the same lock-protected snapshot as the
+            # messages being archived, unless this commit supplied an explicit
+            # override.
+            if memory_policy is None:
+                effective_policy = MemoryPolicy.from_dict(self._meta.memory_policy)
+                _validate_memory_policy_types(effective_policy)
+                effective_policy = _apply_agent_evolution_setting(
+                    effective_policy,
+                    agent_evolution_enabled=agent_evolution_enabled,
+                )
+                effective_memory_policy = effective_policy.to_dict()
+                effective_memory_types = sorted(_effective_memory_types(effective_policy))
+                agent_memory_skip_reason = _agent_memory_skip_reason(
+                    agent_evolution_enabled=agent_evolution_enabled,
+                    effective_memory_types=set(effective_memory_types),
+                )
+
+            archive_refs = await self._list_archive_refs()
+            self._compression.compression_index = max(
+                [archive["index"] for archive in archive_refs],
+                default=0,
+            )
             if not self._messages:
                 self._meta.pending_tokens = 0
-                self._meta.keep_recent_count = keep_recent_count
-                await self._save_meta()
+                self._remember_retention_policy(
+                    keep_recent_count=keep_recent_count,
+                    retention_mode=retention_mode,
+                    keep_recent_turn_count=effective_keep_turns if turn_mode else 0,
+                    retained_message_token_budget=effective_token_budget if turn_mode else 0,
+                    min_raw_tail_steps=effective_min_tail,
+                )
+                await self._save_meta(lease_ref=lease)
                 get_current_telemetry().set("memory.extracted", 0)
                 return {
                     "session_id": self.session_id,
-                    "status": "accepted",
+                    "status": "skipped",
                     "task_id": None,
                     "archive_uri": None,
                     "archived": False,
+                    "reason": "no_messages",
                     "trace_id": trace_id,
                 }
 
-            # WM v2 boundary: if all live messages already fit inside the keep
-            # window, there is nothing to archive — just remember the new
-            # keep_recent_count and reset pending_tokens so the next
-            # add_message uses the sliding-window path.
             total = len(self._messages)
-            if keep_recent_count > 0 and total <= keep_recent_count:
+            retention_plan: Optional[RetentionPlan] = None
+            if turn_mode:
+                # The externalization budget belongs to a logical Turn, not one
+                # physical assistant message. This catches N small tool outputs
+                # whose aggregate exceeds the configured inline budget.
+                for turn in build_turns(self._messages):
+                    self._externalize_large_tool_output_group(turn.messages)
+                retention_plan = plan_retention(
+                    self._messages,
+                    keep_recent_turn_count=effective_keep_turns,
+                    token_budget=effective_token_budget,
+                    min_raw_tail_steps=effective_min_tail,
+                )
+                messages_to_archive = retention_plan.archive_messages
+                retained_messages = retention_plan.retained_messages
+            elif keep_recent_count > 0:
+                split_idx = max(0, total - keep_recent_count)
+                messages_to_archive = self._messages[:split_idx]
+                retained_messages = self._messages[split_idx:]
+            else:
+                messages_to_archive = self._messages.copy()
+                retained_messages = []
+
+            # No archive work: persist possible Turn-wide externalization and
+            # remember the policy for subsequent add_message accounting.
+            if not messages_to_archive:
+                self._messages = retained_messages
+                await self._write_to_agfs_async(messages=self._messages, lease_ref=lease)
                 self._meta.pending_tokens = 0
-                self._meta.keep_recent_count = keep_recent_count
                 self._meta.message_count = total
-                await self._save_meta()
+                self._remember_retention_policy(
+                    keep_recent_count=keep_recent_count,
+                    retention_mode=retention_mode,
+                    keep_recent_turn_count=effective_keep_turns if turn_mode else 0,
+                    retained_message_token_budget=effective_token_budget if turn_mode else 0,
+                    min_raw_tail_steps=effective_min_tail,
+                )
+                await self._save_meta(lease_ref=lease)
                 get_current_telemetry().set("memory.extracted", 0)
                 return {
                     "session_id": self.session_id,
-                    "status": "accepted",
+                    "status": "skipped",
                     "task_id": None,
                     "archive_uri": None,
                     "archived": False,
                     "reason": "all_within_keep_window",
                     "trace_id": trace_id,
+                    "estimated_active_tokens": (
+                        retention_plan.estimated_active_tokens if retention_plan else 0
+                    ),
+                    "budget_exceeded": retention_plan.budget_exceeded if retention_plan else False,
                 }
 
             self._compression.compression_index += 1
-            if keep_recent_count > 0:
-                split_idx = total - keep_recent_count
-                messages_to_archive = self._messages[:split_idx]
-                self._messages = self._messages[split_idx:]
-            else:
-                messages_to_archive = self._messages.copy()
-                self._messages = []
-
+            archive_uri = (
+                f"{self._session_uri}/history/archive_{self._compression.compression_index:03d}"
+            )
+            original_messages = list(self._messages)
+            usage_snapshot = self._usage_records.copy()
+            task_id = str(uuid4())
+            queue_msg = SessionCommitMsg(
+                task_id=task_id,
+                session_id=self.session_id,
+                session_uri=self._session_uri,
+                archive_uri=archive_uri,
+                user=self.ctx.user.to_dict(),
+                actor_peer_id=self.ctx.actor_peer_id,
+                memory_policy=effective_memory_policy,
+                usage_uris=list(dict.fromkeys(u.uri for u in usage_snapshot if u.uri)),
+            )
+            phase1_stage = "phase1_persist"
             try:
-                # Persist the retained tail (may be empty when keep=0). This
-                # replaces messages.jsonl under the lock, consistent with the
-                # previous behavior of writing empty messages on full clear.
-                await self._write_to_agfs_async(messages=self._messages)
+                # Persist the full intent before any root rewrite. Queueing while
+                # holding the same session lock lets a consumer either observe
+                # final ready metadata or recover the exact interrupted state.
+                await self._write_phase1_marker(
+                    archive_uri,
+                    queue_message=queue_msg.to_dict(),
+                    original_messages=original_messages,
+                    archived_messages=messages_to_archive,
+                    retained_messages=retained_messages,
+                    keep_recent_count=keep_recent_count,
+                    retention_mode=retention_mode,
+                    keep_recent_turn_count=effective_keep_turns if turn_mode else 0,
+                    retained_message_token_budget=effective_token_budget if turn_mode else 0,
+                    min_raw_tail_steps=effective_min_tail,
+                    agent_evolution_enabled=agent_evolution_enabled,
+                    agent_memory_skip_reason=agent_memory_skip_reason,
+                    lease_ref=lease,
+                )
+
+                # Archive raw remains durable and recoverable before any live
+                # conversation history is removed from the root JSONL.
+                if self._viking_fs:
+                    lines = [m.to_jsonl() for m in messages_to_archive]
+                    await self._viking_fs.write_file(
+                        uri=f"{archive_uri}/messages.jsonl",
+                        content="\n".join(lines) + "\n",
+                        ctx=self.ctx,
+                        lease_ref=lease,
+                    )
+                    if retention_plan is not None:
+                        await self._merge_archive_meta(
+                            archive_uri,
+                            {
+                                "retention_plan": self._retention_plan_meta(
+                                    retention_plan,
+                                    keep_recent_turn_count=effective_keep_turns,
+                                    retained_message_token_budget=effective_token_budget,
+                                    min_raw_tail_steps=effective_min_tail,
+                                )
+                            },
+                            lease_ref=lease,
+                        )
+
+                phase1_stage = "queue_enqueue"
+                await get_queue_manager().enqueue(
+                    QueueManager.SESSION_COMMIT,
+                    queue_msg.to_dict(),
+                )
+
+                # Register after the durable queue write but before publishing
+                # ready. The consumer is blocked by this session lock until
+                # ready, so it cannot complete the task before registration;
+                # if registration fails, the queued consumer will observe the
+                # Phase 1 failure marker and create/fail the task itself.
+                phase1_stage = "task_tracker_create"
+                await get_task_tracker().create(
+                    "session_commit",
+                    resource_id=self.session_id,
+                    account_id=self.ctx.account_id,
+                    user_id=self.ctx.user.user_id,
+                    task_id=task_id,
+                )
+
+                phase1_stage = "phase1_persist"
+                self._messages = retained_messages
+                await self._write_to_agfs_async(messages=self._messages, lease_ref=lease)
+                self._meta.message_count = len(self._messages)
+                self._meta.pending_tokens = 0
+                self._remember_retention_policy(
+                    keep_recent_count=keep_recent_count,
+                    retention_mode=retention_mode,
+                    keep_recent_turn_count=effective_keep_turns if turn_mode else 0,
+                    retained_message_token_budget=effective_token_budget if turn_mode else 0,
+                    min_raw_tail_steps=effective_min_tail,
+                )
+                self._meta.commit_count = max(
+                    self._meta.commit_count,
+                    self._compression.compression_index,
+                )
+                self._meta.last_commit_at = get_current_timestamp()
+                await self._save_meta(lease_ref=lease)
+                await self._write_phase1_ready_marker(archive_uri, lease_ref=lease)
             except Exception as e:
-                # Rollback: restore messages so they aren't lost
-                logger.error(f"[commit] Failed to write messages.jsonl: {e}")
-                self._messages = list(messages_to_archive) + list(self._messages)
+                logger.error(f"[commit] Failed during {phase1_stage}: {e}")
+                # Whether the queue write failed or a queued Phase 1 stopped
+                # before publication, a terminal marker makes archive raw
+                # logically live and prevents a permanent pending directory.
+                try:
+                    await self._write_failed_marker(
+                        archive_uri,
+                        stage=phase1_stage,
+                        error=str(e),
+                        lease_ref=lease,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to mark archive after Phase 1 persistence failure: %s",
+                        archive_uri,
+                    )
+                self._messages = original_messages
                 self._compression.compression_index -= 1
                 raise
-        # Lock released — live session now contains only the retained tail.
-
-        # ===== Phase 1 continued: Write raw archive (no LLM calls, no lock needed) =====
-        archive_uri = (
-            f"{self._session_uri}/history/archive_{self._compression.compression_index:03d}"
-        )
-        if self._viking_fs:
-            lines = [m.to_jsonl() for m in messages_to_archive]
-            await self._viking_fs.write_file(
-                uri=f"{archive_uri}/messages.jsonl",
-                content="\n".join(lines) + "\n",
-                ctx=self.ctx,
-            )
-
-        # WM v2: live session is now the retained tail; pending_tokens resets
-        # because anything that was pending has been archived.
-        self._meta.message_count = len(self._messages)
-        self._meta.pending_tokens = 0
-        self._meta.keep_recent_count = keep_recent_count
-        self._meta.commit_count = max(
-            self._meta.commit_count,
-            self._compression.compression_index,
-        )
-        self._meta.last_commit_at = get_current_timestamp()
-        await self._save_meta()
+        finally:
+            await self._viking_fs._async_agfs.pathlock_release(lease)
+        # Lock released; Phase 1 intent, queue item, retained root, metadata and
+        # ready metadata are all durable.
 
         self._compression.original_count += len(messages_to_archive)
         logger.info(
@@ -1222,38 +2001,178 @@ class Session:
             f"history/archive_{self._compression.compression_index:03d}/"
         )
 
-        # Snapshot mutable state for Phase 2
-        usage_snapshot = self._usage_records.copy()
+        return {
+            "session_id": self.session_id,
+            "status": "accepted",
+            "task_id": task_id,
+            "archive_uri": archive_uri,
+            "archived": True,
+            "trace_id": trace_id,
+            "estimated_active_tokens": (
+                retention_plan.estimated_active_tokens if retention_plan else 0
+            ),
+            "budget_exceeded": retention_plan.budget_exceeded if retention_plan else False,
+        }
 
-        # Create TaskRecord for tracking Phase 2
+    async def finalize_cancelled_commit(self, archive_uri: str) -> None:
+        """Make a cancelled queued commit terminal without discarding its raw archive."""
+        await self._write_failed_marker(
+            archive_uri,
+            stage="cancelled",
+            error="session commit cancelled",
+        )
+
+    async def resume_queued_commit(self, msg: "SessionCommitMsg") -> None:
+        """Run one durable Phase 2 job from its archived messages."""
+        from openviking.service.task_tracker import get_task_tracker
+
         tracker = get_task_tracker()
         task = await tracker.create(
             "session_commit",
             resource_id=self.session_id,
             account_id=self.ctx.account_id,
             user_id=self.ctx.user.user_id,
+            task_id=msg.task_id,
         )
 
-        asyncio.create_task(
-            self._run_memory_extraction(
-                task_id=task.task_id,
-                archive_uri=archive_uri,
-                messages=messages_to_archive,
-                usage_records=usage_snapshot,
-                first_message_id=messages_to_archive[0].id if messages_to_archive else "",
-                last_message_id=messages_to_archive[-1].id if messages_to_archive else "",
-                memory_policy=effective_memory_policy,
+        try:
+            await self._viking_fs.read_file(f"{msg.archive_uri}/.done", ctx=self.ctx)
+        except Exception as exc:
+            if not _is_storage_not_found(exc):
+                raise
+        else:
+            if task.status.value == "completed":
+                return
+            await tracker.complete(
+                msg.task_id,
+                {"session_id": self.session_id, "archive_uri": msg.archive_uri},
+                account_id=self.ctx.account_id,
+                user_id=self.ctx.user.user_id,
             )
+            return
+
+        try:
+            failed = json.loads(
+                await self._viking_fs.read_file(f"{msg.archive_uri}/.failed.json", ctx=self.ctx)
+            )
+        except Exception as exc:
+            if not _is_storage_not_found(exc):
+                raise
+        else:
+            await tracker.fail(
+                msg.task_id,
+                str(failed.get("error") or "session commit failed"),
+                account_id=self.ctx.account_id,
+                user_id=self.ctx.user.user_id,
+            )
+            return
+
+        if not await self._ensure_phase1_ready(msg.archive_uri):
+            try:
+                failed = json.loads(
+                    await self._viking_fs.read_file(
+                        f"{msg.archive_uri}/.failed.json",
+                        ctx=self.ctx,
+                    )
+                )
+                error = str(failed.get("error") or "session commit Phase 1 is not ready")
+            except Exception:
+                error = "session commit Phase 1 is not ready"
+            await tracker.fail(
+                msg.task_id,
+                error,
+                account_id=self.ctx.account_id,
+                user_id=self.ctx.user.user_id,
+            )
+            return
+
+        archive_error = ""
+        try:
+            archive_messages = await self._read_archive_messages(msg.archive_uri)
+        except _ArchiveMessagesCorruptError as exc:
+            archive_messages = []
+            archive_error = f"session commit archive has invalid messages: {exc}"
+        except Exception as exc:
+            if not _is_storage_not_found(exc):
+                raise
+            archive_messages = []
+        if not archive_messages:
+            error = archive_error or "session commit archive has no messages"
+            await self._write_failed_marker(
+                msg.archive_uri,
+                stage="archive_read",
+                error=error,
+            )
+            await tracker.fail(
+                msg.task_id,
+                error,
+                account_id=self.ctx.account_id,
+                user_id=self.ctx.user.user_id,
+            )
+            return
+
+        queued_policy = MemoryPolicy.from_dict(msg.memory_policy)
+        archive_meta = await self._read_archive_meta(msg.archive_uri)
+        agent_evolution_snapshot = archive_meta.get("agent_evolution")
+        if not isinstance(agent_evolution_snapshot, dict):
+            # Compatibility with jobs created by pre-merge development builds
+            # that temporarily stored this snapshot in the queue payload.
+            phase1 = archive_meta.get("phase1")
+            queue_snapshot = phase1.get("queue_message") if isinstance(phase1, dict) else None
+            agent_evolution_snapshot = queue_snapshot if isinstance(queue_snapshot, dict) else {}
+
+        snapshot_enabled = agent_evolution_snapshot.get("enabled")
+        if snapshot_enabled is None:
+            snapshot_enabled = agent_evolution_snapshot.get("agent_evolution_enabled")
+        # Archives created before this setting existed preserve their original
+        # behavior, where Agent memory extraction was enabled by default.
+        agent_evolution_enabled = snapshot_enabled if isinstance(snapshot_enabled, bool) else True
+        agent_memory_skip_reason = agent_evolution_snapshot.get("skip_reason")
+        if agent_memory_skip_reason is None:
+            agent_memory_skip_reason = agent_evolution_snapshot.get("agent_memory_skip_reason")
+        if agent_memory_skip_reason is None:
+            agent_memory_skip_reason = _agent_memory_skip_reason(
+                agent_evolution_enabled=agent_evolution_enabled,
+                effective_memory_types=_effective_memory_types(queued_policy),
+            )
+        user_config_error = agent_evolution_snapshot.get("user_config_error")
+        if user_config_error is not None:
+            user_config_error = str(user_config_error)
+
+        await self._run_memory_extraction(
+            task_id=msg.task_id,
+            archive_uri=msg.archive_uri,
+            messages=archive_messages,
+            usage_records=[Usage(uri=uri, type="context") for uri in msg.usage_uris],
+            first_message_id=archive_messages[0].id,
+            last_message_id=archive_messages[-1].id,
+            memory_policy=msg.memory_policy,
+            agent_evolution_enabled=agent_evolution_enabled,
+            agent_memory_skip_reason=agent_memory_skip_reason,
+            user_config_error=user_config_error,
         )
 
-        return {
-            "session_id": self.session_id,
-            "status": "accepted",
-            "task_id": task.task_id,
-            "archive_uri": archive_uri,
-            "archived": True,
-            "trace_id": trace_id,
-        }
+    async def _run_usage_reporting(
+        self,
+        *,
+        task_id: str,
+        archive_uri: str,
+        messages: List[Message],
+    ) -> list[Any]:
+        reporter = getattr(self, "_usage_reporter", None)
+        if reporter is None:
+            return []
+
+        from openviking.usage_reporter import UsageContext
+
+        context = UsageContext(
+            account_id=self.ctx.account_id,
+            user_id=self.ctx.user.user_id,
+            session_id=self.session_id,
+            archive_uri=archive_uri,
+            task_id=task_id,
+        )
+        return await reporter.extract_and_report(messages=messages, context=context)
 
     @tracer("session.commit.phase2", ignore_result=True, ignore_args=True)
     async def _run_memory_extraction(
@@ -1265,12 +2184,12 @@ class Session:
         first_message_id: str,
         last_message_id: str,
         memory_policy: Optional[Dict[str, Any]],
+        agent_evolution_enabled: bool = True,
+        agent_memory_skip_reason: Optional[str] = None,
+        user_config_error: Optional[str] = None,
     ) -> None:
         """Phase 2: Extract memories, write relations, enqueue — runs in background."""
-        import uuid
-
         from openviking.service.task_tracker import get_task_tracker
-        from openviking.storage.transaction import get_lock_manager
         from openviking.telemetry import OperationTelemetry, bind_telemetry
         from openviking.telemetry.registry import register_telemetry, unregister_telemetry
 
@@ -1278,34 +2197,27 @@ class Session:
         request_wait_tracker = get_request_wait_tracker()
 
         memories_extracted: Dict[str, int] = {}
+        usage_events_extracted = 0
         extracted_skill_results: list[dict] = []
         active_count_updated = 0
+        memory_diff_uri: Optional[str] = None
+        completed_memory_steps: Dict[str, set[str]] = {}
         telemetry = OperationTelemetry(operation="session_commit_phase2", enabled=True)
         archive_index = self._archive_index_from_uri(archive_uri)
-        redo_task_id: Optional[str] = None
-        lock_manager = get_lock_manager()
-        redo_enabled = lock_manager.redo_recovery_enabled
-        redo_log = lock_manager.redo_log
 
         try:
-            if not await self._wait_for_previous_archive_done(archive_index):
-                await self._write_failed_marker(
-                    archive_uri,
-                    stage="waiting_previous_done",
-                    error=(
-                        f"Previous archive archive_{archive_index - 1:03d} failed; "
-                        "this archive cannot proceed"
-                    ),
-                    blocked_by=f"archive_{archive_index - 1:03d}",
-                )
-                await tracker.fail(
-                    task_id,
-                    f"Previous archive archive_{archive_index - 1:03d} failed; "
-                    "cannot continue session commit",
-                    account_id=self.ctx.account_id,
-                    user_id=self.ctx.user.user_id,
-                )
-                return
+            await self._wait_for_previous_archive_done(archive_index)
+            (
+                messages,
+                coverage_start_archive,
+                coverage_end_archive,
+                covered_failed_archives,
+                completed_memory_steps,
+            ) = await self._prepare_phase2_archive_messages(archive_uri, messages)
+            if not messages:
+                raise ValueError("session commit archive has no recoverable messages")
+            first_message_id = messages[0].id
+            last_message_id = messages[-1].id
 
             await tracker.start(
                 task_id,
@@ -1316,30 +2228,65 @@ class Session:
             register_telemetry(telemetry)
             try:
                 with bind_telemetry(telemetry):
-                    # redo-log protection
-                    if redo_enabled:
-                        redo_task_id = str(uuid.uuid4())
-                        await redo_log.write_pending_async(
-                            redo_task_id,
-                            {
-                                "archive_uri": archive_uri,
-                                "session_uri": self._session_uri,
-                                "account_id": self.ctx.account_id,
-                                "user_id": self.ctx.user.user_id,
-                                "role": self.ctx.role.value,
-                            },
+                    ov_config = get_openviking_config()
+                    effective_policy = MemoryPolicy.from_dict(memory_policy)
+                    working_memory_enabled = effective_policy.working_memory_enabled
+                    checkpoint_requests = (
+                        await self._collect_checkpoint_requests_for_phase2(
+                            archive_uri,
+                            covered_failed_archives,
+                            messages,
                         )
-
-                    latest_archive_overview = await self._get_latest_completed_archive_overview(
-                        exclude_archive_uri=archive_uri
+                        if working_memory_enabled
+                        else []
+                    )
+                    latest_archive_overview = (
+                        await self._get_latest_completed_archive_overview(
+                            exclude_archive_uri=archive_uri,
+                            before_archive_index=archive_index,
+                        )
+                        if working_memory_enabled
+                        else ""
                     )
                     extraction_messages = await self._hydrate_tool_outputs_for_extraction(messages)
+                    usage_events_extracted = len(
+                        await self._run_usage_reporting(
+                            task_id=task_id,
+                            archive_uri=archive_uri,
+                            messages=extraction_messages,
+                        )
+                    )
 
                     async def _run_archive_summary() -> None:
-                        summary = await self._generate_archive_summary_async(
+                        if not working_memory_enabled:
+                            logger.info(
+                                "Working Memory summary skipped "
+                                "(memory_policy.working_memory.enabled=false)"
+                            )
+                            return
+                        summary_kwargs: Dict[str, Any] = {
+                            "latest_archive_overview": latest_archive_overview,
+                        }
+                        if checkpoint_requests:
+                            summary_kwargs["checkpoint_requests"] = checkpoint_requests
+                        generated = await self._generate_archive_summary_async(
                             extraction_messages,
-                            latest_archive_overview=latest_archive_overview,
+                            **summary_kwargs,
                         )
+                        summary_result = (
+                            generated
+                            if isinstance(generated, _ArchiveSummaryResult)
+                            else _ArchiveSummaryResult(overview=str(generated or ""))
+                        )
+                        checkpoint_records = self._build_checkpoint_records(
+                            checkpoint_requests,
+                            summary_result.checkpoint_summaries,
+                        )
+                        summary = summary_result.overview
+                        if checkpoint_requests and not summary.strip():
+                            raise ValueError(
+                                "Working Memory output is empty for a required checkpoint"
+                            )
                         if self._viking_fs and summary:
                             abstract = self._extract_abstract_from_summary(summary)
                             await self._viking_fs.write_file(
@@ -1352,24 +2299,62 @@ class Session:
                                 content=summary,
                                 ctx=self.ctx,
                             )
-                            await self._viking_fs.write_file(
-                                uri=f"{archive_uri}/.meta.json",
-                                content=json.dumps(
-                                    {
-                                        "overview_tokens": estimate_text_tokens(summary),
-                                        "abstract_tokens": estimate_text_tokens(abstract),
-                                    }
-                                ),
-                                ctx=self.ctx,
+                            await self._merge_archive_meta(
+                                archive_uri,
+                                {
+                                    "overview_tokens": estimate_text_tokens(summary),
+                                    "abstract_tokens": estimate_text_tokens(abstract),
+                                    "checkpoints": checkpoint_records,
+                                },
                             )
 
+                    async def _run_retryable_phase2_step(
+                        operation_name: str,
+                        fn: Callable[[], Awaitable[Any]],
+                    ) -> Any:
+                        # Secondary safety net on top of the per-call retry that the
+                        # VLM/embedding layer already performs. Reuses the shared
+                        # transient-error classifier so permanent failures (auth,
+                        # quota, content-safety, 400, oversized input) fail fast
+                        # instead of being retried pointlessly.
+                        return await retry_async(
+                            fn,
+                            max_retries=_MEMORY_EXTRACTION_MAX_RETRIES,
+                            base_delay=_MEMORY_EXTRACTION_RETRY_BASE_DELAY_SECONDS,
+                            max_delay=_MEMORY_EXTRACTION_RETRY_MAX_DELAY_SECONDS,
+                            is_retryable=is_retryable_api_error,
+                            logger=logger,
+                            operation_name=operation_name,
+                        )
+
+                    async def _run_recorded_memory_step(
+                        operation_name: str,
+                        step: str,
+                        step_messages: List[Message],
+                        fn: Callable[[], Awaitable[Any]],
+                    ) -> Any:
+                        result = await _run_retryable_phase2_step(operation_name, fn)
+                        completed_memory_steps.setdefault(step, set()).update(
+                            message.id for message in step_messages
+                        )
+                        # Persist progress before waiting for sibling Phase 2
+                        # tasks. A process restart or a sibling failure can then
+                        # resume without applying this memory step twice.
+                        await self._merge_archive_meta(
+                            archive_uri,
+                            {
+                                "completed_memory_steps": (
+                                    self._serialize_completed_memory_steps(completed_memory_steps)
+                                )
+                            },
+                        )
+                        return result
+
                     # Summary, long-term memory, and execution-derived memory run concurrently.
-                    ov_config = get_openviking_config()
                     memory_extraction_enabled = ov_config.memory.extraction_enabled
                     config_session_skill_extraction_enabled = (
                         ov_config.memory.session_skill_extraction_enabled
                     )
-                    effective_policy = MemoryPolicy.from_dict(memory_policy)
                     extraction_scope = _resolve_memory_extraction_scope(
                         self.ctx,
                         effective_policy,
@@ -1382,19 +2367,39 @@ class Session:
                     allowed_peer_ids = extraction_scope.allowed_peer_ids
                     session_skill_extraction_enabled = extraction_scope.include_session_skills
                     memory_type_filter = extraction_scope.memory_types
-                    long_term_memory_types, execution_memory_types = _split_policy_memory_types(
-                        memory_type_filter
+                    has_execution_memory = hasattr(
+                        self._session_compressor, "extract_execution_memories"
                     )
+                    if has_execution_memory:
+                        long_term_memory_types, execution_memory_types = _split_policy_memory_types(
+                            memory_type_filter
+                        )
+                    else:
+                        long_term_memory_types = memory_type_filter
+                        execution_memory_types = set()
+
+                    long_term_messages = [
+                        message
+                        for message in extraction_messages
+                        if message.id not in completed_memory_steps.get("long_term", set())
+                    ]
+                    execution_messages = [
+                        message
+                        for message in extraction_messages
+                        if message.id not in completed_memory_steps.get("execution", set())
+                    ]
 
                     long_term_has_work = (
                         memory_extraction_enabled
                         and (self_memory_enabled or allowed_peer_ids)
                         and (long_term_memory_types is None or bool(long_term_memory_types))
+                        and bool(long_term_messages)
                     )
                     execution_memory_has_work = (
                         self_memory_enabled
                         and memory_extraction_enabled
                         and (execution_memory_types is None or bool(execution_memory_types))
+                        and bool(execution_messages)
                     )
                     session_skill_extraction_enabled = (
                         session_skill_extraction_enabled and execution_memory_has_work
@@ -1406,74 +2411,106 @@ class Session:
                             len(messages),
                         )
 
-                        has_execution_memory = hasattr(
-                            self._session_compressor, "extract_execution_memories"
-                        )
-
-                        extraction_tasks: List[Any] = [_run_archive_summary()]
-                        extraction_labels = ["archive_summary"]
+                        extraction_tasks: List[Any] = []
+                        extraction_labels: List[str] = []
+                        if working_memory_enabled:
+                            extraction_tasks.append(
+                                _run_retryable_phase2_step("archive_summary", _run_archive_summary)
+                            )
+                            extraction_labels.append("archive_summary")
 
                         if long_term_has_work:
-                            extraction_tasks.append(
-                                self._session_compressor.extract_long_term_memories(
-                                    messages=extraction_messages,
+
+                            async def _run_long_term_memory_extraction() -> Any:
+                                # strict_extract_errors=True lets transient failures
+                                # surface so _run_retryable_phase2_step can retry them
+                                # (and so a final failure is recorded as a skipped
+                                # archive instead of silently dropping the memory).
+                                return await self._session_compressor.extract_long_term_memories(
+                                    messages=long_term_messages,
                                     user=self.user,
                                     session_id=self.session_id,
                                     ctx=self.ctx,
+                                    strict_extract_errors=True,
                                     latest_archive_overview=latest_archive_overview,
                                     archive_uri=archive_uri,
                                     allowed_memory_types=long_term_memory_types,
+                                    agent_evolution_enabled=agent_evolution_enabled,
                                     allow_self_memory=self_memory_enabled,
                                     allowed_peer_ids=allowed_peer_ids,
+                                )
+
+                            extraction_tasks.append(
+                                _run_recorded_memory_step(
+                                    "long_term_memory_extraction",
+                                    "long_term",
+                                    long_term_messages,
+                                    _run_long_term_memory_extraction,
                                 )
                             )
                             extraction_labels.append("long_term")
 
                         if has_execution_memory and execution_memory_has_work:
-                            try:
-                                extraction_tasks.append(
-                                    self._session_compressor.extract_execution_memories(
-                                        messages=extraction_messages,
-                                        ctx=self.ctx,
-                                        latest_archive_overview=latest_archive_overview,
-                                        archive_uri=archive_uri,
-                                        allowed_memory_types=execution_memory_types,
-                                        include_session_skills=session_skill_extraction_enabled,
-                                    )
+
+                            async def _run_execution_memory_extraction() -> Any:
+                                # See _run_long_term_memory_extraction: surface errors
+                                # so retries can engage and final failures are visible.
+                                return await self._session_compressor.extract_execution_memories(
+                                    messages=execution_messages,
+                                    ctx=self.ctx,
+                                    strict_extract_errors=True,
+                                    latest_archive_overview=latest_archive_overview,
+                                    archive_uri=archive_uri,
+                                    allowed_memory_types=execution_memory_types,
+                                    include_session_skills=session_skill_extraction_enabled,
                                 )
-                                extraction_labels.append("execution")
-                            except Exception as exc:
-                                logger.error(
-                                    "Execution memory extraction failed: %s",
-                                    exc,
-                                    exc_info=exc,
+
+                            extraction_tasks.append(
+                                _run_recorded_memory_step(
+                                    "execution_memory_extraction",
+                                    "execution",
+                                    execution_messages,
+                                    _run_execution_memory_extraction,
                                 )
+                            )
+                            extraction_labels.append("execution")
 
                         _results = await asyncio.gather(
                             *extraction_tasks,
                             return_exceptions=True,
                         )
-                        summary_result = _results[0]
-
-                        if isinstance(summary_result, Exception):
-                            logger.error(
-                                f"Archive summary generation failed: {summary_result}",
-                                exc_info=summary_result,
-                            )
-
-                        total_extracted = 0
-                        extraction_errors: list[BaseException] = []
-                        for label, result in zip(extraction_labels[1:], _results[1:], strict=True):
+                        # The archive outcome is binary: if ANY Phase 2 step
+                        # still fails after retries, no .done coverage is
+                        # published. Successful memory steps keep a message-ID
+                        # progress marker solely to make later raw replay
+                        # idempotent.
+                        extraction_error: Optional[BaseException] = None
+                        for label, result in zip(extraction_labels, _results, strict=True):
                             if isinstance(result, Exception):
                                 logger.error(
-                                    "Memory extraction failed for %s: %s",
+                                    "Phase 2 step %s failed: %s",
                                     label,
                                     result,
                                     exc_info=result,
                                 )
-                                extraction_errors.append(result)
-                                continue
+                                if extraction_error is None:
+                                    extraction_error = result
 
+                        if extraction_error is not None:
+                            raise extraction_error
+
+                        if long_term_has_work and self._viking_fs:
+                            candidate_memory_diff_uri = f"{archive_uri}/memory_diff.json"
+                            if await self._viking_fs.exists(
+                                candidate_memory_diff_uri,
+                                ctx=self.ctx,
+                            ):
+                                memory_diff_uri = candidate_memory_diff_uri
+
+                        total_extracted = 0
+                        for label, result in zip(extraction_labels, _results, strict=True):
+                            if label == "archive_summary":
+                                continue
                             if isinstance(result, dict):
                                 target_contexts = list(result.get("contexts", []))
                                 target_skills = list(result.get("session_skills", []))
@@ -1492,9 +2529,6 @@ class Session:
                             if target_skills:
                                 extracted_skill_results.extend(target_skills)
 
-                        if extraction_errors:
-                            raise extraction_errors[0]
-
                         if total_extracted:
                             self._stats.memories_extracted += total_extracted
                         if extracted_skill_results:
@@ -1509,7 +2543,12 @@ class Session:
                                 "Memory and session skill extraction skipped "
                                 "(disabled by config or memory_policy)"
                             )
-                        await _run_archive_summary()
+                        if working_memory_enabled:
+                            await _run_retryable_phase2_step(
+                                "archive_summary", _run_archive_summary
+                            )
+                        else:
+                            await _run_archive_summary()
 
                     # Write relations (using snapshot, not self._usage_records)
                     if self._viking_fs:
@@ -1520,9 +2559,6 @@ class Session:
                                 )
                             except Exception as e:
                                 logger.warning(f"Failed to create relation to {usage.uri}: {e}")
-
-                    if redo_enabled and redo_task_id:
-                        await redo_log.mark_done_async(redo_task_id)
 
                     # Update active_count (using snapshot, not self._usage_records)
                     if self._vikingdb_manager:
@@ -1567,63 +2603,75 @@ class Session:
                 telemetry_snapshot=snapshot,
             )
 
-            # Write .done file last — signals that all state is finalized
-            await self._write_done_file(archive_uri, first_message_id, last_message_id)
+            # Write .done last so a recovered queue item can skip completed work.
+            await self._write_done_file(
+                archive_uri,
+                first_message_id,
+                last_message_id,
+                working_memory_enabled=working_memory_enabled,
+                coverage_start_archive=coverage_start_archive,
+                coverage_end_archive=coverage_end_archive,
+                covered_failed_archives=covered_failed_archives,
+                completed_memory_steps=self._serialize_completed_memory_steps(
+                    completed_memory_steps
+                ),
+            )
+
+            result_payload = {
+                "session_id": self.session_id,
+                "archive_uri": archive_uri,
+                "memories_extracted": memories_extracted,
+                "session_skills_extracted": len(extracted_skill_results),
+                "session_skill_uris": [
+                    item.get("uri") or item.get("root_uri")
+                    for item in extracted_skill_results
+                    if isinstance(item, dict) and (item.get("uri") or item.get("root_uri"))
+                ],
+                "usage_events_extracted": usage_events_extracted,
+                "active_count_updated": active_count_updated,
+                "effective_memory_types": sorted(
+                    _effective_memory_types(MemoryPolicy.from_dict(memory_policy))
+                ),
+                "agent_evolution_enabled": agent_evolution_enabled,
+                "agent_memory_skip_reason": agent_memory_skip_reason,
+                "token_usage": {
+                    "llm": dict(self._meta.llm_token_usage),
+                    "embedding": dict(self._meta.embedding_token_usage),
+                    "total": {
+                        "total_tokens": self._meta.llm_token_usage["total_tokens"]
+                        + self._meta.embedding_token_usage["total_tokens"],
+                        "cached_tokens": self._meta.llm_token_usage["cached_tokens"],
+                        "reasoning_tokens": self._meta.llm_token_usage["reasoning_tokens"],
+                    },
+                },
+            }
+            if memory_diff_uri:
+                result_payload["memory_diff_uri"] = memory_diff_uri
+            if user_config_error:
+                result_payload["user_config_error"] = user_config_error
 
             await tracker.complete(
                 task_id,
-                {
-                    "session_id": self.session_id,
-                    "archive_uri": archive_uri,
-                    "memories_extracted": memories_extracted,
-                    "session_skills_extracted": len(extracted_skill_results),
-                    "session_skill_uris": [
-                        item.get("uri") or item.get("root_uri")
-                        for item in extracted_skill_results
-                        if isinstance(item, dict) and (item.get("uri") or item.get("root_uri"))
-                    ],
-                    "active_count_updated": active_count_updated,
-                    "token_usage": {
-                        "llm": dict(self._meta.llm_token_usage),
-                        "embedding": dict(self._meta.embedding_token_usage),
-                        "total": {
-                            "total_tokens": self._meta.llm_token_usage["total_tokens"]
-                            + self._meta.embedding_token_usage["total_tokens"],
-                            "cached_tokens": self._meta.llm_token_usage["cached_tokens"],
-                            "reasoning_tokens": self._meta.llm_token_usage["reasoning_tokens"],
-                        },
-                    },
-                },
+                result_payload,
                 account_id=self.ctx.account_id,
                 user_id=self.ctx.user.user_id,
             )
             logger.info(f"Session {self.session_id} memory extraction completed")
-        except asyncio.CancelledError as e:
-            if redo_enabled and redo_task_id:
-                await redo_log.mark_done_async(redo_task_id)
-            try:
-                await self._write_failed_marker(
-                    archive_uri,
-                    stage="memory_extraction",
-                    error=f"cancelled: {e}",
-                )
-            except Exception:
-                logger.debug("Failed to write cancelled marker for session %s", self.session_id)
-            await tracker.fail(
-                task_id,
-                f"cancelled: {e}",
-                account_id=self.ctx.account_id,
-                user_id=self.ctx.user.user_id,
+        except asyncio.CancelledError:
+            await self._write_failed_marker(
+                archive_uri,
+                stage="cancelled",
+                error="session commit cancelled",
             )
-            logger.warning("Memory extraction cancelled for session %s", self.session_id)
             raise
         except Exception as e:
-            if redo_enabled and redo_task_id:
-                await redo_log.mark_done_async(redo_task_id)
             await self._write_failed_marker(
                 archive_uri,
                 stage="memory_extraction",
                 error=str(e),
+                completed_memory_steps=self._serialize_completed_memory_steps(
+                    completed_memory_steps
+                ),
             )
             await tracker.fail(
                 task_id, str(e), account_id=self.ctx.account_id, user_id=self.ctx.user.user_id
@@ -1635,14 +2683,26 @@ class Session:
         archive_uri: str,
         first_message_id: str,
         last_message_id: str,
+        *,
+        working_memory_enabled: Optional[bool] = None,
+        coverage_start_archive: Optional[str] = None,
+        coverage_end_archive: Optional[str] = None,
+        covered_failed_archives: Optional[List[str]] = None,
+        completed_memory_steps: Optional[Dict[str, List[str]]] = None,
     ) -> None:
         """Write .done marker file to the archive directory."""
         if not self._viking_fs:
             return
+        archive_id = archive_uri.rstrip("/").split("/")[-1]
         content = json.dumps(
             {
                 "starting_message_id": first_message_id,
                 "ending_message_id": last_message_id,
+                "working_memory_enabled": working_memory_enabled,
+                "coverage_start_archive": coverage_start_archive or archive_id,
+                "coverage_end_archive": coverage_end_archive or archive_id,
+                "covered_failed_archives": list(covered_failed_archives or []),
+                "completed_memory_steps": dict(completed_memory_steps or {}),
             },
             ensure_ascii=False,
         )
@@ -1658,6 +2718,9 @@ class Session:
         stage: str,
         error: str,
         blocked_by: str = "",
+        skipped: bool = True,
+        completed_memory_steps: Optional[Dict[str, List[str]]] = None,
+        lease_ref: Optional[Any] = None,
     ) -> None:
         """Persist a terminal failure marker for the archive."""
         if not self._viking_fs:
@@ -1666,6 +2729,8 @@ class Session:
             "stage": stage,
             "error": error,
             "failed_at": get_current_timestamp(),
+            "skipped": skipped,
+            "completed_memory_steps": dict(completed_memory_steps or {}),
         }
         if blocked_by:
             payload["blocked_by"] = blocked_by
@@ -1673,39 +2738,8 @@ class Session:
             uri=f"{archive_uri}/.failed.json",
             content=json.dumps(payload, ensure_ascii=False),
             ctx=self.ctx,
+            lease_ref=lease_ref,
         )
-
-    def _update_active_counts(self) -> int:
-        """Update active_count for used contexts/skills."""
-        if not self._vikingdb_manager:
-            return 0
-
-        uris = [usage.uri for usage in self._usage_records if usage.uri]
-        try:
-            updated = run_async(self._vikingdb_manager.increment_active_count(self.ctx, uris))
-        except Exception as e:
-            logger.debug(f"Could not update active_count for usage URIs: {e}")
-            updated = 0
-
-        if updated > 0:
-            logger.info(f"Updated active_count for {updated} contexts/skills")
-        return updated
-
-    async def _update_active_counts_async(self) -> int:
-        """Async update active_count for used contexts/skills."""
-        if not self._vikingdb_manager:
-            return 0
-
-        uris = [usage.uri for usage in self._usage_records if usage.uri]
-        try:
-            updated = await self._vikingdb_manager.increment_active_count(self.ctx, uris)
-        except Exception as e:
-            logger.debug(f"Could not update active_count for usage URIs: {e}")
-            updated = 0
-
-        if updated > 0:
-            logger.info(f"Updated active_count for {updated} contexts/skills")
-        return updated
 
     async def get_session_context(self, token_budget: int = 128_000) -> Dict[str, Any]:
         """Get assembled session context with the latest summary archive and merged messages."""
@@ -1714,8 +2748,21 @@ class Session:
 
         context = await self._collect_session_context_components()
         merged_messages = context["messages"]
-
-        message_tokens = sum(m.estimated_tokens for m in merged_messages)
+        budgeted = fit_active_messages_to_budget(
+            merged_messages,
+            token_budget=token_budget,
+        )
+        merged_messages = budgeted.messages
+        message_tokens = budgeted.estimated_tokens
+        if budgeted.dropped_message_ids or budgeted.truncated_message_ids:
+            logger.info(
+                "[get_session_context] active budget applied: session_id=%s, "
+                "budget=%s, dropped=%s, truncated=%s",
+                self.session_id,
+                token_budget,
+                len(budgeted.dropped_message_ids),
+                len(budgeted.truncated_message_ids),
+            )
 
         # 精简日志：只打印关键信息
         logger.info(
@@ -1778,10 +2825,6 @@ class Session:
             "current_messages": current_messages,
         }
 
-    async def get_context_for_assemble(self, token_budget: int = 128_000) -> Dict[str, Any]:
-        """Backward-compatible alias for the assembled session context."""
-        return await self.get_session_context(token_budget=token_budget)
-
     async def get_session_archive(self, archive_id: str) -> Dict[str, Any]:
         """Get one completed archive by archive ID."""
         from openviking_cli.exceptions import NotFoundError
@@ -1809,50 +2852,108 @@ class Session:
     # ============= Internal methods =============
 
     async def _collect_session_context_components(self) -> Dict[str, Any]:
-        """Collect the latest summary archive and merged pending/live messages."""
-        completed_archives = await self._get_completed_archive_refs()
+        """Collect overview and messages by stopping at the newest terminal archive.
+
+        Archive history grows without bound, so this read path deliberately never
+        walks the whole history. It scans newest → oldest and stops at the first
+        terminal marker (``.done`` or ``.failed.json``):
+
+        - newest terminal is ``completed``: inject that archive's overview when
+          readable, plus raw messages from the newer non-terminal archives;
+        - newest terminal is ``failed``: no overview, and only the newer
+          non-terminal archives contribute raw messages;
+        - no terminal at all: no overview, every archive is still non-terminal
+          so all of their raw messages are returned.
+
+        Nothing at or older than that terminal is read, which is a deliberate
+        deviation from the RFC #3330 recovery formula: an uncovered ``failed``
+        archive no longer replays its raw messages, and only the terminal
+        archive's checkpoints are restored. Phase 2 coverage bookkeeping is
+        unaffected because it keeps using the full ``_scan_archive_states()``
+        scan. Public ``pre_archive_abstracts`` stay empty; abstracts are not read.
+        """
+        archive_refs = await self._list_archive_refs()
+        newer_pending: List[Dict[str, Any]] = []
+        terminal: Optional[Dict[str, Any]] = None
+        terminal_state = ""
+
+        for archive in archive_refs:  # newest → oldest
+            state = await self._archive_terminal_state(archive["archive_uri"])
+            if state == "pending":
+                newer_pending.append(archive)
+                continue
+            terminal = archive
+            terminal_state = state
+            break
+
         latest_archive = None
-        pre_archive_abstracts: List[Dict[str, Any]] = []
         failed_archives = 0
-
-        for archive in completed_archives:
-            if latest_archive is None:
-                overview = await self._read_archive_overview(archive["archive_uri"])
-                if not overview:
-                    failed_archives += 1
-                    continue
-
+        if terminal is not None and terminal_state == "completed":
+            overview = (await self._read_archive_overview(terminal["archive_uri"])).strip()
+            if overview:
                 latest_archive = {
-                    "archive_id": archive["archive_id"],
-                    "archive_uri": archive["archive_uri"],
+                    "archive_id": terminal["archive_id"],
+                    "archive_uri": terminal["archive_uri"],
                     "overview": overview,
                     "overview_tokens": await self._read_archive_overview_tokens(
-                        archive["archive_uri"], overview
+                        terminal["archive_uri"], overview
                     ),
                 }
-            abstract = await self._read_archive_abstract(archive["archive_uri"])
-            if abstract:
-                pre_archive_abstracts.append(
-                    {
-                        "archive_id": archive["archive_id"],
-                        "abstract": abstract,
-                        "tokens": estimate_text_tokens(abstract),
-                    }
-                )
             else:
-                failed_archives += 1
+                # A required overview that is missing or unreadable still keeps
+                # the archive terminal here; the warning is emitted by the full
+                # scan used for Phase 2 bookkeeping.
+                logger.warning(
+                    "Completed archive has no readable overview: %s",
+                    terminal["archive_uri"],
+                )
+                failed_archives = 1
+        elif terminal is not None:
+            failed_archives = 1
+
+        archive_messages: List[Message] = []
+        # newer_pending was collected newest-first; restore chronological order.
+        for archive in reversed(newer_pending):
+            try:
+                archive_messages.extend(await self._read_archive_messages(archive["archive_uri"]))
+            except Exception as exc:
+                if not _is_storage_not_found(exc):
+                    raise
+                logger.warning(
+                    "Skipping pending archive %s because messages.jsonl is missing",
+                    archive["archive_uri"],
+                )
+
+        merged_messages = self._stable_deduplicate_messages(
+            archive_messages + list(self._messages)
+        )
+        merged_messages = await self._insert_terminal_checkpoints(merged_messages, terminal)
 
         return {
             "latest_archive": latest_archive,
-            "pre_archive_abstracts": pre_archive_abstracts,
-            "total_archives": len(completed_archives),
+            "pre_archive_abstracts": [],
+            # Directory listing only; deriving an exact count would require the
+            # per-archive marker scan this read path exists to avoid.
+            "total_archives": len(archive_refs),
             "failed_archives": failed_archives,
-            "messages": await self._get_pending_archive_messages() + list(self._messages),
+            "messages": merged_messages,
         }
+
+    async def _archive_terminal_state(self, archive_uri: str) -> str:
+        """Return ``completed``, ``failed``, or ``pending`` for one archive."""
+        if not self._viking_fs:
+            return "pending"
+        for marker, state in ((".done", "completed"), (".failed.json", "failed")):
+            try:
+                if await self._viking_fs.exists(f"{archive_uri}/{marker}", ctx=self.ctx):
+                    return state
+            except Exception:
+                continue
+        return "pending"
 
     async def _list_archive_refs(self) -> List[Dict[str, Any]]:
         """List archive refs sorted by archive index descending."""
-        if not self._viking_fs or self.compression.compression_index <= 0:
+        if not self._viking_fs:
             return []
 
         try:
@@ -1880,42 +2981,199 @@ class Session:
 
         return sorted(refs, key=lambda item: item["index"], reverse=True)
 
+    async def _scan_archive_states(self) -> List[ArchiveState]:
+        """Derive every archive state exclusively from its directory markers."""
+        states: List[ArchiveState] = []
+        refs = sorted(await self._list_archive_refs(), key=lambda item: item["index"])
+        for archive in refs:
+            done_uri = f"{archive['archive_uri']}/.done"
+            try:
+                done_exists = await self._viking_fs.exists(done_uri, ctx=self.ctx)
+            except Exception:
+                done_exists = False
+            done: Dict[str, Any] = {}
+            if done_exists:
+                try:
+                    raw_done = await self._viking_fs.read_file(done_uri, ctx=self.ctx)
+                    parsed_done = json.loads(raw_done or "{}")
+                    if isinstance(parsed_done, dict):
+                        done = parsed_done
+                except Exception as exc:
+                    # Marker existence still means completion, but unreadable
+                    # contents cannot extend coverage to earlier archives.
+                    logger.warning(
+                        "Unreadable archive done marker %s: %s", archive["archive_uri"], exc
+                    )
+
+            if done_exists:
+                # Only validate overview when Working Memory required one.
+                # Otherwise leave overview empty here and let context assembly
+                # lazy-load the newest terminal completed archive's overview.
+                overview = ""
+                if done.get("working_memory_enabled") is True:
+                    overview = await self._read_archive_overview(archive["archive_uri"])
+                    if not overview.strip():
+                        # New markers distinguish an intentionally overview-less
+                        # working_memory=false commit from a missing/corrupt
+                        # required overview. The latter remains logically live and
+                        # can be rolled forward by a later successful archive.
+                        logger.warning(
+                            "Completed archive has no readable required overview: %s",
+                            archive["archive_uri"],
+                        )
+                        states.append(
+                            ArchiveState(
+                                archive_id=archive["archive_id"],
+                                archive_uri=archive["archive_uri"],
+                                index=archive["index"],
+                                state="failed",
+                                done=done,
+                                failed={
+                                    "stage": "archive_overview",
+                                    "error": "required overview is missing or unreadable",
+                                },
+                            )
+                        )
+                        continue
+
+                # working_memory=false legitimately writes .done without an
+                # overview. Legacy markers lack the explicit flag, so retain
+                # their established completed semantics for compatibility.
+                states.append(
+                    ArchiveState(
+                        archive_id=archive["archive_id"],
+                        archive_uri=archive["archive_uri"],
+                        index=archive["index"],
+                        state="completed",
+                        overview=overview,
+                        done=done,
+                    )
+                )
+                continue
+
+            failed: Dict[str, Any] = {}
+            failed_uri = f"{archive['archive_uri']}/.failed.json"
+            try:
+                failed_exists = await self._viking_fs.exists(failed_uri, ctx=self.ctx)
+            except Exception:
+                failed_exists = False
+            if failed_exists:
+                try:
+                    parsed_failed = json.loads(
+                        await self._viking_fs.read_file(failed_uri, ctx=self.ctx) or "{}"
+                    )
+                    if isinstance(parsed_failed, dict):
+                        failed = parsed_failed
+                except Exception as exc:
+                    logger.warning("Unreadable archive failed marker %s: %s", failed_uri, exc)
+            states.append(
+                ArchiveState(
+                    archive_id=archive["archive_id"],
+                    archive_uri=archive["archive_uri"],
+                    index=archive["index"],
+                    state="failed" if failed_exists else "pending",
+                    failed=failed,
+                )
+            )
+        return states
+
+    @staticmethod
+    def _covered_archive_ids(states: List[ArchiveState]) -> set[str]:
+        """Return archives covered by an authoritative completion marker."""
+        existing = {state.archive_id: state for state in states}
+        covered: set[str] = set()
+        for state in states:
+            if state.state != "completed":
+                continue
+            start = max(
+                1,
+                min(state.coverage_start_index, state.coverage_end_index, state.index),
+            )
+            end = min(
+                state.index,
+                max(state.coverage_start_index, state.coverage_end_index),
+            )
+            for candidate in states:
+                # A pending archive still has a live Phase 2 owner and is never
+                # valid coverage input. Even malformed/manual range metadata
+                # must not make its raw messages disappear.
+                if start <= candidate.index <= end and candidate.state != "pending":
+                    covered.add(candidate.archive_id)
+            explicit = state.done.get("covered_failed_archives", [])
+            if isinstance(explicit, list):
+                covered.update(
+                    archive_id
+                    for archive_id in explicit
+                    if isinstance(archive_id, str)
+                    and archive_id in existing
+                    and existing[archive_id].index <= state.index
+                    and existing[archive_id].state == "failed"
+                )
+        return covered
+
+    @staticmethod
+    def _stable_deduplicate_messages(messages: List[Message]) -> List[Message]:
+        """Stable-deduplicate crash/recovery overlaps by durable message id."""
+        seen: set[str] = set()
+        result: List[Message] = []
+        for message in messages:
+            if message.id in seen:
+                continue
+            seen.add(message.id)
+            result.append(message)
+        return result
+
+    @staticmethod
+    def _merge_completed_memory_steps(
+        target: Dict[str, set[str]],
+        raw: Any,
+    ) -> None:
+        """Merge durable per-step message coverage from archive metadata."""
+        if not isinstance(raw, dict):
+            return
+        for step in _MEMORY_STEP_NAMES:
+            message_ids = raw.get(step)
+            if not isinstance(message_ids, list):
+                continue
+            target.setdefault(step, set()).update(
+                item for item in message_ids if isinstance(item, str) and item
+            )
+
+    @staticmethod
+    def _serialize_completed_memory_steps(
+        completed: Dict[str, set[str]],
+    ) -> Dict[str, List[str]]:
+        return {
+            step: sorted(completed.get(step, set()))
+            for step in _MEMORY_STEP_NAMES
+            if completed.get(step)
+        }
+
     async def _get_completed_archive_refs(
         self,
         exclude_archive_uri: Optional[str] = None,
+        before_archive_index: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """Return completed archive refs sorted by archive index descending."""
         completed: List[Dict[str, Any]] = []
         exclude = exclude_archive_uri.rstrip("/") if exclude_archive_uri else None
 
-        for archive in await self._list_archive_refs():
-            if exclude and archive["archive_uri"] == exclude:
+        for state in reversed(await self._scan_archive_states()):
+            if exclude and state.archive_uri == exclude:
                 continue
-            try:
-                await self._viking_fs.read_file(f"{archive['archive_uri']}/.done", ctx=self.ctx)
-            except Exception:
+            if before_archive_index is not None and state.index >= before_archive_index:
                 continue
-            completed.append(archive)
+            if state.state != "completed":
+                continue
+            completed.append(
+                {
+                    "archive_id": state.archive_id,
+                    "archive_uri": state.archive_uri,
+                    "index": state.index,
+                }
+            )
 
         return completed
-
-    async def _get_blocking_failed_archive_ref(self) -> Optional[Dict[str, Any]]:
-        """Return the earliest unresolved failed archive, if any."""
-        for archive in sorted(await self._list_archive_refs(), key=lambda item: item["index"]):
-            try:
-                await self._viking_fs.read_file(f"{archive['archive_uri']}/.done", ctx=self.ctx)
-                continue
-            except Exception:
-                pass
-            try:
-                await self._viking_fs.read_file(
-                    f"{archive['archive_uri']}/.failed.json",
-                    ctx=self.ctx,
-                )
-            except Exception:
-                continue
-            return archive
-        return None
 
     async def _read_archive_overview(self, archive_uri: str) -> str:
         """Read archive overview text."""
@@ -1954,10 +3212,7 @@ class Session:
 
     async def _read_archive_messages(self, archive_uri: str) -> List[Message]:
         """Read archived messages from one archive."""
-        try:
-            content = await self._viking_fs.read_file(f"{archive_uri}/messages.jsonl", ctx=self.ctx)
-        except Exception:
-            return []
+        content = await self._viking_fs.read_file(f"{archive_uri}/messages.jsonl", ctx=self.ctx)
 
         messages: List[Message] = []
         for line in content.strip().split("\n"):
@@ -1965,17 +3220,21 @@ class Session:
                 continue
             try:
                 messages.append(Message.from_dict(json.loads(line)))
-            except Exception:
-                continue
+            except (json.JSONDecodeError, AttributeError, KeyError, TypeError, ValueError) as exc:
+                raise _ArchiveMessagesCorruptError("invalid message record") from exc
 
         return messages
 
     async def _get_latest_completed_archive_summary(
         self,
         exclude_archive_uri: Optional[str] = None,
+        before_archive_index: Optional[int] = None,
     ) -> Optional[Dict[str, Any]]:
         """Return the newest readable completed archive summary."""
-        for archive in await self._get_completed_archive_refs(exclude_archive_uri):
+        for archive in await self._get_completed_archive_refs(
+            exclude_archive_uri,
+            before_archive_index,
+        ):
             overview = await self._read_archive_overview(archive["archive_uri"])
             if not overview:
                 continue
@@ -1995,29 +3254,299 @@ class Session:
     async def _get_latest_completed_archive_overview(
         self,
         exclude_archive_uri: Optional[str] = None,
+        before_archive_index: Optional[int] = None,
     ) -> str:
         """Return the newest completed archive overview, skipping incomplete archives."""
-        summary = await self._get_latest_completed_archive_summary(exclude_archive_uri)
+        summary = await self._get_latest_completed_archive_summary(
+            exclude_archive_uri,
+            before_archive_index,
+        )
         return summary["overview"] if summary else ""
 
-    async def _get_pending_archive_messages(self) -> List[Message]:
-        """Return messages from incomplete archives newer than the latest completed archive."""
-        latest_completed_index = max(0, self._meta.commit_count)
-        incomplete_archives: List[Dict[str, Any]] = []
-        for archive in sorted(await self._list_archive_refs(), key=lambda item: item["index"]):
-            try:
-                await self._viking_fs.read_file(f"{archive['archive_uri']}/.done", ctx=self.ctx)
-                latest_completed_index = max(latest_completed_index, archive["index"])
-            except Exception:
-                incomplete_archives.append(archive)
+    async def _read_archive_meta(self, archive_uri: str) -> Dict[str, Any]:
+        try:
+            content = await self._viking_fs.read_file(f"{archive_uri}/.meta.json", ctx=self.ctx)
+            parsed = json.loads(content)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
 
-        pending_messages: List[Message] = []
-        for archive in incomplete_archives:
-            if archive["index"] <= latest_completed_index:
+    async def _collect_checkpoint_requests_for_phase2(
+        self,
+        archive_uri: str,
+        covered_failed_archives: List[str],
+        messages: List[Message],
+    ) -> List[_CheckpointRequest]:
+        """Collect and validate partial-Turn checkpoint work owned by this Phase 2.
+
+        Failed archives rolled into the current commit contribute their pending
+        checkpoint sources. Requests sharing one retained user anchor are merged
+        before the LLM call, so context assembly inserts one checkpoint per Turn.
+        """
+        archive_root = archive_uri.rstrip("/").rsplit("/", 1)[0]
+        current_archive_id = archive_uri.rstrip("/").split("/")[-1]
+        archive_ids = list(
+            dict.fromkeys(
+                [
+                    archive_id
+                    for archive_id in [*covered_failed_archives, current_archive_id]
+                    if isinstance(archive_id, str) and re.fullmatch(r"archive_\d+", archive_id)
+                ]
+            )
+        )
+        archive_ids.sort(key=lambda item: int(item.split("_")[1]))
+
+        message_by_id = {message.id: message for message in messages}
+        message_ids = set(message_by_id)
+        message_order = {message.id: index for index, message in enumerate(messages)}
+        turn_anchor_by_message_id: Dict[str, Optional[str]] = {}
+        for turn in build_turns(messages):
+            owner_anchor_id = turn.anchor.id if turn.anchor is not None else None
+            for message in turn.messages:
+                turn_anchor_by_message_id[message.id] = owner_anchor_id
+        merged: Dict[str, Dict[str, Any]] = {}
+        for archive_id in archive_ids:
+            meta = await self._read_archive_meta(f"{archive_root}/{archive_id}")
+            plan = meta.get("retention_plan")
+            if not isinstance(plan, dict) or not plan.get("partial_turn"):
                 continue
-            pending_messages.extend(await self._read_archive_messages(archive["archive_uri"]))
 
-        return pending_messages
+            anchor_id = plan.get("turn_anchor_message_id")
+            raw_source_ids = plan.get("checkpoint_source_message_ids")
+            if not isinstance(anchor_id, str) or not anchor_id:
+                raise ValueError(f"{archive_id} has a partial Turn without a valid anchor")
+            if not isinstance(raw_source_ids, list) or not raw_source_ids:
+                raise ValueError(
+                    f"{archive_id} has a partial Turn without checkpoint source messages"
+                )
+            source_ids = [
+                source_id
+                for source_id in raw_source_ids
+                if isinstance(source_id, str) and source_id
+            ]
+            if len(source_ids) != len(raw_source_ids):
+                raise ValueError(f"{archive_id} has invalid checkpoint source message IDs")
+
+            missing_ids = [
+                message_id
+                for message_id in [anchor_id, *source_ids]
+                if message_id not in message_ids
+            ]
+            if missing_ids:
+                raise ValueError(
+                    f"{archive_id} checkpoint source is missing messages: {missing_ids}"
+                )
+            invalid_source_ids = [
+                source_id
+                for source_id in source_ids
+                if is_user_query(message_by_id[source_id])
+                or turn_anchor_by_message_id.get(source_id) != anchor_id
+            ]
+            if invalid_source_ids:
+                raise ValueError(
+                    f"{archive_id} checkpoint source is outside its Assistant/Tool prefix: "
+                    f"{invalid_source_ids}"
+                )
+
+            request = merged.setdefault(
+                anchor_id,
+                {
+                    "source_message_ids": [],
+                    "retained_message_token_budget": 0,
+                    "estimated_active_tokens": 0,
+                },
+            )
+            request["source_message_ids"] = list(
+                dict.fromkeys([*request["source_message_ids"], *source_ids])
+            )
+            # The newest plan for the same still-active Turn is authoritative.
+            request["retained_message_token_budget"] = max(
+                0, int(plan.get("retained_message_token_budget", 0) or 0)
+            )
+            request["estimated_active_tokens"] = max(
+                0, int(plan.get("estimated_active_tokens", 0) or 0)
+            )
+
+        requests: List[_CheckpointRequest] = []
+        for anchor_id, request in merged.items():
+            source_ids = sorted(
+                request["source_message_ids"],
+                key=lambda message_id: message_order[message_id],
+            )
+            requests.append(
+                _CheckpointRequest(
+                    turn_anchor_message_id=anchor_id,
+                    source_message_ids=tuple(source_ids),
+                    retained_message_token_budget=request["retained_message_token_budget"],
+                    estimated_active_tokens=request["estimated_active_tokens"],
+                )
+            )
+        requests.sort(
+            key=lambda request: min(
+                message_order[source_id] for source_id in request.source_message_ids
+            )
+        )
+        return requests
+
+    @staticmethod
+    def _build_checkpoint_records(
+        requests: List[_CheckpointRequest],
+        summaries: tuple[str, ...],
+    ) -> List[Dict[str, Any]]:
+        """Bind ordinal LLM outputs to server-owned IDs and enforce local budgets."""
+        if len(summaries) != len(requests):
+            raise ValueError(
+                "Working Memory output returned "
+                f"{len(summaries)} checkpoint summaries for {len(requests)} requests"
+            )
+
+        records: List[Dict[str, Any]] = []
+        for request, raw_summary in zip(requests, summaries, strict=True):
+            summary = raw_summary.strip() if isinstance(raw_summary, str) else ""
+            if not summary:
+                raise ValueError("Working Memory output contains an empty checkpoint summary")
+
+            configured_budget = request.retained_message_token_budget
+            if configured_budget > 0:
+                available = configured_budget - request.estimated_active_tokens
+                checkpoint_budget = (
+                    min(1024, available) if available > 0 else min(256, configured_budget)
+                )
+            else:
+                checkpoint_budget = 1024
+            abstract = truncate_text_to_token_budget(summary, max(1, checkpoint_budget))
+            if not abstract:
+                raise ValueError("Checkpoint summary is empty after local token truncation")
+            records.append(
+                {
+                    "turn_anchor_message_id": request.turn_anchor_message_id,
+                    "source_message_ids": list(request.source_message_ids),
+                    "abstract": abstract,
+                    "estimated_tokens": estimate_text_tokens(abstract),
+                }
+            )
+        return records
+
+    async def _insert_terminal_checkpoints(
+        self,
+        messages: List[Message],
+        terminal: Optional[Dict[str, Any]],
+    ) -> List[Message]:
+        """Insert the newest terminal archive's checkpoints after retained anchors.
+
+        Only that one archive is read so the cost stays independent of history
+        length. A long User Turn committed partially more than once therefore
+        keeps just its newest compressed prefix; earlier disjoint prefixes from
+        older archives are not restored. Legacy archives without a
+        ``checkpoints`` metadata field do not synthesize one from their overview.
+        """
+        if not messages or terminal is None:
+            return messages
+
+        message_ids = {message.id for message in messages}
+        candidates: Dict[str, Dict[str, Any]] = {}
+        meta = await self._read_archive_meta(terminal["archive_uri"])
+        checkpoints = meta.get("checkpoints")
+        if isinstance(checkpoints, list):
+            for checkpoint in checkpoints:
+                if not isinstance(checkpoint, dict):
+                    continue
+                anchor_id = checkpoint.get("turn_anchor_message_id")
+                source_ids = checkpoint.get("source_message_ids")
+                abstract = checkpoint.get("abstract")
+                if not isinstance(anchor_id, str) or anchor_id not in message_ids:
+                    continue
+                if not isinstance(source_ids, list) or not source_ids:
+                    continue
+                if not isinstance(abstract, str) or not abstract.strip():
+                    continue
+                valid_source_ids = [item for item in source_ids if isinstance(item, str) and item]
+                if not valid_source_ids:
+                    continue
+
+                candidate = candidates.setdefault(
+                    anchor_id,
+                    {
+                        "archive_id": terminal["archive_id"],
+                        "archive_uri": terminal["archive_uri"],
+                        "source_message_ids": [],
+                        "abstracts": [],
+                    },
+                )
+                seen_source_ids = set(candidate["source_message_ids"])
+                new_source_ids = [
+                    source_id for source_id in valid_source_ids if source_id not in seen_source_ids
+                ]
+                if not new_source_ids:
+                    continue
+                candidate["source_message_ids"].extend(new_source_ids)
+                candidate["abstracts"].append(abstract.strip())
+
+        if not candidates:
+            return messages
+
+        result: List[Message] = []
+        for message in messages:
+            result.append(message)
+            candidate = candidates.get(message.id)
+            if not candidate:
+                continue
+            abstract = "\n\n".join(candidate["abstracts"])
+            if not abstract:
+                continue
+            result.append(
+                Message(
+                    id=f"checkpoint_{candidate['archive_id']}_{message.id}",
+                    role="assistant",
+                    parts=[
+                        ContextPart(
+                            uri=candidate["archive_uri"],
+                            context_type="memory",
+                            abstract=abstract,
+                        )
+                    ],
+                    # The checkpoint is synthesized by OpenViking, not authored
+                    # by the user who owns the retained anchor.
+                    peer_id=None,
+                    created_at=message.created_at,
+                    turn_id=message.turn_id,
+                    message_kind="checkpoint",
+                    source_message_ids=candidate["source_message_ids"],
+                )
+            )
+        return result
+
+    async def _get_uncovered_archive_messages(
+        self,
+        states: Optional[List[ArchiveState]] = None,
+    ) -> List[Message]:
+        """Return pending/failed raw messages not covered by a completed archive.
+
+        Kept as the RFC #3330 recovery helper. ``get_session_context`` no longer
+        calls it because that read path stops at the newest terminal archive
+        instead of walking the full history; Phase 2 roll-forward still replays
+        uncovered failed archives through ``_prepare_phase2_archive_messages``.
+        """
+        states = states if states is not None else await self._scan_archive_states()
+        covered = self._covered_archive_ids(states)
+        messages: List[Message] = []
+        for state in states:
+            if state.archive_id in covered or state.state == "completed":
+                continue
+            try:
+                messages.extend(await self._read_archive_messages(state.archive_uri))
+            except Exception as exc:
+                if not _is_storage_not_found(exc):
+                    raise
+                logger.warning(
+                    "Skipping pending archive %s because messages.jsonl is missing",
+                    state.archive_uri,
+                )
+        return self._stable_deduplicate_messages(messages)
+
+    async def _get_pending_archive_messages(self) -> List[Message]:
+        """Compatibility wrapper; uncovered includes pending and failed archives."""
+        return await self._get_uncovered_archive_messages()
 
     @staticmethod
     def _archive_index_from_uri(archive_uri: str) -> int:
@@ -2028,28 +3557,95 @@ class Session:
         return int(match.group(1))
 
     async def _wait_for_previous_archive_done(self, archive_index: int) -> bool:
-        """Wait until the previous archive is done, or report dependency failure."""
+        """Wait until every earlier archive reaches a terminal state."""
         if archive_index <= 1 or not self._viking_fs:
             return True
 
-        previous_archive_uri = f"{self._session_uri}/history/archive_{archive_index - 1:03d}"
         while True:
-            try:
-                await self._viking_fs.read_file(f"{previous_archive_uri}/.done", ctx=self.ctx)
+            earlier_states = [
+                state for state in await self._scan_archive_states() if state.index < archive_index
+            ]
+            pending_states = [state for state in earlier_states if state.state == "pending"]
+            if not pending_states:
+                non_completed = [state for state in earlier_states if state.state == "failed"]
+                if non_completed:
+                    logger.info(
+                        "Earlier archives reached terminal non-completed states; "
+                        "continuing with raw replay: %s",
+                        [state.archive_id for state in non_completed],
+                    )
                 return True
-            except Exception:
-                pass
 
-            try:
-                await self._viking_fs.read_file(
-                    f"{previous_archive_uri}/.failed.json",
-                    ctx=self.ctx,
-                )
-                return False
-            except Exception:
-                pass
-
+            # A new-format intent without ready status may be left by a
+            # process interruption. Reconcile it under the session lock rather
+            # than waiting forever for a queue item that may never have existed.
+            reconciled = False
+            for state in pending_states:
+                phase1 = await self._read_phase1_meta(state.archive_uri)
+                if not phase1 or phase1.get("status") == "ready":
+                    continue
+                await self._ensure_phase1_ready(state.archive_uri)
+                reconciled = True
+            if reconciled:
+                continue
             await asyncio.sleep(_ARCHIVE_WAIT_POLL_SECONDS)
+
+    async def _prepare_phase2_archive_messages(
+        self,
+        archive_uri: str,
+        current_messages: List[Message],
+    ) -> tuple[List[Message], str, str, List[str], Dict[str, set[str]]]:
+        """Roll earlier failed raw archives into current Phase 2 input.
+
+        Pending archives are never replayed: their own Phase 2 job still owns
+        them, and this method is called only after all earlier directories have
+        reached a terminal state.
+        """
+        current_index = self._archive_index_from_uri(archive_uri)
+        states = await self._scan_archive_states()
+        covered = self._covered_archive_ids(states)
+        replay_states = [
+            state
+            for state in states
+            if state.index < current_index
+            and state.archive_id not in covered
+            and state.state == "failed"
+        ]
+
+        combined: List[Message] = []
+        completed_memory_steps: Dict[str, set[str]] = {}
+        for state in replay_states:
+            combined.extend(await self._read_archive_messages(state.archive_uri))
+            marker = state.failed
+            self._merge_completed_memory_steps(
+                completed_memory_steps,
+                marker.get("completed_memory_steps") if marker else None,
+            )
+            state_meta = await self._read_archive_meta(state.archive_uri)
+            self._merge_completed_memory_steps(
+                completed_memory_steps,
+                state_meta.get("completed_memory_steps"),
+            )
+        combined.extend(current_messages)
+        combined = self._stable_deduplicate_messages(combined)
+
+        # A restarted queue item can resume the current archive after a process
+        # died between a successful memory step and the final .done write.
+        current_meta = await self._read_archive_meta(archive_uri)
+        self._merge_completed_memory_steps(
+            completed_memory_steps,
+            current_meta.get("completed_memory_steps"),
+        )
+
+        coverage_start_index = min([current_index] + [state.index for state in replay_states])
+        covered_failed = [state.archive_id for state in replay_states if state.state == "failed"]
+        return (
+            combined,
+            f"archive_{coverage_start_index:03d}",
+            f"archive_{current_index:03d}",
+            covered_failed,
+            completed_memory_steps,
+        )
 
     async def _merge_and_save_commit_meta(
         self,
@@ -2057,37 +3653,48 @@ class Session:
         memories_extracted: Dict[str, int],
         telemetry_snapshot: Any,
     ) -> None:
-        """Reload and merge latest meta state before persisting commit results."""
-        latest_meta = self._meta
+        """Merge Phase 2 results without overwriting concurrent root updates."""
+        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
+        lease = await self._viking_fs._async_agfs.pathlock_acquire_tree(
+            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
+        )
         try:
-            meta_content = await self._viking_fs.read_file(
-                f"{self._session_uri}/.meta.json",
-                ctx=self.ctx,
-            )
-            latest_meta = SessionMeta.from_dict(json.loads(meta_content))
-        except Exception:
             latest_meta = self._meta
+            try:
+                meta_content = await self._viking_fs.read_file(
+                    f"{self._session_uri}/.meta.json",
+                    ctx=self.ctx,
+                )
+                latest_meta = SessionMeta.from_dict(json.loads(meta_content))
+            except Exception:
+                latest_meta = self._meta
 
-        if telemetry_snapshot:
-            llm = telemetry_snapshot.summary.get("tokens", {}).get("llm", {})
-            latest_meta.llm_token_usage["prompt_tokens"] += llm.get("input", 0)
-            latest_meta.llm_token_usage["completion_tokens"] += llm.get("output", 0)
-            latest_meta.llm_token_usage["total_tokens"] += llm.get("total", 0)
-            latest_meta.llm_token_usage["cached_tokens"] += llm.get("prompt_cached", 0)
-            latest_meta.llm_token_usage["reasoning_tokens"] += llm.get("completion_reasoning", 0)
-            embedding = telemetry_snapshot.summary.get("tokens", {}).get("embedding", {})
-            latest_meta.embedding_token_usage["total_tokens"] += embedding.get("total", 0)
+            if telemetry_snapshot:
+                llm = telemetry_snapshot.summary.get("tokens", {}).get("llm", {})
+                latest_meta.llm_token_usage["prompt_tokens"] += llm.get("input", 0)
+                latest_meta.llm_token_usage["completion_tokens"] += llm.get("output", 0)
+                latest_meta.llm_token_usage["total_tokens"] += llm.get("total", 0)
+                latest_meta.llm_token_usage["cached_tokens"] += llm.get("prompt_cached", 0)
+                latest_meta.llm_token_usage["reasoning_tokens"] += llm.get(
+                    "completion_reasoning", 0
+                )
+                embedding = telemetry_snapshot.summary.get("tokens", {}).get("embedding", {})
+                latest_meta.embedding_token_usage["total_tokens"] += embedding.get("total", 0)
 
-        latest_meta.commit_count = max(latest_meta.commit_count, archive_index)
-        for cat, count in memories_extracted.items():
-            latest_meta.memories_extracted[cat] = latest_meta.memories_extracted.get(cat, 0) + count
-            latest_meta.memories_extracted["total"] = (
-                latest_meta.memories_extracted.get("total", 0) + count
-            )
-        latest_meta.last_commit_at = get_current_timestamp()
-        latest_meta.message_count = await self._read_live_message_count()
-        self._meta = latest_meta
-        await self._save_meta()
+            latest_meta.commit_count = max(latest_meta.commit_count, archive_index)
+            for cat, count in memories_extracted.items():
+                latest_meta.memories_extracted[cat] = (
+                    latest_meta.memories_extracted.get(cat, 0) + count
+                )
+                latest_meta.memories_extracted["total"] = (
+                    latest_meta.memories_extracted.get("total", 0) + count
+                )
+            latest_meta.last_commit_at = get_current_timestamp()
+            latest_meta.message_count = await self._read_live_message_count()
+            self._meta = latest_meta
+            await self._save_meta(lease_ref=lease)
+        finally:
+            await self._viking_fs._async_agfs.pathlock_release(lease)
 
     async def _read_live_message_count(self) -> int:
         """Count current live session messages from persisted storage."""
@@ -2101,6 +3708,26 @@ class Session:
         except Exception:
             return len(self._messages)
         return len([line for line in content.strip().split("\n") if line.strip()])
+
+    async def _read_live_messages_strict(self) -> List[Message]:
+        """Read the authoritative root JSONL without silently dropping corrupt rows."""
+        if not self._viking_fs:
+            return list(self._messages)
+        content = await self._viking_fs.read_file(
+            f"{self._session_uri}/messages.jsonl",
+            ctx=self.ctx,
+        )
+        messages: List[Message] = []
+        for line_number, line in enumerate(content.splitlines(), start=1):
+            if not line.strip():
+                continue
+            try:
+                messages.append(Message.from_dict(json.loads(line)))
+            except Exception as exc:
+                raise ValueError(
+                    f"Invalid live message JSONL at line {line_number}: {exc}"
+                ) from exc
+        return messages
 
     def _extract_abstract_from_summary(self, summary: str) -> str:
         """Extract one-sentence overview from structured summary."""
@@ -2134,41 +3761,72 @@ class Session:
         body = "\n".join(lines) if lines else "(no content)"
         return f"[{m.role}]: {body}"
 
-    def _generate_archive_summary(
-        self,
+    @classmethod
+    def _format_messages_for_wm(
+        cls,
         messages: List[Message],
-        latest_archive_overview: str = "",
+        checkpoint_requests: List[_CheckpointRequest],
     ) -> str:
-        """Generate structured summary for archive."""
-        if not messages:
+        """Format WM input and mark checkpoint sources with ordinal-only tags."""
+        source_indexes: Dict[str, int] = {}
+        for index, request in enumerate(checkpoint_requests):
+            for message_id in request.source_message_ids:
+                previous = source_indexes.setdefault(message_id, index)
+                if previous != index:
+                    raise ValueError(
+                        f"Checkpoint source message {message_id} belongs to multiple requests"
+                    )
+
+        lines: List[str] = []
+        open_index: Optional[int] = None
+        for message in messages:
+            index = source_indexes.get(message.id)
+            if index != open_index:
+                if open_index is not None:
+                    lines.append("</checkpoint_source>")
+                if index is not None:
+                    lines.append(f'<checkpoint_source index="{index}">')
+                open_index = index
+            lines.append(cls._format_message_for_wm(message))
+        if open_index is not None:
+            lines.append("</checkpoint_source>")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _checkpoint_prompt_instructions(request_count: int) -> str:
+        if request_count <= 0:
             return ""
+        return (
+            "# CHECKPOINT OUTPUT\n\n"
+            f"The session content contains checkpoint_source blocks indexed 0 through "
+            f"{request_count - 1}. In the SAME tool call, return checkpoint_summaries "
+            f"with exactly {request_count} strings in index order. Each string must "
+            "summarize only its marked block as a compact continuation note: preserve "
+            "the assistant's intent, important tool actions and results, conclusions, "
+            "and unfinished work; omit raw output bulk and do not mention archiving, "
+            "checkpointing, or this instruction."
+        )
 
-        formatted = "\n".join(self._format_message_for_wm(m) for m in messages)
-
-        vlm = get_openviking_config().vlm
-        if vlm and vlm.is_available():
-            try:
-                from openviking.prompts import render_prompt
-
-                prompt = render_prompt(
-                    "compression.structured_summary",
-                    {
-                        "messages": formatted,
-                        "latest_archive_overview": latest_archive_overview,
-                    },
-                )
-                return run_async(vlm.get_completion_async(prompt))
-            except Exception as e:
-                logger.warning(f"LLM summary failed: {e}")
-
-        turn_count = len([m for m in messages if m.role == "user"])
-        return f"# Session Summary\n\n**Overview**: {turn_count} turns, {len(messages)} messages"
+    @staticmethod
+    def _parse_required_checkpoint_summaries(
+        args: Dict[str, Any],
+        request_count: int,
+    ) -> tuple[str, ...]:
+        raw = args.get("checkpoint_summaries")
+        if not isinstance(raw, list):
+            raise ValueError("tool_call arguments.checkpoint_summaries missing")
+        if len(raw) != request_count or not all(isinstance(item, str) for item in raw):
+            raise ValueError(
+                f"tool_call checkpoint_summaries must contain exactly {request_count} strings"
+            )
+        return tuple(raw)
 
     async def _generate_archive_summary_async(
         self,
         messages: List[Message],
         latest_archive_overview: str = "",
-    ) -> str:
+        checkpoint_requests: Optional[List[_CheckpointRequest]] = None,
+    ) -> str | _ArchiveSummaryResult:
         """Generate Working Memory document for the current archive (async).
 
         Two paths:
@@ -2185,14 +3843,20 @@ class Session:
             f"_generate_archive_summary_async called "
             f"messages={len(messages)} prior_wm={len(latest_archive_overview)}B"
         )
+        checkpoint_requests = list(checkpoint_requests or [])
         if not messages:
+            if checkpoint_requests:
+                raise ValueError("Cannot generate checkpoints without archive messages")
             return ""
 
-        formatted = "\n".join(self._format_message_for_wm(m) for m in messages)
+        formatted = self._format_messages_for_wm(messages, checkpoint_requests)
+        checkpoint_instructions = self._checkpoint_prompt_instructions(len(checkpoint_requests))
 
         vlm = get_openviking_config().vlm
         if not (vlm and vlm.is_available()):
-            turn_count = len([m for m in messages if m.role == "user"])
+            if checkpoint_requests:
+                raise ValueError("A configured VLM is required to generate checkpoint summaries")
+            turn_count = len([m for m in messages if is_user_query(m)])
             return (
                 f"# Session Summary\n\n**Overview**: {turn_count} turns, {len(messages)} messages"
             )
@@ -2200,8 +3864,10 @@ class Session:
         try:
             from openviking.prompts import render_prompt
         except Exception as e:
+            if checkpoint_requests:
+                raise RuntimeError("Prompt module is required to generate checkpoints") from e
             logger.warning(f"Prompt module unavailable: {e}")
-            turn_count = len([m for m in messages if m.role == "user"])
+            turn_count = len([m for m in messages if is_user_query(m)])
             return (
                 f"# Session Summary\n\n**Overview**: {turn_count} turns, {len(messages)} messages"
             )
@@ -2223,13 +3889,47 @@ class Session:
                     {
                         "messages": formatted,
                         "latest_archive_overview": latest_archive_overview or "",
+                        "checkpoint_instructions": checkpoint_instructions,
                     },
                 )
+                if checkpoint_requests:
+                    response = await vlm.get_completion_async(
+                        prompt=prompt,
+                        tools=[WM_CREATE_WITH_CHECKPOINTS_TOOL],
+                        tool_choice={
+                            "type": "function",
+                            "function": {"name": "create_working_memory"},
+                        },
+                    )
+                    if not (
+                        getattr(response, "has_tool_calls", False)
+                        and getattr(response, "tool_calls", None)
+                    ):
+                        raise ValueError(
+                            "Working Memory creation returned no create_working_memory tool call"
+                        )
+                    args = response.tool_calls[0].arguments
+                    if isinstance(args, str):
+                        args = json.loads(args)
+                    if not isinstance(args, dict):
+                        raise ValueError("create_working_memory arguments must be an object")
+                    working_memory = args.get("working_memory")
+                    if not isinstance(working_memory, str) or not working_memory.strip():
+                        raise ValueError("create_working_memory.working_memory is empty")
+                    return _ArchiveSummaryResult(
+                        overview=working_memory,
+                        checkpoint_summaries=self._parse_required_checkpoint_summaries(
+                            args,
+                            len(checkpoint_requests),
+                        ),
+                    )
                 return await vlm.get_completion_async(prompt)
             except Exception as e:
                 _wm_debug(f"creation failed: {e}")
                 logger.warning(f"WM creation failed: {e}")
-                turn_count = len([m for m in messages if m.role == "user"])
+                if checkpoint_requests:
+                    raise
+                turn_count = len([m for m in messages if is_user_query(m)])
                 return (
                     f"# Session Summary\n\n"
                     f"**Overview**: {turn_count} turns, {len(messages)} messages"
@@ -2247,6 +3947,7 @@ class Session:
                     "messages": formatted,
                     "latest_archive_overview": latest_archive_overview,
                     "wm_section_reminders": reminders,
+                    "checkpoint_instructions": checkpoint_instructions,
                 },
             )
             resp = await vlm.get_completion_async(
@@ -2261,6 +3962,8 @@ class Session:
             import traceback as _tb
 
             _wm_debug(f"tool_call raised: {type(e).__name__}: {e} tb={_tb.format_exc()[-400:]}")
+            if checkpoint_requests:
+                raise
             logger.warning("WM update tool_call failed (%s); falling back to creation prompt", e)
             return await self._fallback_generate_wm_creation(
                 formatted, messages, latest_archive_overview
@@ -2276,11 +3979,14 @@ class Session:
         )
 
         if not has_tc:
+            if checkpoint_requests:
+                raise ValueError("Working Memory update returned no tool call for checkpoints")
             logger.warning("WM update: LLM returned no tool_call; falling back to creation prompt")
             return await self._fallback_generate_wm_creation(
                 formatted, messages, latest_archive_overview
             )
 
+        checkpoint_summaries: tuple[str, ...] = ()
         try:
             raw_args = resp.tool_calls[0].arguments
             _wm_debug(f"raw_args type={type(raw_args).__name__} preview={str(raw_args)[:400]!r}")
@@ -2318,6 +4024,11 @@ class Session:
                     _wm_debug(f"recovered args keys={list(args.keys())}")
 
             _wm_debug(f"args keys={list(args.keys())}")
+            if checkpoint_requests:
+                checkpoint_summaries = self._parse_required_checkpoint_summaries(
+                    args,
+                    len(checkpoint_requests),
+                )
             # Tolerant: if LLM returned {"Session Title": {...}, ...} without
             # the outer "sections" wrapper, treat the top-level as ops.
             if "sections" in args and isinstance(args["sections"], dict):
@@ -2330,6 +4041,8 @@ class Session:
             if not isinstance(ops, dict):
                 raise ValueError("ops is not a dict")
         except Exception as e:
+            if checkpoint_requests:
+                raise
             _wm_debug(
                 f"args parse failed: {type(e).__name__}: {e}; attempting regex recovery from raw"
             )
@@ -2378,7 +4091,13 @@ class Session:
             f"ops keys={list(ops.keys())[:7]} "
             f"ops_summary={[(k, v.get('op') if isinstance(v, dict) else type(v).__name__) for k, v in ops.items()][:7]}"
         )
-        return self._merge_wm_sections(latest_archive_overview, ops)
+        overview = self._merge_wm_sections(latest_archive_overview, ops)
+        if checkpoint_requests:
+            return _ArchiveSummaryResult(
+                overview=overview,
+                checkpoint_summaries=checkpoint_summaries,
+            )
+        return overview
 
     async def _fallback_generate_wm_creation(
         self,
@@ -2400,12 +4119,16 @@ class Session:
 
             prompt = render_prompt(
                 "compression.ov_wm_v2",
-                {"messages": formatted_messages, "latest_archive_overview": prior_overview},
+                {
+                    "messages": formatted_messages,
+                    "latest_archive_overview": prior_overview,
+                    "checkpoint_instructions": "",
+                },
             )
             return await get_openviking_config().vlm.get_completion_async(prompt)
         except Exception as e:
             logger.warning(f"WM creation fallback failed: {e}")
-            turn_count = len([m for m in messages if m.role == "user"])
+            turn_count = len([m for m in messages if is_user_query(m)])
             return (
                 f"# Session Summary\n\n**Overview**: {turn_count} turns, {len(messages)} messages"
             )
@@ -3158,92 +4881,17 @@ class Session:
 
         return "\n".join(parts).rstrip() + "\n"
 
-    def _write_archive(
+    async def _write_to_agfs_async(
         self,
-        index: int,
         messages: List[Message],
-        abstract: str,
-        overview: str,
+        lease_ref: Optional[Any] = None,
     ) -> None:
-        """Write archive to history/archive_N/."""
+        """Write messages.jsonl to AGFS using an optional held PathLock lease."""
         if not self._viking_fs:
             return
 
         viking_fs = self._viking_fs
-        archive_uri = f"{self._session_uri}/history/archive_{index:03d}"
-
-        # Write messages.jsonl
-        lines = [m.to_jsonl() for m in messages]
-        run_async(
-            viking_fs.write_file(
-                uri=f"{archive_uri}/messages.jsonl",
-                content="\n".join(lines) + "\n",
-                ctx=self.ctx,
-            )
-        )
-
-        run_async(
-            viking_fs.write_file(
-                uri=f"{archive_uri}/.abstract.md",
-                content=abstract,
-                ctx=self.ctx,
-            )
-        )
-        run_async(
-            viking_fs.write_file(
-                uri=f"{archive_uri}/.overview.md",
-                content=overview,
-                ctx=self.ctx,
-            )
-        )
-
-        logger.debug(f"Written archive: {archive_uri}")
-
-    def _write_to_agfs(self, messages: List[Message]) -> None:
-        """Write messages.jsonl to AGFS."""
-        if not self._viking_fs:
-            return
-
-        viking_fs = self._viking_fs
-        turn_count = len([m for m in messages if m.role == "user"])
-
-        abstract = self._generate_abstract()
-        overview = self._generate_overview(turn_count)
-
-        lines = [m.to_jsonl() for m in messages]
-        content = "\n".join(lines) + "\n" if lines else ""
-
-        run_async(
-            viking_fs.write_file(
-                uri=f"{self._session_uri}/messages.jsonl",
-                content=content,
-                ctx=self.ctx,
-            )
-        )
-
-        # Update L0/L1
-        run_async(
-            viking_fs.write_file(
-                uri=f"{self._session_uri}/.abstract.md",
-                content=abstract,
-                ctx=self.ctx,
-            )
-        )
-        run_async(
-            viking_fs.write_file(
-                uri=f"{self._session_uri}/.overview.md",
-                content=overview,
-                ctx=self.ctx,
-            )
-        )
-
-    async def _write_to_agfs_async(self, messages: List[Message]) -> None:
-        """Write messages.jsonl to AGFS (async)."""
-        if not self._viking_fs:
-            return
-
-        viking_fs = self._viking_fs
-        turn_count = len([m for m in messages if m.role == "user"])
+        turn_count = len([m for m in messages if is_user_query(m)])
 
         abstract = self._generate_abstract()
         overview = self._generate_overview(turn_count)
@@ -3255,79 +4903,19 @@ class Session:
             uri=f"{self._session_uri}/messages.jsonl",
             content=content,
             ctx=self.ctx,
+            lease_ref=lease_ref,
         )
         await viking_fs.write_file(
             uri=f"{self._session_uri}/.abstract.md",
             content=abstract,
             ctx=self.ctx,
+            lease_ref=lease_ref,
         )
         await viking_fs.write_file(
             uri=f"{self._session_uri}/.overview.md",
             content=overview,
             ctx=self.ctx,
-        )
-
-    def _append_messages_to_jsonl_batch(self, messages: List[Message]) -> None:
-        """Append multiple messages to messages.jsonl in a single write."""
-        if not self._viking_fs:
-            return
-        batch_content = "".join(msg.to_jsonl() + "\n" for msg in messages)
-        run_async(
-            self._viking_fs.append_file(
-                f"{self._session_uri}/messages.jsonl",
-                batch_content,
-                ctx=self.ctx,
-            )
-        )
-
-    def _update_message_in_jsonl(self) -> None:
-        """Update message in messages.jsonl."""
-        if not self._viking_fs:
-            return
-
-        lines = [m.to_jsonl() for m in self._messages]
-        content = "\n".join(lines) + "\n"
-        run_async(
-            self._viking_fs.write_file(
-                f"{self._session_uri}/messages.jsonl",
-                content,
-                ctx=self.ctx,
-            )
-        )
-
-    def _save_tool_result(
-        self,
-        tool_id: str,
-        msg: Message,
-        output: str,
-        status: str,
-    ) -> None:
-        """Save tool result to tools/{tool_id}/tool.json."""
-        if not self._viking_fs:
-            return
-
-        tool_part = msg.find_tool_part(tool_id)
-        if not tool_part:
-            return
-
-        tool_data = {
-            "tool_id": tool_id,
-            "tool_name": tool_part.tool_name,
-            "session_id": self.session_id,
-            "input": tool_part.tool_input,
-            "output": output,
-            "status": status,
-            "time": {"created": get_current_timestamp()},
-            "duration_ms": tool_part.duration_ms,
-            "prompt_tokens": tool_part.prompt_tokens,
-            "completion_tokens": tool_part.completion_tokens,
-        }
-        run_async(
-            self._viking_fs.write_file(
-                f"{self._session_uri}/tools/{tool_id}/tool.json",
-                json.dumps(tool_data, ensure_ascii=False),
-                ctx=self.ctx,
-            )
+            lease_ref=lease_ref,
         )
 
     def _generate_abstract(self) -> str:
@@ -3361,32 +4949,6 @@ class Session:
         if self._compression.compression_index > 0:
             parts.append(f"- Historical archives: `{self._session_uri}/history/`")
         return "\n".join(parts)
-
-    def _write_relations(self) -> None:
-        """Create relations to used contexts/tools."""
-        if not self._viking_fs:
-            return
-
-        viking_fs = self._viking_fs
-        for usage in self._usage_records:
-            try:
-                run_async(viking_fs.link(self._session_uri, usage.uri, ctx=self.ctx))
-                logger.debug(f"Created relation: {self._session_uri} -> {usage.uri}")
-            except Exception as e:
-                logger.warning(f"Failed to create relation to {usage.uri}: {e}")
-
-    async def _write_relations_async(self) -> None:
-        """Create relations to used contexts/tools (async)."""
-        if not self._viking_fs:
-            return
-
-        viking_fs = self._viking_fs
-        for usage in self._usage_records:
-            try:
-                await viking_fs.link(self._session_uri, usage.uri, ctx=self.ctx)
-                logger.debug(f"Created relation: {self._session_uri} -> {usage.uri}")
-            except Exception as e:
-                logger.warning(f"Failed to create relation to {usage.uri}: {e}")
 
     # ============= Properties =============
 

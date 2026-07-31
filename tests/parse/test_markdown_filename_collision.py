@@ -42,3 +42,44 @@ class TestGenerateMergedFilenameCollision:
         """Empty sections list should return 'merged'."""
         parser = self._make_parser()
         assert parser._generate_merged_filename([]) == "merged"
+
+
+class TestMarkdownSourceNameLayout:
+    def _make_parser(self) -> MarkdownParser:
+        return MarkdownParser(ParserConfig())
+
+    async def test_non_code_source_name_uses_stemmed_root(self):
+        parser = self._make_parser()
+
+        layout = await parser._compute_layout(
+            "hello world\n",
+            "viking://temp/test",
+            source_name="aa.txt",
+        )
+
+        assert layout.root_dir == "viking://temp/test/aa"
+        assert any(op.uri == "viking://temp/test/aa/aa.md" for op in layout.ops)
+
+    async def test_code_source_name_preserves_extension_in_root(self):
+        parser = self._make_parser()
+
+        layout = await parser._compute_layout(
+            "def foo():\n    return 1\n",
+            "viking://temp/test",
+            source_name="foo.py",
+        )
+
+        assert layout.root_dir == "viking://temp/test/foo.py"
+        assert any(op.uri == "viking://temp/test/foo.py/foo.md" for op in layout.ops)
+
+    async def test_unsupported_code_source_name_uses_stemmed_root(self):
+        parser = self._make_parser()
+
+        layout = await parser._compute_layout(
+            "echo hello\n",
+            "viking://temp/test",
+            source_name="script.sh",
+        )
+
+        assert layout.root_dir == "viking://temp/test/script"
+        assert any(op.uri == "viking://temp/test/script/script.md" for op in layout.ops)

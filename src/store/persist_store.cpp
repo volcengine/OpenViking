@@ -4,6 +4,7 @@
 #include "spdlog/spdlog.h"
 #include <stdexcept>
 #include <filesystem>
+#include <memory>
 #include "leveldb/write_batch.h"
 
 namespace vectordb {
@@ -109,6 +110,43 @@ std::vector<std::pair<std::string, std::string>> PersistStore::seek_range(
                 it->status().ToString());
   }
   delete it;
+  return key_values;
+}
+
+std::vector<std::pair<std::string, std::string>>
+PersistStore::seek_range_page(const std::string& start_key,
+                              const std::string& end_key, size_t limit,
+                              size_t max_bytes, bool start_exclusive) {
+  std::vector<std::pair<std::string, std::string>> key_values;
+  if (limit == 0 || max_bytes == 0) {
+    return key_values;
+  }
+  size_t page_bytes = 0;
+  std::unique_ptr<leveldb::Iterator> it(
+      db_->NewIterator(leveldb::ReadOptions()));
+  it->Seek(start_key);
+  if (start_exclusive && it->Valid() && it->key().ToString() == start_key) {
+    it->Next();
+  }
+  for (; it->Valid() && it->key().ToString() < end_key &&
+         key_values.size() < limit;
+       it->Next()) {
+    const auto key = it->key();
+    const auto value = it->value();
+    const size_t item_bytes = key.size() + value.size();
+    // Always admit one oversized row so pagination can make progress. Every
+    // additional row must fit within the encoded-byte budget.
+    if (!key_values.empty() &&
+        (page_bytes >= max_bytes || item_bytes > max_bytes - page_bytes)) {
+      break;
+    }
+    key_values.push_back({key.ToString(), value.ToString()});
+    page_bytes += item_bytes;
+  }
+  if (!it->status().ok()) {
+    throw std::runtime_error("PersistStore::seek_range_page iterate error: " +
+                             it->status().ToString());
+  }
   return key_values;
 }
 

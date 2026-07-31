@@ -316,6 +316,52 @@ class TestOpenAIVLMClientRetries:
         assert result == [worker_loop_client]
         assert build_async_client.call_count == 2
 
+    @patch("volcenginesdkarkruntime.Ark")
+    def test_volcengine_sync_client_applies_timeout_and_disables_sdk_retries(
+        self,
+        mock_ark_class,
+    ):
+        mock_ark_class.return_value = MagicMock()
+
+        vlm = VolcEngineVLM(
+            {
+                "api_key": "sk-test",
+                "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+                "timeout": 12.0,
+                "max_retries": 5,
+            }
+        )
+
+        _ = vlm.get_client()
+
+        mock_ark_class.assert_called_once()
+        call_kwargs = mock_ark_class.call_args[1]
+        assert call_kwargs["timeout"] == 12.0
+        assert call_kwargs["max_retries"] == 0
+
+    @patch("volcenginesdkarkruntime.AsyncArk")
+    def test_volcengine_async_client_applies_timeout_and_disables_sdk_retries(
+        self,
+        mock_async_ark_class,
+    ):
+        mock_async_ark_class.return_value = MagicMock()
+
+        vlm = VolcEngineVLM(
+            {
+                "api_key": "sk-test",
+                "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+                "timeout": 12.0,
+                "max_retries": 5,
+            }
+        )
+
+        _ = vlm._build_async_client()
+
+        mock_async_ark_class.assert_called_once()
+        call_kwargs = mock_async_ark_class.call_args[1]
+        assert call_kwargs["timeout"] == 12.0
+        assert call_kwargs["max_retries"] == 0
+
     @patch("openviking.models.vlm.backends.openai_vlm.openai.AzureOpenAI")
     def test_azure_sync_client_disables_sdk_retries(self, mock_azure_openai_class):
         mock_azure_openai_class.return_value = MagicMock()
@@ -470,7 +516,51 @@ class TestVLMExtraRequestBody:
 
         kwargs = vlm._build_text_kwargs(prompt="hello")
 
-        assert kwargs["extra_body"] == {"think": False}
+        # Ollama models also get a default num_ctx; the explicit think is kept.
+        assert kwargs["extra_body"] == {"think": False, "num_ctx": 16384}
+
+    def test_ollama_defaults_num_ctx_and_think(self):
+        """Ollama models get a larger context window and thinking disabled by default."""
+        vlm = LiteLLMVLMProvider(
+            {
+                "model": "ollama/qwen3.5:4b",
+                "provider": "litellm",
+                "api_base": "http://127.0.0.1:11434",
+            }
+        )
+
+        kwargs = vlm._build_text_kwargs(prompt="hello")
+
+        assert kwargs["extra_body"] == {"num_ctx": 16384, "think": False}
+
+    def test_ollama_extra_request_body_overrides_num_ctx(self):
+        """An explicit num_ctx in extra_request_body is not overridden by the default."""
+        vlm = LiteLLMVLMProvider(
+            {
+                "model": "ollama/qwen3.5:4b",
+                "provider": "litellm",
+                "api_base": "http://127.0.0.1:11434",
+                "extra_request_body": {"num_ctx": 32768},
+            }
+        )
+
+        kwargs = vlm._build_text_kwargs(prompt="hello")
+
+        assert kwargs["extra_body"] == {"num_ctx": 32768, "think": False}
+
+    def test_non_ollama_model_gets_no_num_ctx(self):
+        """num_ctx is Ollama-specific and must not leak into other providers."""
+        vlm = LiteLLMVLMProvider(
+            {
+                "model": "gpt-4o-mini",
+                "provider": "litellm",
+                "api_key": "sk-test",
+            }
+        )
+
+        kwargs = vlm._build_text_kwargs(prompt="hello")
+
+        assert "extra_body" not in kwargs or "num_ctx" not in kwargs.get("extra_body", {})
 
     def test_litellm_dashscope_merges_thinking_with_extra_request_body(self):
         vlm = LiteLLMVLMProvider(

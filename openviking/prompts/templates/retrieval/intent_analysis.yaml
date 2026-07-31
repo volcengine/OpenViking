@@ -2,7 +2,7 @@ metadata:
   id: "retrieval.intent_analysis"
   name: "Intent Analysis"
   description: "Analyze session context to generate query plans for different context types"
-  version: "2.0.0"
+  version: "2.1.0"
   language: "en"
   category: "retrieval"
 
@@ -74,17 +74,6 @@ template: |
 
   **Purpose**: Executable tools, functions, APIs, automation scripts
 
-  **Query Style**: **Start with verbs, maintain operational intent**
-
-  ✅ Correct Examples:
-  - "Create RFC document", "Write technical specification"
-  - "Extract PDF table data", "Merge PDF documents"
-  - "Build MCP server", "Add API tools"
-
-  ❌ Wrong Examples:
-  - "RFC document format specification" (this is a resource query)
-  - "PDF processing methods" (this is a resource query)
-
   **When to Query**:
   - Task contains action verbs (create, generate, write, build, analyze, process)
   - Need to perform specific operations
@@ -93,16 +82,6 @@ template: |
 
   **Purpose**: Documents, specifications, guides, code, configurations, and other structured knowledge
 
-  **Query Style**: **Noun phrases, describing knowledge content**
-
-  ✅ Correct Examples:
-  - "RFC document standard template", "API usage guide"
-  - "Project architecture design", "Code style documentation"
-
-  ❌ Wrong Examples:
-  - "Create RFC document" (this is a skill query)
-  - "How to use API" (this is a skill query)
-
   **When to Query**:
   - Need reference materials, templates, specifications
   - Need to understand knowledge, concepts, definitions
@@ -110,24 +89,6 @@ template: |
   ### 3. memory (User/Agent Memory)
 
   **Purpose**: User personalization information or Agent execution experience
-
-  **Query Style**: Distinguish by memory type
-
-  **User Memory** - "User XX" format:
-  ✅ Correct Examples:
-  - "User's preferred document style"
-  - "User's code style habits"
-  - "User's project background information"
-
-  **Agent Memory** - "Experience executing XX" or "System insights about YY":
-  ✅ Correct Examples:
-  - "Experience executing document generation tasks"
-  - "Historical records of similar RFC creation"
-  - "System insights about document collaboration"
-
-  ❌ Wrong Examples:
-  - "Last execution result" (too vague)
-  - "Previously discussed architecture" (too vague)
 
   **When to Query**:
   - Need personalized customization (user memory)
@@ -141,20 +102,9 @@ template: |
   - Characteristics: Verbs like create, generate, write, build, transform, calculate, analyze, process
   - Typical context combination: `skill + resource + memory`
 
-  Examples:
-  | User Task | Required Context |
-  |-----------|------------------|
-  | "Create an RFC document" | skill: "Create RFC document"<br>resource: "RFC document standard template"<br>memory: "User's preferred document style" |
-  | "Merge three PDFs" | skill: "Merge PDF documents"<br>memory: "User's file processing preferences" |
-
   **Informational Tasks** (acquiring knowledge):
   - Characteristics: What is, how to understand, why, concept explanation, etc.
   - Typical context combination: `resource + memory`
-
-  Examples:
-  | User Task | Required Context |
-  |-----------|------------------|
-  | "What is the standard format for RFC documents" | resource: "RFC document standard format specification"<br>memory: "System insights about RFC specifications" |
 
   **Conversational Tasks** (small talk):
   - Characteristics: Greetings, small talk, confirmation of understanding, etc.
@@ -176,7 +126,6 @@ template: |
 
   1. **Don't over-transform**:
      - ❌ Don't convert "Create XX" to "XX format/specification"
-     - ✅ Skill queries for operational tasks must maintain action characteristics
 
   2. **Multi-type combination**:
      - A task may require multiple context types
@@ -195,6 +144,15 @@ template: |
      - 3 = Medium priority (helpful)
      - 5 = Lowest priority (optional)
 
+  6. **Query Style** (optimize for vector / semantic retrieval):
+     - Queries are embedded and matched against indexed content by **semantic similarity**. Write each query so its embedding lands close to the target content — not necessarily a verbatim fragment, any phrasing that captures the same meaning works.
+     - **Declarative, not interrogative**: state the information need as a noun/verb phrase rather than a question. Drop question framings ("what / who / when / how is ...").
+     - **One information need per query**: each query targets one retrievable fact, relation, comparison, event, or procedure. Do not pile unrelated intents into one query.
+     - **Self-contained**: resolve pronouns and references using the session context; the retriever only sees the query string.
+     - **Concept-dense and natural**: use a grammatical, well-formed phrase carrying the key entities, attributes, and qualifiers. Avoid both bare single keywords and telegraphic word-salad.
+     - **No retrieval-meta words**: exclude words describing the act of retrieval or generic containers ("find", "search", "records", "information about", "content", "details", etc.) — they do not appear in the target content and only dilute the embedding.
+     - **Keep discriminative specifics**: preserve names, dates, places, and domain terms from the task — they anchor the embedding to the right content.
+
   ## Output Format
 
   ```json
@@ -211,37 +169,7 @@ template: |
   }
   ```
 
-  **Example Output**:
-
-  Input: "Create an RFC document"
-  ```json
-  {
-      "reasoning": "1. Operational task (need to create document); 2. Need skill for execution, resource for template, memory for style preferences; 3. No relevant information in context; 4. Need to query all three context types",
-      "queries": [
-          {
-              "query": "Create RFC document",
-              "context_type": "skill",
-              "intent": "Find tools or capabilities to create RFC documents",
-              "priority": 1
-          },
-          {
-              "query": "RFC document standard template",
-              "context_type": "resource",
-              "intent": "Get standard format and template for RFC documents",
-              "priority": 2
-          },
-          {
-              "query": "User's preferred document style",
-              "context_type": "memory",
-              "intent": "Understand user's document writing habits and preferences",
-              "priority": 3
-          }
-      ]
-  }
-  ```
-
   Please output JSON:
 
 llm_config:
   temperature: 0.0
-

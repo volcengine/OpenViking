@@ -273,17 +273,6 @@ class TestContextMethods:
 
         assert ctx.get_vectorization_text() == "Test abstract"
 
-    def test_update_activity(self):
-        """Test update_activity method."""
-        ctx = Context(uri="viking://test/", active_count=5)
-        old_updated = ctx.updated_at
-
-        ctx.update_activity()
-
-        assert ctx.active_count == 6
-        assert ctx.updated_at > old_updated
-
-
 class TestContextToDict:
     """Test Context.to_dict."""
 

@@ -1,6 +1,6 @@
 # LangChain and LangGraph
 
-Wire OpenViking into your LangChain or LangGraph agent as the context backend. The SDK provides a retriever, chat history, context wrapper, agent tools, LangGraph store, and middleware — all connecting to a running OpenViking server over HTTP.
+Wire OpenViking into your LangChain or LangGraph agent as the context backend. The SDK provides a retriever, chat history, context wrapper, agent tools, LangGraph store, and middleware for HTTP-backed or embedded OpenViking deployments.
 
 ## Install
 
@@ -21,7 +21,116 @@ tools = create_openviking_tools(
 )
 ```
 
-When `url` is omitted, the adapters load connection settings from the OpenViking CLI config. Embedding and VLM providers are configured in OpenViking, not in your app.
+When both `url` and `path` are omitted, adapters use the HTTP connection settings from the OpenViking CLI config. Pass `path` to use an embedded workspace through OpenViking's synchronous client. Embedding and VLM providers are configured in OpenViking, not in your app.
+
+### Async applications
+
+The retriever, context wrapper, chat history, session recorder, and LangGraph
+middleware all have native async paths. URL-based adapters create an async
+OpenViking HTTP client automatically:
+
+```python
+docs = await retriever.ainvoke("What did the user decide?")
+result = await chain.ainvoke(
+    {"messages": [...]},
+    config={"configurable": {"session_id": "support-thread-1"}},
+)
+```
+
+Async adapters support three client modes:
+
+| Configuration | Async interface | Ownership |
+|---------------|-----------------|-----------|
+| `client=` or `async_client=` | The injected client is returned unchanged | Caller |
+| `url=`, or neither `url` nor `path` | One recovery-capable HTTP handle per event loop | Adapter |
+| `path=` | A synchronous embedded client invoked in a worker thread | Adapter |
+
+Long-lived applications can initialize one caller-owned async client and reuse
+it across adapters running on the same event loop:
+
+```python
+from openviking.client import AsyncHTTPClient
+from openviking.integrations.langchain import OpenVikingRetriever
+
+client = AsyncHTTPClient(url="http://localhost:1933", api_key="...")
+await client.initialize()
+try:
+    retriever = OpenVikingRetriever(async_client=client)
+    docs = await retriever.ainvoke("deployment decision")
+finally:
+    await client.close()
+```
+
+Injected async clients are bound to the event loop that initializes them. Do
+not share one injected async client across event loops; create and manage one
+client per loop instead. An injected synchronous client remains safe to use
+from async adapter methods because its calls run in a worker thread.
+
+For embedded `path=` adapters, the synchronous fallback is intentional:
+`SyncOpenViking` keeps the stateful embedded engine on OpenViking's shared
+background loop while the application event loop remains non-blocking. To use
+native embedded async methods, construct and initialize `AsyncOpenViking`
+yourself, inject it with `async_client=`, use it from that same event loop, and
+close it yourself. Only one embedded workspace can be live per process; close
+or reset it before selecting another workspace.
+
+`OpenVikingChatMessageHistory` provides `aget_messages()`, `aadd_messages()`,
+and `aclear()`. `OpenVikingSessionRecorder` provides `arecord()`, `aflush()`,
+and `aclose()`. Async LangGraph runs select `awrap_model_call()` and
+`aafter_agent()` automatically. Concurrent first use creates one internal HTTP
+client per adapter and event loop. Each runnable invocation through
+`with_openviking_context()` owns the history snapshot, peer identity, and
+recalled-context references used to record its turn. Concurrent calls may
+therefore share a session without a
+second live history read losing messages, and an abandoned stream does not hold
+a session-wide lifecycle lock. Only the final append-and-commit step is
+serialized: async writes are serialized per session within each event loop,
+while synchronous writes are serialized per session across threads.
+
+If cancellation occurs after a recorder has confirmed part of a write,
+`arecord()` re-raises the original `asyncio.CancelledError`. Pass that exception,
+or a wrapping `asyncio.TimeoutError`, to
+`get_openviking_cancellation_progress()` to inspect the confirmed message
+prefix or pending-commit state before retrying. Preserving the original
+cancellation object also preserves the standard `asyncio.wait_for()` and
+`asyncio.timeout()` timeout behavior.
+
+Adapters never close an injected client. When an adapter creates its own client,
+release it with `await retriever.aclose()`, `await assembler.aclose()`,
+`await middleware.aclose()`, `await history.aclose()`, or
+`await recorder.aclose()` as appropriate. Calling synchronous
+`recorder.close()` after an async operation raises and intentionally leaves the
+recorder open so `await recorder.aclose()` can still release every resource.
+When possible, close HTTP-backed adapters before shutting down their event
+loops; cleanup after an originating loop has already ended is best-effort.
+
+`with_openviking_context()` returns an `OpenVikingContextRunnable`, a compatible
+subclass of LangChain's `RunnableWithMessageHistory` that owns the context and
+recording adapters it creates. It reuses their loop-scoped clients across
+invocations while keeping invocation history, peer identity, and recalled
+references isolated. Prefer a managed lifecycle:
+
+```python
+async with with_openviking_context(runnable, url="http://localhost:1933") as chain:
+    result = await chain.ainvoke(
+        {"messages": [...]},
+        config={"configurable": {"session_id": "support-thread-1"}},
+    )
+```
+
+Use `with ...` for synchronous calls, or call `close()` / `await aclose()`
+explicitly. `close()` cannot run inside an active event loop; use `aclose()`
+there. Injected clients remain caller-owned.
+
+LCEL composition returns a plain `RunnableSequence`, which does not expose the
+OpenViking close methods. Keep the managed wrapper and compose inside its
+lifecycle:
+
+```python
+async with with_openviking_context(runnable, url="http://localhost:1933") as managed:
+    chain = managed | another_step
+    result = await chain.ainvoke(...)
+```
 
 ## Peer Identity
 
@@ -59,6 +168,7 @@ chain.invoke(
 | Store durable cross-thread state | `OpenVikingStore` |
 | Inject context into LangGraph as middleware | `OpenVikingContextMiddleware` |
 | Back LangChain chat history with OpenViking | `OpenVikingChatMessageHistory` |
+| Record caller-selected LangChain messages from a custom lifecycle | `OpenVikingSessionRecorder` |
 
 ## Quick examples
 
@@ -78,11 +188,12 @@ from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
 from openviking.integrations.langchain import with_openviking_context
 
-chain = with_openviking_context(
+with with_openviking_context(
     RunnableLambda(lambda msgs: AIMessage(content="...")),
     url="http://localhost:1933",
     api_key="...",
-)
+) as chain:
+    result = chain.invoke(...)
 ```
 
 ### Agent tools
@@ -116,6 +227,44 @@ middleware = OpenVikingContextMiddleware(
     capture_on_after_agent=True,
 )
 ```
+
+### Session recorder
+
+Use the recorder when your application already owns the conversation lifecycle
+and only needs reusable OpenViking persistence:
+
+```python
+from openviking.integrations.langchain import (
+    OpenVikingPartialWriteError,
+    OpenVikingSessionRecorder,
+)
+
+recorder = OpenVikingSessionRecorder(url="http://localhost:1933", api_key="...")
+try:
+    recorder.record("support-thread-1", messages, peer_id="assistant-a")
+except OpenVikingPartialWriteError as exc:
+    recorder.record(
+        "support-thread-1",
+        messages[exc.input_messages_consumed :],
+        peer_id="assistant-a",
+    )
+recorder.flush("support-thread-1")
+recorder.close()
+```
+
+`record()` writes only the messages supplied by the caller. It filters framework
+control messages, writes in server-safe batches, and applies the configured
+commit policy. If a later batch or the post-write commit fails,
+`OpenVikingPartialWriteError` reports the confirmed input prefix so callers can
+retry only the unwritten suffix; an empty suffix safely retries a pending
+commit. When supplying `context_parts`, resend them only if
+`exc.context_attached` is false. `flush()` forces a commit only when the session
+has pending content. After `close()`, the recorder cannot be reused; injected
+clients remain owned by the caller.
+
+For async lifecycles, use the equivalent `await recorder.arecord(...)`,
+`await recorder.aflush(...)`, and `await recorder.aclose()` methods. Do not
+finish an async lifecycle with `recorder.close()`.
 
 ## Try the examples
 

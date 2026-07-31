@@ -199,6 +199,12 @@ This tool wraps the MCP tool `search-web`. Call this when the user needs functio
 
 #### 3. 使用示例
 
+**TypeScript SDK**
+
+```typescript
+await client.addSkill("./my-skill", { wait: true });
+```
+
 **HTTP API**：
 
 ```
@@ -321,6 +327,18 @@ result = client.add_skill("./skills/my-skill/", wait=True)
 client.wait_processed()
 ```
 
+**Go SDK**
+
+```go
+result, err := client.AddSkill(ctx, "./skills/my-skill/", &openviking.AddSkillOptions{
+    Wait: true,
+})
+if err != nil {
+    return err
+}
+fmt.Println(result["uri"])
+```
+
 **CLI**：
 
 ```bash
@@ -414,61 +432,73 @@ Python HTTP SDK 会把该响应映射为对应异常（`ProcessingError`）。
 
 ## 技能管理操作
 
+Python HTTP SDK 和 Go SDK 都暴露专用技能管理方法。Python 方法包括
+`list_skills`、`find_skills`、`validate_skill`、`get_skill`、`update_skill`
+和 `delete_skill`；Go 方法包括 `ListSkills`、`FindSkills`、`ValidateSkill`、
+`GetSkill`、`UpdateSkill` 和 `DeleteSkill`。通用文件系统、内容和检索方法仍可用于 URI 级访问。
+
 ### 列出技能
 
 **Python SDK**：
 
 ```python
-# 列出所有技能
-skills = client.ls("viking://user/skills/")
-for skill in skills:
-    print(f"{skill['name']}")
+skills = client.list_skills(node_limit=1000)
+for skill in skills["skills"]:
+    print(skill["name"])
+```
 
-# 简单列表（仅名称）
-names = client.ls("viking://user/skills/", simple=True)
-print(names)
+**TypeScript SDK**
+
+```typescript
+const skills = await client.listSkills();
+console.log(skills);
+```
+
+**Go SDK**：
+
+```go
+skills, err := client.ListSkills(ctx, nil)
+_ = skills
 ```
 
 **HTTP API**：
 
 ```bash
-curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://user/skills/" \
+curl -X GET "http://localhost:1933/api/v1/skills?node_limit=1000" \
   -H "X-API-Key: your-key"
 ```
 
-### 读取技能内容
+### 读取技能
 
 **Python SDK**：
 
 ```python
-uri = "viking://user/skills/search-web/"
+skill = client.get_skill("search-web", include_content=True, include_files=True)
+print(skill["name"])
+print(skill.get("content"))
+```
 
-# L0：简要描述
-abstract = client.abstract(uri)
-print(f"Abstract: {abstract}")
+**TypeScript SDK**
 
-# L1：参数和使用概览
-overview = client.overview(uri)
-print(f"Overview: {overview}")
+```typescript
+const skill = await client.getSkill("my-skill");
+console.log(skill);
+```
 
-# L2：完整技能文档
-content = client.read(uri)
-print(f"Content: {content}")
+**Go SDK**：
+
+```go
+skill, err := client.GetSkill(ctx, "search-web", &openviking.GetSkillOptions{
+    IncludeContent: openviking.Bool(true),
+    IncludeFiles:   openviking.Bool(true),
+})
+_ = skill
 ```
 
 **HTTP API**：
 
 ```bash
-# L0：简要描述
-curl -X GET "http://localhost:1933/api/v1/content/abstract?uri=viking://user/skills/search-web/" \
-  -H "X-API-Key: your-key"
-
-# L1：参数和使用概览
-curl -X GET "http://localhost:1933/api/v1/content/overview?uri=viking://user/skills/search-web/" \
-  -H "X-API-Key: your-key"
-
-# L2：完整技能文档
-curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://user/skills/search-web/" \
+curl -X GET "http://localhost:1933/api/v1/skills/search-web?include_content=true&include_files=true" \
   -H "X-API-Key: your-key"
 ```
 
@@ -477,29 +507,93 @@ curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://user/skills/
 **Python SDK**：
 
 ```python
-# 语义搜索技能
-results = client.find(
-    "search the internet",
-    target_uri="viking://user/skills/",
-    limit=5
-)
+results = client.find_skills("search the internet", limit=5)
 
-for ctx in results.skills:
-    print(f"Skill: {ctx.uri}")
-    print(f"Score: {ctx.score:.3f}")
-    print(f"Description: {ctx.abstract}")
+for skill in results["skills"]:
+    print(skill["name"], skill["score"])
+```
+
+**TypeScript SDK**
+
+```typescript
+const skills = await client.findSkills("database migration");
+console.log(skills);
+```
+
+**Go SDK**：
+
+```go
+results, err := client.FindSkills(ctx, "search the internet", &openviking.FindSkillsOptions{
+    Limit: 5,
+})
+_ = results
 ```
 
 **HTTP API**：
 
 ```bash
-curl -X POST http://localhost:1933/api/v1/search/find \
+curl -X POST http://localhost:1933/api/v1/skills/find \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
   -d '{
     "query": "search the internet",
-    "target_uri": "viking://user/skills/",
     "limit": 5
+  }'
+```
+
+### 校验和更新技能
+
+**Python SDK**：
+
+```python
+validated = client.validate_skill({"name": "search-web", "description": "..."})
+updated = client.update_skill("search-web", "./skills/search-web", wait=True)
+```
+
+**TypeScript SDK**
+
+```typescript
+const result = await client.validateSkill({
+  name: "search-web",
+  description: "Search the web for current information",
+  content: "# search-web\n\nSearch the web for current information.",
+});
+console.log(result);
+```
+
+**Go SDK**：
+
+```go
+validated, err := client.ValidateSkill(ctx, map[string]any{
+    "name":        "search-web",
+    "description": "...",
+}, nil)
+updated, err := client.UpdateSkill(ctx, "search-web", "./skills/search-web", &openviking.UpdateSkillOptions{
+    Wait: true,
+})
+_, _ = validated, updated
+```
+
+**HTTP API**：
+
+```bash
+# 校验技能数据
+curl -X POST http://localhost:1933/api/v1/skills/validate \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{"data": {"name": "search-web", "description": "..."}}'
+
+# 使用新的技能内容替换现有技能
+curl -X PUT http://localhost:1933/api/v1/skills/search-web \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "data": {
+      "name": "search-web",
+      "description": "Search the web for current information",
+      "content": "# search-web\n\nUpdated instructions."
+    },
+    "wait": true
   }'
 ```
 
@@ -508,15 +602,104 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 **Python SDK**：
 
 ```python
-client.rm("viking://user/skills/old-skill/", recursive=True)
+client.delete_skill("old-skill")
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.deleteSkill("my-skill");
+```
+
+**Go SDK**：
+
+```go
+deleted, err := client.DeleteSkill(ctx, "old-skill")
+_ = deleted
 ```
 
 **HTTP API**：
 
 ```bash
-curl -X DELETE "http://localhost:1933/api/v1/fs?uri=viking://user/skills/old-skill/&recursive=true" \
+curl -X DELETE "http://localhost:1933/api/v1/skills/old-skill" \
   -H "X-API-Key: your-key"
 ```
+
+### 技能管理响应
+
+列出和搜索都返回 `skills` 数组与 `total`。未指定 `target_uri` 时使用 `root_uris` 表示用户私有与 Agent 共享两个检索根；指定后返回单个 `root_uri`。
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "root_uris": [
+      "viking://user/default/skills",
+      "viking://agent/skills"
+    ],
+    "skills": [
+      {
+        "type": "skill",
+        "name": "search-web",
+        "uri": "viking://user/default/skills/search-web",
+        "root_uri": "viking://user/default/skills/search-web",
+        "skill_md_uri": "viking://user/default/skills/search-web/SKILL.md",
+        "description": "Search the web for current information",
+        "tags": [],
+        "allowed_tools": [],
+        "score": 0.87,
+        "match_reason": "semantic",
+        "level": 0
+      }
+    ],
+    "total": 1
+  }
+}
+```
+
+读取单个技能时，`result` 返回上述技能元数据，并按 `level` 与 `include_*` 参数补充 `abstract`、`overview`、`content`、`files` 和 `source`。
+
+校验返回 `valid`、`strict`、规范化后的元数据、`body_lines`、`errors` 和 `warnings`。校验不通过时仍返回成功响应包，但 `valid=false`：
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "valid": false,
+    "strict": false,
+    "name": "search-web",
+    "description": "",
+    "tags": [],
+    "allowed_tools": [],
+    "body_lines": 0,
+    "errors": [
+      {
+        "rule": "description_required",
+        "message": "description is required",
+        "field": "description"
+      }
+    ],
+    "warnings": []
+  }
+}
+```
+
+更新成功时返回与 `add_skill` 相同的处理结果，并额外包含 `"action": "update"`。删除成功返回：
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "name": "old-skill",
+    "uri": "viking://user/default/skills/old-skill",
+    "root_uri": "viking://user/default/skills/old-skill",
+    "estimated_deleted_count": 4,
+    "privacy_deleted": false
+  }
+}
+```
+
+`estimated_deleted_count` 仅在底层文件系统提供删除数量估算时出现。
 
 ## 最佳实践
 

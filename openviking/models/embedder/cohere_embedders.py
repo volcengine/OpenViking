@@ -181,69 +181,6 @@ class CohereDenseEmbedder(DenseEmbedderBase):
         except Exception as e:
             raise RuntimeError(f"Cohere embedding failed: {e}") from e
 
-    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
-        if not texts:
-            return []
-        input_type = "search_query" if is_query else "search_document"
-        try:
-            results: List[EmbedResult] = []
-            for i in range(0, len(texts), 96):
-                batch = texts[i : i + 96]
-                vectors = self._call_api(batch, input_type)
-                results.extend(EmbedResult(dense_vector=self._normalize_vector(v)) for v in vectors)
-            # Estimate token usage for batch
-            total_tokens = sum(self._estimate_tokens(text) for text in texts)
-            self.update_token_usage(
-                model_name=self.model_name,
-                provider="cohere",
-                prompt_tokens=total_tokens,
-                completion_tokens=0,
-            )
-            return results
-        except httpx.HTTPStatusError as e:
-            raise RuntimeError(
-                f"Cohere API error: {e.response.status_code} {e.response.text}"
-            ) from e
-        except Exception as e:
-            raise RuntimeError(f"Cohere batch embedding failed: {e}") from e
-
-    async def embed_batch_async(
-        self, texts: List[str], is_query: bool = False
-    ) -> List[EmbedResult]:
-        if not texts:
-            return []
-
-        input_type = "search_query" if is_query else "search_document"
-
-        async def _call() -> List[EmbedResult]:
-            results: List[EmbedResult] = []
-            for i in range(0, len(texts), 96):
-                batch = texts[i : i + 96]
-                vectors = await self._call_api_async(batch, input_type)
-                results.extend(EmbedResult(dense_vector=self._normalize_vector(v)) for v in vectors)
-            return results
-
-        try:
-            results = await self._run_with_async_retry(
-                _call,
-                logger=logger,
-                operation_name="Cohere async batch embedding",
-            )
-            total_tokens = sum(self._estimate_tokens(text) for text in texts)
-            self.update_token_usage(
-                model_name=self.model_name,
-                provider="cohere",
-                prompt_tokens=total_tokens,
-                completion_tokens=0,
-            )
-            return results
-        except httpx.HTTPStatusError as e:
-            raise RuntimeError(
-                f"Cohere API error: {e.response.status_code} {e.response.text}"
-            ) from e
-        except Exception as e:
-            raise RuntimeError(f"Cohere batch embedding failed: {e}") from e
-
     def close(self):
         """Close the httpx client connection pool."""
         self._client.close()

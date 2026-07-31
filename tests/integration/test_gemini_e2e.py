@@ -51,15 +51,6 @@ class TestGeminiE2ETextEmbedding:
         norm = l2_norm(result.dense_vector)
         assert abs(norm - 1.0) < 0.01, f"Vector norm {norm} not close to 1.0"
 
-    def test_embed_batch_matches_individual(self, embedder):
-        texts = ["hello world", "foo bar", "test embed"]
-        batch_results = embedder.embed_batch(texts)
-        individual_results = [embedder.embed(t) for t in texts]
-        assert len(batch_results) == 3
-        for br, ir in zip(batch_results, individual_results):
-            sim = _cosine_similarity(br.dense_vector, ir.dense_vector)
-            assert sim > 0.99, f"Batch vs individual similarity {sim} too low"
-
     def test_semantic_similarity_related_texts(self, embedder):
         r1 = embedder.embed("a golden retriever playing in the park")
         r2 = embedder.embed("a dog running outside in a field")
@@ -67,28 +58,6 @@ class TestGeminiE2ETextEmbedding:
         sim_related = _cosine_similarity(r1.dense_vector, r2.dense_vector)
         sim_unrelated = _cosine_similarity(r1.dense_vector, r3.dense_vector)
         assert sim_related > sim_unrelated
-
-
-class TestGeminiE2EAsyncBatch:
-    @pytest.mark.anyio
-    async def test_async_embed_batch_concurrent(self):
-        try:
-            import anyio  # noqa: F401
-        except ImportError:
-            pytest.skip("anyio not installed")
-        import time
-
-        e = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key=GOOGLE_API_KEY, dimension=128)
-        texts = [f"sentence {i}" for i in range(300)]  # 3 batches of 100
-        t0 = time.monotonic()
-        results = await e.async_embed_batch(texts)
-        elapsed = time.monotonic() - t0
-        assert len(results) == 300
-        assert all(len(r.dense_vector) == 128 for r in results)
-        assert elapsed < 15  # concurrent should be << 3× serial RTT
-        e.close()
-
-
 class TestGeminiE2ETaskType:
     def test_query_vs_document_task_types(self):
         doc_embedder = GeminiDenseEmbedder(

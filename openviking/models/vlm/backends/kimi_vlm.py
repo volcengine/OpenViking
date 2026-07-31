@@ -9,7 +9,6 @@ from .openai_vlm import OpenAIVLM
 
 DEFAULT_KIMI_API_BASE = "https://api.kimi.com/coding"
 DEFAULT_KIMI_MODEL = "kimi-code"
-DEFAULT_KIMI_MAX_TOKENS = 32768
 DEFAULT_KIMI_USER_AGENT = "KimiCLI/1.30.0"
 KIMI_LEGACY_MODEL_ALIASES = {
     "kimi-code": "kimi-for-coding",
@@ -31,7 +30,6 @@ class KimiVLM(OpenAIVLM):
         normalized["provider"] = "kimi"
         normalized["api_base"] = _normalize_kimi_api_base(normalized.get("api_base"))
         normalized["model"] = KIMI_LEGACY_MODEL_ALIASES.get(model, model)
-        normalized.setdefault("max_tokens", DEFAULT_KIMI_MAX_TOKENS)
         extra_headers = dict(normalized.get("extra_headers") or {})
         extra_headers.setdefault("User-Agent", DEFAULT_KIMI_USER_AGENT)
         normalized["extra_headers"] = extra_headers

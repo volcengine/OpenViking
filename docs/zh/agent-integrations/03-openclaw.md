@@ -9,7 +9,7 @@
 | 组件 | 版本要求 |
 | --- | --- |
 | Node.js | >= 22 |
-| OpenClaw | >= 2026.4.8 |
+| OpenClaw | >= 2026.5.27 |
 
 插件需要连接到一个正在运行的 OpenViking 服务——参见 [部署指南](../guides/03-deployment.md)。
 

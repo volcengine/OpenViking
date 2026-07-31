@@ -291,6 +291,8 @@ async def _upsert_vector_snapshot_record(
     }
     if not payload.get("abstract"):
         payload["abstract"] = str(record.get("text") or "")
+    if "content" not in payload:
+        payload["content"] = str(record.get("text") or "")
 
     try:
         await vector_store.upsert(payload, ctx=ctx)

@@ -19,18 +19,15 @@ Provides auto-capture of group/DM conversations, semantic recall before each LLM
 - Four auto-commit triggers: message count, token threshold, idle timeout, and process-exit flush
 - Backfills platform message history on first venue encounter
 
-## OpenCode plugins
+## Open WebUI tool server
 
-Two OpenCode plugin variants exist with different design choices. Pick whichever matches your usage.
+[Open WebUI](https://github.com/open-webui/open-webui) is a self-hosted AI chat interface.
 
-### `opencode-memory-plugin` — explicit-tool variant
+Source: [examples/openwebui-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/openwebui-plugin)
 
-Source: [examples/opencode-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-memory-plugin)
+A standalone FastAPI server that exposes a curated subset of OpenViking endpoints as OpenAPI tools, so Open WebUI can call them as native tools. Setup and endpoint details are in the README.
 
-Exposes OpenViking memories as explicit OpenCode tools. The agent decides when to call them, and data is fetched on demand rather than pre-injected.
+## More examples
 
-### `opencode/plugin` — context-injection variant
+The [examples/](https://github.com/volcengine/OpenViking/tree/main/examples) directory also contains deployment and integration samples beyond agent plugins — Grafana dashboards, Kubernetes Helm charts, multi-tenant setups, snapshot workflows, and SDK snippets.
 
-Source: [examples/opencode/plugin](https://github.com/volcengine/OpenViking/tree/main/examples/opencode/plugin)
-
-Injects indexed code repos into OpenCode's context and auto-starts the OpenViking server when needed.

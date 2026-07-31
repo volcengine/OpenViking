@@ -5,7 +5,7 @@ Tests for GeminiDenseEmbedder.
 Pattern: patch at module import path, use MagicMock, never make real API calls.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -155,170 +155,6 @@ class TestGeminiDenseEmbedderEmbed:
         mock_client.models.embed_content.assert_not_called()
 
 
-class TestGeminiDenseEmbedderBatch:
-    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
-    def test_embed_batch_empty(self, mock_client_class):
-        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
-
-        mock_client = mock_client_class.return_value
-        embedder = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key")
-        results = embedder.embed_batch([])
-        assert results == []
-        mock_client.models.embed_content.assert_not_called()
-
-    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
-    def test_embed_batch_skips_empty_strings(self, mock_client_class):
-        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
-
-        mock_client = mock_client_class.return_value
-        mock_client.models.embed_content.return_value = _make_mock_result(
-            [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
-        )
-        embedder = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key", dimension=3)
-        results = embedder.embed_batch(["hello", "", "world", "  "])
-        assert len(results) == 4
-        # Empty positions get zero vectors
-        assert results[1].dense_vector == [0.0, 0.0, 0.0]
-        assert results[3].dense_vector == [0.0, 0.0, 0.0]
-        # Non-empty positions have actual embeddings
-        assert results[0].dense_vector is not None
-        assert results[2].dense_vector is not None
-        # API only called with non-empty texts
-        _, kwargs = mock_client.models.embed_content.call_args
-        assert kwargs["contents"] == ["hello", "world"]
-
-    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
-    def test_embed_batch_single_chunk(self, mock_client_class):
-        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
-
-        mock_client = mock_client_class.return_value
-        mock_client.models.embed_content.return_value = _make_mock_result([[0.1], [0.2], [0.3]])
-        embedder = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key", dimension=1)
-        results = embedder.embed_batch(["a", "b", "c"])
-        assert len(results) == 3
-        mock_client.models.embed_content.assert_called_once()
-        _, kwargs = mock_client.models.embed_content.call_args
-        assert kwargs["contents"] == ["a", "b", "c"]
-
-    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
-    def test_embed_batch_chunks_at_100(self, mock_client_class):
-        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
-
-        mock_client = mock_client_class.return_value
-        mock_client.models.embed_content.side_effect = [
-            _make_mock_result([[0.1]] * 100),
-            _make_mock_result([[0.2]] * 10),
-        ]
-        embedder = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key", dimension=1)
-        results = embedder.embed_batch([f"text{i}" for i in range(110)])
-        assert len(results) == 110
-        assert mock_client.models.embed_content.call_count == 2
-
-    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
-    def test_embed_batch_falls_back_to_individual_on_error(self, mock_client_class):
-        from google.genai.errors import APIError
-
-        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
-
-        mock_client = mock_client_class.return_value
-        mock_response = MagicMock()
-        mock_response.status_code = 500
-        mock_client.models.embed_content.side_effect = [
-            APIError(500, {}, response=mock_response),
-            _make_mock_result([[0.1]]),
-            _make_mock_result([[0.2]]),
-        ]
-        embedder = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key", dimension=1)
-        results = embedder.embed_batch(["a", "b"])
-        assert len(results) == 2
-        assert mock_client.models.embed_content.call_count == 3
-
-
-class TestGeminiDenseEmbedderAsyncBatch:
-    """Unit tests for async_embed_batch (uses AsyncMock, no real API)."""
-
-    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
-    @pytest.mark.anyio
-    async def test_async_embed_batch_dispatches_all_chunks(self, mock_client_class):
-        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
-
-        mock_client = mock_client_class.return_value
-        mock_client.aio.models.embed_content = AsyncMock(
-            side_effect=[
-                _make_mock_result([[0.1]] * 100),
-                _make_mock_result([[0.2]] * 10),
-            ]
-        )
-        embedder = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key", dimension=1)
-        results = await embedder.async_embed_batch([f"t{i}" for i in range(110)])
-        assert len(results) == 110
-        assert mock_client.aio.models.embed_content.call_count == 2
-
-    @patch("openviking.models.embedder.gemini_embedders._TEXT_BATCH_SIZE", 1)
-    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
-    @pytest.mark.anyio
-    async def test_async_embed_batch_preserves_order(self, mock_client_class):
-        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
-
-        mock_client = mock_client_class.return_value
-        # Use orthogonal unit vectors so _l2_normalize keeps them distinguishable
-        mock_client.aio.models.embed_content = AsyncMock(
-            side_effect=[
-                _make_mock_result([[1.0, 0.0, 0.0]]),
-                _make_mock_result([[0.0, 1.0, 0.0]]),
-                _make_mock_result([[0.0, 0.0, 1.0]]),
-            ]
-        )
-        embedder = GeminiDenseEmbedder(
-            "gemini-embedding-2-preview",
-            api_key="key",
-            dimension=3,
-            max_concurrent_batches=3,
-        )
-        results = await embedder.async_embed_batch(["a", "b", "c"])
-        # Order must match input regardless of task completion order
-        assert results[0].dense_vector == pytest.approx([1.0, 0.0, 0.0])
-        assert results[1].dense_vector == pytest.approx([0.0, 1.0, 0.0])
-        assert results[2].dense_vector == pytest.approx([0.0, 0.0, 1.0])
-
-    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
-    @pytest.mark.anyio
-    async def test_async_embed_batch_error_fallback_to_individual(self, mock_client_class):
-        from google.genai.errors import APIError
-
-        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
-
-        mock_client = mock_client_class.return_value
-        mock_response = MagicMock()
-        mock_response.status_code = 500
-        mock_client.aio.models.embed_content = AsyncMock(
-            side_effect=APIError(500, {}, response=mock_response)
-        )
-        mock_client.models.embed_content.return_value = _make_mock_result([[0.1]])
-        embedder = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key", dimension=1)
-        results = await embedder.async_embed_batch(["a", "b"])
-        assert len(results) == 2
-        assert mock_client.models.embed_content.call_count == 2
-
-    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
-    @pytest.mark.anyio
-    async def test_async_embed_batch_empty(self, mock_client_class):
-        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
-
-        embedder = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key")
-        assert await embedder.async_embed_batch([]) == []
-
-    @patch("openviking.models.embedder.gemini_embedders._ANYIO_AVAILABLE", False)
-    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
-    @pytest.mark.anyio
-    async def test_async_embed_batch_raises_without_anyio(self, mock_client_class):
-        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
-
-        embedder = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key")
-        with pytest.raises(ImportError, match="anyio is required"):
-            await embedder.async_embed_batch(["text"])
-
-
 class TestGeminiValidation:
     @patch("openviking.models.embedder.gemini_embedders.genai.Client")
     def test_all_valid_task_types_accepted(self, mock_client):
@@ -448,24 +284,6 @@ class TestBuildConfig:
         embedder.embed("text", title="Doc Title")
         _, kwargs = mock_client.models.embed_content.call_args
         assert kwargs["config"].title == "Doc Title"
-
-    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
-    def test_embed_batch_with_titles_falls_back(self, mock_client_class):
-        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
-
-        mock_client = mock_client_class.return_value
-        mock_client.models.embed_content.side_effect = [
-            _make_mock_result([[0.1]]),
-            _make_mock_result([[0.2]]),
-        ]
-        embedder = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key", dimension=1)
-        results = embedder.embed_batch(["alpha", "beta"], titles=["Title A", "Title B"])
-        assert len(results) == 2
-        # Called once per item (not as a batch)
-        assert mock_client.models.embed_content.call_count == 2
-        # First call should have title="Title A"
-        first_cfg = mock_client.models.embed_content.call_args_list[0][1]["config"]
-        assert first_cfg.title == "Title A"
 
     @patch("openviking.models.embedder.gemini_embedders.genai.Client")
     def test_repr(self, mock_client_class):

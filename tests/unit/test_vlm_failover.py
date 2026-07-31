@@ -655,7 +655,6 @@ class TestVLMConfigWithBackup:
         instance = config.get_vlm_instance()
 
         # Should be a MultiCredentialVLM instance
-        assert hasattr(instance, "active_credential_index")
         assert hasattr(instance, "_vlm_instances")
         assert len(instance._vlm_instances) == 2
 

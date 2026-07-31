@@ -19,12 +19,18 @@ use serde_json::Value;
 use tokio::sync::{Mutex, Notify};
 
 use super::context::{FsContext, FS_CTX};
+use super::encryption_wrapper::EncryptionWrappedFS;
 use super::errors::{Error, Result};
 use super::filesystem::{normalize_prefix_path, relative_match_file, FileSystem};
 use super::types::{
-    BackendRole, BackendSyncState, FileInfo, GrepResult, OperationItemConfig, RedirectEntry,
-    RedirectPolicy, SyncLogEntry, SyncOp, SyncType, TreeEntry, WriteFlag,
+    BackendRole, BackendSyncState, FileInfo, GlobEntry, GlobPage, GrepResult,
+    OperationItemConfig, RedirectEntry, RedirectPolicy, SyncLogEntry, SyncOp, SyncType, TreeEntry,
+    WriteFlag,
 };
+use crate::core::glob::{
+    compare_rel_paths, decode_offset_token, encode_offset_token, PreparedGlob,
+};
+use crate::core::internal_names::is_hidden_internal_name;
 use crate::multibackend::meta::{
     current_required_ctx, file_name, parent_dir, DefaultFsContextResolver, FsContextResolver,
     MetaStateStore, PathSerializer, MULTIWRITE_INTERNAL_NAMES,
@@ -307,6 +313,16 @@ async fn copy_file_state(
             while offset < size {
                 let chunk_len = (size - offset).min(DEFAULT_COPY_CHUNK_SIZE as u64);
                 let chunk = source.read(source_path, offset, chunk_len).await?;
+                if chunk.is_empty() {
+                    if offset == 0 {
+                        if destination.exists(destination_path).await {
+                            destination.truncate(destination_path, 0).await?;
+                        } else {
+                            destination.create(destination_path).await?;
+                        }
+                    }
+                    break;
+                }
                 let flag = if offset == 0 {
                     WriteFlag::Create
                 } else {
@@ -316,12 +332,6 @@ async fn copy_file_state(
                     .write(destination_path, &chunk, offset, flag)
                     .await?;
                 offset = offset.saturating_add(chunk.len() as u64);
-                if chunk.is_empty() {
-                    return Err(Error::internal(format!(
-                        "source returned empty chunk while copying '{}' -> '{}'",
-                        source_path, destination_path
-                    )));
-                }
             }
             Ok(())
         })
@@ -487,11 +497,6 @@ impl MultiWriteWrappedFSBuilder {
         self
     }
 
-    /// Accept the legacy read-route cache TTL option as a no-op.
-    pub fn read_route_cache_ttl(self, _read_route_cache_ttl: Duration) -> Self {
-        self
-    }
-
     /// Configure the context resolver used by retry and admin background paths.
     pub fn ctx_resolver(mut self, ctx_resolver: Arc<dyn FsContextResolver>) -> Self {
         self.ctx_resolver = ctx_resolver;
@@ -577,6 +582,17 @@ impl MultiWriteWrappedFS {
             quarantine_after_failures: DEFAULT_QUARANTINE_AFTER_FAILURES,
             ctx_resolver: Arc::new(DefaultFsContextResolver),
         }
+    }
+
+    /// Return the raw primary backend for mount-level internal-name operations.
+    pub(crate) fn primary_raw_backend(&self) -> Option<Arc<dyn FileSystem>> {
+        self.inner.primary().raw_backend.clone()
+    }
+
+    /// Return whether encrypted backends own dual-path PathLock acquisition.
+    pub(crate) fn encryption_handles_pathlock(&self) -> bool {
+        let any = self.inner.primary().backend.as_ref() as &dyn std::any::Any;
+        any.downcast_ref::<EncryptionWrappedFS>().is_some()
     }
 }
 
@@ -1287,6 +1303,9 @@ impl MultiWriteWrappedFS {
 #[async_trait]
 impl FileSystem for MultiWriteWrappedFS {
     async fn create(&self, path: &str) -> Result<()> {
+        if is_hidden_internal_name(file_name(path)) {
+            return self.inner.primary().backend.create(path).await;
+        }
         self.execute_simple_write(path, 0, Some(SyncOp::Create), |fs, path| async move {
             fs.create(&path).await
         })
@@ -1304,6 +1323,9 @@ impl FileSystem for MultiWriteWrappedFS {
     }
 
     async fn remove(&self, path: &str) -> Result<()> {
+        if is_hidden_internal_name(file_name(path)) {
+            return self.inner.primary().backend.remove(path).await;
+        }
         self.execute_simple_write(path, 0, Some(SyncOp::Remove), |fs, path| async move {
             fs.remove(&path).await
         })
@@ -1311,6 +1333,9 @@ impl FileSystem for MultiWriteWrappedFS {
     }
 
     async fn remove_all(&self, path: &str) -> Result<()> {
+        if is_hidden_internal_name(file_name(path)) {
+            return self.inner.primary().backend.remove_all(path).await;
+        }
         self.execute_simple_write(path, 0, Some(SyncOp::RemoveAll), |fs, path| async move {
             fs.remove_all(&path).await
         })
@@ -1318,6 +1343,9 @@ impl FileSystem for MultiWriteWrappedFS {
     }
 
     async fn read(&self, path: &str, offset: u64, size: u64) -> Result<Vec<u8>> {
+        if is_hidden_internal_name(file_name(path)) {
+            return self.inner.primary().backend.read(path, offset, size).await;
+        }
         if let Some(fs) = self.inner.resolve_read_backend(path).await {
             return fs.read(path, offset, size).await;
         }
@@ -1325,6 +1353,14 @@ impl FileSystem for MultiWriteWrappedFS {
     }
 
     async fn write(&self, path: &str, data: &[u8], offset: u64, flags: WriteFlag) -> Result<u64> {
+        if is_hidden_internal_name(file_name(path)) {
+            return self
+                .inner
+                .primary()
+                .backend
+                .write(path, data, offset, flags)
+                .await;
+        }
         let inner = &self.inner;
         let data_len = data.len() as u64;
         let path_owned = path.to_string();
@@ -1380,6 +1416,9 @@ impl FileSystem for MultiWriteWrappedFS {
     }
 
     async fn stat(&self, path: &str) -> Result<FileInfo> {
+        if is_hidden_internal_name(file_name(path)) {
+            return self.inner.primary().backend.stat(path).await;
+        }
         if let Some(fs) = self.inner.resolve_read_backend(path).await {
             return fs.stat(path).await;
         }
@@ -1387,6 +1426,11 @@ impl FileSystem for MultiWriteWrappedFS {
     }
 
     async fn rename(&self, old_path: &str, new_path: &str) -> Result<()> {
+        if is_hidden_internal_name(file_name(old_path))
+            || is_hidden_internal_name(file_name(new_path))
+        {
+            return self.inner.primary().backend.rename(old_path, new_path).await;
+        }
         let ctx = current_required_ctx()?;
         let inner = &self.inner;
         let old_owned = old_path.to_string();
@@ -1428,6 +1472,9 @@ impl FileSystem for MultiWriteWrappedFS {
     }
 
     async fn chmod(&self, path: &str, mode: u32) -> Result<()> {
+        if is_hidden_internal_name(file_name(path)) {
+            return self.inner.primary().backend.chmod(path, mode).await;
+        }
         self.execute_simple_write(
             path,
             0,
@@ -1438,6 +1485,9 @@ impl FileSystem for MultiWriteWrappedFS {
     }
 
     async fn truncate(&self, path: &str, size: u64) -> Result<()> {
+        if is_hidden_internal_name(file_name(path)) {
+            return self.inner.primary().backend.truncate(path, size).await;
+        }
         self.execute_simple_write(
             path,
             size,
@@ -1595,6 +1645,76 @@ impl FileSystem for MultiWriteWrappedFS {
         }
 
         Ok(result)
+    }
+
+    async fn glob_directory(
+        &self,
+        path: &str,
+        pattern: &str,
+        show_hidden: bool,
+        page_size: Option<usize>,
+        level_limit: Option<usize>,
+        continuation_token: Option<String>,
+    ) -> Result<GlobPage> {
+        if self.inner.redirects.is_empty() {
+            return self
+                .inner
+                .primary()
+                .backend
+                .glob_directory(
+                    path,
+                    pattern,
+                    show_hidden,
+                    page_size,
+                    level_limit,
+                    continuation_token,
+                )
+                .await;
+        }
+
+        let matcher = PreparedGlob::new(pattern)?;
+        if matches!(page_size, Some(0)) {
+            return Err(Error::invalid_operation("page_size must be positive"));
+        }
+
+        let entries = self
+            .tree_directory(path, show_hidden, None, level_limit)
+            .await?;
+
+        let mut matched = Vec::new();
+        for entry in entries {
+            if matcher.is_match(&entry.rel_path) {
+                matched.push(GlobEntry {
+                    path: entry.path,
+                    rel_path: entry.rel_path,
+                    name: entry.info.name,
+                    is_dir: entry.info.is_dir,
+                });
+            }
+        }
+        matched.sort_by(|left, right| compare_rel_paths(&left.rel_path, &right.rel_path));
+
+        let start = decode_offset_token(
+            continuation_token.as_deref(),
+            path,
+            pattern,
+            show_hidden,
+            level_limit,
+        )?;
+        if start > matched.len() {
+            return Err(Error::invalid_operation("continuation token out of range"));
+        }
+        let end = page_size
+            .map(|limit| start.saturating_add(limit))
+            .unwrap_or(matched.len())
+            .min(matched.len());
+        let next_token = (end < matched.len())
+            .then(|| encode_offset_token(end, path, pattern, show_hidden, level_limit));
+
+        Ok(GlobPage {
+            entries: matched[start..end].to_vec(),
+            next_token,
+        })
     }
 
     async fn tree_directory(

@@ -4,19 +4,21 @@
 
 import asyncio
 
-from fastapi import APIRouter, Depends, Path, Request
+from fastapi import APIRouter, Body, Depends, Path, Request
 from pydantic import BaseModel
 
+from openviking.server.api_keys.models import validate_account_user_role
 from openviking.server.auth import (
     get_api_key_manager_or_raise,
     get_request_context,
     require_auth_root,
     require_auth_root_or_admin,
 )
-from openviking.server.config import ServerConfig
+from openviking.server.config import ServerConfig, UserConfig
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
+from openviking.server.user_config import validate_add_targets, write_user_config
 from openviking.service.legacy_migration import LegacyDataMigration
 from openviking.service.task_store import (
     SYSTEM_TASK_ACCOUNT_ID,
@@ -32,6 +34,7 @@ from openviking_cli.exceptions import (
     PermissionDeniedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -42,19 +45,45 @@ router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 class CreateAccountRequest(BaseModel):
     account_id: str
     admin_user_id: str
+    seed: str | None = None
+    user_config: UserConfig | None = None
 
 
 class RegisterUserRequest(BaseModel):
     user_id: str
     role: str = "user"
+    seed: str | None = None
+    user_config: UserConfig | None = None
 
 
 class SetRoleRequest(BaseModel):
     role: str
 
 
+class RegenerateKeyRequest(BaseModel):
+    seed: str | None = None
+
+
 class MigrateLegacyDataRequest(BaseModel):
     action: str = "migrate"
+
+
+@router.get("/agent-evolution")
+@require_auth_root
+async def get_agent_evolution_status(
+    request: Request,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Return the live instance-wide Agent Evolution switch."""
+    del request
+    del ctx
+    return Response(
+        status="ok",
+        result={
+            "enabled": get_service().sessions.get_agent_evolution_enabled(),
+            "account_id": get_openviking_config().default_account,
+        },
+    )
 
 
 def _get_api_key_manager(request: Request):
@@ -75,24 +104,40 @@ def _check_account_access(ctx: RequestContext, account_id: str) -> None:
         raise PermissionDeniedError(f"ADMIN can only manage account: {ctx.account_id}")
 
 
-def _validate_register_user_role(ctx: RequestContext, role: str) -> Role:
-    """Validate which roles may be minted through register_user.
+def _has_add_targets(user_config: UserConfig | None) -> bool:
+    return bool(
+        user_config and (user_config.add_targets.resource_uri or user_config.add_targets.skill_uri)
+    )
 
-    register_user is the user-creation path, not the privileged role-escalation path.
-    - ROOT may create USER or ADMIN accounts here.
-    - ADMIN may create USER or ADMIN accounts in their own account.
-    - ROOT role assignment must go through the dedicated ROOT-only set_role endpoint.
-    """
-    try:
-        resolved_role = Role(role)
-    except ValueError as exc:
-        raise InvalidArgumentError(f"Unsupported role for register_user: {role}") from exc
 
-    if resolved_role == Role.ROOT:
-        raise PermissionDeniedError(
-            "register_user cannot mint ROOT users; use the ROOT-only set_role endpoint instead."
-        )
-    return resolved_role
+def _has_initial_user_config(user_config: UserConfig | None) -> bool:
+    return _has_add_targets(user_config)
+
+
+def _validate_initial_user_config(
+    service,
+    user_ctx: RequestContext,
+    user_config: UserConfig | None,
+) -> None:
+    if not _has_add_targets(user_config):
+        return
+    if service.viking_fs is None:
+        raise FailedPreconditionError("OpenViking service is not initialized.")
+    validate_add_targets(
+        user_config.add_targets,
+        ctx=user_ctx,
+        viking_fs=service.viking_fs,
+    )
+
+
+async def _write_initial_user_config(
+    service,
+    user_ctx: RequestContext,
+    user_config: UserConfig | None,
+) -> None:
+    if not _has_initial_user_config(user_config):
+        return
+    await write_user_config(service.viking_fs, user_ctx, user_config)
 
 
 async def _run_legacy_migration_task(
@@ -128,18 +173,21 @@ async def create_account(
     ctx: RequestContext = Depends(get_request_context),
 ):
     """Create a new account (workspace) with its first admin user."""
-    manager = _get_api_key_manager(request)
-    user_key = await manager.create_account(
-        body.account_id,
-        body.admin_user_id,
-    )
     service = get_service()
     account_ctx = RequestContext(
         user=UserIdentifier(body.account_id, body.admin_user_id),
         role=Role.ADMIN,
     )
+    _validate_initial_user_config(service, account_ctx, body.user_config)
+    manager = _get_api_key_manager(request)
+    user_key = await manager.create_account(
+        body.account_id,
+        body.admin_user_id,
+        seed=body.seed,
+    )
     await service.initialize_account_directories(account_ctx)
     await service.initialize_user_directories(account_ctx)
+    await _write_initial_user_config(service, account_ctx, body.user_config)
     result = {
         "account_id": body.account_id,
         "admin_user_id": body.admin_user_id,
@@ -266,15 +314,22 @@ async def register_user(
 ):
     """Register a new user in an account."""
     _check_account_access(ctx, account_id)
-    resolved_role = _validate_register_user_role(ctx, body.role)
-    manager = _get_api_key_manager(request)
-    user_key = await manager.register_user(account_id, body.user_id, resolved_role.value)
+    resolved_role = validate_account_user_role(body.role)
     service = get_service()
     user_ctx = RequestContext(
         user=UserIdentifier(account_id, body.user_id),
-        role=Role.USER,
+        role=resolved_role,
+    )
+    _validate_initial_user_config(service, user_ctx, body.user_config)
+    manager = _get_api_key_manager(request)
+    user_key = await manager.register_user(
+        account_id,
+        body.user_id,
+        str(resolved_role),
+        seed=body.seed,
     )
     await service.initialize_user_directories(user_ctx)
+    await _write_initial_user_config(service, user_ctx, body.user_config)
     result = {
         "account_id": account_id,
         "user_id": body.user_id,
@@ -320,7 +375,7 @@ async def remove_user(
 
 
 @router.put("/accounts/{account_id}/users/{user_id}/role")
-@require_auth_root
+@require_auth_root_or_admin
 async def set_user_role(
     body: SetRoleRequest,
     request: Request,
@@ -328,15 +383,18 @@ async def set_user_role(
     user_id: str = Path(..., description="User ID"),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """Change a user's role (ROOT only)."""
+    """Promote an account user to ADMIN."""
+    _check_account_access(ctx, account_id)
+    if body.role != Role.ADMIN:
+        raise InvalidArgumentError("set_user_role only supports promotion to admin.")
     manager = _get_api_key_manager(request)
-    await manager.set_role(account_id, user_id, body.role)
+    await manager.set_role(account_id, user_id, Role.ADMIN)
     return Response(
         status="ok",
         result={
             "account_id": account_id,
             "user_id": user_id,
-            "role": body.role,
+            "role": Role.ADMIN,
         },
     )
 
@@ -345,6 +403,7 @@ async def set_user_role(
 @require_auth_root_or_admin
 async def regenerate_key(
     request: Request,
+    body: RegenerateKeyRequest | None = Body(default=None),
     account_id: str = Path(..., description="Account ID"),
     user_id: str = Path(..., description="User ID"),
     ctx: RequestContext = Depends(get_request_context),
@@ -352,5 +411,9 @@ async def regenerate_key(
     """Regenerate a user's API key. Old key is immediately invalidated."""
     _check_account_access(ctx, account_id)
     manager = _get_api_key_manager(request)
-    new_key = await manager.regenerate_key(account_id, user_id)
+    new_key = await manager.regenerate_key(
+        account_id,
+        user_id,
+        seed=body.seed if body is not None else None,
+    )
     return Response(status="ok", result={"user_key": new_key})

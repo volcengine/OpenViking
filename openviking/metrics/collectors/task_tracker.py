@@ -17,7 +17,7 @@ class TaskTrackerCollector(StateMetricCollector):
     """
     Export task tracker backlog and completion counts grouped by task type.
 
-    The datasource returns a snapshot of task counts, so all four families are exposed as gauges
+    The datasource returns a snapshot of task counts, so all families are exposed as gauges
     keyed only by `task_type` rather than as cumulative counters.
     """
 
@@ -28,12 +28,14 @@ class TaskTrackerCollector(StateMetricCollector):
     # rule: <METRICS_NAMESPACE>_<DOMAIN>_running
     # e.g.: openviking_task_running
     RUNNING: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "running")
+    CANCELLING: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "cancelling")
     # rule: <METRICS_NAMESPACE>_<DOMAIN>_completed
     # e.g.: openviking_task_completed
     COMPLETED: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "completed")
     # rule: <METRICS_NAMESPACE>_<DOMAIN>_failed
     # e.g.: openviking_task_failed
     FAILED: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "failed")
+    CANCELLED: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "cancelled")
 
     data_source: TaskStateDataSource
     config: CollectorConfig = CollectorConfig(timeout_seconds=0.5)
@@ -43,11 +45,18 @@ class TaskTrackerCollector(StateMetricCollector):
         return self.data_source.read_task_counts()
 
     def collect_hook(self, registry, metric_input) -> None:
-        """Translate the task-count snapshot into pending, running, completed, and failed gauges."""
+        """Translate the task-count snapshot into lifecycle-state gauges."""
         counts_by_type = metric_input
         # Snapshot semantics: types can disappear entirely, so clear previous series to avoid
         # exporting stale non-zero gauges forever.
-        for metric_name in (self.PENDING, self.RUNNING, self.COMPLETED, self.FAILED):
+        for metric_name in (
+            self.PENDING,
+            self.RUNNING,
+            self.CANCELLING,
+            self.COMPLETED,
+            self.FAILED,
+            self.CANCELLED,
+        ):
             registry.gauge_delete_matching(metric_name, match_labels={})
         for task_type, counts in counts_by_type.items():
             labels = {"task_type": str(task_type)}
@@ -64,6 +73,12 @@ class TaskTrackerCollector(StateMetricCollector):
                 label_names=("task_type",),
             )
             registry.set_gauge(
+                self.CANCELLING,
+                float(counts.get("cancelling", 0)),
+                labels=labels,
+                label_names=("task_type",),
+            )
+            registry.set_gauge(
                 self.COMPLETED,
                 float(counts.get("completed", 0)),
                 labels=labels,
@@ -72,6 +87,12 @@ class TaskTrackerCollector(StateMetricCollector):
             registry.set_gauge(
                 self.FAILED,
                 float(counts.get("failed", 0)),
+                labels=labels,
+                label_names=("task_type",),
+            )
+            registry.set_gauge(
+                self.CANCELLED,
+                float(counts.get("cancelled", 0)),
                 labels=labels,
                 label_names=("task_type",),
             )

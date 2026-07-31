@@ -9,7 +9,7 @@ For HTTP mode, use AsyncHTTPClient or SyncHTTPClient.
 from __future__ import annotations
 
 import threading
-from typing import Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from openviking.client import LocalClient, Session
 from openviking.service.debug_service import SystemStatus
@@ -19,7 +19,13 @@ from openviking_cli.client.base import BaseClient
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 
+if TYPE_CHECKING:
+    from openviking.snapshot_namespace import AsyncSnapshotNamespace
+
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from openviking.snapshot_namespace import AsyncSnapshotNamespace
 
 
 class AsyncOpenViking:
@@ -64,6 +70,7 @@ class AsyncOpenViking:
 
         self.user = UserIdentifier.the_default_user()
         self._initialized = False
+        self._snapshot: Optional["AsyncSnapshotNamespace"] = None
         # Mark initialized only after LocalClient is successfully constructed.
         self._singleton_initialized = False
 
@@ -101,11 +108,6 @@ class AsyncOpenViking:
             if cls._instance is not None:
                 await cls._instance.close()
                 cls._instance = None
-
-        # Also reset lock manager singleton
-        from openviking.storage.transaction import reset_lock_manager
-
-        reset_lock_manager()
 
     # ============= Session methods =============
 
@@ -188,6 +190,9 @@ class AsyncOpenViking:
         created_at: str | None = None,
         peer_id: str | None = None,
         telemetry: TelemetryRequest = False,
+        turn_id: str | None = None,
+        message_kind: str | None = None,
+        source_message_ids: list[str] | None = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -202,6 +207,15 @@ class AsyncOpenViking:
         If both content and parts are provided, parts takes precedence.
         """
         await self._ensure_initialized()
+        semantic_kwargs = {
+            key: value
+            for key, value in {
+                "turn_id": turn_id,
+                "message_kind": message_kind,
+                "source_message_ids": source_message_ids,
+            }.items()
+            if value is not None
+        }
         return await self._client.add_message(
             session_id=session_id,
             role=role,
@@ -210,6 +224,7 @@ class AsyncOpenViking:
             created_at=created_at,
             peer_id=peer_id,
             telemetry=telemetry,
+            **semantic_kwargs,
         )
 
     async def batch_add_messages(
@@ -232,13 +247,28 @@ class AsyncOpenViking:
         telemetry: TelemetryRequest = False,
         *,
         keep_recent_count: int = 0,
+        retention_mode: str | None = None,
+        keep_recent_turn_count: int | None = None,
+        retained_message_token_budget: int | None = None,
+        min_raw_tail_steps: int | None = None,
     ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
         await self._ensure_initialized()
+        optional_retention = {
+            key: value
+            for key, value in {
+                "retention_mode": retention_mode,
+                "keep_recent_turn_count": keep_recent_turn_count,
+                "retained_message_token_budget": retained_message_token_budget,
+                "min_raw_tail_steps": min_raw_tail_steps,
+            }.items()
+            if value is not None
+        }
         return await self._client.commit_session(
             session_id,
             telemetry=telemetry,
             keep_recent_count=keep_recent_count,
+            **optional_retention,
         )
 
     async def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
@@ -246,11 +276,33 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         return await self._client.get_task(task_id)
 
+    async def cancel_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Cancel a background task."""
+        await self._ensure_initialized()
+        return await self._client.cancel_task(task_id)
+
+    async def list_tasks(
+        self,
+        task_type: Optional[str] = None,
+        status: Optional[str] = None,
+        resource_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """List background tasks visible to the current caller."""
+        await self._ensure_initialized()
+        return await self._client.list_tasks(
+            task_type=task_type,
+            status=status,
+            resource_id=resource_id,
+            limit=limit,
+        )
+
     async def reindex(
         self,
         uri: str,
         mode: str = "vectors_only",
         wait: bool = True,
+        dry_run: bool = False,
     ) -> Dict[str, Any]:
         """Reindex semantic/vector artifacts for a URI."""
         await self._ensure_initialized()
@@ -258,6 +310,7 @@ class AsyncOpenViking:
             uri=uri,
             mode=mode,
             wait=wait,
+            dry_run=dry_run,
         )
 
     # ============= Resource methods =============
@@ -276,13 +329,22 @@ class AsyncOpenViking:
         watch_interval: float = 0,
         args: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
+        processing_mode: str = "semantic_and_vectors",
+        add_type: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
         **kwargs,
     ) -> Dict[str, Any]:
         """
         Add a resource (file/URL) to OpenViking.
 
         Args:
-            path: Local file path or URL.
+            path: Local file path or URL. A sitemap / RSS / Atom URL ingests the
+                whole site as one resource tree; pass ``args={"site": True}`` to
+                force whole-site ingestion from a bare domain.
+            add_type: Explicit Connector source type. Requires an exact ``to``
+                target and cannot be combined with ``parent``. The source
+                ``path`` is forwarded verbatim.
             reason: Context/reason for adding this resource.
             instruction: Specific instruction for processing.
             wait: If True, wait for processing to complete.
@@ -290,15 +352,27 @@ class AsyncOpenViking:
             parent: Target parent URI (must already exist).
             build_index: Whether to build vector index immediately (default: True).
             summarize: Whether to generate summary (default: False).
+            processing_mode: "semantic_and_vectors" for normal semantic processing,
+                or "vectors_only" to only build vector indexes.
+            watch_interval: Auto-refresh interval in minutes (>0 enables a watch).
+                On a sitemap/feed URL this keeps the whole site refreshed.
+            args: Parser/accessor-specific options (e.g. ``site``, ``max_pages``).
             telemetry: Whether to attach operation telemetry data to the result.
         """
         await self._ensure_initialized()
 
+        if add_type is not None:
+            add_type = add_type.strip() or None
+        if add_type and parent:
+            raise ValueError("'add_type' cannot be combined with 'parent'.")
+        if add_type and not to:
+            raise ValueError("'add_type' requires an exact 'to' target.")
         if to and parent:
             raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
 
         return await self._client.add_resource(
             path=path,
+            add_type=add_type,
             to=to,
             parent=parent,
             reason=reason,
@@ -307,15 +381,31 @@ class AsyncOpenViking:
             timeout=timeout,
             build_index=build_index,
             summarize=summarize,
+            processing_mode=processing_mode,
             telemetry=telemetry,
             watch_interval=watch_interval,
             args=args,
+            tags=tags,
+            tag_mode=tag_mode,
             **kwargs,
         )
 
     @property
     def _service(self):
         return self._client.service
+
+    @property
+    def snapshot(self) -> "AsyncSnapshotNamespace":
+        """Snapshot version control namespace.
+
+        Lazy-initialized on first access so importing the client does not
+        pull in the snapshot module when it's not needed.
+        """
+        if getattr(self, "_snapshot", None) is None:
+            from openviking.snapshot_namespace import AsyncSnapshotNamespace
+
+            self._snapshot = AsyncSnapshotNamespace(self)
+        return self._snapshot
 
     async def wait_processed(self, timeout: float = None) -> Dict[str, Any]:
         """Wait for all queued processing to complete."""
@@ -348,12 +438,16 @@ class AsyncOpenViking:
         wait: bool = False,
         timeout: float = None,
         telemetry: TelemetryRequest = False,
+        target_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Add skill to OpenViking.
 
         Args:
             wait: Whether to wait for vectorization to complete
             timeout: Wait timeout in seconds
+            target_uri: Optional target root URI override. Defaults to the
+                user's private ``viking://user/{user_id}/skills`` directory.
+                Pass ``viking://agent/skills`` to install a shared skill.
         """
         await self._ensure_initialized()
         return await self._client.add_skill(
@@ -361,13 +455,118 @@ class AsyncOpenViking:
             wait=wait,
             timeout=timeout,
             telemetry=telemetry,
+            target_uri=target_uri,
+        )
+
+    async def list_skills(
+        self,
+        node_limit: int = 1000,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """List installed skills."""
+        await self._ensure_initialized()
+        return await self._client.list_skills(
+            node_limit=node_limit,
+            target_uri=target_uri,
+        )
+
+    async def find_skills(
+        self,
+        query: str,
+        limit: int = 10,
+        score_threshold: Optional[float] = None,
+        level: Optional[List[int]] = None,
+        telemetry: TelemetryRequest = False,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Find skills by semantic search."""
+        await self._ensure_initialized()
+        return await self._client.find_skills(
+            query=query,
+            limit=limit,
+            score_threshold=score_threshold,
+            level=level,
+            telemetry=telemetry,
+            target_uri=target_uri,
+        )
+
+    async def get_skill(
+        self,
+        skill_name: str,
+        include_content: Optional[bool] = None,
+        include_files: bool = True,
+        include_source: bool = False,
+        level: Optional[int] = None,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Get a skill by name."""
+        await self._ensure_initialized()
+        return await self._client.get_skill(
+            skill_name=skill_name,
+            include_content=include_content,
+            include_files=include_files,
+            include_source=include_source,
+            level=level,
+            target_uri=target_uri,
+        )
+
+    async def update_skill(
+        self,
+        skill_name: str,
+        data: Any,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        source_metadata: Optional[Dict[str, Any]] = None,
+        telemetry: TelemetryRequest = False,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Update an existing skill."""
+        await self._ensure_initialized()
+        return await self._client.update_skill(
+            skill_name=skill_name,
+            data=data,
+            wait=wait,
+            timeout=timeout,
+            source_metadata=source_metadata,
+            telemetry=telemetry,
+            target_uri=target_uri,
+        )
+
+    async def delete_skill(
+        self,
+        skill_name: str,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Delete a skill."""
+        await self._ensure_initialized()
+        return await self._client.delete_skill(
+            skill_name=skill_name,
+            target_uri=target_uri,
+        )
+
+    async def validate_skill(
+        self,
+        data: Any,
+        strict: bool = False,
+        source_path: Optional[str] = None,
+        skill_dir_name: Optional[str] = None,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Validate skill data."""
+        await self._ensure_initialized()
+        return await self._client.validate_skill(
+            data=data,
+            strict=strict,
+            source_path=source_path,
+            skill_dir_name=skill_dir_name,
+            target_uri=target_uri,
         )
 
     # ============= Search methods =============
 
     async def search(
         self,
-        query: str,
+        query: str = "",
         target_uri: Union[str, List[str]] = "",
         session: Optional[Union["Session", Any]] = None,
         session_id: Optional[str] = None,
@@ -375,11 +574,13 @@ class AsyncOpenViking:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         context_type: Optional[SearchContextTypeInput] = None,
+        tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
+        image: Optional[Any] = None,
     ):
         """
         Complex search with session context.
@@ -405,26 +606,30 @@ class AsyncOpenViking:
             score_threshold=score_threshold,
             filter=filter,
             context_type=context_type,
+            tags=tags,
             telemetry=telemetry,
             since=since,
             until=until,
             time_field=time_field,
             level=level,
+            image=image,
         )
 
     async def find(
         self,
-        query: str,
+        query: str = "",
         target_uri: Union[str, List[str]] = "",
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         context_type: Optional[SearchContextTypeInput] = None,
+        tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
+        image: Optional[Any] = None,
     ):
         """Semantic search"""
         await self._ensure_initialized()
@@ -435,11 +640,13 @@ class AsyncOpenViking:
             score_threshold=score_threshold,
             filter=filter,
             context_type=context_type,
+            tags=tags,
             telemetry=telemetry,
             since=since,
             until=until,
             time_field=time_field,
             level=level,
+            image=image,
         )
 
     # ============= FS methods =============
@@ -457,6 +664,14 @@ class AsyncOpenViking:
     async def read(self, uri: str, offset: int = 0, limit: int = -1) -> str:
         """Read file content"""
         await self._ensure_initialized()
+        return await self._client.read(uri, offset=offset, limit=limit)
+
+    async def read_raw(self, uri: str, offset: int = 0, limit: int = -1) -> str:
+        """Read raw file content, including hidden MEMORY_FIELDS metadata."""
+        await self._ensure_initialized()
+        read_raw = getattr(self._client, "read_raw", None)
+        if read_raw is not None:
+            return await read_raw(uri, offset=offset, limit=limit)
         return await self._client.read(uri, offset=offset, limit=limit)
 
     async def write(
@@ -479,6 +694,24 @@ class AsyncOpenViking:
             telemetry=telemetry,
         )
 
+    async def set_tags(
+        self,
+        uri: str,
+        tags: List[str],
+        mode: str = "replace",
+        recursive: bool = False,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Replace explicit retrieval tags for a file or directory."""
+        await self._ensure_initialized()
+        return await self._client.set_tags(
+            uri=uri,
+            tags=tags,
+            mode=mode,
+            recursive=recursive,
+            telemetry=telemetry,
+        )
+
     async def ls(self, uri: str, **kwargs) -> List[Any]:
         """
         List directory contents.
@@ -487,6 +720,9 @@ class AsyncOpenViking:
             uri: Viking URI
             simple: Return only relative path list (bool, default: False)
             recursive: List all subdirectories recursively (bool, default: False)
+            node_limit: Maximum number of entries to return (int, default: 1000)
+            sort_by: Optional sort field, "name" or "mtime"
+            sort_order: Sort direction, "asc" or "desc"
         """
         await self._ensure_initialized()
         recursive = kwargs.get("recursive", False)
@@ -494,6 +730,9 @@ class AsyncOpenViking:
         output = kwargs.get("output", "original")
         abs_limit = kwargs.get("abs_limit", 256)
         show_all_hidden = kwargs.get("show_all_hidden", True)
+        node_limit = kwargs.get("node_limit", 1000)
+        sort_by = kwargs.get("sort_by")
+        sort_order = kwargs.get("sort_order", "asc")
         return await self._client.ls(
             uri,
             recursive=recursive,
@@ -501,12 +740,21 @@ class AsyncOpenViking:
             output=output,
             abs_limit=abs_limit,
             show_all_hidden=show_all_hidden,
+            node_limit=node_limit,
+            sort_by=sort_by,
+            sort_order=sort_order,
         )
 
-    async def rm(self, uri: str, recursive: bool = False) -> None:
+    async def rm(
+        self,
+        uri: str,
+        recursive: bool = False,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> None:
         """Remove resource"""
         await self._ensure_initialized()
-        await self._client.rm(uri, recursive=recursive)
+        await self._client.rm(uri, recursive=recursive, wait=wait, timeout=timeout)
 
     async def grep(
         self,
@@ -515,6 +763,7 @@ class AsyncOpenViking:
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
         exclude_uri: Optional[str] = None,
+        level_limit: int = 5,
     ) -> Dict:
         """Content search"""
         await self._ensure_initialized()
@@ -524,6 +773,7 @@ class AsyncOpenViking:
             case_insensitive=case_insensitive,
             node_limit=node_limit,
             exclude_uri=exclude_uri,
+            level_limit=level_limit,
         )
 
     async def glob(self, pattern: str, uri: str = "viking://") -> Dict:

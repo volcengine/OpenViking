@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0", "setuptools-scm>=8.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openviking-sdk"
+dynamic = ["version"]
+description = "Lightweight Python HTTP SDK for OpenViking"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "httpx>=0.25.0",
+]
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["openviking_sdk*"]
+
+[tool.setuptools_scm]
+root = "../.."
+local_scheme = "no-local-version"
+tag_regex = "^python-sdk@(?P<version>[0-9]+(?:\\.[0-9]+)*)$"
+git_describe_command = "git describe --dirty --tags --long --match python-sdk@*"

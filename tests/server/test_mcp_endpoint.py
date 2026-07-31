@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from starlette.routing import Route
 
 import openviking.server.mcp_endpoint as mcp_endpoint
+from openviking.server.auth.plugins import DevAuthPlugin
 from openviking.server.dependencies import set_service
 from openviking.server.identity import AuthMode, RequestContext, Role
 from openviking.server.mcp_endpoint import (
@@ -31,6 +32,7 @@ from openviking.server.mcp_endpoint import (
     health,
     list_watches,
     read,
+    recall,
     remember,
     search,
 )
@@ -118,6 +120,73 @@ async def test_search_respects_min_score(service):
     assert isinstance(result, str)
 
 
+async def test_search_tools_expose_only_context_type_parameter():
+    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+
+    for tool_name in ("find", "search"):
+        properties = tools[tool_name].inputSchema["properties"]
+        assert "context_type" in properties
+        assert "filter" not in properties
+
+
+async def test_tool_schemas_are_portable():
+    """Every advertised schema node must carry an explicit type, with no
+    anyOf/$ref/$defs — strict function-calling APIs (e.g. Gemini's OpenAPI
+    subset) reject schemas that lack these guarantees."""
+
+    def assert_portable(node, path):
+        if not isinstance(node, dict):
+            return
+        assert "anyOf" not in node, f"{path}: anyOf not portable"
+        assert "$ref" not in node, f"{path}: $ref not portable"
+        assert "$defs" not in node, f"{path}: $defs not portable"
+        assert "type" in node, f"{path}: missing explicit type"
+        assert node.get("default", "") is not None, f"{path}: null default"
+        for key, sub in node.get("properties", {}).items():
+            assert_portable(sub, f"{path}.{key}")
+        for key in ("items", "additionalProperties"):
+            if isinstance(node.get(key), dict):
+                assert_portable(node[key], f"{path}.{key}")
+
+    tools = await mcp_endpoint.mcp.list_tools()
+    assert tools
+    for tool in tools:
+        assert_portable(tool.inputSchema, tool.name)
+
+
+def test_portable_schema_collapses_unions():
+    collapsed = mcp_endpoint._portable_schema(
+        {
+            "anyOf": [
+                {"type": "string"},
+                {"items": {"type": "string"}, "type": "array"},
+                {"type": "null"},
+            ],
+            "default": None,
+            "description": "one or many",
+        }
+    )
+    assert collapsed == {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "one or many",
+    }
+
+
+def test_portable_schema_inlines_refs():
+    inlined = mcp_endpoint._portable_schema(
+        {
+            "$defs": {"Item": {"properties": {"name": {"type": "string"}}, "type": "object"}},
+            "items": {"$ref": "#/$defs/Item"},
+            "type": "array",
+        }
+    )
+    assert inlined == {
+        "items": {"properties": {"name": {"type": "string"}}, "type": "object"},
+        "type": "array",
+    }
+
+
 async def test_find_tool_calls_lightweight_find(service, monkeypatch):
     captured = {}
 
@@ -132,6 +201,7 @@ async def test_find_tool_calls_lightweight_find(service, monkeypatch):
         target_uri="viking://resources",
         limit=2,
         min_score=0.2,
+        context_type=["memory", "resource"],
     )
 
     assert result == "No matching context found."
@@ -140,6 +210,11 @@ async def test_find_tool_calls_lightweight_find(service, monkeypatch):
     assert captured["target_uri"] == "viking://resources"
     assert captured["limit"] == 2
     assert captured["score_threshold"] == 0.2
+    assert captured["filter"] == {
+        "op": "must",
+        "field": "context_type",
+        "conds": ["memory", "resource"],
+    }
 
 
 async def test_search_tool_calls_context_aware_search_with_session(service, monkeypatch):
@@ -173,6 +248,7 @@ async def test_search_tool_calls_context_aware_search_with_session(service, monk
         session_id="session-1",
         limit=4,
         min_score=0.1,
+        context_type="skill",
     )
 
     assert result == "No matching context found."
@@ -185,6 +261,43 @@ async def test_search_tool_calls_context_aware_search_with_session(service, monk
     assert captured["session"] == session
     assert captured["limit"] == 4
     assert captured["score_threshold"] == 0.1
+    assert captured["filter"] == {
+        "op": "must",
+        "field": "context_type",
+        "conds": ["skill"],
+    }
+
+
+async def test_recall_tool_returns_type_quota_memory_groups(service, monkeypatch):
+    async def fake_find(**kwargs):
+        if kwargs["target_uri"].endswith("/events"):
+            return SimpleNamespace(
+                memories=[
+                    SimpleNamespace(
+                        uri="viking://user/test_user/memories/events/e.md",
+                        score=0.9,
+                        abstract="event abstract",
+                    )
+                ]
+            )
+        return SimpleNamespace(memories=[])
+
+    async def fake_read(uri, **kwargs):
+        del uri, kwargs
+        return "Summary: MCP recall event.\n2026-07-06 ChatLog: details"
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+    monkeypatch.setattr(service.fs, "read", fake_read)
+
+    result = await recall(
+        query="what happened",
+        quotas={"events": 1, "entities": 0, "preferences": 0, "experiences": 0},
+        max_chars=200,
+        min_score=0.1,
+    )
+
+    assert '<memory_group type="events"' in result
+    assert "MCP recall event." in result
 
 
 async def test_mcp_middleware_sets_actor_peer_context():
@@ -203,6 +316,7 @@ async def test_mcp_middleware_sets_actor_peer_context():
 
     app = FastAPI()
     app.state.config = SimpleNamespace(get_effective_auth_mode=lambda: AuthMode.DEV)
+    app.state.auth_plugin = DevAuthPlugin()
     app.routes.append(Route("/mcp", endpoint=_IdentityASGIMiddleware(downstream), methods=["POST"]))
 
     transport = httpx.ASGITransport(app=app)
@@ -216,12 +330,50 @@ async def test_mcp_middleware_sets_actor_peer_context():
     assert response.status_code == 200
 
 
+@pytest.mark.parametrize(
+    ("headers", "expected_api_key"),
+    [
+        ({"X-API-Key": "api-key-secret"}, "api-key-secret"),
+        ({"Authorization": "Bearer bearer-secret"}, "bearer-secret"),
+        ({}, None),
+    ],
+)
+async def test_mcp_middleware_propagates_request_api_key(headers, expected_api_key):
+    async def downstream(scope, receive, send):
+        assert _get_ctx().api_key == expected_api_key
+        response = httpx.Response(200, json={"ok": True})
+        await send(
+            {
+                "type": "http.response.start",
+                "status": response.status_code,
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        await send({"type": "http.response.body", "body": response.content})
+
+    app = FastAPI()
+    app.state.config = SimpleNamespace(get_effective_auth_mode=lambda: AuthMode.DEV)
+    app.state.auth_plugin = DevAuthPlugin()
+    app.routes.append(Route("/mcp", endpoint=_IdentityASGIMiddleware(downstream), methods=["POST"]))
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://ov.test") as client:
+        response = await client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
+            headers=headers,
+        )
+
+    assert response.status_code == 200
+
+
 async def test_mcp_middleware_rejects_invalid_actor_peer_header():
     async def downstream(scope, receive, send):
         raise AssertionError("invalid actor peer header should not reach downstream app")
 
     app = FastAPI()
     app.state.config = SimpleNamespace(get_effective_auth_mode=lambda: AuthMode.DEV)
+    app.state.auth_plugin = DevAuthPlugin()
     app.routes.append(Route("/mcp", endpoint=_IdentityASGIMiddleware(downstream), methods=["POST"]))
 
     transport = httpx.ASGITransport(app=app)
@@ -303,13 +455,13 @@ async def test_store_does_not_autofill_peer_id_from_ctx(service, monkeypatch):
     from openviking.session.session import Session
 
     captured: list[tuple[str, str | None]] = []
-    original = Session.add_message
+    original = Session.add_message_async
 
-    def _spy(self, role, parts, peer_id=None, created_at=None):
+    async def _spy(self, role, parts, peer_id=None, created_at=None):
         captured.append((role, peer_id))
-        return original(self, role, parts, peer_id=peer_id, created_at=created_at)
+        return await original(self, role, parts, peer_id=peer_id, created_at=created_at)
 
-    monkeypatch.setattr(Session, "add_message", _spy)
+    monkeypatch.setattr(Session, "add_message_async", _spy)
 
     await remember(
         messages=[
@@ -363,15 +515,13 @@ async def test_add_resource_local_path_returns_upload_instruction(service):
 
     upload_token_store.clear()
     result = await add_resource(path="/tmp/sample_local_file_xyz.pdf")
-    assert "upload required" in result.lower()
-    assert "Step 1." in result
-    assert "Step 2." in result
-    assert "/api/v1/resources/temp_upload_signed" in result
-    assert "token=" in result
-    # The server now mints temp_file_id at upload time; the prose tells the agent
-    # to read it from the upload response.
-    assert "temp_file_id" in result
-    assert "<id from step 1>" in result
+    assert "local file detected" in result.lower()
+    # Single-step flow: POST the file and the server auto-ingests. No second call, no
+    # temp_file_id handshake exposed to the agent.
+    assert "/api/v1/resources/temp_upload?token=" in result
+    assert "temp_upload_signed" not in result
+    assert "automatically" in result.lower()
+    assert "temp_file_id" not in result
     # Default fixture sets neither env nor config.public_base_url → URL is auto-inferred
     # and the troubleshooting hint must appear.
     assert "OPENVIKING_PUBLIC_BASE_URL" in result
@@ -384,7 +534,7 @@ async def test_add_resource_local_path_uses_env_var_when_set(service, monkeypatc
     upload_token_store.clear()
     monkeypatch.setenv("OPENVIKING_PUBLIC_BASE_URL", "https://my-ov.example.com")
     result = await add_resource(path="/tmp/x.pdf")
-    assert "https://my-ov.example.com/api/v1/resources/temp_upload_signed" in result
+    assert "https://my-ov.example.com/api/v1/resources/temp_upload?token=" in result
     # Explicit source → no troubleshooting hint
     assert "OPENVIKING_PUBLIC_BASE_URL is not set" not in result
     upload_token_store.clear()
@@ -402,7 +552,7 @@ async def test_add_resource_local_path_uses_config_when_env_unset(service, monke
     )
 
     result = await add_resource(path="/tmp/x.pdf")
-    assert "https://configured.example.com/api/v1/resources/temp_upload_signed" in result
+    assert "https://configured.example.com/api/v1/resources/temp_upload?token=" in result
     assert "OPENVIKING_PUBLIC_BASE_URL is not set" not in result
     upload_token_store.clear()
 
@@ -426,7 +576,7 @@ async def test_add_resource_local_path_infers_from_x_forwarded_headers(service, 
     finally:
         _request_url_ctx.reset(token)
 
-    assert "https://ov.public.example.com/api/v1/resources/temp_upload_signed" in result
+    assert "https://ov.public.example.com/api/v1/resources/temp_upload?token=" in result
     # Inferred → hint must appear
     assert "OPENVIKING_PUBLIC_BASE_URL" in result
     upload_token_store.clear()
@@ -459,6 +609,107 @@ async def test_add_resource_remote_url_is_ingested(service, monkeypatch):
     assert captured["enforce_public_remote_targets"] is True
 
 
+async def test_add_resource_remote_async_result_exposes_task_id(service, monkeypatch):
+    async def fake_add_resource(*, path, ctx, **kwargs):
+        return {
+            "status": "accepted",
+            "task_id": "ov-task-123",
+            "connector_task_key": "connector-task-456",
+        }
+
+    monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
+
+    result = await add_resource(path="tos://bucket/docs")
+
+    assert "task_id: ov-task-123" in result
+    assert "processing in background" in result
+
+
+async def test_add_resource_remote_parent_is_forwarded(service, monkeypatch):
+    captured = {}
+
+    async def fake_add_resource(*, path, ctx, **kwargs):
+        captured.update(kwargs)
+        return {"task_id": "ov-task-123"}
+
+    monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
+
+    await add_resource(
+        path="tos://bucket/docs",
+        parent="viking://resources/imports",
+    )
+
+    assert captured["parent"] == "viking://resources/imports"
+    assert captured["to"] is None
+
+
+async def test_add_resource_declared_add_type_is_forwarded(service, monkeypatch):
+    captured = {}
+
+    async def fake_add_resource(*, path, ctx, **kwargs):
+        captured["path"] = path
+        captured.update(kwargs)
+        return {"task_id": "ov-task-123"}
+
+    monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
+
+    # A non-URL source: only reaches the service because add_type is declared;
+    # without it this path shape would be treated as a local file.
+    result = await add_resource(
+        path="space:home",
+        add_type="feishu",
+        to="viking://resources/feishu",
+    )
+
+    assert "task_id: ov-task-123" in result
+    assert captured["path"] == "space:home"
+    assert captured["add_type"] == "feishu"
+    assert captured["to"] == "viking://resources/feishu"
+
+
+async def test_add_resource_declared_add_type_rejects_temp_file_id(service):
+    result = await add_resource(temp_file_id="upload_abc.md", add_type="feishu")
+
+    assert result == "Error: add_type cannot be combined with temp_file_id."
+
+
+async def test_add_resource_declared_add_type_requires_exact_to(service):
+    result = await add_resource(path="space:home", add_type="feishu")
+
+    assert result == "Error: add_type requires an exact 'to' target."
+
+
+async def test_add_resource_declared_add_type_rejects_parent(service):
+    result = await add_resource(
+        path="space:home",
+        add_type="feishu",
+        to="viking://resources/feishu",
+        parent="viking://resources/imports",
+    )
+
+    assert result == "Error: add_type cannot be combined with parent."
+
+
+async def test_add_resource_remote_tags_are_forwarded(service, monkeypatch):
+    captured = {}
+
+    async def fake_add_resource(*, path, ctx, **kwargs):
+        captured.update(kwargs)
+        return {"root_uri": "viking://resources/tagged"}
+
+    monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
+
+    result = await add_resource(
+        path="https://example.com/tagged.md",
+        tags=["team=search"],
+        tag_mode="append",
+    )
+
+    assert "Resource added" in result
+    assert captured["tags"] == ["team=search"]
+    assert captured["tag_mode"] == "append"
+
+
 async def test_add_resource_temp_file_id_branch_resolves_and_ingests(
     service, upload_temp_dir, monkeypatch
 ):
@@ -486,6 +737,24 @@ async def test_add_resource_temp_file_id_branch_resolves_and_ingests(
     assert captured["path"] == str(target.resolve())
     assert captured["allow_local_path_resolution"] is True
     upload_token_store.clear()
+
+
+async def test_add_resource_temp_file_id_ingest_error_is_surfaced(
+    service, upload_temp_dir, monkeypatch
+):
+    """add_resource returns a business-error dict without raising; MCP must surface it."""
+    tfid = "upload_deadbeef.md"
+    (upload_temp_dir / tfid).write_text("junk")
+
+    async def failing_add_resource(*, path, ctx, **kwargs):
+        return {"status": "error", "errors": ["parse failed"]}
+
+    monkeypatch.setattr(service.resources, "add_resource", failing_add_resource)
+
+    result = await add_resource(temp_file_id=tfid)
+    assert "Error adding resource" in result
+    assert "parse failed" in result
+    assert "Resource added" not in result
 
 
 async def test_add_resource_watch_without_to_is_forwarded(service, monkeypatch):
@@ -651,7 +920,7 @@ async def test_grep_case_insensitive(service):
 
 
 async def test_glob_no_matches(service):
-    result = await glob(pattern="zzz_nonexistent_*.xyz")
+    result = await glob(pattern="**/zzz_nonexistent_*.xyz")
     assert "No files found" in result
 
 
@@ -662,7 +931,7 @@ async def test_glob_match_all_md(service, client_with_resource):
 
 
 async def test_glob_with_uri_scope(service):
-    result = await glob(pattern="*", uri="viking://resources")
+    result = await glob(pattern="**/*", uri="viking://resources")
     assert isinstance(result, str)
 
 
@@ -675,3 +944,80 @@ def test_mcp_route_registered(app):
     """Verify the /mcp route exists in the app."""
     mcp_routes = [r for r in app.routes if hasattr(r, "path") and r.path == "/mcp"]
     assert len(mcp_routes) == 1
+
+
+def test_mcp_route_sets_scope_route(app):
+    """The /mcp route must resolve ``scope["route"]`` on match so the
+    observability middleware's route-template lookup attributes MCP traffic
+    to ``/mcp`` instead of falling back to ``/__unmatched__``."""
+    from starlette.routing import Match
+
+    mcp_route = next(r for r in app.routes if getattr(r, "path", None) == "/mcp")
+
+    scope = {"type": "http", "method": "POST", "path": "/mcp", "headers": []}
+    match, child_scope = mcp_route.matches(scope)
+
+    assert match != Match.NONE
+    assert child_scope["route"] is mcp_route
+
+
+def test_mcp_route_unmatched_paths_keep_falling_back(app):
+    """Non-matching paths must not gain ``scope["route"]`` — the 404 fallback
+    to ``/__unmatched__`` (low-cardinality protection) stays intact."""
+    from starlette.routing import Match
+
+    mcp_route = next(r for r in app.routes if getattr(r, "path", None) == "/mcp")
+
+    scope = {"type": "http", "method": "POST", "path": "/mcp-does-not-exist", "headers": []}
+    match, child_scope = mcp_route.matches(scope)
+
+    assert match == Match.NONE
+    assert "route" not in child_scope
+
+
+async def test_mcp_middleware_stamps_root_span_identity():
+    """Identity resolved from the auth headers must be stamped onto the outer
+    request's root span attributes, so MCP traffic is audited under the real
+    account/user instead of ``__unknown__``."""
+    from openviking.telemetry.span_models import RootSpanAttributes
+
+    root_attrs = RootSpanAttributes(
+        http_method="POST",
+        http_route="/mcp",
+        request_id="req-test",
+    )
+
+    async def downstream(scope, receive, send):
+        response = httpx.Response(200, json={"ok": True})
+        await send(
+            {
+                "type": "http.response.start",
+                "status": response.status_code,
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        await send({"type": "http.response.body", "body": response.content})
+
+    app = FastAPI()
+    app.state.config = SimpleNamespace(get_effective_auth_mode=lambda: AuthMode.DEV)
+    app.state.auth_plugin = DevAuthPlugin()
+    app.routes.append(Route("/mcp", endpoint=_IdentityASGIMiddleware(downstream), methods=["POST"]))
+
+    async def seed_root_span(scope, receive, send):
+        # Mirrors the outer observability middleware attaching root_span_attrs
+        # to scope["state"] before routing.
+        if scope["type"] == "http":
+            scope.setdefault("state", {})["root_span_attrs"] = root_attrs
+        await app(scope, receive, send)
+
+    transport = httpx.ASGITransport(app=seed_root_span)
+    async with httpx.AsyncClient(transport=transport, base_url="http://ov.test") as client:
+        response = await client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
+            headers={"X-OpenViking-Account": "acct-1", "X-OpenViking-User": "user-1"},
+        )
+
+    assert response.status_code == 200
+    assert root_attrs.account_id == "acct-1"
+    assert root_attrs.user_id == "user-1"

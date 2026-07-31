@@ -2,13 +2,11 @@
 // SPDX-License-Identifier: AGPL-3.0
 #pragma once
 #include <algorithm>
-#include <string>
-#include <vector>
-#include <set>
 #include <memory>
-#include <unordered_map>
-#include <unordered_set>
 #include <sstream>
+#include <string>
+#include <unordered_map>
+#include <vector>
 #include "common/io_utils.h"
 #include "index/detail/scalar/bitmap_holder/bitmap.h"
 
@@ -18,6 +16,10 @@ struct TrieNode {
   std::string path_segment_;
   TrieNode* parent_ = nullptr;
   std::unordered_map<std::string, std::unique_ptr<TrieNode>> children_;
+  // Non-owning pointer into BitmapGroupBase::bitmap_group_. Bitmap objects are
+  // updated in place and remain stable during every live directory-index
+  // access under IndexManager's reader/writer lock.
+  const Bitmap* leaf_bitmap_ = nullptr;
   bool is_leaf_ = false;
 
   TrieNode() = default;
@@ -31,7 +33,7 @@ class DirIndex {
   DirIndex() = default;
   virtual ~DirIndex() = default;
 
-  void add_key(const std::string& key) {
+  void add_key(const std::string& key, const Bitmap* bitmap) {
     TrieNode* node = root_.get();
     for (const auto& segment : split_path(key)) {
       auto it = node->children_.find(segment);
@@ -45,27 +47,33 @@ class DirIndex {
       }
     }
     node->is_leaf_ = true;
+    bind_leaf_bitmap(node, bitmap);
   }
 
-  void get_merged_bitmap(const std::string& path_prefix, int depth,
-                         std::unordered_set<std::string>& unique_bitmaps) const;
+  void get_merged_bitmaps(const std::string& path_prefix, int depth,
+                          std::vector<const Bitmap*>& bitmaps) const;
 
   virtual void serialize_to_stream(std::ofstream& output);
   virtual void parse_from_stream(std::ifstream& input);
 
  private:
   std::unique_ptr<TrieNode> root_ = std::make_unique<TrieNode>("", nullptr);
+  // Canonically equivalent spellings can resolve to the same trie leaf. Keep
+  // their additional bitmaps out of TrieNode so the normal one-bitmap case
+  // does not pay per-node vector overhead.
+  std::unordered_map<const TrieNode*, std::vector<const Bitmap*>>
+      leaf_bitmap_collisions_;
   TrieNode* find_node(const std::string& path) const;
+  void bind_leaf_bitmap(TrieNode* node, const Bitmap* bitmap);
 
   std::vector<std::string> split_path(const std::string& path) const;
   void serialize_recursive(const TrieNode* node, std::ofstream& output) const;
   std::unique_ptr<TrieNode> parse_recursive(std::ifstream& input,
                                             TrieNode* parent);
 
-  void collect_bitmaps_recursive_optimized(
+  void collect_bitmaps_recursive(
       const TrieNode* node, int current_depth, int max_depth,
-      std::unordered_set<std::string>& unique_bitmaps,
-      std::string& path_buffer) const;
+      std::vector<const Bitmap*>& bitmaps) const;
 };
 
 using DirIndexPtr = std::shared_ptr<DirIndex>;

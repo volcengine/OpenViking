@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import io
-import os
 import stat
 import zipfile
 from pathlib import Path
@@ -281,7 +280,6 @@ class TestSafeExtractZipSlipPrevention:
                 safe_extract_zip(zf, dest)
         _assert_no_escape(tmp_path, dest)
 
-    @pytest.mark.skipif(os.name != "nt", reason="Windows-specific test")
     def test_rejects_windows_drive_path(self, tmp_path: Path) -> None:
         dest = tmp_path / "out"
         dest.mkdir()
@@ -323,6 +321,22 @@ class TestSafeExtractZipSlipPrevention:
         with zipfile.ZipFile(io.BytesIO(data), "r") as zf:
             safe_extract_zip(zf, dest)
         assert (dest / "safe.txt").exists()
+
+    def test_normalizes_windows_separators(self, tmp_path: Path) -> None:
+        """Benign Windows-style member paths should extract as directories."""
+        dest = tmp_path / "out"
+        dest.mkdir()
+        data = _make_zip_bytes(
+            {
+                "project\\file1.txt": "content1",
+                "project\\subdir\\file2.txt": "content2",
+            }
+        )
+        with zipfile.ZipFile(io.BytesIO(data), "r") as zf:
+            safe_extract_zip(zf, dest)
+
+        assert (dest / "project" / "file1.txt").read_text() == "content1"
+        assert (dest / "project" / "subdir" / "file2.txt").read_text() == "content2"
 
     def test_first_malicious_entry_prevents_all_extraction(self, tmp_path: Path) -> None:
         """If the first entry is malicious, no files should be extracted."""

@@ -9,9 +9,6 @@ import yaml
 
 from openviking.prompts.manager import PromptManager
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
-from openviking.session.memory.session_extract_context_provider import (
-    SessionExtractContextProvider,
-)
 from openviking_cli.utils.config import (
     OPENVIKING_CONFIG_ENV,
     OPENVIKING_PROMPT_TEMPLATES_DIR_ENV,
@@ -69,7 +66,7 @@ def teardown_function() -> None:
     OpenVikingConfigSingleton.reset_instance()
 
 
-def test_profile_memory_template_keeps_profile_minimal_and_migrates_preferences():
+def test_profile_memory_template_includes_stable_identity_work_style_and_preferences():
     template_path = PromptManager._get_bundled_templates_dir() / "memory" / "profile.yaml"
     schema = yaml.safe_load(template_path.read_text(encoding="utf-8"))
     text = "\n".join(
@@ -79,19 +76,16 @@ def test_profile_memory_template_keeps_profile_minimal_and_migrates_preferences(
         ]
     )
 
-    assert "identity summary" in text
-    assert "5-8" in text
-    assert "Complete but minimal" in text
-    assert "Rewrite the full profile" in text
-    assert "Do not append" in text
-    assert "migrate" in text
-    assert "preferences" in text
-    assert "Do not keep concrete preference examples" in text
-    assert "patch" in text
-    assert "rewrite the whole profile" in text
+    assert '"who the user is"' in text
+    assert "identity, work style, and preferences" in text
+    assert "profession, experience level, technical background" in text
+    assert "communication style, work habits" in text
+    assert "Do NOT include transient conversation content" in text
+    assert "Each item: self-contained" in text
+    assert "Only record objective statuses" in text
 
 
-def test_preferences_memory_template_limits_topics_and_splits_when_too_large():
+def test_preferences_memory_template_keeps_topic_specific_preferences():
     template_path = PromptManager._get_bundled_templates_dir() / "memory" / "preferences.yaml"
     schema = yaml.safe_load(template_path.read_text(encoding="utf-8"))
     text = "\n".join(
@@ -102,14 +96,12 @@ def test_preferences_memory_template_limits_topics_and_splits_when_too_large():
         ]
     )
 
-    assert "Complete but minimal" in text
-    assert "3-8" in text
-    assert "800" in text
-    assert "split" in text
-    assert "semantic subtopics" in text
-    assert "evidenced by" in text
-    assert "as of" in text
-    assert "not become a second profile" in text
+    assert "what the user likes/dislikes or is accustomed to" in text
+    assert "specific preferences" in text
+    assert "specific topic" in text
+    assert "code style, communication style, tools, workflow" in text
+    assert "Store different topics as separate memory files" in text
+    assert "do not mix unrelated preferences" in text
 
 
 def test_prompt_manager_prefers_env_templates_dir_over_config(tmp_path, monkeypatch):
@@ -267,79 +259,6 @@ def test_memory_type_registry_prefers_custom_memory_dir_over_prompt_manager_temp
     assert registry.get("prompt_root_memory") is None
 
 
-def test_context_provider_schema_directories_use_prompt_manager_resolved_templates_root(
-    tmp_path, monkeypatch
-):
-    resolved_templates_dir = tmp_path / "resolved-prompts"
-    expected_memory_dir = resolved_templates_dir / "memory"
-    expected_memory_dir.mkdir(parents=True)
-
-    monkeypatch.setattr(
-        PromptManager,
-        "_resolve_templates_dir",
-        classmethod(lambda cls, templates_dir=None: resolved_templates_dir),
-    )
-    monkeypatch.setattr(
-        "openviking.session.memory.session_extract_context_provider.get_openviking_config",
-        lambda: SimpleNamespace(
-            memory=SimpleNamespace(
-                custom_templates_dir="",
-                eager_prefetch=False,
-                prefetch_search_topn=5,
-                experimental_memory_switch=False,
-                link_enabled=True,
-            )
-        ),
-    )
-
-    provider = SessionExtractContextProvider(messages=[])
-
-    bundled_memory_dir = str(PromptManager._get_bundled_templates_dir() / "memory")
-    dirs = provider.get_schema_directories()
-    # Bundled is always first; resolved is appended when different from bundled
-    assert dirs[0] == bundled_memory_dir
-    assert str(expected_memory_dir) in dirs
-
-
-def test_context_provider_schema_directories_prefer_custom_memory_dir_over_prompt_manager_root(
-    tmp_path, monkeypatch
-):
-    resolved_templates_dir = tmp_path / "resolved-prompts"
-    custom_memory_dir = tmp_path / "custom-memory"
-
-    monkeypatch.setattr(
-        PromptManager,
-        "_resolve_templates_dir",
-        classmethod(lambda cls, templates_dir=None: resolved_templates_dir),
-    )
-    monkeypatch.setattr(
-        "openviking.session.memory.session_extract_context_provider.get_openviking_config",
-        lambda: SimpleNamespace(
-            memory=SimpleNamespace(
-                custom_templates_dir=str(custom_memory_dir),
-                eager_prefetch=False,
-                prefetch_search_topn=5,
-                experimental_memory_switch=False,
-                link_enabled=False,
-            )
-        ),
-    )
-    monkeypatch.setattr(
-        "os.path.exists",
-        lambda path: (
-            path == str(custom_memory_dir)
-            or path == str(PromptManager._get_bundled_templates_dir() / "memory")
-        ),
-    )
-
-    provider = SessionExtractContextProvider(messages=[])
-
-    assert provider.get_schema_directories() == [
-        str(PromptManager._get_bundled_templates_dir() / "memory"),
-        str(custom_memory_dir),
-    ]
-
-
 def test_memory_type_registry_loads_experimental_templates_when_switch_enabled(monkeypatch):
     """When experimental_memory_switch is True, experimental templates override defaults."""
     monkeypatch.setattr(
@@ -375,29 +294,3 @@ def test_memory_type_registry_does_not_load_experimental_templates_when_switch_d
 
     entities = registry.get("entities")
     assert entities is not None
-
-
-def test_context_provider_includes_experimental_dir_when_switch_enabled(monkeypatch):
-    """When experimental_memory_switch is True, schema directories include experimental subdir."""
-    monkeypatch.setattr(
-        "openviking.session.memory.session_extract_context_provider.get_openviking_config",
-        lambda: SimpleNamespace(
-            memory=SimpleNamespace(
-                custom_templates_dir="",
-                eager_prefetch=False,
-                prefetch_search_topn=5,
-                experimental_memory_switch=True,
-                link_enabled=False,
-            )
-        ),
-    )
-
-    provider = SessionExtractContextProvider(messages=[])
-    dirs = provider.get_schema_directories()
-
-    bundled_memory_dir = str(PromptManager._get_bundled_templates_dir() / "memory")
-    experimental_memory_dir = str(
-        PromptManager._get_bundled_templates_dir() / "memory" / "experimental_memory"
-    )
-    assert bundled_memory_dir in dirs
-    assert experimental_memory_dir in dirs

@@ -7,6 +7,7 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import AsyncGenerator
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
@@ -61,24 +62,6 @@ async def mock_viking_fs(temp_storage: Path) -> MockVikingFS:
     return MockVikingFS(root_path=str(temp_storage))
 
 
-@pytest_asyncio.fixture
-async def watch_manager(mock_viking_fs: MockVikingFS) -> AsyncGenerator[WatchManager, None]:
-    """Create WatchManager instance with mock VikingFS."""
-    manager = WatchManager(viking_fs=mock_viking_fs)
-    await manager.initialize()
-    yield manager
-    await manager.clear_all_tasks()
-
-
-@pytest_asyncio.fixture
-async def watch_manager_no_fs() -> AsyncGenerator[WatchManager, None]:
-    """Create WatchManager instance without VikingFS."""
-    manager = WatchManager(viking_fs=None)
-    await manager.initialize()
-    yield manager
-    await manager.clear_all_tasks()
-
-
 class TestWatchTask:
     """Tests for WatchTask data model."""
 
@@ -97,6 +80,7 @@ class TestWatchTask:
         assert task.created_at is not None
         assert task.last_execution_time is None
         assert task.next_execution_time is None
+        assert task.processing_mode == "semantic_and_vectors"
 
     def test_create_task_with_all_fields(self):
         """Test creating a task with all fields specified."""
@@ -109,6 +93,7 @@ class TestWatchTask:
             reason="Test reason",
             instruction="Test instruction",
             watch_interval=30.0,
+            processing_mode="vectors_only",
             created_at=now,
             last_execution_time=now,
             next_execution_time=now + timedelta(minutes=30),
@@ -122,6 +107,7 @@ class TestWatchTask:
         assert task.reason == "Test reason"
         assert task.instruction == "Test instruction"
         assert task.watch_interval == 30.0
+        assert task.processing_mode == "vectors_only"
         assert task.is_active is False
         assert task.created_at == now
         assert task.last_execution_time == now
@@ -149,6 +135,7 @@ class TestWatchTask:
         assert data["to_uri"] == "viking://test"
         assert data["created_at"] == now.isoformat()
         assert data["is_active"] is True
+        assert data["processing_mode"] == "semantic_and_vectors"
         assert "auth_state" not in data
 
     def test_from_dict(self):
@@ -162,6 +149,7 @@ class TestWatchTask:
             "reason": "Test",
             "instruction": "Instruction",
             "watch_interval": 45.0,
+            "processing_mode": "vectors_only",
             "created_at": now.isoformat(),
             "last_execution_time": now.isoformat(),
             "next_execution_time": (now + timedelta(minutes=45)).isoformat(),
@@ -174,9 +162,15 @@ class TestWatchTask:
         assert task.path == "/test/path"
         assert task.to_uri == "viking://test"
         assert task.watch_interval == 45.0
+        assert task.processing_mode == "vectors_only"
         assert task.is_active is False
         assert task.created_at == now
         assert task.last_execution_time == now
+
+    def test_from_dict_defaults_legacy_processing_mode(self):
+        task = WatchTask.from_dict({"path": "/test/path"})
+
+        assert task.processing_mode == "semantic_and_vectors"
 
     def test_calculate_next_execution_time(self):
         """Test calculating next execution time."""
@@ -228,6 +222,97 @@ class TestWatchManager:
         assert task.watch_interval == 30.0
         assert task.is_active is True
         assert task.next_execution_time is not None
+
+    @pytest.mark.asyncio
+    async def test_deactivate_tasks_under_uri_internal_matches_subtree(
+        self, watch_manager_no_fs: WatchManager
+    ):
+        root = await watch_manager_no_fs.create_task(
+            path="/test/root",
+            to_uri="viking://resources/codeask/wiki",
+            watch_interval=30.0,
+        )
+        child = await watch_manager_no_fs.create_task(
+            path="/test/child",
+            to_uri="viking://resources/codeask/wiki/page",
+            watch_interval=30.0,
+        )
+        sibling = await watch_manager_no_fs.create_task(
+            path="/test/sibling",
+            to_uri="viking://resources/codeask/wiki-renamed",
+            watch_interval=30.0,
+        )
+
+        deactivated = await watch_manager_no_fs.deactivate_tasks_under_uri_internal(
+            "viking://resources/codeask/wiki", TEST_ACCOUNT_ID
+        )
+
+        assert {task.task_id for task in deactivated} == {root.task_id, child.task_id}
+        assert (await watch_manager_no_fs.get_task(root.task_id)).is_active is False
+        assert (await watch_manager_no_fs.get_task(child.task_id)).is_active is False
+        assert (await watch_manager_no_fs.get_task(sibling.task_id)).is_active is True
+
+    @pytest.mark.asyncio
+    async def test_sync_tasks_with_resource_move_internal_rolls_back_task_state_on_save_failure(
+        self, watch_manager_no_fs: WatchManager
+    ):
+        root = await watch_manager_no_fs.create_task(
+            path="/test/root",
+            to_uri="viking://resources/codeask/wiki",
+            parent_uri=None,
+            watch_interval=30.0,
+        )
+        watch_manager_no_fs._save_tasks = AsyncMock(side_effect=RuntimeError("save failed"))
+        move_resource = AsyncMock()
+        rollback_resource = AsyncMock()
+
+        with pytest.raises(RuntimeError, match="save failed"):
+            await watch_manager_no_fs.sync_tasks_with_resource_move_internal(
+                "viking://resources/codeask/wiki",
+                "viking://resources/codeask/wiki-renamed",
+                move_resource=move_resource,
+                rollback_resource=rollback_resource,
+                account_id=TEST_ACCOUNT_ID,
+            )
+
+        move_resource.assert_awaited_once()
+        rollback_resource.assert_awaited_once()
+        restored = await watch_manager_no_fs.get_task(root.task_id)
+        assert restored is not None
+        assert restored.to_uri == "viking://resources/codeask/wiki"
+        assert restored.parent_uri is None
+
+    @pytest.mark.asyncio
+    async def test_uri_index_move_and_deactivate_are_account_scoped(self):
+        manager = WatchManager()
+        uri = "viking://resources/shared"
+        task_a = await manager.create_task(
+            path="/a", account_id="account-a", to_uri=uri
+        )
+        task_b = await manager.create_task(
+            path="/b", account_id="account-b", to_uri=uri
+        )
+        with pytest.raises(ConflictError):
+            await manager.create_task(path="/duplicate", account_id="account-a", to_uri=uri)
+
+        await manager.sync_tasks_with_resource_move_internal(
+            uri,
+            f"{uri}-moved",
+            move_resource=AsyncMock(),
+            account_id="account-a",
+        )
+        deactivated = await manager.deactivate_tasks_under_uri_internal(uri, "account-b")
+
+        assert task_a.to_uri == f"{uri}-moved"
+        assert task_a.is_active is True
+        assert task_b.to_uri == uri
+        assert task_b.is_active is False
+        assert deactivated == [task_b]
+        moved = await manager.get_task_by_uri(
+            f"{uri}-moved", "account-a", "default", "root"
+        )
+        assert moved is task_a
+        assert await manager.get_task_by_uri(uri, "account-b", "default", "root") is task_b
 
     @pytest.mark.asyncio
     async def test_auth_state_persisted_and_hidden_from_public_dict(
@@ -491,23 +576,6 @@ class TestWatchManager:
 
         assert len(due_tasks) == 1
         assert due_tasks[0].task_id == task1.task_id
-
-    @pytest.mark.asyncio
-    async def test_clear_all_tasks(self, watch_manager: WatchManager):
-        """Test clearing all tasks."""
-        await watch_manager.create_task(path="/test/path1")
-        await watch_manager.create_task(path="/test/path2")
-
-        count = await watch_manager.clear_all_tasks()
-
-        assert count == 2
-
-        tasks = await watch_manager.get_all_tasks(
-            account_id=TEST_ACCOUNT_ID,
-            user_id=TEST_USER_ID,
-            role=TEST_ROLE,
-        )
-        assert len(tasks) == 0
 
     @pytest.mark.asyncio
     async def test_create_task_with_non_positive_interval_raises(self, watch_manager: WatchManager):

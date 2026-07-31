@@ -37,6 +37,8 @@ _CODE_IMPORT_LIMIT = 12
 _CODE_SYMBOL_LIMIT = 24
 _CODE_IMPORT_LINE_CHARS = 180
 _CODE_SYMBOL_LINE_CHARS = 200
+
+
 @dataclass(frozen=True)
 class ToolResultSynopsis:
     kind: ToolResultKind
@@ -95,9 +97,7 @@ def _looks_binary(content: str) -> bool:
         return False
     if "\x00" in content:
         return True
-    control_chars = sum(
-        1 for ch in content[:1000] if ord(ch) < 32 and ch not in {"\n", "\r", "\t"}
-    )
+    control_chars = sum(1 for ch in content[:1000] if ord(ch) < 32 and ch not in {"\n", "\r", "\t"})
     return control_chars / max(1, min(len(content), 1000)) > 0.05
 
 
@@ -204,7 +204,9 @@ def _summarize_yaml(value: Any) -> ToolResultSynopsis:
 def _summarize_xml(root: ET.Element) -> ToolResultSynopsis:
     child_counts = Counter(child.tag for child in list(root))
     structure = [f"root: {root.tag}", f"attributes: {len(root.attrib)}"]
-    structure.extend(f"{tag}: {count}" for tag, count in child_counts.most_common(_XML_CHILD_TAG_LIMIT))
+    structure.extend(
+        f"{tag}: {count}" for tag, count in child_counts.most_common(_XML_CHILD_TAG_LIMIT)
+    )
     return ToolResultSynopsis(
         kind="xml",
         title="XML output",
@@ -326,8 +328,7 @@ def _summarize_text(content: str, preview_chars: int) -> ToolResultSynopsis:
         if len(stripped) <= 1:
             continue
         if not (
-            re.match(r"^#{1,6}\s+", stripped)
-            or re.match(r"^[A-Z0-9][A-Z0-9\s:_-]{6,}$", stripped)
+            re.match(r"^#{1,6}\s+", stripped) or re.match(r"^[A-Z0-9][A-Z0-9\s:_-]{6,}$", stripped)
         ):
             continue
         header = _normalize_text_for_line(stripped, 160)
@@ -341,7 +342,9 @@ def _summarize_text(content: str, preview_chars: int) -> ToolResultSynopsis:
     word_count = len(normalized.split()) if normalized else 0
     excerpt_chars = _TEXT_EXCERPT_CHARS
     first = _normalize_text_for_line(content[:excerpt_chars], excerpt_chars)
-    last = _normalize_text_for_line(content[-excerpt_chars:], excerpt_chars) if excerpt_chars else ""
+    last = (
+        _normalize_text_for_line(content[-excerpt_chars:], excerpt_chars) if excerpt_chars else ""
+    )
     return ToolResultSynopsis(
         kind="text",
         title="Text output",
@@ -384,7 +387,7 @@ def generate_tool_result_synopsis(
             structure=[],
             notable_items=[],
             sample=_head_tail_sample(content, preview_chars),
-    )
+        )
 
     stripped = content.strip()
     lower_mime = (mime_type or "").lower()
@@ -480,5 +483,7 @@ def render_tool_result_stub(
         body.append(
             f"- Use openviking_tool_result_read with ref={ref} and offset/limit to inspect raw output."
         )
-        body.append("- Use openviking_tool_result_list to discover other externalized outputs in this session.")
+        body.append(
+            "- Use openviking_tool_result_list to discover other externalized outputs in this session."
+        )
     return "\n".join(header) + "\n\n" + "\n".join(body)

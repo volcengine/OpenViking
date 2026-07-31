@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <optional>
 
 #include "index/common_structs.h"
 #include "index/index_manager.h"
@@ -23,6 +24,17 @@ class IndexEngine {
   int delete_data(const std::vector<DeleteDataRequest>& data_list);
 
   SearchResult search(const SearchRequest& req);
+
+  std::optional<SearchResult> search_with_filter_token(
+      const SearchRequest& req, uint64_t filter_token);
+
+  int set_filter_layout(const std::vector<uint64_t>& ordered_labels);
+
+  FilterResult evaluate_filter(const std::string& dsl,
+                               uint64_t max_cached_candidates = 0);
+
+  FilterResult evaluate_filter_for_routing(const std::string& dsl,
+                                           uint64_t native_threshold);
 
   int64_t dump(const std::string& dir);
 

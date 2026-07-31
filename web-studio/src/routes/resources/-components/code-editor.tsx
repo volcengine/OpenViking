@@ -28,7 +28,7 @@ import {
   closeBrackets,
   closeBracketsKeymap,
 } from '@codemirror/autocomplete'
-import { oneDark } from '@codemirror/theme-one-dark'
+import { oneDarkHighlightStyle } from '@codemirror/theme-one-dark'
 
 const languageLoaders: Partial<Record<string, () => Promise<LanguageSupport>>> =
   {
@@ -99,10 +99,25 @@ interface CodeEditorProps {
   initialContent: string
   filename: string
   isDark?: boolean
+  readOnly?: boolean
+  enableLanguageSupport?: boolean
+  lineWrapping?: boolean
+  appearance?: 'editor' | 'plain'
 }
 
 export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
-  function CodeEditor({ initialContent, filename, isDark = false }, ref) {
+  function CodeEditor(
+    {
+      initialContent,
+      filename,
+      isDark = false,
+      readOnly = false,
+      enableLanguageSupport = true,
+      lineWrapping = false,
+      appearance = 'editor',
+    },
+    ref,
+  ) {
     const containerRef = useRef<HTMLDivElement>(null)
     const viewRef = useRef<EditorView | null>(null)
 
@@ -118,41 +133,91 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
       const setup = async () => {
         const extensions = [
           lineNumbers(),
-          highlightActiveLineGutter(),
-          highlightActiveLine(),
           drawSelection(),
-          history(),
-          foldGutter(),
-          indentOnInput(),
-          bracketMatching(),
-          closeBrackets(),
-          autocompletion(),
-          highlightSelectionMatches(),
           syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-          keymap.of([
-            ...closeBracketsKeymap,
-            ...defaultKeymap,
-            ...searchKeymap,
-            ...historyKeymap,
-            indentWithTab,
-          ]),
+          EditorState.readOnly.of(readOnly),
+          EditorView.editable.of(!readOnly),
           EditorView.theme({
-            '&': { height: '100%' },
-            '.cm-scroller': { overflow: 'auto' },
+            '&': {
+              height: '100%',
+              backgroundColor:
+                appearance === 'plain'
+                  ? 'var(--background)'
+                  : 'color-mix(in oklch, var(--muted) 28%, var(--background))',
+              color: 'var(--foreground)',
+            },
+            '&.cm-focused': { outline: 'none' },
+            '.cm-scroller': {
+              overflow: 'auto',
+              backgroundColor: 'transparent',
+            },
             '.cm-content': {
+              caretColor: 'var(--primary)',
               fontFamily:
                 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
               fontSize: '13px',
             },
-            '.cm-gutters': { fontSize: '13px' },
+            '.cm-gutters': {
+              backgroundColor:
+                appearance === 'plain'
+                  ? 'var(--background)'
+                  : 'color-mix(in oklch, var(--muted) 44%, var(--background))',
+              borderRight:
+                appearance === 'plain' ? 'none' : '1px solid var(--border)',
+              color: 'var(--muted-foreground)',
+              fontSize: '13px',
+            },
+            '.cm-lineNumbers .cm-gutterElement': {
+              paddingLeft: '8px',
+              paddingRight: '10px',
+            },
+            '.cm-cursor, .cm-dropCursor': {
+              borderLeftColor: 'var(--primary)',
+            },
+            '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection':
+              {
+                backgroundColor:
+                  'color-mix(in oklch, var(--primary) 24%, transparent)',
+              },
+            '.cm-activeLine, .cm-activeLineGutter': {
+              backgroundColor:
+                'color-mix(in oklch, var(--primary) 8%, transparent)',
+            },
           }),
         ]
 
-        if (isDark) {
-          extensions.push(oneDark)
+        if (readOnly) {
+          extensions.push(keymap.of(searchKeymap))
+        } else {
+          extensions.push(
+            highlightActiveLineGutter(),
+            highlightActiveLine(),
+            history(),
+            foldGutter(),
+            indentOnInput(),
+            bracketMatching(),
+            closeBrackets(),
+            autocompletion(),
+            highlightSelectionMatches(),
+            keymap.of([
+              ...closeBracketsKeymap,
+              ...defaultKeymap,
+              ...searchKeymap,
+              ...historyKeymap,
+              indentWithTab,
+            ]),
+          )
         }
 
-        const lang = detectLanguage(filename)
+        if (lineWrapping) {
+          extensions.push(EditorView.lineWrapping)
+        }
+
+        if (isDark) {
+          extensions.push(syntaxHighlighting(oneDarkHighlightStyle))
+        }
+
+        const lang = enableLanguageSupport ? detectLanguage(filename) : null
         if (lang && languageLoaders[lang]) {
           try {
             const langSupport = await languageLoaders[lang]()
@@ -184,12 +249,24 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
         viewRef.current?.destroy()
         viewRef.current = null
       }
-    }, [filename, isDark, initialContent])
+    }, [
+      enableLanguageSupport,
+      appearance,
+      filename,
+      isDark,
+      initialContent,
+      lineWrapping,
+      readOnly,
+    ])
 
     return (
       <div
         ref={containerRef}
-        className="h-full min-h-0 overflow-hidden rounded-md border"
+        className={
+          appearance === 'plain'
+            ? 'h-full min-h-0 overflow-hidden bg-background'
+            : 'h-full min-h-0 overflow-hidden rounded-md border shadow-sm'
+        }
       />
     )
   },

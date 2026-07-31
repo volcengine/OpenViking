@@ -3,15 +3,20 @@
 """Search endpoints for OpenViking HTTP Server."""
 
 import math
-from dataclasses import replace
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict
 
 from openviking.core.path_variables import resolve_path_variables
-from openviking.core.peer_id import normalize_peer_selector
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
+from openviking.retrieve.type_quota_recall import (
+    DEFAULT_MAX_CHARS,
+    DEFAULT_MIN_SCORE,
+    DEFAULT_OTHER_PEER_PENALTIES,
+    DEFAULT_QUOTAS,
+    search_type_quota_recall,
+)
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.error_mapping import map_exception
@@ -24,6 +29,7 @@ from openviking.utils.search_filters import (
     _resolve_levels,
     merge_search_filter,
 )
+from openviking.utils.tags import build_search_tags_filter
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
 
@@ -54,15 +60,24 @@ def _resolve_search_filter(
     since: Optional[str],
     until: Optional[str],
     time_field: Optional[TimeField],
+    tags: Optional[List[str]],
 ) -> Optional[Dict[str, Any]]:
     try:
-        return merge_search_filter(
+        merged = merge_search_filter(
             request_filter,
             context_type=context_type,
             since=since,
             until=until,
             time_field=time_field,
         )
+        tag_filter = build_search_tags_filter(tags)
+        if not tag_filter:
+            return merged
+        if merged:
+            if tag_filter.get("op") == "and" and isinstance(tag_filter.get("conds"), list):
+                return {"op": "and", "conds": [merged, *tag_filter["conds"]]}
+            return {"op": "and", "conds": [merged, tag_filter]}
+        return tag_filter
     except ValueError as exc:
         raise InvalidArgumentError(str(exc)) from exc
 
@@ -74,27 +89,13 @@ def _resolve_uri_or_uris(uri: Union[str, List[str]]) -> Union[str, List[str]]:
     return resolve_path_variables(uri)
 
 
-def _ctx_with_legacy_actor_peer(
-    ctx: RequestContext,
-    legacy_peer_id: Optional[str],
-) -> RequestContext:
-    if legacy_peer_id is None:
-        return ctx
-    if ctx.actor_peer_id and ctx.actor_peer_id != legacy_peer_id:
-        raise InvalidArgumentError(
-            "actor_peer_id cannot be used with a different legacy agent_id/agent_uri"
-        )
-    if ctx.actor_peer_id == legacy_peer_id and ctx.legacy_agent_id == legacy_peer_id:
-        return ctx
-    return replace(ctx, actor_peer_id=legacy_peer_id, legacy_agent_id=legacy_peer_id)
-
-
 class FindRequest(BaseModel):
     """Request model for find."""
 
     model_config = ConfigDict(extra="forbid")
 
-    query: str
+    query: str = ""
+    image_url: Optional[str] = None
     target_uri: Union[str, List[str]] = ""
     context_type: Optional[Union[str, List[str]]] = None
     agent_id: Optional[str] = None
@@ -104,20 +105,12 @@ class FindRequest(BaseModel):
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None
     include_provenance: bool = False
+    tags: Optional[List[str]] = None
     since: Optional[str] = None
     until: Optional[str] = None
     time_field: Optional[TimeField] = None
     level: Optional[Union[int, str, List[int]]] = None
     telemetry: TelemetryRequest = False
-
-    @model_validator(mode="after")
-    def normalize_request_peer_id(self) -> "FindRequest":
-        self.agent_id = normalize_peer_selector(
-            None,
-            agent_id=self.agent_id,
-            agent_uri=self.agent_uri,
-        )
-        return self
 
 
 class SearchRequest(BaseModel):
@@ -125,7 +118,8 @@ class SearchRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    query: str
+    query: str = ""
+    image_url: Optional[str] = None
     target_uri: Union[str, List[str]] = ""
     context_type: Optional[Union[str, List[str]]] = None
     agent_id: Optional[str] = None
@@ -136,6 +130,7 @@ class SearchRequest(BaseModel):
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None
     include_provenance: bool = False
+    tags: Optional[List[str]] = None
 
     since: Optional[str] = None
     until: Optional[str] = None
@@ -143,14 +138,20 @@ class SearchRequest(BaseModel):
     level: Optional[Union[int, str, List[int]]] = None
     telemetry: TelemetryRequest = False
 
-    @model_validator(mode="after")
-    def normalize_request_peer_id(self) -> "SearchRequest":
-        self.agent_id = normalize_peer_selector(
-            None,
-            agent_id=self.agent_id,
-            agent_uri=self.agent_uri,
-        )
-        return self
+
+class RecallRequest(BaseModel):
+    """Request model for type-quota memory recall."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: str
+    quotas: Dict[str, int] = DEFAULT_QUOTAS.copy()
+    max_chars: int = DEFAULT_MAX_CHARS
+    min_score: float = DEFAULT_MIN_SCORE
+    peer_scope: Literal["actor", "all"] = "all"
+    other_peer_penalty: Optional[Union[float, Dict[str, float]]] = None
+    render: bool = True
+    telemetry: TelemetryRequest = False
 
 
 class GrepRequest(BaseModel):
@@ -160,8 +161,8 @@ class GrepRequest(BaseModel):
     exclude_uri: Optional[str] = None
     pattern: str
     case_insensitive: bool = False
-    node_limit: Optional[int] = None
-    level_limit: int = 5
+    node_limit: Optional[int] = 256
+    level_limit: int = 10
 
 
 class GlobRequest(BaseModel):
@@ -169,7 +170,7 @@ class GlobRequest(BaseModel):
 
     pattern: str
     uri: str = "viking://"
-    node_limit: Optional[int] = None
+    node_limit: Optional[int] = 256
 
 
 @router.post("/find")
@@ -179,7 +180,6 @@ async def find(
 ):
     """Semantic search without session context."""
     service = get_service()
-    ctx = _ctx_with_legacy_actor_peer(_ctx, request.agent_id)
     actual_limit = _resolve_search_limit(request.limit, request.node_limit)
     effective_filter = _resolve_search_filter(
         request.filter,
@@ -187,6 +187,7 @@ async def find(
         request.since,
         request.until,
         request.time_field,
+        request.tags,
     )
     resolved_target_uri = _resolve_uri_or_uris(request.target_uri)
     execution = await run_operation(
@@ -194,12 +195,13 @@ async def find(
         telemetry=request.telemetry,
         fn=lambda: service.search.find(
             query=request.query,
-            ctx=ctx,
+            ctx=_ctx,
             target_uri=resolved_target_uri,
             limit=actual_limit,
             score_threshold=request.score_threshold,
             filter=effective_filter,
             level=_resolve_levels(request.level) or None,
+            image_url=request.image_url,
         ),
     )
     result = execution.result
@@ -220,7 +222,6 @@ async def search(
 ):
     """Semantic search with optional session context."""
     service = get_service()
-    ctx = _ctx_with_legacy_actor_peer(_ctx, request.agent_id)
     actual_limit = _resolve_search_limit(request.limit, request.node_limit)
     effective_filter = _resolve_search_filter(
         request.filter,
@@ -228,23 +229,26 @@ async def search(
         request.since,
         request.until,
         request.time_field,
+        request.tags,
     )
     resolved_target_uri = _resolve_uri_or_uris(request.target_uri)
 
     async def _search():
         session = None
-        if request.session_id:
-            session = service.sessions.session(ctx, request.session_id)
+        # Intent off: skip session.load — SearchService will not scan session either.
+        if request.session_id and service.search.is_intent_enabled():
+            session = service.sessions.session(_ctx, request.session_id)
             await session.load()
         return await service.search.search(
             query=request.query,
-            ctx=ctx,
+            ctx=_ctx,
             target_uri=resolved_target_uri,
             session=session,
             limit=actual_limit,
             score_threshold=request.score_threshold,
             filter=effective_filter,
             level=_resolve_levels(request.level) or None,
+            image_url=request.image_url,
         )
 
     execution = await run_operation(
@@ -259,6 +263,37 @@ async def search(
     return Response(
         status="ok",
         result=result,
+        telemetry=execution.telemetry,
+    ).model_dump(exclude_none=True)
+
+
+@router.post("/recall")
+async def recall(
+    request: RecallRequest,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Type-quota memory recall with bounded rendering."""
+    service = get_service()
+    execution = await run_operation(
+        operation="search.recall",
+        telemetry=request.telemetry,
+        fn=lambda: search_type_quota_recall(
+            service=service,
+            ctx=_ctx,
+            query=request.query,
+            quotas=request.quotas,
+            max_chars=max(1, int(request.max_chars)),
+            min_score=request.min_score,
+            render=request.render,
+            peer_scope=request.peer_scope,
+            other_peer_penalty=request.other_peer_penalty
+            if request.other_peer_penalty is not None
+            else DEFAULT_OTHER_PEER_PENALTIES,
+        ),
+    )
+    return Response(
+        status="ok",
+        result=_sanitize_floats(execution.result.to_dict()),
         telemetry=execution.telemetry,
     ).model_dump(exclude_none=True)
 

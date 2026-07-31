@@ -14,11 +14,31 @@
 
 OpenViking 支持通过 Python Package 安装作为本地库使用，也支持通过 Docker 快速启动独立服务。
 
-### 方式一：通过 pip 安装 (作为本地库)
+### 方式一：通过 Python 包安装（作为本地命令和库）
 
-```bash
+选择你常用的 Python 包管理工具安装 OpenViking：
+
+::: code-group
+
+```bash [uv（推荐）]
+uv tool install openviking --upgrade
+```
+
+```bash [pip]
 pip install openviking --upgrade --force-reinstall
 ```
+
+```bash [pipx]
+# 安装
+pipx install openviking
+
+# 更新
+pipx upgrade openviking
+```
+
+:::
+
+安装完成后，可以使用客户端命令 `ov`（`openviking` 是其别名）和服务端命令 `openviking-server`。
 
 ### 方式二：通过 Docker 启动 (作为独立服务)
 

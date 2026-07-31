@@ -58,7 +58,7 @@ def build_ovpack_bytes(
     index_records = _index_records_bytes()
     manifest = {
         "kind": "openviking.ovpack",
-        "format_version": 2,
+        "format_version": 3,
         "root": {
             "name": root_name,
             "uri": f"viking://resources/{root_name}",

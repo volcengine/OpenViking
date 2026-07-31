@@ -1,0 +1,19 @@
+[package]
+name = "ragfs-cache-redis"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.91.1"
+license = "Apache-2.0"
+description = "Redis cache provider adapter for RAGFS"
+
+[dependencies]
+async-trait = "0.1"
+bytes = "1.5"
+ragfs = { path = "../ragfs", features = ["cache"] }
+redis = { version = "0.32", features = ["tokio-comp"] }
+thiserror = "1.0"
+tokio = { version = "1.38", features = ["rt-multi-thread", "sync", "time", "macros"] }
+url = "2"
+
+[dev-dependencies]
+ragfs = { path = "../ragfs", features = ["cache"] }

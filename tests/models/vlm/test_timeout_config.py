@@ -4,7 +4,7 @@
 
 Before this was wired through, ``_build_openai_client_kwargs`` exposed a
 ``timeout`` parameter (#1208) but callers never passed it, so the default
-60.0s was always used and end users could not override it via ``ov.conf``.
+timeout was always used and end users could not override it via ``ov.conf``.
 These tests lock in that the config value flows through to the underlying
 OpenAI and LiteLLM clients.
 """
@@ -26,9 +26,9 @@ def test_vlm_config_accepts_timeout():
     assert cfg.timeout == 120.0
 
 
-def test_vlm_config_timeout_defaults_to_60():
+def test_vlm_config_timeout_defaults_to_600():
     cfg = VLMConfig(model="gpt-4o-mini", api_key="sk-x")
-    assert cfg.timeout == 60.0
+    assert cfg.timeout == 600.0
 
 
 def test_vlm_config_rejects_non_positive_timeout():
@@ -38,7 +38,7 @@ def test_vlm_config_rejects_non_positive_timeout():
 
 def test_build_openai_client_kwargs_default_timeout():
     kwargs = _build_openai_client_kwargs("openai", "sk-x", "https://example.invalid", None, None)
-    assert kwargs["timeout"] == 60.0
+    assert kwargs["timeout"] == 600.0
 
 
 def test_build_openai_client_kwargs_custom_timeout():
@@ -70,7 +70,7 @@ def test_openai_vlm_propagates_config_timeout():
     assert fake.call_args.kwargs.get("timeout") == 120.0
 
 
-def test_openai_vlm_defaults_to_60_timeout_when_config_omits_it():
+def test_openai_vlm_defaults_to_600_timeout_when_config_omits_it():
     vlm = OpenAIVLM(
         {
             "provider": "openai",
@@ -79,11 +79,11 @@ def test_openai_vlm_defaults_to_60_timeout_when_config_omits_it():
             "api_base": "https://example.invalid",
         }
     )
-    assert vlm.timeout == 60.0
+    assert vlm.timeout == 600.0
 
     with mock.patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI") as fake:
         vlm.get_client()
-    assert fake.call_args.kwargs.get("timeout") == 60.0
+    assert fake.call_args.kwargs.get("timeout") == 600.0
 
 
 def test_litellm_build_kwargs_includes_timeout():

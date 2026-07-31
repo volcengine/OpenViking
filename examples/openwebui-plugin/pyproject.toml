@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openviking-openwebui"
+version = "0.1.0"
+description = "OpenAPI tool server that exposes a curated set of OpenViking endpoints to Open WebUI."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "AGPL-3.0" }
+authors = [{ name = "OpenViking Contributors" }]
+keywords = ["openviking", "open-webui", "openwebui", "openapi", "tools", "memory"]
+dependencies = [
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.27",
+  "httpx>=0.27",
+  "pydantic>=2.5",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8",
+  "pytest-asyncio>=0.23",
+  "respx>=0.21",
+]
+
+[project.scripts]
+openviking-openwebui = "openviking_openwebui.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["openviking_openwebui*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

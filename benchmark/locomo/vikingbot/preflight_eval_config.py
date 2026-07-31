@@ -11,7 +11,12 @@ from openviking_cli.utils.config.consts import (
     OPENVIKING_CONFIG_ENV,
 )
 
-_USE_COLOR = hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
+_USE_COLOR = (
+    hasattr(sys.stdout, "isatty")
+    and sys.stdout.isatty()
+    and os.environ.get("TERM", "dumb") != "dumb"
+    and "NO_COLOR" not in os.environ
+)
 
 
 def _color(text: str, code: str) -> str:
@@ -20,24 +25,20 @@ def _color(text: str, code: str) -> str:
     return f"\033[{code}m{text}\033[0m"
 
 
-def _prefix() -> str:
-    return _color("[preflight]", "36")
-
-
 def _log_info(message: str) -> None:
-    print(f"{_prefix()} {_color('[INFO]', '34')} {message}")
+    print(_color(f"  │ {message}", "2"))
 
 
 def _log_warn(message: str) -> None:
-    print(f"{_prefix()} {_color('[WARN]', '33')} {message}")
+    print(f"  {_color('!', '33')} {message}")
 
 
 def _log_ok(message: str) -> None:
-    print(f"{_prefix()} {_color('[OK]', '32')} {message}")
+    print(f"  {_color('✓', '32')} {message}")
 
 
 def _log_error(message: str) -> None:
-    print(f"{_prefix()} {_color('[ERROR]', '31')} {message}", file=sys.stderr)
+    print(f"  {_color('✗', '31')} {message}", file=sys.stderr)
 
 
 def _is_interactive() -> bool:
@@ -45,8 +46,10 @@ def _is_interactive() -> bool:
 
 
 def _prompt_text(prompt: str, default: str | None = None) -> str:
-    suffix = f" [{default}]" if default else ""
-    raw = input(f"{_prefix()} {prompt}{suffix}: ").strip()
+    print(f"\n  {_color('?', '33')} {prompt}")
+    if default:
+        print(f"    {_color('默认:', '2')} {default}")
+    raw = input(f"    {_color('>', '32')} ").strip()
     if not raw and default is not None:
         return default
     return raw
@@ -64,7 +67,9 @@ def _resolve_ov_conf_path() -> Path:
         return Path(configured_path).expanduser()
 
     resolved = resolve_config_path(None, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
-    default_path = str(resolved) if resolved is not None else str(Path.home() / ".openviking" / "ov.conf")
+    default_path = (
+        str(resolved) if resolved is not None else str(Path.home() / ".openviking" / "ov.conf")
+    )
 
     if _is_interactive():
         _log_info(f"OpenViking 配置默认路径: {default_path}")
@@ -76,10 +81,11 @@ def _resolve_ov_conf_path() -> Path:
 
 def _warn_deprecated_or_conflicting_fields(ov_data: dict) -> None:
     ov_server = (ov_data.get("bot") or {}).get("ov_server") or {}
+    server_auth_mode = str((ov_data.get("server") or {}).get("auth_mode") or "").strip().lower()
     if str(ov_server.get("root_api_key") or "").strip():
         _log_warn("bot.ov_server.root_api_key 已废弃，评测不会再把它当作认证 key 使用。")
     api_key_type = str(ov_server.get("api_key_type") or "").strip().lower()
-    if api_key_type and api_key_type != "user":
+    if api_key_type and api_key_type != "user" and server_auth_mode != "trusted":
         _log_warn("bot.ov_server.api_key_type 不是 user；后续会在 User key 校验通过后同步为 user。")
 
 
@@ -97,7 +103,7 @@ def main() -> int:
             return 1
 
         _warn_deprecated_or_conflicting_fields(ov_data)
-        _log_ok("本地配置可读取；将继续连接 OpenViking 校验 User API key。")
+        _log_ok("本地配置可读取；将继续连接 OpenViking 校验 API key。")
         return 0
     except KeyboardInterrupt:
         _log_error("用户取消。")

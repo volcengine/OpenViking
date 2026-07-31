@@ -49,6 +49,18 @@ export type AddMessageRequest = {
      */
     created_at?: string | null;
     /**
+     * Turn Id
+     */
+    turn_id?: string | null;
+    /**
+     * Message Kind
+     */
+    message_kind?: 'user_query' | 'assistant_step' | 'tool_transport' | 'checkpoint' | null;
+    /**
+     * Source Message Ids
+     */
+    source_message_ids?: Array<string> | null;
+    /**
      * Telemetry
      */
     telemetry?: boolean | {
@@ -257,6 +269,30 @@ export type CommitRequest = {
      * Number of most-recent messages to keep live after commit. Plugin's afterTurn path typically passes its configured value (default 10); compact path passes 0 to archive everything.
      */
     keep_recent_count?: number;
+    /**
+     * Retention Mode
+     *
+     * Opt in to logical Turn retention. Omit to preserve keep_recent_count semantics.
+     */
+    retention_mode?: 'turn_budget' | null;
+    /**
+     * Keep Recent Turn Count
+     *
+     * Maximum number of newest logical user Turns to retain.
+     */
+    keep_recent_turn_count?: number | null;
+    /**
+     * Retained Message Token Budget
+     *
+     * Token budget for retained raw messages and checkpoint.
+     */
+    retained_message_token_budget?: number | null;
+    /**
+     * Min Raw Tail Steps
+     *
+     * Minimum number of latest atomic assistant Steps kept raw.
+     */
+    min_raw_tail_steps?: number | null;
     /**
      * Telemetry
      */
@@ -562,6 +598,10 @@ export type ReindexRequest = {
      * Wait
      */
     wait?: boolean;
+    /**
+     * Dry Run
+     */
+    dry_run?: boolean;
 };
 
 /**
@@ -1537,6 +1577,18 @@ export type GetFsLsData = {
          * Alias for node_limit
          */
         limit?: number | null;
+        /**
+         * Sort By
+         *
+         * Sort directory and file groups before applying node_limit
+         */
+        sort_by?: 'name' | 'mtime' | null;
+        /**
+         * Sort Order
+         *
+         * Sort direction
+         */
+        sort_order?: 'asc' | 'desc';
     };
     url: '/api/v1/fs/ls';
 };

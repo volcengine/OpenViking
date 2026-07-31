@@ -1,4 +1,5 @@
 import os
+import time
 
 import psutil
 import pytest
@@ -306,6 +307,47 @@ def _extract_user_key(users, user_id):
     return None
 
 
+def _fallback_api_test_key(reason: str) -> str:
+    if (
+        Config.OPENVIKING_ROOT_API_KEY
+        and Config.OPENVIKING_API_KEY == Config.OPENVIKING_ROOT_API_KEY
+    ):
+        raise RuntimeError(
+            f"{reason}; refusing to fall back to the ROOT API key for tenant-scoped "
+            "API tests. Bootstrap a user/admin key first, or run in trusted mode "
+            "with explicit account/user identity headers."
+        )
+    print(f"{reason}, 使用配置的 API Key")
+    return Config.OPENVIKING_API_KEY
+
+
+def _extract_user_key_from_response(resp, user_id: str) -> str | None:
+    if resp.status_code != 200:
+        return None
+    users = resp.json().get("result", [])
+    return _extract_user_key(users, user_id)
+
+
+def _retry_existing_user_key(
+    root_client,
+    account_id: str,
+    user_id: str,
+    *,
+    reason: str,
+) -> str | None:
+    for attempt in range(3):
+        resp = root_client.admin_list_users(account_id)
+        user_key = _extract_user_key_from_response(resp, user_id)
+        if user_key:
+            print(f"{reason}; 复用测试用户 {account_id}/{user_id}")
+            return user_key
+        if resp.status_code not in (200, 404):
+            print(f"{reason}; 查询用户列表失败({resp.status_code}): {resp.text[:200]}")
+            return None
+        time.sleep(0.2 * (attempt + 1))
+    return None
+
+
 def _ensure_api_test_user_key(root_client, account_id: str, user_id: str) -> str:
     resp = root_client.admin_list_users(account_id)
     if resp.status_code == 404:
@@ -316,12 +358,20 @@ def _ensure_api_test_user_key(root_client, account_id: str, user_id: str) -> str
             if user_key:
                 print(f"已创建测试账户和用户 {account_id}/{user_id}")
                 return user_key
+        elif create_resp.status_code == 409:
+            user_key = _retry_existing_user_key(
+                root_client,
+                account_id,
+                user_id,
+                reason=f"测试账户/用户并发创建冲突({create_resp.status_code})",
+            )
+            if user_key:
+                return user_key
         print(f"创建测试账户失败({create_resp.status_code}): {create_resp.text[:200]}")
-        return Config.OPENVIKING_API_KEY
+        return _fallback_api_test_key("创建测试账户失败")
 
     if resp.status_code != 200:
-        print(f"无法查询用户列表({resp.status_code}), 使用配置的 API Key: {resp.text[:200]}")
-        return Config.OPENVIKING_API_KEY
+        return _fallback_api_test_key(f"无法查询用户列表({resp.status_code}): {resp.text[:200]}")
 
     users = resp.json().get("result", [])
     user_key = _extract_user_key(users, user_id)
@@ -342,8 +392,17 @@ def _ensure_api_test_user_key(root_client, account_id: str, user_id: str) -> str
             if user_key:
                 print(f"已注册测试用户 {account_id}/{user_id}")
                 return user_key
+        elif reg_resp.status_code == 409:
+            user_key = _retry_existing_user_key(
+                root_client,
+                account_id,
+                user_id,
+                reason=f"测试用户并发注册冲突({reg_resp.status_code})",
+            )
+            if user_key:
+                return user_key
         print(f"注册测试用户失败({reg_resp.status_code}): {reg_resp.text[:200]}")
-        return Config.OPENVIKING_API_KEY
+        return _fallback_api_test_key("注册测试用户失败")
 
     role_resp = root_client.admin_set_role(account_id, user_id, "admin")
     if role_resp.status_code != 200:
@@ -357,7 +416,7 @@ def _ensure_api_test_user_key(root_client, account_id: str, user_id: str) -> str
             return user_key
 
     print(f"刷新测试用户 API Key 失败({key_resp.status_code}): {key_resp.text[:200]}")
-    return Config.OPENVIKING_API_KEY
+    return _fallback_api_test_key("刷新测试用户 API Key 失败")
 
 
 @pytest.fixture(scope="session")

@@ -134,7 +134,6 @@ async def create_collection(request: CollectionCreateRequest, req: Request):
     project_name = request.ProjectName or "default"
     description = request.Description or ""
     fields = data_utils.convert_dict(request.Fields)
-    vectorize = data_utils.convert_dict(request.Vectorize)
 
     project = get_project(project_name)
 
@@ -146,7 +145,6 @@ async def create_collection(request: CollectionCreateRequest, req: Request):
         "CollectionName": collection_name,
         "Description": description,
         "Fields": fields,
-        "Vectorize": vectorize,
     }
 
     logger.info(f"Creating collection: {collection_name} in project: {project_name}")
@@ -242,6 +240,20 @@ async def upsert_data(request: DataUpsertRequest, req: Request):
             return error_response("upsert data err", ErrorCode.INTERNAL_ERR.value, request=req)
 
         return success_response("upsert data success", result.ids, request=req)
+    except VikingDBException as e:
+        return error_response(e.message, e.code.value, request=req)
+
+
+@data_router.post("/update", response_model=ApiResponse)
+async def update_data(request: DataUpsertRequest, req: Request):
+    """Update existing data in collection using only explicitly provided fields."""
+    try:
+        collection = get_collection_or_raise(request.collection_name, request.project or "default")
+        data_list = data_utils.convert_dict(request.fields)
+
+        logger.debug(f"Updating {len(data_list)} records in {request.collection_name}")
+        result = collection.update_data(data_list=data_list)
+        return success_response("update data success", result, request=req)
     except VikingDBException as e:
         return error_response(e.message, e.code.value, request=req)
 

@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import requests
+from utils.cli_diagnostics import format_openclaw_cli_failure
 from utils.openclaw_cli_client import _wait_for_session_lock_release
 from utils.test_utils import SessionIdManager
 
@@ -377,7 +378,18 @@ class MemoryV2TestSuite:
         _wait_for_session_lock_release(session_id)
 
         if result.returncode != 0:
-            raise Exception(f"OpenClaw command failed: {result.stderr}")
+            raise Exception(
+                format_openclaw_cli_failure(
+                    "OpenClaw command failed", result.stderr, result.returncode
+                )
+            )
+
+        if not result.stdout.strip():
+            raise Exception(
+                format_openclaw_cli_failure(
+                    "OpenClaw command returned empty stdout", result.stderr, result.returncode
+                )
+            )
 
         try:
             return json.loads(result.stdout)

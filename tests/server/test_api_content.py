@@ -146,7 +146,7 @@ async def test_reindex_uses_request_tenant_for_exists(monkeypatch):
     seen = {}
 
     class FakeService:
-        async def reindex(self, *, uri, mode, wait, ctx):
+        async def reindex(self, *, uri, mode, wait, ctx, dry_run=False):
             seen["uri"] = uri
             seen["mode"] = mode
             seen["wait"] = wait

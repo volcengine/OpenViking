@@ -994,7 +994,7 @@ class BenchmarkRunner:
                 "glob",
                 lambda: adapter.glob(
                     uri=self.config.data_root_uri,
-                    pattern="*.md",
+                    pattern="**/*.md",
                     limit=self.config.find_limit,
                 ),
                 worker_id=worker_id,

@@ -68,6 +68,11 @@ class EmbeddingMsgConverter:
             resolved_level = int(resolved_level.value)
         context_data["level"] = int(resolved_level)
 
+        # Store full content in content field for bm25 full-text search.
+        # Use full_text (raw file content) when available; fall back to vectorization_text.
+        full_content = context.vectorize.full_text or vectorization_text
+        context_data["content"] = full_content
+
         if vectorization_images:
             # Multimodal message: combine text (if any) and image references into the
             # multimodal embedding input format. Image-aware embedders consume this list;

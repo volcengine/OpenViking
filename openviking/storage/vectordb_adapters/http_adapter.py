@@ -13,13 +13,19 @@ from openviking.storage.vectordb.collection.http_collection import (
     list_vikingdb_collections,
 )
 
-from .base import CollectionAdapter, _normalize_collection_names, _parse_url
+from .base import (
+    VIKINGDB_TEXT_FIELD_BYTE_LIMIT,
+    CollectionAdapter,
+    _normalize_collection_names,
+    _parse_url,
+)
 
 
 class HttpCollectionAdapter(CollectionAdapter):
     """Adapter for remote HTTP vectordb project."""
 
     _DATA_BATCH_SIZE = 100
+    _TEXT_FIELD_BYTE_LIMIT = VIKINGDB_TEXT_FIELD_BYTE_LIMIT
 
     def __init__(
         self,

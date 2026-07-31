@@ -40,6 +40,22 @@ def test_owner_memory_extraction_scope_uses_message_peer_ids():
     assert scope.include_session_skills is True
 
 
+def test_owner_memory_extraction_scope_includes_assistant_peer_ids():
+    assistant_message = _message("assistant-bot")
+    assistant_message.role = "assistant"
+
+    scope = _resolve_memory_extraction_scope(
+        _ctx(),
+        MemoryPolicy(peer_enabled=True),
+        [_message("alice"), assistant_message],
+        config_session_skill_extraction_enabled=True,
+    )
+
+    assert scope.allow_self_memory is True
+    assert scope.allowed_peer_ids == {"alice", "assistant-bot"}
+    assert scope.include_session_skills is True
+
+
 def test_actor_memory_extraction_scope_still_uses_policy_and_messages():
     scope = _resolve_memory_extraction_scope(
         _ctx("alice"),

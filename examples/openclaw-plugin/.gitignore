@@ -1,1 +1,16 @@
-node_modules/
+.idea
+.vscode
+.git
+output
+node_modules
+dist
+*.tar.gz
+no-use-file
+.DS_Store
+.trae
+dashboard-ui/dist
+dashboard-ui/node_modules
+log
+artifacts/
+.env.openclaw-compat
+.tmp-home

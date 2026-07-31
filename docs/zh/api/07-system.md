@@ -1,6 +1,6 @@
-# 系统与监控
+# 系统状态
 
-OpenViking 提供系统健康检查、可观测性和调试 API，用于监控各组件状态。
+OpenViking 系统 API 提供健康检查、就绪检查、一致性检查和多写后端同步状态。组件级观测和 Prometheus 指标分别提供独立文档。
 
 ## API 参考
 
@@ -64,6 +64,22 @@ client.initialize()
 
 healthy = client.health()
 print(f"Healthy: {healthy}")
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.health());
+```
+
+**Go SDK**
+
+```go
+healthy, err := client.Health(ctx)
+if err != nil {
+    return err
+}
+fmt.Println(healthy)
 ```
 
 **CLI**
@@ -192,6 +208,12 @@ status = client.get_status()
 print(status)
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.getStatus());
+```
+
 **CLI**
 
 ```bash
@@ -254,6 +276,22 @@ curl -X POST http://localhost:1933/api/v1/system/consistency \
 report = client.check_consistency("viking://resources/my-project")
 print(report["ok"])
 print(report["missing_records"])
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.checkConsistency("viking://resources/"));
+```
+
+**Go SDK**
+
+```go
+report, err := client.CheckConsistency(ctx, "viking://resources/my-project")
+if err != nil {
+    return err
+}
+fmt.Println(report["ok"])
 ```
 
 **CLI**
@@ -333,6 +371,24 @@ status = client.wait_processed(timeout=60.0)
 print(f"Processing complete: {status}")
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.waitProcessed(60));
+```
+
+**Go SDK**
+
+```go
+status, err := client.WaitProcessed(ctx, &openviking.WaitProcessedOptions{
+    Timeout: openviking.Float64(60),
+})
+if err != nil {
+    return err
+}
+fmt.Println(status)
+```
+
 **CLI**
 
 ```bash
@@ -364,237 +420,34 @@ ov system wait --timeout 60
 
 ---
 
-### reindex()
+### backend_sync_status()
 
-对已经存储在 OpenViking 中的现有内容，重新构建语义产物和/或向量索引。这是一个运维维护接口，适用于 embedding 模型更换、VLM 更换、向量库重刷、版本升级后修复历史索引等场景。
-
-这个接口面向已有的 `viking://...` 内容，不负责导入新文件。常规导入请使用 [Resources](02-resources.md)。
-
-**认证**
-
-- HTTP 端点：在开启认证时要求 admin/root 角色。`api_key` 模式下，租户内容重建请使用 admin key；裸 root key 不能访问租户级数据。
-- Python embedded 模式：使用当前 service context
-- Python HTTP client / CLI：使用当前认证身份发起请求
-
-**参数**
-
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| uri | str | 是 | - | 要重新索引的 Viking URI |
-| mode | str | 否 | `vectors_only` | 重建模式：`vectors_only` 或 `semantic_and_vectors` |
-| wait | bool | 否 | `true` | 是否等待任务完成 |
-
-HTTP 请求体不接受未知字段。`uri` 可以使用其他 content API 支持的 OpenViking 路径变量，服务端会先解析再校验。
-
-**支持的 URI 范围**
-
-- `viking://`
-- `viking://user`
-- `viking://user/<user_id>`
-- `viking://resources`
-- `viking://resources/...`
-- `viking://user/<user_id>/memories/...`
-- `viking://user/<user_id>/skills`
-- `viking://user/<user_id>/skills/<skill_name>`
-
-`reindex()` 不支持会话命名空间。请求 `viking://session/...` 或
-`viking://user/<user_id>/sessions/...` 会被拒绝；重建更大的 user 命名空间时，
-session 子树会被跳过。
-
-**模式说明**
-
-- `vectors_only`：基于当前仍可恢复的源数据重建向量库记录，不会重写 `.abstract.md` 和 `.overview.md`
-- `semantic_and_vectors`：先重新生成语义产物，再基于新的语义结果重建向量
-
-对于 `resource` 和 `skill`，`semantic_and_vectors` 会刷新目录/文件语义产物，包括 `.abstract.md` 和 `.overview.md`。对于 `memory`，它会重建当前已持久化 memory 子树的语义和向量，但不会回放历史记忆抽取顺序。
-
-对于 `semantic_and_vectors`，语义刷新和向量重建由 reindex executor 串行编排。语义刷新阶段不会再额外向后台 embedding queue 投递自己的向量化任务；向量由 reindex 阶段统一重建，因此 `wait=true` 表示等待 reindex 操作本身完成。
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-result = client.reindex(
-    uri="viking://resources",
-    mode="vectors_only",
-    wait=True,
-)
-print(result)
-```
-
-```python
-result = client.reindex(
-    uri="viking://user/default/skills",
-    mode="semantic_and_vectors",
-    wait=False,
-)
-print(result["status"])
-```
+查询指定 Viking URI 子树在多写存储后端之间的同步状态。该接口要求 ROOT 或 ADMIN 权限。
 
 **HTTP API**
 
+```http
+POST /api/v1/system/backend/sync-status
+Content-Type: application/json
 ```
-POST /api/v1/content/reindex
-```
-
-不存在 `/api/v1/maintenance/reindex` 端点。请使用 `/api/v1/content/reindex`。
 
 ```bash
-curl -X POST http://localhost:1933/api/v1/content/reindex \
+curl -X POST http://localhost:1933/api/v1/system/backend/sync-status \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -H "X-OpenViking-Account: default" \
-  -d '{
-    "uri": "viking://resources",
-    "mode": "vectors_only",
-    "wait": true
-  }'
+  -H "X-API-Key: your-admin-key" \
+  -d '{"uri":"viking://resources"}'
+```
+
+也可以使用 URI 路径形式：
+
+```http
+GET /api/v1/system/sync/{sync_path}
 ```
 
 **CLI**
 
 ```bash
-openviking reindex viking://resources --mode vectors_only
-```
-
-```bash
-openviking reindex viking://user/default/skills --mode semantic_and_vectors --wait false
-```
-
-**同步响应（`wait=true`）**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "uri": "viking://resources",
-    "mode": "vectors_only",
-    "status": "completed",
-    "object_type": "resource",
-    "scanned_records": 120,
-    "rebuilt_records": 118,
-    "unsupported_records": 2,
-    "failed_records": 0,
-    "duration_ms": 1284,
-    "warnings": []
-  },
-  "time": 0.1
-}
-```
-
-**异步响应（`wait=false`）**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "uri": "viking://resources",
-    "mode": "vectors_only",
-    "object_type": "resource",
-    "status": "accepted",
-    "task_id": "task_xxx"
-  },
-  "time": 0.1
-}
-```
-
-使用返回的 task 查询后台任务：
-
-```bash
-curl -X GET http://localhost:1933/api/v1/tasks/task_xxx \
-  -H "X-API-Key: your-key" \
-  -H "X-OpenViking-Account: default"
-```
-
-Reindex 后台任务的 `task_type` 为 `admin_reindex`，`resource_id` 等于请求中的 `uri`，也可以这样列出：
-
-```text
-GET /api/v1/tasks?task_type=admin_reindex&resource_id=viking://resources
-```
-
-任务记录持久化在 `/local/{account_id}/_system/tasks/{user_id}/{task_id}.json`，服务重启后仍可查询。
-
-**结果字段**
-
-| 字段 | 说明 |
-|------|------|
-| status | 同步完成时为 `completed`，后台执行时为 `accepted` |
-| uri | 解析路径变量后的请求 URI |
-| object_type | 推断出的目标类型，例如 `resource`、`skill`、`memory`、`user_namespace`、`skill_namespace` 或 `global_namespace` |
-| mode | 实际执行的 reindex 模式 |
-| scanned_records | 被检查的记录或语义源数量 |
-| rebuilt_records | 成功重建的向量记录数量 |
-| unsupported_records | 因没有可用向量来源而跳过的记录数量 |
-| failed_records | 重建失败的记录数量 |
-| duration_ms | 同步执行耗时，单位毫秒 |
-| warnings | 可恢复的单条记录级 warning |
-| task_id | 后台任务 ID，仅 `wait=false` 时返回 |
-
-**行为说明**
-
-- Reindex 是非破坏式的，采用重建/覆盖写入，不需要先 drop 向量集合。
-- 对 `viking://` 发起 reindex 时，会向下分发到支持的顶层命名空间，并显式排除 `session`。
-- 命名空间级 reindex，例如 `viking://user`，会继续传播到其支持的子内容类型。
-- 如果只是 embedding 模型或向量索引需要刷新，应使用 `vectors_only`。
-- 如果语义产物本身也需要重建，再做重向量化，应使用 `semantic_and_vectors`。
-- 同一个 URI 和 owner 同时只能运行一个 reindex 任务。对同一目标的并发请求会返回 conflict。
-- 对 resource 文件，文本文件在没有 summary 时可以使用文件正文；非文本文件需要已生成的 summary 或已有向量记录 fallback，否则会计为 unsupported。
-
-**当前限制**
-
-- Reindex 会使用当前系统中“尽可能可恢复”的输入进行重建，不保证所有场景都能逐字节回放历史当时的 embedding 输入。
-- Memory 的 semantic reindex 基于当前已持久化的 memory 树，不会重建最初按时间顺序执行的记忆抽取流水线。
-
----
-
-## Observer API
-
-Observer API 提供详细的组件级监控。
-
-### observer.queue
-
-#### 1. API 实现介绍
-
-获取队列系统状态（embedding 和语义处理队列）。显示各队列的待处理、进行中、已完成和错误数量。
-
-**代码入口**:
-- `openviking/server/routers/observer.py:observer_queue` - HTTP 路由
-- `openviking/service/debug_service.py:ObserverService.queue` - 核心实现
-- `openviking/storage/observers/queue_observer.py` - 队列观察者
-- `crates/ov_cli/src/commands/observer.rs` - CLI 命令
-
-#### 2. 接口和参数说明
-
-无参数。
-
-#### 3. 使用示例
-
-**HTTP API**
-
-```
-GET /api/v1/observer/queue
-```
-
-```bash
-curl -X GET http://localhost:1933/api/v1/observer/queue \
-  -H "X-API-Key: your-key"
-```
-
-**Python SDK**
-
-```python
-print(client.observer.queue)
-# 输出:
-# [queue] (healthy)
-# Queue                 Pending  In Progress  Processed  Errors  Total
-# Embedding             0        0            10         0       10
-# Semantic              0        0            10         0       10
-# TOTAL                 0        0            20         0       20
-```
-
-**CLI**
-
-```bash
-ov observer queue
+ov system backend sync-status viking://resources
 ```
 
 **响应示例**
@@ -603,65 +456,42 @@ ov observer queue
 {
   "status": "ok",
   "result": {
-    "name": "queue",
-    "is_healthy": true,
-    "has_errors": false,
-    "status": "Queue                 Pending  In Progress  Processed  Errors  Total\nEmbedding             0        0            10         0       10\nSemantic              0        0            10         0       10\nTOTAL                 0        0            20         0       20"
-  },
-  "time": 0.1
+    "path": "viking://resources",
+    "entry_count": 12
+  }
 }
 ```
 
----
+`result` 由当前文件系统后端返回；`path` 标识查询范围，`entry_count` 表示该范围内的同步记录数。具体后端可能附加待同步、失败记录等诊断字段。
 
-### observer.vikingdb
+### backend_sync_retry()
 
-#### 1. API 实现介绍
-
-获取 VikingDB 状态（集合、索引、向量数量）。
-
-**代码入口**:
-- `openviking/server/routers/observer.py:observer_vikingdb` - HTTP 路由
-- `openviking/service/debug_service.py:ObserverService.vikingdb` - 核心实现
-- `openviking/storage/observers/vikingdb_observer.py` - VikingDB 观察者
-- `crates/ov_cli/src/commands/observer.rs` - CLI 命令
-
-#### 2. 接口和参数说明
-
-无参数。
-
-#### 3. 使用示例
+重试指定 URI 子树中尚未完成的多写后端同步工作。该接口要求 ROOT 或 ADMIN 权限。
 
 **HTTP API**
 
-```
-GET /api/v1/observer/vikingdb
+```http
+POST /api/v1/system/backend/sync-retry
+Content-Type: application/json
 ```
 
 ```bash
-curl -X GET http://localhost:1933/api/v1/observer/vikingdb \
-  -H "X-API-Key: your-key"
+curl -X POST http://localhost:1933/api/v1/system/backend/sync-retry \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-admin-key" \
+  -d '{"uri":"viking://resources"}'
 ```
 
-**Python SDK**
+URI 路径形式为：
 
-```python
-print(client.observer.vikingdb())
-# 输出:
-# [vikingdb] (healthy)
-# Collection  Index Count  Vector Count  Status
-# context     1            55            OK
-# TOTAL       1            55
-
-# 访问特定属性
-print(client.observer.vikingdb().is_healthy)  # True
-print(client.observer.vikingdb().status)      # 状态表字符串
+```http
+POST /api/v1/system/sync/{sync_path}/retry
 ```
 
 **CLI**
 
 ```bash
-ov observer vikingdb
+ov system backend sync-retry viking://resources
 ```
 
 **响应示例**
@@ -670,355 +500,25 @@ ov observer vikingdb
 {
   "status": "ok",
   "result": {
-    "name": "vikingdb",
-    "is_healthy": true,
-    "has_errors": false,
-    "status": "Collection  Index Count  Vector Count  Status\ncontext     1            55            OK\nTOTAL       1            55"
-  },
-  "time": 0.1
+    "path": "viking://resources",
+    "retried": 2,
+    "failed": 0
+  }
 }
 ```
 
----
+`retried` 是本次重新调度的记录数，`failed` 是重试调度失败的记录数；具体后端可能附加额外诊断字段。
 
-### observer.models
-
-#### 1. API 实现介绍
-
-获取模型子系统的聚合状态（VLM、embedding、rerank）。检查各模型提供者是否健康可用。
-
-**代码入口**:
-- `openviking/server/routers/observer.py:observer_models` - HTTP 路由
-- `openviking/service/debug_service.py:ObserverService.models` - 核心实现
-- `openviking/storage/observers/models_observer.py` - 模型观察者
-- `crates/ov_cli/src/commands/observer.rs` - CLI 命令
-
-#### 2. 接口和参数说明
-
-无参数。
-
-#### 3. 使用示例
-
-**HTTP API**
-
-```
-GET /api/v1/observer/models
-```
-
-```bash
-curl -X GET http://localhost:1933/api/v1/observer/models \
-  -H "X-API-Key: your-key"
-```
-
-**Python SDK**
-
-```python
-print(client.observer.models)
-# 输出:
-# [models] (healthy)
-# provider_model         healthy  detail
-# dense_embedding        yes      ...
-# rerank                 yes      ...
-# vlm                    yes      ...
-```
-
-**CLI**
-
-```bash
-ov observer models
-```
-
-**响应示例**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "name": "models",
-    "is_healthy": true,
-    "has_errors": false,
-    "status": "provider_model         healthy  detail\ndense_embedding        yes      ...\nrerank                 yes      ...\nvlm                    yes      ..."
-  },
-  "time": 0.1
-}
-```
+公共 Python、TypeScript 和 Go SDK 当前没有多写后端同步方法，因此以上小节只展示 HTTP 和 CLI Tab。
 
 ---
 
-### observer.lock
-
-#### 1. API 实现介绍
-
-获取分布式锁系统状态。
-
-**代码入口**:
-- `openviking/server/routers/observer.py:observer_lock` - HTTP 路由
-- `openviking/service/debug_service.py:ObserverService.lock` - 核心实现
-- `openviking/storage/observers/lock_observer.py` - 锁观察者
-- `crates/ov_cli/src/commands/observer.rs` - CLI 命令
-
-#### 2. 接口和参数说明
-
-无参数。
-
-#### 3. 使用示例
-
-**HTTP API**
-
-```
-GET /api/v1/observer/lock
-```
-
-```bash
-curl -X GET http://localhost:1933/api/v1/observer/lock \
-  -H "X-API-Key: your-key"
-```
-
-**Python SDK**
-
-```python
-print(client.observer.lock)
-```
-
-**CLI**
-
-```bash
-ov observer transaction
-```
-
-**响应示例**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "name": "lock",
-    "is_healthy": true,
-    "has_errors": false,
-    "status": "..."
-  },
-  "time": 0.1
-}
-```
-
----
-
-### observer.retrieval
-
-#### 1. API 实现介绍
-
-获取检索质量指标。
-
-**代码入口**:
-- `openviking/server/routers/observer.py:observer_retrieval` - HTTP 路由
-- `openviking/service/debug_service.py:ObserverService.retrieval` - 核心实现
-- `openviking/storage/observers/retrieval_observer.py` - 检索观察者
-- `crates/ov_cli/src/commands/observer.rs` - CLI 命令
-
-#### 2. 接口和参数说明
-
-无参数。
-
-#### 3. 使用示例
-
-**HTTP API**
-
-```
-GET /api/v1/observer/retrieval
-```
-
-```bash
-curl -X GET http://localhost:1933/api/v1/observer/retrieval \
-  -H "X-API-Key: your-key"
-```
-
-**Python SDK**
-
-```python
-print(client.observer.retrieval)
-```
-
-**CLI**
-
-```bash
-ov observer retrieval
-```
-
-**响应示例**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "name": "retrieval",
-    "is_healthy": true,
-    "has_errors": false,
-    "status": "..."
-  },
-  "time": 0.1
-}
-```
-
----
-
-### observer.filesystem
-
-#### 1. API 实现介绍
-
-获取文件系统操作指标。
-
-**代码入口**:
-- `openviking/server/routers/observer.py:observer_filesystem` - HTTP 路由
-- `openviking/service/debug_service.py:ObserverService.filesystem` - 核心实现
-- `openviking/storage/observers/filesystem_observer.py` - 文件系统观察者
-- `crates/ov_cli/src/commands/observer.rs` - CLI 命令
-
-#### 2. 接口和参数说明
-
-无参数。
-
-#### 3. 使用示例
-
-**HTTP API**
-
-```
-GET /api/v1/observer/filesystem
-```
-
-```bash
-curl -X GET http://localhost:1933/api/v1/observer/filesystem \
-  -H "X-API-Key: your-key"
-```
-
-**Python SDK**
-
-```python
-print(client.observer.filesystem)
-```
-
-**CLI**
-
-```bash
-ov observer filesystem
-```
-
-**响应示例**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "name": "filesystem",
-    "is_healthy": true,
-    "has_errors": false,
-    "status": "..."
-  },
-  "time": 0.1
-}
-```
-
----
-
-### observer.system
-
-#### 1. API 实现介绍
-
-获取整体系统状态，包括所有组件（queue、vikingdb、models、lock、retrieval）。
-
-**代码入口**:
-- `openviking/server/routers/observer.py:observer_system` - HTTP 路由
-- `openviking/service/debug_service.py:ObserverService.system` - 核心实现
-- `crates/ov_cli/src/commands/observer.rs` - CLI 命令
-
-#### 2. 接口和参数说明
-
-无参数。
-
-#### 3. 使用示例
-
-**HTTP API**
-
-```
-GET /api/v1/observer/system
-```
-
-```bash
-curl -X GET http://localhost:1933/api/v1/observer/system \
-  -H "X-API-Key: your-key"
-```
-
-**Python SDK**
-
-```python
-print(client.observer.system())
-# 输出:
-# [queue] (healthy)
-# ...
-#
-# [vikingdb] (healthy)
-# ...
-#
-# [models] (healthy)
-# ...
-#
-# [system] (healthy)
-```
-
-**CLI**
-
-```bash
-ov observer system
-```
-
-**响应示例**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "is_healthy": true,
-    "errors": [],
-    "components": {
-      "queue": {
-        "name": "queue",
-        "is_healthy": true,
-        "has_errors": false,
-        "status": "..."
-      },
-      "vikingdb": {
-        "name": "vikingdb",
-        "is_healthy": true,
-        "has_errors": false,
-        "status": "..."
-      },
-      "models": {
-        "name": "models",
-        "is_healthy": true,
-        "has_errors": false,
-        "status": "..."
-      },
-      "lock": {
-        "name": "lock",
-        "is_healthy": true,
-        "has_errors": false,
-        "status": "..."
-      },
-      "retrieval": {
-        "name": "retrieval",
-        "is_healthy": true,
-        "has_errors": false,
-        "status": "..."
-      }
-    }
-  },
-  "time": 0.1
-}
-```
-
----
+<a id="reindex"></a><a id="observer-api"></a>
 
 ## 相关文档
 
 - [Resources](02-resources.md) - 资源管理
 - [Retrieval](06-retrieval.md) - 搜索与检索
 - [Sessions](05-sessions.md) - 会话管理
+- [运行观测](18-observer.md) - 组件即时状态
+- [Metrics](09-metrics.md) - Prometheus 指标

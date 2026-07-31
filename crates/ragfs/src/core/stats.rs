@@ -42,6 +42,8 @@ pub enum FsOperation {
     EnsureParentDirs,
     /// Tree directory operation
     TreeDir,
+    /// Glob directory operation
+    GlobDir,
 }
 
 impl FsOperation {
@@ -63,6 +65,7 @@ impl FsOperation {
             FsOperation::Grep,
             FsOperation::EnsureParentDirs,
             FsOperation::TreeDir,
+            FsOperation::GlobDir,
         ]
     }
 
@@ -84,6 +87,7 @@ impl FsOperation {
             FsOperation::Grep => "grep",
             FsOperation::EnsureParentDirs => "ensure_parent_dirs",
             FsOperation::TreeDir => "tree_dir",
+            FsOperation::GlobDir => "glob_dir",
         }
     }
 }

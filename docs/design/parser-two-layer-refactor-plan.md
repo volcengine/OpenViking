@@ -1,5 +1,7 @@
 # OpenViking 解析器两层架构重构
 
+> 本文是 Accessor / Parser 两层拆分的历史重构记录。当前 `add_resource` 的完整入口分流、Understanding、Connector 与异步执行规则，见 [添加资源后的解析路由](./resource-ingestion-routing.md)。
+
 | 项目 | 信息 |
 |-----|------|
 | 状态 | `已完成` |
@@ -232,6 +234,9 @@ async with await registry.access("https://github.com/user/repo") as resource:
 ### 自定义 Accessor
 
 ```python
+import tempfile
+from pathlib import Path
+
 from openviking.parse.accessors import DataAccessor, LocalResource
 
 class MyAccessor(DataAccessor):
@@ -244,7 +249,7 @@ class MyAccessor(DataAccessor):
 
     async def access(self, source: str, **kwargs) -> LocalResource:
         # 获取数据到本地...
-        temp_path = self._create_temp_dir()
+        temp_path = Path(tempfile.mkdtemp(prefix="openviking_"))
         # ... 下载逻辑 ...
         return LocalResource(
             path=temp_path,

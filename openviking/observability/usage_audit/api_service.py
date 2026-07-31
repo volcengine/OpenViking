@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking_cli.exceptions import InvalidArgumentError
 
 from .inventory import ContextInventoryProvider
@@ -37,6 +37,18 @@ class UsageAuditQueryService:
     def _resolve_tz(self, timezone_name: str | None):
         return resolve_user_timezone(timezone_name, fallback=self._default_tz)
 
+    @staticmethod
+    def _usage_user_id(ctx: RequestContext) -> str | None:
+        if ctx.role in (Role.ROOT, Role.ADMIN):
+            return None
+        return ctx.user.user_id
+
+    @staticmethod
+    def _audit_user_id(ctx: RequestContext) -> str | None:
+        if ctx.role in (Role.ROOT, Role.ADMIN):
+            return None
+        return ctx.user.user_id
+
     def today(self, timezone_name: str | None = None) -> str:
         """Return today's date in the viewer's timezone (or the default)."""
         tz = self._resolve_tz(timezone_name)
@@ -49,11 +61,12 @@ class UsageAuditQueryService:
         tz = self._resolve_tz(timezone_name)
         today = datetime.now(tz).date().isoformat()
         context_counts = await self._inventory.get_counts(ctx)
+        user_id = self._usage_user_id(ctx)
         today_tokens = await self._store.get_today_tokens(
-            account_id=ctx.account_id, user_date=today, tz=tz
+            account_id=ctx.account_id, user_date=today, tz=tz, user_id=user_id
         )
         today_retrievals = await self._store.get_today_retrievals(
-            account_id=ctx.account_id, user_date=today, tz=tz
+            account_id=ctx.account_id, user_date=today, tz=tz, user_id=user_id
         )
         return {
             "context_counts": context_counts,
@@ -79,6 +92,7 @@ class UsageAuditQueryService:
             end_user_date=end_date,
             bucket=bucket,
             tz=tz,
+            user_id=self._usage_user_id(ctx),
         )
         return {"start_date": start_date, "end_date": end_date, "bucket": bucket, "items": items}
 
@@ -100,6 +114,7 @@ class UsageAuditQueryService:
             end_user_date=end_date,
             bucket=bucket,
             tz=tz,
+            user_id=self._usage_user_id(ctx),
         )
         return {"start_date": start_date, "end_date": end_date, "bucket": bucket, "items": items}
 
@@ -120,6 +135,7 @@ class UsageAuditQueryService:
         """
         return await self._store.query_audit_logs(
             account_id=ctx.account_id,
+            user_id=self._audit_user_id(ctx),
             request_id=request_id,
             statuses=statuses,
             api_types=api_types,

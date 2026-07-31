@@ -185,38 +185,3 @@ class TestAddMessage:
         assert [message["parts"][0]["text"] for message in context["messages"]] == [
             "first valid message"
         ]
-
-
-class TestUpdateToolPart:
-    """Test update_tool_part"""
-
-    async def test_update_tool_completed(self, session_with_tool_call):
-        """Test updating tool status to completed"""
-        session, message_id, tool_id = session_with_tool_call
-
-        session.update_tool_part(
-            message_id=message_id,
-            tool_id=tool_id,
-            output="Tool execution completed successfully",
-            status="completed",
-        )
-
-        # Verify tool status updated
-        # Need to find the corresponding message and tool part
-        msg = next((m for m in session.messages if m.id == message_id), None)
-        assert msg is not None
-
-    async def test_update_tool_failed(self, session_with_tool_call):
-        """Test updating tool status to failed"""
-        session, message_id, tool_id = session_with_tool_call
-
-        session.update_tool_part(
-            message_id=message_id,
-            tool_id=tool_id,
-            output="Tool execution failed: error message",
-            status="failed",
-        )
-
-        # Verify tool status updated
-        msg = next((m for m in session.messages if m.id == message_id), None)
-        assert msg is not None

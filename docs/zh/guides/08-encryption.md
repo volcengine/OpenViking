@@ -58,14 +58,17 @@ ov system crypto init-key --output ~/.openviking/master.key
 ```python
 import openviking as ov
 import asyncio
+from pathlib import Path
 
 
 async def test():
     client = ov.AsyncOpenViking(path="./data")
     await client.initialize()
 
-    # 添加资源（自动加密）
-    await client.add_resource("Hello, encrypted world!", reason="测试加密")
+    # add_resource 接收文件路径或 URL
+    sample = Path("./encrypted-sample.txt")
+    sample.write_text("Hello, encrypted world!", encoding="utf-8")
+    await client.add_resource(str(sample), reason="测试加密")
 
     # 读取资源（自动解密）
     results = await client.find("encrypted")
@@ -394,33 +397,24 @@ except Exception as e:
 
 ### 从无加密迁移到有加密
 
-1. 备份现有数据
-2. 启用加密（参考上文）
-3. 重新导入所有资源：
+启用加密不会改写已有明文文件。为了向后兼容，这些文件仍可读取；新写入的数据会使用加密。如需加密已有公开 scope，应通过 OVPack 将其迁移到全新的空加密存储环境：
 
-```python
-import openviking as ov
-import asyncio
+1. 停止业务写入，在原未加密环境运行时创建逻辑备份：
 
-
-async def migrate():
-    client = ov.AsyncOpenViking(path="./data")
-    await client.initialize()
-
-    # 列出所有资源
-    resources = await client.list_resources()
-
-    for resource in resources:
-        # 读取旧资源（未加密）
-        content = await client.read_resource(resource["uri"])
-        # 重新写入（自动加密）
-        await client.add_resource(content, reason="迁移到加密存储")
-
-    await client.close()
-
-
-asyncio.run(migrate())
+```bash
+ov backup ./backups/before-encryption.ovpack
 ```
+
+2. 停止 OpenViking，启用加密，并将存储配置指向**全新的空** workspace/backend。验证完成前保留原数据和加密密钥备份。
+3. 启动加密环境后恢复逻辑备份。恢复过程会通过加密存储层写入 package 内容：
+
+```bash
+ov restore ./backups/before-encryption.ovpack --on-conflict fail
+```
+
+4. 切流前验证资源、用户、session 和索引数据。OVPack 不包含 queue、upload、lock、watch 和 relation 文件等运行时/内部状态，这些内容需要单独重建或验证。
+
+支持的 scope 和恢复选项详见 [OVPack 导入与导出](09-ovpack.md#全量备份与恢复)。
 
 ### 切换密钥提供程序
 

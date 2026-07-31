@@ -7,14 +7,15 @@ Tests for memory ExtractLoop orchestrator.
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from openviking.session.memory.dataclass import (
     MemoryTypeSchema,
+    ResolvedOperations,
 )
+from openviking.session.memory.schema_model_generator import SchemaModelGenerator
+
 from openviking.session.memory.extract_loop import (
     ExtractLoop,
 )
-from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 
 
 class TestPreFetchFileFiltering:
@@ -153,52 +154,97 @@ class TestAllowedDirectoriesList:
         """Create a mock VikingFS."""
         return MagicMock()
 
-    def test_get_allowed_directories_list(self, mock_vlm, mock_viking_fs):
-        """Test that allowed directories list is properly formatted."""
-        registry = MemoryTypeRegistry(load_schemas=False)
-
-        schema1 = MemoryTypeSchema(
-            memory_type="preferences",
-            description="Preferences",
-            directory="viking://user/{{ user_space }}/memories/preferences",
-            filename_template="{{ topic }}.md",
-            fields=[],
-        )
-        schema2 = MemoryTypeSchema(
-            memory_type="tools",
-            description="Tools",
-            directory="viking://user/{{ user_space }}/memories/tools",
-            filename_template="{{ tool_name }}.md",
-            fields=[],
-        )
-
-        registry.register(schema1)
-        registry.register(schema2)
-
-        result = registry.list_search_uris(user_space="default")
-
-        assert "viking://user/default/memories/preferences" in result
-        assert "viking://user/default/memories/tools" in result
-
 
 class TestExtractLoopFinalJsonRetry:
+    @pytest.mark.asyncio
+    async def test_structured_parser_preserves_delete_ids(self):
+        class FakeContextProvider:
+            read_file_contents = {}
+
+            def get_memory_schemas(self, ctx):
+                return [
+                    MemoryTypeSchema(
+                        memory_type="preferences",
+                        description="Preferences",
+                        directory="viking://user/{user_space}/memories/preferences",
+                        filename_template="{topic}.md",
+                        fields=[],
+                    )
+                ]
+
+            def get_tools(self):
+                return []
+
+            def get_extract_context(self):
+                return MagicMock()
+
+            def get_output_language(self):
+                return "en"
+
+            def instruction(self):
+                return "Extract memory operations."
+
+            async def prefetch(self):
+                return []
+
+        vlm = MagicMock()
+        vlm.model = "test-model"
+        vlm.get_completion_async = AsyncMock(
+            return_value=('{"delete_ids": [{"delete_page_id": 7, "replacement_page_id": 11}]}')
+        )
+        extract_loop = ExtractLoop(
+            vlm=vlm,
+            viking_fs=MagicMock(),
+            context_provider=FakeContextProvider(),
+            max_iterations=1,
+        )
+        resolved = ResolvedOperations(
+            upsert_operations=[],
+            delete_file_contents=[],
+            errors=[],
+        )
+        extract_loop.resolve_operations = AsyncMock(return_value=(resolved, []))
+        extract_loop._check_unread_existing_files = AsyncMock(return_value={})
+        extract_loop._validate_patch_operations = MagicMock(return_value=[])
+        extract_loop.finalize_operations = AsyncMock()
+
+        await extract_loop.run()
+
+        parsed_operations = extract_loop.resolve_operations.await_args.args[0]
+        assert len(parsed_operations.delete_ids) == 1
+        assert parsed_operations.delete_ids[0].delete_page_id == 7
+        assert parsed_operations.delete_ids[0].replacement_page_id == 11
+
+    def test_add_only_contract_does_not_allow_delete_ids(self):
+        schema = MemoryTypeSchema(
+            memory_type="trajectories",
+            description="Trajectories",
+            directory="viking://agent/{agent_space}/memories/trajectories",
+            filename_template="{task}.md",
+            fields=[],
+            operation_mode="add_only",
+        )
+        generator = SchemaModelGenerator([schema], template_context={"language": "en"})
+
+        assert "delete_ids" not in generator.create_structured_operations_model().model_fields
+
     def test_final_instruction_includes_schema_aware_empty_json(self):
         extract_loop = object.__new__(ExtractLoop)
-        extract_loop._expected_fields = ["delete_uris", "preferences", "tools"]
+        extract_loop._expected_fields = ["preferences", "tools"]
 
         instruction = extract_loop._build_final_operations_instruction()
 
         assert "ONLY a valid JSON object" in instruction
-        assert '"delete_uris": []' in instruction
+        assert '"delete_ids": []' in instruction
         assert '"preferences": []' in instruction
         assert '"tools": []' in instruction
 
-    def test_final_skeleton_always_includes_delete_uris(self):
+    def test_final_skeleton_always_includes_delete_ids(self):
         extract_loop = object.__new__(ExtractLoop)
         extract_loop._expected_fields = ["preferences"]
 
         assert extract_loop._build_final_operations_skeleton() == {
-            "delete_uris": [],
+            "delete_ids": [],
             "preferences": [],
         }
 
@@ -251,8 +297,9 @@ class TestExtractLoopFinalJsonRetry:
             max_iterations=1,
         )
 
-        with pytest.raises(RuntimeError, match="final response could not be parsed"):
-            await extract_loop.run()
+        result, _ = await extract_loop.run()
+        assert result.errors
+        assert "Final response could not be parsed" in result.errors[0]
 
         final_prompts = [
             message["content"]
@@ -262,5 +309,5 @@ class TestExtractLoopFinalJsonRetry:
             and "maximum number of tool call iterations" in message.get("content", "")
         ]
         assert final_prompts
-        assert '"delete_uris": []' in final_prompts[-1]
+        assert '"delete_ids": []' in final_prompts[-1]
         assert '"preferences": []' in final_prompts[-1]

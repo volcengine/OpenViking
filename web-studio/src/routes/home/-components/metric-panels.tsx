@@ -134,12 +134,14 @@ function MetricPanel({
 export function ContextDataPanel({
   data,
   disabled,
+  disabledMessage,
   isError,
   isLoading,
   t,
 }: {
   data: ContextCounts | undefined
   disabled: boolean
+  disabledMessage: string
   isError: boolean
   isLoading: boolean
   t: HomeT
@@ -155,7 +157,7 @@ export function ContextDataPanel({
       value={isError ? t('requestFailed') : formatNumber(total)}
     >
       {disabled ? (
-        <p className="text-xs text-muted-foreground">{t('usageDisabled')}</p>
+        <p className="text-xs text-muted-foreground">{disabledMessage}</p>
       ) : (
         <>
           <DetailRow
@@ -179,12 +181,14 @@ export function ContextDataPanel({
 export function TodayTokensPanel({
   data,
   disabled,
+  disabledMessage,
   isError,
   isLoading,
   t,
 }: {
   data: TokenCounts | undefined
   disabled: boolean
+  disabledMessage: string
   isError: boolean
   isLoading: boolean
   t: HomeT
@@ -200,7 +204,7 @@ export function TodayTokensPanel({
       value={isError ? t('requestFailed') : formatNumber(total)}
     >
       {disabled ? (
-        <p className="text-xs text-muted-foreground">{t('usageDisabled')}</p>
+        <p className="text-xs text-muted-foreground">{disabledMessage}</p>
       ) : (
         <>
           <DetailRow
@@ -224,12 +228,14 @@ export function TodayTokensPanel({
 export function TodayRetrievalsPanel({
   data,
   disabled,
+  disabledMessage,
   isError,
   isLoading,
   t,
 }: {
   data: RetrievalCounts | undefined
   disabled: boolean
+  disabledMessage: string
   isError: boolean
   isLoading: boolean
   t: HomeT
@@ -245,7 +251,7 @@ export function TodayRetrievalsPanel({
       value={isError ? t('requestFailed') : formatNumber(total)}
     >
       {disabled ? (
-        <p className="text-xs text-muted-foreground">{t('usageDisabled')}</p>
+        <p className="text-xs text-muted-foreground">{disabledMessage}</p>
       ) : (
         <>
           <DetailRow

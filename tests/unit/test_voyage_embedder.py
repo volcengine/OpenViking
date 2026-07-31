@@ -98,40 +98,6 @@ class TestVoyageDenseEmbedder:
         assert "dimensions" not in call_kwargs
 
     @patch("openviking.models.embedder.voyage_embedders.openai.OpenAI")
-    def test_embed_batch(self, mock_openai_class):
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
-
-        mock_response = MagicMock()
-        mock_response.data = [
-            MagicMock(embedding=[0.1] * 1024),
-            MagicMock(embedding=[0.2] * 1024),
-        ]
-        mock_client.embeddings.create.return_value = mock_response
-
-        embedder = VoyageDenseEmbedder(
-            model_name="voyage-4-lite",
-            api_key="voyage-key",
-        )
-        results = embedder.embed_batch(["Hello", "World"])
-
-        assert len(results) == 2
-        assert len(results[0].dense_vector) == 1024
-        assert len(results[1].dense_vector) == 1024
-
-    @patch("openviking.models.embedder.voyage_embedders.openai.OpenAI")
-    def test_embed_batch_empty(self, mock_openai_class):
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
-
-        embedder = VoyageDenseEmbedder(
-            model_name="voyage-4-lite",
-            api_key="voyage-key",
-        )
-        assert embedder.embed_batch([]) == []
-        mock_client.embeddings.create.assert_not_called()
-
-    @patch("openviking.models.embedder.voyage_embedders.openai.OpenAI")
     def test_embed_api_error(self, mock_openai_class):
         import openai
 

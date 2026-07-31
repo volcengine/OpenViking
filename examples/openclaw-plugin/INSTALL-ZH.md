@@ -27,13 +27,13 @@ openclaw plugins install clawhub:@openviking/openclaw-plugin
 | 组件 | 要求 |
 | --- | --- |
 | Node.js | >= 22 |
-| OpenClaw | >= 2026.4.8 |
+| OpenClaw | >= 2026.5.27 |
 
 插件以远程模式连接到已有的 OpenViking 服务。它不会帮你启动 OpenViking server。需要先启动 OpenViking，并保持服务运行，再把插件的 `baseUrl` 指向这个 HTTP 服务。默认本地地址是 `http://127.0.0.1:1933`。
 
 OpenClaw 插件包版本边界：
 
-- `2026.4.8` 是当前插件支持的最低 OpenClaw 版本。
+- `2026.5.27` 是当前插件支持的最低 OpenClaw 版本。这个版本下限包含 2026 年 7 月 2 日 OpenClaw 安全公告批次的修复，包括 GHSA-8wg3-5mcm-fjq8 和 GHSA-83w9-h5wv-j9xm。
 - `2026.5.3` 开始，OpenClaw 在安装包时会校验 TypeScript 插件入口是否有编译后的 JavaScript 产物。
 - `2026.5.4` 及之后，已安装/全局插件如果缺少编译后的 JavaScript，运行时不再回退加载 `.ts` 源码，插件可能被跳过。
 - 推荐的 `openclaw plugins install clawhub:@openviking/openclaw-plugin` 会安装已经发布并包含 `dist/*.js` 的插件包，普通用户不需要本地编译。
@@ -51,18 +51,15 @@ openclaw --version
 如果你使用的是火山控制台创建的 OpenViking Service 库，不需要启动本地 `openviking-server`。从控制台复制 OpenViking Service 的 server url、API Key，并按需配置 peer 标识：
 
 ```bash
-openclaw plugins install clawhub:@openviking/openclaw-plugin
-openclaw openviking setup \
-  --base-url "https://api.vikingdb.cn-beijing.volces.com/openviking" \
-  --api-key "<your-openviking-service-api-key>" \
-  --json
-openclaw gateway restart
-openclaw openviking status --json
+OPENVIKING_BASE_URL="https://api.vikingdb.cn-beijing.volces.com/openviking" \
+OPENVIKING_API_KEY="<your-openviking-service-api-key>" \
+bash scripts/install.sh --json
 ```
 
 这条命令会完成：
 
-- 通过 ClawHub 安装 OpenViking 插件。
+- 默认从 TOS `latest` 安装 OpenViking 插件。
+- 写入 `$OPENCLAW_STATE_DIR/openviking.env`，默认是 `~/.openclaw/openviking.env`，权限为 `0600`。
 - 调用 `openclaw openviking setup --base-url ... --api-key ...` 写入插件配置。
 - 重启 `openclaw gateway`。
 - 执行 `openclaw openviking status --json` 和 `openclaw config get plugins.slots.contextEngine` 验证。
@@ -70,32 +67,32 @@ openclaw openviking status --json
 如果需要把 OpenClaw assistant 说话人写成独立 `peer_id`，并让数据面 recall/search 使用对应 actor peer 视图，可以额外传：
 
 ```bash
-openclaw openviking setup \
-  --base-url "https://api.vikingdb.cn-beijing.volces.com/openviking" \
-  --api-key "<your-openviking-service-api-key>" \
-  --peer-role assistant \
-  --peer-prefix "openclaw-prod" \
-  --json
+OPENVIKING_BASE_URL="https://api.vikingdb.cn-beijing.volces.com/openviking" \
+OPENVIKING_API_KEY="<your-openviking-service-api-key>" \
+OPENVIKING_PEER_ROLE="assistant" \
+OPENVIKING_PEER_PREFIX="openclaw-prod" \
+bash scripts/install.sh --json
 ```
 
 如果使用 root key 或可信服务身份，补充租户信息：
 
 ```bash
-openclaw openviking setup \
-  --base-url "https://api.vikingdb.cn-beijing.volces.com/openviking" \
-  --api-key "<root-key>" \
-  --account-id "<account-id>" \
-  --user-id "<user-id>" \
-  --json
+OPENVIKING_BASE_URL="https://api.vikingdb.cn-beijing.volces.com/openviking" \
+OPENVIKING_API_KEY="<root-key>" \
+OPENVIKING_ACCOUNT_ID="<account-id>" \
+OPENVIKING_USER_ID="<user-id>" \
+bash scripts/install.sh --json
 ```
 
-本地源码验证：
+离线下载包安装：
 
 ```bash
-npm install
-npm run typecheck
-npm test
-npm run build
+sh build.sh
+OPENVIKING_BASE_URL="https://api.vikingdb.cn-beijing.volces.com/openviking" \
+OPENVIKING_API_KEY="<your-openviking-service-api-key>" \
+OPENVIKING_PEER_ROLE="assistant" \
+OPENVIKING_PEER_PREFIX="openclaw-prod" \
+bash output/install.sh --source tarball --tarball output/openviking.tgz --json
 ```
 
 接入后，在火山 OpenViking Service 控制台检查：
@@ -200,11 +197,50 @@ openclaw openviking setup \
 openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --force-slot --json
 ```
 
-如需给 assistant message 写入带前缀的 `peer_id`，并让数据面 recall/search 使用对应 actor peer 视图（可选；多数用户保持默认 `none` 即可）：
+如需给默认 assistant peer 路由增加前缀，可以额外传：
 
 ```bash
 openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --peer-role assistant --peer-prefix <PREFIX> --json
 ```
+
+#### 无法执行 CLI 时直接配置文件
+
+如果容器内无法执行 `openclaw` CLI，可以把以下字段合并到 OpenClaw 实际读取的配置文件。设置了 `OPENCLAW_CONFIG_PATH` 时使用该路径；否则通常是 `$OPENCLAW_STATE_DIR/openclaw.json`（默认 `~/.openclaw/openclaw.json`）。
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "openviking": {
+        "enabled": true,
+        "config": {
+          "mode": "remote",
+          "baseUrl": "http://openviking:1933",
+          "apiKey": "<API_KEY>",
+          "peer_role": "assistant"
+        }
+      }
+    },
+    "slots": {
+      "contextEngine": "openviking"
+    }
+  }
+}
+```
+
+- 插件必须已经安装；编辑前请备份配置，并把以上字段合并到现有 `plugins` 配置。
+- 如果配置中已有 `plugins.allow`，把 `openviking` 追加进去；如果没有，不要仅为本插件新建 allowlist。
+- `contextEngine` 是独占 slot；若已有其他 context engine，只有确认替换后再修改该字段。使用 root API key 时，还需在 `config` 中设置 `accountId` 和 `userId`。
+- 容器连接其他服务时，`baseUrl` 应使用容器内可访问的服务地址，而不是 `127.0.0.1`。
+- 推荐使用 `SecretRef` 对象作为 `apiKey`（而不是明文字符串），避免密钥直接落盘写入 `openclaw.json`。支持的形式与 OpenClaw 核心中 LLM/TTS/MCP 等 provider 配置使用的标准 `SecretRef` 一致：
+
+  | 类型 | 示例 | 说明 |
+  | --- | --- | --- |
+  | `env` | `{ "source": "env", "id": "OPENVIKING_API_KEY" }` | 启动时读取同名环境变量。 |
+  | `file` | `{ "source": "file", "id": "/etc/secrets/openviking.key" }` | 以 UTF-8 读取并去除首尾空白；`~` 可展开，适配 Kubernetes `secretKeyRef` 卷挂载、0600 权限文件。 |
+  | `exec` | `{ "source": "exec", "provider": "op", "id": "op://vault/openviking/credential" }` | 运行 `<provider> <id>`，去除 stdout 首尾空白（1Password `op`、Vault、gopass 等均符合此形态）。 |
+
+  仍可使用纯字符串形式（含 `${ENV_VAR}` 插值）作为向后兼容路径；此时请限制文件权限或通过受控 Secret 卷提供，并在修改后重启 Gateway、容器或 Pod。
 
 ### 3. 重启 OpenClaw Gateway
 
@@ -264,7 +300,7 @@ plugins.entries.openviking.config
 | `mode` | `remote` | 兼容旧配置的字段。当前只支持 remote。 |
 | `baseUrl` | `http://127.0.0.1:1933` | OpenViking HTTP 地址 |
 | `apiKey` | 空 | OpenViking API key |
-| `peer_role` | `none` | Peer 身份模式：`none`、`assistant` 或 `person`。Session message 使用 body `peer_id`；数据面 recall/search 使用 `X-OpenViking-Actor-Peer`。 |
+| `peer_role` | `assistant` | Peer 身份模式：`none`、`assistant` 或 `person`。Session message 使用 body `peer_id`；数据面 recall/search 使用 `X-OpenViking-Actor-Peer`。 |
 | `peer_prefix` | 空 | `peer_role=assistant` 时 assistant `peer_id` / actor peer 值的可选前缀。 |
 | `accountId` | 空 | 使用 root API key 时需要 |
 | `userId` | 空 | 使用 root API key 时需要 |
@@ -289,7 +325,7 @@ openclaw config get plugins.entries.openviking.config
 | --- | --- | --- |
 | `baseUrl` | `http://127.0.0.1:1933` | 远端 OpenViking 服务地址 |
 | `apiKey` | 空 | 远端 OpenViking API Key；服务端未开启认证时可不填 |
-| `peer_role` | `none` | Peer 身份模式：`none`、`assistant` 或 `person`；session message 使用 body `peer_id`，数据面 recall/search 使用 `X-OpenViking-Actor-Peer` |
+| `peer_role` | `assistant` | Peer 身份模式：`none`、`assistant` 或 `person`；session message 使用 body `peer_id`，数据面 recall/search 使用 `X-OpenViking-Actor-Peer` |
 | `peer_prefix` | 空 | `peer_role=assistant` 时 assistant `peer_id` / actor peer 值的可选前缀 |
 
 常见设置：
@@ -405,4 +441,4 @@ openclaw openviking status --json
 bash examples/openclaw-plugin/upgrade_scripts/cleanup-memory-openviking.sh
 ```
 
-另见：[INSTALL.md](./INSTALL.md) 和 [INSTALL-AGENT.md](./INSTALL-AGENT.md)。
+另见：[INSTALL.md](./INSTALL.md)、[INSTALL-AGENT.md](./INSTALL-AGENT.md) 和 [docs/openviking-tos-install-guide.md](./docs/openviking-tos-install-guide.md)。

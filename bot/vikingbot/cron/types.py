@@ -1,9 +1,7 @@
 """Cron types."""
 
 from dataclasses import dataclass, field
-from typing import Literal
-
-from vikingbot.config.schema import SessionKey
+from typing import Any, Literal
 
 
 @dataclass
@@ -30,6 +28,7 @@ class CronPayload:
     # Deliver response to channel
     deliver: bool = False
     session_key_str: str | None = None  # e.g. "whatsapp"
+    channel_metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

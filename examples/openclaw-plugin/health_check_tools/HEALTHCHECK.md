@@ -136,6 +136,7 @@ This confirms the full async pipeline: conversation archiving, overview generati
 | `--openviking <url>` | auto | OpenViking base URL |
 | `--token <token>` | auto | Gateway bearer token |
 | `--openviking-api-key <key>` | auto | OpenViking API key |
+| `--actor-peer <id>` | `main` | OpenViking actor peer for direct inspection requests |
 | `--user-id <id>` | random | User id for the test session |
 | `--openclaw-config <path>` | auto | Path to `openclaw.json` |
 | `--chat-timeout <seconds>` | `120` | Timeout per Gateway chat request |

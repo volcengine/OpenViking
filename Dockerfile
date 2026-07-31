@@ -98,6 +98,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
     libstdc++6 \
+    ripgrep \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -115,7 +116,7 @@ ENV HOME="/app" \
 EXPOSE 1933
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:1933/health || exit 1
+    CMD ["openviking-entrypoint", "--healthcheck"]
 
 # All persistent state (ov.conf, ovcli.conf, workspace data) lives under
 # /app/.openviking, which mirrors the host's ~/.openviking layout. Mount one

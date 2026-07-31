@@ -8,11 +8,15 @@ scattered across different modules. All configurations inherit from ParserConfig
 and can be loaded from ov.conf files.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Iterable, Optional, Union
+
+from openviking_cli.utils.logger import get_logger
 
 from .config_utils import raise_unknown_config_fields
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -201,7 +205,7 @@ class CodeHostingConfig(ParserConfig):
     Base configuration for code hosting platform domains.
 
     Attributes:
-        code_hosting_domains: List of code hosting platform domains (github.com, gitlab.com, etc.)
+        code_hosting_domains: List of allowed generic code hosting domains
         github_domains: List of GitHub domains (github.com, www.github.com)
         gitlab_domains: List of GitLab domains (gitlab.com, www.gitlab.com)
         azure_devops_domains: List of Azure DevOps domains (dev.azure.com, ssh.dev.azure.com)
@@ -216,7 +220,17 @@ class CodeHostingConfig(ParserConfig):
     def __post_init__(self):
         """Initialize default values for mutable fields."""
         if self.code_hosting_domains is None:
-            self.code_hosting_domains = ["github.com", "gitlab.com"]
+            self.code_hosting_domains = [
+                "github.com",
+                "gitlab.com",
+                "gitcode.com",
+                "gitee.com",
+                "bitbucket.org",
+                "codeberg.org",
+                "gitea.com",
+                "atomgit.com",
+                "git.sr.ht",
+            ]
         if self.github_domains is None:
             self.github_domains = ["github.com", "www.github.com"]
         if self.gitlab_domains is None:
@@ -235,20 +249,18 @@ class CodeConfig(CodeHostingConfig):
     Configuration for code parsing.
 
     Attributes:
-        code_summary_mode: Summary generation mode ("llm" | "ast" | "ast_llm")
-        extract_functions: Whether to extract function definitions
-        extract_classes: Whether to extract class definitions
-        extract_imports: Whether to extract import statements
-        include_comments: Whether to include comments in L1/L2
-        max_line_length: Maximum line length before splitting
-        language_hint: Optional language hint (auto-detected if None)
-        max_token_limit: Maximum tokens to process per file
-        truncation_strategy: "head", "tail", or "balanced"
-        warn_on_truncation: Whether to warn when truncation occurs
+        extract_functions: Legacy compatibility field; ignored by the fixed skeleton route
+        extract_classes: Legacy compatibility field; ignored by the fixed skeleton route
+        extract_imports: Legacy compatibility field; ignored by the fixed skeleton route
+        include_comments: Legacy compatibility field; ignored by the fixed skeleton route
+        max_line_length: Legacy compatibility field; ignored by the fixed skeleton route
+        language_hint: Legacy compatibility field; ignored by the fixed skeleton route
+        max_token_limit: Legacy compatibility field; ignored by the fixed skeleton route
+        truncation_strategy: Legacy compatibility field; ignored by the fixed skeleton route
+        warn_on_truncation: Legacy compatibility field; ignored by the fixed skeleton route
         github_raw_domain: Domain for GitHub raw content (raw.githubusercontent.com)
     """
 
-    code_summary_mode: str = "ast"  # "llm" | "ast" | "ast_llm"
     extract_functions: bool = True
     extract_classes: bool = True
     extract_imports: bool = True
@@ -259,6 +271,22 @@ class CodeConfig(CodeHostingConfig):
     truncation_strategy: str = "head"  # "head", "tail", or "balanced"
     warn_on_truncation: bool = True
     github_raw_domain: str = "raw.githubusercontent.com"
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "CodeConfig":
+        """Create code configuration, accepting removed fields for upgrade compatibility."""
+
+        data = dict(data)
+        if "code_summary_mode" in data:
+            data.pop("code_summary_mode", None)
+            logger.warning(
+                "code.code_summary_mode is deprecated and ignored; "
+                "code summaries now always use the fixed skeleton route with LLM fallback"
+            )
+
+        valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
+        raise_unknown_config_fields(data=data, valid_fields=valid_fields, context_name=cls.__name__)
+        return cls(**data)
 
     def validate(self) -> None:
         """
@@ -271,12 +299,6 @@ class CodeConfig(CodeHostingConfig):
         super().validate()
 
         # Validate code-specific fields
-        if self.code_summary_mode not in ("llm", "ast", "ast_llm"):
-            raise ValueError(
-                f"Invalid code_summary_mode '{self.code_summary_mode}'. "
-                "Must be 'llm', 'ast', or 'ast_llm'"
-            )
-
         if self.max_line_length <= 0:
             raise ValueError("max_line_length must be positive")
 
@@ -300,14 +322,23 @@ class ImageConfig(ParserConfig):
         enable_vlm: Whether to use VLM for visual understanding
         ocr_lang: Language for OCR (e.g., "chi_sim", "eng")
         vlm_model: VLM model to use (e.g., "gpt-4-vision")
-        max_dimension: Maximum image dimension (resize if larger)
+        preview_max_dimension: Maximum dimension for preview resizing (resize if larger)
+        max_file_size_mb: Maximum file size before triggering large image processing
+        max_tile_dimension_px: Maximum dimension for individual tiles
+        tile_overlap_px: Number of pixels to overlap between tiles
+        large_image_threshold_dimension: Dimension threshold for large image detection
     """
 
     enable_ocr: bool = False
     enable_vlm: bool = True
     ocr_lang: str = "eng"
     vlm_model: Optional[str] = None
-    max_dimension: int = 2048
+    preview_max_dimension: int = 2048
+    # Large image processing settings
+    max_file_size_mb: float = 10.0  # 10 MB
+    max_tile_dimension_px: int = 2048  # 2048 pixels
+    tile_overlap_px: int = 2  # 2 pixels
+    large_image_threshold_dimension: int = 4096  # 4096 pixels
 
     def validate(self) -> None:
         """
@@ -320,8 +351,16 @@ class ImageConfig(ParserConfig):
         super().validate()
 
         # Validate image-specific fields
-        if self.max_dimension <= 0:
-            raise ValueError("max_dimension must be positive")
+        if self.preview_max_dimension <= 0:
+            raise ValueError("preview_max_dimension must be positive")
+        if self.max_file_size_mb <= 0:
+            raise ValueError("max_file_size_mb must be positive")
+        if self.max_tile_dimension_px <= 0:
+            raise ValueError("max_tile_dimension_px must be positive")
+        if self.tile_overlap_px < 0:
+            raise ValueError("tile_overlap_px must be non-negative")
+        if self.large_image_threshold_dimension <= 0:
+            raise ValueError("large_image_threshold_dimension must be positive")
 
 
 @dataclass
@@ -426,6 +465,95 @@ class MarkdownConfig(ParserConfig):
 
 
 @dataclass
+class ExcelConfig(ParserConfig):
+    """
+    Configuration for Excel parsing.
+
+    Attributes:
+        enable_process_pool: Offload Excel→Markdown conversion and layout
+            planning to a ProcessPoolExecutor (default off).
+        process_pool_workers: Max worker processes when the pool is enabled.
+    """
+
+    enable_process_pool: bool = False
+    process_pool_workers: int = 2
+
+    # Excel is converted to Markdown and then sectioned by MarkdownParser, so
+    # these fields decide the resulting node structure and stable URIs.
+    _SECTIONING_FIELDS = (
+        "max_content_length",
+        "encoding",
+        "max_section_size",
+        "section_size_flexibility",
+        "max_section_chars",
+    )
+
+    # Names of keys a config source actually provided. Tracked as a plain
+    # instance attribute rather than a dataclass field so it never appears in
+    # asdict/model_dump output, cannot be injected from a config file, and does
+    # not affect equality. Absent means "provenance unknown".
+    _EXPLICIT_ATTR = "_openviking_explicit_keys"
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ExcelConfig":
+        """Build the config while remembering which keys were actually present.
+
+        ``with_sectioning_defaults_from`` needs to tell "the user wrote this
+        value" from "the key was absent". Comparing against class defaults
+        cannot do that, so record the provided keys here instead.
+        """
+        config = super().from_dict(data)
+        return config.with_explicit_keys(data)
+
+    def with_explicit_keys(self, names: Iterable[str]) -> "ExcelConfig":
+        """Return this config marked as having ``names`` explicitly configured."""
+        object.__setattr__(self, self._EXPLICIT_ATTR, frozenset(names))
+        return self
+
+    @property
+    def explicit_keys(self) -> Optional[frozenset]:
+        """Keys a config source provided, or ``None`` when unknown."""
+        return getattr(self, self._EXPLICIT_ATTR, None)
+
+    def with_sectioning_defaults_from(self, markdown: "ParserConfig") -> "ExcelConfig":
+        """Inherit sectioning fields that ``parsers.excel`` did not set.
+
+        Excel used to be registered with ``config.markdown`` directly, so a
+        deployment that tuned ``parsers.markdown`` also tuned Excel imports.
+        Introducing a dedicated ``parsers.excel`` section must not silently
+        change that node structure, so a sectioning field absent from
+        ``parsers.excel`` keeps following Markdown. Explicit ``parsers.excel``
+        values always win, including one that happens to equal the class
+        default.
+
+        Configs built without ``from_dict`` carry no key information; those are
+        treated as fully explicit so a hand-constructed ``ExcelConfig`` is never
+        silently rewritten.
+        """
+        if markdown is None:
+            return self
+
+        explicit = self.explicit_keys
+        if explicit is None:
+            return self
+
+        overrides = {
+            name: getattr(markdown, name)
+            for name in self._SECTIONING_FIELDS
+            if hasattr(markdown, name) and name not in explicit
+        }
+        if not overrides:
+            return self
+        return replace(self, **overrides).with_explicit_keys(explicit)
+
+    def validate(self) -> None:
+        """Validate Excel-specific configuration."""
+        super().validate()
+        if self.process_pool_workers < 1:
+            raise ValueError("process_pool_workers must be at least 1")
+
+
+@dataclass
 class HTMLConfig(ParserConfig):
     """
     Configuration for HTML parsing.
@@ -507,9 +635,7 @@ class FeishuConfig(ParserConfig):
     domain: str = "https://open.feishu.cn"
     max_rows_per_sheet: int = 1000
     max_records_per_table: int = 1000
-    download_images: bool = (
-        True  # TODO: not yet implemented, reserved for future image download support
-    )
+    download_images: bool = True
     request_timeout: float = (
         30.0  # TODO: not yet passed to lark-oapi client, reserved for future use
     )
@@ -552,6 +678,56 @@ class DirectoryConfig(ParserConfig):
 
 
 @dataclass
+class WebFeedConfig(ParserConfig):
+    """
+    Configuration for whole-site ingestion via sitemap / RSS / Atom feeds.
+
+    Used by WebFeedAccessor (and its single-page detect-and-suggest helper).
+    Each setting can be overridden per call via add_resource ``args`` (e.g.
+    ``args={"max_pages": 50}``).
+
+    Attributes:
+        max_pages: Hard cap on the number of pages mirrored per site.
+        max_concurrency: Max concurrent page fetches.
+        request_timeout: Per-request timeout in seconds.
+        politeness_delay: Delay (seconds) before each page fetch, to be polite.
+        same_host_only: Only ingest URLs on the same host as the feed.
+        respect_robots: Honor robots.txt Disallow rules (and discover sitemaps).
+        max_depth: Max recursion depth when following <sitemapindex> entries.
+        suggest_feed: When adding a single webpage, probe for a sitemap/RSS and
+            append a one-line hint suggesting whole-site ingestion (never auto-crawls).
+        suggest_timeout: Hard timeout (seconds) for that single-page probe.
+    """
+
+    max_pages: int = 200
+    max_concurrency: int = 5
+    request_timeout: float = 30.0
+    politeness_delay: float = 0.2
+    same_host_only: bool = True
+    respect_robots: bool = True
+    max_depth: int = 2
+    suggest_feed: bool = True
+    suggest_timeout: float = 2.5
+
+    def validate(self) -> None:
+        """Validate web feed configuration."""
+        super().validate()
+
+        if self.max_pages <= 0:
+            raise ValueError("max_pages must be positive")
+        if self.max_concurrency <= 0:
+            raise ValueError("max_concurrency must be positive")
+        if self.request_timeout <= 0:
+            raise ValueError("request_timeout must be positive")
+        if self.politeness_delay < 0:
+            raise ValueError("politeness_delay must be non-negative")
+        if self.max_depth <= 0:
+            raise ValueError("max_depth must be positive")
+        if self.suggest_timeout <= 0:
+            raise ValueError("suggest_timeout must be positive")
+
+
+@dataclass
 class SemanticConfig:
     """
     Configuration for semantic processing (overview/abstract generation).
@@ -564,7 +740,7 @@ class SemanticConfig:
     """Maximum characters of file content sent to LLM for summary generation."""
 
     max_skeleton_chars: int = 12000
-    """Maximum characters of AST skeleton used for embedding (~3000 tokens)."""
+    """Maximum characters of code skeleton used for embedding (~3000 tokens)."""
 
     max_overview_prompt_chars: int = 60000
     """Maximum characters allowed in the overview generation prompt.
@@ -586,6 +762,14 @@ class SemanticConfig:
     memory_chunk_overlap: int = 200
     """Character overlap between adjacent memory chunks for context continuity."""
 
+    def __post_init__(self):
+        if self.memory_chunk_chars <= 0:
+            raise ValueError("memory_chunk_chars must be positive")
+        if self.memory_chunk_overlap < 0:
+            raise ValueError("memory_chunk_overlap must be non-negative")
+        if self.memory_chunk_overlap >= self.memory_chunk_chars:
+            raise ValueError("memory_chunk_overlap must be smaller than memory_chunk_chars")
+
 
 # Configuration registry for dynamic loading
 PARSER_CONFIG_REGISTRY = {
@@ -595,10 +779,12 @@ PARSER_CONFIG_REGISTRY = {
     "audio": AudioConfig,
     "video": VideoConfig,
     "markdown": MarkdownConfig,
+    "excel": ExcelConfig,
     "html": HTMLConfig,
     "text": TextConfig,
     "directory": DirectoryConfig,
     "feishu": FeishuConfig,
+    "webfeed": WebFeedConfig,
 }
 
 
@@ -624,8 +810,7 @@ def get_parser_config(
 
         >>> # Get custom code configuration
         >>> code_config = get_parser_config("code", {
-        ...     "enable_ast": False,
-        ...     "max_token_limit": 10000
+        ...     "github_raw_domain": "raw.githubusercontent.com"
         ... })
     """
     if parser_type not in PARSER_CONFIG_REGISTRY:
@@ -634,10 +819,10 @@ def get_parser_config(
 
     config_class = PARSER_CONFIG_REGISTRY[parser_type]
 
-    if config_data:
-        return config_class.from_dict(config_data)
-    else:
-        return config_class()
+    # Always go through from_dict, even with no data: configs that track which
+    # keys a source provided need to see the empty mapping to record that none
+    # were set.
+    return config_class.from_dict(config_data or {})
 
 
 def load_parser_configs_from_dict(config_dict: Dict[str, Any]) -> Dict[str, ParserConfig]:
@@ -653,7 +838,7 @@ def load_parser_configs_from_dict(config_dict: Dict[str, Any]) -> Dict[str, Pars
     Examples:
         >>> configs = load_parser_configs_from_dict({
         ...     "pdf": {"strategy": "auto"},
-        ...     "code": {"enable_ast": false}
+        ...     "code": {"github_raw_domain": "raw.githubusercontent.com"}
         ... })
         >>> pdf_config = configs["pdf"]
         >>> code_config = configs["code"]
@@ -667,10 +852,8 @@ def load_parser_configs_from_dict(config_dict: Dict[str, Any]) -> Dict[str, Pars
     configs = {}
 
     for parser_type, config_class in PARSER_CONFIG_REGISTRY.items():
-        if parser_type in config_dict:
-            config_data = config_dict[parser_type]
-            configs[parser_type] = config_class.from_dict(config_data)
-        else:
-            configs[parser_type] = config_class()
+        # from_dict on an empty mapping rather than a bare constructor, so
+        # configs that track provided keys record that a section was absent.
+        configs[parser_type] = config_class.from_dict(config_dict.get(parser_type) or {})
 
     return configs

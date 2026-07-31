@@ -3,7 +3,7 @@
 """SemanticProcessor: Processes messages from SemanticQueue, generates .abstract.md and .overview.md."""
 
 import asyncio
-import json
+import re
 import threading
 from contextlib import nullcontext
 from dataclasses import dataclass, field
@@ -13,16 +13,16 @@ from openviking.observability.context import (
     bind_root_observability_context,
     reset_root_observability_context,
 )
+from openviking.parse.image_rewrite import (
+    IMAGE_MAPPINGS_FILENAME,
+    rewrite_image_uris,
+)
 from openviking.parse.parsers.constants import (
     CODE_EXTENSIONS,
     DOCUMENTATION_EXTENSIONS,
     FILE_TYPE_CODE,
     FILE_TYPE_DOCUMENTATION,
     FILE_TYPE_OTHER,
-)
-from openviking.parse.image_rewrite import (
-    IMAGE_MAPPINGS_FILENAME,
-    rewrite_image_uris,
 )
 from openviking.parse.parsers.media.utils import (
     generate_audio_summary,
@@ -31,6 +31,7 @@ from openviking.parse.parsers.media.utils import (
     get_media_type,
 )
 from openviking.prompts import render_prompt
+from openviking.utils.ingest_options import IngestOptions
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
@@ -39,7 +40,6 @@ from openviking.storage.queuefs.semantic_lock import SemanticLockScope
 from openviking.storage.queuefs.semantic_msg import SemanticMsg, build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_queue import is_semantic_msg_stale
 from openviking.storage.queuefs.semantic_sidecar import write_semantic_sidecars
-from openviking.storage.transaction import NO_LOCK, LockLease
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry import bind_telemetry, bind_telemetry_stage, resolve_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -171,7 +171,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
     @staticmethod
     def _ctx_from_semantic_msg(msg: SemanticMsg) -> RequestContext:
-        role = Role(msg.role) if msg.role in {r.value for r in Role} else Role.ROOT
+        role = Role(msg.role or Role.ROOT)
         return RequestContext(
             user=UserIdentifier(msg.account_id, msg.user_id),
             role=role,
@@ -179,7 +179,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
     def _detect_file_type(self, file_name: str) -> str:
         """
-        Detect file type based on extension using constants from code parser.
+        Detect file type for summary prompt selection.
 
         Args:
             file_name: File name with extension
@@ -189,15 +189,21 @@ class SemanticProcessor(DequeueHandlerBase):
         """
         file_name_lower = file_name.lower()
 
-        # Check if file is a code file
-        for ext in CODE_EXTENSIONS:
-            if file_name_lower.endswith(ext):
-                return FILE_TYPE_CODE
-
-        # Check if file is a documentation file
+        # Documentation prompts should win over broad code skeleton recognition.
         for ext in DOCUMENTATION_EXTENSIONS:
             if file_name_lower.endswith(ext):
                 return FILE_TYPE_DOCUMENTATION
+
+        from openviking.parse.parsers.code.ast.providers import supports_code_skeleton
+
+        if supports_code_skeleton(file_name):
+            return FILE_TYPE_CODE
+
+        # Keep legacy extension-based routing for code-like text formats not
+        # covered by tags queries or tree-sitter-language-pack.
+        for ext in CODE_EXTENSIONS:
+            if file_name_lower.endswith(ext):
+                return FILE_TYPE_CODE
 
         # Default to other
         return FILE_TYPE_OTHER
@@ -306,7 +312,7 @@ class SemanticProcessor(DequeueHandlerBase):
     async def on_dequeue(
         self,
         data: Optional[Dict[str, Any]],
-        lock: LockLease = NO_LOCK,
+        lock: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Process dequeued SemanticMsg, recursively process all subdirectories."""
         msg: Optional[SemanticMsg] = None
@@ -368,11 +374,12 @@ class SemanticProcessor(DequeueHandlerBase):
                     semantic_lock = await SemanticLockScope.resolve(
                         msg.lock_handoff,
                         caller_lock=lock,
+                        fallback_path_factory=lambda: get_viking_fs()._uri_to_path(
+                            msg.uri, ctx=current_ctx
+                        ),
                     )
-                    lock_transferred = False
                     try:
                         if msg.context_type == "memory":
-                            lock_transferred = True
                             await self._process_memory_directory(
                                 msg,
                                 ctx=current_ctx,
@@ -437,10 +444,10 @@ class SemanticProcessor(DequeueHandlerBase):
                                 is_code_repo=msg.is_code_repo,
                                 changes=changes,
                                 skip_vectorization=msg.skip_vectorization,
+                                ingest_options=msg.ingest_options,
                                 coalesce_key=msg.coalesce_key,
                                 coalesce_version=msg.coalesce_version,
                             )
-                            lock_transferred = True
                             await executor.run(run_uri)
                             self._cache_dag_stats(
                                 msg.telemetry_id,
@@ -450,8 +457,7 @@ class SemanticProcessor(DequeueHandlerBase):
                             if not executor.stale:
                                 await self._enqueue_parent_refresh(msg, target_uri or msg.uri)
                     finally:
-                        if not lock_transferred:
-                            await semantic_lock.close()
+                        await semantic_lock.close()
                     self._merge_request_stats(msg.telemetry_id, processed=1)
                     logger.info(f"Completed semantic generation for: {msg.uri}")
                     self.report_success()
@@ -511,6 +517,31 @@ class SemanticProcessor(DequeueHandlerBase):
                     self.report_error(str(e), data)
             return None
 
+    async def on_cancelled(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Release a queued semantic lock before cancelled work is ACKed."""
+        try:
+            import json
+
+            payload = data.get("data", data) if isinstance(data, dict) else data
+            if isinstance(payload, str):
+                payload = json.loads(payload)
+            msg = SemanticMsg.from_dict(payload)
+        except (TypeError, ValueError) as exc:
+            self.report_error(str(exc), data)
+            return None
+
+        if msg.telemetry_id and msg.id:
+            get_request_wait_tracker().mark_semantic_done(msg.telemetry_id, msg.id)
+        if msg.lock_handoff is not None:
+            try:
+                viking_fs = get_viking_fs()
+                lock = await viking_fs._async_agfs.pathlock_adopt(msg.lock_handoff)
+                await viking_fs._async_agfs.pathlock_release(lock)
+            except Exception as exc:
+                logger.warning("Failed to release cancelled semantic lock: %s", exc)
+        self.report_success()
+        return None
+
     def get_dag_stats(self) -> Optional["DagStats"]:
         return SemanticDagExecutor.get_active_stats()
 
@@ -518,7 +549,7 @@ class SemanticProcessor(DequeueHandlerBase):
         self,
         msg: SemanticMsg,
         ctx: Optional[RequestContext] = None,
-        lock: LockLease = NO_LOCK,
+        lock: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Process a memory directory with special handling.
 
@@ -653,11 +684,10 @@ class SemanticProcessor(DequeueHandlerBase):
                 for file_path, summary in zip(file_paths, file_summaries, strict=False)
                 if file_path in paths_to_vectorize and summary is not None
             ]
-            overview = await self._generate_overview(
+            generated_content = await self._generate_overview(
                 dir_uri, completed_summaries, [], llm_sem=llm_sem
             )
-            abstract = self._extract_abstract_from_overview(overview)
-            overview, abstract = self._enforce_size_limits(overview, abstract)
+            overview, abstract = self._normalize_overview_generation(generated_content)
 
             try:
                 wrote_semantics = await self._write_memory_directory_semantics(
@@ -713,7 +743,7 @@ class SemanticProcessor(DequeueHandlerBase):
             )
             logger.info(f"Vectorized abstract.md and overview.md for {dir_uri}")
         finally:
-            await lock.close()
+            pass
 
     async def _write_memory_directory_semantics(
         self,
@@ -724,7 +754,7 @@ class SemanticProcessor(DequeueHandlerBase):
         overview: str,
         abstract: str,
         ctx: Optional[RequestContext],
-        lock: LockLease = NO_LOCK,
+        lock: Optional[Dict[str, Any]] = None,
     ) -> bool:
         return await write_semantic_sidecars(
             viking_fs=viking_fs,
@@ -743,22 +773,21 @@ class SemanticProcessor(DequeueHandlerBase):
         target_uri: str,
         ctx: Optional[RequestContext] = None,
         file_change_status: Optional[Dict[str, bool]] = None,
-        lock: LockLease = NO_LOCK,
+        lock: Optional[Dict[str, Any]] = None,
     ) -> DiffResult:
         viking_fs = get_viking_fs()
+        if not await viking_fs.exists(root_uri, ctx=ctx):
+            raise FileNotFoundError(
+                f"Semantic source no longer exists; refusing to sync into {target_uri}: {root_uri}"
+            )
         diff = DiffResult()
-        lock_handle = lock.handle
 
         async def list_children(dir_uri: str) -> Tuple[Dict[str, str], Dict[str, str]]:
             files: Dict[str, str] = {}
             dirs: Dict[str, str] = {}
-            try:
-                entries = await viking_fs.ls(
-                    dir_uri, show_all_hidden=True, node_limit=LS_ALL_NODES, ctx=ctx
-                )
-            except Exception as e:
-                logger.error(f"[SyncDiff] Failed to list {dir_uri}: {e}")
-                return files, dirs
+            entries = await viking_fs.ls(
+                dir_uri, show_all_hidden=True, node_limit=LS_ALL_NODES, ctx=ctx
+            )
 
             for entry in entries:
                 name = entry.get("name", "")
@@ -789,7 +818,7 @@ class SemanticProcessor(DequeueHandlerBase):
                             target_conflict_dir,
                             recursive=True,
                             ctx=ctx,
-                            lock_handle=lock_handle,
+                            lease_ref=lock,
                         )
                         diff.deleted_dirs.append(target_conflict_dir)
                         target_dirs.pop(name, None)
@@ -801,7 +830,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
                 if target_file and name in root_dirs and not root_file:
                     try:
-                        await viking_fs.rm(target_file, ctx=ctx, lock_handle=lock_handle)
+                        await viking_fs.rm(target_file, ctx=ctx, lease_ref=lock)
                         diff.deleted_files.append(target_file)
                         target_files.pop(name, None)
                     except Exception as e:
@@ -812,7 +841,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
                 if target_file and not root_file:
                     try:
-                        await viking_fs.rm(target_file, ctx=ctx, lock_handle=lock_handle)
+                        await viking_fs.rm(target_file, ctx=ctx, lease_ref=lock)
                         diff.deleted_files.append(target_file)
                     except Exception as e:
                         logger.error(f"[SyncDiff] Failed to delete file: {target_file}, error={e}")
@@ -835,7 +864,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     if changed:
                         diff.updated_files.append(target_file)
                         try:
-                            await viking_fs.rm(target_file, ctx=ctx, lock_handle=lock_handle)
+                            await viking_fs.rm(target_file, ctx=ctx, lease_ref=lock)
                         except Exception as e:
                             logger.error(
                                 f"[SyncDiff] Failed to remove old file before update: {target_file}, error={e}"
@@ -845,7 +874,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                 root_file,
                                 target_file,
                                 ctx=ctx,
-                                lock_handle=lock_handle,
+                                lease_ref=lock,
                             )
                         except Exception as e:
                             logger.error(
@@ -861,7 +890,7 @@ class SemanticProcessor(DequeueHandlerBase):
                             root_file,
                             target_file_uri,
                             ctx=ctx,
-                            lock_handle=lock_handle,
+                            lease_ref=lock,
                         )
                     except Exception as e:
                         logger.error(
@@ -879,7 +908,7 @@ class SemanticProcessor(DequeueHandlerBase):
                         await viking_fs.rm(
                             target_conflict_file,
                             ctx=ctx,
-                            lock_handle=lock_handle,
+                            lease_ref=lock,
                         )
                         diff.deleted_files.append(target_conflict_file)
                         target_files.pop(name, None)
@@ -895,7 +924,7 @@ class SemanticProcessor(DequeueHandlerBase):
                             target_subdir,
                             recursive=True,
                             ctx=ctx,
-                            lock_handle=lock_handle,
+                            lease_ref=lock,
                         )
                         diff.deleted_dirs.append(target_subdir)
                     except Exception as e:
@@ -912,7 +941,7 @@ class SemanticProcessor(DequeueHandlerBase):
                             root_subdir,
                             target_subdir_uri,
                             ctx=ctx,
-                            lock_handle=lock_handle,
+                            lease_ref=lock,
                         )
                     except Exception as e:
                         logger.error(
@@ -927,9 +956,14 @@ class SemanticProcessor(DequeueHandlerBase):
         if not target_exists:
             parent_uri = VikingURI(target_uri).parent
             if parent_uri:
-                await viking_fs.mkdir(parent_uri.uri, exist_ok=True, ctx=ctx)
+                await viking_fs.mkdir(
+                    parent_uri.uri,
+                    exist_ok=True,
+                    ctx=ctx,
+                    lease_ref=lock,
+                )
             diff.added_dirs.append(target_uri)
-            await viking_fs.mv(root_uri, target_uri, ctx=ctx, lock_handle=lock_handle)
+            await viking_fs.mv(root_uri, target_uri, ctx=ctx, lease_ref=lock)
             # The whole temp tree (including the hidden .image_mappings.json
             # sidecar) was moved into the target; rewrite local image paths now.
             await self._rewrite_target_image_uris(root_uri, target_uri, ctx=ctx, lock=lock)
@@ -951,7 +985,7 @@ class SemanticProcessor(DequeueHandlerBase):
         root_uri: str,
         target_uri: str,
         ctx: Optional[RequestContext] = None,
-        lock: LockLease = NO_LOCK,
+        lock: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Rewrite local image refs in the target after a temp-to-target sync.
 
@@ -972,7 +1006,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
         if root_prefix != target_prefix:
             try:
-                glob_result = await viking_fs.glob("*.md", uri=target_prefix, ctx=ctx)
+                glob_result = await viking_fs.glob("**/*.md", uri=target_prefix, ctx=ctx)
                 target_md_uris = glob_result.get("matches", [])
             except Exception:
                 target_md_uris = []
@@ -989,9 +1023,15 @@ class SemanticProcessor(DequeueHandlerBase):
                     d = d.rsplit("/", 1)[0]
 
             for rel in candidate_rels:
-                src_mapping = f"{root_prefix}/{rel}/{mapping_name}" if rel else f"{root_prefix}/{mapping_name}"
+                src_mapping = (
+                    f"{root_prefix}/{rel}/{mapping_name}"
+                    if rel
+                    else f"{root_prefix}/{mapping_name}"
+                )
                 target_mapping = (
-                    f"{target_prefix}/{rel}/{mapping_name}" if rel else f"{target_prefix}/{mapping_name}"
+                    f"{target_prefix}/{rel}/{mapping_name}"
+                    if rel
+                    else f"{target_prefix}/{mapping_name}"
                 )
                 try:
                     await viking_fs.stat(target_mapping, ctx=ctx)
@@ -1003,28 +1043,21 @@ class SemanticProcessor(DequeueHandlerBase):
                 except Exception:
                     continue  # no sidecar at this level
                 try:
-                    await viking_fs.write_file(target_mapping, mapping_content, ctx=ctx)
+                    # TODO: This must be optimized once pathlock is pushed down into ragfs.
+                    await viking_fs.write_file(
+                        target_mapping,
+                        mapping_content,
+                        ctx=ctx,
+                        lease_ref=lock,
+                    )
                 except Exception:
                     # Target subtree may not exist (doc removed in sync); skip.
                     pass
 
         try:
-            await rewrite_image_uris(target_uri, ctx=ctx, lock_handle=lock.handle)
+            await rewrite_image_uris(target_uri, ctx=ctx, lease_ref=lock)
         except Exception as e:
             logger.error(f"[SyncDiff] Failed to rewrite image URIs for {target_uri}: {e}")
-
-    async def _collect_children_abstracts(
-        self, children_uris: List[str], ctx: Optional[RequestContext] = None
-    ) -> List[Dict[str, str]]:
-        """Collect .abstract.md from subdirectories."""
-        viking_fs = get_viking_fs()
-        results = []
-
-        for child_uri in children_uris:
-            abstract = await viking_fs.abstract(child_uri, ctx=ctx)
-            dir_name = child_uri.split("/")[-1]
-            results.append({"name": dir_name, "abstract": abstract})
-        return results
 
     async def _generate_text_summary(
         self,
@@ -1032,7 +1065,7 @@ class SemanticProcessor(DequeueHandlerBase):
         file_name: str,
         llm_sem: asyncio.Semaphore,
         ctx: Optional[RequestContext] = None,
-    ) -> Dict[str, str]:
+    ) -> Dict[str, Any]:
         """Generate summary for a single text file (code, documentation, or other text)."""
         viking_fs = get_viking_fs()
         vlm = get_openviking_config().vlm
@@ -1040,63 +1073,48 @@ class SemanticProcessor(DequeueHandlerBase):
 
         content = await viking_fs.read_file(file_path, ctx=active_ctx)
         if isinstance(content, bytes):
-            # Try to decode with error handling for text files
-            try:
-                content = content.decode("utf-8")
-            except UnicodeDecodeError:
-                logger.warning(f"Failed to decode file as UTF-8, skipping: {file_path}")
-                return {"name": file_name, "summary": ""}
+            from openviking.utils.embedding_utils import _decode_text_bytes
+
+            content = _decode_text_bytes(content)
+
+        full_content = content or ""
+
+        def result(summary: str) -> Dict[str, Any]:
+            return {"name": file_name, "summary": summary, "content": full_content}
+
+        config = get_openviking_config()
 
         # Limit content length
-        max_chars = get_openviking_config().semantic.max_file_content_chars
+        max_chars = config.semantic.max_file_content_chars
         if len(content) > max_chars:
             content = content[:max_chars] + "\n...(truncated)"
-
-        # Generate summary
-        if not vlm.is_available():
-            logger.warning("VLM not available, using empty summary")
-            return {"name": file_name, "summary": ""}
-
-        from openviking.session.memory.utils.language import resolve_output_language
-
-        output_language = resolve_output_language(content)
 
         # Detect file type and select appropriate prompt
         file_type = self._detect_file_type(file_name)
 
         if file_type == FILE_TYPE_CODE:
-            code_mode = get_openviking_config().code.code_summary_mode
+            from openviking.parse.parsers.code.ast import extract_skeleton_result
 
-            if code_mode in ("ast", "ast_llm") and len(content.splitlines()) >= 100:
-                from openviking.parse.parsers.code.ast import extract_skeleton
+            extraction = extract_skeleton_result(file_name, content)
+            if extraction.text:
+                skeleton_text = extraction.text
+                max_skeleton_chars = config.semantic.max_skeleton_chars
+                if len(skeleton_text) > max_skeleton_chars:
+                    skeleton_text = skeleton_text[:max_skeleton_chars]
+                return result(skeleton_text)
+            logger.info(
+                "Code skeleton fallback to LLM for '%s': %s",
+                file_path,
+                extraction.reason,
+            )
 
-                verbose = code_mode == "ast_llm"
-                skeleton_text = extract_skeleton(file_name, content, verbose=verbose)
-                if skeleton_text:
-                    max_skeleton_chars = get_openviking_config().semantic.max_skeleton_chars
-                    if len(skeleton_text) > max_skeleton_chars:
-                        skeleton_text = skeleton_text[:max_skeleton_chars]
-                    if code_mode == "ast":
-                        return {"name": file_name, "summary": skeleton_text}
-                    else:  # ast_llm
-                        prompt = render_prompt(
-                            "semantic.code_ast_summary",
-                            {
-                                "file_name": file_name,
-                                "skeleton": skeleton_text,
-                                "output_language": output_language,
-                            },
-                        )
-                        async with llm_sem:
-                            with bind_telemetry_stage("resource_summarize"):
-                                summary = await vlm.get_completion_async(prompt)
-                        return {"name": file_name, "summary": summary.strip()}
-                if skeleton_text is None:
-                    logger.info("AST unsupported language, fallback to LLM: %s", file_path)
-                else:
-                    logger.info("AST empty skeleton, fallback to LLM: %s", file_path)
+            if not vlm.is_available():
+                logger.warning("VLM not available for code summary fallback: %s", file_path)
+                return result("")
 
-            # "llm" mode or fallback when skeleton is None/empty
+            from openviking.session.memory.utils.language import resolve_output_language
+
+            output_language = resolve_output_language(content, config=config)
             prompt = render_prompt(
                 "semantic.code_summary",
                 {"file_name": file_name, "content": content, "output_language": output_language},
@@ -1104,9 +1122,16 @@ class SemanticProcessor(DequeueHandlerBase):
             async with llm_sem:
                 with bind_telemetry_stage("resource_summarize"):
                     summary = await vlm.get_completion_async(prompt)
-            return {"name": file_name, "summary": summary.strip()}
+            return result(summary.strip())
 
-        elif file_type == FILE_TYPE_DOCUMENTATION:
+        if not vlm.is_available():
+            logger.warning("VLM not available, using empty summary")
+            return result("")
+
+        from openviking.session.memory.utils.language import resolve_output_language
+
+        output_language = resolve_output_language(content, config=config)
+        if file_type == FILE_TYPE_DOCUMENTATION:
             prompt_id = "semantic.document_summary"
         else:
             prompt_id = "semantic.file_summary"
@@ -1119,21 +1144,22 @@ class SemanticProcessor(DequeueHandlerBase):
         async with llm_sem:
             with bind_telemetry_stage("resource_summarize"):
                 summary = await vlm.get_completion_async(prompt)
-        return {"name": file_name, "summary": summary.strip()}
+        return result(summary.strip())
 
     async def _generate_single_file_summary(
         self,
         file_path: str,
         llm_sem: Optional[asyncio.Semaphore] = None,
         ctx: Optional[RequestContext] = None,
-    ) -> Dict[str, str]:
+    ) -> Dict[str, Any]:
         """Generate summary for a single file.
 
         Args:
             file_path: File path
 
         Returns:
-            {"name": file_name, "summary": summary_content}
+            {"name": file_name, "summary": summary_content}; text files also carry
+            decoded "content" so vectorization can avoid re-reading the same file.
         """
         file_name = file_path.split("/")[-1]
         llm_sem = llm_sem or asyncio.Semaphore(self.max_concurrent_llm)
@@ -1147,8 +1173,47 @@ class SemanticProcessor(DequeueHandlerBase):
         else:
             return await self._generate_text_summary(file_path, file_name, llm_sem, ctx=ctx)
 
+    def _replace_index_references(
+        self, generated_content: str, file_index_map: Dict[int, str]
+    ) -> str:
+        def replace_index(match):
+            idx = int(match.group(1))
+            return file_index_map.get(idx, match.group(0))
+
+        return re.sub(r"\[(\d+)\]", replace_index, generated_content)
+
+    def _truncate_generated_text(self, text: str, max_chars: int) -> str:
+        if max_chars <= 0 or len(text) <= max_chars:
+            return text
+
+        if max_chars <= 3:
+            return text[:max_chars]
+
+        first_sentence_end = None
+        last_sentence_end_within_limit = None
+        for sentence_end_match in re.finditer(r"\.(?!\d)(?=\s|$)|[!?](?=\s|$)|[。？！]", text):
+            sentence_end = sentence_end_match.end()
+            if first_sentence_end is None:
+                first_sentence_end = sentence_end
+            if sentence_end <= max_chars:
+                last_sentence_end_within_limit = sentence_end
+            elif last_sentence_end_within_limit is not None:
+                break
+
+        if last_sentence_end_within_limit is not None:
+            return text[:last_sentence_end_within_limit].strip()
+        if first_sentence_end is not None:
+            return text[:first_sentence_end].strip()
+
+        candidate = text[: max_chars - 3].rstrip()
+        word_boundary = candidate.rfind(" ")
+        if word_boundary > 0:
+            return candidate[:word_boundary].rstrip() + "..."
+
+        return candidate + "..."
+
     def _extract_abstract_from_overview(self, overview_content: str) -> str:
-        """Extract abstract from overview.md."""
+        """Extract an abstract from the Markdown overview brief description."""
         lines = overview_content.split("\n")
 
         # Skip header lines (starting with #)
@@ -1170,13 +1235,19 @@ class SemanticProcessor(DequeueHandlerBase):
 
         return "\n".join(content_lines).strip()
 
+    def _normalize_overview_generation(self, generated_content: str) -> Tuple[str, str]:
+        """Convert raw Markdown overview output into final L1 overview and L0 abstract."""
+        overview = generated_content
+        abstract = self._extract_abstract_from_overview(generated_content)
+        return self._enforce_size_limits(overview, abstract)
+
     def _enforce_size_limits(self, overview: str, abstract: str) -> Tuple[str, str]:
         """Enforce max size limits on overview and abstract."""
         semantic = get_openviking_config().semantic
         if len(overview) > semantic.overview_max_chars:
-            overview = overview[: semantic.overview_max_chars]
+            overview = self._truncate_generated_text(overview, semantic.overview_max_chars)
         if len(abstract) > semantic.abstract_max_chars:
-            abstract = abstract[: semantic.abstract_max_chars - 3] + "..."
+            abstract = self._truncate_generated_text(abstract, semantic.abstract_max_chars)
         return overview, abstract
 
     def _parse_overview_md(self, overview_content: str) -> Dict[str, str]:
@@ -1239,7 +1310,7 @@ class SemanticProcessor(DequeueHandlerBase):
         children_abstracts: List[Dict[str, str]],
         llm_sem: Optional[asyncio.Semaphore] = None,
     ) -> str:
-        """Generate directory's .overview.md (L1).
+        """Generate raw directory overview model output.
 
         For small directories, generates a single overview from all file summaries.
         For large directories that would exceed the prompt budget, splits file
@@ -1252,7 +1323,7 @@ class SemanticProcessor(DequeueHandlerBase):
             children_abstracts: Subdirectory summary list
 
         Returns:
-            Overview content
+            Markdown overview content generated by the model.
         """
 
         config = get_openviking_config()
@@ -1292,13 +1363,15 @@ class SemanticProcessor(DequeueHandlerBase):
         # Budget guard: check if prompt would be oversized
         estimated_size = len(file_summaries_str) + len(children_abstracts_str)
         over_budget = estimated_size > semantic.max_overview_prompt_chars
-        many_files = len(file_summaries) > semantic.overview_batch_size
+        entry_count = len(file_summaries) + len(children_abstracts)
+        many_entries = entry_count > semantic.overview_batch_size
 
-        if over_budget and many_files:
-            # Many files, oversized prompt → batch and merge
+        if over_budget and many_entries:
+            # Many entries, oversized prompt → batch and merge
             logger.info(
                 f"Overview prompt for {dir_uri} exceeds budget "
-                f"({estimated_size} chars, {len(file_summaries)} files). "
+                f"({estimated_size} chars, {len(file_summaries)} files, "
+                f"{len(children_abstracts)} subdirectories). "
                 f"Splitting into batches of {semantic.overview_batch_size}."
             )
             overview = await self._batched_generate_overview(
@@ -1351,9 +1424,8 @@ class SemanticProcessor(DequeueHandlerBase):
         output_language: str = "en",
     ) -> str:
         """Generate overview from a single prompt (small directories)."""
-        import re
-
-        vlm = get_openviking_config().vlm
+        config = get_openviking_config()
+        vlm = config.vlm
 
         try:
             prompt = render_prompt(
@@ -1369,12 +1441,7 @@ class SemanticProcessor(DequeueHandlerBase):
             with bind_telemetry_stage("resource_summarize"):
                 overview = await vlm.get_completion_async(prompt)
 
-            # Post-process: replace [number] with actual file name
-            def replace_index(match):
-                idx = int(match.group(1))
-                return file_index_map.get(idx, match.group(0))
-
-            overview = re.sub(r"\[(\d+)\]", replace_index, overview)
+            overview = self._replace_index_references(overview, file_index_map)
 
             return overview.strip()
 
@@ -1394,76 +1461,58 @@ class SemanticProcessor(DequeueHandlerBase):
         llm_sem: Optional[asyncio.Semaphore] = None,
         output_language: str = "en",
     ) -> str:
-        """Generate overview by batching file summaries and merging.
+        """Generate overview by batching file and subdirectory summaries.
 
-        Splits file summaries into batches, generates a partial overview per
-        batch, then merges all partials into a final overview.
+        Splits both input kinds into batches, generates a partial overview per
+        batch, then merges the partials without repeating the raw inputs.
         """
-        import re
-
-        vlm = get_openviking_config().vlm
-        semantic = get_openviking_config().semantic
+        config = get_openviking_config()
+        vlm = config.vlm
+        semantic = config.semantic
         batch_size = semantic.overview_batch_size
         dir_name = dir_uri.split("/")[-1]
 
-        # Split file summaries into batches
-        batches = [
-            file_summaries[i : i + batch_size] for i in range(0, len(file_summaries), batch_size)
+        work_items = [("file", index, item) for index, item in enumerate(file_summaries, 1)] + [
+            ("child", None, item) for item in children_abstracts
         ]
+        batches = [work_items[i : i + batch_size] for i in range(0, len(work_items), batch_size)]
         logger.info(f"Generating overview for {dir_uri} in {len(batches)} batches")
 
-        # Build children abstracts string (used in first batch + merge)
-        children_abstracts_str = (
-            "\n".join(f"- {item['name']}/: {item['abstract']}" for item in children_abstracts)
-            if children_abstracts
-            else "None"
-        )
-
-        # Generate partial overview per batch concurrently using global file indices
+        # Generate partial overviews concurrently using global file indices.
         if llm_sem is None:
             llm_sem = asyncio.Semaphore(self.max_concurrent_llm)
         partial_overviews = [None] * len(batches)
-        global_offset = 0
         batch_prompts: List[Tuple[int, str, Dict[int, str]]] = []
 
         for batch_idx, batch in enumerate(batches):
-            # Build per-batch index map using global offsets
             batch_lines = []
+            child_lines = []
             batch_index_map = {}
-            for local_idx, item in enumerate(batch):
-                global_idx = global_offset + local_idx + 1
-                batch_index_map[global_idx] = item["name"]
-                batch_lines.append(f"[{global_idx}] {item['name']}: {item['summary']}")
-            batch_str = "\n".join(batch_lines)
-            global_offset += len(batch)
-
-            # Include children abstracts in the first batch
-            children_str = children_abstracts_str if batch_idx == 0 else "None"
+            for entry_kind, global_idx, item in batch:
+                if entry_kind == "file":
+                    assert global_idx is not None
+                    batch_index_map[global_idx] = item["name"]
+                    batch_lines.append(f"[{global_idx}] {item['name']}: {item['summary']}")
+                else:
+                    child_lines.append(f"- {item['name']}/: {item['abstract']}")
 
             prompt = render_prompt(
                 "semantic.overview_generation",
                 {
                     "dir_name": dir_name,
-                    "file_summaries": batch_str,
-                    "children_abstracts": children_str,
+                    "file_summaries": "\n".join(batch_lines) or "None",
+                    "children_abstracts": "\n".join(child_lines) or "None",
                     "output_language": output_language,
                 },
             )
             batch_prompts.append((batch_idx, prompt, batch_index_map))
-
-        def make_replacer(idx_map):
-            def replacer(match):
-                idx = int(match.group(1))
-                return idx_map.get(idx, match.group(0))
-
-            return replacer
 
         async def _run_batch(batch_idx: int, prompt: str, batch_index_map: Dict[int, str]) -> None:
             try:
                 async with llm_sem:
                     with bind_telemetry_stage("resource_summarize"):
                         partial = await vlm.get_completion_async(prompt)
-                partial = re.sub(r"\[(\d+)\]", make_replacer(batch_index_map), partial)
+                partial = self._replace_index_references(partial, batch_index_map)
                 partial_overviews[batch_idx] = partial.strip()
             except Exception as e:
                 logger.warning(
@@ -1481,7 +1530,7 @@ class SemanticProcessor(DequeueHandlerBase):
         if len(partial_overviews) == 1:
             return partial_overviews[0]
 
-        # Merge partials into a final overview (include children for context)
+        # Merge partials only; each child abstract is already represented once.
         combined = "\n\n---\n\n".join(partial_overviews)
         try:
             prompt = render_prompt(
@@ -1489,12 +1538,13 @@ class SemanticProcessor(DequeueHandlerBase):
                 {
                     "dir_name": dir_name,
                     "file_summaries": combined,
-                    "children_abstracts": children_abstracts_str,
+                    "children_abstracts": "None",
                     "output_language": output_language,
                 },
             )
             with bind_telemetry_stage("resource_summarize"):
                 overview = await vlm.get_completion_async(prompt)
+            overview = self._replace_index_references(overview, file_index_map)
             return overview.strip()
         except Exception as e:
             logger.error(
@@ -1511,6 +1561,7 @@ class SemanticProcessor(DequeueHandlerBase):
         overview: str,
         ctx: Optional[RequestContext] = None,
         semantic_msg_id: Optional[str] = None,
+        ingest_options: IngestOptions | None = None,
     ) -> None:
         """Create directory Context and enqueue to EmbeddingQueue."""
 
@@ -1524,6 +1575,7 @@ class SemanticProcessor(DequeueHandlerBase):
             context_type=context_type,
             ctx=active_ctx,
             semantic_msg_id=semantic_msg_id,
+            ingest_options=ingest_options,
         )
 
     async def _vectorize_single_file(
@@ -1536,6 +1588,7 @@ class SemanticProcessor(DequeueHandlerBase):
         semantic_msg_id: Optional[str] = None,
         use_summary: bool = False,
         preserve_existing_created_at: bool = False,
+        ingest_options: IngestOptions | None = None,
     ) -> None:
         """Vectorize a single file using its content or summary."""
         from openviking.utils.embedding_utils import vectorize_file
@@ -1550,4 +1603,5 @@ class SemanticProcessor(DequeueHandlerBase):
             semantic_msg_id=semantic_msg_id,
             use_summary=use_summary,
             preserve_existing_created_at=preserve_existing_created_at,
+            ingest_options=ingest_options,
         )

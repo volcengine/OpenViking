@@ -188,24 +188,3 @@ class VolcengineProject:
 
         self.collections.remove(collection_name)
         logger.info(f"Dropped Volcengine collection: {collection_name}")
-
-    def get_or_create_collection(
-        self, collection_name: str, meta_data: Optional[Dict[str, Any]] = None
-    ) -> Collection:
-        """
-        Get an existing collection or create a new one if it doesn't exist
-
-        Args:
-            collection_name: Collection name
-            meta_data: Collection metadata (required if collection doesn't exist)
-
-        Returns:
-            Collection instance
-        """
-        if self.has_collection(collection_name):
-            return self.get_collection(collection_name)
-
-        if meta_data is None:
-            raise ValueError(f"meta_data is required to create collection {collection_name}")
-
-        return self.create_collection(collection_name, meta_data)

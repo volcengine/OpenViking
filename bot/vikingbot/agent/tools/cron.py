@@ -1,14 +1,20 @@
 """Cron tool for scheduling reminders and tasks."""
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from vikingbot.agent.tools.base import Tool
 from vikingbot.cron.service import CronService
 from vikingbot.cron.types import CronSchedule
 
+if TYPE_CHECKING:
+    from vikingbot.agent.tools.base import ToolContext
+    from vikingbot.config.schema import SessionKey
+
 
 class CronTool(Tool):
     """Tool to schedule reminders and recurring tasks."""
+
+    DELIVERY_METADATA_KEYS = ("reply_to", "chat_type", "chat_mode", "root_id", "sender_id")
 
     def __init__(self, cron_service: CronService):
         self._cron = cron_service
@@ -64,7 +70,13 @@ class CronTool(Tool):
     ) -> str:
         if action == "add":
             return self._add_job(
-                name, message, every_seconds, cron_expr, at, tool_context.session_key
+                name,
+                message,
+                every_seconds,
+                cron_expr,
+                at,
+                tool_context.session_key,
+                self._delivery_metadata(getattr(tool_context, "channel_metadata", None)),
             )
         elif action == "list":
             return self._list_jobs()
@@ -80,6 +92,7 @@ class CronTool(Tool):
         cron_expr: str | None,
         at: str | None,
         session_key: "SessionKey",
+        channel_metadata: dict[str, Any] | None = None,
     ) -> str:
         if not message:
             return "Error: message is required for add"
@@ -106,9 +119,19 @@ class CronTool(Tool):
             message=message,
             deliver=True,
             session_key=session_key,
+            channel_metadata=channel_metadata,
             delete_after_run=delete_after,
         )
         return f"Created job '{job.name}' (id: {job.id})"
+
+    def _delivery_metadata(self, metadata: dict[str, Any] | None) -> dict[str, Any]:
+        if not metadata:
+            return {}
+        return {
+            key: metadata[key]
+            for key in self.DELIVERY_METADATA_KEYS
+            if isinstance(metadata.get(key), str) and metadata[key]
+        }
 
     def _list_jobs(self) -> str:
         jobs = self._cron.list_jobs()

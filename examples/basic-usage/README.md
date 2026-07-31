@@ -250,7 +250,7 @@ You can also use Volcengine or Azure OpenAI. For current provider-specific examp
 - [Server Mode Quick Start](../../docs/en/getting-started/03-quickstart-server.md): set up `openviking-server` properly.
 - [MCP Integration Guide](../../docs/en/guides/06-mcp-integration.md): connect OpenViking to Claude Code, Cursor, Claude Desktop, or OpenClaw.
 - [Claude Code Memory Plugin](../claude-code-memory-plugin/README.md): use OpenViking as long-term memory inside Claude Code.
-- [OpenCode Memory Plugin](../opencode-memory-plugin/README.md): use OpenViking memory tools inside OpenCode.
+- [OpenCode Plugin](../opencode-plugin/README.md): use OpenViking repository context and memory tools inside OpenCode.
 - [OpenClaw Plugin](../openclaw-plugin/README.md): integrate OpenViking with OpenClaw.
 
 ## Troubleshooting

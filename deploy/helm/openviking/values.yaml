@@ -85,7 +85,8 @@ bot:
 # ${persistence.mountPath}/ov.conf.
 config:
   storage:
-    workspace: /app/.openviking/openviking_workspace
+    # Defaults to <persistence.mountPath>/openviking_workspace when empty.
+    workspace: ""
     vectordb:
       name: context
       backend: local
@@ -118,7 +119,7 @@ config:
     api_base: "https://ark.cn-beijing.volces.com/api/v3"
     api_key: ""
     provider: "volcengine"
-    model: "doubao-seed-2-0-pro-260215"
+    model: "doubao-seed-2-0-lite-260428"
     temperature: 0.0
     max_retries: 2
     thinking: false

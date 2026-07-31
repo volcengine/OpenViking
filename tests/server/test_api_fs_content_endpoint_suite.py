@@ -198,7 +198,7 @@ async def test_write_permission_denied_returns_structured_error(app, service, mo
 
 async def test_reindex_missing_uri_returns_not_found_error_payload(client, monkeypatch):
     class FakeService:
-        async def reindex(self, *, uri, mode, wait, ctx):
+        async def reindex(self, *, uri, mode, wait, ctx, dry_run=False):
             from openviking_cli.exceptions import NotFoundError
 
             raise NotFoundError(uri, "resource")
@@ -213,7 +213,7 @@ async def test_reindex_missing_uri_returns_not_found_error_payload(client, monke
 
 async def test_reindex_sync_conflict_returns_error_payload(client, monkeypatch):
     class FakeService:
-        async def reindex(self, *, uri, mode, wait, ctx):
+        async def reindex(self, *, uri, mode, wait, ctx, dry_run=False):
             from openviking_cli.exceptions import OpenVikingError
 
             raise OpenVikingError(
@@ -232,7 +232,7 @@ async def test_reindex_sync_conflict_returns_error_payload(client, monkeypatch):
 
 async def test_reindex_sync_success_returns_ok_payload(client, monkeypatch):
     class FakeService:
-        async def reindex(self, *, uri, mode, wait, ctx):
+        async def reindex(self, *, uri, mode, wait, ctx, dry_run=False):
             return {"status": "completed", "mode": mode, "uri": uri}
 
     monkeypatch.setattr("openviking.server.routers.content.get_service", lambda: FakeService())
@@ -249,7 +249,7 @@ async def test_reindex_sync_success_returns_ok_payload(client, monkeypatch):
 
 async def test_reindex_async_returns_task_id(client, monkeypatch):
     class FakeService:
-        async def reindex(self, *, uri, mode, wait, ctx):
+        async def reindex(self, *, uri, mode, wait, ctx, dry_run=False):
             return {
                 "task_id": "task-123",
                 "status": "accepted",

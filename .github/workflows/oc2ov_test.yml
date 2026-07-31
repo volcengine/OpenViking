@@ -30,7 +30,11 @@ jobs:
     name: P0 Memory Tests
     runs-on: [self-hosted, linux, x64]
     timeout-minutes: 100
-    if: inputs.skip_tests != true && (github.event_name == 'workflow_dispatch' || github.repository == 'volcengine/OpenViking')
+    if: >-
+      inputs.skip_tests != true &&
+      (github.event_name == 'workflow_dispatch' ||
+        (github.repository == 'volcengine/OpenViking' &&
+          (github.event_name != 'release' || startsWith(github.event.release.tag_name, 'v'))))
     
     steps:
       - name: Clean up previous artifacts
@@ -123,6 +127,12 @@ jobs:
               sleep 5
             fi
           done
+
+          echo "Checking a real OpenClaw JSON response..."
+          openclaw --version || true
+          cd tests/oc2ov_test
+          python3 utils/openclaw_cli_smoke.py \
+            --session-id "oc2ov-ci-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
       - name: Install test dependencies
         run: |

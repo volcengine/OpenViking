@@ -17,7 +17,7 @@
 - **Go**: 1.22+ (从源码构建 AGFS 组件需要)
 - **Rust**: 1.91.1+（从源码构建需要；打包流程会同时构建内置 `ov` CLI）
 - **C++ 编译器**: GCC 9+ 或 Clang 11+ (构建核心扩展需要，必须支持 C++17)
-- **CMake**: 3.12+
+- **CMake**: 3.15+
 
 #### 平台相关的本地构建工具
 
@@ -84,7 +84,7 @@ uv pip install -e . --force-reinstall
   },
   "vlm": {
     "api_key": "your-api-key",
-    "model": "doubao-seed-2-0-pro-260215",
+    "model": "doubao-seed-2-0-lite-260428",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3"
   }
 }
@@ -195,22 +195,6 @@ openviking/
 |------|---------|--------|
 | **Ruff** | Linting, 格式化, 导入排序 | `pyproject.toml` |
 | **mypy** | 类型检查 | `pyproject.toml` |
-
-### 自动检查（推荐）
-
-我们使用 [pre-commit](https://pre-commit.com/) 在每次提交前自动运行这些检查。这确保您的代码无需手动努力即可符合标准。
-
-1. **安装 pre-commit**：
-   ```bash
-   pip install pre-commit
-   ```
-
-2. **安装 git hooks**：
-   ```bash
-   pre-commit install
-   ```
-
-现在，当您运行 `git commit` 时，`ruff`（检查和格式化）将自动运行。如果任何检查失败，它可能会自动修复文件。您只需添加更改并再次提交即可。
 
 ### 运行检查
 
@@ -507,8 +491,6 @@ git commit -m "refactor(storage): simplify interface methods"
 
 #### A. 代码检查 (`11. _Lint Checks`)
 运行代码风格检查 (Ruff) 和类型检查 (Mypy) 。无需参数。
-
-> **提示**：建议在本地安装 [pre-commit](https://pre-commit.com/) 以在提交前自动运行这些检查（详见上文[自动检查](#自动检查推荐)章节）。
 
 #### B. 简易测试 (`12. _Test Suite (Lite)`)
 运行快速集成测试，支持自定义矩阵配置。

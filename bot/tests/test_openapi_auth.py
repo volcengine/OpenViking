@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -15,6 +16,7 @@ from vikingbot.bus.events import OutboundEventType, OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.openapi import OpenAPIChannel, OpenAPIChannelConfig, PendingResponse
 from vikingbot.channels.openapi_models import ChatResponse
+from vikingbot.compile.models import CompileAccepted
 from vikingbot.config.schema import BotChannelConfig, SessionKey
 
 
@@ -35,7 +37,143 @@ def _make_client(channel: OpenAPIChannel) -> TestClient:
     return TestClient(app)
 
 
+class _AsyncBytesStream(httpx.AsyncByteStream):
+    def __init__(self, *chunks: bytes):
+        self.chunks = chunks
+        self.closed = False
+
+    async def __aiter__(self):
+        for chunk in self.chunks:
+            yield chunk
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
 class TestOpenAPIAuth:
+    def test_compile_routes_use_existing_principal_resolver(
+        self, message_bus, temp_workspace
+    ):
+        class FakeCompileService:
+            def __init__(self):
+                self.scope = None
+
+            async def create_task(self, request, *, principal_scope):
+                self.scope = principal_scope
+                return CompileAccepted(task_id="cmp_test", to=request.to)
+
+            async def get_task(self, task_id, *, principal_scope):
+                if task_id != "cmp_test" or principal_scope != self.scope:
+                    return None
+                return {
+                    "task_id": task_id,
+                    "status": "running",
+                    "stage": "agent",
+                    "created_at": "2026-07-20T00:00:00Z",
+                    "updated_at": "2026-07-20T00:00:01Z",
+                }
+
+        service = FakeCompileService()
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+            compile_service=service,
+        )
+        client = _make_client(channel)
+        created = client.post(
+            "/bot/v1/compile",
+            json={
+                "from": ["viking://resources/source"],
+                "to": "viking://resources/wiki",
+                "skill": "viking://agent/skills/wiki",
+            },
+        )
+        assert created.status_code == 202
+        assert created.json()["task_id"] == "cmp_test"
+        assert client.get("/bot/v1/compile/cmp_test").status_code == 200
+        assert client.get("/bot/v1/compile/cmp_other").status_code == 404
+
+    def test_dev_compile_with_forwarded_connection_uses_same_principal_for_status(
+        self, message_bus, temp_workspace, monkeypatch
+    ):
+        class FakeCompileService:
+            def __init__(self):
+                self.scope = None
+                self.connection = "unset"
+
+            async def create_task(self, request, *, principal_scope):
+                self.scope = principal_scope
+                self.connection = request.openviking_connection
+                return CompileAccepted(task_id="cmp_dev", to=request.to)
+
+            async def get_task(self, task_id, *, principal_scope):
+                if task_id != "cmp_dev" or principal_scope != self.scope:
+                    return None
+                return {
+                    "task_id": task_id,
+                    "status": "running",
+                    "stage": "agent",
+                    "created_at": "2026-07-20T00:00:00Z",
+                    "updated_at": "2026-07-20T00:00:01Z",
+                }
+
+        config = SimpleNamespace(
+            gateway=SimpleNamespace(host="127.0.0.1", token="gateway-secret"),
+            ov_server=SimpleNamespace(
+                server_url="http://127.0.0.1:1933",
+                effective_auth_mode="dev",
+                api_key_type="user",
+            ),
+        )
+        service = FakeCompileService()
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+            global_config=config,
+            compile_service=service,
+        )
+        runtime_probes = []
+
+        async def fake_runtime_probe(headers=None):
+            runtime_probes.append(headers)
+            return {"status": "ok", "auth_mode": "dev"}
+
+        monkeypatch.setattr(channel, "_assert_runtime_upstream_auth_mode", fake_runtime_probe)
+        app = FastAPI()
+        app.include_router(channel.get_router(), prefix="/bot/v1")
+        client = TestClient(app, client=("127.0.0.1", 50000))
+        headers = {
+            "X-Gateway-Token": "gateway-secret",
+            "X-API-Key": "stale-dev-key",
+            "X-OpenViking-Account": "default",
+            "X-OpenViking-User": "default",
+        }
+
+        created = client.post(
+            "/bot/v1/compile",
+            headers=headers,
+            json={
+                "from": ["viking://resources/source"],
+                "to": "viking://resources/wiki",
+                "skill": "viking://agent/skills/wiki",
+                "openviking_connection": {
+                    "api_key": "stale-dev-key",
+                    "account_id": "default",
+                    "user_id": "default",
+                    "server_url": "http://127.0.0.1:1933",
+                },
+            },
+        )
+        status_response = client.get("/bot/v1/compile/cmp_dev", headers=headers)
+
+        assert created.status_code == 202
+        assert status_response.status_code == 200
+        assert service.scope == channel._principal_scope("dev")
+        assert service.connection is None
+        assert runtime_probes == [{}, {}]
+
     def test_health_remains_available_without_api_key(self, message_bus, temp_workspace):
         channel = OpenAPIChannel(
             OpenAPIChannelConfig(),
@@ -47,6 +185,80 @@ class TestOpenAPIAuth:
         response = client.get("/bot/v1/health")
 
         assert response.status_code == 200
+
+    def test_public_gateway_health_requires_gateway_token(self, message_bus, temp_workspace):
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+            global_config=SimpleNamespace(
+                gateway=SimpleNamespace(host="0.0.0.0", token="gateway-secret")
+            ),
+        )
+        app = FastAPI()
+        app.include_router(channel.get_router(), prefix="/bot/v1")
+        app.include_router(channel.get_gateway_router())
+        client = TestClient(app)
+
+        root_challenge = client.get("/health")
+        bot_challenge = client.get("/bot/v1/health")
+        assert root_challenge.status_code == 401
+        assert bot_challenge.status_code == 401
+        assert root_challenge.headers["X-VikingBot-Gateway"] == "true"
+        assert bot_challenge.headers["X-VikingBot-Gateway"] == "true"
+        headers = {"X-Gateway-Token": "gateway-secret"}
+        assert client.get("/health", headers=headers).status_code == 200
+        assert client.get("/bot/v1/health", headers=headers).status_code == 200
+
+    def test_trusted_sessions_are_isolated_by_request_identity(
+        self, message_bus, temp_workspace, monkeypatch
+    ):
+        config = SimpleNamespace(
+            gateway=SimpleNamespace(host="127.0.0.1", token=""),
+            ov_server=SimpleNamespace(
+                server_url="http://ov.local",
+                effective_auth_mode="trusted",
+                api_key_type="root",
+            ),
+        )
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+            global_config=config,
+        )
+
+        async def fake_health(request):
+            return {
+                "status": "ok",
+                "auth_mode": "trusted",
+                "role": "user",
+                "account_id": request.headers["X-OpenViking-Account"],
+                "user_id": request.headers["X-OpenViking-User"],
+            }
+
+        monkeypatch.setattr(channel, "_request_upstream_health", fake_health)
+        client = _make_client(channel)
+        alice_headers = {
+            "X-API-Key": "root-key",
+            "X-OpenViking-Account": "acct",
+            "X-OpenViking-User": "alice",
+        }
+        bob_headers = {
+            "X-API-Key": "root-key",
+            "X-OpenViking-Account": "acct",
+            "X-OpenViking-User": "bob",
+        }
+
+        created = client.post("/bot/v1/sessions", headers=alice_headers, json={})
+        assert created.status_code == 200
+        session_id = created.json()["session_id"]
+
+        assert (
+            client.get(f"/bot/v1/sessions/{session_id}", headers=alice_headers).status_code == 200
+        )
+        assert client.get(f"/bot/v1/sessions/{session_id}", headers=bob_headers).status_code == 404
+        assert client.get("/bot/v1/sessions", headers=bob_headers).json()["total"] == 0
 
     def test_chat_accepts_requests_when_api_key_not_configured(
         self, message_bus, temp_workspace, monkeypatch
@@ -97,6 +309,109 @@ class TestOpenAPIAuth:
         assert response.status_code == 200
         assert response.json()["message"] == "ok"
 
+    def test_gateway_health_reports_upstream_sources(
+        self, message_bus, temp_workspace, monkeypatch
+    ):
+        config = SimpleNamespace(
+            gateway=SimpleNamespace(host="127.0.0.1", token=""),
+            ov_server=SimpleNamespace(
+                server_url="http://ov.local",
+                effective_auth_mode="api_key",
+                api_key_type="user",
+                _source="inherited",
+                _api_key_source="bot.ov_server.api_key",
+            ),
+        )
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+            global_config=config,
+        )
+
+        async def fake_health(_request):
+            return {
+                "status": "ok",
+                "auth_mode": "api_key",
+                "role": "user",
+                "account_id": "acct",
+                "user_id": "alice",
+            }
+
+        monkeypatch.setattr(channel, "_request_upstream_health", fake_health)
+        app = FastAPI()
+        app.include_router(channel.get_gateway_router())
+        client = TestClient(app)
+
+        response = client.get("/health")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["mode"] == "openviking_inherited"
+        assert body["upstream_source"] == "inherited"
+        assert body["upstream_api_key_source"] == "bot.ov_server.api_key"
+        assert body["gateway_token_required"] is False
+
+    def test_gateway_health_validates_and_returns_caller_identity(
+        self, message_bus, temp_workspace, monkeypatch
+    ):
+        captured = []
+        config = SimpleNamespace(
+            gateway=SimpleNamespace(host="127.0.0.1", token=""),
+            ov_server=SimpleNamespace(
+                server_url="http://ov.local",
+                effective_auth_mode="api_key",
+                api_key_type="user",
+                api_key="bot-user-key",
+            ),
+        )
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+            global_config=config,
+        )
+
+        class FakeAsyncClient:
+            def __init__(self, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def get(self, url, headers=None):
+                captured.append(dict(headers or {}))
+                return httpx.Response(
+                    200,
+                    json={
+                        "status": "ok",
+                        "auth_mode": "api_key",
+                        "role": "user",
+                        "account_id": "acct",
+                        "user_id": "alice",
+                    },
+                )
+
+        monkeypatch.setattr("vikingbot.channels.openapi.httpx.AsyncClient", FakeAsyncClient)
+        app = FastAPI()
+        app.include_router(channel.get_gateway_router())
+        client = TestClient(app)
+
+        anonymous = client.get("/health")
+        authenticated = client.get("/health", headers={"X-API-Key": "caller-user-key"})
+
+        assert anonymous.status_code == 200
+        assert "role" not in anonymous.json()
+        assert captured[0]["X-API-Key"] == "bot-user-key"
+        assert authenticated.status_code == 200
+        assert captured[1]["X-API-Key"] == "caller-user-key"
+        assert authenticated.json()["role"] == "user"
+        assert authenticated.json()["account_id"] == "acct"
+        assert authenticated.json()["user_id"] == "alice"
+
     def test_chat_rejects_when_non_localhost_and_token_not_configured(
         self, message_bus, temp_workspace
     ):
@@ -114,6 +429,793 @@ class TestOpenAPIAuth:
         assert (
             response.json()["detail"]
             == "OpenAPI gateway token is required when host is non-localhost"
+        )
+
+    def test_chat_rejects_untrusted_openviking_connection_body(self, message_bus, temp_workspace):
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+        )
+        client = _make_client(channel)
+
+        response = client.post(
+            "/bot/v1/chat",
+            json={
+                "message": "hello",
+                "openviking_connection": {
+                    "api_key": "stolen-key",
+                    "account_id": "acct",
+                    "user_id": "alice",
+                    "server_url": "http://ov.local",
+                },
+            },
+        )
+
+        assert response.status_code == 403
+        assert "openviking_connection is only accepted" in response.json()["detail"]
+
+    def test_chat_resolves_openviking_api_key_identity(
+        self, message_bus, temp_workspace, monkeypatch
+    ):
+        captured = {}
+        config = SimpleNamespace(
+            gateway=SimpleNamespace(host="127.0.0.1", token=""),
+            ov_server=SimpleNamespace(
+                server_url="http://ov.local",
+                effective_auth_mode="api_key",
+                api_key_type="user",
+            ),
+        )
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+            global_config=config,
+        )
+
+        class FakeAsyncClient:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def get(self, url, headers=None):
+                captured["health_url"] = url
+                captured["health_headers"] = headers
+                return httpx.Response(
+                    200,
+                    json={
+                        "status": "ok",
+                        "auth_mode": "api_key",
+                        "role": "user",
+                        "account_id": "acct",
+                        "user_id": "alice",
+                    },
+                )
+
+        async def fake_handle_chat(request):
+            captured["connection"] = request.openviking_connection.model_dump(exclude_none=True)
+            captured["sender_id"] = channel._request_user_id(request)
+            captured["actor_peer_id"] = channel._request_actor_peer_id(
+                request, captured["sender_id"]
+            )
+            return ChatResponse(
+                session_id=request.session_id or "default", message="ok", events=None
+            )
+
+        monkeypatch.setattr("vikingbot.channels.openapi.httpx.AsyncClient", FakeAsyncClient)
+        monkeypatch.setattr(channel, "_handle_chat", fake_handle_chat)
+        client = _make_client(channel)
+
+        response = client.post(
+            "/bot/v1/chat",
+            headers={"X-API-Key": "user-key", "X-OpenViking-Actor-Peer": "peer-a"},
+            json={"message": "hello", "user_id": "display-user"},
+        )
+
+        assert response.status_code == 200
+        assert captured["health_url"] == "http://ov.local/health"
+        assert captured["health_headers"]["X-API-Key"] == "user-key"
+        assert captured["sender_id"] == "display-user"
+        assert captured["actor_peer_id"] == "peer-a"
+        assert captured["connection"] == {
+            "api_key": "user-key",
+            "account_id": "acct",
+            "user_id": "alice",
+            "agent_id": "web-playground",
+            "role": "user",
+            "api_key_type": "user",
+            "namespace_policy": {
+                "isolate_user_scope_by_agent": False,
+                "isolate_agent_scope_by_user": False,
+            },
+            "server_url": "http://ov.local",
+            "actor_peer_id": "peer-a",
+        }
+
+    def test_chat_rejects_root_openviking_api_key_identity(
+        self, message_bus, temp_workspace, monkeypatch
+    ):
+        config = SimpleNamespace(
+            gateway=SimpleNamespace(host="127.0.0.1", token=""),
+            ov_server=SimpleNamespace(
+                server_url="http://ov.local",
+                effective_auth_mode="api_key",
+                api_key_type="user",
+            ),
+        )
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+            global_config=config,
+        )
+
+        class FakeAsyncClient:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def get(self, url, headers=None):
+                return httpx.Response(
+                    200,
+                    json={
+                        "status": "ok",
+                        "auth_mode": "api_key",
+                        "role": "root",
+                        "account_id": "acct",
+                        "user_id": "root",
+                    },
+                )
+
+        async def fake_handle_chat(_request):
+            raise AssertionError("chat handler should not run for root API key")
+
+        monkeypatch.setattr("vikingbot.channels.openapi.httpx.AsyncClient", FakeAsyncClient)
+        monkeypatch.setattr(channel, "_handle_chat", fake_handle_chat)
+        client = _make_client(channel)
+
+        response = client.post(
+            "/bot/v1/chat",
+            headers={"X-API-Key": "root-key"},
+            json={"message": "hello"},
+        )
+
+        assert response.status_code == 401
+        assert "User/Admin identity" in response.json()["detail"]
+
+    def test_chat_rejects_api_key_upstream_without_openviking_api_key(
+        self, message_bus, temp_workspace, monkeypatch
+    ):
+        config = SimpleNamespace(
+            gateway=SimpleNamespace(host="0.0.0.0", token="gateway-secret"),
+            ov_server=SimpleNamespace(
+                server_url="http://ov.local",
+                effective_auth_mode="api_key",
+                api_key_type="user",
+            ),
+        )
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+            global_config=config,
+        )
+
+        async def fake_handle_chat(_request):
+            raise AssertionError("chat handler should not run without an OpenViking API key")
+
+        monkeypatch.setattr(channel, "_handle_chat", fake_handle_chat)
+        client = _make_client(channel)
+
+        response = client.post(
+            "/bot/v1/chat",
+            headers={"X-Gateway-Token": "gateway-secret"},
+            json={"message": "hello"},
+        )
+
+        assert response.status_code == 401
+        assert response.json()["detail"] == "OpenViking API key header required"
+
+    def test_chat_rejects_trusted_upstream_without_identity(
+        self, message_bus, temp_workspace, monkeypatch
+    ):
+        config = SimpleNamespace(
+            gateway=SimpleNamespace(host="127.0.0.1", token=""),
+            ov_server=SimpleNamespace(
+                server_url="http://ov.local",
+                effective_auth_mode="trusted",
+                api_key_type="root",
+                api_key="configured-root-key",
+                account_id="configured-account",
+                admin_user_id="configured-user",
+            ),
+        )
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+            global_config=config,
+        )
+
+        class FakeAsyncClient:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def get(self, url, headers=None):
+                return httpx.Response(
+                    200,
+                    json={"status": "ok", "auth_mode": "trusted"},
+                    headers={"content-type": "application/json"},
+                )
+
+        async def fake_handle_chat(_request):
+            raise AssertionError("chat handler should not run without trusted identity")
+
+        monkeypatch.setattr("vikingbot.channels.openapi.httpx.AsyncClient", FakeAsyncClient)
+        monkeypatch.setattr(channel, "_handle_chat", fake_handle_chat)
+        client = _make_client(channel)
+
+        response = client.post(
+            "/bot/v1/chat",
+            headers={"X-API-Key": "root-key"},
+            json={"message": "hello"},
+        )
+
+        assert response.status_code == 401
+        assert "Trusted OpenViking chat requires" in response.json()["detail"]
+        assert "X-OpenViking-Account" in response.json()["detail"]
+        assert "X-OpenViking-User" in response.json()["detail"]
+
+    def test_chat_resolves_trusted_connection_from_request_identity(
+        self, message_bus, temp_workspace, monkeypatch
+    ):
+        captured = {}
+        config = SimpleNamespace(
+            gateway=SimpleNamespace(host="127.0.0.1", token=""),
+            ov_server=SimpleNamespace(
+                server_url="http://ov.local",
+                effective_auth_mode="trusted",
+                api_key_type="root",
+                api_key="configured-root-key",
+                account_id="",
+                admin_user_id="",
+            ),
+        )
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+            global_config=config,
+        )
+
+        class FakeAsyncClient:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def get(self, url, headers=None):
+                captured["health_headers"] = headers
+                return httpx.Response(
+                    200,
+                    json={
+                        "status": "ok",
+                        "auth_mode": "trusted",
+                        "role": "user",
+                        "account_id": "acct",
+                        "user_id": "alice",
+                    },
+                    headers={"content-type": "application/json"},
+                )
+
+        async def fake_handle_chat(request):
+            captured["connection"] = request.openviking_connection.model_dump(exclude_none=True)
+            return ChatResponse(
+                session_id=request.session_id or "default", message="ok", events=None
+            )
+
+        monkeypatch.setattr("vikingbot.channels.openapi.httpx.AsyncClient", FakeAsyncClient)
+        monkeypatch.setattr(channel, "_handle_chat", fake_handle_chat)
+        client = _make_client(channel)
+
+        response = client.post(
+            "/bot/v1/chat",
+            headers={
+                "X-API-Key": "root-key",
+                "X-OpenViking-Account": "acct",
+                "X-OpenViking-User": "alice",
+            },
+            json={"message": "hello"},
+        )
+
+        assert response.status_code == 200
+        assert captured["health_headers"]["X-API-Key"] == "root-key"
+        assert captured["health_headers"]["X-OpenViking-Account"] == "acct"
+        assert captured["health_headers"]["X-OpenViking-User"] == "alice"
+        assert captured["connection"]["api_key"] == "root-key"
+        assert captured["connection"]["account_id"] == "acct"
+        assert captured["connection"]["user_id"] == "alice"
+        assert captured["connection"]["api_key_type"] == "root"
+
+    def test_chat_rejects_trusted_identity_without_request_api_key(
+        self, message_bus, temp_workspace, monkeypatch
+    ):
+        config = SimpleNamespace(
+            gateway=SimpleNamespace(host="127.0.0.1", token=""),
+            ov_server=SimpleNamespace(
+                server_url="http://ov.local",
+                effective_auth_mode="trusted",
+                api_key_type="root",
+                api_key="configured-root-key",
+                account_id="configured-account",
+                admin_user_id="configured-user",
+            ),
+        )
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+            global_config=config,
+        )
+
+        class FakeAsyncClient:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def get(self, url, headers=None):
+                return httpx.Response(
+                    200,
+                    json={"status": "ok", "auth_mode": "trusted"},
+                    headers={"content-type": "application/json"},
+                )
+
+        async def fake_handle_chat(_request):
+            raise AssertionError("chat handler should not run without a request API key")
+
+        monkeypatch.setattr("vikingbot.channels.openapi.httpx.AsyncClient", FakeAsyncClient)
+        monkeypatch.setattr(channel, "_handle_chat", fake_handle_chat)
+        client = _make_client(channel)
+
+        response = client.post(
+            "/bot/v1/chat",
+            headers={
+                "X-OpenViking-Account": "acct",
+                "X-OpenViking-User": "alice",
+            },
+            json={"message": "hello"},
+        )
+
+        assert response.status_code == 401
+        assert response.json()["detail"] == "OpenViking API key header required"
+
+    def test_compile_status_accepts_trusted_identity_when_no_root_key_is_configured(
+        self, message_bus, temp_workspace, monkeypatch
+    ):
+        config = SimpleNamespace(
+            gateway=SimpleNamespace(host="127.0.0.1", token=""),
+            ov_server=SimpleNamespace(
+                server_url="http://ov.local",
+                effective_auth_mode="trusted",
+                api_key_type="root",
+                api_key="",
+                account_id="",
+                admin_user_id="",
+            ),
+        )
+        compile_service = SimpleNamespace()
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+            global_config=config,
+            compile_service=compile_service,
+        )
+
+        class FakeAsyncClient:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def get(self, url, headers=None):
+                assert "X-API-Key" not in headers
+                assert headers["X-OpenViking-Account"] == "acct"
+                assert headers["X-OpenViking-User"] == "alice"
+                return httpx.Response(
+                    200,
+                    json={
+                        "status": "ok",
+                        "auth_mode": "trusted",
+                        "role": "user",
+                        "account_id": "acct",
+                        "user_id": "alice",
+                    },
+                    headers={"content-type": "application/json"},
+                )
+
+        async def fake_get_task(task_id, principal_scope):
+            assert task_id == "cmp_1"
+            assert principal_scope == channel._principal_scope("openviking:acct:alice")
+            return {
+                "task_id": task_id,
+                "status": "running",
+                "stage": "agent",
+                "created_at": "2026-07-20T00:00:00Z",
+                "updated_at": "2026-07-20T00:00:01Z",
+            }
+
+        compile_service.get_task = fake_get_task
+        monkeypatch.setattr("vikingbot.channels.openapi.httpx.AsyncClient", FakeAsyncClient)
+        client = _make_client(channel)
+
+        response = client.get(
+            "/bot/v1/compile/cmp_1",
+            headers={
+                "X-OpenViking-Account": "acct",
+                "X-OpenViking-User": "alice",
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["task_id"] == "cmp_1"
+
+    def test_public_gateway_requires_gateway_token_even_with_openviking_api_key(
+        self, message_bus, temp_workspace, monkeypatch
+    ):
+        config = SimpleNamespace(
+            gateway=SimpleNamespace(host="0.0.0.0", token="gateway-secret"),
+            ov_server=SimpleNamespace(
+                server_url="http://ov.local",
+                effective_auth_mode="api_key",
+                api_key_type="user",
+            ),
+        )
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+            global_config=config,
+        )
+
+        async def fake_handle_chat(_request):
+            raise AssertionError("chat handler should not run without gateway token")
+
+        monkeypatch.setattr(channel, "_handle_chat", fake_handle_chat)
+        client = _make_client(channel)
+
+        response = client.post(
+            "/bot/v1/chat",
+            headers={"X-API-Key": "user-key"},
+            json={"message": "hello"},
+        )
+
+        assert response.status_code == 401
+        assert response.json()["detail"] == "X-Gateway-Token header required"
+        assert response.headers["X-VikingBot-Gateway"] == "true"
+
+    def test_gateway_proxy_reports_standalone_without_openviking(self, message_bus, temp_workspace):
+        config = SimpleNamespace(
+            gateway=SimpleNamespace(host="127.0.0.1", token=""),
+            ov_server=SimpleNamespace(server_url=""),
+        )
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+            global_config=config,
+        )
+        app = FastAPI()
+        app.include_router(channel.get_gateway_router())
+        client = TestClient(app)
+
+        response = client.get("/api/v1/system/status")
+
+        assert response.status_code == 503
+        assert (
+            response.json()["detail"]
+            == "VikingBot gateway proxy is active, but no available OpenViking server is configured"
+        )
+
+    def test_chat_rejects_runtime_upstream_dev_on_public_gateway(
+        self, message_bus, temp_workspace, monkeypatch
+    ):
+        config = SimpleNamespace(
+            gateway=SimpleNamespace(host="0.0.0.0", token="gateway-secret"),
+            ov_server=SimpleNamespace(
+                server_url="http://ov.local",
+                effective_auth_mode="api_key",
+                api_key_type="user",
+            ),
+        )
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+            global_config=config,
+        )
+
+        class FakeAsyncClient:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def get(self, url, headers=None):
+                return httpx.Response(
+                    200,
+                    json={"status": "ok", "auth_mode": "dev"},
+                    headers={"content-type": "application/json"},
+                )
+
+        async def fake_handle_chat(_request):
+            raise AssertionError("chat handler should not run against unsafe dev upstream")
+
+        monkeypatch.setattr("vikingbot.channels.openapi.httpx.AsyncClient", FakeAsyncClient)
+        monkeypatch.setattr(channel, "_handle_chat", fake_handle_chat)
+        client = _make_client(channel)
+
+        response = client.post(
+            "/bot/v1/chat",
+            headers={"X-Gateway-Token": "gateway-secret", "X-API-Key": "user-key"},
+            json={"message": "hello"},
+        )
+
+        assert response.status_code == 403
+        assert (
+            response.json()["detail"]
+            == "OpenViking server auth_mode changed to dev, but dev auth can only be used when gateway and OpenViking server are localhost"
+        )
+
+    def test_gateway_proxy_forwards_openviking_request_without_gateway_token(
+        self, message_bus, temp_workspace, monkeypatch
+    ):
+        captured = {}
+        config = SimpleNamespace(
+            gateway=SimpleNamespace(host="127.0.0.1", token="secret123"),
+            ov_server=SimpleNamespace(
+                server_url="http://ov.local",
+                effective_auth_mode="trusted",
+                api_key_type="root",
+            ),
+        )
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+            global_config=config,
+        )
+
+        class FakeAsyncClient:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def get(self, url, headers=None):
+                captured["health_url"] = url
+                captured["health_headers"] = headers
+                return httpx.Response(
+                    200,
+                    json={"status": "ok", "auth_mode": "trusted"},
+                    headers={"content-type": "application/json"},
+                )
+
+            def build_request(self, method, url, content=None, headers=None):
+                captured["method"] = method
+                captured["url"] = url
+                captured["headers"] = headers
+                return httpx.Request(method, url, content=content, headers=headers)
+
+            async def send(self, request, stream=False):
+                captured["content"] = b"".join([chunk async for chunk in request.stream])
+                upstream_stream = _AsyncBytesStream(b'{"ok":', b"true}")
+                captured["upstream_stream"] = upstream_stream
+                return httpx.Response(
+                    201,
+                    stream=upstream_stream,
+                    headers={"content-type": "application/json"},
+                    request=request,
+                )
+
+            async def aclose(self):
+                captured["proxy_client_closed"] = True
+
+        monkeypatch.setattr("vikingbot.channels.openapi.httpx.AsyncClient", FakeAsyncClient)
+        app = FastAPI()
+        app.include_router(channel.get_gateway_router())
+        client = TestClient(app)
+
+        response = client.post(
+            "/api/v1/search/search?profile=1",
+            headers={
+                "X-Gateway-Token": "secret123",
+                "X-API-Key": "user-key",
+                "X-OpenViking-Account": "acct",
+                "Content-Type": "application/json",
+            },
+            json={"query": "hello"},
+        )
+
+        assert response.status_code == 201
+        assert response.json() == {"ok": True}
+        assert captured["health_url"] == "http://ov.local/health"
+        assert captured["method"] == "POST"
+        assert captured["url"] == "http://ov.local/api/v1/search/search?profile=1"
+        assert json.loads(captured["content"]) == {"query": "hello"}
+        forwarded_headers = {key.lower(): value for key, value in captured["headers"].items()}
+        assert forwarded_headers["x-api-key"] == "user-key"
+        assert forwarded_headers["x-openviking-account"] == "acct"
+        assert "x-gateway-token" not in forwarded_headers
+        assert captured["upstream_stream"].closed is True
+        assert captured["proxy_client_closed"] is True
+
+    def test_gateway_proxy_does_not_add_trusted_identity_from_config(
+        self, message_bus, temp_workspace, monkeypatch
+    ):
+        captured = {}
+        config = SimpleNamespace(
+            gateway=SimpleNamespace(host="127.0.0.1", token=""),
+            ov_server=SimpleNamespace(
+                server_url="http://ov.local",
+                effective_auth_mode="trusted",
+                api_key_type="root",
+                api_key="configured-root-key",
+                account_id="acct",
+                admin_user_id="alice",
+            ),
+        )
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+            global_config=config,
+        )
+
+        class FakeAsyncClient:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def aclose(self):
+                captured["proxy_client_closed"] = True
+
+            async def get(self, url, headers=None):
+                captured["health_headers"] = headers
+                return httpx.Response(
+                    200,
+                    json={"status": "ok", "auth_mode": "trusted"},
+                    headers={"content-type": "application/json"},
+                )
+
+            def build_request(self, method, url, content=None, headers=None):
+                captured["content"] = content
+                captured["headers"] = headers
+                return httpx.Request(method, url, content=content, headers=headers)
+
+            async def send(self, request, stream=False):
+                upstream_stream = _AsyncBytesStream(b'{"ok":true}')
+                captured["upstream_stream"] = upstream_stream
+                return httpx.Response(
+                    200,
+                    stream=upstream_stream,
+                    headers={"content-type": "application/json"},
+                    request=request,
+                )
+
+        monkeypatch.setattr("vikingbot.channels.openapi.httpx.AsyncClient", FakeAsyncClient)
+        app = FastAPI()
+        app.include_router(channel.get_gateway_router())
+        client = TestClient(app)
+
+        response = client.get("/api/v1/system/status")
+
+        assert response.status_code == 200
+        assert captured["content"] is None
+        assert captured["health_headers"] == {}
+        forwarded_headers = {key.lower(): value for key, value in captured["headers"].items()}
+        assert "x-api-key" not in forwarded_headers
+        assert "authorization" not in forwarded_headers
+        assert "x-openviking-account" not in forwarded_headers
+        assert "x-openviking-user" not in forwarded_headers
+        assert captured["upstream_stream"].closed is True
+        assert captured["proxy_client_closed"] is True
+
+    def test_gateway_proxy_rejects_runtime_upstream_dev_on_public_gateway(
+        self, message_bus, temp_workspace, monkeypatch
+    ):
+        config = SimpleNamespace(
+            gateway=SimpleNamespace(host="0.0.0.0", token="gateway-secret"),
+            ov_server=SimpleNamespace(
+                server_url="http://ov.local",
+                effective_auth_mode="api_key",
+                api_key_type="user",
+            ),
+        )
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+            global_config=config,
+        )
+
+        class FakeAsyncClient:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def get(self, url, headers=None):
+                return httpx.Response(
+                    200,
+                    json={"status": "ok", "auth_mode": "dev"},
+                    headers={"content-type": "application/json"},
+                )
+
+            async def request(self, *args, **kwargs):
+                raise AssertionError("proxy should not forward requests to unsafe dev upstream")
+
+        monkeypatch.setattr("vikingbot.channels.openapi.httpx.AsyncClient", FakeAsyncClient)
+        app = FastAPI()
+        app.include_router(channel.get_gateway_router())
+        client = TestClient(app)
+
+        response = client.get(
+            "/api/v1/system/status",
+            headers={"X-Gateway-Token": "gateway-secret"},
+        )
+
+        assert response.status_code == 403
+        assert (
+            response.json()["detail"]
+            == "OpenViking server auth_mode changed to dev, but dev auth can only be used when gateway and OpenViking server are localhost"
         )
 
     def test_bot_channel_accepts_requests_without_channel_api_key(
@@ -142,7 +1244,7 @@ class TestOpenAPIAuth:
         assert response.status_code == 200
         assert response.json()["message"] == "ok:alpha"
 
-    def test_bot_channel_requires_global_gateway_token_when_configured(
+    def test_bot_channel_allows_localhost_without_gateway_token_when_configured(
         self, message_bus, temp_workspace, monkeypatch
     ):
         channel = OpenAPIChannel(
@@ -161,12 +1263,20 @@ class TestOpenAPIAuth:
         monkeypatch.setattr(channel, "_handle_bot_chat", fake_handle_bot_chat)
         client = _make_client(channel)
 
-        unauthorized = client.post(
+        local_without_token = client.post(
             "/bot/v1/chat/channel",
             json={"message": "hello", "channel_id": "alpha"},
         )
-        assert unauthorized.status_code == 401
-        assert unauthorized.json()["detail"] == "X-Gateway-Token header required"
+        assert local_without_token.status_code == 200
+        assert local_without_token.json()["message"] == "ok:alpha"
+
+        invalid = client.post(
+            "/bot/v1/chat/channel",
+            headers={"X-Gateway-Token": "wrong"},
+            json={"message": "hello", "channel_id": "alpha"},
+        )
+        assert invalid.status_code == 200
+        assert invalid.json()["message"] == "ok:alpha"
 
         authorized = client.post(
             "/bot/v1/chat/channel",
@@ -205,66 +1315,55 @@ class TestOpenAPIAuth:
         assert pending.events[0]["type"] == "response"
         assert pending.events[0]["data"] == {"content": "hello", "response_id": "resp-123"}
 
-    def test_feedback_persists_event_and_emits_feedback_submitted(
-        self, message_bus, temp_workspace
-    ):
+    @pytest.mark.asyncio
+    async def test_send_forwards_iteration_to_bot_stream(self, message_bus, temp_workspace):
         channel = OpenAPIChannel(
             OpenAPIChannelConfig(),
             message_bus,
             workspace_path=temp_workspace,
         )
-        session_key = SessionKey(type="cli", channel_id="default", chat_id="session-1")
-        session = channel._session_manager.get_or_create(session_key)
-        session.add_message(
-            "assistant",
-            "hello",
-            sender_id="user-1",
-            response_id="resp-123",
-            timestamp="2026-04-30T00:00:00",
-        )
-        asyncio.run(channel._session_manager.save(session))
+        pending = PendingResponse()
+        channel._bot_pending["default"] = {"session-1": pending}
 
-        client = _make_client(channel)
-        response = client.post(
-            "/bot/v1/feedback",
-            json={
-                "session_id": "session-1",
-                "response_id": "resp-123",
-                "feedback_type": "thumb_up",
-                "feedback_text": "helpful",
-            },
+        await channel.send(
+            OutboundMessage(
+                session_key=SessionKey(
+                    type="bot_api",
+                    channel_id="default",
+                    chat_id="session-1",
+                ),
+                content="Iteration 2/10",
+                event_type=OutboundEventType.ITERATION,
+            )
         )
 
-        assert response.status_code == 200
-        body = response.json()
-        assert body["accepted"] is True
-        assert body["response_id"] == "resp-123"
-        assert body["session_id"] == "session-1"
-        assert body["feedback_type"] == "thumb_up"
-        assert message_bus.outbound_size == 2
+        assert pending.events[0]["type"] == "iteration"
+        assert pending.events[0]["data"] == "Iteration 2/10"
 
-        first_outbound = asyncio.run(message_bus.consume_outbound())
-        second_outbound = asyncio.run(message_bus.consume_outbound())
-        assert first_outbound.event_type == OutboundEventType.RESPONSE_OUTCOME_EVALUATED
-        assert first_outbound.response_id == "resp-123"
-        assert (
-            first_outbound.metadata["response_outcome_evaluated"]["outcome_label"]
-            == "positive_feedback"
+    @pytest.mark.asyncio
+    async def test_send_forwards_iteration_to_openapi_stream(self, message_bus, temp_workspace):
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
         )
-        assert second_outbound.event_type == OutboundEventType.FEEDBACK_SUBMITTED
-        assert second_outbound.response_id == "resp-123"
-        assert second_outbound.metadata["feedback_submitted"]["feedback_type"] == "thumb_up"
-        assert second_outbound.metadata["feedback_submitted"]["feedback_text"] == "helpful"
+        pending = PendingResponse()
+        channel._pending["session-1"] = pending
 
-        session_path = temp_workspace / "sessions" / "cli__default__session-1.jsonl"
-        lines = session_path.read_text(encoding="utf-8").splitlines()
-        metadata = json.loads(lines[0])
-        assert metadata["metadata"]["feedback_events"][0]["response_id"] == "resp-123"
-        assert metadata["metadata"]["feedback_events"][0]["feedback_type"] == "thumb_up"
-        assert (
-            metadata["metadata"]["response_outcomes"]["resp-123"]["outcome_label"]
-            == "positive_feedback"
+        await channel.send(
+            OutboundMessage(
+                session_key=SessionKey(
+                    type="cli",
+                    channel_id="default",
+                    chat_id="session-1",
+                ),
+                content="Iteration 2/10",
+                event_type=OutboundEventType.ITERATION,
+            )
         )
+
+        assert pending.events[0]["type"] == "iteration"
+        assert pending.events[0]["data"] == "Iteration 2/10"
 
     def test_feedback_requires_existing_response(self, message_bus, temp_workspace):
         channel = OpenAPIChannel(
@@ -305,66 +1404,6 @@ class TestOpenAPIAuth:
 
         assert response.status_code == 422
         assert "feedback_score is required when feedback_type is rating" in response.text
-
-    def test_rating_feedback_persists_score_and_emits_outcome(self, message_bus, temp_workspace):
-        channel = OpenAPIChannel(
-            OpenAPIChannelConfig(),
-            message_bus,
-            workspace_path=temp_workspace,
-        )
-        session_key = SessionKey(type="cli", channel_id="default", chat_id="session-1")
-        session = channel._session_manager.get_or_create(session_key)
-        session.add_message(
-            "assistant",
-            "hello",
-            sender_id="user-1",
-            response_id="resp-123",
-            timestamp="2026-04-30T00:00:00",
-        )
-        asyncio.run(channel._session_manager.save(session))
-
-        client = _make_client(channel)
-        response = client.post(
-            "/bot/v1/feedback",
-            json={
-                "session_id": "session-1",
-                "response_id": "resp-123",
-                "feedback_type": "rating",
-                "feedback_score": -1,
-                "feedback_text": "bad answer",
-            },
-        )
-
-        assert response.status_code == 200
-        body = response.json()
-        assert body["accepted"] is True
-        assert body["feedback_type"] == "rating"
-        assert message_bus.outbound_size == 2
-
-        first_outbound = asyncio.run(message_bus.consume_outbound())
-        second_outbound = asyncio.run(message_bus.consume_outbound())
-        assert first_outbound.event_type == OutboundEventType.RESPONSE_OUTCOME_EVALUATED
-        assert (
-            first_outbound.metadata["response_outcome_evaluated"]["outcome_label"]
-            == "negative_feedback"
-        )
-        assert (
-            first_outbound.metadata["response_outcome_evaluated"]["evidence"]["feedback_score"]
-            == -1.0
-        )
-        assert second_outbound.event_type == OutboundEventType.FEEDBACK_SUBMITTED
-        assert second_outbound.metadata["feedback_submitted"]["feedback_type"] == "rating"
-        assert second_outbound.metadata["feedback_submitted"]["feedback_score"] == -1
-
-        session_path = temp_workspace / "sessions" / "cli__default__session-1.jsonl"
-        lines = session_path.read_text(encoding="utf-8").splitlines()
-        metadata = json.loads(lines[0])
-        assert metadata["metadata"]["feedback_events"][0]["feedback_type"] == "rating"
-        assert metadata["metadata"]["feedback_events"][0]["feedback_score"] == -1
-        assert (
-            metadata["metadata"]["response_outcomes"]["resp-123"]["outcome_label"]
-            == "negative_feedback"
-        )
 
     def test_feedback_reloads_session_after_stale_cached_miss(self, message_bus, temp_workspace):
         channel = OpenAPIChannel(

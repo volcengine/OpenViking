@@ -4,6 +4,7 @@
 """Tests for Admin API endpoints (openviking/server/routers/admin.py)."""
 
 import asyncio
+import hashlib
 import json
 import uuid
 
@@ -21,6 +22,7 @@ from openviking.server.config import ServerConfig
 from openviking.server.dependencies import set_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
+from openviking.server.user_config import read_user_add_targets, read_user_config
 from openviking.service.core import OpenVikingService
 from openviking.service.task_store import (
     SYSTEM_TASK_ACCOUNT_ID,
@@ -32,6 +34,10 @@ from openviking_cli.session.user_id import UserIdentifier
 
 def _uid() -> str:
     return f"acme_{uuid.uuid4().hex[:8]}"
+
+
+def _seed_secret(user_id: str, seed: str) -> str:
+    return hashlib.sha256(f"{user_id}\0{seed}".encode("utf-8")).hexdigest()
 
 
 ROOT_KEY = "admin-api-test-root-key-abcdef1234567890ab"
@@ -63,10 +69,28 @@ class _FakeAGFS:
             current = f"{current}/{part}" if current else f"/{part}"
             self._dirs.add(current)
 
+    def pathlock_acquire_exact(self, ctx, path, timeout_secs=0.0, owner_lease_ref=None):
+        return {"lease_ref": f"test:{path}"}
+
+    def pathlock_release(self, ctx, lease):
+        return None
+
 
 class _FakeVikingFS:
     def __init__(self):
         self.agfs = _FakeAGFS()
+        self.files = {}
+
+    async def read_file(self, uri, **_kwargs):
+        if uri not in self.files:
+            raise FileNotFoundError(uri)
+        return self.files[uri]
+
+    async def write_file(self, uri, content, **_kwargs):
+        self.files[uri] = content
+
+    async def rm(self, uri, **_kwargs):
+        self.files.pop(uri, None)
 
 
 class _FakeService:
@@ -81,11 +105,14 @@ class _FakeService:
 
 
 def _build_lightweight_admin_test_app() -> FastAPI:
+    from openviking.server.auth.plugins import ApiKeyAuthPlugin
+    from openviking.server.auth.registry import get_registry
     from openviking.server.routers import admin as admin_router
 
     app = FastAPI()
     app.state.config = ServerConfig(root_api_key=ROOT_KEY)
     fake_service = _FakeService()
+    app.state.fake_service = fake_service
     set_service(fake_service)
 
     @app.exception_handler(OpenVikingError)
@@ -101,12 +128,19 @@ def _build_lightweight_admin_test_app() -> FastAPI:
 
     manager = APIKeyManager(root_key=ROOT_KEY, viking_fs=fake_service.viking_fs)
     app.state.api_key_manager = manager
+
+    # Set auth plugin (lifespan not triggered in ASGI tests)
+    registry = get_registry()
+    if registry.get("api_key") is None:
+        registry.register(ApiKeyAuthPlugin)
+    app.state.auth_plugin = registry.get("api_key")()
+
     app.include_router(admin_router.router)
     return app
 
 
 @pytest_asyncio.fixture(scope="function")
-async def lightweight_admin_app():
+async def lightweight_admin_app(monkeypatch):
     app = _build_lightweight_admin_test_app()
     await app.state.api_key_manager.load()
     return app
@@ -131,6 +165,9 @@ async def admin_service(temp_dir):
 
 @pytest_asyncio.fixture(scope="function")
 async def admin_app(admin_service):
+    from openviking.server.auth.plugins import ApiKeyAuthPlugin
+    from openviking.server.auth.registry import get_registry
+
     config = ServerConfig(root_api_key=ROOT_KEY)
     app = create_app(config=config, service=admin_service)
     set_service(admin_service)
@@ -138,6 +175,12 @@ async def admin_app(admin_service):
     manager = APIKeyManager(root_key=ROOT_KEY, viking_fs=admin_service.viking_fs)
     await manager.load()
     app.state.api_key_manager = manager
+
+    # Set auth plugin (lifespan not triggered in ASGI tests)
+    registry = get_registry()
+    if registry.get("api_key") is None:
+        registry.register(ApiKeyAuthPlugin)
+    app.state.auth_plugin = registry.get("api_key")()
 
     return app
 
@@ -231,6 +274,90 @@ async def test_create_account(admin_client: httpx.AsyncClient, admin_service: Op
     ctx = RequestContext(user=UserIdentifier(acct, "alice"), role=Role.ADMIN)
     assert await admin_service.viking_fs.abstract("viking://resources", ctx=ctx)
     assert await admin_service.viking_fs.abstract("viking://user", ctx=ctx)
+
+
+async def test_create_user_paths_accept_initial_user_config(
+    lightweight_admin_client: httpx.AsyncClient,
+    lightweight_admin_app: FastAPI,
+):
+    acct = _uid()
+    viking_fs = lightweight_admin_app.state.fake_service.viking_fs
+
+    resp = await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={
+            "account_id": acct,
+            "admin_user_id": "alice",
+            "user_config": {"add_targets": {"resource_uri": "viking://user/resources/admin"}},
+        },
+        headers=root_headers(),
+    )
+    assert resp.status_code == 200, resp.text
+
+    alice_settings = await read_user_add_targets(
+        viking_fs,
+        RequestContext(user=UserIdentifier(acct, "alice"), role=Role.ADMIN),
+    )
+    assert alice_settings.resource_uri == "viking://user/resources/admin"
+
+    resp = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={
+            "user_id": "bob",
+            "role": "user",
+            "user_config": {"add_targets": {"resource_uri": "viking://user/resources/bob"}},
+        },
+        headers=root_headers(),
+    )
+    assert resp.status_code == 200, resp.text
+
+    bob_settings = await read_user_add_targets(
+        viking_fs,
+        RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER),
+    )
+    assert bob_settings.resource_uri == "viking://user/resources/bob"
+
+
+async def test_create_user_paths_ignore_deprecated_agent_evolution_config(
+    lightweight_admin_client: httpx.AsyncClient,
+    lightweight_admin_app: FastAPI,
+):
+    acct = _uid()
+    viking_fs = lightweight_admin_app.state.fake_service.viking_fs
+
+    resp = await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={
+            "account_id": acct,
+            "admin_user_id": "alice",
+            "user_config": {"agent_evolution": {"enabled": True}},
+        },
+        headers=root_headers(),
+    )
+    assert resp.status_code == 200, resp.text
+
+    alice_config = await read_user_config(
+        viking_fs,
+        RequestContext(user=UserIdentifier(acct, "alice"), role=Role.ADMIN),
+    )
+    assert alice_config.agent_evolution.enabled is None
+
+    resp = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={
+            "user_id": "bob",
+            "role": "user",
+            "user_config": {"agent_evolution": {"enabled": False}},
+        },
+        headers=root_headers(),
+    )
+    assert resp.status_code == 200, resp.text
+
+    bob_config = await read_user_config(
+        viking_fs,
+        RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER),
+    )
+    assert bob_config.agent_evolution.enabled is None
 
 
 async def test_list_accounts(admin_client: httpx.AsyncClient):
@@ -346,7 +473,7 @@ async def test_root_can_register_admin_role_user(
 async def test_root_cannot_register_root_role_user(
     lightweight_admin_client: httpx.AsyncClient,
 ):
-    """ROOT must use set_role instead of minting ROOT directly in register_user."""
+    """ROOT is the configured server identity, not an account user role."""
     acct = _uid()
     await lightweight_admin_client.post(
         "/api/v1/admin/accounts",
@@ -533,26 +660,44 @@ async def test_remove_user(admin_client: httpx.AsyncClient):
 # ---- Role management ----
 
 
-async def test_set_role(admin_client: httpx.AsyncClient):
-    """ROOT can change a user's role."""
+async def test_admin_can_set_user_role_in_own_account(
+    lightweight_admin_client: httpx.AsyncClient,
+):
+    """ADMIN can promote a user in its own account to ADMIN."""
     acct = _uid()
-    await admin_client.post(
+    create_account = await lightweight_admin_client.post(
         "/api/v1/admin/accounts",
         json={"account_id": acct, "admin_user_id": "alice"},
         headers=root_headers(),
     )
-    await admin_client.post(
+    alice_key = create_account.json()["result"]["user_key"]
+    create_user = await lightweight_admin_client.post(
         f"/api/v1/admin/accounts/{acct}/users",
         json={"user_id": "bob", "role": "user"},
         headers=root_headers(),
     )
-    resp = await admin_client.put(
+    bob_key = create_user.json()["result"]["user_key"]
+
+    resp = await lightweight_admin_client.put(
         f"/api/v1/admin/accounts/{acct}/users/bob/role",
         json={"role": "admin"},
-        headers=root_headers(),
+        headers={"X-API-Key": alice_key},
     )
     assert resp.status_code == 200
     assert resp.json()["result"]["role"] == "admin"
+
+    list_users = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/users",
+        headers={"X-API-Key": bob_key},
+    )
+    assert list_users.status_code == 200
+
+    invalid_role = await lightweight_admin_client.put(
+        f"/api/v1/admin/accounts/{acct}/users/bob/role",
+        json={"role": "root"},
+        headers={"X-API-Key": alice_key},
+    )
+    assert invalid_role.status_code == 400
 
 
 async def test_regenerate_key(admin_client: httpx.AsyncClient):
@@ -591,6 +736,60 @@ async def test_regenerate_key(admin_client: httpx.AsyncClient):
         headers={"X-API-Key": new_key},
     )
     assert resp.status_code == 200
+
+
+async def test_seeded_admin_key_endpoints(admin_client: httpx.AsyncClient):
+    from openviking.server.api_keys import parse_api_key
+
+    acct = _uid()
+    resp = await admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice", "seed": "admin-seed"},
+        headers=root_headers(),
+    )
+    assert resp.status_code == 200
+    admin_key = resp.json()["result"]["user_key"]
+    account_id, user_id, secret = parse_api_key(admin_key)
+    assert account_id == acct
+    assert user_id == "alice"
+    assert secret == _seed_secret("alice", "admin-seed")
+
+    resp = await admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={"user_id": "bob", "role": "user", "seed": "bob-seed"},
+        headers=root_headers(),
+    )
+    assert resp.status_code == 200
+    old_key = resp.json()["result"]["user_key"]
+    _, _, old_secret = parse_api_key(old_key)
+    assert old_secret == _seed_secret("bob", "bob-seed")
+
+    resp = await admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users/bob/key",
+        json={"seed": "bob-new-seed"},
+        headers=root_headers(),
+    )
+    assert resp.status_code == 200
+    new_key = resp.json()["result"]["user_key"]
+    _, _, new_secret = parse_api_key(new_key)
+    assert new_secret == _seed_secret("bob", "bob-new-seed")
+    assert new_key != old_key
+
+    resp = await admin_client.get(
+        "/api/v1/fs/ls?uri=viking://",
+        headers={"X-API-Key": old_key},
+    )
+    assert resp.status_code == 401
+
+
+async def test_empty_seed_rejected(admin_client: httpx.AsyncClient):
+    acct = _uid()
+    resp = await admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice", "seed": ""},
+        headers=root_headers(),
+    )
+    assert resp.status_code == 400
 
 
 # ---- Permission guard ----
@@ -1035,6 +1234,9 @@ async def test_legacy_agent_and_session_uri_reads_are_read_only(
 
 @pytest_asyncio.fixture(scope="function")
 async def trusted_admin_app(admin_service):
+    from openviking.server.auth.plugins import TrustedAuthPlugin
+    from openviking.server.auth.registry import get_registry
+
     config = ServerConfig(auth_mode="trusted", root_api_key=ROOT_KEY)
     app = create_app(config=config, service=admin_service)
     set_service(admin_service)
@@ -1044,6 +1246,13 @@ async def trusted_admin_app(admin_service):
     if "platform" not in manager._accounts:
         await manager.create_account("platform", "gateway-admin")
     app.state.api_key_manager = manager
+
+    # Set auth plugin (lifespan not triggered in ASGI tests)
+    registry = get_registry()
+    if registry.get("trusted") is None:
+        registry.register(TrustedAuthPlugin)
+    app.state.auth_plugin = registry.get("trusted")()
+
     return app
 
 
@@ -1059,10 +1268,6 @@ async def test_trusted_mode_root_can_create_account(
     trusted_admin_app,
 ):
     """Trusted ROOT requests should be able to create accounts."""
-    # Set gateway-admin to ROOT role
-    manager = trusted_admin_app.state.api_key_manager
-    await manager.set_role("platform", "gateway-admin", "root")
-
     acct = _uid()
     resp = await trusted_admin_client.post(
         "/api/v1/admin/accounts",
@@ -1088,10 +1293,6 @@ async def test_trusted_mode_admin_can_register_user_in_own_account(
     trusted_admin_app,
 ):
     """Trusted ADMIN requests should be able to manage users in their own account."""
-    # Set gateway-admin to ROOT role first
-    manager = trusted_admin_app.state.api_key_manager
-    await manager.set_role("platform", "gateway-admin", "root")
-
     acct = _uid()
     create_resp = await trusted_admin_client.post(
         "/api/v1/admin/accounts",
@@ -1124,10 +1325,6 @@ async def test_trusted_mode_admin_can_list_users_with_account_only_in_url(
     trusted_admin_app,
 ):
     """Trusted ADMIN requests may omit X-OpenViking-Account when the URL already provides it."""
-    # Set gateway-admin to ROOT role first
-    manager = trusted_admin_app.state.api_key_manager
-    await manager.set_role("platform", "gateway-admin", "root")
-
     acct = _uid()
     create_resp = await trusted_admin_client.post(
         "/api/v1/admin/accounts",
@@ -1157,10 +1354,6 @@ async def test_trusted_mode_admin_can_list_users_without_account_or_user_headers
     trusted_admin_app,
 ):
     """Trusted admin routes may omit caller account/user when the route itself identifies the target."""
-    # Set gateway-admin to ROOT role first
-    manager = trusted_admin_app.state.api_key_manager
-    await manager.set_role("platform", "gateway-admin", "root")
-
     acct = _uid()
     create_resp = await trusted_admin_client.post(
         "/api/v1/admin/accounts",
@@ -1175,11 +1368,7 @@ async def test_trusted_mode_admin_can_list_users_without_account_or_user_headers
 
     resp = await trusted_admin_client.get(
         f"/api/v1/admin/accounts/{acct}/users",
-        headers={
-            "X-API-Key": ROOT_KEY,
-            "X-OpenViking-Account": acct,
-            "X-OpenViking-User": "alice",
-        },
+        headers={"X-API-Key": ROOT_KEY},
     )
     assert resp.status_code == 200
     assert any(user["user_id"] == "alice" for user in resp.json()["result"])
@@ -1190,10 +1379,6 @@ async def test_trusted_mode_admin_cannot_register_user_in_other_account(
     trusted_admin_app,
 ):
     """Trusted ADMIN requests should reject conflicting account identity."""
-    # Set gateway-admin to ROOT role first
-    manager = trusted_admin_app.state.api_key_manager
-    await manager.set_role("platform", "gateway-admin", "root")
-
     acct = _uid()
     other = _uid()
     for account_id, admin_user_id in ((acct, "alice"), (other, "eve")):
@@ -1226,11 +1411,8 @@ async def test_trusted_mode_admin_api_uses_trusted_gateway_identity(
     trusted_admin_app,
 ):
     """Trusted admin routes use the trusted gateway identity instead of tenant user role."""
-    # Set gateway-admin to ROOT role first
-    manager = trusted_admin_app.state.api_key_manager
-    await manager.set_role("platform", "gateway-admin", "root")
-
     acct = _uid()
+    manager = trusted_admin_app.state.api_key_manager
     create_resp = await trusted_admin_client.post(
         "/api/v1/admin/accounts",
         json={"account_id": acct, "admin_user_id": "alice"},
@@ -1265,10 +1447,6 @@ async def test_trusted_mode_requires_matching_api_key_for_admin_api(
     trusted_admin_app,
 ):
     """Trusted admin requests should require the configured server API key when present."""
-    # Set gateway-admin to ROOT role first
-    manager = trusted_admin_app.state.api_key_manager
-    await manager.set_role("platform", "gateway-admin", "root")
-
     resp = await trusted_admin_client.post(
         "/api/v1/admin/accounts",
         json={"account_id": _uid(), "admin_user_id": "alice"},
@@ -1286,10 +1464,6 @@ async def test_trusted_mode_create_account_lists_current_account_metadata(
     trusted_admin_app,
 ):
     """Trusted account creation should list the current account metadata shape."""
-    # Set gateway-admin to ROOT role first
-    manager = trusted_admin_app.state.api_key_manager
-    await manager.set_role("platform", "gateway-admin", "root")
-
     acct = _uid()
     resp = await trusted_admin_client.post(
         "/api/v1/admin/accounts",

@@ -53,6 +53,8 @@ OpenViking Server 支持两种多租户相关认证模式：
 | `api_key` | `server.auth_mode = "api_key"` | Root key 或 user key | 标准部署方式 |
 | `trusted` | `server.auth_mode = "trusted"` | 上游显式注入 `X-OpenViking-Account` / `X-OpenViking-User` | 受信网关后面 |
 
+在 trusted 模式下，上游网关还可以断言 `X-OpenViking-Role: user` 或 `X-OpenViking-Role: admin`。角色断言要求服务端已配置 `root_api_key`，且请求携带匹配的 API Key。`X-OpenViking-Role: root` 会被拒绝；ROOT 只保留给已校验的 Admin API 回退路径。
+
 ### `root_api_key` 的作用
 
 配置 `server.root_api_key` 后，OpenViking 才进入正式多租户模式：

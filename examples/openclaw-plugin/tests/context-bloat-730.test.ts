@@ -2,6 +2,11 @@ import { describe, it, expect, vi } from "vitest";
 import type { FindResultItem } from "../client.js";
 import { postProcessMemories, pickMemoriesForInjection } from "../memory-ranking.js";
 import { memoryOpenVikingConfigSchema } from "../config.js";
+import {
+  buildMemoryLines,
+  buildMemoryLinesWithBudget,
+  estimateTokenCount,
+} from "../auto-recall.js";
 
 /** Helper: create a mock FindResultItem */
 function mockMemory(overrides: Partial<FindResultItem> & { uri: string }): FindResultItem {
@@ -53,8 +58,6 @@ describe("Slice A: recallScoreThreshold default", () => {
 
 describe("Slice B: prefer abstract over full content fetch", () => {
   it("should use abstract when available instead of calling read()", async () => {
-    const { buildMemoryLines } = await import("../index.js");
-
     const mockRead = vi.fn().mockResolvedValue("Full long content from read()");
 
     const memories: FindResultItem[] = [
@@ -86,8 +89,6 @@ describe("Slice B: prefer abstract over full content fetch", () => {
 
 describe("Slice D: individual memory integrity", () => {
   it("should keep full memory content intact", async () => {
-    const { buildMemoryLines } = await import("../index.js");
-
     const longContent = "A".repeat(2000);
     const mockRead = vi.fn().mockResolvedValue(longContent);
 
@@ -111,8 +112,6 @@ describe("Slice D: individual memory integrity", () => {
 
 describe("Slice E: character budget enforcement", () => {
   it("should stop injecting before the character budget is exceeded", async () => {
-    const { buildMemoryLinesWithBudget } = await import("../index.js");
-
     // Each memory ~200 chars -> ~50 tokens per line (200 chars + "- [memory] " prefix)
     const memories: FindResultItem[] = Array.from({ length: 10 }, (_, i) =>
       mockMemory({
@@ -139,14 +138,11 @@ describe("Slice E: character budget enforcement", () => {
     expect(estimatedTokens).toBeLessThanOrEqual(53);
   });
 
-  it("should estimate tokens with CJK-aware fallback weights", async () => {
-    const { estimateTokenCount } = await import("../index.js");
+  it("should estimate tokens as ceil(chars/4)", async () => {
     expect(estimateTokenCount("")).toBe(0);
     expect(estimateTokenCount("abcd")).toBe(1);
     expect(estimateTokenCount("abcde")).toBe(2);
     expect(estimateTokenCount("A".repeat(100))).toBe(25);
-    expect(estimateTokenCount("\u4f60\u597d\u4e16\u754c")).toBe(6);
-    expect(estimateTokenCount("A\u4f60\ud83d\ude42")).toBe(4);
   });
 
   it("should have recallMaxInjectedChars in parsed config with default 4000-character budget", () => {

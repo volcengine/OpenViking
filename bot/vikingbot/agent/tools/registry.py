@@ -21,9 +21,10 @@ class ToolRegistry:
     Allows dynamic registration and execution of tools.
     """
 
-    def __init__(self):
+    def __init__(self, config: Any = None):
         self._tools: dict[str, Tool] = {}
         self.langfuse = LangfuseClient.get_instance()
+        self.config = config
 
     def register(self, tool: Tool) -> None:
         """
@@ -140,10 +141,12 @@ class ToolRegistry:
         session_key: SessionKey,
         sandbox_manager: SandboxManager | None = None,
         sender_id: str | None = None,
+        actor_peer_id: str | None = None,
         memory_peer_ids: list[str] | None = None,
         memory_owner_user_ids: list[str] | None = None,
         memory_user_ids: list[str] | None = None,
         openviking_connection: dict[str, Any] | None = None,
+        channel_metadata: dict[str, Any] | None = None,
     ) -> str:
         """
         Execute a tool by name with given parameters.
@@ -154,11 +157,13 @@ class ToolRegistry:
             session_key: Session key for the current session.
             sandbox_manager: Sandbox manager for file/shell operations.
             sender_id: Sender id for the current session.
+            actor_peer_id: Authenticated OpenViking peer id for tool requests.
             memory_peer_ids: List of peer IDs for memory retrieval.
             memory_owner_user_ids: List of explicit OpenViking user IDs for
-                legacy root-key fanout searches.
+                trusted-mode owner-user memory lookup.
             memory_user_ids: Deprecated alias for memory_owner_user_ids.
             openviking_connection: Request-scoped OpenViking identity.
+            channel_metadata: Channel-specific metadata from the inbound message.
 
         Returns:
             Tool execution result as string.
@@ -174,10 +179,12 @@ class ToolRegistry:
             session_key=session_key,
             sandbox_manager=sandbox_manager,
             sender_id=sender_id,
+            actor_peer_id=actor_peer_id or sender_id,
             memory_peer_ids=memory_peer_ids,
             memory_owner_user_ids=memory_owner_user_ids,
             memory_user_ids=memory_user_ids,
             openviking_connection=openviking_connection,
+            channel_metadata=dict(channel_metadata or {}),
         )
 
         # Langfuse tool call tracing - automatic for all tools
@@ -231,7 +238,11 @@ class ToolRegistry:
             context=HookContext(
                 event_type="tool.post_call",
                 session_key=session_key,
-                workspace_id=sandbox_manager.to_workspace_id(session_key),
+                workspace_id=(
+                    sandbox_manager.to_workspace_id(session_key) if sandbox_manager else "shared"
+                ),
+                config=self.config,
+                openviking_connection=openviking_connection,
             ),
             tool_name=name,
             params=params,

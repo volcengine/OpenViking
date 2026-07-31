@@ -298,48 +298,6 @@ class OpenVikingMount:
             logger.error(f"Failed to delete {uri}: {e}")
             raise
 
-    def get_abstract(self, path: Union[str, Path]) -> Optional[str]:
-        """
-        获取文件/目录的L0摘要
-
-        Args:
-            path: 本地文件路径
-
-        Returns:
-            摘要内容
-        """
-        self._ensure_client()
-
-        uri = self._path_to_uri(path)
-        logger.debug(f"Getting abstract for: {uri}")
-
-        try:
-            return self._client.abstract(uri)
-        except Exception as e:
-            logger.warning(f"Failed to get abstract for {uri}: {e}")
-            return None
-
-    def get_overview(self, path: Union[str, Path]) -> Optional[str]:
-        """
-        获取文件/目录的L1概览
-
-        Args:
-            path: 本地文件路径
-
-        Returns:
-            概览内容
-        """
-        self._ensure_client()
-
-        uri = self._path_to_uri(path)
-        logger.debug(f"Getting overview for: {uri}")
-
-        try:
-            return self._client.overview(uri)
-        except Exception as e:
-            logger.warning(f"Failed to get overview for {uri}: {e}")
-            return None
-
     def search(self, query: str, target_path: Optional[Union[str, Path]] = None) -> List[FileInfo]:
         """
         语义搜索

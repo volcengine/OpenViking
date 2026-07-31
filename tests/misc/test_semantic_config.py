@@ -3,6 +3,8 @@
 
 """Tests for SemanticConfig and overview budget estimation."""
 
+import pytest
+
 from openviking_cli.utils.config.parser_config import SemanticConfig
 
 
@@ -89,3 +91,17 @@ def test_memory_chunk_config_custom():
     config = SemanticConfig(memory_chunk_chars=500, memory_chunk_overlap=50)
     assert config.memory_chunk_chars == 500
     assert config.memory_chunk_overlap == 50
+
+
+@pytest.mark.parametrize(
+    ("chunk_chars", "overlap"),
+    [
+        (0, 0),
+        (100, 100),
+        (100, 101),
+    ],
+)
+def test_memory_chunk_config_rejects_non_progressing_overlap(chunk_chars, overlap):
+    """Memory chunk settings must guarantee chunking advances."""
+    with pytest.raises(ValueError, match="memory_chunk"):
+        SemanticConfig(memory_chunk_chars=chunk_chars, memory_chunk_overlap=overlap)

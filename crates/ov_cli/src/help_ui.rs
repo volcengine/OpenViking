@@ -2,20 +2,20 @@ use std::ffi::OsString;
 
 use clap::{Arg, ArgAction, Command, CommandFactory};
 use colored::Colorize;
-use unicode_width::UnicodeWidthStr;
 
 use crate::{
     Cli,
     cli_arg_scan::ValueOptions,
     i18n::{Language, copy},
+    terminal_ui::{
+        display_width, fit_to_display_width, pad_to_display_width, truncate_to_display_width,
+    },
     theme,
 };
 
 const BOX_WIDTH: usize = 74;
 const COMMAND_WIDTH: usize = 16;
-const DESCRIPTION_WIDTH: usize = BOX_WIDTH - COMMAND_WIDTH - 5;
 const COMMAND_HELP_LEFT_WIDTH: usize = 34;
-const START_HERE_DESCRIPTION_WIDTH: usize = 56;
 
 #[derive(Debug, Clone, Copy)]
 struct HelpCommand {
@@ -68,9 +68,11 @@ const CORE_WORKFLOW: &[HelpCommand] = help_commands![
     "read",
     "write",
     "add-memory",
+    "set-tags",
 ];
 
-const FILESYSTEM: &[HelpCommand] = help_commands!["ls", "tree", "mkdir", "rm", "mv", "stat", "get"];
+const FILESYSTEM: &[HelpCommand] =
+    help_commands!["ls", "tree", "mkdir", "rm", "mv", "stat", "attrs", "get"];
 
 const SEARCH_CONTEXT: &[HelpCommand] = help_commands![
     "find", "search", "grep", "glob", "abstract", "overview", "read"
@@ -81,12 +83,13 @@ const CONFIG_STATUS: &[HelpCommand] = help_commands![
 ];
 
 const IMPORT_EXPORT_SESSIONS: &[HelpCommand] = help_commands![
-    "import", "export", "backup", "restore", "session", "privacy"
+    "import", "export", "backup", "restore", "snapshot", "session", "privacy"
 ];
 
 const INTERACTIVE_ADMIN: &[HelpCommand] = help_commands![
     "tui",
     "chat",
+    "compile",
     "admin",
     "system",
     "reindex",
@@ -125,7 +128,7 @@ const HELP_SECTIONS: &[HelpSection] = &[
 const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["add-resource"],
-        purpose: "Import a local file, folder, URL, or repository into OpenViking.",
+        purpose: "Import a local file, folder, URL, repository, or whole website (sitemap/RSS) into OpenViking.",
         examples: &[
             HelpItem {
                 label: "ov add-resource ./docs --parent viking://projects/acme --wait",
@@ -134,6 +137,14 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "ov add-resource https://example.com/spec.md --to viking://specs/api.md",
                 description: "Import a URL to an exact target URI.",
+            },
+            HelpItem {
+                label: "ov add-resource https://example.com/sitemap.xml --watch-interval 1440",
+                description: "Import a whole site via sitemap/RSS and refresh it daily.",
+            },
+            HelpItem {
+                label: "ov add-resource tos://bucket/docs/ --add-type tos --to viking://resources/docs",
+                description: "Declare the Connector source type explicitly (Connector integration must be enabled).",
             },
         ],
         next_steps: &[
@@ -265,6 +276,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 label: "ov rm viking://scratch --recursive",
                 description: "Remove a directory subtree.",
             },
+            HelpItem {
+                label: "ov rm viking://resources/images/foo --recursive --wait",
+                description: "Remove a subtree and wait for generated overviews to refresh.",
+            },
         ],
         next_steps: &[
             HelpItem {
@@ -310,6 +325,30 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "ov relations <uri>",
                 description: "Inspect related resources.",
+            },
+        ],
+    },
+    CommandHelpSpec {
+        path: &["attrs"],
+        purpose: "Get or update logical extended attributes for a resource.",
+        examples: &[
+            HelpItem {
+                label: "ov attrs get viking://projects/acme/spec.md",
+                description: "Show all logical attributes for a resource.",
+            },
+            HelpItem {
+                label: "ov attrs set-tags viking://projects/acme/spec.md --tags team=search",
+                description: "Set retrieval tags on a resource.",
+            },
+        ],
+        next_steps: &[
+            HelpItem {
+                label: "ov stat <uri>",
+                description: "Inspect resource metadata.",
+            },
+            HelpItem {
+                label: "ov find \"query\" -u <uri>",
+                description: "Search with updated context.",
             },
         ],
     },
@@ -380,6 +419,24 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         ],
     },
     CommandHelpSpec {
+        path: &["set-tags"],
+        purpose: "Update explicit retrieval tags for a file or directory.",
+        examples: &[
+            HelpItem {
+                label: "ov set-tags viking://resources/proj --tags env=prod,team=search",
+                description: "Replace tags on a directory.",
+            },
+            HelpItem {
+                label: "ov set-tags viking://resources/proj --tags env=staging --mode append",
+                description: "Append (merge) tags without dropping existing keys.",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov find \"query\" -u <uri>",
+            description: "Verify the tags influence retrieval.",
+        }],
+    },
+    CommandHelpSpec {
         path: &["get"],
         purpose: "Download a file resource to a local path.",
         examples: &[HelpItem {
@@ -402,6 +459,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "ov find \"auth flow\" -u viking://projects/acme -L 1,2",
                 description: "Search a subtree and include overview/file results.",
+            },
+            HelpItem {
+                label: "ov find --image ./query.png -u viking://resources/images",
+                description: "Search by image with a local file or image URI.",
             },
         ],
         next_steps: &[
@@ -467,6 +528,176 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         next_steps: &[HelpItem {
             label: "ov session <subcommand> --help",
             description: "Show exact arguments for a session operation.",
+        }],
+    },
+    CommandHelpSpec {
+        path: &["snapshot"],
+        purpose: "Manage workspace snapshots: commit, restore, show, diff, and walk history.",
+        examples: &[
+            HelpItem {
+                label: "ov snapshot commit -m \"checkpoint before refactor\"",
+                description: "Commit the current workspace state.",
+            },
+            HelpItem {
+                label: "ov snapshot log --branch main",
+                description: "Walk commit history, newest first.",
+            },
+            HelpItem {
+                label: "ov snapshot diff viking://docs/spec.md --from <old> --to <new>",
+                description: "Compare one file between two snapshots.",
+            },
+            HelpItem {
+                label: "ov snapshot restore viking://projects/acme <commit> --dry-run",
+                description: "Preview restoring a directory to a past snapshot.",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov snapshot <subcommand> --help",
+            description: "Show exact arguments for a snapshot operation.",
+        }],
+    },
+    CommandHelpSpec {
+        path: &["snapshot", "commit"],
+        purpose: "Commit the current workspace state as a new snapshot.",
+        examples: &[
+            HelpItem {
+                label: "ov snapshot commit -m \"checkpoint before refactor\"",
+                description: "Commit the full workspace on the main branch.",
+            },
+            HelpItem {
+                label: "ov snapshot commit -m \"docs only\" --paths viking://docs",
+                description: "Commit only the given viking:// URIs. Directories are expanded recursively (with snapshot pruning rules applied).",
+            },
+        ],
+        next_steps: &[
+            HelpItem {
+                label: "ov snapshot log --branch main",
+                description: "Confirm the new commit in history.",
+            },
+            HelpItem {
+                label: "ov snapshot show <commit>",
+                description: "Inspect the commit metadata.",
+            },
+        ],
+    },
+    CommandHelpSpec {
+        path: &["snapshot", "restore"],
+        purpose: "Restore a project directory to a past snapshot via a forward commit.",
+        examples: &[
+            HelpItem {
+                label: "ov snapshot restore viking://projects/acme <commit> --dry-run",
+                description: "Preview which files would change.",
+            },
+            HelpItem {
+                label: "ov snapshot restore viking://projects/acme <commit> -m \"rollback\"",
+                description: "Apply the restore as a new commit.",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov snapshot log --branch main",
+            description: "Verify the restore commit landed.",
+        }],
+    },
+    CommandHelpSpec {
+        path: &["snapshot", "show"],
+        purpose: "Show a commit's metadata, or a single blob at a path.",
+        examples: &[
+            HelpItem {
+                label: "ov snapshot show <commit>",
+                description: "Print commit metadata.",
+            },
+            HelpItem {
+                label: "ov snapshot show <commit> --path viking://docs/spec.md --out-file spec.md",
+                description: "Write a file blob from the snapshot to disk.",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov snapshot log --branch main",
+            description: "Find another commit to inspect.",
+        }],
+    },
+    CommandHelpSpec {
+        path: &["snapshot", "log"],
+        purpose: "Walk commit history for a branch, newest first.",
+        examples: &[
+            HelpItem {
+                label: "ov snapshot log --branch main",
+                description: "Show the latest commits on main.",
+            },
+            HelpItem {
+                label: "ov snapshot log --branch main --limit 50",
+                description: "Show more history entries.",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov snapshot show <commit>",
+            description: "Inspect a commit from the log.",
+        }],
+    },
+    CommandHelpSpec {
+        path: &["snapshot", "diff"],
+        purpose: "Compare one file between two snapshots as a unified diff.",
+        examples: &[
+            HelpItem {
+                label: "ov snapshot diff viking://docs/spec.md --from <old> --to <new>",
+                description: "Compare the file contents at two commits.",
+            },
+            HelpItem {
+                label: "ov snapshot diff viking://docs/spec.md --to <commit>",
+                description: "Compare an empty file with the file at a commit.",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov snapshot log --paths viking://docs/spec.md",
+            description: "Find commits that changed this file.",
+        }],
+    },
+    CommandHelpSpec {
+        path: &["snapshot", "ignore-get"],
+        purpose: "Show the account-level .ovgitignore content.",
+        examples: &[
+            HelpItem {
+                label: "ov snapshot ignore-get",
+                description: "Print the .ovgitignore content to stdout.",
+            },
+            HelpItem {
+                label: "ov snapshot ignore-get -o json",
+                description: "Return the content wrapped in the standard JSON envelope.",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov snapshot ignore-set --content \"*.log\"",
+            description: "Update the ignore rules.",
+        }],
+    },
+    CommandHelpSpec {
+        path: &["snapshot", "ignore-set"],
+        purpose: "Set the account-level .ovgitignore content (overwrites).",
+        examples: &[
+            HelpItem {
+                label: "ov snapshot ignore-set --content \"*.log\"",
+                description: "Ignore all .log files from future commits.",
+            },
+            HelpItem {
+                label: "ov snapshot ignore-set --file ./my-rules",
+                description: "Read the content from a file (--file takes precedence over --content).",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov snapshot commit -m \"with ignore\"",
+            description: "Commit; matching files are excluded (see the `ignored` count).",
+        }],
+    },
+    CommandHelpSpec {
+        path: &["snapshot", "ignore-delete"],
+        purpose: "Delete the account-level .ovgitignore file (idempotent).",
+        examples: &[HelpItem {
+            label: "ov snapshot ignore-delete",
+            description: "Remove the ignore rules; missing is success.",
+        }],
+        next_steps: &[HelpItem {
+            label: "ov snapshot ignore-get",
+            description: "Confirm the rules are gone (returns an empty string).",
         }],
     },
     CommandHelpSpec {
@@ -638,6 +869,24 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         }],
     },
     CommandHelpSpec {
+        path: &["compile"],
+        purpose: "Use a required VikingBot Skill to compile OpenViking materials into Wiki pages or a Skill package.",
+        examples: &[
+            HelpItem {
+                label: "ov compile --from viking://resources/weekly --to viking://resources/wiki --skill viking://agent/skills/monthly_wiki --wait",
+                description: "Compile one source directory into Wiki pages.",
+            },
+            HelpItem {
+                label: "ov compile --from viking://resources/weekly --to viking://agent/skills --skill viking://agent/skills/skill-creator --wait",
+                description: "Generate or update one shared Skill package.",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov tree <target-uri>",
+            description: "Inspect the generated output.",
+        }],
+    },
+    CommandHelpSpec {
         path: &["wait"],
         purpose: "Wait for queued async processing to complete.",
         examples: &[HelpItem {
@@ -666,6 +915,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "ov task status <task-id>",
                 description: "Inspect one task.",
+            },
+            HelpItem {
+                label: "ov task cancel <task-id>",
+                description: "Cancel one task.",
             },
         ],
         next_steps: &[HelpItem {
@@ -1044,6 +1297,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Register a user in an account.",
             },
             HelpItem {
+                label: "ov admin regenerate-key <account> <user> --seed <seed>",
+                description: "Regenerate a predictable API key from a seed.",
+            },
+            HelpItem {
                 label: "ov admin migrate --sudo",
                 description: "Start legacy agent/session migration.",
             },
@@ -1106,10 +1363,20 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["reindex"],
         purpose: "Reindex semantic/vector artifacts for a URI.",
-        examples: &[HelpItem {
-            label: "ov reindex viking://projects/acme --mode vectors_only --wait true",
-            description: "Rebuild vector artifacts and wait.",
-        }],
+        examples: &[
+            HelpItem {
+                label: "ov reindex viking://projects/acme --mode vectors_only --wait true",
+                description: "Rebuild vector artifacts and wait.",
+            },
+            HelpItem {
+                label: "ov reindex viking://projects/acme --mode semantic_and_vectors --wait true",
+                description: "Regenerate semantic artifacts, then vectors.",
+            },
+            HelpItem {
+                label: "ov reindex viking://projects/acme --mode prune_orphans --dry-run",
+                description: "Preview orphan vector cleanup.",
+            },
+        ],
         next_steps: &[
             HelpItem {
                 label: "ov task list",
@@ -1145,114 +1412,155 @@ pub(crate) fn render_top_level_help() -> String {
 }
 
 pub(crate) fn render_top_level_help_with_language(language: Language) -> String {
+    render_top_level_help_with_language_and_width(language, help_output_width())
+}
+
+fn render_top_level_help_with_language_and_width(language: Language, width: usize) -> String {
     let mut lines = Vec::new();
     let mut root = Cli::command();
     root.build();
 
-    lines.push(format!(
-        "{} {}",
-        theme::brand_title("OpenViking").bold(),
-        theme::version(version())
-    ));
-    lines.push(
-        theme::heading(copy(
-            language,
-            "Context Database for AI Agents",
-            "AI Agent 上下文数据库",
-        ))
-        .bold()
-        .to_string(),
+    let title = format!("OpenViking {}", version());
+    if width >= BOX_WIDTH || display_width(&title) <= width {
+        lines.push(format!(
+            "{} {}",
+            theme::brand_title("OpenViking").bold(),
+            theme::version(version())
+        ));
+    } else {
+        lines.push(
+            theme::brand_title(truncate_to_display_width(&title, width))
+                .bold()
+                .to_string(),
+        );
+    }
+    let motto = copy(
+        language,
+        "Context Database for AI Agents",
+        "AI Agent 上下文数据库",
     );
+    let motto = if width >= BOX_WIDTH {
+        motto.to_string()
+    } else {
+        truncate_to_display_width(motto, width)
+    };
+    lines.push(theme::heading(motto).bold().to_string());
     lines.push(String::new());
-    lines.push(format!(
-        "{}",
-        theme::warning(copy(language, "Usage:", "用法：")).bold()
-    ));
-    lines.push(format!("  {}", theme::strong("ov <command> [options]")));
+    lines.push(warning_line(copy(language, "Usage:", "用法："), width));
+    let usage = if width >= BOX_WIDTH {
+        "ov <command> [options]".to_string()
+    } else {
+        truncate_to_display_width("ov <command> [options]", width.saturating_sub(2))
+    };
+    lines.push(format!("  {}", theme::strong(usage)));
     lines.push(String::new());
-    lines.push(format!(
-        "{}",
-        theme::strong(copy(language, "Start here:", "从这里开始："))
+    lines.push(strong_line(
+        copy(language, "Start here:", "从这里开始："),
+        width,
     ));
     for command in ["config", "health", "status", "tui"] {
-        if let Some(line) = top_level_start_here_line(&root, command, language) {
+        if let Some(line) = top_level_start_here_line(&root, command, language, width) {
             lines.push(line);
         }
     }
     lines.push(String::new());
 
     for section in HELP_SECTIONS {
-        lines.extend(section_lines(section, &root, language));
+        lines.extend(section_lines(section, &root, language, width));
         lines.push(String::new());
     }
 
-    lines.push(format!(
-        "{}",
-        theme::strong(copy(language, "Global options:", "全局选项："))
+    lines.push(strong_line(
+        copy(language, "Global options:", "全局选项："),
+        width,
     ));
     for item in top_level_global_options(&root, language) {
-        lines.push(option_line(&item.label, &item.description));
+        lines.push(option_line(&item.label, &item.description, width));
     }
     lines.push(String::new());
-    lines.push(format!(
-        "{}",
-        theme::strong(copy(language, "More:", "更多："))
-    ));
+    lines.push(strong_line(copy(language, "More:", "更多："), width));
     lines.push(start_here_line(
         "ov <command> --help",
         copy(language, "Show command details", "查看命令详情"),
+        width,
     ));
     lines.push(start_here_line(
         "ov config",
         copy(language, "Configure the CLI", "配置 CLI"),
+        width,
     ));
 
     format!("{}\n", lines.join("\n"))
 }
 
 fn render_command_help(spec: &CommandHelpSpec) -> String {
+    render_command_help_with_width(spec, help_output_width())
+}
+
+fn render_command_help_with_width(spec: &CommandHelpSpec, width: usize) -> String {
     let mut lines = Vec::new();
     let language = Language::current();
     let command = command_display(spec.path);
     let clap_command = clap_command_for_path(spec.path)
         .unwrap_or_else(|| panic!("curated help path missing from clap: {command}"));
 
-    lines.push(format!(
-        "{} {} {}",
-        theme::brand_title("OpenViking").bold(),
-        theme::version(version()),
-        theme::muted(format!("· {command}"))
-    ));
-    lines.push(theme::body(localized_command_purpose(spec, language)).to_string());
+    let plain_title_line = format!("OpenViking {} · {command}", version());
+    if width >= BOX_WIDTH || display_width(&plain_title_line) <= width {
+        lines.push(format!(
+            "{} {} {}",
+            theme::brand_title("OpenViking").bold(),
+            theme::version(version()),
+            theme::muted(format!("· {command}"))
+        ));
+    } else {
+        lines.push(
+            theme::brand_title(truncate_to_display_width(&plain_title_line, width))
+                .bold()
+                .to_string(),
+        );
+    }
+    let purpose = localized_command_purpose(spec, language);
+    let purpose = if width >= BOX_WIDTH {
+        purpose.to_string()
+    } else {
+        truncate_to_display_width(purpose, width)
+    };
+    lines.push(theme::body(purpose).to_string());
     lines.push(String::new());
-    lines.push(format!(
-        "{}",
-        theme::warning(copy(language, "Usage:", "用法：")).bold()
-    ));
+    lines.push(warning_line(copy(language, "Usage:", "用法："), width));
     let usage = usage_for_command(clap_command.clone(), spec.path);
+    let usage = if width >= BOX_WIDTH {
+        usage
+    } else {
+        truncate_to_display_width(&usage, width.saturating_sub(2))
+    };
     lines.push(format!("  {}", theme::strong(usage)));
     push_section(
         &mut lines,
         copy(language, "Examples", "示例"),
         spec.examples,
+        width,
     );
     let argument_items = arguments_from_command(&clap_command);
     push_dynamic_section(
         &mut lines,
         copy(language, "Arguments", "参数"),
         &argument_items,
+        width,
     );
     let subcommand_items = subcommands_from_command(&clap_command);
     push_dynamic_section(
         &mut lines,
         copy(language, "Subcommands", "子命令"),
         &subcommand_items,
+        width,
     );
     for section in option_sections_from_command(&clap_command) {
         push_dynamic_section(
             &mut lines,
             localized_option_section_title(&section.title, language),
             &section.items,
+            width,
         );
     }
     let global_items = global_options_for(spec);
@@ -1260,11 +1568,13 @@ fn render_command_help(spec: &CommandHelpSpec) -> String {
         &mut lines,
         copy(language, "Global options", "全局选项"),
         &global_items,
+        width,
     );
     push_section(
         &mut lines,
         copy(language, "Next", "下一步"),
         spec.next_steps,
+        width,
     );
 
     format!("{}\n", lines.join("\n"))
@@ -1529,50 +1839,59 @@ fn localized_option_section_title(title: &str, language: Language) -> &str {
     }
 }
 
-fn push_section(lines: &mut Vec<String>, title: &str, items: &[HelpItem]) {
+fn push_section(lines: &mut Vec<String>, title: &str, items: &[HelpItem], width: usize) {
     if items.is_empty() {
         return;
     }
 
     lines.push(String::new());
-    lines.push(format!("{}", theme::heading(title).bold()));
+    lines.push(heading_line(title, width));
     for item in items {
-        lines.push(help_item_line(item));
+        lines.push(help_item_line(item, width));
     }
 }
 
-fn push_dynamic_section(lines: &mut Vec<String>, title: &str, items: &[RenderedHelpItem]) {
+fn push_dynamic_section(
+    lines: &mut Vec<String>,
+    title: &str,
+    items: &[RenderedHelpItem],
+    width: usize,
+) {
     if items.is_empty() {
         return;
     }
 
     lines.push(String::new());
-    lines.push(format!("{}", theme::heading(title).bold()));
+    lines.push(heading_line(title, width));
     for item in items {
-        lines.push(help_item_line_parts(&item.label, &item.description));
+        lines.push(help_item_line_parts(&item.label, &item.description, width));
     }
 }
 
-fn help_item_line(item: &HelpItem) -> String {
+fn help_item_line(item: &HelpItem, width: usize) -> String {
     let language = Language::current();
     let description = localized_help_item_description(item.label, item.description, language);
-    help_item_line_parts(item.label, description)
+    help_item_line_parts(item.label, description, width)
 }
 
-fn help_item_line_parts(label: &str, description: &str) -> String {
-    if display_width(label) > COMMAND_HELP_LEFT_WIDTH {
+fn help_item_line_parts(label: &str, description: &str, width: usize) -> String {
+    if width >= BOX_WIDTH {
+        if display_width(label) > COMMAND_HELP_LEFT_WIDTH {
+            return format!(
+                "  {}\n      {}",
+                theme::command(label),
+                theme::body(description)
+            );
+        }
+
         return format!(
-            "  {}\n      {}",
-            theme::command(label),
+            "  {} {}",
+            theme::command(pad_to_display_width(label, COMMAND_HELP_LEFT_WIDTH)),
             theme::body(description)
         );
     }
 
-    format!(
-        "  {} {}",
-        theme::command(pad_to_display_width(label, COMMAND_HELP_LEFT_WIDTH)),
-        theme::body(description)
-    )
+    two_column_line(label, description, COMMAND_HELP_LEFT_WIDTH, width)
 }
 
 fn localized_command_purpose(spec: &CommandHelpSpec, language: Language) -> &str {
@@ -1595,6 +1914,12 @@ fn localized_command_purpose(spec: &CommandHelpSpec, language: Language) -> &str
         ["health"] => "快速检查服务器是否可连接。",
         ["status"] => "查看 OpenViking 服务器诊断状态。",
         ["language"] => "选择 OpenViking CLI 显示语言。",
+        ["snapshot"] => "管理工作区快照：提交、恢复、查看、对比，以及遍历历史。",
+        ["snapshot", "commit"] => "将当前工作区状态提交为新的快照。",
+        ["snapshot", "restore"] => "通过一次前向提交，将项目目录恢复到历史快照。",
+        ["snapshot", "show"] => "查看某次提交的元数据，或指定路径下的单个文件内容。",
+        ["snapshot", "log"] => "按分支遍历提交历史，最新的在前。",
+        ["snapshot", "diff"] => "对比指定文件在两个快照中的内容差异。",
         _ => spec.purpose,
     }
 }
@@ -1659,32 +1984,25 @@ fn localized_help_item_description<'a>(
     }
 }
 
-fn start_here_line(command: &str, description: &str) -> String {
-    let description = truncate_to_display_width(description, START_HERE_DESCRIPTION_WIDTH);
-    format!(
-        "  {} {}",
-        theme::command(pad_to_display_width(command, 22)).bold(),
-        theme::body(description)
-    )
+fn start_here_line(command: &str, description: &str, width: usize) -> String {
+    two_column_line_with_bold_label(command, description, 22, width)
 }
 
-fn option_line(option: &str, description: &str) -> String {
-    format!(
-        "  {} {}",
-        theme::command(pad_to_display_width(option, 26)),
-        theme::body(description)
-    )
+fn option_line(option: &str, description: &str, width: usize) -> String {
+    two_column_line(option, description, 26, width)
 }
 
 fn top_level_start_here_line(
     root: &Command,
     command_name: &str,
     language: Language,
+    width: usize,
 ) -> Option<String> {
     let command = root.find_subcommand(command_name)?;
     Some(start_here_line(
         &format!("ov {command_name}"),
         &top_level_command_description(command, language),
+        width,
     ))
 }
 
@@ -1735,11 +2053,17 @@ fn rendered_global_options(
         .collect()
 }
 
-fn section_lines(section: &HelpSection, root: &Command, language: Language) -> Vec<String> {
+fn section_lines(
+    section: &HelpSection,
+    root: &Command,
+    language: Language,
+    width: usize,
+) -> Vec<String> {
     let mut lines = Vec::new();
     let title_text = localized_section_title(section.title, language);
     let title = format!("─ {title_text} ");
-    let fill = BOX_WIDTH.saturating_sub(2 + display_width(&title));
+    let title = truncate_to_display_width(&title, width.saturating_sub(2));
+    let fill = width.saturating_sub(2 + display_width(&title));
     lines.push(format!(
         "{}{}{}{}",
         theme::border("╭"),
@@ -1750,44 +2074,48 @@ fn section_lines(section: &HelpSection, root: &Command, language: Language) -> V
 
     for command in section.commands {
         if let Some(clap_command) = root.find_subcommand(command.name) {
-            lines.push(command_line(command.name, clap_command, language));
+            lines.push(command_line(command.name, clap_command, language, width));
         }
     }
 
     lines.push(format!(
         "{}{}{}",
         theme::border("╰"),
-        theme::border("─".repeat(BOX_WIDTH.saturating_sub(2))),
+        theme::border("─".repeat(width.saturating_sub(2))),
         theme::border("╯")
     ));
     lines
 }
 
-fn command_line(command_name: &str, command: &Command, language: Language) -> String {
+fn command_line(command_name: &str, command: &Command, language: Language, width: usize) -> String {
     let command_description = top_level_command_description(command, language);
     let badge = top_level_command_badge(command);
+    let command_width = boxed_command_width(width);
+    let description_width = boxed_description_width(width, command_width);
     let description = match badge.as_deref() {
         Some(badge) => {
             let badge = localized_badge(badge, language);
-            let description_width = DESCRIPTION_WIDTH.saturating_sub(display_width(badge) + 1);
+            let badge = truncate_to_display_width(badge, description_width);
+            let badge_width = display_width(&badge);
+            let description_text_width = description_width.saturating_sub(badge_width + 1);
             let command_description =
-                truncate_to_display_width(&command_description, description_width);
-            let used = display_width(&command_description) + display_width(badge);
-            let spacer = DESCRIPTION_WIDTH.saturating_sub(used).max(1);
+                truncate_to_display_width(&command_description, description_text_width);
+            let used = display_width(&command_description) + badge_width;
+            let spacer = description_width.saturating_sub(used);
             format!(
                 "{}{}{}",
                 command_description,
                 " ".repeat(spacer),
-                theme::muted(badge)
+                theme::muted(&badge)
             )
         }
         None => {
             let command_description =
-                truncate_to_display_width(&command_description, DESCRIPTION_WIDTH);
+                truncate_to_display_width(&command_description, description_width);
             format!(
                 "{}{}",
                 command_description,
-                " ".repeat(DESCRIPTION_WIDTH.saturating_sub(display_width(&command_description)))
+                " ".repeat(description_width.saturating_sub(display_width(&command_description)))
             )
         }
     };
@@ -1795,7 +2123,7 @@ fn command_line(command_name: &str, command: &Command, language: Language) -> St
     format!(
         "{} {} {} {}",
         theme::border("│"),
-        theme::command(pad_to_display_width(command_name, COMMAND_WIDTH)).bold(),
+        theme::command(fit_to_display_width(command_name, command_width)).bold(),
         theme::body(description),
         theme::border("│")
     )
@@ -1882,42 +2210,106 @@ fn localized_global_option_description<'a>(
     }
 }
 
-fn display_width(value: &str) -> usize {
-    UnicodeWidthStr::width(value)
+#[cfg(not(test))]
+fn help_output_width() -> usize {
+    crossterm::terminal::size()
+        .map(|(columns, _)| crate::terminal_ui::terminal_width(columns as usize, BOX_WIDTH))
+        .unwrap_or(BOX_WIDTH)
 }
 
-fn truncate_to_display_width(value: &str, width: usize) -> String {
-    if display_width(value) <= width {
-        return value.to_string();
+#[cfg(test)]
+fn help_output_width() -> usize {
+    BOX_WIDTH
+}
+
+fn boxed_command_width(width: usize) -> usize {
+    let content_width = width.saturating_sub(5);
+    COMMAND_WIDTH.min(content_width / 2).max(1)
+}
+
+fn boxed_description_width(width: usize, command_width: usize) -> usize {
+    width.saturating_sub(command_width + 5)
+}
+
+fn two_column_line(
+    label: &str,
+    description: &str,
+    preferred_label_width: usize,
+    width: usize,
+) -> String {
+    two_column_line_with_style(label, description, preferred_label_width, width, false)
+}
+
+fn two_column_line_with_bold_label(
+    label: &str,
+    description: &str,
+    preferred_label_width: usize,
+    width: usize,
+) -> String {
+    two_column_line_with_style(label, description, preferred_label_width, width, true)
+}
+
+fn strong_line(text: &str, width: usize) -> String {
+    let text = if width >= BOX_WIDTH {
+        text.to_string()
+    } else {
+        truncate_to_display_width(text, width)
+    };
+    theme::strong(text).to_string()
+}
+
+fn warning_line(text: &str, width: usize) -> String {
+    let text = if width >= BOX_WIDTH {
+        text.to_string()
+    } else {
+        truncate_to_display_width(text, width)
+    };
+    theme::warning(text).bold().to_string()
+}
+
+fn heading_line(text: &str, width: usize) -> String {
+    let text = if width >= BOX_WIDTH {
+        text.to_string()
+    } else {
+        truncate_to_display_width(text, width)
+    };
+    theme::heading(text).bold().to_string()
+}
+
+fn two_column_line_with_style(
+    label: &str,
+    description: &str,
+    preferred_label_width: usize,
+    width: usize,
+    bold_label: bool,
+) -> String {
+    if width >= BOX_WIDTH {
+        let label = pad_to_display_width(label, preferred_label_width);
+        let label = if bold_label {
+            theme::command(label).bold().to_string()
+        } else {
+            theme::command(label).to_string()
+        };
+
+        return format!("  {} {}", label, theme::body(description));
     }
 
     if width <= 3 {
-        return ".".repeat(width);
+        return truncate_to_display_width(label, width);
     }
 
-    let target = width - 3;
-    let mut truncated = String::new();
-    let mut used = 0;
+    let content_width = width.saturating_sub(3);
+    let label_width = preferred_label_width.min(content_width / 2).max(1);
+    let description_width = width.saturating_sub(label_width + 3);
+    let label = fit_to_display_width(label, label_width);
+    let label = if bold_label {
+        theme::command(label).bold().to_string()
+    } else {
+        theme::command(label).to_string()
+    };
+    let description = truncate_to_display_width(description, description_width);
 
-    for ch in value.chars() {
-        let ch_width = display_width(&ch.to_string());
-        if used + ch_width > target {
-            break;
-        }
-        truncated.push(ch);
-        used += ch_width;
-    }
-
-    truncated.push_str("...");
-    truncated
-}
-
-fn pad_to_display_width(value: &str, width: usize) -> String {
-    format!(
-        "{}{}",
-        value,
-        " ".repeat(width.saturating_sub(display_width(value)))
-    )
+    format!("  {} {}", label, theme::body(description))
 }
 
 fn localized_section_title(title: &str, language: Language) -> &str {
@@ -1990,6 +2382,7 @@ fn localized_command_description<'a>(
         "export" => "导出为 .ovpack",
         "backup" => "创建仅恢复备份",
         "restore" => "恢复备份",
+        "snapshot" => "管理工作区快照",
         "tui" => "打开交互式浏览器",
         "chat" => "与 VikingBot 对话",
         "admin" => "管理账户、用户和 API Key",
@@ -2206,7 +2599,7 @@ fn version() -> String {
 fn is_bare_group_help_command(command: &str) -> bool {
     matches!(
         command,
-        "task" | "skills" | "session" | "privacy" | "admin" | "system" | "observer"
+        "task" | "skills" | "session" | "snapshot" | "privacy" | "admin" | "system" | "observer"
     )
 }
 
@@ -2263,10 +2656,12 @@ fn cli_value_options() -> ValueOptions {
 mod tests {
     use super::{
         COMMAND_HELP_SPECS, HELP_SECTIONS, command_help_path, display_width,
-        render_command_help_request, render_top_level_help,
+        render_command_help_request, render_command_help_with_width, render_top_level_help,
+        render_top_level_help_with_language_and_width,
     };
     use super::{command_spec, is_top_level_help_request};
     use crate::Cli;
+    use crate::i18n::Language;
     use clap::CommandFactory;
     use std::ffi::OsString;
 
@@ -2391,6 +2786,37 @@ mod tests {
     }
 
     #[test]
+    fn top_level_help_respects_narrow_terminal_width() {
+        let width = 24;
+        let rendered = strip_ansi(&render_top_level_help_with_language_and_width(
+            Language::En,
+            width,
+        ));
+
+        for line in rendered.lines() {
+            assert!(
+                display_width(line) <= width,
+                "line exceeded narrow width: {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn command_help_respects_narrow_terminal_width() {
+        let width = 24;
+        let path = vec!["config".to_string()];
+        let spec = command_spec(&path).expect("config command spec");
+        let rendered = strip_ansi(&render_command_help_with_width(spec, width));
+
+        for line in rendered.lines() {
+            assert!(
+                display_width(line) <= width,
+                "line exceeded narrow width: {line:?}"
+            );
+        }
+    }
+
+    #[test]
     fn every_curated_top_level_command_in_help_map_has_command_help() {
         for command in HELP_SECTIONS
             .iter()
@@ -2450,7 +2876,7 @@ mod tests {
         );
 
         assert!(rendered.contains("OpenViking v"));
-        assert!(rendered.contains("ov find [OPTIONS] <query>"));
+        assert!(rendered.contains("ov find [OPTIONS] [query]"));
         assert!(rendered.contains("Examples"));
         assert!(rendered.contains("Common options"));
         assert!(rendered.contains("Next"));
@@ -2465,7 +2891,7 @@ mod tests {
             &["ov", "config", "add", "custom", "--help"][..],
         ] {
             let rendered = strip_ansi(
-                &render_command_help_request(&os_args(&args)).expect("help should render"),
+                &render_command_help_request(&os_args(args)).expect("help should render"),
             );
             assert!(
                 rendered.contains("Common options"),
@@ -2495,6 +2921,18 @@ mod tests {
     }
 
     #[test]
+    fn reindex_help_lists_supported_modes() {
+        let rendered = strip_ansi(
+            &render_command_help_request(&os_args(&["ov", "reindex", "--help"]))
+                .expect("reindex help should render"),
+        );
+
+        assert!(rendered.contains("--mode <vectors_only|semantic_and_vectors|prune_orphans>"));
+        assert!(rendered.contains("--dry-run"));
+        assert!(rendered.contains("Regenerate semantic artifacts, then vectors."));
+    }
+
+    #[test]
     fn renders_curated_command_help_for_single_dash_help_alias() {
         let rendered = strip_ansi(
             &render_command_help_request(&os_args(&["ov", "find", "-help"]))
@@ -2502,7 +2940,7 @@ mod tests {
         );
 
         assert!(rendered.contains("OpenViking v"));
-        assert!(rendered.contains("ov find [OPTIONS] <query>"));
+        assert!(rendered.contains("ov find [OPTIONS] [query]"));
         assert!(rendered.contains("Usage:"));
     }
 
@@ -2523,6 +2961,7 @@ mod tests {
         for args in [
             ["ov", "add-resource", "--help"],
             ["ov", "add-skill", "--help"],
+            ["ov", "rm", "--help"],
             ["ov", "write", "--help"],
         ] {
             let rendered = strip_ansi(
@@ -2684,6 +3123,7 @@ mod tests {
                 .expect("task help should render"),
         );
         assert!(task.contains("status <task-id>"));
+        assert!(task.contains("cancel <task-id>"));
         assert!(task.contains("list"));
     }
 

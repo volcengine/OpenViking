@@ -67,7 +67,7 @@ class VLMBase(ABC):
         self.api_base = config.get("api_base")
         self.temperature = config.get("temperature", 0.0)
         self.max_retries = config.get("max_retries", 3)
-        self.timeout = config.get("timeout", 60.0)
+        self.timeout = config.get("timeout", 600.0)
         self.max_tokens = config.get("max_tokens")
         self.extra_headers = config.get("extra_headers")
         self.extra_request_body = dict(config.get("extra_request_body") or {})
@@ -331,12 +331,26 @@ class VLMFactory:
 
             return LiteLLMVLMProvider(config)
 
-    @staticmethod
-    def get_available_providers() -> List[str]:
-        """Get list of available providers"""
-        from .registry import get_all_provider_names
 
-        return get_all_provider_names()
+def _annotate_vlm_error(exc: Exception, vlm_instance: "VLMBase") -> None:
+    """Attach model and api_base info to an exception for better error diagnostics.
+
+    The info is attached as attributes on the exception object so that upstream
+    error mapping (e.g. error_mapping.py) can include them in the user-facing
+    message, making it clear which model endpoint triggered the failure.
+    """
+    try:
+        if not hasattr(exc, "_vlm_model"):
+            model = getattr(vlm_instance, "model", None)
+            if model:
+                exc._vlm_model = model
+        if not hasattr(exc, "_vlm_api_base"):
+            api_base = getattr(vlm_instance, "api_base", None)
+            if api_base:
+                exc._vlm_api_base = api_base
+    except Exception:
+        # Never let annotation break the original error path
+        pass
 
 
 class FailoverVLM(VLMBase):
@@ -401,6 +415,7 @@ class FailoverVLM(VLMBase):
                 self._switcher.record_primary_success()
                 return result
             except Exception as e:
+                _annotate_vlm_error(e, self.primary)
                 last_error = e
                 if self._switcher.record_primary_failure(e):
                     # Switched to backup, continue to try backup
@@ -415,6 +430,7 @@ class FailoverVLM(VLMBase):
             method = getattr(self.backup, method_name)
             return method(*args, **kwargs)
         except Exception as e:
+            _annotate_vlm_error(e, self.backup)
             last_error = e
             self._logger.error(f"Backup VLM also failed with error: {e}")
             raise last_error
@@ -443,6 +459,7 @@ class FailoverVLM(VLMBase):
                 self._switcher.record_primary_success()
                 return result
             except Exception as e:
+                _annotate_vlm_error(e, self.primary)
                 last_error = e
                 if self._switcher.record_primary_failure(e):
                     # Switched to backup, continue to try backup
@@ -457,6 +474,7 @@ class FailoverVLM(VLMBase):
             method = getattr(self.backup, method_name)
             return await method(*args, **kwargs)
         except Exception as e:
+            _annotate_vlm_error(e, self.backup)
             last_error = e
             self._logger.error(f"Backup VLM also failed with error: {e}")
             raise last_error
@@ -614,6 +632,7 @@ class MultiCredentialVLM(VLMBase):
         config = {
             "model": first.model,
             "provider": first.provider,
+            "thinking": first.thinking,
         }
         super().__init__(config)
 
@@ -662,6 +681,7 @@ class MultiCredentialVLM(VLMBase):
                 self._switcher.commit_success(idx)
                 return result
             except Exception as exc:
+                _annotate_vlm_error(exc, vlm_instance)
                 error_class = classify_api_error(exc)
                 aggregated_errors.append((credential_id, error_class, exc, idx))
 
@@ -708,6 +728,7 @@ class MultiCredentialVLM(VLMBase):
                 self._switcher.commit_success(idx)
                 return result
             except Exception as exc:
+                _annotate_vlm_error(exc, vlm_instance)
                 error_class = classify_api_error(exc)
                 aggregated_errors.append((credential_id, error_class, exc, idx))
 
@@ -797,11 +818,6 @@ class MultiCredentialVLM(VLMBase):
             tool_choice=tool_choice,
             messages=messages,
         )
-
-    @property
-    def active_credential_index(self) -> int:
-        """Get the index of the currently active credential."""
-        return self._switcher.get_active_index()
 
     @property
     def active_credential_id(self) -> str:

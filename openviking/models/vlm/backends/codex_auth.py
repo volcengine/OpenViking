@@ -552,30 +552,6 @@ def has_codex_auth_available() -> bool:
     )
 
 
-def _sync_external_codex_auth(
-    external_path: Path,
-    ov_auth_path: Path,
-    *,
-    fallback_payload: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    external_payload = _load_tokens_from_source("codex-cli", external_path)
-    if external_payload is not None:
-        _write_tokens_to_ov_store(
-            ov_auth_path,
-            external_payload["access_token"],
-            external_payload["refresh_token"],
-            last_refresh=external_payload.get("last_refresh"),
-            imported_from=str(external_path),
-            client_id=external_payload.get("client_id"),
-            auth_owner=CODEX_AUTH_OWNER_EXTERNAL,
-        )
-        return external_payload
-    if fallback_payload is not None:
-        return fallback_payload
-    raise CodexAuthError(
-        f"Externally managed Codex auth is unavailable at {external_path}. Re-run Codex CLI login or openviking-server init."
-    )
-
 
 def resolve_codex_runtime_credentials(
     *,

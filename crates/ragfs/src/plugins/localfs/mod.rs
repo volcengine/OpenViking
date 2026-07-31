@@ -17,9 +17,10 @@ use ignore::WalkBuilder;
 use serde::Deserialize;
 
 use crate::core::errors::{Error, Result};
-use crate::core::filesystem::FileSystem;
+use crate::core::filesystem::{validate_virtual_path, FileSystem};
+use crate::core::glob::{decode_offset_token, encode_offset_token, PreparedGlob};
 use crate::core::plugin::ServicePlugin;
-use crate::core::types::{ConfigParameter, FileInfo, GrepResult, PluginConfig, WriteFlag};
+use crate::core::types::{ConfigParameter, FileInfo, GlobEntry, GlobPage, GrepResult, PluginConfig, WriteFlag};
 
 /// LocalFS - Local file system implementation
 pub struct LocalFileSystem {
@@ -75,20 +76,167 @@ impl LocalFileSystem {
     }
 
     /// Resolve a virtual path to actual local path
-    fn resolve_path(&self, path: &str) -> PathBuf {
+    fn resolve_path(&self, path: &str) -> Result<PathBuf> {
+        validate_virtual_path(path)?;
+
         // Remove leading slash to make it relative
         let relative = path.strip_prefix('/').unwrap_or(path);
+        if Path::new(relative).is_absolute() {
+            return Err(Error::invalid_path(path));
+        }
 
         // Join with base path
         if relative.is_empty() {
-            self.base_path.clone()
+            Ok(self.base_path.clone())
         } else {
-            self.base_path.join(relative)
+            Ok(self.base_path.join(relative))
         }
     }
 
-    /// Run blocking grep work on a dedicated thread and normalize join errors.
-    async fn run_blocking_grep<T, F>(job: F) -> Result<T>
+    /// Return whether an open file still identifies the file currently stored at `path`.
+    fn open_file_matches_path(file: &fs::File, path: &Path) -> Result<bool> {
+        let open_metadata = file
+            .metadata()
+            .map_err(|e| Error::plugin(format!("failed to stat open CAS file: {}", e)))?;
+        let path_metadata = match fs::metadata(path) {
+            Ok(metadata) => metadata,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(e) => {
+                return Err(Error::plugin(format!(
+                    "failed to stat CAS path '{}': {}",
+                    path.display(),
+                    e
+                )));
+            }
+        };
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            Ok(open_metadata.dev() == path_metadata.dev()
+                && open_metadata.ino() == path_metadata.ino())
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            Ok(open_metadata.volume_serial_number() == path_metadata.volume_serial_number()
+                && open_metadata.file_index() == path_metadata.file_index())
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = (open_metadata, path_metadata);
+            Err(Error::invalid_operation(
+                "CAS file identity checks are unsupported on this platform",
+            ))
+        }
+    }
+
+    /// Replace local file content only when the locked file content matches `expected`.
+    fn compare_and_write_locked(
+        local_path: PathBuf,
+        expected: Vec<u8>,
+        new_data: Vec<u8>,
+    ) -> Result<bool> {
+        use std::io::{Read, Seek, SeekFrom, Write};
+
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&local_path)
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    Error::NotFound(local_path.to_string_lossy().to_string())
+                } else {
+                    Error::plugin(format!("failed to open file for compare_and_write: {}", e))
+                }
+            });
+        let file = match file {
+            Ok(file) => file,
+            Err(Error::NotFound(_)) => return Ok(false),
+            Err(e) => return Err(e),
+        };
+        let mut lock = filelocks::LockOptions::new()
+            .backend(filelocks::LockBackend::Fcntl)
+            .lock(
+                file,
+                filelocks::LockKind::Exclusive,
+                filelocks::LockMode::NonBlocking,
+            )
+            .map_err(|e| Error::plugin(format!("failed to lock for compare_and_write: {}", e)))?;
+        let file = lock.file_mut();
+        if !Self::open_file_matches_path(&file, &local_path)? {
+            return Ok(false);
+        }
+
+        let mut current = Vec::new();
+        file.seek(SeekFrom::Start(0))
+            .map_err(|e| Error::plugin(format!("failed to seek for compare_and_write: {}", e)))?;
+        file.read_to_end(&mut current)
+            .map_err(|e| Error::plugin(format!("failed to read for compare_and_write: {}", e)))?;
+        if current != expected {
+            return Ok(false);
+        }
+
+        file.set_len(0)
+            .map_err(|e| Error::plugin(format!("failed to truncate for compare_and_write: {}", e)))?;
+        file.seek(SeekFrom::Start(0))
+            .map_err(|e| Error::plugin(format!("failed to rewind for compare_and_write: {}", e)))?;
+        file.write_all(&new_data)
+            .map_err(|e| Error::plugin(format!("failed to write for compare_and_write: {}", e)))?;
+        file.sync_data()
+            .map_err(|e| Error::plugin(format!("failed to sync for compare_and_write: {}", e)))?;
+        Ok(true)
+    }
+
+    /// Remove a local file only when the locked file content matches `expected`.
+    fn compare_and_remove_locked(local_path: PathBuf, expected: Vec<u8>) -> Result<bool> {
+        use std::io::{Read, Seek, SeekFrom};
+
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&local_path)
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    Error::NotFound(local_path.to_string_lossy().to_string())
+                } else {
+                    Error::plugin(format!("failed to open file for compare_and_remove: {}", e))
+                }
+            });
+        let file = match file {
+            Ok(file) => file,
+            Err(Error::NotFound(_)) => return Ok(false),
+            Err(e) => return Err(e),
+        };
+        let mut lock = filelocks::LockOptions::new()
+            .backend(filelocks::LockBackend::Fcntl)
+            .lock(
+                file,
+                filelocks::LockKind::Exclusive,
+                filelocks::LockMode::NonBlocking,
+            )
+            .map_err(|e| Error::plugin(format!("failed to lock for compare_and_remove: {}", e)))?;
+        let file = lock.file_mut();
+        if !Self::open_file_matches_path(&file, &local_path)? {
+            return Ok(false);
+        }
+
+        let mut current = Vec::new();
+        file.seek(SeekFrom::Start(0))
+            .map_err(|e| Error::plugin(format!("failed to seek for compare_and_remove: {}", e)))?;
+        file.read_to_end(&mut current)
+            .map_err(|e| Error::plugin(format!("failed to read for compare_and_remove: {}", e)))?;
+        if current != expected {
+            return Ok(false);
+        }
+
+        fs::remove_file(&local_path)
+            .map_err(|e| Error::plugin(format!("failed to remove for compare_and_remove: {}", e)))?;
+        Ok(true)
+    }
+
+    /// Run blocking local filesystem work on a dedicated thread.
+    async fn run_blocking_fs<T, F>(job: F) -> Result<T>
     where
         T: Send + 'static,
         F: FnOnce() -> Result<T> + Send + 'static,
@@ -509,12 +657,156 @@ impl LocalFileSystem {
     }
     fn local_to_query_relative_path(query_root: &Path, local: &Path) -> Option<String> {
         let rel = local.strip_prefix(query_root).ok()?;
-        let s = rel.to_string_lossy();
-        if s.is_empty() {
+        let parts = rel
+            .components()
+            .map(|component| component.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>();
+        if parts.is_empty() {
             Some(".".to_string())
         } else {
-            Some(s.to_string())
+            Some(parts.join("/"))
         }
+    }
+
+    /// Build the plugin-root-relative path required by the `GlobEntry.path` contract.
+    fn local_glob_entry_path(virtual_root: &str, rel_path: &str) -> String {
+        if virtual_root == "/" {
+            format!("/{}", rel_path)
+        } else {
+            format!("{}/{}", virtual_root.trim_end_matches('/'), rel_path)
+        }
+    }
+
+    fn glob_static_max_depth(pattern: &str) -> Option<usize> {
+        let mut depth = 0usize;
+        for segment in pattern.split('/') {
+            if segment.is_empty() || segment == "." {
+                continue;
+            }
+            if segment == "**" {
+                return None;
+            }
+            depth += 1;
+        }
+        Some(depth)
+    }
+
+    fn effective_glob_max_depth(pattern: &str, level_limit: Option<usize>) -> Option<usize> {
+        match (Self::glob_static_max_depth(pattern), level_limit) {
+            (Some(pattern_depth), Some(level_depth)) => Some(pattern_depth.min(level_depth)),
+            (Some(pattern_depth), None) => Some(pattern_depth),
+            (None, Some(level_depth)) => Some(level_depth),
+            (None, None) => None,
+        }
+    }
+
+    /// Implement glob pagination via `ignore::WalkBuilder` without materializing the whole tree.
+    ///
+    /// Args:
+    /// - `base_path`: Absolute local path to the mounted root directory.
+    /// - `virtual_path`: Query path inside the plugin mount.
+    /// - `pattern`: Standard glob pattern matched against query-root-relative paths.
+    /// - `show_hidden`: Whether hidden files should be included.
+    /// - `page_size`: Page size, or `None` to return all matches.
+    /// - `level_limit`: Maximum traversal depth.
+    /// - `continuation_token`: Continuation token returned by the previous page.
+    ///
+    /// Returns:
+    /// - The current `GlobPage`, or an error if the path is missing, not a directory,
+    ///   the token is invalid, or traversal fails.
+    fn glob_via_walk(
+        base_path: &Path,
+        virtual_path: &str,
+        pattern: &str,
+        show_hidden: bool,
+        page_size: Option<usize>,
+        level_limit: Option<usize>,
+        continuation_token: Option<String>,
+    ) -> Result<GlobPage> {
+        let matcher = PreparedGlob::new(pattern)?;
+        if matches!(page_size, Some(0)) {
+            return Err(Error::invalid_operation("page_size must be positive"));
+        }
+
+        let query_root = Self::resolve_virtual_path(base_path, virtual_path);
+        if !query_root.exists() {
+            return Err(Error::NotFound(virtual_path.to_string()));
+        }
+        if !query_root.is_dir() {
+            return Err(Error::NotADirectory(virtual_path.to_string()));
+        }
+
+        let start = decode_offset_token(
+            continuation_token.as_deref(),
+            virtual_path,
+            pattern,
+            show_hidden,
+            level_limit,
+        )?;
+        let limit = page_size.unwrap_or(usize::MAX);
+        let mut builder = WalkBuilder::new(&query_root);
+        builder
+            .hidden(false)
+            .parents(false)
+            .ignore(false)
+            .git_ignore(false)
+            .git_global(false)
+            .git_exclude(false)
+            .sort_by_file_path(|left, right| left.cmp(right));
+        if let Some(max_depth) = Self::effective_glob_max_depth(pattern, level_limit) {
+            builder.max_depth(Some(max_depth));
+        }
+
+        let mut walker = builder.build();
+        let mut raw_seen = 0usize;
+        let mut entries = Vec::new();
+        let mut next_offset = None;
+
+        while let Some(dent) = walker.next() {
+            if entries.len() >= limit {
+                next_offset = Some(raw_seen);
+                break;
+            }
+
+            let dent = dent.map_err(|e| Error::plugin(format!("failed to walk directory: {}", e)))?;
+            raw_seen += 1;
+
+            if raw_seen <= start {
+                continue;
+            }
+
+            let rel_path = Self::local_to_query_relative_path(&query_root, dent.path())
+                .ok_or_else(|| Error::InvalidPath(dent.path().display().to_string()))?;
+            if rel_path == "." {
+                continue;
+            }
+
+            let name = dent.file_name().to_string_lossy().to_string();
+            let is_dir = dent
+                .file_type()
+                .map(|file_type| file_type.is_dir())
+                .unwrap_or_else(|| dent.path().is_dir());
+
+            if !show_hidden && !is_dir && name.starts_with('.') {
+                continue;
+            }
+            if !matcher.is_match(&rel_path) {
+                continue;
+            }
+
+            entries.push(GlobEntry {
+                path: Self::local_glob_entry_path(virtual_path, &rel_path),
+                rel_path,
+                name,
+                is_dir,
+            });
+        }
+
+        let next_token = next_offset
+            .filter(|_| page_size.is_some())
+            .map(|offset| encode_offset_token(offset, virtual_path, pattern, show_hidden, level_limit));
+
+        Ok(GlobPage { entries, next_token })
     }
 
     fn resolve_virtual_path(base_path: &Path, path: &str) -> PathBuf {
@@ -530,7 +822,7 @@ impl LocalFileSystem {
 #[async_trait]
 impl FileSystem for LocalFileSystem {
     async fn create(&self, path: &str) -> Result<()> {
-        let local_path = self.resolve_path(path);
+        let local_path = self.resolve_path(path)?;
 
         // Check if file already exists
         if local_path.exists() {
@@ -552,7 +844,7 @@ impl FileSystem for LocalFileSystem {
     }
 
     async fn mkdir(&self, path: &str, _mode: u32) -> Result<()> {
-        let local_path = self.resolve_path(path);
+        let local_path = self.resolve_path(path)?;
 
         // Check if directory already exists
         if local_path.exists() {
@@ -574,7 +866,7 @@ impl FileSystem for LocalFileSystem {
     }
 
     async fn remove(&self, path: &str) -> Result<()> {
-        let local_path = self.resolve_path(path);
+        let local_path = self.resolve_path(path)?;
 
         // Check if exists
         if !local_path.exists() {
@@ -600,7 +892,7 @@ impl FileSystem for LocalFileSystem {
     }
 
     async fn remove_all(&self, path: &str) -> Result<()> {
-        let local_path = self.resolve_path(path);
+        let local_path = self.resolve_path(path)?;
 
         // Check if exists
         if !local_path.exists() {
@@ -615,7 +907,7 @@ impl FileSystem for LocalFileSystem {
     }
 
     async fn read(&self, path: &str, offset: u64, size: u64) -> Result<Vec<u8>> {
-        let local_path = self.resolve_path(path);
+        let local_path = self.resolve_path(path)?;
 
         // Check if exists and is not a directory
         let metadata = fs::metadata(&local_path).map_err(|_| Error::NotFound(path.to_string()))?;
@@ -645,7 +937,7 @@ impl FileSystem for LocalFileSystem {
     }
 
     async fn write(&self, path: &str, data: &[u8], offset: u64, flags: WriteFlag) -> Result<u64> {
-        let local_path = self.resolve_path(path);
+        let local_path = self.resolve_path(path)?;
 
         // Check if it's a directory
         if local_path.exists() && local_path.is_dir() {
@@ -659,101 +951,143 @@ impl FileSystem for LocalFileSystem {
             }
         }
 
-        // Determine if we should truncate based on flags
-        let should_truncate = matches!(flags, WriteFlag::Create | WriteFlag::Truncate);
+        let mut options = fs::OpenOptions::new();
+        match flags {
+            WriteFlag::Create => {
+                options.write(true).create(true).truncate(true);
+            }
+            WriteFlag::CreateNew => {
+                options.write(true).create_new(true);
+            }
+            WriteFlag::Append => {
+                options.append(true);
+            }
+            WriteFlag::Truncate => {
+                options.write(true).truncate(true);
+            }
+            WriteFlag::None => {
+                options.write(true);
+            }
+        }
+        let mut file = options.open(&local_path).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                Error::NotFound(path.to_string())
+            } else {
+                Error::plugin(format!("failed to open file: {}", e))
+            }
+        })?;
 
-        // Open or create file with truncate support
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(should_truncate)
-            .open(&local_path)
-            .map_err(|e| Error::plugin(format!("failed to open file: {}", e)))?;
-
-        // Write data
         use std::io::{Seek, SeekFrom, Write};
-
-        if offset > 0 {
+        if matches!(flags, WriteFlag::None) && offset > 0 {
             file.seek(SeekFrom::Start(offset))
                 .map_err(|e| Error::plugin(format!("failed to seek: {}", e)))?;
         }
-
-        let written = file
-            .write(data)
+        file.write_all(data)
             .map_err(|e| Error::plugin(format!("failed to write: {}", e)))?;
+        Ok(data.len() as u64)
+    }
 
-        Ok(written as u64)
+    /// Atomically replace a local file when its current content exactly matches `expected`.
+    async fn compare_and_write(
+        &self,
+        path: &str,
+        expected: &[u8],
+        new_data: &[u8],
+    ) -> Result<bool> {
+        let local_path = self.resolve_path(path)?;
+        let expected = expected.to_vec();
+        let new_data = new_data.to_vec();
+        Self::run_blocking_fs(move || {
+            Self::compare_and_write_locked(local_path, expected, new_data)
+        })
+        .await
+    }
+
+    /// Atomically remove a local file when its current content exactly matches `expected`.
+    async fn compare_and_remove(&self, path: &str, expected: &[u8]) -> Result<bool> {
+        let local_path = self.resolve_path(path)?;
+        let expected = expected.to_vec();
+        Self::run_blocking_fs(move || Self::compare_and_remove_locked(local_path, expected)).await
     }
 
     async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
-        let local_path = self.resolve_path(path);
+        let local_path = self.resolve_path(path)?;
+        let path = path.to_string();
 
-        // Check if directory exists
-        if !local_path.exists() {
-            return Err(Error::NotFound(path.to_string()));
-        }
+        Self::run_blocking_fs(move || {
+            // Check if directory exists
+            if !local_path.exists() {
+                return Err(Error::NotFound(path.clone()));
+            }
 
-        if !local_path.is_dir() {
-            return Err(Error::plugin(format!("not a directory: {}", path)));
-        }
+            if !local_path.is_dir() {
+                return Err(Error::plugin(format!("not a directory: {}", path)));
+            }
 
-        // Read directory
-        let entries = fs::read_dir(&local_path)
-            .map_err(|e| Error::plugin(format!("failed to read directory: {}", e)))?;
+            // Read directory
+            let entries = fs::read_dir(&local_path)
+                .map_err(|e| Error::plugin(format!("failed to read directory: {}", e)))?;
 
-        let mut files = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|e| Error::plugin(format!("failed to read entry: {}", e)))?;
-            let metadata = entry
-                .metadata()
-                .map_err(|e| Error::plugin(format!("failed to get metadata: {}", e)))?;
+            let mut files = Vec::new();
+            for entry in entries {
+                let entry =
+                    entry.map_err(|e| Error::plugin(format!("failed to read entry: {}", e)))?;
+                let metadata = entry
+                    .metadata()
+                    .map_err(|e| Error::plugin(format!("failed to get metadata: {}", e)))?;
 
-            let name = entry.file_name().to_string_lossy().to_string();
+                let name = entry.file_name().to_string_lossy().to_string();
+                let mode = if metadata.is_dir() { 0o755 } else { 0o644 };
+                let mod_time = metadata
+                    .modified()
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+
+                files.push(FileInfo::new(
+                    name,
+                    metadata.len(),
+                    mode,
+                    mod_time,
+                    metadata.is_dir(),
+                ));
+            }
+
+            Ok(files)
+        })
+        .await
+    }
+
+    async fn stat(&self, path: &str) -> Result<FileInfo> {
+        let local_path = self.resolve_path(path)?;
+        let path = path.to_string();
+
+        Self::run_blocking_fs(move || {
+            // Get file metadata
+            let metadata = fs::metadata(&local_path).map_err(|_| Error::NotFound(path.clone()))?;
+
+            let name = Path::new(&path)
+                .file_name()
+                .unwrap_or(path.as_ref())
+                .to_string_lossy()
+                .to_string();
             let mode = if metadata.is_dir() { 0o755 } else { 0o644 };
             let mod_time = metadata
                 .modified()
                 .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
 
-            files.push(FileInfo::new(
+            Ok(FileInfo::new(
                 name,
                 metadata.len(),
                 mode,
                 mod_time,
                 metadata.is_dir(),
-            ));
-        }
-
-        Ok(files)
-    }
-
-    async fn stat(&self, path: &str) -> Result<FileInfo> {
-        let local_path = self.resolve_path(path);
-
-        // Get file metadata
-        let metadata = fs::metadata(&local_path).map_err(|_| Error::NotFound(path.to_string()))?;
-
-        let name = Path::new(path)
-            .file_name()
-            .unwrap_or(path.as_ref())
-            .to_string_lossy()
-            .to_string();
-        let mode = if metadata.is_dir() { 0o755 } else { 0o644 };
-        let mod_time = metadata
-            .modified()
-            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-
-        Ok(FileInfo::new(
-            name,
-            metadata.len(),
-            mode,
-            mod_time,
-            metadata.is_dir(),
-        ))
+            ))
+        })
+        .await
     }
 
     async fn rename(&self, old_path: &str, new_path: &str) -> Result<()> {
-        let old_local = self.resolve_path(old_path);
-        let new_local = self.resolve_path(new_path);
+        let old_local = self.resolve_path(old_path)?;
+        let new_local = self.resolve_path(new_path)?;
 
         // Check if old path exists
         if !old_local.exists() {
@@ -774,8 +1108,88 @@ impl FileSystem for LocalFileSystem {
         Ok(())
     }
 
+    async fn replace(&self, src_path: &str, dst_path: &str) -> Result<()> {
+        let src_local = self.resolve_path(src_path)?;
+        let dst_local = self.resolve_path(dst_path)?;
+
+        if !src_local.exists() {
+            return Err(Error::NotFound(src_path.to_string()));
+        }
+
+        if src_local.is_dir() {
+            return Err(Error::invalid_operation(
+                "replace only supports files in localfs",
+            ));
+        }
+
+        if dst_local.is_dir() {
+            return Err(Error::IsADirectory(dst_path.to_string()));
+        }
+
+        if let Some(parent) = dst_local.parent() {
+            if !parent.exists() {
+                return Err(Error::NotFound(parent.to_string_lossy().to_string()));
+            }
+        }
+
+          // Keep replace semantics explicit instead of inheriting rename behavior:
+          // encrypted publish needs an overwrite-on-destination move.
+          #[cfg(windows)]
+          {
+              use std::ffi::OsStr;
+              use std::io;
+              use std::os::windows::ffi::OsStrExt;
+
+              type BOOL = i32;
+              type DWORD = u32;
+              type LPCWSTR = *const u16;
+
+              const MOVEFILE_REPLACE_EXISTING: DWORD = 0x1;
+              const MOVEFILE_WRITE_THROUGH: DWORD = 0x8;
+
+              unsafe extern "system" {
+                  fn MoveFileExW(
+                      lpExistingFileName: LPCWSTR,
+                      lpNewFileName: LPCWSTR,
+                      dwFlags: DWORD,
+                  ) -> BOOL;
+              }
+
+              let src_wide: Vec<u16> = OsStr::new(src_local.as_os_str())
+                  .encode_wide()
+                  .chain(std::iter::once(0))
+                  .collect();
+              let dst_wide: Vec<u16> = OsStr::new(dst_local.as_os_str())
+                  .encode_wide()
+                  .chain(std::iter::once(0))
+                  .collect();
+
+              let replaced = unsafe {
+                  MoveFileExW(
+                      src_wide.as_ptr(),
+                      dst_wide.as_ptr(),
+                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+                  )
+              };
+              if replaced == 0 {
+                  return Err(Error::plugin(format!(
+                      "failed to replace: {}",
+                      io::Error::last_os_error()
+                  )));
+              }
+          }
+
+          #[cfg(not(windows))]
+          {
+              fs::rename(&src_local, &dst_local)
+                  .map_err(|e| Error::plugin(format!("failed to replace: {}", e)))?;
+          }
+
+        Ok(())
+    }
+
     async fn chmod(&self, path: &str, _mode: u32) -> Result<()> {
-        let local_path = self.resolve_path(path);
+        let local_path = self.resolve_path(path)?;
 
         // Check if exists
         if !local_path.exists() {
@@ -788,7 +1202,7 @@ impl FileSystem for LocalFileSystem {
     }
 
     async fn ensure_parent_dirs(&self, path: &str, _mode: u32) -> Result<()> {
-        let local_path = self.resolve_path(path);
+        let local_path = self.resolve_path(path)?;
 
         // Get parent directory
         if let Some(parent) = local_path.parent() {
@@ -816,7 +1230,7 @@ impl FileSystem for LocalFileSystem {
             return Ok(GrepResult::new());
         }
 
-        let local = self.resolve_path(path);
+        let local = self.resolve_path(path)?;
         if !local.exists() {
             return Err(Error::NotFound(path.to_string()));
         }
@@ -830,7 +1244,7 @@ impl FileSystem for LocalFileSystem {
             let rg_pattern = pattern_owned.clone();
             let rg_base_path = base_path.clone();
             let rg_exclude = exclude_owned.clone();
-            let rg_res = Self::run_blocking_grep(move || {
+            let rg_res = Self::run_blocking_fs(move || {
                 LocalFileSystem::grep_via_rg(
                     rg_base_path.as_path(),
                     local.as_path(),
@@ -850,7 +1264,7 @@ impl FileSystem for LocalFileSystem {
         }
 
         // Fallback: also run in a blocking thread (dir walking + file reads are blocking IO).
-        Self::run_blocking_grep(move || {
+        Self::run_blocking_fs(move || {
             LocalFileSystem::grep_via_libs(
                 base_path.as_path(),
                 &path_owned,
@@ -864,11 +1278,57 @@ impl FileSystem for LocalFileSystem {
         })
         .await
     }
+
+    /// Return one glob page in local stable DFS order without building the full directory tree first.
+    ///
+    /// Args:
+    /// - `path`: Query directory path inside the plugin mount.
+    /// - `pattern`: Glob pattern.
+    /// - `show_hidden`: Whether hidden files should be included.
+    /// - `page_size`: Page size, or `None` to return all matches.
+    /// - `level_limit`: Maximum traversal depth.
+    /// - `continuation_token`: Token returned by the previous page.
+    ///
+    /// Returns:
+    /// - The current `GlobPage`, or an error if arguments are invalid or traversal fails.
+    async fn glob_directory(
+        &self,
+        path: &str,
+        pattern: &str,
+        show_hidden: bool,
+        page_size: Option<usize>,
+        level_limit: Option<usize>,
+        continuation_token: Option<String>,
+    ) -> Result<GlobPage> {
+        // Use the same guard as every other op: `validate_virtual_path` alone lets an
+        // absolute remainder (e.g. `//etc` from a `//`-double-slash mount path) through,
+        // and `glob_via_walk`'s `resolve_virtual_path` would then join it over the base.
+        // `resolve_path` adds the is_absolute check; discard the PathBuf, keep the guard.
+        self.resolve_path(path)?;
+        let base_path = self.base_path.clone();
+        let path_owned = path.to_string();
+        let pattern_owned = pattern.to_string();
+
+        Self::run_blocking_fs(move || {
+            LocalFileSystem::glob_via_walk(
+                base_path.as_path(),
+                &path_owned,
+                &pattern_owned,
+                show_hidden,
+                page_size,
+                level_limit,
+                continuation_token,
+            )
+        })
+        .await
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::{ConfigValue, FileSystem, MountableFS};
+    use std::collections::HashMap;
     use std::path::Path;
     use tempfile::TempDir;
 
@@ -912,6 +1372,84 @@ mod tests {
         std::fs::write(path, content).unwrap();
     }
 
+    #[tokio::test]
+    async fn test_localfs_rejects_parent_path_components() {
+        let dir = TempDir::new().unwrap();
+        let mount = dir.path().join("mount");
+        std::fs::create_dir(&mount).unwrap();
+        write_file(dir.path(), "secret.txt", "secret");
+        let fs = LocalFileSystem::new(mount.to_str().unwrap()).unwrap();
+
+        let err = fs.read("/../secret.txt", 0, 0).await.unwrap_err();
+        assert!(matches!(err, Error::InvalidPath(_)));
+    }
+
+    #[tokio::test]
+    async fn test_localfs_mount_rejects_absolute_remainder() {
+        let dir = TempDir::new().unwrap();
+        let mount = dir.path().join("mount");
+        std::fs::create_dir(&mount).unwrap();
+        write_file(dir.path(), "secret.txt", "secret");
+
+        let fs = MountableFS::new();
+        fs.register_plugin(LocalFSPlugin::new()).await;
+        let params = HashMap::from([(
+            "local_dir".to_string(),
+            ConfigValue::String(mount.to_string_lossy().into_owned()),
+        )]);
+        fs.mount(PluginConfig::single_backend("localfs", "/local", params))
+            .await
+            .unwrap();
+
+        let escape_path = format!("/local/{}", dir.path().join("secret.txt").display());
+        let err = fs.read(&escape_path, 0, 0).await.unwrap_err();
+        assert!(matches!(err, Error::InvalidPath(_)));
+    }
+
+    #[tokio::test]
+    async fn test_localfs_glob_mount_rejects_absolute_remainder() {
+        let dir = TempDir::new().unwrap();
+        let mount = dir.path().join("mount");
+        std::fs::create_dir(&mount).unwrap();
+        write_file(dir.path(), "secret.txt", "secret");
+
+        let fs = MountableFS::new();
+        fs.register_plugin(LocalFSPlugin::new()).await;
+        let params = HashMap::from([(
+            "local_dir".to_string(),
+            ConfigValue::String(mount.to_string_lossy().into_owned()),
+        )]);
+        fs.mount(PluginConfig::single_backend("localfs", "/local", params))
+            .await
+            .unwrap();
+
+        // `/local/<abs dir>` -> remainder `//<abs dir>` would otherwise join over the mount
+        // base and let glob list a host directory outside the mount.
+        let escape_path = format!("/local/{}", dir.path().display());
+        let err = fs
+            .glob_directory(&escape_path, "**/*", false, None, None, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidPath(_)));
+    }
+
+    #[tokio::test]
+    async fn test_localfs_write_honors_flags() {
+        let (_dir, fs) = fallback_localfs();
+        fs.write("/file", b"old", 0, WriteFlag::Create)
+            .await
+            .unwrap();
+        fs.write("/file", b"new", 0, WriteFlag::Append)
+            .await
+            .unwrap();
+        assert_eq!(fs.read("/file", 0, 0).await.unwrap(), b"oldnew");
+
+        for flag in [WriteFlag::Append, WriteFlag::Truncate, WriteFlag::None] {
+            let err = fs.write("/missing", b"data", 0, flag).await.unwrap_err();
+            assert!(matches!(err, Error::NotFound(_)));
+        }
+    }
+
     /// Install a fake rg executable and prepend it to PATH for the current test.
     #[cfg(unix)]
     fn install_fake_rg(dir: &TempDir, script: &str) -> EnvVarGuard {
@@ -949,6 +1487,24 @@ mod tests {
 
         assert_eq!(result.count, 1);
         assert_eq!(result.matches[0].file, "a.txt");
+    }
+
+    #[tokio::test]
+    async fn test_localfs_replace_overwrites_existing_file() {
+        let (_dir, fs) = fallback_localfs();
+
+        fs.write("/src.txt", b"fresh", 0, WriteFlag::Create)
+            .await
+            .unwrap();
+        fs.write("/dst.txt", b"stale", 0, WriteFlag::Create)
+            .await
+            .unwrap();
+
+        fs.replace("/src.txt", "/dst.txt").await.unwrap();
+
+        assert!(fs.stat("/src.txt").await.is_err());
+        let data = fs.read("/dst.txt", 0, 0).await.unwrap();
+        assert_eq!(data, b"fresh");
     }
 
     #[tokio::test]
@@ -1102,6 +1658,166 @@ mod tests {
         assert_eq!(result.matches.len(), 1);
         assert_eq!(result.matches[0].file, "a.txt");
         assert_eq!(result.matches[0].content, "hello");
+    }
+
+    #[tokio::test]
+    async fn test_localfs_glob_paginates_with_local_cursor_tokens() {
+        let (dir, fs) = fallback_localfs();
+        write_file(dir.path(), "a.md", "");
+        write_file(dir.path(), "b.md", "");
+        write_file(dir.path(), "c.md", "");
+
+        let first = fs
+            .glob_directory("/", "**/*.md", false, Some(2), None, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            first
+                .entries
+                .iter()
+                .map(|entry| entry.rel_path.clone())
+                .collect::<Vec<_>>(),
+            vec!["a.md", "b.md"]
+        );
+        assert!(first.next_token.is_some());
+        assert_eq!(first.entries[0].path, "/a.md");
+
+        let second = fs
+            .glob_directory("/", "**/*.md", false, Some(2), None, first.next_token)
+            .await
+            .unwrap();
+        assert_eq!(
+            second
+                .entries
+                .iter()
+                .map(|entry| entry.rel_path.clone())
+                .collect::<Vec<_>>(),
+            vec!["c.md"]
+        );
+        assert!(second.next_token.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_localfs_glob_keeps_directory_matches() {
+        let (dir, fs) = fallback_localfs();
+        std::fs::create_dir_all(dir.path().join("folder")).unwrap();
+
+        let out = fs.glob_directory("/", "**/*", false, None, None, None).await.unwrap();
+        assert_eq!(
+            out.entries
+                .iter()
+                .map(|entry| entry.rel_path.clone())
+                .collect::<Vec<_>>(),
+            vec!["folder"]
+        );
+        assert!(out.entries[0].is_dir);
+    }
+
+    #[test]
+    fn test_localfs_relative_path_uses_forward_slashes() {
+        let root = Path::new("root");
+        let local = root.join("a").join("b.md");
+
+        assert_eq!(
+            LocalFileSystem::local_to_query_relative_path(root, &local).unwrap(),
+            "a/b.md"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_localfs_glob_respects_level_limit() {
+        let (dir, fs) = fallback_localfs();
+        write_file(dir.path(), "top.md", "");
+        write_file(dir.path(), "sub/nested.md", "");
+        write_file(dir.path(), "sub/deeper/late.md", "");
+
+        let out = fs
+            .glob_directory("/", "**/*.md", false, None, Some(1), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            out.entries
+                .iter()
+                .map(|entry| entry.rel_path.clone())
+                .collect::<Vec<_>>(),
+            vec!["top.md"]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_localfs_glob_rejects_token_from_different_query_scope() {
+        let (dir, fs) = fallback_localfs();
+        write_file(dir.path(), "a.md", "");
+        write_file(dir.path(), "b.md", "");
+        write_file(dir.path(), "c.md", "");
+
+        let first = fs
+            .glob_directory("/", "**/*.md", false, Some(2), None, None)
+            .await
+            .unwrap();
+        let err = fs
+            .glob_directory("/", "**/*.txt", false, Some(2), None, first.next_token)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidOperation(_)));
+    }
+
+    #[tokio::test]
+    async fn test_localfs_glob_skips_hidden_files_but_keeps_hidden_dirs() {
+        let (dir, fs) = fallback_localfs();
+        write_file(dir.path(), ".hidden.md", "");
+        write_file(dir.path(), ".hidden_dir/nested.md", "");
+
+        let out = fs.glob_directory("/", "**/*.md", false, None, None, None).await.unwrap();
+        assert_eq!(
+            out.entries
+                .iter()
+                .map(|entry| entry.rel_path.clone())
+                .collect::<Vec<_>>(),
+            vec![".hidden_dir/nested.md"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_localfs_glob_defers_late_subtree_errors_to_later_pages() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (dir, fs) = fallback_localfs();
+        write_file(dir.path(), "a.md", "");
+        write_file(dir.path(), "b.md", "");
+        write_file(dir.path(), "c.md", "");
+        std::fs::create_dir_all(dir.path().join("z_blocked")).unwrap();
+        write_file(dir.path(), "z_blocked/late.md", "");
+
+        let blocked_dir = dir.path().join("z_blocked");
+        let old_mode = std::fs::metadata(&blocked_dir).unwrap().permissions().mode();
+        let mut perms = std::fs::metadata(&blocked_dir).unwrap().permissions();
+        perms.set_mode(0);
+        std::fs::set_permissions(&blocked_dir, perms).unwrap();
+
+        let first = fs.glob_directory("/", "**/*.md", false, Some(2), None, None).await;
+        assert!(first.is_ok());
+        let first = first.unwrap();
+        assert_eq!(
+            first
+                .entries
+                .iter()
+                .map(|entry| entry.rel_path.clone())
+                .collect::<Vec<_>>(),
+            vec!["a.md", "b.md"]
+        );
+        assert!(first.next_token.is_some());
+
+        let out = fs
+            .glob_directory("/", "**/*.md", false, Some(2), None, first.next_token)
+            .await;
+
+        let mut restore = std::fs::metadata(&blocked_dir).unwrap().permissions();
+        restore.set_mode(old_mode);
+        std::fs::set_permissions(&blocked_dir, restore).unwrap();
+
+        assert!(out.is_err());
     }
 }
 

@@ -10,18 +10,16 @@ images themselves are stored next to the markdown file referencing them).
 
 import json
 import re
-from typing import TYPE_CHECKING, Dict, Optional, Set
+from pathlib import Path
+from typing import Any, Dict, Optional, Set
 
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.utils import get_logger
 
-if TYPE_CHECKING:
-    from openviking.storage.transaction.lock_handle import LockHandle
-
 logger = get_logger(__name__)
 
-_IMAGE_PATTERN = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+_IMAGE_PATTERN = re.compile(r"!\[([^\]]*)\]\(((?:[^()]|\([^()]*\))+)\)")
 _REMOTE_PREFIXES = ("http://", "https://", "viking://", "data:", "ftp://")
 
 # Sidecar written by MarkdownParser._ingest_local_images at each document root,
@@ -30,11 +28,70 @@ IMAGE_MAPPINGS_FILENAME = ".image_mappings.json"
 
 # HTML <img src="..."> embeds, common in markdown for sizing control. Shared
 # with the parser so ingestion and rewriting see the same references.
-HTML_IMG_PATTERN = re.compile(
-    r"""(<img\s[^>]*?src=["'])([^"']+)(["'][^>]*>)""", re.IGNORECASE
-)
+HTML_IMG_PATTERN = re.compile(r"""(<img\s[^>]*?src=["'])([^"']+)(["'][^>]*>)""", re.IGNORECASE)
 _FENCE_PATTERN = re.compile(r"^(\s{0,3})(`{3,}|~{3,})")
 _LIST_ITEM_PATTERN = re.compile(r"^(\s{0,3})([-*+]|\d{1,9}[.)])(\s+)")
+
+
+def build_artifact_image_mappings(root_dir: Path) -> Dict[str, Dict[str, str]]:
+    """Build the sidecar mapping for an already-materialized parser artifact.
+
+    Understanding API artifacts already place each image next to the markdown
+    file that references it. Keep this helper deliberately narrower than
+    MarkdownParser's local-image ingestion: it records only existing sibling
+    files and never copies or renames artifact content.
+    """
+    root = root_dir.resolve()
+    mappings: Dict[str, Dict[str, str]] = {}
+
+    for md_path in root.rglob("*.md"):
+        if not md_path.is_file():
+            continue
+        try:
+            content = md_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            logger.warning(f"[image_rewrite] Failed to read artifact markdown: {md_path}")
+            continue
+
+        protected = _protected_ranges(content)
+
+        refs = [(match.start(), match.group(2)) for match in _IMAGE_PATTERN.finditer(content)]
+        refs.extend((match.start(), match.group(2)) for match in HTML_IMG_PATTERN.finditer(content))
+
+        file_mappings: Dict[str, str] = {}
+        md_dir = md_path.parent.resolve()
+        for pos, original_ref in refs:
+            if any(start <= pos < end for start, end in protected):
+                continue
+
+            ref = original_ref.strip()
+            if not ref or _is_remote_uri(ref):
+                continue
+
+            # Queries/fragments are not part of the local filesystem path, but
+            # the exact original reference remains the mapping key used later.
+            path_part = re.split(r"[?#]", ref, maxsplit=1)[0]
+            ref_path = Path(path_part)
+            if not path_part or ref_path.is_absolute():
+                continue
+
+            try:
+                candidate = (md_dir / ref_path).resolve()
+                candidate.relative_to(root)
+            except (OSError, ValueError):
+                continue
+
+            # The existing sidecar contract stores only the final filename and
+            # rewrite_image_uris resolves it beside the markdown file.
+            if candidate.parent != md_dir or not candidate.is_file():
+                continue
+
+            file_mappings[original_ref] = candidate.name
+
+        if file_mappings:
+            mappings[md_path.relative_to(root).as_posix()] = file_mappings
+
+    return mappings
 
 
 def _is_remote_uri(path: str) -> bool:
@@ -103,7 +160,12 @@ def _protected_ranges(content: str):
         if in_fence:
             ranges.append((start, end))
             m = _FENCE_PATTERN.match(line_content)
-            if m and m.group(2)[0] == fence_char and len(m.group(2)) >= fence_len and stripped == m.group(2):
+            if (
+                m
+                and m.group(2)[0] == fence_char
+                and len(m.group(2)) >= fence_len
+                and stripped == m.group(2)
+            ):
                 in_fence = False
             prev_blank = is_blank
             continue
@@ -194,7 +256,7 @@ async def _discover_mappings(
 async def rewrite_image_uris(
     root_uri: str,
     ctx: Optional[RequestContext] = None,
-    lock_handle: Optional["LockHandle"] = None,
+    lease_ref: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, int]:
     """Rewrite local image references in markdown files to viking:// URIs.
 
@@ -212,7 +274,7 @@ async def rewrite_image_uris(
     Args:
         root_uri: The final VikingFS root URI (e.g. ``viking://resources/doc``)
         ctx: Optional request context for permissions
-        lock_handle: Optional lock handle held by the caller. When the caller
+        lease_ref: Optional lease reference held by the caller. When the caller
             already owns a TREE lock over *root_uri*, forwarding it lets the
             cleanup ``rm`` reuse that lock instead of conflicting with it.
 
@@ -224,7 +286,7 @@ async def rewrite_image_uris(
     root_prefix = root_uri.rstrip("/")
 
     # Find all .md files recursively
-    glob_result = await viking_fs.glob("*.md", uri=root_uri, ctx=ctx)
+    glob_result = await viking_fs.glob("**/*.md", uri=root_uri, ctx=ctx)
     md_uris = glob_result.get("matches", [])
 
     if not md_uris:
@@ -255,8 +317,7 @@ async def rewrite_image_uris(
         try:
             entries = await viking_fs.ls(md_dir, ctx=ctx)
             available_images = {
-                e["name"] for e in entries
-                if not e.get("isDir") and not e["name"].startswith(".")
+                e["name"] for e in entries if not e.get("isDir") and not e["name"].startswith(".")
             }
         except Exception:
             logger.debug(f"[image_rewrite] Failed to list directory {md_dir}")
@@ -267,25 +328,36 @@ async def rewrite_image_uris(
             logger.warning(f"[image_rewrite] Failed to read {md_uri}, skipping")
             continue
 
-        new_content, rewrite_count = _rewrite_content(content, md_dir, available_images, path_to_image_name)
+        new_content, rewrite_count = _rewrite_content(
+            content, md_dir, available_images, path_to_image_name
+        )
 
         if rewrite_count > 0:
             try:
-                await viking_fs.write_file(md_uri, new_content, ctx=ctx)
+                await viking_fs.write_file(
+                    md_uri,
+                    new_content,
+                    ctx=ctx,
+                    lease_ref=lease_ref,
+                )
                 files_processed += 1
                 references_rewritten += rewrite_count
-                logger.debug(
-                    f"[image_rewrite] Rewrote {rewrite_count} image ref(s) in {md_uri}"
-                )
+                logger.debug(f"[image_rewrite] Rewrote {rewrite_count} image ref(s) in {md_uri}")
             except Exception:
                 logger.warning(f"[image_rewrite] Failed to write {md_uri}")
 
     # Clean up mapping sidecars — no longer needed after rewrite
     for map_dir in mappings_by_dir:
         try:
-            await viking_fs.rm(f"{map_dir}/{IMAGE_MAPPINGS_FILENAME}", ctx=ctx, lock_handle=lock_handle)
+            await viking_fs.rm(
+                f"{map_dir}/{IMAGE_MAPPINGS_FILENAME}",
+                ctx=ctx,
+                lease_ref=lease_ref,
+            )
         except Exception as e:
-            logger.warning(f"[image_rewrite] Failed to delete {map_dir}/{IMAGE_MAPPINGS_FILENAME}: {e}")
+            logger.warning(
+                f"[image_rewrite] Failed to delete {map_dir}/{IMAGE_MAPPINGS_FILENAME}: {e}"
+            )
 
     logger.info(
         f"[image_rewrite] Processed {len(md_uris)} .md files, "

@@ -4,14 +4,19 @@
 VikingDB Manager class that extends VikingVectorIndexBackend with queue management functionality.
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator, Dict, List, Mapping, Optional, Tuple
 
 from openviking.server.identity import RequestContext
 from openviking.storage.expr import FilterExpr
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.embedding_queue import EmbeddingQueue
 from openviking.storage.queuefs.queue_manager import QueueManager
-from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
+from openviking.storage.viking_vector_index_backend import (
+    UpsertOptions,
+    VikingVectorIndexBackend,
+    normalize_upsert_options,
+)
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
@@ -182,9 +187,8 @@ class VikingDBManagerProxy:
         manager = VikingDBManager(...)
         proxy = VikingDBManagerProxy(manager, ctx)
 
-        # 使用（无需传 ctx，API 完全兼容）
-        await proxy.upsert(data)
-        results = await proxy.search_similar_memories(...)
+        # 使用（无需传 ctx；仅在需要保留未显式传入字段时开启 partial_update）
+        await proxy.upsert(data, options=UpsertOptions(partial_update=True))
         ```
     """
 
@@ -286,8 +290,33 @@ class VikingDBManagerProxy:
     # 数据操作 API（自动携带 ctx）
     # =========================================================================
 
-    async def upsert(self, data: Dict[str, Any]) -> str:
-        return await self._manager.upsert(data, ctx=self._ctx)
+    async def upsert(
+        self,
+        data: Dict[str, Any],
+        options: UpsertOptions | Mapping[str, Any] | None = None,
+    ):
+        """Bound write entrypoint.
+
+        ``options.partial_update=False`` keeps the legacy full-record upsert semantics.
+        ``options.partial_update=True`` reads the current record first and preserves
+        fields that are omitted from ``data`` before writing.
+        """
+        options = normalize_upsert_options(options)
+        return await self._manager.upsert(
+            data,
+            ctx=self._ctx,
+            options=options,
+        )
+
+    async def upsert_many(self, data_list: List[Dict[str, Any]]) -> List[str]:
+        """Bulk full-record upsert with the proxy's bound request context."""
+        return await self._manager.upsert_many(data_list, ctx=self._ctx)
+
+    @asynccontextmanager
+    async def bulk_ingest(self) -> AsyncIterator[None]:
+        """Bind the proxy context to a bulk-ingest maintenance scope."""
+        async with self._manager.bulk_ingest(ctx=self._ctx):
+            yield
 
     async def get(self, ids: List[str]) -> List[Dict[str, Any]]:
         return await self._manager.get(ids, ctx=self._ctx)
@@ -412,6 +441,7 @@ class VikingDBManagerProxy:
         context_type: Optional[str] = None,
         target_directories: Optional[List[str]] = None,
         extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
+        level: Optional[List[int]] = None,
         limit: int = 10,
         offset: int = 0,
     ) -> List[Dict[str, Any]]:
@@ -422,27 +452,9 @@ class VikingDBManagerProxy:
             context_type=context_type,
             target_directories=target_directories,
             extra_filter=extra_filter,
+            level=level,
             limit=limit,
             offset=offset,
-        )
-
-    async def search_global_roots_in_tenant(
-        self,
-        query_vector: Optional[List[float]],
-        sparse_query_vector: Optional[Dict[str, float]] = None,
-        context_type: Optional[str] = None,
-        target_directories: Optional[List[str]] = None,
-        extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
-        limit: int = 10,
-    ) -> List[Dict[str, Any]]:
-        return await self._manager.search_global_roots_in_tenant(
-            self._ctx,
-            query_vector=query_vector,
-            sparse_query_vector=sparse_query_vector,
-            context_type=context_type,
-            target_directories=target_directories,
-            extra_filter=extra_filter,
-            limit=limit,
         )
 
     async def search_children_in_tenant(
@@ -464,21 +476,6 @@ class VikingDBManagerProxy:
             target_directories=target_directories,
             extra_filter=extra_filter,
             limit=limit,
-        )
-
-    async def search_similar_memories(
-        self,
-        owner_space: Optional[str],
-        category_uri_prefix: str,
-        query_vector: List[float],
-        limit: int = 5,
-    ) -> List[Dict[str, Any]]:
-        return await self._manager.search_similar_memories(
-            owner_space=owner_space,
-            category_uri_prefix=category_uri_prefix,
-            query_vector=query_vector,
-            limit=limit,
-            ctx=self._ctx,
         )
 
     async def get_context_by_uri(

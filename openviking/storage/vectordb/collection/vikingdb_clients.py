@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional
 
 import requests
 
+import openviking
 from openviking_cli.utils.logger import default_logger as logger
 
 # Default request timeout (seconds)
@@ -82,6 +83,7 @@ class VikingDBClient:
         headers = {
             "Accept": "application/json",
             "Content-Type": "application/json",
+            "User-Agent": f"openviking/{openviking.__version__}",
         }
         headers.update(self.headers)
 

@@ -8,61 +8,9 @@ import time
 from types import SimpleNamespace
 
 import httpx
-import pytest
 
-from openviking.server.app import _initialize_runtime_state, _on_deferred_init_done, create_app
+from openviking.server.app import _initialize_runtime_state, create_app
 from openviking.server.config import ServerConfig
-
-
-class _ExitCalled(Exception):
-    def __init__(self, code: int):
-        self.code = code
-        super().__init__(f"os._exit({code})")
-
-
-async def test_deferred_init_failure_exits_process(monkeypatch):
-    async def fail_init():
-        raise RuntimeError("init failed")
-
-    def fake_exit(code: int):
-        raise _ExitCalled(code)
-
-    monkeypatch.setattr("openviking.server.app.os._exit", fake_exit)
-    task = asyncio.create_task(fail_init())
-    with pytest.raises(RuntimeError):
-        await task
-
-    with pytest.raises(_ExitCalled) as exc_info:
-        _on_deferred_init_done(task)
-
-    assert exc_info.value.code == 1
-
-
-async def test_deferred_init_success_does_not_exit(monkeypatch):
-    async def complete_init():
-        return None
-
-    monkeypatch.setattr(
-        "openviking.server.app.os._exit",
-        lambda code: pytest.fail(f"os._exit({code}) should not be called"),
-    )
-    task = asyncio.create_task(complete_init())
-    await task
-
-    _on_deferred_init_done(task)
-
-
-async def test_deferred_init_cancellation_does_not_exit(monkeypatch):
-    monkeypatch.setattr(
-        "openviking.server.app.os._exit",
-        lambda code: pytest.fail(f"os._exit({code}) should not be called"),
-    )
-    task = asyncio.create_task(asyncio.sleep(60))
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-
-    _on_deferred_init_done(task)
 
 
 async def test_health_endpoint(client: httpx.AsyncClient):
@@ -70,6 +18,56 @@ async def test_health_endpoint(client: httpx.AsyncClient):
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
+
+
+async def test_health_endpoint_resolves_identity_with_api_key(caplog):
+    """When an API key is provided, /health should return identity information."""
+    app = create_app(
+        config=ServerConfig(
+            auth_mode="api_key",
+            host="127.0.0.1",
+            root_api_key="test-root-key",
+        ),
+        service=SimpleNamespace(),
+    )
+    transport = httpx.ASGITransport(app=app)
+
+    with caplog.at_level("WARNING", logger="openviking.server.routers.system"):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/health", headers={"X-API-Key": "test-root-key"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["auth_mode"] == "api_key"
+    assert "account_id" in body
+    assert "user_id" in body
+    assert "role" in body
+    assert body["role"] == "root"
+    assert "Failed to resolve identity" not in caplog.text
+
+
+async def test_health_endpoint_without_api_key():
+    """Without an API key, /health should not return identity information."""
+    app = create_app(
+        config=ServerConfig(
+            auth_mode="api_key",
+            host="127.0.0.1",
+            root_api_key="test-root-key",
+        ),
+        service=SimpleNamespace(),
+    )
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/health")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert "account_id" not in body
+    assert "user_id" not in body
+    assert "role" not in body
 
 
 async def test_system_status(client: httpx.AsyncClient):

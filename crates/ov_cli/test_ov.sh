@@ -203,7 +203,7 @@ fi
 echo ""
 
 echo "5.4. Glob pattern search..."
-if $OV_BIN glob "*.md" --uri "viking://resources"; then
+if $OV_BIN glob "**/*.md" --uri "viking://resources"; then
     print_success "Glob search completed"
 else
     print_error "Glob search failed"

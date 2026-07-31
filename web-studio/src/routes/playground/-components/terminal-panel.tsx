@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import {
   ArrowRightIcon,
@@ -7,7 +8,6 @@ import {
   Loader2Icon,
   SendIcon,
   SparklesIcon,
-  TerminalIcon,
   TrashIcon,
   XCircleIcon,
 } from 'lucide-react'
@@ -67,6 +67,7 @@ import type {
 } from '../-lib/types'
 import {
   cleanVikingUri,
+  createIdentityStorageKey,
   entryToRef,
   getErrorMessage,
   readStoredJsonArray,
@@ -93,289 +94,7 @@ const URI_ARGUMENT_COMMANDS = new Set([
   '/tree',
 ])
 
-const COMMAND_HELP_FALLBACKS: Partial<
-  Record<string, { description: string; usage: string }>
-> = {
-  '/abstract': {
-    description: '读取目录摘要',
-    usage: '/abstract viking://resources/...',
-  },
-  '/add-resource': {
-    description: '添加外部资源',
-    usage: '/add-resource',
-  },
-  '/find': {
-    description: '查找相关资源',
-    usage: '/find 查询词',
-  },
-  '/health': {
-    description: '查看后端健康状态',
-    usage: '/health',
-  },
-  '/ls': {
-    description: '查看已有资源',
-    usage: '/ls [viking://resources/...]',
-  },
-  '/overview': {
-    description: '读取目录概览',
-    usage: '/overview viking://resources/...',
-  },
-  '/read': {
-    description: '读取资源文件',
-    usage: '/read viking://resources/.../file.md',
-  },
-  '/search': {
-    description: '语义检索上下文',
-    usage: '/search 查询词',
-  },
-  '/session': {
-    description: '管理 Agent 会话',
-    usage: '/session 子命令',
-  },
-  '/stat': {
-    description: '查看资源元信息',
-    usage: '/stat viking://resources/...',
-  },
-  '/status': {
-    description: '检查连通状态',
-    usage: '/status',
-  },
-  '/tree': {
-    description: '展示目录树',
-    usage: '/tree [viking://resources/...]',
-  },
-  '/wait': {
-    description: '等待服务就绪',
-    usage: '/wait [--timeout seconds]',
-  },
-}
-
-const PARAMETER_HELP_FALLBACKS: Record<
-  TerminalCommandParameterKey,
-  { description: string; name: string }
-> = {
-  archiveId: {
-    description: '读取 archive 时必填。',
-    name: 'archive_id',
-  },
-  contextChars: {
-    description: 'tool-search 子命令使用，控制命中上下文长度。',
-    name: '--context-chars 数量',
-  },
-  contexts: {
-    description: 'used 子命令可重复传入，记录本轮实际使用的上下文。',
-    name: '--context uri',
-  },
-  keepRecent: {
-    description: 'commit 子命令使用，提交后保留最近 N 条 live messages。',
-    name: '--keep-recent 数量',
-  },
-  limit: {
-    description: 'tool result 列表、读取或搜索时限制返回数量。',
-    name: '--limit 数量',
-  },
-  messageContent: {
-    description: 'message 子命令使用，要追加到 session 的文本内容。',
-    name: 'content',
-  },
-  messageRole: {
-    description: 'message 子命令使用，支持 user 或 assistant。',
-    name: 'role',
-  },
-  offset: {
-    description: 'tool-result 子命令使用，从指定字符偏移开始读取。',
-    name: '--offset 数量',
-  },
-  query: {
-    description: '要检索的关键词或语义问题。',
-    name: '查询词',
-  },
-  scope: {
-    description: '可选。不填则全局搜索；传 . 使用当前目录；传 uri 使用指定目录。',
-    name: '--scope <.|uri>',
-  },
-  sessionAction: {
-    description:
-      'current、list、create、switch、get、context、messages、archive、commit、extract、message、used、tool-results、tool-result、tool-search、delete。',
-    name: '子命令',
-  },
-  sessionId: {
-    description: '可选。省略时多数子命令使用当前 Agent session；delete 必须显式指定。',
-    name: 'session_id',
-  },
-  skillJson: {
-    description: 'used 子命令使用，记录实际使用的 skill 信息。',
-    name: '--skill-json JSON',
-  },
-  timeout: {
-    description: '可选。等待服务就绪的最长时间。',
-    name: '--timeout 秒',
-  },
-  tokenBudget: {
-    description: 'context 子命令使用，限制组装上下文的 token 预算。',
-    name: '--token-budget 数量',
-  },
-  toolName: {
-    description: 'tool-results 子命令使用，按工具名过滤。',
-    name: '--tool-name 名称',
-  },
-  toolResultId: {
-    description: '读取或搜索外部化 tool result 时必填。',
-    name: 'tool_result_id',
-  },
-  uri: {
-    description: '可选或必填的 viking:// 资源路径，取决于命令用法。',
-    name: 'uri',
-  },
-}
-
-const EXAMPLE_HELP_FALLBACKS: Partial<
-  Record<string, { code: string; description: string }>
-> = {
-  'abstract.target': {
-    code: '/abstract viking://resources/',
-    description: '读取目录摘要',
-  },
-  'addResource.default': {
-    code: '/add-resource',
-    description: '打开添加资源表单',
-  },
-  'find.current': {
-    code: '/find agent --scope .',
-    description: '使用当前高亮目录',
-  },
-  'find.global': {
-    code: '/find agent',
-    description: '全局查找相关资源',
-  },
-  'find.scoped': {
-    code: '/find agent --scope viking://resources/',
-    description: '只在指定目录查找',
-  },
-  'health.default': {
-    code: '/health',
-    description: '查看后端健康状态',
-  },
-  'ls.current': {
-    code: '/ls',
-    description: '列出当前目录',
-  },
-  'ls.target': {
-    code: '/ls viking://resources/',
-    description: '列出指定目录',
-  },
-  'overview.target': {
-    code: '/overview viking://resources/',
-    description: '读取目录概览',
-  },
-  'read.file': {
-    code: '/read viking://resources/file.md',
-    description: '读取并打开文件',
-  },
-  'search.current': {
-    code: '/search agent --scope .',
-    description: '使用当前高亮目录',
-  },
-  'search.global': {
-    code: '/search agent',
-    description: '全局语义检索',
-  },
-  'search.scoped': {
-    code: '/search agent --scope viking://resources/',
-    description: '只在指定目录检索',
-  },
-  'session.archive': {
-    code: '/session archive [session_id] <archive_id>',
-    description: '读取指定 archive',
-  },
-  'session.commit': {
-    code: '/session commit [session_id] --keep-recent 10',
-    description: '归档并触发记忆提取',
-  },
-  'session.context': {
-    code: '/session context [session_id] --token-budget 8000',
-    description: '读取组装后的 session context',
-  },
-  'session.create': {
-    code: '/session create [session_id]',
-    description: '创建并切换到新 session',
-  },
-  'session.current': {
-    code: '/session',
-    description: '查看当前 active session',
-  },
-  'session.delete': {
-    code: '/session delete <session_id>',
-    description: '删除指定 session',
-  },
-  'session.extract': {
-    code: '/session extract [session_id]',
-    description: '从 session 中提取记忆',
-  },
-  'session.get': {
-    code: '/session get [session_id]',
-    description: '查看 session 元信息',
-  },
-  'session.list': {
-    code: '/session list',
-    description: '列出所有 session',
-  },
-  'session.message': {
-    code: '/session message [session_id] user hello',
-    description: '向 session 追加消息',
-  },
-  'session.messages': {
-    code: '/session messages [session_id]',
-    description: '读取 session 消息列表',
-  },
-  'session.switch': {
-    code: '/session switch <session_id>',
-    description: '切换 Agent 面板会话',
-  },
-  'session.toolResult': {
-    code: '/session tool-result [session_id] <tool_result_id>',
-    description: '读取一个 tool result',
-  },
-  'session.toolResults': {
-    code: '/session tool-results [session_id] --limit 20',
-    description: '列出外部化 tool results',
-  },
-  'session.toolSearch': {
-    code: '/session tool-search [session_id] <tool_result_id> query',
-    description: '在 tool result 中搜索',
-  },
-  'session.used': {
-    code: '/session used [session_id] --context viking://resources/...',
-    description: '记录实际使用的上下文或 skill',
-  },
-  'stat.target': {
-    code: '/stat viking://resources/file.md',
-    description: '查看资源元信息',
-  },
-  'status.default': {
-    code: '/status',
-    description: '检查 Agent 和 API 连通状态',
-  },
-  'tree.current': {
-    code: '/tree',
-    description: '展示当前目录树',
-  },
-  'tree.target': {
-    code: '/tree viking://resources/',
-    description: '展示指定目录树',
-  },
-  'wait.default': {
-    code: '/wait',
-    description: '等待服务就绪',
-  },
-  'wait.timeout': {
-    code: '/wait --timeout 30',
-    description: '指定等待秒数',
-  },
-}
-
 type SessionSubcommandHelp = {
-  description: string
   examples: string[]
   insertText: string
   key: string
@@ -385,7 +104,6 @@ type SessionSubcommandHelp = {
 
 const SESSION_SUBCOMMANDS: SessionSubcommandHelp[] = [
   {
-    description: '查看当前 active session',
     examples: ['session.current'],
     insertText: '/session current',
     key: 'current',
@@ -393,7 +111,6 @@ const SESSION_SUBCOMMANDS: SessionSubcommandHelp[] = [
     usage: '/session current',
   },
   {
-    description: '列出所有 session',
     examples: ['session.list'],
     insertText: '/session list',
     key: 'list',
@@ -401,7 +118,6 @@ const SESSION_SUBCOMMANDS: SessionSubcommandHelp[] = [
     usage: '/session list',
   },
   {
-    description: '创建并切换到新 session',
     examples: ['session.create'],
     insertText: '/session create ',
     key: 'create',
@@ -409,7 +125,6 @@ const SESSION_SUBCOMMANDS: SessionSubcommandHelp[] = [
     usage: '/session create [session_id]',
   },
   {
-    description: '切换 Agent 面板会话',
     examples: ['session.switch'],
     insertText: '/session switch ',
     key: 'switch',
@@ -417,7 +132,6 @@ const SESSION_SUBCOMMANDS: SessionSubcommandHelp[] = [
     usage: '/session switch <session_id>',
   },
   {
-    description: '查看 session 元信息',
     examples: ['session.get'],
     insertText: '/session get ',
     key: 'get',
@@ -425,7 +139,6 @@ const SESSION_SUBCOMMANDS: SessionSubcommandHelp[] = [
     usage: '/session get [session_id]',
   },
   {
-    description: '读取组装后的 session context',
     examples: ['session.context'],
     insertText: '/session context ',
     key: 'context',
@@ -433,7 +146,6 @@ const SESSION_SUBCOMMANDS: SessionSubcommandHelp[] = [
     usage: '/session context [session_id] --token-budget 8000',
   },
   {
-    description: '读取 session 消息列表',
     examples: ['session.messages'],
     insertText: '/session messages ',
     key: 'messages',
@@ -441,7 +153,6 @@ const SESSION_SUBCOMMANDS: SessionSubcommandHelp[] = [
     usage: '/session messages [session_id]',
   },
   {
-    description: '读取指定 archive',
     examples: ['session.archive'],
     insertText: '/session archive ',
     key: 'archive',
@@ -449,7 +160,6 @@ const SESSION_SUBCOMMANDS: SessionSubcommandHelp[] = [
     usage: '/session archive [session_id] <archive_id>',
   },
   {
-    description: '归档并触发记忆提取',
     examples: ['session.commit'],
     insertText: '/session commit ',
     key: 'commit',
@@ -457,7 +167,6 @@ const SESSION_SUBCOMMANDS: SessionSubcommandHelp[] = [
     usage: '/session commit [session_id] --keep-recent 10',
   },
   {
-    description: '从 session 中提取记忆',
     examples: ['session.extract'],
     insertText: '/session extract ',
     key: 'extract',
@@ -465,7 +174,6 @@ const SESSION_SUBCOMMANDS: SessionSubcommandHelp[] = [
     usage: '/session extract [session_id]',
   },
   {
-    description: '向 session 追加消息',
     examples: ['session.message'],
     insertText: '/session message ',
     key: 'message',
@@ -473,7 +181,6 @@ const SESSION_SUBCOMMANDS: SessionSubcommandHelp[] = [
     usage: '/session message [session_id] user hello',
   },
   {
-    description: '记录实际使用的上下文或 skill',
     examples: ['session.used'],
     insertText: '/session used ',
     key: 'used',
@@ -481,7 +188,6 @@ const SESSION_SUBCOMMANDS: SessionSubcommandHelp[] = [
     usage: '/session used [session_id] --context viking://resources/...',
   },
   {
-    description: '列出外部化 tool results',
     examples: ['session.toolResults'],
     insertText: '/session tool-results ',
     key: 'tool-results',
@@ -489,7 +195,6 @@ const SESSION_SUBCOMMANDS: SessionSubcommandHelp[] = [
     usage: '/session tool-results [session_id] --limit 20',
   },
   {
-    description: '读取一个 tool result',
     examples: ['session.toolResult'],
     insertText: '/session tool-result ',
     key: 'tool-result',
@@ -497,7 +202,6 @@ const SESSION_SUBCOMMANDS: SessionSubcommandHelp[] = [
     usage: '/session tool-result [session_id] <tool_result_id>',
   },
   {
-    description: '在 tool result 中搜索',
     examples: ['session.toolSearch'],
     insertText: '/session tool-search ',
     key: 'tool-search',
@@ -505,7 +209,6 @@ const SESSION_SUBCOMMANDS: SessionSubcommandHelp[] = [
     usage: '/session tool-search [session_id] <tool_result_id> query',
   },
   {
-    description: '删除指定 session',
     examples: ['session.delete'],
     insertText: '/session delete ',
     key: 'delete',
@@ -547,9 +250,9 @@ type ParsedOptions = {
   positional: string[]
 }
 
-function loadCommandHistory(): string[] {
+function loadCommandHistory(storageKey: string): string[] {
   return readStoredJsonArray(
-    TERMINAL_COMMAND_HISTORY_STORAGE_KEY,
+    storageKey,
     (item) => {
       if (typeof item !== 'string') return undefined
       const trimmed = item.trim()
@@ -559,11 +262,8 @@ function loadCommandHistory(): string[] {
   )
 }
 
-function persistCommandHistory(history: string[]): void {
-  writeStoredJson(
-    TERMINAL_COMMAND_HISTORY_STORAGE_KEY,
-    history.slice(0, TERMINAL_COMMAND_HISTORY_LIMIT),
-  )
+function persistCommandHistory(storageKey: string, history: string[]): void {
+  writeStoredJson(storageKey, history.slice(0, TERMINAL_COMMAND_HISTORY_LIMIT))
 }
 
 function normalizeRefs(value: unknown): ResourceRef[] | undefined {
@@ -583,9 +283,9 @@ function normalizeRefs(value: unknown): ResourceRef[] | undefined {
   return refs.length > 0 ? refs : undefined
 }
 
-function loadTerminalHistory(): TerminalEntry[] {
+function loadTerminalHistory(storageKey: string): TerminalEntry[] {
   return readStoredJsonArray(
-    TERMINAL_ENTRY_HISTORY_STORAGE_KEY,
+    storageKey,
     (item): TerminalEntry | undefined => {
       if (typeof item !== 'object' || item === null) return undefined
       const record = item as Record<string, unknown>
@@ -612,15 +312,15 @@ function loadTerminalHistory(): TerminalEntry[] {
   )
 }
 
-function persistTerminalHistory(history: TerminalEntry[]): void {
-  writeStoredJson(
-    TERMINAL_ENTRY_HISTORY_STORAGE_KEY,
-    history.slice(-TERMINAL_ENTRY_HISTORY_LIMIT),
-  )
+function persistTerminalHistory(
+  storageKey: string,
+  history: TerminalEntry[],
+): void {
+  writeStoredJson(storageKey, history.slice(-TERMINAL_ENTRY_HISTORY_LIMIT))
 }
 
-function clearPersistedTerminalHistory(): void {
-  removeStoredValue(TERMINAL_ENTRY_HISTORY_STORAGE_KEY)
+function clearPersistedTerminalHistory(storageKey: string): void {
+  removeStoredValue(storageKey)
 }
 
 function extractVikingUris(text: string): string[] {
@@ -750,6 +450,7 @@ export function TerminalPanel({
   openingUri,
   onSessionChange,
   sessionId,
+  toolbarContainer,
 }: {
   currentUri: string
   entries: VikingFsEntry[]
@@ -758,15 +459,28 @@ export function TerminalPanel({
   openingUri: string | null
   onSessionChange: (sessionId: string) => void
   sessionId?: string
+  toolbarContainer: HTMLDivElement | null
 }) {
   const { t } = useTranslation('playground')
-  const { connectionRole } = useAppConnection()
+  const { connectionRole, identityScopeKey } = useAppConnection()
+  const commandHistoryStorageKey = createIdentityStorageKey(
+    TERMINAL_COMMAND_HISTORY_STORAGE_KEY,
+    identityScopeKey,
+  )
+  const terminalHistoryStorageKey = createIdentityStorageKey(
+    TERMINAL_ENTRY_HISTORY_STORAGE_KEY,
+    identityScopeKey,
+  )
   const [command, setCommand] = useState('')
   const [running, setRunning] = useState(false)
   const [suggestionsOpen, setSuggestionsOpen] = useState(false)
   const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(0)
-  const [commandHistory, setCommandHistory] = useState(loadCommandHistory)
-  const [history, setHistory] = useState(loadTerminalHistory)
+  const [commandHistory, setCommandHistory] = useState(() =>
+    loadCommandHistory(commandHistoryStorageKey),
+  )
+  const [history, setHistory] = useState(() =>
+    loadTerminalHistory(terminalHistoryStorageKey),
+  )
   const [historyOpen, setHistoryOpen] = useState(false)
   const [inputFocused, setInputFocused] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -781,15 +495,10 @@ export function TerminalPanel({
           connectionRole === 'admin' ||
           connectionRole === 'root',
       ).map((item) => {
-        const fallback = COMMAND_HELP_FALLBACKS[item.command]
         return {
           ...item,
-          description: t(`terminal.commands.${item.key}.description`, {
-            defaultValue: fallback?.description ?? item.command,
-          }),
-          usage: t(`terminal.commands.${item.key}.usage`, {
-            defaultValue: fallback?.usage ?? item.insertText.trim(),
-          }),
+          description: t(`terminal.commands.${item.key}.description`),
+          usage: t(`terminal.commands.${item.key}.usage`),
         }
       }),
     [connectionRole, t],
@@ -895,26 +604,22 @@ export function TerminalPanel({
 
             if (!isChoosingSubcommand) return []
 
-            return SESSION_SUBCOMMANDS.filter(
-              (item) =>
+            return SESSION_SUBCOMMANDS.filter((item) => {
+              const description = t(
+                `terminal.commandExamples.${item.examples[0]}.description`,
+              )
+              return (
                 !partial ||
                 item.key.toLowerCase().startsWith(partial.toLowerCase()) ||
-                item.description.toLowerCase().includes(partial.toLowerCase()),
-            ).map((item) => {
-              const exampleKey = item.examples[0]
-              const fallback = exampleKey
-                ? EXAMPLE_HELP_FALLBACKS[exampleKey]
-                : undefined
-              const description = t(
-                `terminal.commandExamples.${exampleKey}.description`,
-                {
-                  defaultValue: fallback?.description ?? item.description,
-                },
+                description.toLowerCase().includes(partial.toLowerCase())
               )
+            }).map((item) => {
               return {
                 ...activeCommand,
                 command: item.key,
-                description,
+                description: t(
+                  `terminal.commandExamples.${item.examples[0]}.description`,
+                ),
                 group: 'subcommand' as const,
                 id: `subcommand:session:${item.key}`,
                 insertText: item.insertText,
@@ -975,14 +680,9 @@ export function TerminalPanel({
     () =>
       SESSION_SUBCOMMANDS.map((item) => {
         const exampleKey = item.examples[0]
-        const fallback = exampleKey
-          ? EXAMPLE_HELP_FALLBACKS[exampleKey]
-          : undefined
         return {
           ...item,
-          description: t(`terminal.commandExamples.${exampleKey}.description`, {
-            defaultValue: fallback?.description ?? item.description,
-          }),
+          description: t(`terminal.commandExamples.${exampleKey}.description`),
         }
       }),
     [t],
@@ -997,11 +697,6 @@ export function TerminalPanel({
   const helpDescription = selectedSessionSubcommand
     ? t(
         `terminal.commandExamples.${selectedSessionSubcommand.examples[0]}.description`,
-        {
-          defaultValue:
-            EXAMPLE_HELP_FALLBACKS[selectedSessionSubcommand.examples[0]]
-              ?.description ?? selectedSessionSubcommand.description,
-        },
       )
     : helpCommand?.description
   const helpUsage = selectedSessionSubcommand
@@ -1014,15 +709,10 @@ export function TerminalPanel({
         selectedSessionSubcommand?.parameters ??
         (showSessionSubcommandList ? [] : (helpCommand?.parameters ?? []))
       ).map((key) => {
-        const fallback = PARAMETER_HELP_FALLBACKS[key]
         return {
-          description: t(`terminal.commandParameters.${key}.description`, {
-            defaultValue: fallback.description,
-          }),
+          description: t(`terminal.commandParameters.${key}.description`),
           key,
-          name: t(`terminal.commandParameters.${key}.name`, {
-            defaultValue: fallback.name,
-          }),
+          name: t(`terminal.commandParameters.${key}.name`),
         }
       }),
     [helpCommand, selectedSessionSubcommand, showSessionSubcommandList, t],
@@ -1034,14 +724,9 @@ export function TerminalPanel({
         selectedSessionSubcommand?.examples ??
         (showSessionSubcommandList ? [] : (helpCommand?.examples ?? []))
       ).map((key) => {
-        const fallback = EXAMPLE_HELP_FALLBACKS[key]
         return {
-          code: t(`terminal.commandExamples.${key}.code`, {
-            defaultValue: fallback?.code ?? key,
-          }),
-          description: t(`terminal.commandExamples.${key}.description`, {
-            defaultValue: fallback?.description ?? '',
-          }),
+          code: t(`terminal.commandExamples.${key}.code`),
+          description: t(`terminal.commandExamples.${key}.description`),
           key,
         }
       }),
@@ -1060,10 +745,7 @@ export function TerminalPanel({
   }, [suggestions.length])
 
   useEffect(() => {
-    suggestionRefs.current = suggestionRefs.current.slice(
-      0,
-      suggestions.length,
-    )
+    suggestionRefs.current = suggestionRefs.current.slice(0, suggestions.length)
   }, [suggestions.length])
 
   useEffect(() => {
@@ -1080,37 +762,45 @@ export function TerminalPanel({
     })
   }, [history.length, running])
 
-  const append = useCallback((entry: Omit<TerminalEntry, 'id'>) => {
-    setHistory((prev) => {
-      const next = [
-        ...prev,
-        {
-          ...entry,
-          id: `${Date.now()}-${prev.length}`,
-        },
-      ].slice(-TERMINAL_ENTRY_HISTORY_LIMIT)
-      persistTerminalHistory(next)
-      return next
-    })
-  }, [])
+  const append = useCallback(
+    (entry: Omit<TerminalEntry, 'id'>) => {
+      setHistory((prev) => {
+        const next = [
+          ...prev,
+          {
+            ...entry,
+            id: `${Date.now()}-${prev.length}`,
+          },
+        ].slice(-TERMINAL_ENTRY_HISTORY_LIMIT)
+        persistTerminalHistory(terminalHistoryStorageKey, next)
+        return next
+      })
+    },
+    [terminalHistoryStorageKey],
+  )
 
   const clearHistory = useCallback(() => {
     setHistory([])
-    clearPersistedTerminalHistory()
-  }, [])
+    clearPersistedTerminalHistory(terminalHistoryStorageKey)
+  }, [terminalHistoryStorageKey])
 
-  const rememberCommand = useCallback((raw: string) => {
-    const trimmed = raw.trim()
-    if (!trimmed) return
-    setCommandHistory((prev) => {
-      const next = [
-        trimmed,
-        ...prev.filter((item) => item.toLowerCase() !== trimmed.toLowerCase()),
-      ].slice(0, TERMINAL_COMMAND_HISTORY_LIMIT)
-      persistCommandHistory(next)
-      return next
-    })
-  }, [])
+  const rememberCommand = useCallback(
+    (raw: string) => {
+      const trimmed = raw.trim()
+      if (!trimmed) return
+      setCommandHistory((prev) => {
+        const next = [
+          trimmed,
+          ...prev.filter(
+            (item) => item.toLowerCase() !== trimmed.toLowerCase(),
+          ),
+        ].slice(0, TERMINAL_COMMAND_HISTORY_LIMIT)
+        persistCommandHistory(commandHistoryStorageKey, next)
+        return next
+      })
+    },
+    [commandHistoryStorageKey],
+  )
 
   const runCommand = useCallback(
     async (raw: string) => {
@@ -1342,7 +1032,10 @@ export function TerminalPanel({
               case 'create': {
                 const requestedId = positional.shift()
                 const result = await createSession(requestedId)
-                registerPlaygroundAgentSessionId(result.session_id)
+                registerPlaygroundAgentSessionId(
+                  result.session_id,
+                  identityScopeKey,
+                )
                 onSessionChange(result.session_id)
                 append({
                   body: joinBodyLines([
@@ -1360,7 +1053,7 @@ export function TerminalPanel({
               case 'switch': {
                 const id = positional.shift()
                 if (!id) throw new Error(t('terminal.sessionUsage'))
-                registerPlaygroundAgentSessionId(id)
+                registerPlaygroundAgentSessionId(id, identityScopeKey)
                 onSessionChange(id)
                 append({
                   body: t('terminal.sessionSwitchedBody', { id }),
@@ -1463,7 +1156,10 @@ export function TerminalPanel({
                     ? positional.slice(0, roleIndex).join(' ')
                     : requireCurrentSession()
                 const role = positional[roleIndex] as 'user' | 'assistant'
-                const content = positional.slice(roleIndex + 1).join(' ').trim()
+                const content = positional
+                  .slice(roleIndex + 1)
+                  .join(' ')
+                  .trim()
                 if (!content) throw new Error(t('terminal.sessionUsage'))
                 const result = await addMessage(id, role, content)
                 append({
@@ -1602,6 +1298,7 @@ export function TerminalPanel({
       currentUri,
       entries,
       groupLabels,
+      identityScopeKey,
       onOpenAddResource,
       onOpenResource,
       onSessionChange,
@@ -1666,11 +1363,11 @@ export function TerminalPanel({
         title: t('terminal.quickStart.addMemory.title'),
       },
       {
-        action: () => void runCommand('/find openviking 有什么价值？'),
         code: t('terminal.quickStart.find.code'),
         command: t('terminal.quickStart.find.command'),
         key: 'find',
         title: t('terminal.quickStart.find.title'),
+        action: () => void runCommand(t('terminal.quickStart.find.command')),
       },
     ],
     [runCommand, t],
@@ -1678,31 +1375,30 @@ export function TerminalPanel({
 
   return (
     <>
+      {toolbarContainer
+        ? createPortal(
+            <>
+              <span
+                className="min-w-0 max-w-40 truncate rounded-md border bg-muted/40 px-2 py-1 font-mono text-[11px] text-foreground"
+                title={currentUri}
+              >
+                {t('terminal.scopeLabel', { uri: currentUri })}
+              </span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                className="size-7 shrink-0"
+                title={t('terminal.history')}
+                onClick={() => setHistoryOpen(true)}
+              >
+                <HistoryIcon className="size-3.5" />
+              </Button>
+            </>,
+            toolbarContainer,
+          )
+        : null}
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="border-b bg-background/70 px-4 py-3">
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <TerminalIcon className="size-3.5 shrink-0" />
-            <span className="min-w-0 flex-1 truncate">
-              {t('terminal.header')}
-            </span>
-            <span
-              className="min-w-0 max-w-[60%] truncate rounded-md border bg-muted/40 px-2 py-1 font-mono text-[11px] text-foreground"
-              title={currentUri}
-            >
-              {t('terminal.scopeLabel', { uri: currentUri })}
-            </span>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              className="size-7 shrink-0"
-              title={t('terminal.history')}
-              onClick={() => setHistoryOpen(true)}
-            >
-              <HistoryIcon className="size-3.5" />
-            </Button>
-          </div>
-        </div>
         <div
           ref={scrollRef}
           className="min-h-0 flex-1 overflow-y-auto px-4 py-4"
@@ -1830,9 +1526,7 @@ export function TerminalPanel({
                       {showSessionSubcommandList ? (
                         <div className="min-w-0">
                           <div className="mb-1.5 text-[11px] font-medium text-muted-foreground">
-                            {t('terminal.helpSubcommands', {
-                              defaultValue: '子命令',
-                            })}
+                            {t('terminal.helpSubcommands')}
                           </div>
                           <div className="overflow-hidden rounded-md border">
                             <table className="w-full table-fixed border-collapse text-xs">

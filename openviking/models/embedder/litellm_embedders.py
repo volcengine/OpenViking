@@ -217,64 +217,6 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
         except Exception as e:
             raise RuntimeError(f"LiteLLM embedding failed: {e}") from e
 
-    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
-        """Batch embedding via litellm.
-
-        Args:
-            texts: List of texts
-            is_query: Flag to indicate if these are query embeddings
-
-        Returns:
-            List[EmbedResult]: List of embedding results
-
-        Raises:
-            RuntimeError: When embedding call fails
-        """
-        if not texts:
-            return []
-
-        def _call() -> List[EmbedResult]:
-            kwargs = self._build_kwargs(is_query=is_query)
-            kwargs["input"] = texts
-            response = litellm.embedding(**kwargs)
-            self._update_telemetry_token_usage(response)
-            # Truncate vectors if needed
-            return [
-                EmbedResult(dense_vector=self._truncate_vector(item["embedding"]))
-                for item in response.data
-            ]
-
-        try:
-            return self._run_with_retry(
-                _call,
-                logger=logger,
-                operation_name="LiteLLM batch embedding",
-            )
-        except Exception as e:
-            raise RuntimeError(f"LiteLLM batch embedding failed: {e}") from e
-
-    async def embed_batch_async(
-        self, texts: List[str], is_query: bool = False
-    ) -> List[EmbedResult]:
-        if not texts:
-            return []
-
-        async def _call() -> List[EmbedResult]:
-            kwargs = self._build_kwargs(is_query=is_query)
-            kwargs["input"] = texts
-            response = await litellm.aembedding(**kwargs)
-            self._update_telemetry_token_usage(response)
-            return [EmbedResult(dense_vector=item["embedding"]) for item in response.data]
-
-        try:
-            return await self._run_with_async_retry(
-                _call,
-                logger=logger,
-                operation_name="LiteLLM async batch embedding",
-            )
-        except Exception as e:
-            raise RuntimeError(f"LiteLLM batch embedding failed: {e}") from e
-
     def get_dimension(self) -> int:
         """Get embedding dimension.
 

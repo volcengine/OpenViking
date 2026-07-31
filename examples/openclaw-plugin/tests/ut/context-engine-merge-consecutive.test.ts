@@ -4,7 +4,7 @@ import {
   mergeConsecutiveAssistants,
   mergeConsecutiveUsers,
   ensureAlternation,
-} from "../../context-engine.js";
+} from "../../services/context-message-adapter.js";
 
 // Local AgentMessage type matches the (lax) one used inside context-engine.ts.
 type AgentMessage = {

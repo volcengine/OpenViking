@@ -22,7 +22,7 @@ The following platforms have been successfully integrated with OpenViking MCP:
 | **Trae** | Standard MCP config |
 | **Cursor** | Standard MCP config |
 | **ChatGPT & Codex** | Standard MCP config |
-| **OpenCode** | Standard MCP config |
+| **OpenCode** | Native OpenCode `mcp` config |
 | **Manus** | Standard MCP config |
 | **Claude.ai / Claude Desktop** | Native OAuth 2.1 (see [11-oauth](11-oauth.md)) |
 
@@ -82,6 +82,26 @@ Or in `.mcp.json`:
 
 Add `--scope user` to make the config global (shared across all projects).
 
+### OpenCode
+
+Configure `~/.config/opencode/opencode.json`:
+
+```json
+{
+  "mcp": {
+    "openviking": {
+      "type": "remote",
+      "url": "https://your-server.com/mcp",
+      "enabled": true,
+      "oauth": false,
+      "headers": {
+        "Authorization": "Bearer your-api-key-here"
+      }
+    }
+  }
+}
+```
+
 ### Claude.ai / Claude Desktop (OAuth)
 
 These clients only accept OAuth 2.1 — API Keys cannot be passed directly.
@@ -109,39 +129,38 @@ If you already have HTTPS configured, just connect to `https://your-server.com/m
 
 ## Available MCP Tools
 
-Once connected, OpenViking exposes 14 tools:
+Once connected, OpenViking exposes 13 tools:
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
-| `search` | Semantic search across memories, resources, and skills | `query`, `target_uri` (optional), `limit`, `min_score` |
+| `find` | Fast semantic retrieval without session context | `query`, `target_uri` (optional), `limit`, `min_score`, `level` (optional), `context_type` (optional) |
+| `search` | Deep semantic retrieval with optional session context and intent analysis | `query`, `target_uri` (optional), `session_id` (optional), `limit`, `min_score`, `level` (optional), `context_type` (optional) |
+| `recall` | Type-quota recall across memory categories | `query`, `quotas` (optional), `max_chars`, `min_score`, `peer_scope`, `other_peer_penalty` (optional) |
 | `read` | Read one or more `viking://` URIs | `uris` (single string or array) |
 | `list` | List entries under a `viking://` directory | `uri`, `recursive` (optional) |
-| `store` | Store messages into long-term memory (triggers extraction) | `messages` (list of `{role, content}`) |
-| `add_resource` | Add a local file or URL as a resource (local files trigger a progressive upload flow) | `path`, `temp_file_id` (optional), `description` (optional), `watch_interval` (optional, minutes — auto-refresh cadence for remote URLs), `to` (optional, target `viking://resources/...` URI; if omitted when `watch_interval > 0`, the watch auto-binds to the resource's created URI), `args` (optional parser-specific options, such as `{"feishu_access_token":"u-..."}` for one-time Feishu user-token imports, or `{"feishu_access_token":"u-...","feishu_refresh_token":"r-..."}` for Feishu user-token watches) |
+| `remember` | Store messages into long-term memory (triggers extraction) | `messages` (list of `{role, content}`) |
+| `add_resource` | Add a local file or URL as a resource (local files trigger a progressive upload flow) | `path`, `temp_file_id` (optional), `description` (optional), `watch_interval` (optional, minutes — auto-refresh cadence for remote URLs), `processing_mode` (optional: `semantic_and_vectors` default, or `vectors_only` to skip VLM semantic understanding and only vectorize current files), `to` (optional, target `viking://resources/...` URI; if omitted when `watch_interval > 0`, the watch auto-binds to the resource's created URI), `args` (optional parser-specific options, such as `{"feishu_access_token":"u-..."}` for one-time Feishu user-token imports, or `{"feishu_access_token":"u-...","feishu_refresh_token":"r-..."}` for Feishu user-token watches) |
 | `list_watches` | List watch tasks (auto-refresh subscriptions) visible to the current agent. Each entry shows target URI, refresh interval (minutes), active/paused status, and next scheduled execution time | none |
 | `cancel_watch` | Cancel (delete) a watch task by its target URI. To change the cadence or pause temporarily, cancel and re-add with a new `watch_interval` | `to_uri` (must match the watch task's `to` value, e.g. `viking://resources/...`) |
-| `grep` | Regex content search across `viking://` files | `uri`, `pattern` (string), `case_insensitive` |
-| `glob` | Find files matching a glob pattern | `pattern`, `uri` (optional scope) |
+| `grep` | Regex content search across `viking://` files | `uri`, `pattern` (string or array), `case_insensitive`, `node_limit` |
+| `glob` | Find files matching a glob pattern | `pattern`, `uri` (optional scope), `node_limit` |
 | `forget` | Delete any `viking://` URI (use `search` to find it first; pass `recursive=true` to delete a directory) | `uri`, `recursive` (optional) |
-| `code_outline` | Show a file's symbol structure (classes, functions, methods, line ranges) without reading bodies. Survey a file before deciding what to `read`. | `uri` (must be a `viking://` **file** URI) |
-| `code_search` | Search symbol names (class / function / method) by substring across a `viking://` directory. Returns symbol type, class context, file URI, line range. Scans up to 200 source files. | `query`, `uri` (must be a `viking://` directory; narrow to subdir for deeper coverage) |
-| `code_expand` | Return the full source of a single named symbol, avoiding reading the entire file. | `uri` (file), `symbol` (`bar` for top-level or `Foo.bar` for a method) |
 | `health` | Check OpenViking service health | none |
 
 > **Note**: MCP exposes the minimum closure for watch management (`list_watches` + `cancel_watch`). Pause / resume / trigger and the unified `update` verb are intentionally not exposed here — use the REST `/api/v1/watches/*` endpoints or the `ov task watch` CLI for those operations.
 
 > Feishu/Lark imports without `args.feishu_access_token` keep the existing app/tenant-token behavior and can be watched. Feishu/Lark one-time user-token imports pass only `args.feishu_access_token`; Feishu/Lark user-token watches must also pass `args.feishu_refresh_token` and require the same Feishu app credentials configured on the OpenViking server.
 
-### Adding local-file resources (progressive upload)
+> `processing_mode=vectors_only` skips the VLM semantic-understanding stage. It does not generate or refresh `.abstract.md` / `.overview.md`; it only vectorizes current non-hidden resource files, preserving any older semantic artifacts that already exist.
+
+### Adding local-file resources (single-step upload)
 
 The `add_resource` tool accepts both **remote URLs** and **local file paths**, handled differently:
 
 - **Remote URL** (`http(s)://`, `git@`, `ssh://`, `git://`): single round-trip — the server fetches and ingests directly.
-- **Local file path**: the tool returns a **two-step upload instruction** (plain prose with `Step 1` / `Step 2` formatting). The agent must:
-  1. POST the file as `multipart/form-data` to the `temp_upload_signed` URL given in the response (URL embeds a one-shot token; 10-minute TTL by default). The server mints the `temp_file_id` at write time and returns it as JSON: `{"temp_file_id": "..."}`.
-  2. Read `temp_file_id` from that response, then call `add_resource(temp_file_id="<id from step 1>")` again — the server resolves the file via `TempUploadStore` and ingests.
+- **Local file path**: the tool returns an **upload instruction** (plain prose). The agent POSTs the file as `multipart/form-data` (field name `file`) to the `temp_upload` URL given in the response. The URL embeds a one-shot token (10-minute TTL by default) that authorizes the upload, so no API key is needed. The server then ingests the file **automatically in the same request** and returns the final result — the agent does **not** call `add_resource` again.
 
-This lets any MCP client — including sandboxed environments without a local filesystem (Claude web, Manus, etc.) — push files into OpenViking without pre-installing the `ov` CLI. The signed endpoint shares the same persistence layer as the authenticated `temp_upload` route, so the `local` / `shared` upload modes (and multi-worker support via the `shared` mode) apply equally.
+This lets any MCP client — including sandboxed environments without a local filesystem (Claude web, Manus, etc.) — push files into OpenViking without pre-installing the `ov` CLI. The token upload reuses the authenticated `temp_upload` route (API key first, otherwise the one-shot `?token=`) and its `TempUploadStore` persistence, so the same `local` / `shared` upload modes apply. Note: the one-shot token is held in-process, so in a multi-worker deployment the `add_resource` call and the follow-up upload POST must reach the same worker (or run single-worker) for the token to resolve.
 
 #### When you must set `OPENVIKING_PUBLIC_BASE_URL`
 

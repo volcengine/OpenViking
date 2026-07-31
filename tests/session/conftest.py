@@ -10,14 +10,13 @@ import pytest_asyncio
 
 from openviking import AsyncOpenViking
 from openviking.message import TextPart, ToolPart
-from openviking.service.task_tracker import TaskStatus, get_task_tracker, reset_task_tracker
+from openviking.service.task_tracker import TaskStatus, get_task_tracker, set_task_tracker
 from openviking.session import Session
 
 
 @pytest_asyncio.fixture(autouse=True)
 async def _drain_background_tasks(client: AsyncOpenViking):
     """Wait for background commit tasks to finish before client teardown."""
-    reset_task_tracker()
     yield
     # Drain asyncio.create_task() background tasks BEFORE client.close()
     tracker = get_task_tracker()
@@ -30,7 +29,7 @@ async def _drain_background_tasks(client: AsyncOpenViking):
         if not pending:
             break
         await asyncio.sleep(0.1)
-    reset_task_tracker()
+    set_task_tracker(None)
 
 
 @pytest_asyncio.fixture(scope="function")

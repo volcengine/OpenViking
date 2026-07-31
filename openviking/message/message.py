@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import List, Literal, Optional
 
 from openviking.core.peer_id import normalize_peer_id
-from openviking.message.part import ContextPart, ImagePart, Part, TextPart, ToolPart
+from openviking.message.part import ContextPart, ImagePart, Part, TextPart, ToolPart, part_from_dict
 from openviking.utils.token_estimation import estimate_text_tokens
 
 
@@ -24,6 +24,11 @@ class Message:
     parts: List[Part]
     peer_id: Optional[str] = None
     created_at: str = None
+    turn_id: Optional[str] = None
+    message_kind: Optional[
+        Literal["user_query", "assistant_step", "tool_transport", "checkpoint"]
+    ] = None
+    source_message_ids: Optional[List[str]] = None
 
     @property
     def content(self) -> str:
@@ -83,6 +88,12 @@ class Message:
         }
         if self.peer_id is not None:
             data["peer_id"] = self.peer_id
+        if self.turn_id is not None:
+            data["turn_id"] = self.turn_id
+        if self.message_kind is not None:
+            data["message_kind"] = self.message_kind
+        if self.source_message_ids is not None:
+            data["source_message_ids"] = list(self.source_message_ids)
         return data
 
     def _part_to_dict(self, part: Part) -> dict:
@@ -168,62 +179,7 @@ class Message:
                 raw_parts = []
 
         for p in raw_parts:
-            if p["type"] == "text":
-                parts.append(TextPart(text=p.get("text", "")))
-            elif p["type"] == "context":
-                parts.append(
-                    ContextPart(
-                        uri=p["uri"],
-                        context_type=p.get("context_type", "memory"),
-                        abstract=p.get("abstract", ""),
-                    )
-                )
-            elif p["type"] == "image_url":
-                image_url = p.get("image_url")
-                url = ""
-                detail = None
-                if isinstance(image_url, dict):
-                    url = str(image_url.get("url", "") or "")
-                    detail = image_url.get("detail")
-                elif isinstance(image_url, str):
-                    url = image_url
-                if not url.strip():
-                    raise ValueError("image_url part requires a non-empty URL")
-                parts.append(ImagePart(url=url, detail=detail))
-            elif p["type"] == "tool":
-                parts.append(
-                    ToolPart(
-                        tool_id=p["tool_id"],
-                        tool_name=p["tool_name"],
-                        tool_uri=p["tool_uri"],
-                        skill_uri=p.get("skill_uri", ""),
-                        tool_input=p.get("tool_input"),
-                        tool_output=p.get("tool_output", ""),
-                        tool_status=p.get("tool_status", "pending"),
-                        duration_ms=p.get("duration_ms"),
-                        prompt_tokens=p.get("prompt_tokens"),
-                        completion_tokens=p.get("completion_tokens"),
-                        tool_output_ref=p.get("tool_output_ref", ""),
-                        tool_output_truncated=bool(p.get("tool_output_truncated", False)),
-                        tool_output_original_chars=p.get("tool_output_original_chars"),
-                        tool_output_preview_chars=p.get("tool_output_preview_chars"),
-                        tool_output_sha256=p.get("tool_output_sha256", ""),
-                        tool_output_storage_uri=p.get("tool_output_storage_uri", ""),
-                        tool_output_mime_type=p.get("tool_output_mime_type", "text/plain"),
-                        tool_output_source_ref=p.get("tool_output_source_ref", ""),
-                        tool_output_source_offset=p.get("tool_output_source_offset"),
-                        tool_output_source_limit=p.get("tool_output_source_limit"),
-                        tool_output_externalization_error=p.get(
-                            "tool_output_externalization_error", ""
-                        ),
-                        tool_output_group_id=p.get("tool_output_group_id", ""),
-                        tool_output_externalized_reason=p.get(
-                            "tool_output_externalized_reason", ""
-                        ),
-                        tool_output_group_original_chars=p.get("tool_output_group_original_chars"),
-                        tool_output_group_budget_chars=p.get("tool_output_group_budget_chars"),
-                    )
-                )
+            parts.append(part_from_dict(p))
         try:
             peer_id = normalize_peer_id(data.get("peer_id"))
         except ValueError:
@@ -235,18 +191,14 @@ class Message:
             parts=parts,
             peer_id=peer_id,
             created_at=data.get("created_at"),
+            turn_id=data.get("turn_id"),
+            message_kind=data.get("message_kind"),
+            source_message_ids=(
+                list(data.get("source_message_ids"))
+                if isinstance(data.get("source_message_ids"), list)
+                else None
+            ),
         )
-
-    def get_tool_parts(self) -> List[ToolPart]:
-        """Get all ToolParts."""
-        return [p for p in self.parts if isinstance(p, ToolPart)]
-
-    def find_tool_part(self, tool_id: str) -> Optional[ToolPart]:
-        """Find ToolPart by tool_id."""
-        for p in self.parts:
-            if isinstance(p, ToolPart) and p.tool_id == tool_id:
-                return p
-        return None
 
     def to_jsonl(self) -> str:
         """Serialize to JSONL string."""

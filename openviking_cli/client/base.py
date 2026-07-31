@@ -43,10 +43,18 @@ class BaseClient(ABC):
         wait: bool = False,
         timeout: Optional[float] = None,
         watch_interval: float = 0,
+        processing_mode: str = "semantic_and_vectors",
         args: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
+        add_type: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
     ) -> Dict[str, Any]:
-        """Add resource to OpenViking."""
+        """Add resource to OpenViking.
+
+        ``add_type`` declares a Connector source and requires an exact ``to``
+        target; it cannot be combined with ``parent``.
+        """
         ...
 
     @abstractmethod
@@ -56,8 +64,79 @@ class BaseClient(ABC):
         wait: bool = False,
         timeout: Optional[float] = None,
         telemetry: TelemetryRequest = False,
+        target_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Add skill to OpenViking."""
+        ...
+
+    @abstractmethod
+    async def list_skills(
+        self,
+        node_limit: int = 1000,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """List skills."""
+        ...
+
+    @abstractmethod
+    async def find_skills(
+        self,
+        query: str,
+        limit: int = 10,
+        score_threshold: Optional[float] = None,
+        level: Optional[List[int]] = None,
+        telemetry: TelemetryRequest = False,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Find skills by semantic search."""
+        ...
+
+    @abstractmethod
+    async def get_skill(
+        self,
+        skill_name: str,
+        include_content: Optional[bool] = None,
+        include_files: bool = True,
+        include_source: bool = False,
+        level: Optional[int] = None,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Get a skill by name."""
+        ...
+
+    @abstractmethod
+    async def update_skill(
+        self,
+        skill_name: str,
+        data: Any,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        source_metadata: Optional[Dict[str, Any]] = None,
+        telemetry: TelemetryRequest = False,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Update an existing skill."""
+        ...
+
+    @abstractmethod
+    async def delete_skill(
+        self,
+        skill_name: str,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Delete a skill."""
+        ...
+
+    @abstractmethod
+    async def validate_skill(
+        self,
+        data: Any,
+        strict: bool = False,
+        source_path: Optional[str] = None,
+        skill_dir_name: Optional[str] = None,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Validate skill data."""
         ...
 
     @abstractmethod
@@ -71,6 +150,7 @@ class BaseClient(ABC):
         uri: str,
         mode: str = "vectors_only",
         wait: bool = True,
+        dry_run: bool = False,
     ) -> Dict[str, Any]:
         """Reindex semantic/vector artifacts for a URI."""
         ...
@@ -87,6 +167,8 @@ class BaseClient(ABC):
         abs_limit: int = 256,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
     ) -> List[Any]:
         """List directory contents."""
         ...
@@ -114,7 +196,13 @@ class BaseClient(ABC):
         ...
 
     @abstractmethod
-    async def rm(self, uri: str, recursive: bool = False) -> None:
+    async def rm(
+        self,
+        uri: str,
+        recursive: bool = False,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> None:
         """Remove resource."""
         ...
 
@@ -159,18 +247,32 @@ class BaseClient(ABC):
         """Write text content to an existing file and refresh semantics/vectors."""
         ...
 
+    @abstractmethod
+    async def set_tags(
+        self,
+        uri: str,
+        tags: List[str],
+        mode: str = "replace",
+        recursive: bool = False,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Update explicit retrieval tags metadata for a file or directory."""
+        ...
+
     # ============= Search =============
 
     @abstractmethod
     async def find(
         self,
-        query: str,
+        query: str = "",
         target_uri: Union[str, List[str]] = "",
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         context_type: Optional[SearchContextTypeInput] = None,
+        tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
+        image: Optional[Any] = None,
     ) -> Any:
         """Semantic search without session context."""
         ...
@@ -178,14 +280,16 @@ class BaseClient(ABC):
     @abstractmethod
     async def search(
         self,
-        query: str,
+        query: str = "",
         target_uri: Union[str, List[str]] = "",
         session_id: Optional[str] = None,
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         context_type: Optional[SearchContextTypeInput] = None,
+        tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
+        image: Optional[Any] = None,
     ) -> Any:
         """Semantic search with optional session context."""
         ...
@@ -198,6 +302,7 @@ class BaseClient(ABC):
         case_insensitive: bool = False,
         exclude_uri: Optional[str] = None,
         node_limit: Optional[int] = None,
+        level_limit: int = 5,
     ) -> Dict[str, Any]:
         """Content search with pattern."""
         ...
@@ -277,6 +382,10 @@ class BaseClient(ABC):
         telemetry: TelemetryRequest = False,
         *,
         keep_recent_count: int = 0,
+        retention_mode: str | None = None,
+        keep_recent_turn_count: int | None = None,
+        retained_message_token_budget: int | None = None,
+        min_raw_tail_steps: int | None = None,
     ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories).
 
@@ -297,6 +406,9 @@ class BaseClient(ABC):
         created_at: str | None = None,
         peer_id: str | None = None,
         telemetry: TelemetryRequest = False,
+        turn_id: str | None = None,
+        message_kind: str | None = None,
+        source_message_ids: list[str] | None = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -331,6 +443,27 @@ class BaseClient(ABC):
         Returns:
             Result dict with session_id, message_count, and added count.
         """
+        ...
+
+    @abstractmethod
+    async def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Query background task status."""
+        ...
+
+    @abstractmethod
+    async def cancel_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Cancel a background task."""
+        ...
+
+    @abstractmethod
+    async def list_tasks(
+        self,
+        task_type: Optional[str] = None,
+        status: Optional[str] = None,
+        resource_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """List background tasks visible to the current caller."""
         ...
 
     # ============= Pack =============
@@ -432,3 +565,76 @@ class BaseClient(ABC):
     def observer(self) -> Any:
         """Get observer service for component status."""
         ...
+
+    # ============= Git Version Control =============
+
+    @abstractmethod
+    async def git_commit(
+        self,
+        *,
+        message: str,
+        paths: Optional[List[str]] = None,
+        branch: str = "main",
+        author_name: Optional[str] = None,
+        author_email: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create a git snapshot. See VikingFS.commit for semantics."""
+
+    @abstractmethod
+    async def git_restore(
+        self,
+        *,
+        project_dir: Optional[str] = None,
+        source_commit: str,
+        branch: str = "main",
+        dry_run: bool = False,
+        message: Optional[str] = None,
+        author_name: Optional[str] = None,
+        author_email: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Restore a subtree, or the full account tree when project_dir is omitted."""
+
+    @abstractmethod
+    async def git_show(
+        self,
+        target_ref: str,
+        *,
+        path: Optional[str] = None,
+    ) -> Any:
+        """Read a commit's metadata or a single blob."""
+
+    @abstractmethod
+    async def git_log(
+        self,
+        *,
+        branch: str = "main",
+        limit: int = 20,
+        paths: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Walk back along parents[0] up to limit commits."""
+
+    async def git_diff(
+        self,
+        path: str,
+        *,
+        to_ref: str,
+        from_ref: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Compare one file between two snapshot refs.
+
+        The default keeps third-party subclasses written against older
+        OpenViking releases instantiable while making unsupported use explicit.
+        """
+        raise NotImplementedError("snapshot diff is not supported by this client")
+
+    @abstractmethod
+    async def git_get_ignore(self) -> str:
+        """Return the account .ovgitignore content (empty string if absent)."""
+
+    @abstractmethod
+    async def git_set_ignore(self, *, content: str) -> None:
+        """Write the account .ovgitignore control file."""
+
+    @abstractmethod
+    async def git_delete_ignore(self) -> None:
+        """Delete the account .ovgitignore control file (missing is success)."""

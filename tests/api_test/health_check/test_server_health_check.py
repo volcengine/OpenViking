@@ -26,7 +26,6 @@ class TestServerHealthCheck:
                 )
                 assert data.get("healthy") is not None, "'healthy' field should not be null"
                 assert "version" in data, "'version' field should exist"
-                assert "user_id" in data, "'user_id' field should exist"
 
         except requests.exceptions.ConnectionError:
             pytest.fail("Could not connect to server service - service is not running")

@@ -19,7 +19,6 @@ from typing import Any
 
 import requests
 
-
 DEFAULT_GATEWAY_URL = os.environ.get("OPENCLAW_GATEWAY_URL", "http://127.0.0.1:19830")
 DEFAULT_OPENVIKING_URL = os.environ.get("OPENVIKING_BASE_URL", "http://127.0.0.1:2948")
 DEFAULT_CJK_REPEAT = 120
@@ -182,7 +181,9 @@ def find_ov_context_with_marker(
             if not session_id or session_id.startswith("memory-store-"):
                 continue
             try:
-                ctx = ov_get(openviking_url, f"/api/v1/sessions/{session_id}/context?token_budget=128000")
+                ctx = ov_get(
+                    openviking_url, f"/api/v1/sessions/{session_id}/context?token_budget=128000"
+                )
             except requests.RequestException:
                 continue
             if marker in flatten_message_text(ctx):

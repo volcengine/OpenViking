@@ -9,6 +9,7 @@ Provides common token usage tracking functionality.
 import logging
 from typing import Any, Dict
 
+from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.utils import get_logger
 
 _token_tracker_instance = None
@@ -48,8 +49,8 @@ class RerankBase:
         self._token_tracker = _get_token_tracker()
 
     def _estimate_tokens(self, text: str) -> int:
-        """Estimate token count for text (rough approximation: 1 token ≈ 4 characters)."""
-        return max(1, len(text) // 4)
+        """Estimate token count with the shared mixed-language fallback."""
+        return max(1, estimate_text_tokens(text))
 
     def update_token_usage(
         self,

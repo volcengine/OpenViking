@@ -117,7 +117,7 @@ ov mv viking://resources/old-name/ viking://resources/new-name/
 ### `ov grep` — Search by regex pattern
 
 ```bash
-ov grep viking://resources/ "authentication" --ignore-case
+ov grep "authentication" --uri viking://resources/ --ignore-case
 ```
 
 Parameters: `uri`, `pattern` (required), `--ignore-case`, `--exclude-uri`, `--node-limit`, `--level-limit`.

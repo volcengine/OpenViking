@@ -1,4 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
 import gc
@@ -141,9 +142,7 @@ class TestFilterOpsLargeFields(unittest.TestCase):
     def test_upsert_record_with_oversized_json_field_raises(self):
         large_abstract = 'prefix "quoted" \\\\ path\n' + ("x" * 66000)
         uri = "viking://user/memories/large.md"
-        with self.assertRaisesRegex(
-            (RuntimeError, ValueError), "fields.*exceeds 65535 bytes"
-        ):
+        with self.assertRaisesRegex((RuntimeError, ValueError), "fields.*exceeds 65535 bytes"):
             self.collection.upsert_data(
                 [
                     {
@@ -1175,6 +1174,15 @@ class TestFilterOpsTypes(unittest.TestCase):
         self.assertEqual(
             self._search({"op": "must", "field": "f_list_str", "conds": ["b"]}), [1, 2]
         )
+        # Multi-cond must on list<string> uses contains-any semantics
+        self.assertEqual(
+            self._search({"op": "must", "field": "f_list_str", "conds": ["b", "d"]}),
+            [1, 2, 3, 4],
+        )
+        self.assertEqual(
+            self._search({"op": "must", "field": "f_list_str", "conds": ["missing"]}),
+            [],
+        )
 
         # List<Int64> contains
         # 3 is in id 2, 3
@@ -1259,6 +1267,10 @@ class TestFilterOpsTypes(unittest.TestCase):
             # List contains
             self.assertEqual(
                 self._search({"op": "must", "field": "f_list_str", "conds": ["a"]}), [1]
+            )
+            self.assertEqual(
+                self._search({"op": "must", "field": "f_list_str", "conds": ["b", "d"]}),
+                [1, 2, 3, 4],
             )
             # Date range
             self.assertEqual(

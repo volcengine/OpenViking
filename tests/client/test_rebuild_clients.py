@@ -3,7 +3,7 @@ import threading
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -20,7 +20,7 @@ from openviking_cli.utils.config import OPENVIKING_CLI_CONFIG_ENV
 @pytest.fixture(autouse=True)
 def clear_ovcli_config(monkeypatch):
     monkeypatch.delenv(OPENVIKING_CLI_CONFIG_ENV, raising=False)
-    monkeypatch.setattr(http_module, "load_ovcli_config", lambda: None)
+    monkeypatch.setattr(http_module, "load_ovcli_config", lambda: None, raising=False)
 
 
 def test_async_http_client_zip_directory_skips_symlinked_entries(tmp_path):
@@ -86,16 +86,72 @@ async def test_async_openviking_reindex_forwards_to_local_client(tmp_path):
 
             result = await client.reindex(
                 "viking://resources/demo",
-                mode="vectors_only",
+                mode="prune_orphans",
                 wait=False,
+                dry_run=True,
             )
 
     assert result == {"status": "completed"}
     mock_init.assert_awaited_once()
     mock_reindex.assert_awaited_once_with(
         uri="viking://resources/demo",
-        mode="vectors_only",
+        mode="prune_orphans",
         wait=False,
+        dry_run=True,
+    )
+
+
+async def test_async_openviking_forwards_turn_retention_and_message_semantics(tmp_path):
+    client = AsyncOpenViking(path=str(tmp_path))
+    with patch.object(client, "_ensure_initialized", new_callable=AsyncMock):
+        with patch.object(
+            client._client,
+            "add_message",
+            new_callable=AsyncMock,
+            return_value={"message_count": 1},
+        ) as mock_add:
+            with patch.object(
+                client._client,
+                "commit_session",
+                new_callable=AsyncMock,
+                return_value={"status": "accepted"},
+            ) as mock_commit:
+                await client.add_message(
+                    "session-1",
+                    "assistant",
+                    parts=[{"type": "text", "text": "checking"}],
+                    turn_id="turn-1",
+                    message_kind="assistant_step",
+                    source_message_ids=["u1"],
+                )
+                await client.commit_session(
+                    "session-1",
+                    retention_mode="turn_budget",
+                    keep_recent_turn_count=3,
+                    retained_message_token_budget=12_000,
+                    min_raw_tail_steps=1,
+                )
+
+    mock_add.assert_awaited_once_with(
+        session_id="session-1",
+        role="assistant",
+        content=None,
+        parts=[{"type": "text", "text": "checking"}],
+        created_at=None,
+        peer_id=None,
+        telemetry=False,
+        turn_id="turn-1",
+        message_kind="assistant_step",
+        source_message_ids=["u1"],
+    )
+    mock_commit.assert_awaited_once_with(
+        "session-1",
+        telemetry=False,
+        keep_recent_count=0,
+        retention_mode="turn_budget",
+        keep_recent_turn_count=3,
+        retained_message_token_budget=12_000,
+        min_raw_tail_steps=1,
     )
 
 
@@ -104,6 +160,7 @@ def test_sync_openviking_reindex_forwards_to_async_client():
     with patch.object(
         client._async_client,
         "reindex",
+        new_callable=Mock,
         return_value={"status": "completed"},
     ) as mock_reindex:
         with patch(
@@ -111,13 +168,19 @@ def test_sync_openviking_reindex_forwards_to_async_client():
         ) as mock_run:
             result = client.reindex(
                 "viking://resources/demo",
-                mode="semantic_and_vectors",
+                mode="prune_orphans",
                 wait=True,
+                dry_run=True,
             )
 
     assert result == {"status": "completed"}
     assert mock_run.called
-    assert mock_reindex.called
+    mock_reindex.assert_called_once_with(
+        uri="viking://resources/demo",
+        mode="prune_orphans",
+        wait=True,
+        dry_run=True,
+    )
 
 
 async def test_local_client_reindex_forwards_to_service():
@@ -127,12 +190,18 @@ async def test_local_client_reindex_forwards_to_service():
     result = await LocalClient.reindex(
         client,
         uri="viking://resources/demo",
-        mode="vectors_only",
+        mode="prune_orphans",
         wait=False,
+        dry_run=True,
     )
 
     assert result == {"status": "completed"}
-    client._service.reindex.assert_awaited_once()
+    client._service.reindex.assert_awaited_once_with(
+        uri="viking://resources/demo",
+        mode="prune_orphans",
+        wait=False,
+        dry_run=True,
+    )
 
 
 async def test_local_client_batch_add_messages_forwards_to_session():
@@ -156,6 +225,7 @@ async def test_local_client_batch_add_messages_forwards_to_session():
     client = LocalClient.__new__(LocalClient)
     client._service = SimpleNamespace(sessions=FakeSessions())
     client._ctx = SimpleNamespace(user=SimpleNamespace(user_id="user-1"))
+    client._legacy_agent_id = None
 
     result = await LocalClient.batch_add_messages(
         client,
@@ -171,7 +241,14 @@ async def test_local_client_batch_add_messages_forwards_to_session():
         ],
     )
 
-    assert result == {"session_id": "batch-session", "message_count": 2, "added": 2}
+    # A lightweight fake session has no ``meta``, so pending_tokens degrades to 0
+    # instead of raising; the field is always present for commit-policy callers.
+    assert result == {
+        "session_id": "batch-session",
+        "message_count": 2,
+        "added": 2,
+        "pending_tokens": 0,
+    }
     assert fake_session.messages[0]["role"] == "user"
     assert fake_session.messages[0]["peer_id"] == "explicit-user"
     assert fake_session.messages[0]["created_at"] == "2026-05-28T00:00:00+00:00"
@@ -208,6 +285,7 @@ async def test_local_client_add_message_accepts_image_parts():
     client = LocalClient.__new__(LocalClient)
     client._service = SimpleNamespace(sessions=FakeSessions())
     client._ctx = SimpleNamespace(user=SimpleNamespace(user_id="user-1"))
+    client._legacy_agent_id = None
 
     result = await LocalClient.add_message(
         client,
@@ -219,7 +297,11 @@ async def test_local_client_add_message_accepts_image_parts():
         ],
     )
 
-    assert result == {"session_id": "image-session", "message_count": 1}
+    assert result == {
+        "session_id": "image-session",
+        "message_count": 1,
+        "pending_tokens": 0,
+    }
     assert isinstance(fake_session.messages[0]["parts"][0], TextPart)
     assert isinstance(fake_session.messages[0]["parts"][1], ImagePart)
     assert fake_session.messages[0]["parts"][1].url == "https://example.com/image.png"
@@ -252,6 +334,30 @@ async def test_async_http_client_batch_add_messages_posts_batch_payload():
     )
 
 
+async def test_async_http_client_batch_add_messages_url_encodes_session_id():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {
+        "result": {"session_id": "encoded-session", "message_count": 1, "added": 1}
+    }
+
+    session_id = (
+        "feishu__cli_a938e530eb7c9bd9__"
+        "oc_aa9e08fddf5727f9c53400a07ff505cd#om_x100b6ff6c3df48ace10030ac68d3eb4"
+    )
+
+    await client.batch_add_messages(session_id, [{"role": "user", "content": "hello"}])
+
+    fake_http.post.assert_awaited_once_with(
+        "/api/v1/sessions/"
+        "feishu__cli_a938e530eb7c9bd9__"
+        "oc_aa9e08fddf5727f9c53400a07ff505cd%23om_x100b6ff6c3df48ace10030ac68d3eb4"
+        "/messages/batch",
+        json={"messages": [{"role": "user", "content": "hello"}]},
+    )
+
+
 async def test_async_http_client_reindex_posts_content_reindex():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
@@ -261,8 +367,9 @@ async def test_async_http_client_reindex_posts_content_reindex():
     ) as mock_handle:
         result = await client.reindex(
             "viking://resources/demo",
-            mode="vectors_only",
+            mode="prune_orphans",
             wait=False,
+            dry_run=True,
         )
 
     assert result == {"status": "completed"}
@@ -270,8 +377,9 @@ async def test_async_http_client_reindex_posts_content_reindex():
         "/api/v1/content/reindex",
         json={
             "uri": "viking://resources/demo",
-            "mode": "vectors_only",
+            "mode": "prune_orphans",
             "wait": False,
+            "dry_run": True,
         },
     )
     assert mock_handle.called
@@ -282,21 +390,27 @@ def test_sync_http_client_reindex_forwards_to_async_client():
     with patch.object(
         client._async_client,
         "reindex",
+        new_callable=Mock,
         return_value={"status": "accepted"},
     ) as mock_reindex:
         with patch(
-            "openviking_cli.client.sync_http.run_async",
-            return_value={"status": "accepted"},
+            "openviking_sdk.client.run_async", return_value={"status": "accepted"}
         ) as mock_run:
             result = client.reindex(
                 "viking://resources/demo",
-                mode="vectors_only",
+                mode="prune_orphans",
                 wait=False,
+                dry_run=True,
             )
 
     assert result == {"status": "accepted"}
     assert mock_run.called
-    assert mock_reindex.called
+    mock_reindex.assert_called_once_with(
+        uri="viking://resources/demo",
+        mode="prune_orphans",
+        wait=False,
+        dry_run=True,
+    )
 
 
 def test_sync_http_client_batch_add_messages_forwards_to_async_client():

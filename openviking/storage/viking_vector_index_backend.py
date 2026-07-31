@@ -6,14 +6,18 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from typing import Any, Dict, List, Optional
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from typing import Any, AsyncIterator, Dict, List, Mapping, Optional
 
-from openviking.core.namespace import canonicalize_uri, visible_roots
+from openviking.core.namespace import canonicalize_uri, uri_parts, visible_roots
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, RawDSL
 from openviking.storage.vectordb.collection.collection import Collection
+from openviking.storage.vectordb.collection.result import UpdateResult
 from openviking.storage.vectordb.utils.logging_init import init_cpp_logging
 from openviking.storage.vectordb_adapters import create_collection_adapter
+from openviking.utils.tags import merge_search_tags
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.vectordb_config import DEFAULT_INDEX_NAME, VectorDBBackendConfig
 
@@ -26,6 +30,7 @@ RETRIEVAL_OUTPUT_FIELDS = [
     "abstract",
     "active_count",
     "updated_at",
+    "search_tags",
 ]
 
 LOOKUP_OUTPUT_FIELDS = [
@@ -34,19 +39,8 @@ LOOKUP_OUTPUT_FIELDS = [
     "active_count",
 ]
 
-MEMORY_DEDUP_OUTPUT_FIELDS = [
-    "uri",
-    "abstract",
-    "context_type",
-    "created_at",
-    "updated_at",
-    "active_count",
-    "level",
-    "account_id",
-    "owner_user_id",
-]
-
 FETCH_BY_URI_OUTPUT_FIELDS = [
+    "id",
     "uri",
     "type",
     "context_type",
@@ -57,6 +51,7 @@ FETCH_BY_URI_OUTPUT_FIELDS = [
     "name",
     "description",
     "tags",
+    "search_tags",
     "abstract",
     "account_id",
     "owner_user_id",
@@ -66,8 +61,56 @@ URI_REWRITE_OUTPUT_FIELDS = [
     "id",
     "uri",
     "level",
+    "name",
+    "description",
+    "tags",
+    "abstract",
+    "content",
     "account_id",
 ]
+
+VIKINGDB_CONTENT_MAX_SIZE = 1024 * 1024
+
+
+@dataclass(frozen=True)
+class UpsertOptions:
+    partial_update: bool = False
+    search_tag_mode: str = "replace"
+
+
+def normalize_upsert_options(
+    options: UpsertOptions | Mapping[str, Any] | None = None,
+) -> UpsertOptions:
+    if options is None:
+        return UpsertOptions()
+    if isinstance(options, UpsertOptions):
+        return options
+    return UpsertOptions(
+        partial_update=bool(options.get("partial_update", False)),
+        search_tag_mode=str(options.get("search_tag_mode", "replace")),
+    )
+
+
+async def _wait_for_task_completion_despite_cancellation(
+    task: asyncio.Task[Any],
+) -> Optional[asyncio.CancelledError]:
+    """Wait for an offloaded lifecycle operation without leaking its state."""
+
+    pending_cancellation: Optional[asyncio.CancelledError] = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as exc:
+            # A child that cancels itself did not complete the lifecycle
+            # operation and must still be reported by ``task.result()``.
+            if not task.cancelled() and pending_cancellation is None:
+                pending_cancellation = exc
+        except BaseException:
+            # Read the task's exception below so the caller can apply the
+            # lifecycle-specific exception ordering.
+            if not task.done():
+                raise
+    return pending_cancellation
 
 
 class _AsyncVectorAdapter:
@@ -137,9 +180,6 @@ class _SingleAccountBackend:
             self._meta_data_cache = coll.get_meta_data() or {}
         return self._meta_data_cache
 
-    def _refresh_meta_data(self, coll: Collection) -> None:
-        self._meta_data_cache = coll.get_meta_data() or {}
-
     def _filter_known_fields(self, data: Dict[str, Any]) -> Dict[str, Any]:
         try:
             coll = self._get_collection()
@@ -153,7 +193,63 @@ class _SingleAccountBackend:
         """Drop runtime-only or stale legacy fields before writing back to the current schema."""
         payload = {k: v for k, v in data.items() if v is not None}
         filtered = self._filter_known_fields(payload)
-        return {k: v for k, v in filtered.items() if v is not None}
+        result = {k: v for k, v in filtered.items() if v is not None}
+
+        # Ensure text fields required by the schema are present (even if empty).
+        # VikingDB requires all schema-defined fields in upsert data.
+        try:
+            coll = self._get_collection()
+            meta = self._get_meta_data(coll)
+            for field in meta.get("Fields", []):
+                if field.get("FieldType") == "text" and field.get("FieldName") not in result:
+                    result[field["FieldName"]] = ""
+        except Exception:
+            pass
+
+        # ``content`` (full text) is only meaningful for VikingDB-backed backends,
+        # which use it for server-side full-text grep. Every other backend leaves
+        # ``USE_CONTENT_FIELD=False`` and gets ``content`` dropped here, so its large
+        # payload can't blow past the local engine's per-field byte limit. A new backend
+        # that doesn't need ``content`` requires no extra code.
+        if self._adapter.USE_CONTENT_FIELD:
+            content = result.get("content")
+            if isinstance(content, (str, bytes)):
+                result["content"] = content[:VIKINGDB_CONTENT_MAX_SIZE]
+        else:
+            result.pop("content", None)
+
+        return result
+
+    def _prepare_upsert_payloads(self, data_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Prepare a batch in one worker-thread handoff."""
+        return [self._prepare_upsert_payload(data) for data in data_list]
+
+    def _bind_upsert_payload(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Copy a record, enforce its bound account, and apply write defaults."""
+        payload = dict(data)
+        if self._bound_account_id:
+            account_id = payload.get("account_id")
+            if account_id and account_id != self._bound_account_id:
+                raise PermissionError(
+                    "record account_id does not match the request context account_id"
+                )
+            payload["account_id"] = self._bound_account_id
+
+        context_type = payload.get("context_type")
+        if context_type and context_type not in VikingVectorIndexBackend.ALLOWED_CONTEXT_TYPES:
+            raise ValueError(
+                f"Invalid context_type: {context_type}. "
+                f"Must be one of {sorted(VikingVectorIndexBackend.ALLOWED_CONTEXT_TYPES)}"
+            )
+
+        if not payload.get("id"):
+            payload["id"] = str(uuid.uuid4())
+        return payload
+
+    @staticmethod
+    def _is_not_found_error(exc: Exception) -> bool:
+        message = str(exc).lower()
+        return "not found" in message or "does not exist" in message
 
     async def _refresh_meta_data_async(self) -> None:
         self._meta_data_cache = await self._async_adapter.collection_meta()
@@ -235,33 +331,138 @@ class _SingleAccountBackend:
     # Data Operations (with tenant enforcement)
     # =========================================================================
 
-    async def upsert(self, data: Dict[str, Any]) -> str:
-        payload = dict(data)
-        logger.debug(
-            f"[_SingleAccountBackend.upsert] Input data.account_id={payload.get('account_id')}, bound_account_id={self._bound_account_id}"
-        )
-
-        if self._bound_account_id and not payload.get("account_id"):
-            payload["account_id"] = self._bound_account_id
-        logger.debug(
-            f"[_SingleAccountBackend.upsert] Final payload.account_id={payload.get('account_id')}"
-        )
-
-        context_type = payload.get("context_type")
-        if context_type and context_type not in VikingVectorIndexBackend.ALLOWED_CONTEXT_TYPES:
-            logger.warning(
-                "Invalid context_type: %s. Must be one of %s",
-                context_type,
-                sorted(VikingVectorIndexBackend.ALLOWED_CONTEXT_TYPES),
-            )
+    async def upsert(
+        self,
+        data: Dict[str, Any],
+        options: UpsertOptions | Mapping[str, Any] | None = None,
+    ) -> str:
+        options = normalize_upsert_options(options)
+        try:
+            payload = self._bind_upsert_payload(data)
+        except (PermissionError, ValueError) as exc:
+            logger.warning("Rejecting upsert: %s", exc)
             return ""
 
-        if not payload.get("id"):
-            payload["id"] = str(uuid.uuid4())
+        if options.partial_update:
+            try:
+                existing_records = await self._async_adapter.call("get", [payload["id"]])
+                if self._bound_account_id:
+                    existing_records = [
+                        record
+                        for record in existing_records
+                        if record.get("account_id") == self._bound_account_id
+                    ]
+            except Exception as e:
+                logger.error("Error reading existing record before partial update: %s", e)
+                return ""
+
+            if existing_records:
+                existing = dict(existing_records[0])
+                if options.search_tag_mode == "append" and payload.get("search_tags") is not None:
+                    payload["search_tags"] = merge_search_tags(
+                        existing.get("search_tags"),
+                        payload.get("search_tags"),
+                    )
+                existing.update({k: v for k, v in payload.items() if v is not None})
+                payload = existing
 
         payload = await self._async_adapter.run(self._prepare_upsert_payload, payload)
         ids = await self._async_adapter.call("upsert", payload)
         return ids[0] if ids else ""
+
+    async def upsert_many(self, data_list: List[Dict[str, Any]]) -> List[str]:
+        """Bulk full-record upsert through one adapter call.
+
+        The batch is validated before the adapter is invoked. Partial-update
+        semantics intentionally remain on :meth:`upsert`, where each existing
+        record is read and merged independently. Returned IDs preserve input
+        order; invalid batches raise before the adapter is invoked.
+        """
+        if not data_list:
+            return []
+
+        payloads: List[Dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for index, data in enumerate(data_list):
+            try:
+                payload = self._bind_upsert_payload(data)
+            except PermissionError as exc:
+                raise PermissionError(f"record at index {index}: {exc}") from exc
+            except ValueError as exc:
+                raise ValueError(f"record at index {index}: {exc}") from exc
+            record_id = str(payload["id"])
+            if record_id in seen_ids:
+                raise ValueError(f"duplicate record id at index {index}")
+            seen_ids.add(record_id)
+            payloads.append(payload)
+
+        payloads = await self._async_adapter.run(self._prepare_upsert_payloads, payloads)
+        ids = await self._async_adapter.call("upsert", payloads)
+        normalized_ids = [str(item) for item in (ids or []) if item is not None]
+        expected_ids = [str(payload["id"]) for payload in payloads]
+        if normalized_ids != expected_ids:
+            raise RuntimeError(
+                "bulk upsert adapter returned IDs that do not match the input count and order "
+                f"(expected {len(expected_ids)}, got {len(normalized_ids)})"
+            )
+        return normalized_ids
+
+    async def begin_bulk_ingest(self) -> None:
+        await self._async_adapter.call("begin_bulk_ingest")
+
+    async def end_bulk_ingest(self) -> None:
+        await self._async_adapter.call("end_bulk_ingest")
+
+    async def update(self, data: Dict[str, Any]) -> UpdateResult:
+        """Strict update path. The target record must already exist."""
+        try:
+            payload = dict(data)
+            logger.debug(
+                f"[_SingleAccountBackend.update] Input data.account_id={payload.get('account_id')}, bound_account_id={self._bound_account_id}"
+            )
+
+            if self._bound_account_id and not payload.get("account_id"):
+                payload["account_id"] = self._bound_account_id
+
+            if not payload.get("id"):
+                raise ValueError("id is required for update")
+
+            context_type = payload.get("context_type")
+            if context_type and context_type not in VikingVectorIndexBackend.ALLOWED_CONTEXT_TYPES:
+                allowed = sorted(VikingVectorIndexBackend.ALLOWED_CONTEXT_TYPES)
+                raise ValueError(f"Invalid context_type: {context_type}. Must be one of {allowed}")
+
+            payload = await self._async_adapter.run(self._prepare_upsert_payload, payload)
+            ids = await self._async_adapter.call("update_data", [payload])
+            normalized_ids = [str(item) for item in (ids or []) if item is not None]
+            return UpdateResult(
+                ok=bool(normalized_ids),
+                ids=normalized_ids,
+                updated_count=len(normalized_ids),
+                error_code=None if normalized_ids else "UPDATE_FAILED",
+                error_message=None
+                if normalized_ids
+                else "update completed without any updated ids",
+            )
+        except ValueError as e:
+            message = str(e)
+            error_code = "NOT_FOUND" if "not found" in message.lower() else "INVALID_ARGUMENT"
+            return UpdateResult(
+                ok=False,
+                ids=[],
+                updated_count=0,
+                error_code=error_code,
+                error_message=message,
+            )
+        except Exception as e:
+            logger.error("Error updating record: %s", e)
+            return UpdateResult(
+                ok=False,
+                ids=[],
+                updated_count=0,
+                error_code="UPDATE_FAILED",
+                error_message=str(e),
+            )
 
     async def get(self, ids: List[str]) -> List[Dict[str, Any]]:
         try:
@@ -293,7 +494,7 @@ class _SingleAccountBackend:
             return await self._async_adapter.call("delete", filter=filter)
         except Exception as e:
             logger.error("Error deleting by filter: %s", e)
-            return 0
+            raise
 
     async def exists(self, id: str) -> bool:
         try:
@@ -479,6 +680,38 @@ class _SingleAccountBackend:
         logger.info("Optimization requested")
         return True
 
+    async def search_by_keywords(
+        self,
+        keywords: Optional[List[str]] = None,
+        query: Optional[str] = None,
+        limit: int = 10,
+        offset: int = 0,
+        filter: Optional[Dict[str, Any] | FilterExpr] = None,
+        output_fields: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        try:
+            if self._bound_account_id:
+                account_filter = Eq("account_id", self._bound_account_id)
+                if filter:
+                    if isinstance(filter, dict):
+                        filter = RawDSL(filter)
+                    filter = And([account_filter, filter])
+                else:
+                    filter = account_filter
+
+            return await asyncio.to_thread(
+                self._adapter.search_by_keywords,
+                keywords=keywords,
+                query=query,
+                limit=limit,
+                offset=offset,
+                filter=filter,
+                output_fields=output_fields,
+            )
+        except Exception as e:
+            logger.error("Error searching by keywords: %s", e)
+            raise
+
     async def close(self) -> None:
         try:
             await self._async_adapter.call("close")
@@ -532,6 +765,7 @@ class VikingVectorIndexBackend:
         init_cpp_logging()
 
         self._config = config
+        self._backend_type = config.backend  # expose for engine resolution
         self.vector_dim = config.dimension
         self.distance_metric = config.distance_metric
         self.sparse_weight = config.sparse_weight
@@ -617,8 +851,16 @@ class VikingVectorIndexBackend:
     async def get_collection_info(self) -> Optional[Dict[str, Any]]:
         return await self._get_default_backend().get_collection_info()
 
-    async def get_collection_meta(self) -> Optional[Dict[str, Any]]:
-        return await self._get_default_backend().get_collection_meta()
+    async def get_collection_meta(
+        self,
+        *,
+        ctx: Optional[RequestContext] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if ctx:
+            backend = self._get_backend_for_context(ctx)
+        else:
+            backend = self._get_default_backend()
+        return await backend.get_collection_meta()
 
     async def update_collection_description(self, description: str) -> bool:
         return await self._get_default_backend().update_collection_description(description)
@@ -627,16 +869,114 @@ class VikingVectorIndexBackend:
     # 公开数据操作 API（强制要求 ctx）
     # =========================================================================
 
-    async def upsert(self, data: Dict[str, Any], *, ctx: RequestContext) -> str:
+    async def upsert(
+        self,
+        data: Dict[str, Any],
+        *,
+        ctx: RequestContext,
+        options: UpsertOptions | Mapping[str, Any] | None = None,
+    ) -> str:
+        """Main write entrypoint.
+
+        With the default ``options.partial_update=False``, this preserves the legacy
+        full-record upsert behavior. When ``options.partial_update=True``, the backend
+        first reads the current record and preserves unspecified existing
+        fields before issuing the final upsert.
+        """
+        options = normalize_upsert_options(options)
         logger.debug(
-            f"[VikingVectorIndexBackend.upsert] Called with ctx.account_id={ctx.account_id}, data={data}"
+            "[VikingVectorIndexBackend.upsert] Called with ctx.account_id=%s, "
+            "partial_update=%s, search_tag_mode=%s, data=%s",
+            ctx.account_id,
+            options.partial_update,
+            options.search_tag_mode,
+            data,
         )
         backend = self._get_backend_for_context(ctx)
         logger.debug(
-            f"[VikingVectorIndexBackend.upsert] Using backend for account_id={ctx.account_id}"
+            "[VikingVectorIndexBackend.upsert] Using backend for account_id=%s",
+            ctx.account_id,
         )
-        result = await backend.upsert(data)
-        logger.debug(f"[VikingVectorIndexBackend.upsert] Completed, result={result}")
+        result = await backend.upsert(
+            data,
+            options=options,
+        )
+        logger.debug(
+            "[VikingVectorIndexBackend.upsert] Completed with partial_update=%s, "
+            "search_tag_mode=%s, result=%s",
+            options.partial_update,
+            options.search_tag_mode,
+            result,
+        )
+        return result
+
+    async def upsert_many(
+        self, data_list: List[Dict[str, Any]], *, ctx: RequestContext
+    ) -> List[str]:
+        """Bulk full-record upsert.
+
+        All records are validated for the bound account before one adapter
+        invocation is made. Adapters may split that invocation into multiple
+        data-plane requests, so this API does not guarantee transaction
+        atomicity. Use :meth:`upsert` with
+        ``options=UpsertOptions(partial_update=True)`` when omitted fields must
+        be preserved from existing records.
+        """
+        logger.debug(
+            "[VikingVectorIndexBackend.upsert_many] Called with ctx.account_id=%s, count=%s",
+            ctx.account_id,
+            len(data_list),
+        )
+        backend = self._get_backend_for_context(ctx)
+        result = await backend.upsert_many(data_list)
+        logger.debug(
+            "[VikingVectorIndexBackend.upsert_many] Completed with count=%s, result_count=%s",
+            len(data_list),
+            len(result),
+        )
+        return result
+
+    @asynccontextmanager
+    async def bulk_ingest(self, *, ctx: RequestContext) -> AsyncIterator[None]:
+        """Coalesce optional derived-index rebuilds across many write calls.
+
+        The scope is a performance hint only. It does not make the enclosed
+        writes transactional or atomic, and adapters that do not maintain a
+        derived local index treat it as a no-op.
+        """
+        backend = self._get_backend_for_context(ctx)
+        begin_task = asyncio.create_task(backend.begin_bulk_ingest())
+        entry_cancellation = await _wait_for_task_completion_despite_cancellation(begin_task)
+        # A failed or self-cancelled begin did not acquire the scope, so it
+        # must not be balanced with an end call.
+        begin_task.result()
+        if entry_cancellation is not None:
+            end_task = asyncio.create_task(backend.end_bulk_ingest())
+            await _wait_for_task_completion_despite_cancellation(end_task)
+            # Cleanup failures take priority because they mean the suspension
+            # may still be live. Otherwise preserve the original cancellation.
+            end_task.result()
+            raise entry_cancellation
+        try:
+            yield
+        finally:
+            end_task = asyncio.create_task(backend.end_bulk_ingest())
+            exit_cancellation = await _wait_for_task_completion_despite_cancellation(end_task)
+            end_task.result()
+            if exit_cancellation is not None:
+                raise exit_cancellation
+
+    async def update(self, data: Dict[str, Any], *, ctx: RequestContext) -> UpdateResult:
+        """Strict update path. The target record must already exist."""
+        logger.debug(
+            f"[VikingVectorIndexBackend.update] Called with ctx.account_id={ctx.account_id}, data={data}"
+        )
+        backend = self._get_backend_for_context(ctx)
+        logger.debug(
+            f"[VikingVectorIndexBackend.update] Using backend for account_id={ctx.account_id}"
+        )
+        result = await backend.update(data)
+        logger.debug(f"[VikingVectorIndexBackend.update] Completed, result={result}")
         return result
 
     async def get(self, ids: List[str], *, ctx: RequestContext) -> List[Dict[str, Any]]:
@@ -654,6 +994,116 @@ class VikingVectorIndexBackend:
     async def fetch_by_uri(self, uri: str, *, ctx: RequestContext) -> Optional[Dict[str, Any]]:
         backend = self._get_backend_for_context(ctx)
         return await backend.fetch_by_uri(uri)
+
+    async def update_search_tags(
+        self,
+        uri: str,
+        tags: List[str],
+        *,
+        mode: str,
+        levels: Optional[List[int]] = None,
+        ctx: RequestContext,
+    ) -> List[Dict[str, Any]]:
+        """Update search tags for the exact indexed record or directory summary records."""
+        if mode not in {"replace", "append"}:
+            raise ValueError(f"unsupported tag mode: {mode}")
+
+        from openviking.utils.tags import merge_search_tags
+
+        canonical_uri = canonicalize_uri(uri, ctx)
+        if levels is None:
+            record = await self.fetch_by_uri(canonical_uri, ctx=ctx)
+            if not record or not record.get("id"):
+                return []
+
+            full_records = await self.get([str(record["id"])], ctx=ctx)
+            if not full_records:
+                logger.warning(
+                    "update_search_tags failed to fetch full exact record uri=%s account_id=%s id=%s",
+                    canonical_uri,
+                    ctx.account_id,
+                    record.get("id"),
+                )
+                return []
+
+            updated_record = dict(full_records[0])
+            try:
+                if mode == "append":
+                    updated_record["search_tags"] = merge_search_tags(
+                        updated_record.get("search_tags"), tags
+                    )
+                else:
+                    updated_record["search_tags"] = list(tags)
+            except Exception as exc:
+                logger.warning(
+                    "update_search_tags failed to merge exact record tags uri=%s "
+                    "account_id=%s existing_tags=%s incoming_tags=%s error=%s",
+                    canonical_uri,
+                    ctx.account_id,
+                    updated_record.get("search_tags"),
+                    tags,
+                    exc,
+                )
+                return []
+
+            if await self.upsert(updated_record, ctx=ctx):
+                return [updated_record]
+            return []
+
+        records = await self.filter(
+            filter=And([Eq("uri", canonical_uri), In("level", levels)]),
+            limit=max(len(levels), 2),
+            output_fields=FETCH_BY_URI_OUTPUT_FIELDS,
+            ctx=ctx,
+        )
+        if not records:
+            return []
+
+        record_ids = [str(record["id"]) for record in records if record.get("id")]
+        if not record_ids:
+            return []
+        full_records = await self.get(record_ids, ctx=ctx)
+        full_records_by_id = {
+            str(record["id"]): record for record in full_records if record.get("id") is not None
+        }
+
+        updated_records: List[Dict[str, Any]] = []
+        for record in records:
+            if not record or not record.get("id"):
+                continue
+            full_record = full_records_by_id.get(str(record["id"]))
+            if not full_record:
+                logger.warning(
+                    "update_search_tags failed to fetch full leveled record uri=%s account_id=%s level=%s id=%s",
+                    canonical_uri,
+                    ctx.account_id,
+                    record.get("level"),
+                    record.get("id"),
+                )
+                continue
+            updated_record = dict(full_record)
+            try:
+                if mode == "append":
+                    updated_record["search_tags"] = merge_search_tags(
+                        updated_record.get("search_tags"), tags
+                    )
+                else:
+                    updated_record["search_tags"] = list(tags)
+            except Exception as exc:
+                logger.warning(
+                    "update_search_tags failed to merge leveled record tags uri=%s "
+                    "account_id=%s level=%s existing_tags=%s incoming_tags=%s error=%s",
+                    canonical_uri,
+                    ctx.account_id,
+                    updated_record.get("level"),
+                    updated_record.get("search_tags"),
+                    tags,
+                    exc,
+                )
+                return []
+            if await self.upsert(updated_record, ctx=ctx):
+                updated_records.append(updated_record)
+        return updated_records
 
     async def query(
         self,
@@ -755,6 +1205,30 @@ class VikingVectorIndexBackend:
             backend = self._get_default_backend()
         return await backend.count(filter=filter)
 
+    async def search_by_keywords(
+        self,
+        keywords: Optional[List[str]] = None,
+        query: Optional[str] = None,
+        limit: int = 10,
+        offset: int = 0,
+        filter: Optional[Dict[str, Any] | FilterExpr] = None,
+        output_fields: Optional[List[str]] = None,
+        *,
+        ctx: Optional[RequestContext] = None,
+    ) -> List[Dict[str, Any]]:
+        if ctx:
+            backend = self._get_backend_for_context(ctx)
+        else:
+            backend = self._get_default_backend()
+        return await backend.search_by_keywords(
+            keywords=keywords,
+            query=query,
+            limit=limit,
+            offset=offset,
+            filter=filter,
+            output_fields=output_fields,
+        )
+
     async def clear(self, *, ctx: Optional[RequestContext] = None) -> bool:
         if ctx:
             backend = self._get_backend_for_context(ctx)
@@ -806,6 +1280,7 @@ class VikingVectorIndexBackend:
         context_type: Optional[str] = None,
         target_directories: Optional[List[str]] = None,
         extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
+        level: Optional[List[int]] = None,
         limit: int = 10,
         offset: int = 0,
     ) -> List[Dict[str, Any]]:
@@ -814,6 +1289,7 @@ class VikingVectorIndexBackend:
             context_type=context_type,
             target_directories=target_directories,
             extra_filter=extra_filter,
+            level=level,
         )
         return await self.search(
             query_vector=query_vector,
@@ -821,37 +1297,6 @@ class VikingVectorIndexBackend:
             filter=scope_filter,
             limit=limit,
             offset=offset,
-            output_fields=RETRIEVAL_OUTPUT_FIELDS,
-            ctx=ctx,
-        )
-
-    async def search_global_roots_in_tenant(
-        self,
-        ctx: RequestContext,
-        query_vector: Optional[List[float]],
-        sparse_query_vector: Optional[Dict[str, float]] = None,
-        context_type: Optional[str] = None,
-        target_directories: Optional[List[str]] = None,
-        extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
-        limit: int = 10,
-    ) -> List[Dict[str, Any]]:
-        if not query_vector:
-            return []
-
-        merged_filter = self._merge_filters(
-            self._build_scope_filter(
-                ctx=ctx,
-                context_type=context_type,
-                target_directories=target_directories,
-                extra_filter=extra_filter,
-            ),
-            In("level", [0, 1, 2]),  # TODO: smj fix this
-        )
-        return await self.search(
-            query_vector=query_vector,
-            sparse_query_vector=sparse_query_vector,
-            filter=merged_filter,
-            limit=limit,
             output_fields=RETRIEVAL_OUTPUT_FIELDS,
             ctx=ctx,
         )
@@ -899,31 +1344,6 @@ class VikingVectorIndexBackend:
             limit=limit,
             output_fields=RETRIEVAL_OUTPUT_FIELDS,
             ctx=ctx,
-        )
-
-    async def search_similar_memories(
-        self,
-        owner_space: Optional[str],
-        category_uri_prefix: str,
-        query_vector: List[float],
-        limit: int = 5,
-        *,
-        ctx: RequestContext,
-    ) -> List[Dict[str, Any]]:
-        conds: List[FilterExpr] = [
-            Eq("context_type", "memory"),
-            Eq("level", 2),
-            Eq("account_id", ctx.account_id),
-        ]
-        if category_uri_prefix:
-            conds.append(PathScope("uri", canonicalize_uri(category_uri_prefix, ctx), depth=-1))
-
-        backend = self._get_backend_for_context(ctx)
-        return await backend.search(
-            query_vector=query_vector,
-            filter=And(conds),
-            limit=limit,
-            output_fields=MEMORY_DEDUP_OUTPUT_FIELDS,
         )
 
     async def get_context_by_uri(
@@ -1047,7 +1467,8 @@ class VikingVectorIndexBackend:
                     record.get("id"),
                 )
                 continue
-            if await self.upsert(updated, ctx=ctx):
+            result = await self.upsert(updated, ctx=ctx)
+            if result:
                 success = True
                 old_id = record.get("id")
                 if old_id and old_id != new_id:
@@ -1072,8 +1493,8 @@ class VikingVectorIndexBackend:
             uri_updated = False
             for record in full_records:
                 current = int(record.get("active_count", 0) or 0)
-                record["active_count"] = current + 1
-                if await self.upsert(record, ctx=ctx):
+                result = await self.upsert(record | {"active_count": current + 1}, ctx=ctx)
+                if result:
                     uri_updated = True
             if uri_updated:
                 updated += 1
@@ -1085,21 +1506,28 @@ class VikingVectorIndexBackend:
         context_type: Optional[str],
         target_directories: Optional[List[str]],
         extra_filter: Optional[FilterExpr | Dict[str, Any]],
+        level: Optional[List[int]] = None,
     ) -> Optional[FilterExpr]:
         filters: List[FilterExpr] = []
         if context_type:
             filters.append(Eq("context_type", context_type))
 
+        canonical_targets = [
+            canonicalize_uri(target_dir, ctx)
+            for target_dir in target_directories or []
+            if target_dir
+        ]
         tenant_filter = self._tenant_filter(ctx, context_type=context_type)
+        if tenant_filter and self._targets_within_visible_roots(ctx, canonical_targets):
+            # The target scopes are already narrower than the tenant-visible
+            # roots. Keep account isolation, but avoid recursively evaluating
+            # the broader path scopes as an additional filter.
+            tenant_filter = Eq("account_id", ctx.account_id)
         if tenant_filter:
             filters.append(tenant_filter)
 
-        if target_directories:
-            uri_conds = [
-                PathScope("uri", canonicalize_uri(target_dir, ctx), depth=-1)
-                for target_dir in target_directories
-                if target_dir
-            ]
+        if canonical_targets:
+            uri_conds = [PathScope("uri", target_dir, depth=-1) for target_dir in canonical_targets]
             if uri_conds:
                 filters.append(Or(uri_conds))
 
@@ -1109,8 +1537,24 @@ class VikingVectorIndexBackend:
             else:
                 filters.append(extra_filter)
 
-        merged = self._merge_filters(*filters)
-        return merged
+        if level:
+            filters.append(In("level", level))
+
+        return self._merge_filters(*filters)
+
+    @staticmethod
+    def _targets_within_visible_roots(ctx: RequestContext, canonical_targets: List[str]) -> bool:
+        if not canonical_targets:
+            return False
+
+        root_parts = [tuple(uri_parts(root)) for root in visible_roots(ctx)]
+        return all(
+            any(
+                len(target_parts) >= len(root) and target_parts[: len(root)] == root
+                for root in root_parts
+            )
+            for target_parts in (tuple(uri_parts(target)) for target in canonical_targets)
+        )
 
     @staticmethod
     def _tenant_filter(

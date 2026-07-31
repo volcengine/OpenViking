@@ -295,11 +295,11 @@ vim ~/.openviking/ov.conf
     }
   },
   "vlm": {
-    "api_base"   : "<api-endpoint>",   
-    "api_key"    : "<your-api-key>",   
-    "provider"   : "<provider-type>",  
+    "api_base"   : "<api-endpoint>",
+    "api_key"    : "<your-api-key>",
+    "provider"   : "<provider-type>",
     "max_retries": 2,
-    "model"      : "<model-name>"      // e.g., doubao-seed-2-0-pro-260215 or gpt-4-vision-preview
+    "model"      : "<model-name>"      // e.g., doubao-seed-2-0-lite-260428 or gpt-4-vision-preview
   }
 }
 

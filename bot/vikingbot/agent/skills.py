@@ -2,10 +2,12 @@
 
 import json
 import os
-from loguru import logger
 import re
 import shutil
 from pathlib import Path
+
+import yaml
+from loguru import logger
 
 # Default builtin skills directory (relative to this file)
 BUILTIN_SKILLS_DIR = Path(__file__).parent.parent.parent / "workspace" / "skills"
@@ -43,7 +45,12 @@ class SkillsLoader:
                     skill_file = skill_dir / "SKILL.md"
                     if skill_file.exists():
                         skills.append(
-                            {"name": skill_dir.name, "path": str(skill_file), "source": "workspace"}
+                            {
+                                "name": skill_dir.name,
+                                "path": str(skill_file),
+                                "relative_path": f"skills/{skill_dir.name}/SKILL.md",
+                                "source": "workspace",
+                            }
                         )
 
         # Filter by requirements
@@ -113,7 +120,7 @@ class SkillsLoader:
         lines = ["<skills>"]
         for s in all_skills:
             name = escape_xml(s["name"])
-            path = s["path"]
+            path = escape_xml(s.get("relative_path") or s["path"])
             desc = escape_xml(self._get_skill_description(s["name"]))
             skill_meta = self._get_skill_meta(s["name"])
             available = self._check_requirements(skill_meta)
@@ -161,11 +168,13 @@ class SkillsLoader:
                 return content[match.end() :].strip()
         return content
 
-    def _parse_vikingbot_metadata(self, raw: str) -> dict:
-        """Parse vikingbot metadata JSON from frontmatter."""
+    def _parse_vikingbot_metadata(self, raw: object) -> dict:
+        """Parse scoped or plain VikingBot metadata."""
+        if isinstance(raw, dict):
+            scoped = raw.get("vikingbot", raw)
+            return scoped if isinstance(scoped, dict) else {}
         try:
-            data = json.loads(raw)
-            return data.get("vikingbot", {}) if isinstance(data, dict) else {}
+            return self._parse_vikingbot_metadata(json.loads(raw))
         except (json.JSONDecodeError, TypeError):
             return {}
 
@@ -212,12 +221,10 @@ class SkillsLoader:
         if content.startswith("---"):
             match = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
             if match:
-                # Simple YAML parsing
-                metadata = {}
-                for line in match.group(1).split("\n"):
-                    if ":" in line:
-                        key, value = line.split(":", 1)
-                        metadata[key.strip()] = value.strip().strip("\"'")
-                return metadata
+                try:
+                    metadata = yaml.safe_load(match.group(1))
+                except yaml.YAMLError:
+                    return None
+                return metadata if isinstance(metadata, dict) else None
 
         return None

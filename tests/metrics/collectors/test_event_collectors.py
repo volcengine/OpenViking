@@ -10,6 +10,7 @@ from openviking.metrics.collectors.base import EventMetricCollector
 from openviking.metrics.collectors.cache import CacheCollector
 from openviking.metrics.collectors.embedding import EmbeddingCollector
 from openviking.metrics.collectors.rerank import RerankCollector
+from openviking.metrics.collectors.retrieval import RetrievalCollector
 from openviking.metrics.collectors.session import SessionCollector
 from openviking.metrics.collectors.telemetry_bridge import TelemetryBridgeCollector
 
@@ -271,3 +272,60 @@ def test_embedding_collector_records_error_volume_and_error_code_counter(
         or 'openviking_embedding_errors_total{account_id="__unknown__",error_code="rate_limit"} 1.0'
         in text
     )
+
+
+def _emit_retrieval(registry, *, result_count, context_type="search", rerank_used=False):
+    RetrievalCollector().receive(
+        "retrieval.completed",
+        {
+            "context_type": context_type,
+            "result_count": result_count,
+            "latency_seconds": 0.05,
+            "rerank_used": rerank_used,
+            "rerank_fallback": False,
+        },
+        registry,
+    )
+
+
+def test_retrieval_collector_zero_result_records_downstream_without_raising(registry, render_prometheus):
+    """Regression for #2922: a zero-result retrieval is a normal outcome, not an error.
+
+    Previously ``record_completed`` incremented RESULTS_TOTAL by ``max(0, result_count)``,
+    so an empty retrieval passed ``amount=0`` and the registry raised
+    "counter can only be increased by a positive amount". As the 2nd registry call this
+    aborted the rest of the method: ZERO_RESULT_TOTAL, the latency histogram and the
+    rerank counters were silently dropped and a WARNING was logged on every empty retrieval.
+    """
+    _emit_retrieval(registry, result_count=0)
+    text = render_prometheus(registry)
+
+    assert re.search(r'openviking_retrieval_requests_total\{[^}]*context_type="search"[^}]*\} 1(?:\.0)?', text)
+    assert re.search(r'openviking_retrieval_zero_result_total\{[^}]*context_type="search"[^}]*\} 1(?:\.0)?', text)
+    # Latency histogram still observed one sample (proving the method did not abort early).
+    assert re.search(r'openviking_retrieval_latency_seconds_count\{[^}]*context_type="search"[^}]*\} 1(?:\.0)?', text)
+    # No positive results -> RESULTS_TOTAL has no series for this context.
+    assert not re.search(r'openviking_retrieval_results_total\{[^}]*context_type="search"', text)
+
+
+def test_retrieval_collector_positive_result_increments_results_total(registry, render_prometheus):
+    """A non-empty retrieval increments RESULTS_TOTAL by the result count and does not
+    touch the zero-result counter."""
+    _emit_retrieval(registry, result_count=3, rerank_used=True)
+    text = render_prometheus(registry)
+
+    assert re.search(r'openviking_retrieval_results_total\{[^}]*context_type="search"[^}]*\} 3(?:\.0)?', text)
+    assert re.search(r'openviking_retrieval_requests_total\{[^}]*context_type="search"[^}]*\} 1(?:\.0)?', text)
+    assert not re.search(r'openviking_retrieval_zero_result_total\{[^}]*context_type="search"', text)
+
+
+def test_retrieval_collector_negative_result_count_is_bucketed_as_zero_result(registry, render_prometheus):
+    """A malformed negative result_count must not raise or drop metrics; it is classified
+    as an empty retrieval (no positive results) so telemetry stays internally consistent."""
+    _emit_retrieval(registry, result_count=-1)
+    text = render_prometheus(registry)
+
+    assert re.search(r'openviking_retrieval_requests_total\{[^}]*context_type="search"[^}]*\} 1(?:\.0)?', text)
+    assert re.search(r'openviking_retrieval_zero_result_total\{[^}]*context_type="search"[^}]*\} 1(?:\.0)?', text)
+    assert re.search(r'openviking_retrieval_latency_seconds_count\{[^}]*context_type="search"[^}]*\} 1(?:\.0)?', text)
+    assert not re.search(r'openviking_retrieval_results_total\{[^}]*context_type="search"', text)

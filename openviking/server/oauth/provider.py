@@ -33,10 +33,6 @@ from openviking.server.oauth.otp import generate_otp
 from openviking.server.oauth.storage import OAuthStore
 from openviking_cli.utils import get_logger
 
-# Mirrors auth.py:_ROLE_RANK; duplicated here to avoid the import cycle
-# (auth.py already depends on this module via the Provider Protocol).
-_ROLE_RANK = {Role.USER: 0, Role.ADMIN: 1, Role.ROOT: 2}
-
 logger = get_logger(__name__)
 
 # Access tokens carry this prefix so the auth.py bearer router can cheaply
@@ -45,6 +41,11 @@ logger = get_logger(__name__)
 ACCESS_TOKEN_PREFIX = "ovat_"
 REFRESH_TOKEN_PREFIX = "ovrt_"
 AUTH_CODE_PREFIX = "ovac_"
+
+# The only scope OpenViking defines. Single source for the three places that
+# must agree on it: the RFC 9728 PRM document (router.py), the DCR default
+# (app.py ClientRegistrationOptions), and the missing-scope fallback below.
+MCP_SCOPE = "mcp"
 
 # Primary authorize page: a /studio SPA route that runs in the same tab as
 # the user's Studio session, so it can read the session-stored API key.
@@ -124,6 +125,13 @@ class OpenVikingOAuthProvider(
             token_endpoint_auth_method=record["token_endpoint_auth_method"],
             grant_types=record["grant_types"],
             response_types=record["response_types"],
+            # Clients registered without a scope (ChatGPT's DCR omits the
+            # field; rows predating #2921's scope column are NULL) would fail
+            # /authorize with invalid_scope as soon as they request the "mcp"
+            # scope our PRM document advertises — the SDK's validate_scope
+            # treats a scope-less client as "nothing authorized". Fall back to
+            # the default grant instead.
+            scope=record.get("scope") or MCP_SCOPE,
             client_name=record.get("client_name"),
             client_id_issued_at=record["created_at"],
         )
@@ -165,6 +173,7 @@ class OpenVikingOAuthProvider(
                 if client_info.response_types
                 else None,
                 client_secret=None,  # public client; never stored
+                scope=client_info.scope,
             )
         except ValueError as exc:
             raise RegistrationError(
@@ -285,14 +294,16 @@ class OpenVikingOAuthProvider(
         if self._role_resolver is not None:
             try:
                 token_role = Role(refresh_token.role)
-                current_role = self._role_resolver(refresh_token.account_id, refresh_token.user_id)
+                current_role = Role(
+                    self._role_resolver(refresh_token.account_id, refresh_token.user_id)
+                )
             except (ValueError, Exception):  # noqa: BLE001
                 token_role = None
                 current_role = None
             if (
                 token_role is not None
                 and current_role is not None
-                and _ROLE_RANK[token_role] > _ROLE_RANK[current_role]
+                and token_role.rank > current_role.rank
             ):
                 raise TokenError(
                     error="invalid_grant",

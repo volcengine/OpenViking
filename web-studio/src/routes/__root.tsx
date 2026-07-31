@@ -1,8 +1,7 @@
+import { lazy, Suspense } from 'react'
 import { RotateCcwIcon, TriangleAlertIcon } from 'lucide-react'
 import { Outlet, createRootRoute } from '@tanstack/react-router'
 import type { ErrorComponentProps } from '@tanstack/react-router'
-import { TanStackRouterDevtoolsPanel } from '@tanstack/react-router-devtools'
-import { TanStackDevtools } from '@tanstack/react-devtools'
 import { useTranslation } from 'react-i18next'
 
 import { AppShell } from '#/components/app-shell'
@@ -18,6 +17,14 @@ import {
 import { Toaster } from '#/components/ui/sonner'
 import '../styles.css'
 
+const AppDevtools = import.meta.env.DEV
+  ? lazy(() =>
+      import('#/components/app-devtools').then((module) => ({
+        default: module.AppDevtools,
+      })),
+    )
+  : null
+
 export const Route = createRootRoute({
   component: RootComponent,
   errorComponent: RootErrorComponent,
@@ -30,18 +37,18 @@ function RootComponent() {
         <Outlet />
       </AppShell>
       <Toaster />
-      <TanStackDevtools
-        config={{
-          position: 'bottom-right',
-        }}
-        plugins={[
-          {
-            name: 'TanStack Router',
-            render: <TanStackRouterDevtoolsPanel />,
-          },
-        ]}
-      />
+      <DevtoolsSlot />
     </>
+  )
+}
+
+function DevtoolsSlot() {
+  if (!AppDevtools) return null
+
+  return (
+    <Suspense fallback={null}>
+      <AppDevtools />
+    </Suspense>
   )
 }
 
@@ -76,17 +83,7 @@ function RootErrorComponent({ error, reset }: ErrorComponentProps) {
           </CardFooter>
         </Card>
       </div>
-      <TanStackDevtools
-        config={{
-          position: 'bottom-right',
-        }}
-        plugins={[
-          {
-            name: 'TanStack Router',
-            render: <TanStackRouterDevtoolsPanel />,
-          },
-        ]}
-      />
+      <DevtoolsSlot />
     </>
   )
 }

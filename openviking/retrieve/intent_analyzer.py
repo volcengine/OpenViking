@@ -22,6 +22,7 @@ DEFAULT_INTENT_ANALYSIS_PROMPT = "retrieval.intent_analysis"
 # Model-specific query-planner prompts. Models not listed here keep using the
 # default intent-analysis prompt for backward compatibility.
 QUERY_PLANNER_PROMPT_BY_MODEL: dict[str, str] = {
+    "ollama/guoxuter/ov_intent_analysis_sft:v7_q8": "retrieval.ov_intent_analysis_sft_v7",
     "ollama/guoxuter/ov_intent_analysis_sft:v4_q8": "retrieval.ov_intent_analysis_sft_v4",
 }
 

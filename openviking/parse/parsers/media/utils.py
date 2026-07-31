@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from openviking.core.path_variables import CalendarVariableProvider
+from openviking.parse.parsers.constants import TYPESCRIPT_MPEG_TS_EXTENSION
 from openviking.prompts import render_prompt
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.utils.config import get_openviking_config
@@ -19,37 +20,57 @@ from .constants import AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 
 logger = get_logger(__name__)
 
+MPEG_TS_PACKET_SIZE = 188
+MPEG_TS_PROBE_PACKETS = 10
+MPEG_TS_PROBE_BYTES = MPEG_TS_PACKET_SIZE * MPEG_TS_PROBE_PACKETS
+MPEG_TS_SYNC_BYTE = 0x47
+
 
 def _is_svg(data: bytes) -> bool:
     """Check if the data is an SVG file."""
     return data[:4] == b"<svg" or (data[:5] == b"<?xml" and b"<svg" in data[:100])
 
 
-# SVG to PNG conversion (disabled by default)
-# Uncomment and install dependencies if you need SVG support:
-#   Ubuntu/Debian: sudo apt-get install libcairo2 && pip install cairosvg
-#   macOS: brew install cairo && pip install cairosvg
-#   Or use ImageMagick: sudo apt-get install libmagickwand-dev && pip install Wand
-#
-# def _convert_svg_to_png(svg_data: bytes) -> Optional[bytes]:
-#     """Convert SVG to PNG using cairosvg or wand."""
-#     try:
-#         import cairosvg
-#         return cairosvg.svg2png(bytestring=svg_data)
-#     except ImportError:
-#         pass
-#     except OSError:
-#         pass  # libcairo not installed
-#
-#     try:
-#         from wand.image import Image as WandImage
-#         with WandImage(blob=svg_data, format='svg') as img:
-#             img.format = 'png'
-#             return img.make_blob()
-#     except ImportError:
-#         pass
-#
-#     return None
+def _convert_svg_to_png(svg_data: bytes) -> Optional[bytes]:
+    """Convert SVG to PNG using cairosvg or wand.
+
+    Dependencies:
+      Ubuntu/Debian: sudo apt-get install libcairo2 && pip install cairosvg
+      macOS: brew install cairo && pip install cairosvg
+    """
+    try:
+        import cairosvg
+        return cairosvg.svg2png(bytestring=svg_data)
+    except ImportError:
+        pass
+    except OSError:
+        pass  # libcairo not installed
+
+    try:
+        from wand.image import Image as WandImage
+        with WandImage(blob=svg_data, format='svg') as img:
+            img.format = 'png'
+            return img.make_blob()
+    except ImportError:
+        pass
+
+    return None
+
+
+def read_mpeg_ts_probe(path: Path) -> bytes:
+    """Read only the bytes needed to detect MPEG-TS packet sync."""
+    with path.open("rb") as file:
+        return file.read(MPEG_TS_PROBE_BYTES)
+
+
+def is_mpeg_ts(content: bytes) -> bool:
+    """Detect MPEG-TS by checking sync bytes at packet boundaries."""
+    if len(content) < MPEG_TS_PROBE_BYTES:
+        return False
+    return all(
+        content[index * MPEG_TS_PACKET_SIZE] == MPEG_TS_SYNC_BYTE
+        for index in range(MPEG_TS_PROBE_PACKETS)
+    )
 
 
 def get_media_type(source_path: Optional[str], source_format: Optional[str]) -> Optional[str]:
@@ -73,6 +94,11 @@ def get_media_type(source_path: Optional[str], source_format: Optional[str]) -> 
             return "image"
         elif ext in AUDIO_EXTENSIONS:
             return "audio"
+        elif ext == TYPESCRIPT_MPEG_TS_EXTENSION:
+            path = Path(source_path)
+            if not path.is_file():
+                return None
+            return "video" if is_mpeg_ts(read_mpeg_ts_probe(path)) else None
         elif ext in VIDEO_EXTENSIONS:
             return "video"
 

@@ -81,7 +81,6 @@ async def test_manual_memory_batching_100_files(monkeypatch):
     mock_config.semantic.abstract_max_chars = 256
     mock_config.semantic.overview_max_chars = 4000
     mock_config.semantic.max_concurrent_llm = 10
-    mock_config.code.code_summary_mode = "llm"
 
     # 2. 模拟 AGFS/VikingFS 中的 100 个文件
     class MockVikingFS:

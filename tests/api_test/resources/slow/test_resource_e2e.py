@@ -136,7 +136,7 @@ class TestResourceEndToEnd:
                 return
             root_uri = add_resp.json().get("result", {}).get("root_uri", "")
 
-            glob_resp = api_client.glob(pattern="*.md", uri=root_uri)
+            glob_resp = api_client.glob(pattern="**/*.md", uri=root_uri)
             if glob_resp.status_code == 200:
                 matches = glob_resp.json().get("result", {}).get("matches", [])
                 assert len(matches) >= 1, (

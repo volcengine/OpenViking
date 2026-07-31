@@ -81,7 +81,7 @@ AK/SK 同时用于 TOS 和 VikingDB 的鉴权。
 3. 记录生成的 API Key
 4. 确认以下模型已开通（在 **模型广场** 中申请）：
    - `doubao-embedding-vision-251215`（多模态 Embedding）
-   - `doubao-seed-2-0-pro-260215`（VLM 推理）
+   - `doubao-seed-2-0-lite-260428`（VLM 推理）
 5. 将 API Key 填入配置文件的 `embedding.dense.api_key` 和 `vlm.api_key`
 
 ---
@@ -340,7 +340,7 @@ openviking:
         provider: volcengine
         input: multimodal
     vlm:
-      model: "doubao-seed-2-0-pro-260215"
+      model: "doubao-seed-2-0-lite-260428"
       api_key: "your-ark-api-key"
       api_base: "https://ark.cn-beijing.volces.com/api/v3"
       temperature: 0.0

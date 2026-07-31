@@ -5,8 +5,10 @@
 import sys
 from typing import Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
+# Import auth plugin registry for config validation
+from openviking.server.auth.registry import get_registry
 from openviking.server.identity import AuthMode
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.config_loader import (
@@ -22,6 +24,89 @@ from openviking_cli.utils.config.consts import (
 )
 
 logger = get_logger(__name__)
+
+
+def _normalize_config_uri(value: Optional[str], field_name: str) -> Optional[str]:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a string")
+    uri = value.strip().rstrip("/")
+    if not uri:
+        raise ValueError(f"{field_name} must not be empty")
+    return uri
+
+
+class AddTargetsConfig(BaseModel):
+    """Add targets for resource and skill writes."""
+
+    resource_uri: Optional[str] = None
+    skill_uri: Optional[str] = None
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("resource_uri")
+    @classmethod
+    def validate_resource_uri(cls, value: Optional[str]) -> Optional[str]:
+        uri = _normalize_config_uri(value, "resource_uri")
+        if uri is None:
+            return None
+        from openviking.core.namespace import classify_uri, uri_parts
+        from openviking.core.uri_validation import validate_viking_uri
+        from openviking_cli.utils.uri import VikingURI
+
+        validate_viking_uri(uri, field_name="resource_uri")
+        normalized = VikingURI.normalize(uri).rstrip("/")
+        parts = uri_parts(normalized)
+        classification = classify_uri(normalized)
+        if parts[:1] == ["resources"] or (
+            parts[:1] == ["user"]
+            and classification.context_type == "resource"
+            and classification.content_index is not None
+        ):
+            return normalized
+        raise ValueError("resource_uri must be a resource directory URI")
+
+    @field_validator("skill_uri")
+    @classmethod
+    def validate_skill_uri(cls, value: Optional[str]) -> Optional[str]:
+        uri = _normalize_config_uri(value, "skill_uri")
+        if uri is None:
+            return None
+        from openviking_cli.utils.uri import VikingURI
+
+        normalized = VikingURI.normalize(uri).rstrip("/")
+        if normalized in {"viking://user/skills", "viking://agent/skills"}:
+            return normalized
+        raise ValueError("skill_uri must be viking://user/skills or viking://agent/skills")
+
+
+class AgentEvolutionConfig(BaseModel):
+    """Server-wide Agent Evolution production switch."""
+
+    enabled: bool = False
+
+    model_config = {"extra": "forbid"}
+
+
+class DeprecatedUserAgentEvolutionConfig(BaseModel):
+    """Parse-only compatibility for legacy per-user configuration files."""
+
+    enabled: Optional[bool] = None
+
+    model_config = {"extra": "forbid"}
+
+
+class UserConfig(BaseModel):
+    """User configuration values that can be defaulted or initialized."""
+
+    add_targets: AddTargetsConfig = Field(default_factory=AddTargetsConfig)
+    agent_evolution: DeprecatedUserAgentEvolutionConfig = Field(
+        default_factory=DeprecatedUserAgentEvolutionConfig,
+        exclude=True,
+    )
+
+    model_config = {"extra": "forbid"}
 
 
 class MetricsAccountDimensionConfig(BaseModel):
@@ -54,12 +139,15 @@ class OTelExporterConfig(BaseModel):
         model_config = {"extra": "forbid"}
 
     enabled: bool = False
-    protocol: str = "grpc"  # "grpc" or "http"
+    protocol: str = "grpc"  # "grpc", "http", or "local" for traces
     tls: TLSConfig = Field(default_factory=TLSConfig)
     endpoint: str = "localhost:4317"  # gRPC default: 4317; HTTP default: 4318
     service_name: str = "openviking-server"
     export_interval_ms: int = 10000
     headers: Dict[str, str] = Field(default_factory=dict)
+    local_path: str = "~/.openviking/logs/traces.jsonl"
+    local_rotation_mb: int = Field(default=40, gt=0)
+    local_backup_count: int = Field(default=2, ge=0)
 
     model_config = {"extra": "forbid"}
 
@@ -105,6 +193,26 @@ class UsageAuditConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class UsageReporterSinkConfig(BaseModel):
+    """Usage reporter sink configuration."""
+
+    type: Literal["custom", "file_log"] = "custom"
+    class_path: Optional[str] = None
+    config: Dict[str, object] = Field(default_factory=dict)
+
+    model_config = {"extra": "forbid"}
+
+
+class UsageReporterConfig(BaseModel):
+    """Usage event reporter configuration."""
+
+    enabled: bool = False
+    extractors: List[Literal["memory_usage"]] = Field(default_factory=lambda: ["memory_usage"])
+    sinks: List[UsageReporterSinkConfig] = Field(default_factory=list)
+
+    model_config = {"extra": "forbid"}
+
+
 class TraceDumpBodyConfig(BaseModel):
     """HTTP body dump configuration.
 
@@ -134,7 +242,7 @@ class ObservabilityConfig(BaseModel):
 class TempUploadConfig(BaseModel):
     """Temporary upload configuration."""
 
-    default_mode: str = "local"
+    default_mode: Literal["local", "shared"] = "local"
     shared_max_size_bytes: int = 512 * 1024 * 1024
     shared_prefix: str = "viking://upload"
 
@@ -160,7 +268,7 @@ class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 1933
     workers: int = 1
-    auth_mode: Optional[AuthMode] = None  # If None, auto-detect based on root_api_key
+    auth_mode: Optional[str] = None  # If None, auto-detect based on root_api_key
     root_api_key: Optional[str] = None
     profile_enabled: bool = False
     cors_origins: List[str] = Field(default_factory=lambda: ["*"])
@@ -169,6 +277,7 @@ class ServerConfig(BaseModel):
     encryption_enabled: bool = False  # Whether file-level AES encryption is enabled
     api_key_hashing_enabled: bool = False  # Whether API key Argon2id hashing is enabled (default: false, rely on file encryption)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+    usage_reporter: UsageReporterConfig = Field(default_factory=UsageReporterConfig)
     # Public-facing base URL emitted in MCP-issued upload instructions. See
     # ``openviking.server.mcp_endpoint._resolve_public_base_url`` for the full
     # resolution chain: env var > this field > X-Forwarded-Host/Proto > Host header
@@ -177,23 +286,64 @@ class ServerConfig(BaseModel):
     public_base_url: Optional[str] = None
     upload_signed_ttl_seconds: int = 600
     temp_upload: TempUploadConfig = Field(default_factory=TempUploadConfig)
+    user_config_defaults: UserConfig = Field(default_factory=UserConfig)
+    agent_evolution: AgentEvolutionConfig = Field(default_factory=AgentEvolutionConfig)
     tool_output_externalization: ToolOutputExternalizationConfig = Field(
         default_factory=ToolOutputExternalizationConfig
     )
 
     model_config = {"extra": "forbid"}
 
-    def get_effective_auth_mode(self) -> AuthMode:
+    def get_effective_auth_mode(self) -> str:
         """Get effective auth mode, auto-detecting if not explicitly set.
 
-        - If root_api_key is configured (non-empty) and auth_mode is None: API_KEY
-        - If root_api_key is not configured and auth_mode is None: DEV
+        - If root_api_key is configured (non-empty) and auth_mode is None: api_key
+        - If root_api_key is not configured and auth_mode is None: dev
         """
-        if self.auth_mode is not None:
-            return self.auth_mode
-        if self.root_api_key is not None and self.root_api_key != "":
-            return AuthMode.API_KEY
-        return AuthMode.DEV
+        auth_mode_text = str(self.auth_mode).strip() if self.auth_mode is not None else ""
+        if auth_mode_text:
+            return auth_mode_text
+
+        if self.root_api_key is not None and str(self.root_api_key).strip():
+            return AuthMode.API_KEY.value
+        return AuthMode.DEV.value
+
+
+def map_bind_host_to_loopback(host: str) -> str:
+    """Map a server *bind* host to a client-connectable *loopback* host.
+
+    ``server.host`` configures the address the server binds/listens on. A
+    wildcard bind address such as ``0.0.0.0`` (or IPv6 ``::``) is valid to
+    listen on but is *not* a destination a client can connect to. Clients that
+    derive a connect URL from the configured host (the bot proxy, the bot's
+    own config loader, ``doctor``) must translate the wildcard to loopback:
+
+    - ``"0.0.0.0"``, ``""``, ``"*"``   -> ``"127.0.0.1"``
+    - ``"::"``, ``"::0"``, ``"[::]"``  -> ``"[::1]"``
+    - bare IPv6 literals (e.g. ``"::1"``) are bracketed for URL syntax
+    - everything else passes through unchanged
+    """
+    host = str(host or "").strip()
+    if host in ("0.0.0.0", "", "*"):
+        return "127.0.0.1"
+    if host in ("::", "::0", "[::]"):
+        return "[::1]"
+    if ":" in host and not (host.startswith("[") and host.endswith("]")):
+        return f"[{host}]"
+    return host
+
+
+def get_server_url_from_server_data(server_data: object) -> str:
+    """Return the loopback URL clients use for the configured OpenViking server."""
+    if isinstance(server_data, dict):
+        host_value = server_data.get("host")
+        port_value = server_data.get("port")
+    else:
+        host_value = getattr(server_data, "host", None)
+        port_value = getattr(server_data, "port", None)
+    host = map_bind_host_to_loopback(str(host_value or "127.0.0.1"))
+    port = str(port_value or "1933").strip()
+    return f"http://{host}:{port}"
 
 
 def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
@@ -234,16 +384,14 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
     if not isinstance(server_data, dict):
         raise ValueError("Invalid server config: 'server' section must be an object")
 
-    # Convert auth_mode string to enum if present
+    # Convert auth_mode string — built-in enums are converted to their string
+    # value; custom modes are kept as-is for plugin extensibility.
     if "auth_mode" in server_data and isinstance(server_data["auth_mode"], str):
         try:
-            server_data["auth_mode"] = AuthMode(server_data["auth_mode"])
-        except ValueError as e:
-            valid_modes = ", ".join(repr(m.value) for m in AuthMode)
-            raise ValueError(
-                f"Invalid server.auth_mode={server_data['auth_mode']!r}. "
-                f"Expected one of: {valid_modes}."
-            ) from e
+            server_data["auth_mode"] = AuthMode(server_data["auth_mode"]).value
+        except ValueError:
+            # Custom auth mode — keep as string for plugin registration
+            pass
 
     # Get encryption enabled from config data directly (for test compatibility)
     encryption_enabled = data.get("encryption", {}).get("enabled", False)
@@ -309,16 +457,13 @@ def load_bot_gateway_token(config_path: Optional[str] = None) -> str:
 def validate_server_config(config: ServerConfig) -> None:
     """Validate server config for safe startup.
 
-    - **dev mode**: No authentication required, always returns ROOT identity.
-      Only acceptable when binding to localhost.
-    - **api_key mode**: Authenticates via root_api_key or user keys.
-      Requires root_api_key to be configured.
-    - **trusted mode**: Trusts X-OpenViking-Account/User headers.
-      Requires root_api_key when binding to non-localhost.
+    Validation is delegated to the auth plugin registered for the effective
+    auth_mode. Built-in plugins (dev, api_key, trusted) preserve the original
+    validation behaviour.
 
     If auth_mode is not explicitly configured:
-    - If root_api_key is configured (non-empty): auto-select API_KEY mode
-    - If root_api_key is not configured: auto-select DEV mode
+    - If root_api_key is configured (non-empty): auto-select api_key mode
+    - If root_api_key is not configured: auto-select dev mode
 
     Raises:
         SystemExit: If the configuration is unsafe.
@@ -333,83 +478,38 @@ def validate_server_config(config: ServerConfig) -> None:
 
     effective_auth_mode = config.get_effective_auth_mode()
 
-    if effective_auth_mode == AuthMode.DEV:
-        # Dev mode: no authentication, only allowed on localhost
-        if _is_localhost(config.host):
-            if config.auth_mode is None:
-                logger.warning(
-                    "Dev mode (auto-detected): authentication disabled. "
-                    "This is allowed because the server is bound to localhost (%s). "
-                    "Do NOT expose this server to the network.",
-                    config.host,
-                )
-            else:
-                logger.warning(
-                    "Dev mode: authentication disabled. This is allowed because the "
-                    "server is bound to localhost (%s). Do NOT expose this server "
-                    "to the network.",
-                    config.host,
-                )
-            return
-        logger.error(
-            "SECURITY: server.auth_mode='dev' requires server.host to be localhost, "
-            "but it is set to '%s'. Dev mode exposes an unauthenticated ROOT "
-            "endpoint and must not be exposed to the network.",
-            config.host,
-        )
-        logger.error(
-            "To fix, either:\n"
-            '  1. Set server.auth_mode="api_key" and configure server.root_api_key, or\n'
-            '  2. Bind dev mode to localhost (server.host = "127.0.0.1")'
-        )
-        sys.exit(1)
+    # Ensure built-in plugins are registered before validation.
+    # If a non-built-in plugin has already claimed a built-in mode name,
+    # log a security warning and forcefully override it.
+    from openviking.server.auth.plugins import ApiKeyAuthPlugin, DevAuthPlugin, TrustedAuthPlugin
 
-    if effective_auth_mode == AuthMode.TRUSTED:
-        if config.root_api_key and config.root_api_key != "":
-            return
-        if _is_localhost(config.host):
+    registry = get_registry()
+    _BUILTIN_PLUGINS = {
+        "dev": DevAuthPlugin,
+        "api_key": ApiKeyAuthPlugin,
+        "trusted": TrustedAuthPlugin,
+    }
+    for mode, plugin_cls in _BUILTIN_PLUGINS.items():
+        existing = registry.get(mode)
+        if existing is None:
+            registry.register(plugin_cls)
+        elif existing is not plugin_cls:
             logger.warning(
-                "Trusted mode without API key: authentication trusts "
-                "X-OpenViking-Account/User headers. This is allowed because "
-                "the server is bound to localhost (%s).",
-                config.host,
+                "SECURITY: Auth mode %r was registered by %s but is being "
+                "overridden by the built-in %s.",
+                mode,
+                existing.__name__,
+                plugin_cls.__name__,
             )
-            return
+            registry._plugins[mode] = plugin_cls
+
+    plugin_cls = registry.get(effective_auth_mode)
+    if plugin_cls is None:
         logger.error(
-            "SECURITY: server.auth_mode='trusted' requires server.root_api_key when "
-            "server.host is '%s' (non-localhost). Only localhost trusted mode may run "
-            "without an API key.",
-            config.host,
-        )
-        logger.error(
-            "To fix, either:\n"
-            "  1. Set server.root_api_key in ov.conf, or\n"
-            '  2. Bind trusted mode to localhost (server.host = "127.0.0.1")'
+            "Unknown auth_mode: %r. No auth plugin registered for this mode. Registered modes: %s.",
+            effective_auth_mode,
+            ", ".join(registry.list_modes()),
         )
         sys.exit(1)
 
-    # AuthMode.API_KEY
-    if config.root_api_key and config.root_api_key != "":
-        if config.auth_mode is None:
-            logger.info("Api key mode (auto-detected): using root_api_key for authentication")
-        return
-
-    # api_key mode without root_api_key is invalid - should use dev mode instead
-    if _is_localhost(config.host):
-        logger.error(
-            "server.auth_mode='api_key' requires server.root_api_key to be configured.\n"
-            'To run without authentication on localhost, either set server.auth_mode="dev" '
-            "or simply remove the server.auth_mode setting to auto-detect."
-        )
-    else:
-        logger.error(
-            "SECURITY: server.auth_mode='api_key' requires server.root_api_key "
-            "to be configured when server.host is '%s' (non-localhost).",
-            config.host,
-        )
-    logger.error(
-        "To fix, either:\n"
-        "  1. Set server.root_api_key in ov.conf, or\n"
-        '  2. Use server.auth_mode="dev" (localhost only)'
-    )
-    sys.exit(1)
+    plugin_cls().validate_config(config)

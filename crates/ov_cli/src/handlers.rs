@@ -5,6 +5,9 @@ use crate::commands;
 use crate::config::merge_csv_options;
 use crate::config_agent;
 use crate::error::{Error, Result};
+use crate::terminal_ui::{
+    RenderedRegion as RenderedSelectRegion, clear_rendered_lines, live_select_block,
+};
 use crate::theme;
 use crate::tui;
 use colored::Colorize;
@@ -12,6 +15,7 @@ use serde_json::{Map, Value};
 
 pub async fn handle_add_resource(
     mut path: String,
+    add_type: Option<String>,
     to: Option<String>,
     parent: Option<String>,
     parent_auto_create: Option<String>,
@@ -25,13 +29,18 @@ pub async fn handle_add_resource(
     exclude: Option<String>,
     no_directly_upload_media: bool,
     watch_interval: f64,
+    processing_mode: String,
     resource_args: Option<String>,
+    tags: Vec<String>,
+    tag_mode: String,
     ctx: CliContext,
 ) -> Result<()> {
     let is_url =
         path.starts_with("http://") || path.starts_with("https://") || path.starts_with("git@");
 
-    if !is_url {
+    // A declared Connector add_type sends the path verbatim to the server;
+    // it is never a local file, so skip local-path existence validation.
+    if add_type.is_none() && !is_url {
         use std::path::Path;
 
         // Unescape path: replace backslash followed by space with just space
@@ -71,6 +80,9 @@ pub async fn handle_add_resource(
     let effective_include = merge_csv_options(ctx.config.upload.include.clone(), include);
     let effective_exclude = merge_csv_options(ctx.config.upload.exclude.clone(), exclude);
     let add_resource_args = parse_add_resource_args(resource_args.as_deref())?;
+    if let Some(args) = &add_resource_args {
+        reject_manifest_run_keys(args)?;
+    }
 
     let effective_timeout = if wait {
         timeout.unwrap_or(60.0).max(ctx.config.timeout)
@@ -84,14 +96,15 @@ pub async fn handle_add_resource(
         auth.account,
         auth.user,
         ctx.config.effective_actor_peer_id(),
-        ctx.config.agent_id.clone(),
         effective_timeout,
         ctx.profile.unwrap_or(ctx.config.profile),
-        ctx.config.extra_headers.clone(),
-    );
+        ctx.config.effective_extra_headers(),
+    )
+    .with_gateway_token(ctx.config.effective_gateway_token());
     commands::resources::add_resource(
         &client,
         &path,
+        add_type,
         to,
         parent,
         parent_auto_create,
@@ -105,7 +118,10 @@ pub async fn handle_add_resource(
         effective_exclude,
         directly_upload_media,
         watch_interval,
+        processing_mode,
         add_resource_args,
+        tags,
+        tag_mode,
         ctx.output_format,
         ctx.compact,
         ctx.should_show_progress(),
@@ -114,7 +130,26 @@ pub async fn handle_add_resource(
     .await
 }
 
-fn parse_add_resource_args(raw: Option<&str>) -> Result<Option<Map<String, Value>>> {
+/// Single-resource `--args` go to the server as parser options; a manifest-run
+/// key here almost always means a forgotten `-m`. Fail instead of forwarding —
+/// the server treats unknown args keys of shared Connector sources by silently
+/// degrading to the standard pipeline, which would bury the mistake.
+fn reject_manifest_run_keys(args: &Map<String, Value>) -> Result<()> {
+    let run_keys: Vec<&str> = args
+        .keys()
+        .map(String::as_str)
+        .filter(|key| crate::openviking_assets::MANIFEST_RUN_ARG_KEYS.contains(key))
+        .collect();
+    if run_keys.is_empty() {
+        return Ok(());
+    }
+    Err(Error::Client(format!(
+        "--args {} are manifest-run options and need -m/--manifest.",
+        run_keys.join(", ")
+    )))
+}
+
+pub(crate) fn parse_add_resource_args(raw: Option<&str>) -> Result<Option<Map<String, Value>>> {
     let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
         return Ok(None);
     };
@@ -231,10 +266,53 @@ fn parse_add_resource_arg_value(raw: &str) -> Value {
     Value::String(unquoted.to_string())
 }
 
+#[cfg(test)]
+mod add_resource_args_tests {
+    use super::*;
+
+    #[test]
+    fn single_resource_mode_rejects_manifest_run_keys() {
+        let args = parse_add_resource_args(Some("dry_run:true,external_connector:true"))
+            .unwrap()
+            .unwrap();
+        let err = reject_manifest_run_keys(&args).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("dry_run"), "{message}");
+        assert!(message.contains("--manifest"), "{message}");
+
+        let server_args = parse_add_resource_args(Some("feishu_access_token:u-xxx"))
+            .unwrap()
+            .unwrap();
+        assert!(reject_manifest_run_keys(&server_args).is_ok());
+    }
+
+    #[test]
+    fn manifest_run_args_share_single_resource_args_syntax() {
+        // Both --args forms of single-resource mode must drive manifest mode
+        // identically: the colon list and the JSON object go through the same
+        // parser, so neither mode grows its own syntax.
+        let colon = parse_add_resource_args(Some(
+            "catalog:shared/catalog.yaml,dry_run:true,skip_failed:false",
+        ))
+        .unwrap();
+        let json = parse_add_resource_args(Some(
+            r#"{"catalog": "shared/catalog.yaml", "dry_run": true, "skip_failed": false}"#,
+        ))
+        .unwrap();
+        assert_eq!(colon, json);
+
+        let run = crate::openviking_assets::parse_manifest_run_args(colon.as_ref()).unwrap();
+        assert_eq!(run.catalog.as_deref(), Some("shared/catalog.yaml"));
+        assert!(run.dry_run);
+        assert!(!run.skip_failed);
+    }
+}
+
 pub async fn handle_add_skill(
     data: String,
     wait: bool,
     timeout: Option<f64>,
+    parent: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
@@ -243,6 +321,7 @@ pub async fn handle_add_skill(
         &data,
         wait,
         timeout,
+        parent.as_deref(),
         ctx.should_show_progress(),
         ctx.is_verbose(),
         ctx.output_format,
@@ -399,9 +478,6 @@ pub async fn handle_observer(cmd: ObserverCommands, ctx: CliContext) -> Result<(
         ObserverCommands::Models => {
             commands::observer::models(&client, ctx.output_format, ctx.compact).await
         }
-        ObserverCommands::Transaction => {
-            commands::observer::transaction(&client, ctx.output_format, ctx.compact).await
-        }
         ObserverCommands::Retrieval => {
             commands::observer::retrieval(&client, ctx.output_format, ctx.compact).await
         }
@@ -504,11 +580,15 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
         AdminCommands::CreateAccount {
             account_id,
             admin_user_id,
+            seed,
+            user_config_json,
         } => {
             commands::admin::create_account(
                 &client,
                 &account_id,
                 &admin_user_id,
+                seed.as_deref(),
+                user_config_json.as_deref(),
                 ctx.output_format,
                 ctx.compact,
             )
@@ -528,12 +608,16 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
             account_id,
             user_id,
             role,
+            seed,
+            user_config_json,
         } => {
             commands::admin::register_user(
                 &client,
                 &account_id,
                 &user_id,
                 &role,
+                seed.as_deref(),
+                user_config_json.as_deref(),
                 ctx.output_format,
                 ctx.compact,
             )
@@ -587,11 +671,13 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
         AdminCommands::RegenerateKey {
             account_id,
             user_id,
+            seed,
         } => {
             commands::admin::regenerate_key(
                 &client,
                 &account_id,
                 &user_id,
+                seed.as_deref(),
                 ctx.output_format,
                 ctx.compact,
             )
@@ -967,9 +1053,8 @@ fn prompt_select(prompt: &str, items: &[String], default: usize) -> Result<Selec
 
     use crossterm::{
         cursor,
-        event::{self, Event, KeyCode, KeyModifiers},
-        execute,
-        terminal::{self, Clear, ClearType},
+        event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+        execute, terminal,
     };
 
     if items.is_empty() {
@@ -1000,80 +1085,71 @@ fn prompt_select(prompt: &str, items: &[String], default: usize) -> Result<Selec
     }
 
     let mut selected = default.min(items.len().saturating_sub(1));
-    let mut rendered_lines = 0usize;
     let _raw_guard = RawGuard::enter()?;
 
-    loop {
-        clear_rendered_lines(rendered_lines)?;
-        let lines = select_lines(prompt, items, selected);
-        rendered_lines = lines.len();
-        print!("{}", live_select_block(&lines));
-        io::stdout().flush()?;
+    // Initial render
+    let lines = select_lines(prompt, items, selected);
+    let mut rendered_region = RenderedSelectRegion::from_lines(&lines, live_select_columns());
+    print!("{}", live_select_block(&lines));
+    io::stdout().flush()?;
 
-        if let Event::Key(key) = event::read()? {
-            match key.code {
-                KeyCode::Up => {
-                    selected = if selected == 0 {
-                        items.len().saturating_sub(1)
-                    } else {
-                        selected - 1
-                    };
+    loop {
+        match event::read()? {
+            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                match key.code {
+                    KeyCode::Up => {
+                        selected = if selected == 0 {
+                            items.len().saturating_sub(1)
+                        } else {
+                            selected - 1
+                        };
+                    }
+                    KeyCode::Down => selected = (selected + 1) % items.len(),
+                    KeyCode::Enter | KeyCode::Char('\n') | KeyCode::Char('\r') => {
+                        clear_rendered_region(&rendered_region)?;
+                        return Ok(SelectOutcome::Selected(selected));
+                    }
+                    KeyCode::Esc => {
+                        clear_rendered_region(&rendered_region)?;
+                        return Ok(SelectOutcome::Back);
+                    }
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        clear_rendered_region(&rendered_region)?;
+                        return Ok(SelectOutcome::Quit);
+                    }
+                    _ => continue,
                 }
-                KeyCode::Down => selected = (selected + 1) % items.len(),
-                KeyCode::Enter | KeyCode::Char('\n') | KeyCode::Char('\r') => {
-                    clear_rendered_lines(rendered_lines)?;
-                    return Ok(SelectOutcome::Selected(selected));
-                }
-                KeyCode::Esc => {
-                    clear_rendered_lines(rendered_lines)?;
-                    return Ok(SelectOutcome::Back);
-                }
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    clear_rendered_lines(rendered_lines)?;
-                    return Ok(SelectOutcome::Quit);
-                }
-                _ => {}
+                clear_rendered_region(&rendered_region)?;
+                let lines = select_lines(prompt, items, selected);
+                rendered_region = RenderedSelectRegion::from_lines(&lines, live_select_columns());
+                print!("{}", live_select_block(&lines));
+                io::stdout().flush()?;
             }
+            Event::Resize(_, _) => {
+                clear_rendered_region(&rendered_region)?;
+                let lines = select_lines(prompt, items, selected);
+                rendered_region = RenderedSelectRegion::from_lines(&lines, live_select_columns());
+                print!("{}", live_select_block(&lines));
+                io::stdout().flush()?;
+            }
+            _ => {}
         }
     }
 
-    fn clear_rendered_lines(lines: usize) -> Result<()> {
-        if lines == 0 {
-            return Ok(());
-        }
-        let mut stdout = io::stdout();
-        execute!(
-            stdout,
-            cursor::MoveUp(lines as u16),
-            cursor::MoveToColumn(0)
-        )?;
-        for line in 0..lines {
-            execute!(
-                stdout,
-                cursor::MoveToColumn(0),
-                Clear(ClearType::CurrentLine)
-            )?;
-            if line + 1 < lines {
-                execute!(stdout, cursor::MoveDown(1))?;
-            }
-        }
-        execute!(
-            stdout,
-            cursor::MoveUp(lines.saturating_sub(1) as u16),
-            cursor::MoveToColumn(0)
-        )?;
-        Ok(())
+    fn clear_rendered_region(region: &RenderedSelectRegion) -> Result<()> {
+        clear_rendered_lines(region.rows_to_clear(live_select_columns()))
     }
 }
 
-fn live_select_block(lines: &[String]) -> String {
-    if lines.is_empty() {
-        return String::new();
-    }
+fn live_select_columns() -> usize {
+    crossterm::terminal::size()
+        .map(|(columns, _)| usize::from(columns).saturating_sub(1).max(1))
+        .unwrap_or(80)
+}
 
-    let mut rendered = lines.join("\r\n");
-    rendered.push_str("\r\n");
-    rendered
+#[cfg(test)]
+fn rendered_select_rows(lines: &[String], columns: usize) -> usize {
+    crate::terminal_ui::rendered_row_count(lines, columns)
 }
 
 fn switch_confirmation_labels() -> Vec<String> {
@@ -1224,9 +1300,44 @@ pub async fn handle_write(
     .await
 }
 
-pub async fn handle_reindex(uri: String, mode: String, wait: bool, ctx: CliContext) -> Result<()> {
+pub async fn handle_set_tags(
+    uri: String,
+    tags: Vec<String>,
+    mode: String,
+    recursive: bool,
+    ctx: CliContext,
+) -> Result<()> {
     let client = ctx.get_client();
-    commands::content::reindex(&client, &uri, &mode, wait, ctx.output_format, ctx.compact).await
+    commands::content::set_tags(
+        &client,
+        &uri,
+        tags,
+        &mode,
+        recursive,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
+}
+
+pub async fn handle_reindex(
+    uri: String,
+    mode: String,
+    wait: bool,
+    dry_run: bool,
+    ctx: CliContext,
+) -> Result<()> {
+    let client = ctx.get_client();
+    commands::content::reindex(
+        &client,
+        &uri,
+        &mode,
+        wait,
+        dry_run,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
 }
 
 pub async fn handle_get(uri: String, local_path: String, ctx: CliContext) -> Result<()> {
@@ -1235,17 +1346,28 @@ pub async fn handle_get(uri: String, local_path: String, ctx: CliContext) -> Res
 }
 
 pub async fn handle_find(
-    query: String,
+    query: Option<String>,
     uri: String,
+    image: Option<String>,
     node_limit: i32,
     threshold: Option<f64>,
     after: Option<String>,
     before: Option<String>,
     level: Option<Vec<i32>>,
     context_type: Option<Vec<String>>,
+    tags: Option<Vec<String>>,
     ctx: CliContext,
 ) -> Result<()> {
+    let query = query.unwrap_or_default();
+    if query.trim().is_empty() && image.is_none() {
+        return Err(Error::Client(
+            "Search query or --image must not be empty.".to_string(),
+        ));
+    }
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
+    if let Some(ref img) = image {
+        params.push(format!("--image {}", img));
+    }
     if let Some(t) = threshold {
         params.push(format!("--threshold {}", t));
     }
@@ -1262,6 +1384,9 @@ pub async fn handle_find(
     if let Some(ref context_types) = context_type {
         params.push(format!("--context-type {}", context_types.join(",")));
     }
+    if let Some(ref t) = tags {
+        params.push(format!("--tags {}", t.join(",")));
+    }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov find", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
@@ -1269,6 +1394,7 @@ pub async fn handle_find(
         &client,
         &query,
         &uri,
+        image,
         node_limit,
         threshold,
         after.as_deref(),
@@ -1276,6 +1402,7 @@ pub async fn handle_find(
         None,
         level,
         context_type,
+        tags,
         ctx.output_format,
         ctx.compact,
     )
@@ -1283,8 +1410,9 @@ pub async fn handle_find(
 }
 
 pub async fn handle_search(
-    query: String,
+    query: Option<String>,
     uri: String,
+    image: Option<String>,
     session_id: Option<String>,
     node_limit: i32,
     threshold: Option<f64>,
@@ -1292,9 +1420,19 @@ pub async fn handle_search(
     before: Option<String>,
     level: Option<Vec<i32>>,
     context_type: Option<Vec<String>>,
+    tags: Option<Vec<String>>,
     ctx: CliContext,
 ) -> Result<()> {
+    let query = query.unwrap_or_default();
+    if query.trim().is_empty() && image.is_none() {
+        return Err(Error::Client(
+            "Search query or --image must not be empty.".to_string(),
+        ));
+    }
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
+    if let Some(ref img) = image {
+        params.push(format!("--image {}", img));
+    }
     if let Some(s) = &session_id {
         params.push(format!("--session-id {}", s));
     }
@@ -1314,6 +1452,9 @@ pub async fn handle_search(
     if let Some(ref context_types) = context_type {
         params.push(format!("--context-type {}", context_types.join(",")));
     }
+    if let Some(ref t) = tags {
+        params.push(format!("--tags {}", t.join(",")));
+    }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov search", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
@@ -1321,6 +1462,7 @@ pub async fn handle_search(
         &client,
         &query,
         &uri,
+        image,
         session_id,
         node_limit,
         threshold,
@@ -1329,6 +1471,7 @@ pub async fn handle_search(
         None,
         level,
         context_type,
+        tags,
         ctx.output_format,
         ctx.compact,
     )
@@ -1444,9 +1587,24 @@ pub async fn handle_mkdir(uri: String, description: Option<String>, ctx: CliCont
     .await
 }
 
-pub async fn handle_rm(uri: String, recursive: bool, ctx: CliContext) -> Result<()> {
+pub async fn handle_rm(
+    uri: String,
+    recursive: bool,
+    wait: bool,
+    timeout: Option<f64>,
+    ctx: CliContext,
+) -> Result<()> {
     let client = ctx.get_client();
-    commands::filesystem::rm(&client, &uri, recursive, ctx.output_format, ctx.compact).await
+    commands::filesystem::rm(
+        &client,
+        &uri,
+        recursive,
+        wait,
+        timeout,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
 }
 
 pub async fn handle_mv(from_uri: String, to_uri: String, ctx: CliContext) -> Result<()> {
@@ -1457,6 +1615,18 @@ pub async fn handle_mv(from_uri: String, to_uri: String, ctx: CliContext) -> Res
 pub async fn handle_stat(uri: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     commands::filesystem::stat(&client, &uri, ctx.output_format, ctx.compact).await
+}
+
+pub async fn handle_attrs(uri: String, key: Option<String>, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    commands::filesystem::attrs(
+        &client,
+        &uri,
+        key.as_deref(),
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
 }
 
 pub async fn handle_grep(
@@ -1570,6 +1740,26 @@ mod config_switch_prompt_tests {
 
         assert_eq!(rendered, "Choose config\r\n  › local\r\n");
         assert!(!rendered.contains("config\n"));
+    }
+
+    #[test]
+    fn switch_selector_counts_physical_rows_after_wrapping_and_ansi_styles() {
+        let lines = vec![
+            "\u{1b}[31m12345678901\u{1b}[0m".to_string(),
+            "short".to_string(),
+        ];
+
+        assert_eq!(rendered_select_rows(&lines, 10), 3);
+    }
+
+    #[test]
+    fn switch_selector_recomputes_clear_rows_after_resize() {
+        let lines = vec!["x".repeat(90)];
+        let region = RenderedSelectRegion::from_lines(&lines, 90);
+
+        assert_eq!(rendered_select_rows(&lines, 90), 1);
+        assert_eq!(rendered_select_rows(&lines, 30), 3);
+        assert_eq!(region.rows_to_clear(30), 3);
     }
 
     #[test]

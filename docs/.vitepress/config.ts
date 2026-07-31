@@ -30,6 +30,7 @@ const preferenceBootstrapScript = `;(() => {
 
 const sectionNames: Record<string, string> = {
   'getting-started': 'Getting Started',
+  configuration: 'Configuration',
   concepts: 'Concepts',
   guides: 'Guides',
   'agent-integrations': 'Agent Integrations',
@@ -41,7 +42,8 @@ const sectionNames: Record<string, string> = {
 }
 
 const zhSectionNames: Record<string, string> = {
-  'getting-started': '快速开始',
+  'getting-started': '开始使用',
+  configuration: '配置',
   concepts: '核心概念',
   guides: '指南',
   'agent-integrations': 'Agent 集成',
@@ -54,12 +56,16 @@ const zhSectionNames: Record<string, string> = {
 
 const navLabels = {
   en: {
-    guide: 'Guide',
+    start: 'Getting Started',
+    concepts: 'Concepts',
+    guide: 'Guides',
     api: 'API Reference',
     faq: 'FAQ',
     about: 'About'
   },
   zh: {
+    start: '开始使用',
+    concepts: '核心概念',
     guide: '指南',
     api: 'API 参考',
     faq: '常见问题',
@@ -96,18 +102,579 @@ function sidebarSection(dir: string, title: string, collapsed = true): DefaultTh
   return { text: title, collapsed, items }
 }
 
-function localizedGuideSidebarItems(locale: 'en' | 'zh'): DefaultTheme.SidebarItem[] {
-  const labels = locale === 'zh' ? zhSectionNames : sectionNames
-  const sections = ['getting-started', 'concepts', 'guides', 'agent-integrations', 'migration']
+const gettingStartedSidebar = {
+  en: [
+    ['01-introduction.md', 'Introduction'],
+    ['02-quickstart.md', 'Quick Start'],
+    ['03-quickstart-server.md', 'Server Deployment'],
+    ['04-setup-for-agent.md', 'Server Setup for Agent'],
+    ['05-cli-setup.md', 'OpenViking CLI']
+  ],
+  zh: [
+    ['01-introduction.md', '简介'],
+    ['02-quickstart.md', '快速开始'],
+    ['03-quickstart-server.md', '服务端部署'],
+    ['04-setup-for-agent.md', '服务端安装（Agent 版）'],
+    ['05-cli-setup.md', 'OpenViking CLI']
+  ]
+} as const
 
-  return sections.map((section, index) =>
-    sidebarSection(`${locale}/${section}`, labels[section], index !== 0)
+const agentIntegrationSidebar = {
+  en: {
+    overview: 'Integration Overview',
+    groups: [
+      {
+        text: 'Developer Tools',
+        items: [
+          ['02-claude-code.md', 'Claude Code'],
+          ['04-codex.md', 'Codex'],
+          ['10-opencode.md', 'OpenCode'],
+          ['12-cursor.md', 'Cursor'],
+          ['13-trae.md', 'TRAE / TRAE CN']
+        ]
+      },
+      {
+        text: 'Agents & Frameworks',
+        items: [
+          ['03-openclaw.md', 'OpenClaw'],
+          ['05-hermes.md', 'Hermes'],
+          ['07-langchain-langgraph.md', 'LangChain / LangGraph'],
+          ['11-pi.md', 'pi']
+        ]
+      },
+      {
+        text: 'General Integration',
+        items: [
+          ['14-openviking-helper.md', 'OpenViking Helper'],
+          ['06-mcp-clients.md', 'MCP Clients'],
+          ['09-log-ingestion.md', 'Local Log Import'],
+          ['08-community-plugins.md', 'Community Integrations']
+        ]
+      }
+    ]
+  },
+  zh: {
+    overview: '集成概览',
+    groups: [
+      {
+        text: '开发工具',
+        items: [
+          ['02-claude-code.md', 'Claude Code'],
+          ['04-codex.md', 'Codex'],
+          ['10-opencode.md', 'OpenCode'],
+          ['12-cursor.md', 'Cursor'],
+          ['13-trae.md', 'TRAE / TRAE CN']
+        ]
+      },
+      {
+        text: 'Agent 与框架',
+        items: [
+          ['03-openclaw.md', 'OpenClaw'],
+          ['05-hermes.md', 'Hermes'],
+          ['07-langchain-langgraph.md', 'LangChain / LangGraph'],
+          ['11-pi.md', 'pi']
+        ]
+      },
+      {
+        text: '通用接入',
+        items: [
+          ['14-openviking-helper.md', 'OpenViking Helper'],
+          ['06-mcp-clients.md', 'MCP 客户端'],
+          ['09-log-ingestion.md', '本地日志导入'],
+          ['08-community-plugins.md', '社区集成']
+        ]
+      }
+    ]
+  }
+} as const
+
+const apiReferenceSidebar = {
+  en: {
+    overview: 'Overview',
+    groups: [
+      {
+        text: 'Core Data',
+        items: [
+          ['02-resources.md', 'Resources'],
+          ['12-content.md', 'Content'],
+          ['03-filesystem.md', 'File System'],
+          ['04-skills.md', 'Skills'],
+          ['05-sessions.md', 'Sessions'],
+          ['16-memory.md', 'Memory']
+        ]
+      },
+      {
+        text: 'Retrieval & Relations',
+        items: [
+          ['06-retrieval.md', 'Retrieval'],
+          ['13-relations.md', 'Relations']
+        ]
+      },
+      {
+        text: 'Data Lifecycle',
+        items: [
+          ['15-watches.md', 'Resource Watches'],
+          ['11-snapshot.md', 'Snapshots'],
+          ['14-ovpack.md', 'OVPack']
+        ]
+      },
+      {
+        text: 'Operations & Observability',
+        items: [
+          ['07-system.md', 'System Status'],
+          ['17-tasks.md', 'Background Tasks'],
+          ['18-observer.md', 'Runtime Observability'],
+          ['09-metrics.md', 'Metrics']
+        ]
+      },
+      {
+        text: 'Identity & Governance',
+        items: [
+          ['08-admin.md', 'Multi-Tenancy'],
+          ['10-privacy.md', 'Privacy']
+        ]
+      },
+      {
+        text: 'Protocols & Extensions',
+        items: [
+          ['22-openviking-assets.md', 'OpenViking Assets'],
+          ['20-webdav.md', 'WebDAV'],
+          ['24-vikingbot.md', 'VikingBot API']
+        ]
+      },
+      {
+        text: 'Documentation Maintenance',
+        items: [['99-api-doc-writing-guide.md', 'API Docs Guide']]
+      }
+    ]
+  },
+  zh: {
+    overview: '概览',
+    groups: [
+      {
+        text: '核心数据',
+        items: [
+          ['02-resources.md', '资源'],
+          ['12-content.md', '内容'],
+          ['03-filesystem.md', '文件系统'],
+          ['04-skills.md', '技能'],
+          ['05-sessions.md', '会话'],
+          ['16-memory.md', '记忆']
+        ]
+      },
+      {
+        text: '检索与关系',
+        items: [
+          ['06-retrieval.md', '检索'],
+          ['13-relations.md', '关系']
+        ]
+      },
+      {
+        text: '数据生命周期',
+        items: [
+          ['15-watches.md', '资源 Watch'],
+          ['11-snapshot.md', '快照'],
+          ['14-ovpack.md', 'OVPack']
+        ]
+      },
+      {
+        text: '运维与观测',
+        items: [
+          ['07-system.md', '系统状态'],
+          ['17-tasks.md', '后台任务'],
+          ['18-observer.md', '运行观测'],
+          ['09-metrics.md', '监控指标']
+        ]
+      },
+      {
+        text: '身份与治理',
+        items: [
+          ['08-admin.md', '多租户'],
+          ['10-privacy.md', '隐私配置']
+        ]
+      },
+      {
+        text: '协议与扩展',
+        items: [
+          ['22-openviking-assets.md', 'OpenViking Assets'],
+          ['20-webdav.md', 'WebDAV'],
+          ['24-vikingbot.md', 'VikingBot API']
+        ]
+      },
+      {
+        text: '文档维护',
+        items: [['99-api-doc-writing-guide.md', 'API 文档规范']]
+      }
+    ]
+  }
+} as const
+
+const conceptsSidebar = {
+  en: {
+    overview: 'Overview',
+    groups: [
+      {
+        text: 'Core Model',
+        items: [
+          ['02-context-types.md', 'Context Types'],
+          ['03-context-layers.md', 'Context Layers'],
+          ['04-viking-uri.md', 'Viking URI']
+        ]
+      },
+      {
+        text: 'Storage & Processing',
+        items: [
+          ['05-storage.md', 'Storage'],
+          ['06-extraction.md', 'Extraction'],
+          ['07-retrieval.md', 'Retrieval'],
+          ['08-session.md', 'Sessions']
+        ]
+      },
+      {
+        text: 'Reliability & Governance',
+        items: [
+          ['09-transaction.md', 'Transactions & Recovery'],
+          ['10-encryption.md', 'Encryption'],
+          ['11-multi-tenant.md', 'Multi-Tenancy'],
+          ['12-metrics.md', 'Metrics'],
+          ['13-privacy.md', 'Privacy'],
+          ['14-multi-write-storage.md', 'Multi-Write Storage']
+        ]
+      },
+      {
+        text: 'Example',
+        items: [['15-vikingbot.md', 'VikingBot']]
+      }
+    ]
+  },
+  zh: {
+    overview: '概览',
+    groups: [
+      {
+        text: '核心模型',
+        items: [
+          ['02-context-types.md', '上下文类型'],
+          ['03-context-layers.md', '上下文层级'],
+          ['04-viking-uri.md', 'Viking URI']
+        ]
+      },
+      {
+        text: '存储与处理',
+        items: [
+          ['05-storage.md', '存储架构'],
+          ['06-extraction.md', '上下文提取'],
+          ['07-retrieval.md', '检索机制'],
+          ['08-session.md', '会话管理']
+        ]
+      },
+      {
+        text: '可靠性与治理',
+        items: [
+          ['09-transaction.md', '事务与恢复'],
+          ['10-encryption.md', '数据加密'],
+          ['11-multi-tenant.md', '多租户'],
+          ['12-metrics.md', '监控指标'],
+          ['13-privacy.md', '隐私配置'],
+          ['14-multi-write-storage.md', '多写存储']
+        ]
+      },
+      {
+        text: '应用案例',
+        items: [['15-vikingbot.md', 'VikingBot']]
+      }
+    ]
+  }
+} as const
+
+const guidesSidebar = {
+  en: {
+    groups: [
+      {
+        text: 'Configuration & Deployment',
+        items: [
+          ['01-configuration.md', 'Configuration'],
+          ['02-volcengine-purchase-guide.md', 'Model Purchase'],
+          ['03-deployment.md', 'Server Deployment'],
+          ['04-authentication.md', 'Authentication'],
+          ['08-encryption.md', 'Encryption'],
+          ['11-oauth.md', 'OAuth 2.1'],
+          ['12-public-access.md', 'Public Access']
+        ]
+      },
+      {
+        text: 'Integration & Extension',
+        items: [
+          ['06-mcp-integration.md', 'MCP Integration'],
+          ['09-ovpack.md', 'OVPack'],
+          ['18-openviking-assets.md', 'OpenViking Assets'],
+          ['10-prompt-guide.md', 'Prompt Customization'],
+          ['17-vikingbot.md', 'VikingBot']
+        ]
+      },
+      {
+        text: 'Observability',
+        items: [
+          ['05-observability.md', 'Observability & Diagnostics'],
+          ['07-operation-telemetry.md', 'Operation Telemetry'],
+          ['11-grafana-prometheus.md', 'Prometheus / Grafana']
+        ]
+      },
+      {
+        text: 'Storage & Performance',
+        items: [
+          ['13-multi-write-storage.md', 'Multi-Write Storage'],
+          ['14-ragfs-cache.md', 'RAGFS Cache'],
+          ['15-snapshot.md', 'Snapshots'],
+          ['16-cuvs.md', 'cuVS Vector Search']
+        ]
+      }
+    ]
+  },
+  zh: {
+    groups: [
+      {
+        text: '配置与部署',
+        items: [
+          ['01-configuration.md', '基础配置'],
+          ['02-volcengine-purchase-guide.md', '模型购买'],
+          ['03-deployment.md', '服务端部署'],
+          ['04-authentication.md', '身份认证'],
+          ['08-encryption.md', '数据加密'],
+          ['11-oauth.md', 'OAuth 2.1'],
+          ['12-public-access.md', '公网访问']
+        ]
+      },
+      {
+        text: '集成与扩展',
+        items: [
+          ['06-mcp-integration.md', 'MCP 集成'],
+          ['09-ovpack.md', 'OVPack'],
+          ['18-openviking-assets.md', 'OpenViking Assets'],
+          ['10-prompt-guide.md', 'Prompt 自定义'],
+          ['17-vikingbot.md', 'VikingBot']
+        ]
+      },
+      {
+        text: '可观测性',
+        items: [
+          ['05-observability.md', '可观测性与排障'],
+          ['07-operation-telemetry.md', '操作遥测'],
+          ['11-grafana-prometheus.md', 'Prometheus / Grafana'],
+          ['12-vikingbot-metrics-validation.md', 'VikingBot 指标验证']
+        ]
+      },
+      {
+        text: '存储与性能',
+        items: [
+          ['13-multi-write-storage.md', '多写存储'],
+          ['14-ragfs-cache.md', 'RAGFS 缓存'],
+          ['15-snapshot.md', '快照管理'],
+          ['16-cuvs.md', 'cuVS 向量检索']
+        ]
+      }
+    ]
+  }
+} as const
+
+type StructuredSidebarCopy = {
+  readonly overview: string
+  readonly groups: ReadonlyArray<{
+    readonly text: string
+    readonly items: ReadonlyArray<readonly [string, string]>
+  }>
+}
+
+type GroupedSidebarCopy = Pick<StructuredSidebarCopy, 'groups'>
+
+function configuredSidebarItem(
+  locale: 'en' | 'zh',
+  section: string,
+  [file, text]: readonly [string, string]
+): DefaultTheme.SidebarItem {
+  return {
+    text,
+    link: linkFor(path.join(docsRoot, locale, section, file))
+  }
+}
+
+function configuredSidebarGroups(
+  locale: 'en' | 'zh',
+  section: string,
+  groups: GroupedSidebarCopy['groups']
+): DefaultTheme.SidebarItem[] {
+  return groups.map((group) => ({
+    text: group.text,
+    collapsed: false,
+    items: group.items.map((item) => configuredSidebarItem(locale, section, item))
+  }))
+}
+
+function groupedSidebarSection(
+  locale: 'en' | 'zh',
+  section: string,
+  title: string,
+  copy: GroupedSidebarCopy,
+  collapsed = true
+): DefaultTheme.SidebarItem {
+  return {
+    text: title,
+    collapsed,
+    items: configuredSidebarGroups(locale, section, copy.groups)
+  }
+}
+
+function structuredSidebarSection(
+  locale: 'en' | 'zh',
+  section: string,
+  title: string,
+  copy: StructuredSidebarCopy,
+  collapsed = true,
+  overviewFile = '01-overview.md'
+): DefaultTheme.SidebarItem {
+  return {
+    text: title,
+    collapsed,
+    items: [
+      configuredSidebarItem(locale, section, [overviewFile, copy.overview]),
+      ...configuredSidebarGroups(locale, section, copy.groups)
+    ]
+  }
+}
+
+function agentIntegrationSection(
+  locale: 'en' | 'zh',
+  title: string,
+  collapsed = true
+): DefaultTheme.SidebarItem {
+  return structuredSidebarSection(
+    locale,
+    'agent-integrations',
+    title,
+    agentIntegrationSidebar[locale],
+    collapsed
+  )
+}
+
+function gettingStartedSection(
+  locale: 'en' | 'zh',
+  title: string,
+  collapsed = true
+): DefaultTheme.SidebarItem {
+  return {
+    text: title,
+    collapsed,
+    items: gettingStartedSidebar[locale].map((item) =>
+      configuredSidebarItem(locale, 'getting-started', item)
+    )
+  }
+}
+
+function apiReferenceSection(
+  locale: 'en' | 'zh',
+  title: string,
+  collapsed = true
+): DefaultTheme.SidebarItem {
+  return structuredSidebarSection(locale, 'api', title, apiReferenceSidebar[locale], collapsed)
+}
+
+function conceptsSection(
+  locale: 'en' | 'zh',
+  title: string,
+  collapsed = true
+): DefaultTheme.SidebarItem {
+  return structuredSidebarSection(
+    locale,
+    'concepts',
+    title,
+    conceptsSidebar[locale],
+    collapsed,
+    '01-architecture.md'
+  )
+}
+
+function guidesSection(
+  locale: 'en' | 'zh',
+  title: string,
+  collapsed = true
+): DefaultTheme.SidebarItem {
+  return groupedSidebarSection(locale, 'guides', title, guidesSidebar[locale], collapsed)
+}
+
+function migrationSection(
+  locale: 'en' | 'zh',
+  title: string,
+  collapsed = true
+): DefaultTheme.SidebarItem {
+  return {
+    text: title,
+    collapsed,
+    items: [
+      {
+        text: '0.3.x → 0.4.0',
+        link: linkFor(path.join(docsRoot, locale, 'migration', '01-user-peer-model.md'))
+      }
+    ]
+  }
+}
+
+type LocalizedSidebarSection =
+  | 'getting-started'
+  | 'configuration'
+  | 'concepts'
+  | 'guides'
+  | 'agent-integrations'
+  | 'migration'
+
+type LocalizedSidebarSectionBuilder = (
+  locale: 'en' | 'zh',
+  title: string,
+  collapsed?: boolean
+) => DefaultTheme.SidebarItem
+
+const localizedSidebarSectionBuilders: Record<
+  LocalizedSidebarSection,
+  LocalizedSidebarSectionBuilder
+> = {
+  'getting-started': gettingStartedSection,
+  configuration: (locale, title, collapsed = true) =>
+    sidebarSection(`${locale}/configuration`, title, collapsed),
+  concepts: conceptsSection,
+  guides: guidesSection,
+  'agent-integrations': agentIntegrationSection,
+  migration: migrationSection
+}
+
+function localizedSidebarSection(
+  locale: 'en' | 'zh',
+  section: LocalizedSidebarSection,
+  title: string,
+  collapsed = true
+): DefaultTheme.SidebarItem {
+  return localizedSidebarSectionBuilders[section](locale, title, collapsed)
+}
+
+function localizedSectionSidebarItems(
+  locale: 'en' | 'zh',
+  section: LocalizedSidebarSection
+): DefaultTheme.SidebarItem[] {
+  const labels = locale === 'zh' ? zhSectionNames : sectionNames
+  return [localizedSidebarSection(locale, section, labels[section], false)]
+}
+
+function localizedGroupedSidebarItems(
+  locale: 'en' | 'zh',
+  sections: ReadonlyArray<Exclude<LocalizedSidebarSection, 'concepts'>>
+): DefaultTheme.SidebarItem[] {
+  const labels = locale === 'zh' ? zhSectionNames : sectionNames
+
+  return sections.map((section) =>
+    localizedSidebarSection(locale, section, labels[section], false)
   )
 }
 
 function localizedReferenceSidebarItems(locale: 'en' | 'zh'): DefaultTheme.SidebarItem[] {
   const labels = locale === 'zh' ? zhSectionNames : sectionNames
-  return [sidebarSection(`${locale}/api`, labels.api, false)]
+  return [apiReferenceSection(locale, labels.api, false)]
 }
 
 function localizedAboutSidebarItems(locale: 'en' | 'zh'): DefaultTheme.SidebarItem[] {
@@ -120,22 +687,30 @@ const designSidebar: DefaultTheme.SidebarItem[] = [
 ]
 
 const enNav: DefaultTheme.NavItem[] = [
-  { text: navLabels.en.guide, link: '/en/getting-started/01-introduction', activeMatch: '/en/(getting-started|concepts|guides|agent-integrations|migration)/' },
+  { text: navLabels.en.start, link: '/en/getting-started/01-introduction', activeMatch: '/en/(getting-started|configuration|agent-integrations)/' },
+  { text: navLabels.en.concepts, link: '/en/concepts/01-architecture', activeMatch: '/en/concepts/' },
+  { text: navLabels.en.guide, link: '/en/guides/01-configuration', activeMatch: '/en/(guides|migration)/' },
   { text: navLabels.en.api, link: '/en/api/01-overview', activeMatch: '/en/api/' },
   { text: navLabels.en.faq, link: '/en/faq/faq', activeMatch: '/en/faq/' },
   { text: navLabels.en.about, link: '/en/about/01-about-us', activeMatch: '/en/about/' }
 ]
 
 const zhNav: DefaultTheme.NavItem[] = [
-  { text: navLabels.zh.guide, link: '/zh/getting-started/01-introduction', activeMatch: '/zh/(getting-started|concepts|guides|agent-integrations|migration)/' },
+  { text: navLabels.zh.start, link: '/zh/getting-started/01-introduction', activeMatch: '/zh/(getting-started|configuration|agent-integrations)/' },
+  { text: navLabels.zh.concepts, link: '/zh/concepts/01-architecture', activeMatch: '/zh/concepts/' },
+  { text: navLabels.zh.guide, link: '/zh/guides/01-configuration', activeMatch: '/zh/(guides|migration)/' },
   { text: navLabels.zh.api, link: '/zh/api/01-overview', activeMatch: '/zh/api/' },
   { text: navLabels.zh.faq, link: '/zh/faq/faq', activeMatch: '/zh/faq/' },
   { text: navLabels.zh.about, link: '/zh/about/01-about-us', activeMatch: '/zh/about/' }
 ]
 
-function collectAllMdFiles(srcDir: string): { relativePath: string; absPath: string }[] {
+function collectAllMdFiles(
+  srcDir: string,
+  options: { includeIndex?: boolean } = {}
+): { relativePath: string; absPath: string }[] {
   const results: { relativePath: string; absPath: string }[] = []
   const ignored = new Set(['node_modules', '.vitepress'])
+  const includeIndex = options.includeIndex ?? false
 
   function walk(dir: string) {
     for (const entry of fs.readdirSync(dir)) {
@@ -144,7 +719,7 @@ function collectAllMdFiles(srcDir: string): { relativePath: string; absPath: str
       const stat = fs.statSync(abs)
       if (stat.isDirectory()) {
         walk(abs)
-      } else if (entry.endsWith('.md') && entry !== 'index.md') {
+      } else if (entry.endsWith('.md') && (includeIndex || entry !== 'index.md')) {
         results.push({ relativePath: path.relative(srcDir, abs), absPath: abs })
       }
     }
@@ -152,6 +727,61 @@ function collectAllMdFiles(srcDir: string): { relativePath: string; absPath: str
 
   walk(srcDir)
   return results.sort((a, b) => a.relativePath.localeCompare(b.relativePath))
+}
+
+function markdownToSearchText(content: string): string {
+  return content
+    .replace(/^---[\s\S]*?---\s*/m, '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, ' ')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/^\s{0,3}#{1,6}\s+/gm, ' ')
+    .replace(/^\s{0,3}>\s?/gm, ' ')
+    .replace(/^\s*[-*+]\s+/gm, ' ')
+    .replace(/^\s*\|?[\s:-]+\|[\s|:-]*$/gm, ' ')
+    .replace(/\*\*([^*\n]+)\*\*/g, '$1')
+    .replace(/__([^_\n]+)__/g, '$1')
+    .replace(/~~([^~\n]+)~~/g, '$1')
+    .replace(/(^|[\s([{"'（【])\*([^*\n]+)\*(?=$|[\s.,;:!?，。；：！？、）】\])}"'])/g, '$1$2')
+    .replace(/(^|[\s([{"'（【])_([^_\n]+)_(?=$|[\s.,;:!?，。；：！？、）】\])}"'])/g, '$1$2')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function docsSearchLocale(relativePath: string): 'en' | 'zh' | null {
+  if (relativePath.startsWith('en/')) return 'en'
+  if (relativePath.startsWith('zh/')) return 'zh'
+  return null
+}
+
+function buildDocsSearchRecords(srcDir: string) {
+  return collectAllMdFiles(srcDir, { includeIndex: true })
+    .map(({ relativePath, absPath }) => {
+      const normalizedPath = relativePath.replace(/\\/g, '/')
+      const locale = docsSearchLocale(normalizedPath)
+      if (!locale) return null
+
+      const content = fs.readFileSync(absPath, 'utf-8')
+      const url = `/${normalizedPath.replace(/\.md$/, '')}`.replace(/\/index$/, '')
+      return {
+        locale,
+        path: normalizedPath,
+        text: markdownToSearchText(content),
+        title: titleFromMarkdown(absPath),
+        url
+      }
+    })
+    .filter((record): record is NonNullable<typeof record> => record !== null)
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildDocsSearchIndex(siteConfig: any) {
+  fs.writeFileSync(
+    path.join(siteConfig.outDir, 'docs-search-index.json'),
+    JSON.stringify(buildDocsSearchRecords(siteConfig.srcDir)),
+    'utf-8'
+  )
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -242,6 +872,7 @@ export default defineConfig({
   },
   buildEnd(siteConfig) {
     buildLlmsTxt(siteConfig)
+    buildDocsSearchIndex(siteConfig)
   },
   vite: {
     publicDir: 'images',
@@ -260,6 +891,13 @@ export default defineConfig({
               next()
             }
           })
+          server.middlewares.use((req, res, next) => {
+            const pathname = req.url?.split('?')[0]
+            if (pathname !== '/docs-search-index.json') return next()
+
+            res.setHeader('Content-Type', 'application/json; charset=utf-8')
+            res.end(JSON.stringify(buildDocsSearchRecords(docsRoot)))
+          })
         }
       }
     ]
@@ -267,9 +905,6 @@ export default defineConfig({
   themeConfig: {
     logo: '/ov-logo.png',
     logoLink: mainSiteBase,
-    search: {
-      provider: 'local'
-    },
     socialLinks: [
       { icon: 'github', link: `https://github.com/${repo}` }
     ],
@@ -285,12 +920,16 @@ export default defineConfig({
       link: '/en/',
       themeConfig: {
         nav: enNav,
+        outline: {
+          level: [2, 3]
+        },
         sidebar: {
-          '/en/getting-started/': localizedGuideSidebarItems('en'),
-          '/en/concepts/': localizedGuideSidebarItems('en'),
-          '/en/guides/': localizedGuideSidebarItems('en'),
-          '/en/agent-integrations/': localizedGuideSidebarItems('en'),
-          '/en/migration/': localizedGuideSidebarItems('en'),
+          '/en/getting-started/': localizedGroupedSidebarItems('en', ['getting-started', 'configuration', 'agent-integrations']),
+          '/en/configuration/': localizedGroupedSidebarItems('en', ['getting-started', 'configuration', 'agent-integrations']),
+          '/en/concepts/': localizedSectionSidebarItems('en', 'concepts'),
+          '/en/guides/': localizedGroupedSidebarItems('en', ['guides', 'migration']),
+          '/en/agent-integrations/': localizedGroupedSidebarItems('en', ['getting-started', 'configuration', 'agent-integrations']),
+          '/en/migration/': localizedGroupedSidebarItems('en', ['guides', 'migration']),
           '/en/api/': localizedReferenceSidebarItems('en'),
           '/en/about/': localizedAboutSidebarItems('en'),
           '/design/': designSidebar
@@ -306,16 +945,18 @@ export default defineConfig({
       themeConfig: {
         nav: zhNav,
         sidebar: {
-          '/zh/getting-started/': localizedGuideSidebarItems('zh'),
-          '/zh/concepts/': localizedGuideSidebarItems('zh'),
-          '/zh/guides/': localizedGuideSidebarItems('zh'),
-          '/zh/agent-integrations/': localizedGuideSidebarItems('zh'),
-          '/zh/migration/': localizedGuideSidebarItems('zh'),
+          '/zh/getting-started/': localizedGroupedSidebarItems('zh', ['getting-started', 'configuration', 'agent-integrations']),
+          '/zh/configuration/': localizedGroupedSidebarItems('zh', ['getting-started', 'configuration', 'agent-integrations']),
+          '/zh/concepts/': localizedSectionSidebarItems('zh', 'concepts'),
+          '/zh/guides/': localizedGroupedSidebarItems('zh', ['guides', 'migration']),
+          '/zh/agent-integrations/': localizedGroupedSidebarItems('zh', ['getting-started', 'configuration', 'agent-integrations']),
+          '/zh/migration/': localizedGroupedSidebarItems('zh', ['guides', 'migration']),
           '/zh/api/': localizedReferenceSidebarItems('zh'),
           '/zh/about/': localizedAboutSidebarItems('zh')
         },
         outline: {
-          label: '页面导航'
+          label: '页面导航',
+          level: [2, 3]
         },
         docFooter: {
           prev: '上一页',

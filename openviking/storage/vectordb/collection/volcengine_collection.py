@@ -121,18 +121,6 @@ class VolcengineCollection(ICollection):
             f"Request to {action} failed: {response.status_code} {code} {message}"
         )
 
-    @staticmethod
-    def _is_collection_not_found(response: Any, action: str) -> bool:
-        if action != "GetVikingdbCollection" or response.status_code != 404:
-            return False
-        try:
-            result = response.json()
-        except json.JSONDecodeError:
-            return False
-        metadata = result.get("ResponseMetadata", {}) if isinstance(result, dict) else {}
-        error = metadata.get("Error", {}) if isinstance(metadata, dict) else {}
-        return error.get("Code") == "NotFound.VikingdbCollection"
-
     def _console_post(self, data: Dict[str, Any], action: str):
         params = {"Action": action, "Version": VIKING_DB_VERSION}
         response = self.console_client.do_req("POST", req_params=params, req_body=data)
@@ -392,6 +380,17 @@ class VolcengineCollection(ICollection):
             "collection_name": self.collection_name,
             "data": data_list,
             "ttl": ttl,
+            "ignore_unknown_fields": True,
+        }
+        return self._data_post(path, data)
+
+    def update_data(self, data_list: List[Dict[str, Any]]):
+        path = "/api/vikingdb/data/update"
+        data = {
+            "project": self.project_name,
+            "collection_name": self.collection_name,
+            "data": data_list,
+            "ignore_unknown_fields": True,
         }
         return self._data_post(path, data)
 
@@ -401,6 +400,7 @@ class VolcengineCollection(ICollection):
             "project": self.project_name,
             "collection_name": self.collection_name,
             "ids": primary_keys,
+            "ignore_unknown_fields": True,
         }
         resp_data = self._data_post(path, data)
         # print(resp_data)
@@ -474,6 +474,7 @@ class VolcengineCollection(ICollection):
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
+            "ignore_unknown_fields": True,
         }
         if sparse_vector:
             data["sparse_vector"] = sparse_vector
@@ -499,6 +500,7 @@ class VolcengineCollection(ICollection):
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
+            "ignore_unknown_fields": True,
         }
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)
@@ -526,6 +528,7 @@ class VolcengineCollection(ICollection):
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
+            "ignore_unknown_fields": True,
         }
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)
@@ -547,6 +550,7 @@ class VolcengineCollection(ICollection):
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
+            "ignore_unknown_fields": True,
         }
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)
@@ -572,7 +576,9 @@ class VolcengineCollection(ICollection):
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
+            "ignore_unknown_fields": True,
         }
+        data = {k: v for k, v in data.items() if v is not None}
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)
 
@@ -597,6 +603,7 @@ class VolcengineCollection(ICollection):
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
+            "ignore_unknown_fields": True,
         }
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)

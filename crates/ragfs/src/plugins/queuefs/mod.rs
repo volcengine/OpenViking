@@ -6,6 +6,7 @@
 //! - `/queue_name/dequeue` - Read from this file to remove and return the first message
 //! - `/queue_name/peek` - Read from this file to view the first message without removing it
 //! - `/queue_name/size` - Read from this file to get the current queue size
+//! - `/queue_name/messages` - Read all unacknowledged messages without changing queue state
 //! - `/queue_name/clear` - Write to this file to clear all messages from the queue
 //! - `/queue_name/ack` - Write message ID to this file to acknowledge and delete it
 
@@ -46,6 +47,10 @@ const CONTROL_FILES: &[ControlFileSpec] = &[
     },
     ControlFileSpec {
         name: "size",
+        mode: 0o444,
+    },
+    ControlFileSpec {
+        name: "messages",
         mode: 0o444,
     },
     ControlFileSpec {
@@ -251,8 +256,19 @@ impl FileSystem for QueueFileSystem {
                 let size = backend.size(&queue_name)?;
                 Ok(size.to_string().into_bytes())
             }
+            "messages" => {
+                let messages = backend
+                    .list_unacked(&queue_name)?
+                    .into_iter()
+                    .map(|msg| QueueMessage {
+                        id: msg.id,
+                        data: String::from_utf8_lossy(&msg.data).to_string(),
+                    })
+                    .collect::<Vec<_>>();
+                Ok(serde_json::to_vec(&messages)?)
+            }
             _ => Err(Error::InvalidOperation(format!(
-                "Cannot read from '{}'. Use dequeue, peek, or size",
+                "Cannot read from '{}'. Use dequeue, peek, size, or messages",
                 operation
             ))),
         }
@@ -780,13 +796,14 @@ mod tests {
 
         // Queue directory should list control files
         let entries = fs.read_dir("/test").await.unwrap();
-        assert_eq!(entries.len(), 6);
+        assert_eq!(entries.len(), 7);
 
         let names: Vec<String> = entries.iter().map(|e| e.name.clone()).collect();
         assert!(names.contains(&"enqueue".to_string()));
         assert!(names.contains(&"dequeue".to_string()));
         assert!(names.contains(&"peek".to_string()));
         assert!(names.contains(&"size".to_string()));
+        assert!(names.contains(&"messages".to_string()));
         assert!(names.contains(&"clear".to_string()));
         assert!(names.contains(&"ack".to_string()));
     }

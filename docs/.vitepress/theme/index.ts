@@ -1,7 +1,12 @@
 import { h } from 'vue'
 import DefaultTheme from 'vitepress/theme'
+import type { EnhanceAppContext } from 'vitepress'
 import CopyMarkdownButton from './CopyMarkdownButton.vue'
 import LlmsTxtLink from './LlmsTxtLink.vue'
+import OpenVikingSearch from './OpenVikingSearch.vue'
+import ApiExampleTabsEnhancer from './ApiExampleTabsEnhancer.vue'
+import VikingBotAssistant from './VikingBotAssistant.vue'
+import { trackPageView } from './track'
 import './custom.css'
 
 type OpenVikingPreference = {
@@ -299,8 +304,23 @@ export default {
   extends: DefaultTheme,
   Layout() {
     return h(DefaultTheme.Layout, null, {
-      'doc-before': () => h(CopyMarkdownButton),
-      'doc-footer-before': () => h(LlmsTxtLink)
+      'doc-before': () => h('div', { class: 'doc-page-actions' }, [
+        h(LlmsTxtLink),
+        h(CopyMarkdownButton)
+      ]),
+      'doc-after': () => h(ApiExampleTabsEnhancer),
+      'nav-bar-content-before': () => [h(OpenVikingSearch), h(VikingBotAssistant)]
     })
+  },
+  enhanceApp({ router }: EnhanceAppContext) {
+    if (import.meta.env.SSR || typeof window === 'undefined') return
+
+    trackPageView(window.location.pathname)
+
+    const previousHook = router.onAfterRouteChanged
+    router.onAfterRouteChanged = (to: string) => {
+      previousHook?.(to)
+      trackPageView(to.split('?')[0].split('#')[0])
+    }
   }
 }

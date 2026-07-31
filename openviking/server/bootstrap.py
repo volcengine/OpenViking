@@ -16,8 +16,12 @@ from typing import Optional
 
 import uvicorn
 
-from openviking.server.app import create_app
-from openviking.server.config import load_server_config
+from openviking.server.app import (
+    WORKER_BOT_API_URL_ENV,
+    WORKER_WITH_BOT_ENV,
+    create_app,
+)
+from openviking.server.config import get_server_url_from_server_data, load_server_config
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.config_loader import resolve_config_path
 from openviking_cli.utils.config.consts import (
@@ -160,10 +164,6 @@ def main():
     )
     parser.add_argument(
         "--bot",
-        action="store_true",
-        help="Also start vikingbot gateway after server starts",
-    )
-    parser.add_argument(
         "--with-bot",
         action="store_true",
         dest="with_bot",
@@ -207,6 +207,11 @@ def main():
 
     # Load server config from ov.conf
     try:
+        resolved_config_path = resolve_config_path(
+            args.config,
+            OPENVIKING_CONFIG_ENV,
+            DEFAULT_OV_CONF,
+        )
         config = load_server_config(args.config)
         OpenVikingConfigSingleton.initialize(config_path=args.config)
     except (FileNotFoundError, ValueError) as e:
@@ -256,7 +261,12 @@ def main():
         # Determine if bot logging should be enabled
         enable_bot_logging = args.enable_bot_logging
         if enable_bot_logging is None:
-            enable_bot_logging = args.with_bot
+            # Reaching this block means bot integration is enabled, either by
+            # ``--with-bot`` or by ``server.with_bot`` in ov.conf.  Default
+            # logging must not depend only on which activation surface was
+            # used, otherwise config-enabled gateways silently lose their
+            # child-process diagnostics.
+            enable_bot_logging = True
         bot_log_dir = args.bot_log_dir or _resolve_default_bot_log_dir(args.config)
         # Start vikingbot gateway if --with-bot is set
         bot_process = _start_vikingbot_gateway(
@@ -264,10 +274,22 @@ def main():
             bot_log_dir,
             bot_port,
             config_path=args.config,
+            managed_server_url=get_server_url_from_server_data(config),
         )
+        if bot_process is None:
+            print(
+                "Error: --with-bot was requested, but VikingBot could not be started.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     # Create and run server app
-    app = create_app(config)
+    app = create_app(
+        config,
+        config_path=(
+            str(resolved_config_path) if resolved_config_path is not None else args.config
+        ),
+    )
     workers_info = f" (workers: {config.workers})" if config.workers > 1 else ""
     print(f"OpenViking HTTP Server is running on {config.host}:{config.port}{workers_info}")
 
@@ -278,8 +300,10 @@ def main():
             # can independently import the application.  We stash the
             # resolved config path in an env-var so that the factory can
             # pick it up (ServerConfig already reads OPENVIKING_CONFIG_FILE).
+            os.environ[WORKER_WITH_BOT_ENV] = "1" if config.with_bot else "0"
+            os.environ[WORKER_BOT_API_URL_ENV] = config.bot_api_url
             uvicorn.run(
-                "openviking.server.app:create_app",
+                "openviking.server.app:create_worker_app",
                 factory=True,
                 host=config.host,
                 port=config.port,
@@ -318,6 +342,7 @@ def _start_vikingbot_gateway(
     log_dir: str,
     port: int = VIKINGBOT_DEFAULT_PORT,
     config_path: Optional[str] = None,
+    managed_server_url: Optional[str] = None,
 ) -> Optional[BotProcess]:
     """Start vikingbot gateway as a subprocess."""
     print("Starting vikingbot gateway...")
@@ -331,7 +356,7 @@ def _start_vikingbot_gateway(
         python_cmd = sys.executable
         try:
             result = subprocess.run(
-                [python_cmd, "-m", "vikingbot", "--help"], capture_output=True, timeout=5
+                [python_cmd, "-m", "vikingbot", "--help"], capture_output=True, timeout=15
             )
             if result.returncode == 0:
                 vikingbot_cmd = [python_cmd, "-m", "vikingbot", "gateway"]
@@ -375,6 +400,9 @@ def _start_vikingbot_gateway(
         cli_config_path = _resolve_cli_config_for_bot(config_path)
         if cli_config_path is not None:
             env[OPENVIKING_CLI_CONFIG_ENV] = cli_config_path
+        env["VIKINGBOT_WITH_OPENVIKING_SERVER"] = "1"
+        if managed_server_url:
+            env["VIKINGBOT_MANAGED_OV_SERVER_URL"] = managed_server_url
 
         process = subprocess.Popen(
             vikingbot_cmd,

@@ -10,12 +10,23 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from openviking.telemetry import tracer
+from openviking.utils.multimodal import redact_image_data_urls
 from openviking_cli.utils import get_logger
 
 from ..base import ToolCall, VLMResponse
 from .openai_vlm import OpenAIVLM
 
 logger = get_logger(__name__)
+
+VOLCENGINE_CLIENT_REQUEST_ID_HEADER = "X-Client-Request-Id"
+VOLCENGINE_CLIENT_REQUEST_ID = "ToB-direct,OpenViking_Service,openviking-service_cn-beijing"
+
+
+def _build_volcengine_headers(extra_headers: Optional[Dict[str, str]]) -> Dict[str, str]:
+    headers = dict(extra_headers or {})
+    if not any(k.lower() == VOLCENGINE_CLIENT_REQUEST_ID_HEADER.lower() for k in headers):
+        headers[VOLCENGINE_CLIENT_REQUEST_ID_HEADER] = VOLCENGINE_CLIENT_REQUEST_ID
+    return headers
 
 
 class VolcEngineVLM(OpenAIVLM):
@@ -25,11 +36,12 @@ class VolcEngineVLM(OpenAIVLM):
         super().__init__(config)
         self._sync_client = None
         self.provider = "volcengine"
+        self.extra_headers = _build_volcengine_headers(self.extra_headers)
 
         if not self.api_base:
             self.api_base = "https://ark.cn-beijing.volces.com/api/v3"
         if not self.model:
-            self.model = "doubao-seed-2-0-pro-260215"
+            self.model = "doubao-seed-2-0-lite-260428"
 
     def _parse_tool_calls(self, message) -> List[ToolCall]:
         """Parse tool calls from VolcEngine response message."""
@@ -47,6 +59,9 @@ class VolcEngineVLM(OpenAIVLM):
 
     def _build_vlm_response(self, response, has_tools: bool) -> Union[str, VLMResponse]:
         """Build response from Chat Completions response. Returns str or VLMResponse based on has_tools."""
+        if isinstance(response, str):
+            return VLMResponse(content=response) if has_tools else response
+
         choice = response.choices[0]
         message = choice.message
         if hasattr(message, "tool_calls") and message.tool_calls:
@@ -81,6 +96,8 @@ class VolcEngineVLM(OpenAIVLM):
             self._sync_client = volcenginesdkarkruntime.Ark(
                 api_key=self.api_key,
                 base_url=self.api_base,
+                timeout=self.timeout,
+                max_retries=0,
             )
         return self._sync_client
 
@@ -95,6 +112,8 @@ class VolcEngineVLM(OpenAIVLM):
         return volcenginesdkarkruntime.AsyncArk(
             api_key=self.api_key,
             base_url=self.api_base,
+            timeout=self.timeout,
+            max_retries=0,
         )
 
     def get_completion(
@@ -109,13 +128,14 @@ class VolcEngineVLM(OpenAIVLM):
         effective_thinking = self.thinking if thinking is None else thinking
         kwargs_messages = messages or [{"role": "user", "content": prompt}]
         kwargs = {
-            "model": self.model or "doubao-seed-2-0-pro-260215",
+            "model": self.model or "doubao-seed-2-0-lite-260428",
             "messages": kwargs_messages,
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not effective_thinking else "enabled"},
+            "extra_headers": self.extra_headers,
         }
-        max_tokens = self.max_tokens or 32768
-        kwargs["max_tokens"] = max_tokens
+        if self.max_tokens is not None:
+            kwargs["max_tokens"] = self.max_tokens
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
@@ -130,7 +150,7 @@ class VolcEngineVLM(OpenAIVLM):
             return result
         return self._clean_response(str(result))
 
-    @tracer("volcengine.vlm.call", ignore_result=True, ignore_args=False)
+    @tracer("volcengine.vlm.call", ignore_result=True, ignore_args=["messages"])
     async def get_completion_async(
         self,
         prompt: str = "",
@@ -143,19 +163,23 @@ class VolcEngineVLM(OpenAIVLM):
         effective_thinking = self.thinking if thinking is None else thinking
         kwargs_messages = messages or [{"role": "user", "content": prompt}]
         kwargs = {
-            "model": self.model or "doubao-seed-2-0-pro-260215",
+            "model": self.model or "doubao-seed-2-0-lite-260428",
             "messages": kwargs_messages,
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not effective_thinking else "enabled"},
+            "extra_headers": self.extra_headers,
         }
-        max_tokens = self.max_tokens or 32768
-        kwargs["max_tokens"] = max_tokens
+        if self.max_tokens is not None:
+            kwargs["max_tokens"] = self.max_tokens
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
 
         # 用 tracer.info 打印请求
-        tracer.info(f"request: {json.dumps(kwargs_messages, ensure_ascii=False, indent=2)}")
+        tracer.info(
+            "request: "
+            f"{json.dumps(redact_image_data_urls(kwargs_messages), ensure_ascii=False, indent=2)}"
+        )
         if tools:
             tracer.info(
                 f"tools: {json.dumps([t['function']['name'] for t in tools], ensure_ascii=False)}"
@@ -323,13 +347,14 @@ class VolcEngineVLM(OpenAIVLM):
             kwargs_messages = [{"role": "user", "content": content}]
 
         kwargs = {
-            "model": self.model or "doubao-seed-2-0-pro-260215",
+            "model": self.model or "doubao-seed-2-0-lite-260428",
             "messages": kwargs_messages,
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not effective_thinking else "enabled"},
+            "extra_headers": self.extra_headers,
         }
-        max_tokens = self.max_tokens or 32768
-        kwargs["max_tokens"] = max_tokens
+        if self.max_tokens is not None:
+            kwargs["max_tokens"] = self.max_tokens
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
@@ -366,13 +391,14 @@ class VolcEngineVLM(OpenAIVLM):
             kwargs_messages = [{"role": "user", "content": content}]
 
         kwargs = {
-            "model": self.model or "doubao-seed-2-0-pro-260215",
+            "model": self.model or "doubao-seed-2-0-lite-260428",
             "messages": kwargs_messages,
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not effective_thinking else "enabled"},
+            "extra_headers": self.extra_headers,
         }
-        max_tokens = self.max_tokens or 32768
-        kwargs["max_tokens"] = max_tokens
+        if self.max_tokens is not None:
+            kwargs["max_tokens"] = self.max_tokens
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"

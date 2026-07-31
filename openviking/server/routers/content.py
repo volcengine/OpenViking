@@ -2,12 +2,19 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Content endpoints for OpenViking HTTP Server."""
 
+from typing import Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, Query
 from fastapi.responses import Response as FastAPIResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
+from openviking.core.namespace import (
+    canonicalize_uri,
+    is_hidden_by_actor_peer_view,
+    may_include_hidden_actor_peers,
+    resolve_uri,
+)
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_viking_uri
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
@@ -21,7 +28,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
-from openviking_cli.exceptions import NotFoundError
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, PermissionDeniedError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -40,12 +47,65 @@ class WriteContentRequest(BaseModel):
     telemetry: TelemetryRequest = False
 
 
+class BatchWritePrecondition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["create_if_absent", "replace_if_hash"]
+    base_hash: str | None = None
+
+    @model_validator(mode="after")
+    def validate_hash_shape(self) -> "BatchWritePrecondition":
+        if self.kind == "replace_if_hash" and not self.base_hash:
+            raise ValueError("base_hash is required for replace_if_hash")
+        if self.kind == "create_if_absent" and self.base_hash is not None:
+            raise ValueError("base_hash is not allowed for create_if_absent")
+        return self
+
+
+class BatchWriteOperation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    uri: str
+    content: str | None = None
+    content_base64: str | None = None
+    precondition: BatchWritePrecondition
+
+    @model_validator(mode="after")
+    def validate_content_shape(self) -> "BatchWriteOperation":
+        if (self.content is None) == (self.content_base64 is None):
+            raise ValueError("exactly one of content or content_base64 is required")
+        return self
+
+
+class BatchWriteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    root_uri: str
+    operations: list[BatchWriteOperation]
+    wait: bool = True
+    timeout: float | None = None
+    telemetry: TelemetryRequest = False
+
+
+class SetTagsRequest(BaseModel):
+    """Request to set explicit k=v retrieval tags metadata for a file or directory."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    uri: str
+    tags: list[str]
+    mode: str = "replace"
+    recursive: bool = False
+    telemetry: TelemetryRequest = False
+
+
 class ReindexRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     uri: str
     mode: str = "vectors_only"
     wait: bool = True
+    dry_run: bool = False
 
 
 router = APIRouter(prefix="/api/v1/content", tags=["content"])
@@ -56,6 +116,26 @@ def _validate_reindex_uri(uri: str) -> str:
     if raw_uri.startswith("viking://"):
         return raw_uri
     return validate_viking_uri(raw_uri)
+
+
+def _authorize_reindex_uri(uri: str, ctx: RequestContext) -> str:
+    """Allow users to reindex only their own private namespace."""
+    if ctx.role != Role.USER:
+        return uri
+
+    canonical_uri = canonicalize_uri(uri, ctx)
+    target = resolve_uri(canonical_uri, ctx=ctx, require_canonical=True)
+    if (
+        target.scope != "user"
+        or target.owner_user_id != ctx.user.user_id
+        or is_hidden_by_actor_peer_view(canonical_uri, ctx)
+        or may_include_hidden_actor_peers(canonical_uri, ctx)
+    ):
+        raise PermissionDeniedError(
+            "USER can only reindex their own user namespace.",
+            resource=canonical_uri,
+        )
+    return canonical_uri
 
 
 @router.get("/read")
@@ -198,19 +278,78 @@ async def write(
     ).model_dump(exclude_none=True)
 
 
+@router.post("/batch-write")
+async def batch_write(
+    request: BatchWriteRequest = Body(...),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Apply preconditioned file writes and refresh their indexes as one request."""
+    service = get_service()
+    root_uri = resolve_path_variables(request.root_uri)
+    operations = [operation.model_dump(exclude_none=True) for operation in request.operations]
+    for operation in operations:
+        operation["uri"] = resolve_path_variables(operation["uri"])
+    execution = await run_operation(
+        operation="content.batch_write",
+        telemetry=request.telemetry,
+        fn=lambda: service.fs.batch_write(
+            root_uri=root_uri,
+            operations=operations,
+            ctx=_ctx,
+            wait=request.wait,
+            timeout=request.timeout,
+        ),
+    )
+    return Response(
+        status="ok",
+        result=execution.result,
+        telemetry=execution.telemetry,
+    ).model_dump(exclude_none=True)
+
+
+@router.post("/set_tags")
+async def set_tags(
+    request: SetTagsRequest = Body(...),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Set explicit k=v retrieval tags metadata for a file or directory."""
+    service = get_service()
+    uri = resolve_path_variables(request.uri)
+    execution = await run_operation(
+        operation="content.set_tags",
+        telemetry=request.telemetry,
+        fn=lambda: service.fs.set_tags(
+            uri=uri,
+            tags=request.tags,
+            mode=request.mode,
+            recursive=request.recursive,
+            ctx=_ctx,
+        ),
+    )
+    return Response(
+        status="ok",
+        result=execution.result,
+        telemetry=execution.telemetry,
+    ).model_dump(exclude_none=True)
+
+
 @router.post("/reindex")
 async def reindex(
     body: ReindexRequest = Body(...),
-    ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN),
+    ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN, Role.USER),
 ):
     """Reindex semantic/vector artifacts for a URI-scoped maintenance target."""
+    if body.dry_run and body.mode != "prune_orphans":
+        raise InvalidArgumentError("dry_run is only supported for prune_orphans reindex mode.")
     uri = resolve_path_variables(body.uri)
     uri = _validate_reindex_uri(uri)
+    uri = _authorize_reindex_uri(uri, ctx)
     service = get_service()
     result = await service.reindex(
         uri=uri,
         mode=body.mode,
         wait=body.wait,
+        dry_run=body.dry_run,
         ctx=ctx,
     )
     return Response(status="ok", result=result)

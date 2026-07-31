@@ -13,7 +13,12 @@ from typing import Annotated, Any, Dict, List, Optional, Tuple, Type, Union
 from pydantic import BaseModel, Field, WithJsonSchema, create_model
 from pydantic.config import ConfigDict
 
-from openviking.session.memory.dataclass import FaultTolerantBaseModel, MemoryTypeSchema, WikiLink
+from openviking.session.memory.dataclass import (
+    DeleteId,
+    FaultTolerantBaseModel,
+    MemoryTypeSchema,
+    WikiLink,
+)
 from openviking.session.memory.memory_isolation_handler import RoleScope
 from openviking.session.memory.merge_op import MergeOp, MergeOpFactory
 from openviking.session.memory.merge_op.base import FieldType, get_python_type_for_field
@@ -45,11 +50,12 @@ class SchemaModelGenerator:
         schemas: List[MemoryTypeSchema],
         template_context: Optional[Dict[str, Any]] = None,
     ):
+        if hasattr(schemas, "list_all"):
+            schemas = schemas.list_all()
         self.schemas = schemas
         self._template_context = dict(template_context or {})
         self._model_cache: Dict[str, Type[BaseModel]] = {}
         self._flat_data_models: Dict[str, Type[BaseModel]] = {}
-        self._union_model: Optional[Type[BaseModel]] = None
         self._operations_model: Optional[Type[BaseModel]] = None
 
     def _render_description(self, description: str) -> str:
@@ -101,7 +107,7 @@ class SchemaModelGenerator:
         # Skip if schema has "ranges" field (like events) - these are message-based and
         # their self/peer targets are derived from message ranges instead of explicit routing fields.
         has_ranges = any(field.name == "ranges" for field in memory_type.fields)
-        if has_peer_scope and not has_ranges:
+        if has_peer_scope and memory_type.peer_enabled and not has_ranges:
             peer_values = ", ".join(role_scope.peer_ids)
             field_definitions["peer_id"] = (
                 Optional[str],
@@ -170,55 +176,7 @@ class SchemaModelGenerator:
             models[memory_type.memory_type] = self.create_flat_data_model(memory_type)
         return models
 
-    def create_discriminated_union_model(self) -> Type[BaseModel]:
-        """
-        Create a unified MemoryData model with discriminator support.
-
-        The model uses 'memory_type' as the discriminator field to
-        determine which fields model to use.
-
-        Returns:
-            Unified Pydantic model with discriminator (a wrapper model containing the union)
-        """
-        if self._union_model is not None:
-            return self._union_model
-
-        # Generate all flat data models first (including disabled for completeness)
-        self.generate_all_models(include_disabled=True)
-
-        # Build the annotated union with discriminator - only use enabled types
-        if not self.schemas:
-            raise ValueError("No memory types in schemas")
-
-        # Create union of flat data models
-        enabled_memory_types = self.schemas
-        flat_model_union_types = tuple(
-            self._flat_data_models[mt.memory_type] for mt in enabled_memory_types
-        )
-
-        if flat_model_union_types:
-            FlatDataUnion = Union[tuple(flat_model_union_types)]  # type: ignore
-        else:
-            # Fallback if no types are enabled
-            class GenericMemoryData(BaseModel):
-                """Generic memory data (fallback)."""
-
-                memory_type: str = Field(..., description="Memory type identifier")
-
-            FlatDataUnion = GenericMemoryData  # type: ignore
-
-        # Wrap the union in a BaseModel for JSON schema generation
-        class MemoryDataWrapper(BaseModel):
-            """Wrapper model for memory data union."""
-
-            data: FlatDataUnion = Field(..., description="Memory data")  # type: ignore
-
-            model_config = ConfigDict(extra="forbid")
-
-        self._union_model = MemoryDataWrapper
-        return self._union_model
-
-    def create_structured_operations_model(self, role_scope: RoleScope) -> Type[BaseModel]:
+    def create_structured_operations_model(self, role_scope: Optional[RoleScope] = None) -> Type[BaseModel]:
         """
         Create a structured MemoryOperations model with type-safe write operations.
 
@@ -261,14 +219,21 @@ class SchemaModelGenerator:
                 ),
             )
 
-        # Only expose delete_uris when at least one schema supports it.
+        # Only expose delete_ids when at least one schema supports deletion.
         # add_only schemas (e.g. trajectories) never delete existing records,
-        # so excluding this field prevents the LLM from hallucinating fake URIs.
+        # so excluding this field prevents the LLM from hallucinating fake deletes.
         has_deletable_schema = any(mt.operation_mode != "add_only" for mt in enabled_memory_types)
         if has_deletable_schema:
-            field_definitions["delete_uris"] = (
-                List[str],
-                Field(default_factory=list, description="Delete operations as URI strings"),
+            field_definitions["delete_ids"] = (
+                List[DeleteId],
+                Field(
+                    default_factory=list,
+                    description=(
+                        "Delete operations by page_id. Each item has delete_page_id and "
+                        "replacement_page_id; set replacement_page_id to null for a pure delete, "
+                        "or to the canonical replacement page_id so existing links/backlinks are inherited."
+                    ),
+                ),
             )
 
         # Add links field for link extraction (only when enabled globally)
@@ -308,7 +273,7 @@ class SchemaModelGenerator:
                     else:
                         # Single value (not None)
                         return False
-            return len(self.delete_uris) == 0
+            return len(getattr(self, "delete_ids", [])) == 0
 
         def to_legacy_operations(self) -> Dict[str, Any]:
             """Convert new per-type structure to legacy write_uris/edit_uris format."""
@@ -334,7 +299,7 @@ class SchemaModelGenerator:
             return {
                 "write_uris": write_uris,
                 "edit_uris": edit_uris,
-                "delete_uris": self.delete_uris,
+                "delete_ids": self.delete_ids,
             }
 
         # Attach methods
@@ -347,17 +312,6 @@ class SchemaModelGenerator:
 
         self._operations_model = StructuredMemoryOperations
         return self._operations_model
-
-    def get_memory_data_json_schema(self) -> Dict[str, Any]:
-        """
-        Get the JSON schema just for the flat memory data union.
-
-        Returns:
-            JSON schema for MemoryData
-        """
-        memory_model = self.create_discriminated_union_model()
-        return memory_model.model_json_schema()
-
 
 class SchemaPromptGenerator:
     """
@@ -372,6 +326,8 @@ class SchemaPromptGenerator:
         schemas: List[MemoryTypeSchema],
         template_context: Optional[Dict[str, Any]] = None,
     ):
+        if hasattr(schemas, "list_all"):
+            schemas = schemas.list_all()
         self.schemas = schemas
         self._template_context = dict(template_context or {})
 

@@ -61,12 +61,15 @@ class ModelsObserver(BaseObserver):
 
         # VLM section
         if self._vlm_instance:
+            vlm_data = None
             try:
                 vlm_data = self._get_vlm_usage()
-                if vlm_data:
-                    sections.append(("VLM", vlm_data))
             except Exception as e:
                 logger.warning(f"Error getting VLM usage: {e}")
+            if not vlm_data:
+                vlm_data = self._get_configured_vlm()
+            if vlm_data:
+                sections.append(("VLM", vlm_data))
 
         # Embedding section
         if self._embedding_instance:
@@ -124,6 +127,20 @@ class ModelsObserver(BaseObserver):
                 )
 
         return data
+
+    def _get_configured_vlm(self) -> Optional[list]:
+        """Return configured VLM identity when usage data is unavailable."""
+        model = getattr(self._vlm_instance, "model", None)
+        if not model:
+            return None
+
+        return [
+            {
+                "Model": model,
+                "Provider": getattr(self._vlm_instance, "provider", None) or "unknown",
+                "Status": "configured",
+            }
+        ]
 
     def _get_embedding_usage(self) -> Optional[list]:
         """Get Embedding token usage data."""

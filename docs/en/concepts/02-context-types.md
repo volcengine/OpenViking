@@ -8,7 +8,7 @@ Based on a simplified mapping of human cognitive patterns and engineering consid
 |------|---------|-----------|------------|
 | **Resource** | Knowledge and rules | Long-term, relatively static | User adds |
 | **Memory** | Agent's cognition | Long-term, dynamically updated | Agent records |
-| **Skill** | Callable capabilities | Long-term, static | Agent invokes |
+| **Skill** | Declarable agent capability configuration (AgentDefinedContextType) | Long-term, static | User or system adds |
 
 ## Resource
 
@@ -44,7 +44,7 @@ results = client.find(
 
 ## Memory
 
-Memories are divided into user memories and Agent memories, representing learned knowledge about users and the world.
+Memories are durable knowledge learned from interactions and task execution. They are stored in the current User or Peer namespace, not in a separate `viking://agent/memories` directory.
 
 ### Characteristics
 
@@ -52,18 +52,23 @@ Memories are divided into user memories and Agent memories, representing learned
 - **Dynamic updates**: Continuously updated from interactions by Agent
 - **Personalized**: Learned for specific users and stable peers
 
-### 8 Categories
+### Built-in Memory Types
 
-| Category | Location | Description | Update Strategy |
-|----------|----------|-------------|-----------------|
-| **profile** | `user/memories/profile.md` | User basic info | ✅ Merge into one file |
-| **preferences** | `user/memories/preferences/` | User preferences by topic | ✅ Appendable |
-| **entities** | `user/memories/entities/` | Entity memories (people, projects) | ✅ Appendable |
-| **events** | `user/memories/events/` | Event records (decisions, milestones) | ❌ No update |
-| **trajectories** | `user/memories/trajectories/` | Reusable operation contracts | ❌ No update |
-| **experiences** | `user/memories/experiences/` | Reusable execution insights | ✅ Mergeable |
-| **tools** | `user/memories/tools/` | Tool usage knowledge and best practices | ✅ Mergeable |
-| **skills** | `user/memories/skills/` | Skill execution knowledge and workflow strategies | ✅ Mergeable |
+| Type | Default location | Description |
+|------|------------------|-------------|
+| **profile** | `user/memories/profile.md` | Basic user information |
+| **preferences** | `user/memories/preferences/` | User preferences organized by topic |
+| **entities** | `user/memories/entities/` | Knowledge about people, projects, organizations, and other entities |
+| **events** | `user/memories/events/` | Decisions, milestones, and other event records |
+| **identity** | `user/memories/identity.md` | Assistant name, persona, temperament, and self-introduction |
+| **soul** | `user/memories/soul.md` | Assistant principles, boundaries, style, and continuity |
+| **cases** | `user/memories/cases/` | Task cases used for training and evaluation |
+| **trajectories** | `user/memories/trajectories/` | Reusable task-execution trajectories |
+| **experiences** | `user/memories/experiences/` | Reusable experience distilled from execution outcomes |
+| **tools** | `user/memories/tools/` | Tool usage knowledge and best practices |
+| **skills** | `user/memories/skills/` | Skill-execution knowledge and workflow strategies |
+
+The `user/...` entries above are current-user short paths. The server resolves them to `viking://user/{user_id}/...`. When the memory policy permits Peer memory, supported types may instead be written under `viking://user/{user_id}/peers/{peer_id}/memories/...`. Applications can extend or adjust memory types with custom templates.
 
 ### Usage
 
@@ -81,9 +86,9 @@ results = await client.find(
 )
 ```
 
-## Skill
+## Skill (Capabilities / AgentDefinedContextType)
 
-Skills are capabilities that Agents can invoke, such as current Skills, MCP, etc.
+Skills are capabilities that Agents can invoke, belonging to the **AgentDefinedContextType** category. This includes traditional workflow definitions, communication endpoints, tool configurations, and payment capabilities. Their common characteristic is that they **define how an agent interacts with external systems**, with relatively static runtime definitions, but invocation experiences are updated in Memory.
 
 ### Characteristics
 
@@ -94,26 +99,51 @@ Skills are capabilities that Agents can invoke, such as current Skills, MCP, etc
 ### Storage Location
 
 ```
-viking://user/skills/{skill-name}/
+viking://user/skills/{skill-name}/     # Default storage path
+├── .abstract.md          # L0: Short description
+├── SKILL.md              # L1: Detailed overview
+└── scripts               # L2: Full definition
+
+viking://agent/skills/{skill-name}/    # Override via --uri, public/shared (account global)
 ├── .abstract.md          # L0: Short description
 ├── SKILL.md              # L1: Detailed overview
 └── scripts               # L2: Full definition
 ```
 
+### AgentDefinedContextType Subtypes
+
+AgentDefinedContextType includes the following subtypes, all stored under the `viking://agent/` scope:
+
+| Subtype | Location | Description |
+|---------|----------|-------------|
+| **Skill** | `agent/skills/` | Traditional workflow definitions, such as search and code generation |
+| **Endpoint** | `agent/endpoints/` | Communication endpoint configuration (a2a, anp, etc.) (planned) |
+| **Tool** | `agent/tools/` | Tool configuration (mcp, etc.) (planned) |
+| **Payment** | `agent/payments/` | Payment capability configuration (ap2, etc.) (planned) |
+
 ### Usage
 
 ```python
-# Add skill
+# Add skill (defaults to viking://user/skills/)
 await client.add_skill({
     "name": "search-web",
     "description": "Search the web for information",
     "content": "# search-web\n..."
 })
 
-# Search skills
+# Write to global agent skills root (public/shared) via -p override
+ov skills add search-web -p viking://agent/skills
+
+# Search user skills
 results = await client.find(
     "web search",
     target_uri="viking://user/skills/"
+)
+
+# Search global agent skills
+results = await client.find(
+    "web search",
+    target_uri="viking://agent/skills/"
 )
 ```
 

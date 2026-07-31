@@ -4,9 +4,10 @@
 //! Supports AWS S3 and S3-compatible services (MinIO, LocalStack, TOS).
 
 use crate::core::{ConfigValue, Error, Result};
-use aws_sdk_s3::error::SdkError;
+use aws_sdk_s3::config::http::HttpResponse;
 use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
 use aws_sdk_s3::error::ProvideErrorMetadata;
+use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::{RequestId, RequestIdExt};
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client;
@@ -63,23 +64,74 @@ where
 fn format_sdk_s3_error<E, R>(op: &str, scope: &str, sdk_err: &SdkError<E, R>) -> Error
 where
     E: std::fmt::Display + ProvideErrorMetadata + RequestId + RequestIdExt,
+    R: std::fmt::Debug + Send + Sync + 'static,
 {
-    let raw_error = sdk_err.to_string();
-    if let Some(service_err) = sdk_err.as_service_error() {
-        Error::internal(build_s3_error_message(
+    use std::any::Any;
+
+    match sdk_err {
+        SdkError::ServiceError(se) => {
+            if let Some(resp) = (se.raw() as &dyn Any).downcast_ref::<HttpResponse>() {
+                let status = resp.status().as_u16();
+                let headers = resp.headers();
+                Error::internal(build_s3_error_message(
+                    op,
+                    scope,
+                    &format!("HTTP {}: {}", status, se.err()),
+                    se.err().code(),
+                    se.err().message(),
+                    se.err()
+                        .request_id()
+                        .or_else(|| headers.get("x-amz-request-id")),
+                    se.err()
+                        .extended_request_id()
+                        .or_else(|| headers.get("x-amz-id-2")),
+                ))
+            } else {
+                Error::internal(build_s3_error_message(
+                    op,
+                    scope,
+                    &format!("service error: {}", se.err()),
+                    se.err().code(),
+                    se.err().message(),
+                    se.err().request_id(),
+                    se.err().extended_request_id(),
+                ))
+            }
+        }
+        _ => Error::internal(build_s3_error_message(
             op,
             scope,
-            &raw_error,
-            service_err.code(),
-            service_err.message(),
-            service_err.request_id(),
-            service_err.extended_request_id(),
-        ))
-    } else {
-        Error::internal(build_s3_error_message(
-            op, scope, &raw_error, None, None, None, None,
-        ))
+            &sdk_err.to_string(),
+            None,
+            None,
+            None,
+            None,
+        )),
     }
+}
+
+/// Return true when an S3 SDK service error represents a failed conditional request.
+fn is_s3_conditional_failure<E, R>(sdk_err: &SdkError<E, R>) -> bool
+where
+    E: ProvideErrorMetadata,
+    R: 'static,
+{
+    use std::any::Any;
+
+    let SdkError::ServiceError(service_err) = sdk_err else {
+        return false;
+    };
+
+    if matches!(
+        service_err.err().code(),
+        Some("PreconditionFailed" | "ConditionalRequestConflict")
+    ) {
+        return true;
+    }
+
+    (service_err.raw() as &dyn Any)
+        .downcast_ref::<HttpResponse>()
+        .is_some_and(|response| matches!(response.status().as_u16(), 409 | 412))
 }
 
 fn format_generic_s3_error(
@@ -224,7 +276,7 @@ impl DirectoryMarkerMode {
 }
 
 /// Object metadata from HeadObject
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ObjectMeta {
     /// Object key
     pub key: String,
@@ -234,6 +286,13 @@ pub struct ObjectMeta {
     pub last_modified: SystemTime,
     /// Whether this is a directory marker
     pub is_dir_marker: bool,
+}
+
+/// One flat `ListObjectsV2` page used by S3-backed tree/glob traversal.
+#[derive(Debug, Clone)]
+pub struct ListTreePage {
+    pub objects: Vec<ObjectMeta>,
+    pub next_continuation_token: Option<String>,
 }
 
 /// Result of a ListObjects operation
@@ -255,6 +314,20 @@ fn aws_datetime_to_systemtime(dt: &aws_sdk_s3::primitives::DateTime) -> SystemTi
     }
 }
 
+/// The Content-Type to be written to S3 is inferred from the filename suffix of the object key.
+fn detect_content_type_for_key(key: &str) -> Option<String> {
+    if key.ends_with('/') {
+        return None;
+    }
+
+    Some(
+        mime_guess::from_path(key)
+            .first_or_octet_stream()
+            .essence_str()
+            .to_string(),
+    )
+}
+
 /// S3 Client wrapper
 pub struct S3Client {
     client: Client,
@@ -263,6 +336,7 @@ pub struct S3Client {
     normalize_encoding_chars: String,
     marker_mode: DirectoryMarkerMode,
     disable_batch_delete: bool,
+    auto_detect_content_type: bool,
 }
 
 impl S3Client {
@@ -347,6 +421,11 @@ impl S3Client {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
+        let auto_detect_content_type = config
+            .get("auto_detect_content_type")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         // Build S3 config
         let mut s3_config_builder = aws_sdk_s3::Config::builder()
             .behavior_version(BehaviorVersion::latest())
@@ -374,6 +453,7 @@ impl S3Client {
             normalize_encoding_chars,
             marker_mode,
             disable_batch_delete,
+            auto_detect_content_type,
         })
     }
 
@@ -430,6 +510,46 @@ impl S3Client {
         Ok(bytes.to_vec())
     }
 
+    /// Get an object's contents and ETag for conditional updates.
+    pub async fn get_object_with_etag(&self, key: &str) -> Result<Option<(Vec<u8>, String)>> {
+        let resp = match self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+        {
+            Ok(resp) => resp,
+            Err(sdk_err) => {
+                let service_err = sdk_err.into_service_error();
+                if service_err.is_no_such_key() {
+                    return Ok(None);
+                }
+                return Err(format_s3_service_error(
+                    "GetObjectWithEtag",
+                    &format!("bucket={} key={}", self.bucket, key),
+                    &service_err,
+                ));
+            }
+        };
+
+        let etag = resp.e_tag().ok_or_else(|| {
+            Error::internal(format!(
+                "S3 GetObjectWithEtag missing ETag: bucket={} key={key}",
+                self.bucket
+            ))
+        })?.to_string();
+
+        let bytes = resp
+            .body
+            .collect()
+            .await
+            .map_err(|e| format_generic_s3_error("ReadBody", &self.bucket, key, e))?;
+
+        Ok(Some((bytes.to_vec(), etag)))
+    }
+
     /// Get an object's contents with range request
     pub async fn get_object_range(&self, key: &str, offset: u64, size: u64) -> Result<Vec<u8>> {
         let range = if size == 0 {
@@ -472,16 +592,94 @@ impl S3Client {
 
     /// Upload an object
     pub async fn put_object(&self, key: &str, data: Vec<u8>) -> Result<()> {
-        self.client
+        let mut request = self
+            .client
             .put_object()
             .bucket(&self.bucket)
             .key(key)
-            .body(ByteStream::from(data))
-            .send()
-            .await
-            .map_err(|e| format_sdk_s3_error("PutObject", &format!("bucket={} key={key}", self.bucket), &e))?;
+            .body(ByteStream::from(data));
+
+        if self.auto_detect_content_type {
+            if let Some(content_type) = detect_content_type_for_key(key) {
+                request = request.content_type(content_type);
+            }
+        }
+
+        request.send().await.map_err(|e| {
+            format_sdk_s3_error(
+                "PutObject",
+                &format!("bucket={} key={key}", self.bucket),
+                &e,
+            )
+        })?;
 
         Ok(())
+    }
+
+    /// Upload an object only when the key does not already exist.
+    pub async fn put_object_create_new(&self, key: &str, data: Vec<u8>) -> Result<()> {
+        let mut request = self
+            .client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .if_none_match("*")
+            .body(ByteStream::from(data));
+
+        if self.auto_detect_content_type {
+            if let Some(content_type) = detect_content_type_for_key(key) {
+                request = request.content_type(content_type);
+            }
+        }
+
+        request.send().await.map_err(|e| {
+            if is_s3_conditional_failure(&e) {
+                Error::already_exists(key)
+            } else {
+                format_sdk_s3_error(
+                    "PutObjectCreateNew",
+                    &format!("bucket={} key={key}", self.bucket),
+                    &e,
+                )
+            }
+        })?;
+
+        Ok(())
+    }
+
+    /// Upload an object only when its ETag still matches `etag`.
+    pub async fn put_object_if_match(&self, key: &str, data: Vec<u8>, etag: &str) -> Result<bool> {
+        let mut request = self
+            .client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .if_match(etag)
+            .body(ByteStream::from(data));
+
+        if self.auto_detect_content_type {
+            if let Some(content_type) = detect_content_type_for_key(key) {
+                request = request.content_type(content_type);
+            }
+        }
+
+        request.send().await.map_err(|e| {
+            if is_s3_conditional_failure(&e) {
+                Error::AlreadyExists(key.to_string())
+            } else {
+                format_sdk_s3_error(
+                    "PutObjectIfMatch",
+                    &format!("bucket={} key={key}", self.bucket),
+                    &e,
+                )
+            }
+        }).map(|_| true).or_else(|e| {
+            if matches!(e, Error::AlreadyExists(_)) {
+                Ok(false)
+            } else {
+                Err(e)
+            }
+        })
     }
 
     /// Delete a single object
@@ -493,10 +691,44 @@ impl S3Client {
             .send()
             .await
             .map_err(|e| {
-                format_sdk_s3_error("DeleteObject", &format!("bucket={} key={key}", self.bucket), &e)
+                format_sdk_s3_error(
+                    "DeleteObject",
+                    &format!("bucket={} key={key}", self.bucket),
+                    &e,
+                )
             })?;
 
         Ok(())
+    }
+
+    /// Delete a single object only when its ETag still matches `etag`.
+    pub async fn delete_object_if_match(&self, key: &str, etag: &str) -> Result<bool> {
+        self.client
+            .delete_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .if_match(etag)
+            .send()
+            .await
+            .map_err(|e| {
+                if is_s3_conditional_failure(&e) {
+                    Error::AlreadyExists(key.to_string())
+                } else {
+                    format_sdk_s3_error(
+                        "DeleteObjectIfMatch",
+                        &format!("bucket={} key={key}", self.bucket),
+                        &e,
+                    )
+                }
+            })
+            .map(|_| true)
+            .or_else(|e| {
+                if matches!(e, Error::AlreadyExists(_)) {
+                    Ok(false)
+                } else {
+                    Err(e)
+                }
+            })
     }
 
     /// Batch delete objects (up to 1000 per call)
@@ -586,14 +818,17 @@ impl S3Client {
             }
             Err(sdk_err) => {
                 // Check if it's a 404
-                let service_err = sdk_err.into_service_error();
-                if service_err.is_not_found() {
+                if sdk_err
+                    .as_service_error()
+                    .map(|err| err.is_not_found())
+                    .unwrap_or(false)
+                {
                     Ok(None)
                 } else {
-                    Err(format_s3_service_error(
+                    Err(format_sdk_s3_error(
                         "HeadObject",
                         &format!("bucket={} key={}", self.bucket, key),
-                        &service_err,
+                        &sdk_err,
                     ))
                 }
             }
@@ -621,16 +856,13 @@ impl S3Client {
                 req = req.continuation_token(token);
             }
 
-            let resp = req
-                .send()
-                .await
-                .map_err(|e| {
-                    format_sdk_s3_error(
-                        "ListObjectsV2",
-                        &format!("bucket={} prefix={prefix}", self.bucket),
-                        &e,
-                    )
-                })?;
+            let resp = req.send().await.map_err(|e| {
+                format_sdk_s3_error(
+                    "ListObjectsV2",
+                    &format!("bucket={} prefix={prefix}", self.bucket),
+                    &e,
+                )
+            })?;
 
             // Process files (contents)
             for obj in resp.contents() {
@@ -695,16 +927,13 @@ impl S3Client {
                 req = req.continuation_token(token);
             }
 
-            let resp = req
-                .send()
-                .await
-                .map_err(|e| {
-                    format_sdk_s3_error(
-                        "ListObjectsV2",
-                        &format!("bucket={} prefix={prefix}", self.bucket),
-                        &e,
-                    )
-                })?;
+            let resp = req.send().await.map_err(|e| {
+                format_sdk_s3_error(
+                    "ListObjectsV2",
+                    &format!("bucket={} prefix={prefix}", self.bucket),
+                    &e,
+                )
+            })?;
 
             for obj in resp.contents() {
                 let key = obj.key().unwrap_or("");
@@ -736,6 +965,59 @@ impl S3Client {
         }
 
         Ok(objects)
+    }
+
+    /// List one flat object page under a prefix (no delimiter).
+    pub async fn list_tree_objects_page(
+        &self,
+        prefix: &str,
+        continuation_token: Option<&str>,
+        max_keys: usize,
+    ) -> Result<ListTreePage> {
+        let mut req = self
+            .client
+            .list_objects_v2()
+            .bucket(&self.bucket)
+            .prefix(prefix)
+            .max_keys(max_keys.min(1000) as i32);
+
+        if let Some(token) = continuation_token {
+            req = req.continuation_token(token);
+        }
+
+        let resp = req.send().await.map_err(|e| {
+            format_sdk_s3_error(
+                "ListObjectsV2",
+                &format!("bucket={} prefix={prefix}", self.bucket),
+                &e,
+            )
+        })?;
+
+        let mut objects = Vec::new();
+        for obj in resp.contents() {
+            let key = obj.key().unwrap_or("");
+            if key == prefix {
+                continue;
+            }
+
+            let size = obj.size.unwrap_or(0);
+            let last_modified = obj
+                .last_modified()
+                .map(aws_datetime_to_systemtime)
+                .unwrap_or(UNIX_EPOCH);
+
+            objects.push(ObjectMeta {
+                key: key.to_string(),
+                size,
+                last_modified,
+                is_dir_marker: key.ends_with('/'),
+            });
+        }
+
+        Ok(ListTreePage {
+            objects,
+            next_continuation_token: resp.next_continuation_token().map(|s| s.to_string()),
+        })
     }
 
     /// Copy an object
@@ -922,6 +1204,7 @@ mod tests {
             normalize_encoding_chars: normalize_encoding_chars.to_string(),
             marker_mode: DirectoryMarkerMode::Empty,
             disable_batch_delete: false,
+            auto_detect_content_type: false,
         }
     }
 
@@ -991,13 +1274,34 @@ mod tests {
     }
 
     #[test]
-    fn test_format_generic_s3_error_includes_operation_bucket_key_and_raw_error() {
-        let err = format_generic_s3_error(
-            "PutObject",
-            "test-bucket",
-            "tenant/a.txt",
-            "service error",
+    fn test_detect_content_type_for_key_uses_filename_extension() {
+        assert_eq!(
+            detect_content_type_for_key("tenant/docs/readme.md").as_deref(),
+            Some("text/markdown")
         );
+        assert_eq!(
+            detect_content_type_for_key("tenant/docs/data.json").as_deref(),
+            Some("application/json")
+        );
+        assert_eq!(
+            detect_content_type_for_key("tenant/images/logo.png").as_deref(),
+            Some("image/png")
+        );
+    }
+
+    #[test]
+    fn test_detect_content_type_for_key_handles_unknown_and_directory_marker() {
+        assert_eq!(
+            detect_content_type_for_key("tenant/blob/no-extension").as_deref(),
+            Some("application/octet-stream")
+        );
+        assert_eq!(detect_content_type_for_key("tenant/dir/"), None);
+    }
+
+    #[test]
+    fn test_format_generic_s3_error_includes_operation_bucket_key_and_raw_error() {
+        let err =
+            format_generic_s3_error("PutObject", "test-bucket", "tenant/a.txt", "service error");
 
         match err {
             Error::Internal(message) => {

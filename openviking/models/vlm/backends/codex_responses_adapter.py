@@ -210,7 +210,9 @@ def _build_final_response_from_stream_events(
 
     return SimpleNamespace(
         output=fallback_output,
-        usage=getattr(completed_response, "usage", None) if completed_response is not None else None,
+        usage=getattr(completed_response, "usage", None)
+        if completed_response is not None
+        else None,
     )
 
 

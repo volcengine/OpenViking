@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 #pragma once
+#include <cstddef>
 #include <string>
 #include <vector>
 #include "store/common_structs.h"
@@ -25,6 +26,10 @@ class KVStore {
 
   virtual std::vector<std::pair<std::string, std::string>> seek_range(
       const std::string& start_key, const std::string& end_key) = 0;
+
+  virtual std::vector<std::pair<std::string, std::string>> seek_range_page(
+      const std::string& start_key, const std::string& end_key, size_t limit,
+      size_t max_bytes, bool start_exclusive) = 0;
 };
 
 }  // namespace vectordb

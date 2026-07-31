@@ -6,7 +6,7 @@ File System Service for OpenViking.
 Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, overview, grep, glob.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.core.namespace import context_type_for_uri
 from openviking.core.uri_validation import validate_optional_viking_uri, validate_viking_uri
@@ -15,14 +15,27 @@ from openviking.privacy import (
     get_skill_name_from_uri,
     restore_skill_content,
 )
+from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
+from openviking.session.memory.memory_updater import MemoryUpdater
 from openviking.storage.content_write import ContentWriteCoordinator
+from openviking.storage.queuefs import SemanticMsg, get_queue_manager
+from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.viking_fs import VikingFS
+from openviking.telemetry import get_current_telemetry
+from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+from openviking.telemetry.resource_summary import build_queue_status_payload
 from openviking.utils.embedding_utils import vectorize_directory_meta
-from openviking_cli.exceptions import NotInitializedError
+from openviking_cli.exceptions import DeadlineExceededError, NotInitializedError
 from openviking_cli.utils import VikingURI, get_logger
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from openviking.resource.watch_manager import WatchManager
+    from openviking.resource.watch_scheduler import WatchScheduler
+    from openviking.service.resource_memory_link_service import ResourceMemoryLinkService
+    from openviking.storage import VikingDBManager
 
 
 class FSService:
@@ -31,25 +44,42 @@ class FSService:
     def __init__(
         self,
         viking_fs: Optional[VikingFS] = None,
+        vikingdb: Optional["VikingDBManager"] = None,
         privacy_config_service: Optional[UserPrivacyConfigService] = None,
+        resource_memory_link_service: Optional["ResourceMemoryLinkService"] = None,
+        watch_scheduler: Optional["WatchScheduler"] = None,
     ):
         self._viking_fs = viking_fs
+        self._vikingdb = vikingdb
         self._privacy_config_service = privacy_config_service
+        self._resource_memory_link_service = resource_memory_link_service
+        self._watch_scheduler = watch_scheduler
 
     def set_dependencies(
         self,
         viking_fs: VikingFS,
+        vikingdb: Optional["VikingDBManager"] = None,
         privacy_config_service: Optional[UserPrivacyConfigService] = None,
+        resource_memory_link_service: Optional["ResourceMemoryLinkService"] = None,
+        watch_scheduler: Optional["WatchScheduler"] = None,
     ) -> None:
         """Set service dependencies (for deferred initialization)."""
         self._viking_fs = viking_fs
+        self._vikingdb = vikingdb
         self._privacy_config_service = privacy_config_service
+        self._resource_memory_link_service = resource_memory_link_service
+        self._watch_scheduler = watch_scheduler
 
     def _ensure_initialized(self) -> VikingFS:
         """Ensure VikingFS is initialized."""
         if not self._viking_fs:
             raise NotInitializedError("VikingFS")
         return self._viking_fs
+
+    def _get_watch_manager(self) -> Optional["WatchManager"]:
+        if not self._watch_scheduler:
+            return None
+        return self._watch_scheduler.watch_manager
 
     async def ls(
         self,
@@ -62,6 +92,8 @@ class FSService:
         show_all_hidden: bool = False,
         node_limit: int = 1000,
         level_limit: int = 3,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
     ) -> List[Any]:
         """List directory contents.
 
@@ -73,6 +105,8 @@ class FSService:
             abs_limit: int = 256 if output == "agent" else ignore
             show_all_hidden: bool = False (list all hidden files, like -a)
             node_limit: int = 1000 (maximum number of nodes to list)
+            sort_by: Optional sort field for non-recursive listings
+            sort_order: Sort direction, "asc" or "desc"
         """
         viking_fs = self._ensure_initialized()
         uri = validate_viking_uri(uri)
@@ -95,6 +129,8 @@ class FSService:
                     output="original",
                     show_all_hidden=show_all_hidden,
                     node_limit=node_limit,
+                    sort_by=sort_by,
+                    sort_order=sort_order,
                 )
             return [e.get("uri", "") for e in entries]
 
@@ -116,6 +152,8 @@ class FSService:
                 abs_limit=abs_limit,
                 show_all_hidden=show_all_hidden,
                 node_limit=node_limit,
+                sort_by=sort_by,
+                sort_order=sort_order,
             )
         return entries
 
@@ -158,19 +196,240 @@ class FSService:
         return directory_uri, abstract_uri
 
     async def rm(
-        self, uri: str, ctx: RequestContext, recursive: bool = False
+        self,
+        uri: str,
+        ctx: RequestContext,
+        recursive: bool = False,
+        wait: bool = False,
+        timeout: Optional[float] = None,
     ) -> Optional[Dict[str, Any]]:
         """Remove resource."""
         uri = validate_viking_uri(uri)
         viking_fs = self._ensure_initialized()
-        return await viking_fs.rm(uri, recursive=recursive, ctx=ctx)
+        cleanup_result: Optional[Dict[str, Any]] = None
+        context_type = context_type_for_uri(uri)
+        refresh_parent_uri = self._semantic_refresh_parent_uri(uri, context_type)
+        memory_overview_uri = self._memory_overview_parent_uri(uri, context_type)
+        result = await viking_fs.rm(uri, recursive=recursive, ctx=ctx)
+        await self._sync_watch_after_rm(uri, account_id=ctx.account_id, context_type=context_type)
+        queue_status = None
+        request_registered = False
+        telemetry_id = get_current_telemetry().telemetry_id
+        try:
+            if refresh_parent_uri:
+                if wait and telemetry_id:
+                    get_request_wait_tracker().register_request(telemetry_id)
+                    request_registered = True
+                await self._enqueue_delete_refresh(
+                    root_uri=refresh_parent_uri,
+                    deleted_uri=uri,
+                    context_type=context_type,
+                    ctx=ctx,
+                )
+            if self._resource_memory_link_service and context_type == "resource":
+                cleanup_result = await self._resource_memory_link_service.before_resource_delete(
+                    ctx=ctx,
+                    resource_uri=uri,
+                    recursive=recursive,
+                )
+            if memory_overview_uri:
+                await MemoryUpdater.refresh_schema_overview(
+                    viking_fs=viking_fs,
+                    directory_uri=memory_overview_uri,
+                    ctx=ctx,
+                )
+            for cleanup_overview_uri in self._memory_overview_parent_uris_from_cleanup(
+                cleanup_result
+            ):
+                await MemoryUpdater.refresh_schema_overview(
+                    viking_fs=viking_fs,
+                    directory_uri=cleanup_overview_uri,
+                    ctx=ctx,
+                )
+            if refresh_parent_uri and wait:
+                queue_status = await self._wait_for_refresh(timeout=timeout)
+        finally:
+            if request_registered:
+                get_request_wait_tracker().cleanup(telemetry_id)
+        if cleanup_result is not None and isinstance(result, dict):
+            result["memory_cleanup"] = cleanup_result
+        if refresh_parent_uri and isinstance(result, dict):
+            result["semantic_root_uri"] = refresh_parent_uri
+            result["semantic_status"] = self._semantic_refresh_status(
+                wait=wait,
+                queue_status=queue_status,
+            )
+            if queue_status is not None:
+                result["queue_status"] = queue_status
+        return result
+
+    @staticmethod
+    def _semantic_refresh_status(
+        *,
+        wait: bool,
+        queue_status: Optional[Dict[str, Any]],
+    ) -> str:
+        if not wait:
+            return "queued"
+        if not isinstance(queue_status, dict):
+            return "complete"
+        semantic = queue_status.get("Semantic", {})
+        if not isinstance(semantic, dict):
+            return "complete"
+        try:
+            if int(semantic.get("error_count", 0) or 0) > 0:
+                return "failed"
+        except (TypeError, ValueError):
+            if semantic.get("errors"):
+                return "failed"
+        if semantic.get("errors"):
+            return "failed"
+        return "complete"
+
+    @staticmethod
+    def _semantic_refresh_parent_uri(uri: str, context_type: str) -> Optional[str]:
+        if context_type != "resource":
+            return None
+        parent = VikingURI(uri).parent
+        return parent.uri if parent else None
+
+    @staticmethod
+    def _memory_overview_parent_uri(uri: str, context_type: str) -> Optional[str]:
+        if context_type != "memory":
+            return None
+        leaf = uri.rstrip("/").rsplit("/", 1)[-1]
+        if leaf in {".abstract.md", ".overview.md", ".relations.json"}:
+            return None
+        parent = VikingURI(uri).parent
+        if parent is None:
+            return None
+        if not MemoryUpdater.memory_type_from_uri(parent.uri):
+            return None
+        return parent.uri
+
+    @classmethod
+    def _memory_overview_parent_uris_from_cleanup(
+        cls,
+        cleanup_result: Optional[Dict[str, Any]],
+    ) -> List[str]:
+        if not isinstance(cleanup_result, dict):
+            return []
+
+        overview_uris: List[str] = []
+        for field in ("memory_uris", "deleted_memory_uris"):
+            values = cleanup_result.get(field)
+            if not isinstance(values, list):
+                continue
+            for memory_uri in values:
+                if not isinstance(memory_uri, str):
+                    continue
+                overview_uri = cls._memory_overview_parent_uri(
+                    memory_uri,
+                    context_type_for_uri(memory_uri),
+                )
+                if overview_uri:
+                    overview_uris.append(overview_uri)
+        return list(dict.fromkeys(overview_uris))
+
+    async def _enqueue_delete_refresh(
+        self,
+        *,
+        root_uri: str,
+        deleted_uri: str,
+        context_type: str,
+        ctx: RequestContext,
+    ) -> None:
+        try:
+            queue_manager = get_queue_manager()
+        except RuntimeError as exc:
+            logger.warning("QueueManager not available, skipping delete refresh: %s", exc)
+            return
+        semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
+        telemetry_id = get_current_telemetry().telemetry_id
+        msg = SemanticMsg(
+            uri=root_uri,
+            context_type=context_type,
+            recursive=False,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+            peer_id=ctx.user.user_id,
+            role=str(ctx.role),
+            skip_vectorization=False,
+            telemetry_id=telemetry_id,
+            coalesce_key=build_semantic_coalesce_key(
+                context_type=context_type,
+                uri=root_uri,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+                peer_id=ctx.user.user_id,
+            ),
+            changes={"deleted": [deleted_uri]},
+        )
+        if telemetry_id:
+            get_request_wait_tracker().register_semantic_root(telemetry_id, msg.id)
+        try:
+            await semantic_queue.enqueue(msg)
+        except Exception as exc:
+            if telemetry_id:
+                get_request_wait_tracker().mark_semantic_failed(telemetry_id, msg.id, str(exc))
+            raise
+
+    async def _wait_for_refresh(self, *, timeout: Optional[float]) -> Dict[str, Any]:
+        telemetry_id = get_current_telemetry().telemetry_id
+        if telemetry_id:
+            try:
+                await get_request_wait_tracker().wait_for_request(telemetry_id, timeout=timeout)
+            except TimeoutError as exc:
+                raise DeadlineExceededError("queue processing", timeout) from exc
+            return get_request_wait_tracker().build_queue_status(telemetry_id)
+        try:
+            return build_queue_status_payload(
+                await get_queue_manager().wait_complete(timeout=timeout)
+            )
+        except TimeoutError as exc:
+            raise DeadlineExceededError("queue processing", timeout) from exc
 
     async def mv(self, from_uri: str, to_uri: str, ctx: RequestContext) -> None:
         """Move resource."""
         from_uri = validate_viking_uri(from_uri, field_name="from_uri")
         to_uri = validate_viking_uri(to_uri, field_name="to_uri")
         viking_fs = self._ensure_initialized()
-        await viking_fs.mv(from_uri, to_uri, ctx=ctx)
+        watch_manager = self._get_watch_manager()
+        if not watch_manager or context_type_for_uri(from_uri) != "resource":
+            await viking_fs.mv(from_uri, to_uri, ctx=ctx)
+            return
+        if context_type_for_uri(to_uri) != "resource":
+            await viking_fs.mv(from_uri, to_uri, ctx=ctx)
+            return
+        if is_watch_task_control_uri(from_uri) or is_watch_task_control_uri(to_uri):
+            await viking_fs.mv(from_uri, to_uri, ctx=ctx)
+            return
+
+        await watch_manager.sync_tasks_with_resource_move_internal(
+            from_uri,
+            to_uri,
+            account_id=ctx.account_id,
+            move_resource=lambda: viking_fs.mv(from_uri, to_uri, ctx=ctx),
+            rollback_resource=lambda: viking_fs.mv(to_uri, from_uri, ctx=ctx),
+        )
+
+    async def _sync_watch_after_rm(
+        self, uri: str, *, account_id: str, context_type: str
+    ) -> None:
+        if context_type != "resource":
+            return
+        if is_watch_task_control_uri(uri):
+            return
+        watch_manager = self._get_watch_manager()
+        if not watch_manager:
+            return
+        deactivated = await watch_manager.deactivate_tasks_under_uri_internal(uri, account_id)
+        if deactivated:
+            logger.info(
+                "Deactivated %d watch task(s) after deleting %s",
+                len(deactivated),
+                uri,
+            )
 
     async def tree(
         self,
@@ -254,7 +513,7 @@ class FSService:
         exclude_uri: Optional[str] = None,
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
-        level_limit: int = 5,
+        level_limit: int = 10,
     ) -> Dict:
         """Content search."""
         viking_fs = self._ensure_initialized()
@@ -300,7 +559,7 @@ class FSService:
         """Write to an existing file and refresh semantics/vectors."""
         uri = validate_viking_uri(uri)
         viking_fs = self._ensure_initialized()
-        coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+        coordinator = ContentWriteCoordinator(viking_fs=viking_fs, vikingdb=self._vikingdb)
         return await coordinator.write(
             uri=uri,
             content=content,
@@ -309,3 +568,169 @@ class FSService:
             wait=wait,
             timeout=timeout,
         )
+
+    async def batch_write(
+        self,
+        *,
+        root_uri: str,
+        operations: list[dict[str, Any]],
+        ctx: RequestContext,
+        wait: bool = True,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Apply a preconditioned multi-file write and aggregate downstream refresh."""
+        root_uri = validate_viking_uri(root_uri, field_name="root_uri")
+        viking_fs = self._ensure_initialized()
+        coordinator = ContentWriteCoordinator(viking_fs=viking_fs, vikingdb=self._vikingdb)
+        return await coordinator.batch_write(
+            root_uri=root_uri,
+            operations=operations,
+            ctx=ctx,
+            wait=wait,
+            timeout=timeout,
+        )
+
+    async def set_tags(
+        self,
+        uri: str,
+        tags: list[str],
+        mode: str,
+        recursive: bool,
+        ctx: RequestContext,
+    ) -> Dict[str, Any]:
+        """Set explicit retrieval tags for a file or directory semantic nodes."""
+        uri = validate_viking_uri(uri)
+        viking_fs = self._ensure_initialized()
+        coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+        return await coordinator.set_tags(
+            uri=uri,
+            tags=tags,
+            mode=mode,
+            recursive=recursive,
+            ctx=ctx,
+        )
+
+    async def commit(
+        self,
+        *,
+        message: str,
+        ctx: RequestContext,
+        paths: Optional[List[str]] = None,
+        branch: str = "main",
+        author_name: Optional[str] = None,
+        author_email: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Forward to VikingFS.commit. See viking_fs.commit for semantics."""
+        viking_fs = self._ensure_initialized()
+        validated = (
+            [validate_viking_uri(p) for p in paths] if paths is not None else None
+        )
+        return await viking_fs.commit(
+            message=message,
+            paths=validated,
+            branch=branch,
+            author_name=author_name,
+            author_email=author_email,
+            ctx=ctx,
+        )
+
+    async def restore(
+        self,
+        *,
+        project_dir: Optional[str],
+        source_commit: str,
+        ctx: RequestContext,
+        branch: str = "main",
+        dry_run: bool = False,
+        message: Optional[str] = None,
+        author_name: Optional[str] = None,
+        author_email: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Forward to VikingFS.restore. See viking_fs.restore for semantics."""
+        viking_fs = self._ensure_initialized()
+        if project_dir is not None:
+            project_dir = validate_viking_uri(project_dir, field_name="project_dir")
+        return await viking_fs.restore(
+            project_dir=project_dir,
+            source_commit=source_commit,
+            branch=branch,
+            dry_run=dry_run,
+            message=message,
+            author_name=author_name,
+            author_email=author_email,
+            ctx=ctx,
+        )
+
+    async def show(
+        self,
+        target_ref: str,
+        ctx: RequestContext,
+        *,
+        path: Optional[str] = None,
+    ) -> Any:
+        """Forward to VikingFS.show. Returns dict (metadata) or bytes (blob)."""
+        viking_fs = self._ensure_initialized()
+        # validate_optional_viking_uri returns "" for None input; VikingFS.show needs None.
+        path = validate_optional_viking_uri(path, field_name="path") or None
+        return await viking_fs.show(target_ref, path=path, ctx=ctx)
+
+    async def show_blob_raw(
+        self,
+        target_ref: str,
+        ctx: RequestContext,
+        *,
+        path: str,
+    ) -> Dict[str, Any]:
+        """Forward to VikingFS.show_blob_raw. Returns ``{"oid", "size", "bytes"}``."""
+        viking_fs = self._ensure_initialized()
+        path = validate_viking_uri(path, field_name="path")
+        return await viking_fs.show_blob_raw(target_ref, path=path, ctx=ctx)
+
+    async def diff(
+        self,
+        *,
+        path: str,
+        from_ref: Optional[str],
+        to_ref: str,
+        ctx: RequestContext,
+    ) -> Dict[str, Any]:
+        """Return a unified text diff for one path between two snapshots."""
+        viking_fs = self._ensure_initialized()
+        path = validate_viking_uri(path, field_name="path")
+        return await viking_fs.diff(path=path, from_ref=from_ref, to_ref=to_ref, ctx=ctx)
+
+    async def log(
+        self,
+        ctx: RequestContext,
+        *,
+        branch: str = "main",
+        limit: int = 20,
+        paths: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Forward to VikingFS.log. Walks parents[0] up to limit commits."""
+        viking_fs = self._ensure_initialized()
+        if paths is not None:
+            paths = [validate_viking_uri(path, field_name="paths") for path in paths]
+            if not paths:
+                paths = None
+        return await viking_fs.log(branch=branch, limit=limit, paths=paths, ctx=ctx)
+
+    async def get_gitignore(self, *, ctx: RequestContext) -> str:
+        """Forward to VikingFS.get_gitignore. Returns the account .ovgitignore
+        content, or an empty string if absent."""
+        viking_fs = self._ensure_initialized()
+        return await viking_fs.get_gitignore(ctx=ctx)
+
+    async def set_gitignore(
+        self, *, content: str, ctx: RequestContext
+    ) -> None:
+        """Forward to VikingFS.set_gitignore. Writes the account .ovgitignore
+        control file (validates the size limit)."""
+        viking_fs = self._ensure_initialized()
+        await viking_fs.set_gitignore(content, ctx=ctx)
+
+    async def delete_gitignore(self, *, ctx: RequestContext) -> None:
+        """Forward to VikingFS.delete_gitignore. Removes the account
+        .ovgitignore; missing is success."""
+        viking_fs = self._ensure_initialized()
+        await viking_fs.delete_gitignore(ctx=ctx)

@@ -31,7 +31,11 @@ jobs:
     name: API & CLI Integration Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request' || github.repository == 'volcengine/OpenViking'
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'pull_request' ||
+      (github.repository == 'volcengine/OpenViking' &&
+        (github.event_name != 'release' || startsWith(github.event.release.tag_name, 'v')))
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -502,6 +506,7 @@ jobs:
             openviking version
             echo "OPENVIKING_CLI_BIN=$(which openviking)" >> $GITHUB_ENV
           elif command -v ov &> /dev/null; then
+            ov language en
             ov version
             echo "OPENVIKING_CLI_BIN=$(which ov)" >> $GITHUB_ENV
           else

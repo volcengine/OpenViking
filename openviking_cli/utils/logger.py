@@ -4,12 +4,16 @@
 Logging utilities for OpenViking.
 """
 
+import atexit
+import contextvars
 import logging
+import queue
 import sys
+import threading
 from contextlib import contextmanager
-from logging.handlers import TimedRotatingFileHandler
+from logging.handlers import QueueHandler, QueueListener, TimedRotatingFileHandler
 from pathlib import Path
-from typing import Any, Optional, Tuple
+from typing import Any, Iterator, Optional, Tuple
 from uuid import uuid4
 
 from openviking.observability.context import (
@@ -63,6 +67,27 @@ _otel_log_handler: Any = None
 _MANAGED_LOGGER_ROOTS = ("openviking", "openviking_cli", "uvicorn")
 _shared_log_handler: Optional[logging.Handler] = None
 _shared_log_handler_key: Optional[tuple[Any, ...]] = None
+
+# QueueListeners for thread-safe stdout/stderr logging (avoids StreamHandler stalls
+# on application threads when process managers redirect streams).
+_std_stream_handlers: dict[str, Tuple[QueueListener, logging.Handler]] = {}
+_std_stream_handlers_lock = threading.RLock()
+_std_stream_atexit_registered = False
+
+_request_id_context: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "openviking_log_request_id", default=""
+)
+
+
+@contextmanager
+def bind_log_request_id(request_id: str) -> Iterator[None]:
+    """Bind a request ID to logs emitted in the current execution context."""
+
+    token = _request_id_context.set(request_id)
+    try:
+        yield
+    finally:
+        _request_id_context.reset(token)
 
 
 def _get_log_context() -> dict[str, Any]:
@@ -432,6 +457,17 @@ class TraceContextFilter(logging.Filter):
         return True
 
 
+class _RequestIdLoggingFilter(logging.Filter):
+    """Inject and render the request ID bound by the HTTP server."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        request_id = _request_id_context.get()
+        record.request_id = request_id
+        if request_id:
+            record.msg = f"[request_id={request_id}] {record.msg}"
+        return True
+
+
 class LogToSpanEventFilter(logging.Filter):
     """
     Log filter that automatically maps log records to OTel span events.
@@ -622,6 +658,7 @@ def _load_log_config() -> Tuple[str, str, str, Optional[Any]]:
             log_dir.mkdir(parents=True, exist_ok=True)
             log_output = str(log_dir / "openviking.log")
     except Exception:
+        config = None
         log_level_str = "INFO"
         log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
         log_output = "stdout"
@@ -636,15 +673,64 @@ def _managed_root_name(name: str) -> Optional[str]:
     return None
 
 
+def _stop_std_stream_listeners() -> None:
+    """Stop queue listeners created for stdout/stderr logging."""
+    with _std_stream_handlers_lock:
+        listeners = list(_std_stream_handlers.values())
+        _std_stream_handlers.clear()
+
+    for listener, real_handler in listeners:
+        try:
+            listener.stop()
+        except Exception:
+            pass
+        try:
+            real_handler.close()
+        except Exception:
+            pass
+
+
+def _create_queued_stream_handler(log_output: str) -> QueueHandler:
+    """Create a QueueHandler backed by a per-stream QueueListener."""
+    global _std_stream_atexit_registered
+
+    if log_output not in ("stdout", "stderr"):
+        raise ValueError(f"unsupported stream log output: {log_output}")
+
+    with _std_stream_handlers_lock:
+        entry = _std_stream_handlers.get(log_output)
+        if entry is None:
+            stream = sys.stdout if log_output == "stdout" else sys.stderr
+            real_handler = logging.StreamHandler(stream)
+            log_queue: queue.Queue = queue.Queue(-1)
+            listener = QueueListener(log_queue, real_handler, respect_handler_level=True)
+            listener.start()
+            _std_stream_handlers[log_output] = (listener, real_handler)
+            entry = (listener, real_handler)
+            if not _std_stream_atexit_registered:
+                atexit.register(_stop_std_stream_listeners)
+                _std_stream_atexit_registered = True
+
+        listener, real_handler = entry
+        handler = QueueHandler(listener.queue)
+        handler._ov_real_handler = real_handler  # type: ignore[attr-defined]
+        return handler
+
+
+def _add_trace_id_filter(handler: logging.Handler) -> None:
+    from openviking.telemetry.tracer import TraceIdLoggingFilter
+
+    if not any(isinstance(filter_, TraceIdLoggingFilter) for filter_ in handler.filters):
+        handler.addFilter(TraceIdLoggingFilter())
+
+
 def _create_log_handler(log_output: str, config: Optional[Any]) -> logging.Handler:
     # Prevent creating a file literally named "file"
     if log_output == "file":
         log_output = "stdout"
 
-    if log_output == "stdout":
-        return logging.StreamHandler(sys.stdout)
-    elif log_output == "stderr":
-        return logging.StreamHandler(sys.stderr)
+    if log_output in ("stdout", "stderr"):
+        return _create_queued_stream_handler(log_output)
     else:
         if config is not None:
             try:
@@ -681,12 +767,18 @@ def _build_standard_handler(
     format_string: str,
 ) -> logging.Handler:
     handler = _create_log_handler(log_output, config)
+
+    # QueueHandler must enrich and format records on the caller thread so
+    # context-local trace data and per-logger format strings are captured before
+    # the shared listener-side stream handler writes the prepared message.
+    if isinstance(handler, QueueHandler):
+        real = getattr(handler, "_ov_real_handler", None)
+        if real is not None:
+            real.setFormatter(logging.Formatter("%(message)s"))
+
     handler.setFormatter(logging.Formatter(format_string))
-
-    # Add trace id filter
-    from openviking.telemetry.tracer import TraceIdLoggingFilter
-
-    handler.addFilter(TraceIdLoggingFilter())
+    _add_trace_id_filter(handler)
+    handler.addFilter(_RequestIdLoggingFilter())
     return handler
 
 

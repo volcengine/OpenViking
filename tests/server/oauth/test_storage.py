@@ -100,20 +100,62 @@ async def test_register_and_get_client(store):
     record = await store.register_client(
         redirect_uris=["https://claude.ai/api/mcp/auth_callback"],
         client_name="Claude.ai",
+        scope="mcp",
     )
     assert record["client_id"]
     assert record["redirect_uris"] == ["https://claude.ai/api/mcp/auth_callback"]
     assert record["token_endpoint_auth_method"] == "none"
+    assert record["scope"] == "mcp"
     fetched = await store.get_client(record["client_id"])
     assert fetched is not None
     assert fetched["redirect_uris"] == ["https://claude.ai/api/mcp/auth_callback"]
     assert fetched["client_name"] == "Claude.ai"
+    assert fetched["scope"] == "mcp"
     assert "authorization_code" in fetched["grant_types"]
 
 
 @pytest.mark.asyncio
 async def test_get_client_missing(store):
     assert await store.get_client("nope") is None
+
+
+@pytest.mark.asyncio
+async def test_provider_get_client_defaults_missing_scope(store):
+    """A client registered without a scope (ChatGPT's DCR omits the field;
+    rows predating #2921 are NULL) must still pass validate_scope for the
+    "mcp" scope the PRM document advertises. #2921 persisted the scope when
+    the registrar sent one; this covers the scope-less registration."""
+    from openviking.server.oauth.provider import MCP_SCOPE, OpenVikingOAuthProvider
+
+    record = await store.register_client(
+        redirect_uris=["https://chatgpt.com/connector/oauth/cb"],
+        client_name="ChatGPT",
+        scope=None,
+    )
+    provider = OpenVikingOAuthProvider(store=store, issuer="https://ov.test")
+    client = await provider.get_client(record["client_id"])
+    assert client is not None
+    assert client.scope == MCP_SCOPE
+    # The exact request that failed in the field: /authorize?scope=mcp.
+    assert client.validate_scope(MCP_SCOPE) == [MCP_SCOPE]
+
+
+@pytest.mark.asyncio
+async def test_provider_get_client_keeps_registered_scope(store):
+    """The missing-scope fallback must not clobber an explicitly registered
+    scope (e.g. Claude registers its own scope string via DCR)."""
+    from openviking.server.oauth.provider import OpenVikingOAuthProvider
+
+    record = await store.register_client(
+        redirect_uris=["https://claude.ai/api/mcp/auth_callback"],
+        client_name="Claude.ai",
+        scope="claudeai",
+    )
+    provider = OpenVikingOAuthProvider(store=store, issuer="https://ov.test")
+    client = await provider.get_client(record["client_id"])
+    assert client is not None
+    assert client.scope == "claudeai"
+    assert client.validate_scope("claudeai") == ["claudeai"]
 
 
 def _insert_code(store, code, *, account_id="a", user_id="u", ttl_seconds=300):
@@ -138,9 +180,7 @@ async def test_auth_code_concurrent_consume_race(store):
     """Two coroutines racing to consume the same code — exactly one wins."""
     code = "race-code"
     await _insert_code(store, code)
-    results = await asyncio.gather(
-        store.consume_auth_code(code), store.consume_auth_code(code)
-    )
+    results = await asyncio.gather(store.consume_auth_code(code), store.consume_auth_code(code))
     winners = [r for r in results if r is not None]
     assert len(winners) == 1
 
@@ -208,35 +248,6 @@ async def test_refresh_token_roundtrip(store):
     # Reuse detection: second use returns None but the row is still flagged consumed.
     assert await store.consume_refresh(token_plain=rt, replaced_by_plain=None) is None
     assert await store.is_refresh_known_but_consumed(rt) is True
-
-
-@pytest.mark.asyncio
-async def test_refresh_replay_revokes_chain(store):
-    """Reusing a consumed refresh must allow the caller to revoke the family."""
-    rt1 = "rt-1"
-    rt2 = "rt-2"
-    rt3 = "rt-3"
-    for rt in (rt1, rt2, rt3):
-        await store.insert_refresh(
-            token_plain=rt,
-            client_id="cx",
-            account_id="acct",
-            user_id="user",
-            role="user",
-            scope=None,
-            resource=None,
-            authorizing_key_fp=_FP,
-            ttl_seconds=86400,
-        )
-    # Consume rt1 (rotate to rt2). Then attacker replays rt1.
-    assert await store.consume_refresh(token_plain=rt1, replaced_by_plain=rt2) is not None
-    assert await store.consume_refresh(token_plain=rt1, replaced_by_plain=None) is None
-    # Detection — caller now revokes the chain.
-    revoked = await store.revoke_chain(client_id="cx", account_id="acct", user_id="user")
-    assert revoked >= 2  # rt2 and rt3 still active before revoke
-    # Both rt2 and rt3 must now be unusable.
-    assert await store.consume_refresh(token_plain=rt2, replaced_by_plain=None) is None
-    assert await store.consume_refresh(token_plain=rt3, replaced_by_plain=None) is None
 
 
 @pytest.mark.asyncio

@@ -14,11 +14,31 @@ Before using OpenViking, ensure your environment meets the following requirement
 
 OpenViking can be installed via a Python Package to be used as a local library, or you can quickly launch it as an independent service using Docker.
 
-### Option 1: Install via pip (As a local library)
+### Option 1: Install as a Python package (local commands and library)
 
-```bash
+Choose your preferred Python package manager to install OpenViking:
+
+::: code-group
+
+```bash [uv (recommended)]
+uv tool install openviking --upgrade
+```
+
+```bash [pip]
 pip install openviking --upgrade --force-reinstall
 ```
+
+```bash [pipx]
+# Install
+pipx install openviking
+
+# Update
+pipx upgrade openviking
+```
+
+:::
+
+After installation, use `ov` as the client command (`openviking` is an alias) and `openviking-server` as the server command.
 
 ### Option 2: Start via Docker (As an independent service)
 

@@ -2,10 +2,12 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { CompassIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { useAppConnection } from '#/hooks/use-app-connection'
 import { useChat } from '#/lib/sessions/use-chat'
-import { useSessionMessages } from '#/lib/sessions/use-sessions'
+import { useSession, useSessionMessages } from '#/lib/sessions/use-sessions'
 import { useSessionTitles } from '#/lib/sessions/use-session-titles'
 import { MessageList } from './message-list'
+import { MemoryImpact } from './memory-impact'
 import { Composer } from './composer'
 
 const PixelBlast = lazy(() => import('#/components/ui/pixel-blast'))
@@ -16,12 +18,15 @@ interface ThreadProps {
 }
 
 export function Thread({ sessionId }: ThreadProps) {
-  const { getTitle } = useSessionTitles()
+  const { identityScopeKey } = useAppConnection()
+  const { getTitle } = useSessionTitles(identityScopeKey)
   const title = getTitle(sessionId)
 
+  const { data: session } = useSession(sessionId)
   const { data: historyMessages } = useSessionMessages(sessionId)
 
   const chat = useChat({
+    identityScopeKey,
     sessionId,
     initialMessages: historyMessages,
     persistMessages: true,
@@ -55,10 +60,7 @@ export function Thread({ sessionId }: ThreadProps) {
     scrollRafRef.current = requestAnimationFrame(() => {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
     })
-  }, [
-    chat.messages.length,
-    chat.streamingParts,
-  ])
+  }, [chat.messages.length, chat.streamingParts])
 
   const [showBackground, setShowBackground] = useState(false)
 
@@ -93,13 +95,12 @@ export function Thread({ sessionId }: ThreadProps) {
         </div>
       )}
 
-      {title && (
-        <div className="relative z-10 flex h-12 items-center border-b border-border/50 bg-background/95 px-6">
-          <h2 className="text-sm font-medium truncate text-foreground">
-            {title}
-          </h2>
-        </div>
-      )}
+      <div className="relative z-10 flex h-12 items-center justify-between gap-4 border-b border-border/50 bg-background/95 px-6">
+        <h2 className="truncate text-sm font-medium text-foreground">
+          {title || sessionId}
+        </h2>
+        <MemoryImpact session={session} />
+      </div>
 
       <div
         ref={scrollRef}

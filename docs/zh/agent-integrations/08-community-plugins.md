@@ -19,18 +19,15 @@
 - 四触发器自动 commit：消息计数、token 阈值、空闲超时、进程退出 flush
 - 首次接入群聊时自动拉取平台历史消息入库
 
-## OpenCode 插件
+## Open WebUI tool server
 
-OpenCode 有两个设计路径不同的插件变体，请按你的使用方式自行选择。
+[Open WebUI](https://github.com/open-webui/open-webui) 是一个自托管的 AI 聊天界面。
 
-### `opencode-memory-plugin` — 显式工具版本
+源码：[examples/openwebui-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/openwebui-plugin)
 
-源码：[examples/opencode-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-memory-plugin)
+一个独立的 FastAPI server，把 OpenViking 的一组精选端点以 OpenAPI tools 形式暴露，让 Open WebUI 作为原生工具调用。部署与端点说明见 README。
 
-通过 OpenCode 的工具机制把 OpenViking 记忆暴露为显式工具。模型决定何时调用，数据按需获取。
+## 更多示例
 
-### `opencode/plugin` — 上下文注入版本
+[examples/](https://github.com/volcengine/OpenViking/tree/main/examples) 目录下还有 Agent 插件之外的部署与集成示例——Grafana 面板、Kubernetes Helm chart、多租户配置、快照流程和 SDK 片段等。
 
-源码：[examples/opencode/plugin](https://github.com/volcengine/OpenViking/tree/main/examples/opencode/plugin)
-
-把已索引的代码仓库注入 OpenCode 上下文，并按需自动启动 OpenViking 服务器。

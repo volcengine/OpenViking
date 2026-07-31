@@ -26,7 +26,7 @@ import secrets
 import sqlite3
 import time
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
 
 from openviking.server.oauth.otp import hash_secret
 from openviking_cli.utils import get_logger
@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
     grant_types TEXT NOT NULL DEFAULT '["authorization_code","refresh_token"]',
     response_types TEXT NOT NULL DEFAULT '["code"]',
     client_name TEXT,
+    scope TEXT,
     created_at INTEGER NOT NULL
 );
 
@@ -168,6 +169,7 @@ class OAuthStore:
         ALTER TABLE ADD COLUMN guarded by a ``PRAGMA table_info`` check.
         """
         column_additions = (
+            ("oauth_clients", "scope", "TEXT"),
             ("oauth_codes", "authorizing_key_fp", "TEXT"),
             ("oauth_pending_authorizations", "verified_key_fp", "TEXT"),
             ("oauth_refresh_tokens", "authorizing_key_fp", "TEXT"),
@@ -199,6 +201,7 @@ class OAuthStore:
         grant_types: Optional[list[str]] = None,
         response_types: Optional[list[str]] = None,
         client_secret: Optional[str] = None,
+        scope: Optional[str] = None,
     ) -> dict[str, Any]:
         """Persist a freshly registered client and return the public record.
 
@@ -220,6 +223,7 @@ class OAuthStore:
             "grant_types": grant_types or ["authorization_code", "refresh_token"],
             "response_types": response_types or ["code"],
             "client_name": client_name,
+            "scope": scope,
             "created_at": now,
         }
 
@@ -229,7 +233,7 @@ class OAuthStore:
                 "INSERT INTO oauth_clients "
                 "(client_id, client_secret_hash, redirect_uris, "
                 "token_endpoint_auth_method, grant_types, response_types, "
-                "client_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "client_name, scope, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     record["client_id"],
                     record["client_secret_hash"],
@@ -238,6 +242,7 @@ class OAuthStore:
                     json.dumps(record["grant_types"]),
                     json.dumps(record["response_types"]),
                     record["client_name"],
+                    record["scope"],
                     record["created_at"],
                 ),
             )
@@ -484,21 +489,6 @@ class OAuthStore:
 
         async with self._lock:
             return await asyncio.to_thread(_q)
-
-    async def revoke_chain(self, *, client_id: str, account_id: str, user_id: str) -> int:
-        """Revoke every refresh token for (client, account, user). Returns count."""
-
-        def _revoke() -> int:
-            assert self._conn is not None
-            cur = self._conn.execute(
-                "UPDATE oauth_refresh_tokens SET consumed = 1 "
-                "WHERE client_id = ? AND account_id = ? AND user_id = ? AND consumed = 0",
-                (client_id, account_id, user_id),
-            )
-            return cur.rowcount
-
-        async with self._lock:
-            return await asyncio.to_thread(_revoke)
 
     # ---- Access tokens ----
 
@@ -798,12 +788,3 @@ class OAuthStore:
             return await asyncio.to_thread(_gc)
 
     # ---- Test helpers (no-op in production paths) ----
-
-    async def _all_codes_for_test(self) -> Iterable[dict[str, Any]]:
-        def _q() -> list[dict[str, Any]]:
-            assert self._conn is not None
-            cur = self._conn.execute("SELECT * FROM oauth_codes")
-            return [_row_to_dict(cur, r) for r in cur.fetchall()]
-
-        async with self._lock:
-            return await asyncio.to_thread(_q)

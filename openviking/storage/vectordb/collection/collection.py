@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 import importlib
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional, Type, cast
 
 from openviking.storage.vectordb.collection.result import AggregateResult, SearchResult
 from openviking.storage.vectordb.index.index import IIndex
@@ -37,6 +37,12 @@ class ICollection(ABC):
     @abstractmethod
     def drop(self):
         raise NotImplementedError
+
+    def begin_bulk_ingest(self) -> None:
+        """Suspend optional derived-index maintenance across a bulk write scope."""
+
+    def end_bulk_ingest(self) -> None:
+        """Resume optional derived-index maintenance after a bulk write scope."""
 
     @abstractmethod
     def create_index(self, index_name: str, meta_data: Dict[str, Any]) -> IIndex:
@@ -152,6 +158,10 @@ class ICollection(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def update_data(self, data_list: List[Dict[str, Any]]):
+        raise NotImplementedError
+
+    @abstractmethod
     def fetch_data(self, primary_keys: List[Any]):
         raise NotImplementedError
 
@@ -239,6 +249,22 @@ class Collection:
         if self.__collection is None:
             raise RuntimeError("Collection is closed")
         return self.__collection.drop()
+
+    def begin_bulk_ingest(self) -> None:
+        """Coalesce derived-index maintenance across multiple write calls.
+
+        This is a maintenance hint, not a transaction or atomicity boundary.
+        Backends that do not maintain derived indexes may treat it as a no-op.
+        """
+        if self.__collection is None:
+            raise RuntimeError("Collection is closed")
+        self.__collection.begin_bulk_ingest()
+
+    def end_bulk_ingest(self) -> None:
+        """End a matching :meth:`begin_bulk_ingest` scope."""
+        if self.__collection is None:
+            raise RuntimeError("Collection is closed")
+        self.__collection.end_bulk_ingest()
 
     def get_meta_data(self) -> Dict[str, Any]:
         """
@@ -449,6 +475,7 @@ class Collection:
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
+        raise_on_error: bool = False,
     ):
         """Retrieve random documents from the index.
 
@@ -459,6 +486,7 @@ class Collection:
             filters (Optional[Dict[str, Any]]): Query filters to narrow down results. Defaults to None.
             output_fields (Optional[List[str]]): List of field names to include in results.
                 If None, returns all fields. Defaults to None.
+            raise_on_error (bool): Propagate HTTP errors for deletion lookups. Defaults to False.
 
         Returns:
             SearchResult: Random documents from the index with field values (scores are not meaningful).
@@ -468,6 +496,15 @@ class Collection:
         """
         if self.__collection is None:
             raise RuntimeError("Collection is closed")
+        if raise_on_error:
+            return cast(Any, self.__collection).search_by_random(
+                index_name,
+                limit,
+                offset,
+                filters,
+                output_fields,
+                raise_on_error=True,
+            )
         return self.__collection.search_by_random(index_name, limit, offset, filters, output_fields)
 
     def search_by_scalar(
@@ -578,6 +615,21 @@ class Collection:
         if self.__collection is None:
             raise RuntimeError("Collection is closed")
         return self.__collection.upsert_data(data_list, ttl)
+
+    def update_data(self, data_list: List[Dict[str, Any]]) -> Any:
+        """
+        Update existing data in the collection using only explicitly provided fields.
+
+        Args:
+            data_list (List[Dict[str, Any]]): List of partial data documents to update.
+                Each document must contain the primary key.
+
+        Returns:
+            Any: Implementation-specific result for the updated records.
+        """
+        if self.__collection is None:
+            raise RuntimeError("Collection is closed")
+        return self.__collection.update_data(data_list)
 
     def fetch_data(self, primary_keys: List[Any]) -> List[Dict[str, Any]]:
         """

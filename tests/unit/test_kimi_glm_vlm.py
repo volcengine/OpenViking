@@ -8,7 +8,6 @@ from unittest.mock import MagicMock, patch
 from openviking.models.vlm import VLMFactory
 from openviking.models.vlm.backends.glm_vlm import DEFAULT_GLM_API_BASE, GLMVLM
 from openviking.models.vlm.backends.kimi_vlm import (
-    DEFAULT_KIMI_MAX_TOKENS,
     DEFAULT_KIMI_USER_AGENT,
     KimiVLM,
 )
@@ -57,7 +56,6 @@ def test_kimi_backend_sets_openai_compatible_defaults():
     assert vlm.provider == "kimi"
     assert vlm.api_base == "https://api.kimi.com/coding/v1"
     assert vlm.model == "kimi-for-coding"
-    assert vlm.max_tokens == DEFAULT_KIMI_MAX_TOKENS
     assert vlm.extra_headers == {"User-Agent": DEFAULT_KIMI_USER_AGENT}
 
 
@@ -75,18 +73,6 @@ def test_vlm_factory_routes_first_class_kimi_and_glm_providers():
 
     assert kimi_vlm.__class__.__name__ == "KimiVLM"
     assert glm_vlm.__class__.__name__ == "GLMVLM"
-
-
-def test_vlm_factory_exposes_canonical_provider_names():
-    assert VLMFactory.get_available_providers() == [
-        "volcengine",
-        "openai",
-        "azure",
-        "kimi",
-        "glm",
-        "litellm",
-        "openai-codex",
-    ]
 
 
 def test_vlm_config_uses_canonical_provider_names():

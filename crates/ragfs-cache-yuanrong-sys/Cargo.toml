@@ -1,0 +1,16 @@
+[package]
+name = "ragfs-cache-yuanrong-sys"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.91.1"
+license = "Apache-2.0"
+description = "Native C ABI bridge for the Yuanrong DataSystem C++ SDK"
+links = "openviking_yuanrong_bridge"
+build = "build.rs"
+
+[build-dependencies]
+cc = "1"
+
+[features]
+default = []
+native = []

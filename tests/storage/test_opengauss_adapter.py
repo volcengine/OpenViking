@@ -5,11 +5,9 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import datetime, timezone
 
 import pytest
 
-from openviking.storage.expr import And, Contains, Eq, PathScope, TimeRange
 from openviking.storage.vectordb.collection.result import SearchResult
 from openviking.storage.vectordb_adapters.factory import create_collection_adapter
 from openviking.storage.vectordb_adapters.opengauss_adapter import (
@@ -66,78 +64,6 @@ def test_factory_creates_opengauss_adapter_without_connecting():
     assert adapter.collection_name == "context"
     assert adapter.index_name == "default"
     assert adapter.physical_table_name == "ov_default_context"
-
-
-def test_augments_path_fields_on_write_and_hides_them_on_read():
-    adapter = OpenGaussCollectionAdapter.from_config(_build_config())
-    source_record = {
-        "id": "1",
-        "uri": "viking://resources/acme/docs/a.md",
-        "vector": [0.1, 0.2],
-    }
-
-    normalized = adapter._normalize_record_for_write(source_record)
-
-    assert normalized["uri"] == "/resources/acme/docs/a.md"
-    assert normalized["parent_uri"] == "/resources/acme/docs"
-    assert normalized["scope_roots"] == [
-        "/",
-        "/resources",
-        "/resources/acme",
-        "/resources/acme/docs",
-    ]
-    assert normalized["uri_depth"] == 4
-
-    public_record = adapter.normalize_record_for_read(normalized)
-    assert public_record["uri"] == "viking://resources/acme/docs/a.md"
-    assert "parent_uri" not in public_record
-    assert "scope_roots" not in public_record
-    assert "uri_depth" not in public_record
-
-
-def test_sanitizes_scalar_index_fields():
-    adapter = OpenGaussCollectionAdapter.from_config(_build_config())
-
-    result = adapter.sanitize_scalar_index_fields(
-        scalar_index_fields=["uri", "account_id"],
-        fields_meta=[],
-    )
-
-    assert result == ["uri", "account_id", "parent_uri", "scope_roots", "uri_depth"]
-
-
-def test_compiles_filter_exprs_for_sql_collection():
-    adapter = OpenGaussCollectionAdapter.from_config(_build_config())
-
-    compiled = adapter.compile_filter(
-        And(
-            [
-                Eq("account_id", "acme"),
-                PathScope("uri", "viking://resources/acme/docs", depth=-1),
-                TimeRange(
-                    "updated_at",
-                    start=datetime(2026, 5, 1, tzinfo=timezone.utc),
-                    end=datetime(2026, 6, 1, tzinfo=timezone.utc),
-                ),
-                Contains("abstract", "quarterly report"),
-            ]
-        )
-    )
-
-    assert compiled == {
-        "op": "and",
-        "conds": [
-            {"op": "must", "field": "account_id", "conds": ["acme"]},
-            {"op": "must", "field": "scope_roots", "conds": ["/resources/acme/docs"]},
-            {
-                "op": "range",
-                "field": "updated_at",
-                "gte": "2026-05-01T00:00:00+00:00",
-                "lt": "2026-06-01T00:00:00+00:00",
-            },
-            {"op": "contains", "field": "abstract", "substring": "quarterly report"},
-        ],
-    }
 
 
 def test_collection_filter_to_sql_for_path_scope():
@@ -223,7 +149,9 @@ def test_drop_index_removes_vector_and_scalar_indexes():
         "IndexName": index_name,
         "ScalarIndex": ["uri", "account_id"],
     }
-    collection._delete_index_meta = lambda index_name: statements.append(("delete_meta", index_name))
+    collection._delete_index_meta = lambda index_name: statements.append(
+        ("delete_meta", index_name)
+    )
     collection._execute = lambda sql, params=None, fetch=False: statements.append(sql)
 
     collection.drop_index("default")
@@ -260,7 +188,9 @@ def test_create_index_normalizes_metadata_to_hnsw():
     collection = object.__new__(OpenGaussCollection)
     saved = {}
 
-    collection._create_vector_index = lambda index_name, distance, meta: saved.setdefault("vector_meta", meta)
+    collection._create_vector_index = lambda index_name, distance, meta: saved.setdefault(
+        "vector_meta", meta
+    )
     collection._create_scalar_index = lambda index_name, field_name: None
     collection._save_index_meta = lambda index_name, meta: saved.setdefault("saved_meta", meta)
 
@@ -285,7 +215,9 @@ def test_create_index_does_not_save_metadata_when_vector_index_fails():
         raise RuntimeError("boom")
 
     collection._create_vector_index = fail_vector_index
-    collection._create_scalar_index = lambda index_name, field_name: saved.setdefault("scalar", field_name)
+    collection._create_scalar_index = lambda index_name, field_name: saved.setdefault(
+        "scalar", field_name
+    )
     collection._save_index_meta = lambda index_name, meta: saved.setdefault("saved_meta", meta)
 
     with pytest.raises(RuntimeError, match="boom"):

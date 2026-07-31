@@ -4,11 +4,10 @@
 
 import os
 import tempfile
-import time
 import uuid
 
 import pytest
-from conftest import ov
+from conftest import ov, ov_add_resource, ov_mkdir, ov_mv, ov_rm
 
 pytestmark = pytest.mark.cli_remote
 
@@ -89,35 +88,29 @@ class TestFsStat:
 class TestFsMkdir:
     def test_mkdir(self, test_dir_uri):
         sub_dir = f"{test_dir_uri}/mkdir_test"
-        r = ov(["mkdir", sub_dir, "-o", "json"])
+        r = ov_mkdir(sub_dir)
         assert r["exit_code"] == 0, (
             f"ov mkdir should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )
         assert "Directory created" in r["stdout"] or (r["json"] and r["json"].get("ok")), (
             f"mkdir should confirm creation, got: {r['stdout'][:200]}"
         )
-        ov(["rm", sub_dir, "-r", "-o", "json"])
+        ov_rm(sub_dir)
 
     def test_mkdir_with_description(self, test_dir_uri):
         sub_dir = f"{test_dir_uri}/mkdir_desc"
-        r = ov(["mkdir", sub_dir, "--description", "CLI test directory", "-o", "json"])
+        r = ov_mkdir(sub_dir, "--description", "CLI test directory")
         assert r["exit_code"] == 0, (
             f"ov mkdir with description should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )
-        ov(["rm", sub_dir, "-r", "-o", "json"])
+        ov_rm(sub_dir)
 
 
 class TestFsRm:
     def test_rm_directory(self, test_dir_uri):
         sub_dir = f"{test_dir_uri}/rm_test"
-        ov(["mkdir", sub_dir, "-o", "json"])
-        time.sleep(2)
-        r = None
-        for _attempt in range(5):
-            r = ov(["rm", sub_dir, "-r", "-o", "json"])
-            if r["exit_code"] == 0:
-                break
-            time.sleep(3)
+        ov_mkdir(sub_dir)
+        r = ov_rm(sub_dir)
         assert r["exit_code"] == 0, (
             f"ov rm should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )
@@ -134,17 +127,11 @@ class TestFsMv:
             f.write("move me")
             temp_path = f.name
         try:
-            ov(["add-resource", temp_path, "--to", src_uri, "--wait", "-o", "json"], timeout=120)
+            ov_add_resource(temp_path, src_uri)
         finally:
             os.unlink(temp_path)
-        time.sleep(15)
-        r = None
-        for _attempt in range(20):
-            r = ov(["mv", src_uri, dst_uri, "-o", "json"])
-            if r["exit_code"] == 0:
-                break
-            time.sleep(15)
+        r = ov_mv(src_uri, dst_uri)
         assert r["exit_code"] == 0, (
             f"ov mv should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )
-        ov(["rm", dst_uri, "-r", "-o", "json"])
+        ov_rm(dst_uri)

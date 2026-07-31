@@ -113,6 +113,8 @@ embedding_template: |
 directory: "viking://user/{{ user_space }}/memories/..."
 enabled: true
 operation_mode: "upsert"
+stage: "user"
+peer_enabled: true
 ```
 
 Field meanings:
@@ -135,6 +137,10 @@ Field meanings:
   - Whether this memory type is enabled
 - `operation_mode`
   - The update mode of the memory type, such as `upsert`
+- `stage`
+  - Extraction stage. The default is `user`, which participates in session user-memory extraction; `agent` is reserved for execution-derived schemas such as trajectories and experiences.
+- `peer_enabled`
+  - Whether this memory type is stored separately under peer directories when `peer_id` or message ranges identify a peer. The default is `true`; set `false` for memories that must stay under the current user space.
 
 When writing a memory schema, focus on:
 
@@ -190,9 +196,9 @@ These YAML files define the structure of different memory types. They are not si
 
 - `cases`
   - Effective stage: case-memory persistence and update stage
-  - Affects: reusable problem-to-solution case accumulation
-  - Purpose: defines case memory for "what problem happened and how it was solved"
-  - Key fields: `case_name`, `problem`, `solution`, `content`
+  - Affects: trainable and evaluable task-case accumulation
+  - Purpose: defines concrete task inputs, evaluation rubrics, and supporting evidence
+  - Key fields: `case_name`, `task_signature`, `input`, `rubric`, `evidence`
 
 - `entities`
   - Effective stage: entity-memory persistence and update stage
@@ -206,17 +212,17 @@ These YAML files define the structure of different memory types. They are not si
   - Purpose: defines structured event memory such as summaries, goals, and time ranges
   - Key fields: `event_name`, `goal`, `summary`, `ranges`
 
+- `experiences`
+  - Effective stage: experience-memory persistence and update stage
+  - Affects: reusable guidance distilled from task outcomes
+  - Purpose: records durable execution experience and the memories it supersedes
+  - Key fields: `experience_name`, `content`, `supersedes`
+
 - `identity`
   - Effective stage: agent identity memory persistence stage
   - Affects: long-term consistency of the agent's identity settings
   - Purpose: defines the agent's name, persona, vibe, avatar, and self-introduction fields
-  - Key fields: `name`, `creature`, `vibe`, `emoji`, `avatar`
-
-- `patterns`
-  - Effective stage: pattern-memory persistence and update stage
-  - Affects: long-term accumulation of reusable workflows and methods
-  - Purpose: defines pattern memory for "under what circumstances to follow what process"
-  - Key fields: `pattern_name`, `pattern_type`, `content`
+  - Key fields: `name`, `creature`, `vibe`, `emoji`, `avatar`, `introduction`
 
 - `preferences`
   - Effective stage: preference-memory persistence and update stage
@@ -249,7 +255,7 @@ These YAML files define the structure of different memory types. They are not si
   - Key fields: `tool_name`, `static_desc`, `call_count`, `success_time`, `when_to_use`, `optimal_params`
 
 - `trajectories`
-  - Effective stage: agent trajectory memory persistence stage (agent-only, add-only)
+  - Effective stage: agent trajectory memory persistence stage (`stage: agent`, add-only)
   - Affects: reusable operation contracts distilled from agent task trajectories — multi-step decisions, tool calls, and execution traces
   - Purpose: defines compact trajectory memory for "what reusable operation/contract emerged from a task trajectory"
   - Key fields: `trajectory_name`, `outcome`, `retrieval_anchor`, `content`
@@ -317,12 +323,6 @@ These prompts are mainly used to understand user intent before retrieval and dec
 ### Semantic
 
 These prompts are mainly used to generate file-level and directory-level summaries and are an important part of semantic indexing.
-
-- `semantic.code_ast_summary`
-  - Effective stage: AST skeleton summarization for large code files
-  - Affects: code file summaries, code retrieval, and structural understanding
-  - Purpose: generates code summaries from an AST skeleton instead of the full source
-  - Key inputs: `file_name`, `skeleton`, `output_language`
 
 - `semantic.code_summary`
   - Effective stage: code file summarization stage

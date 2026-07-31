@@ -9,10 +9,8 @@ from openviking.core.namespace import (
     canonicalize_uri,
     classify_uri,
     context_type_for_uri,
-    is_content_namespace_root_uri,
     is_content_root_uri,
     is_session_uri,
-    legacy_session_uri,
     owner_space_for_uri,
     visible_roots,
 )
@@ -40,6 +38,8 @@ def test_context_type_for_uri_uses_path_segments():
     assert context_type_for_uri("viking://agent/code-agent/memories/profile.md") == "memory"
     assert context_type_for_uri("viking://agent/code-agent/resources/faq.md") == "resource"
     assert context_type_for_uri("viking://agent/code-agent/skills/demo") == "skill"
+    assert context_type_for_uri("viking://agent/skills") == "skill"
+    assert context_type_for_uri("viking://agent/skills/demo") == "skill"
     assert context_type_for_uri("viking://resources/memories-report.md") == "resource"
     assert context_type_for_uri("viking://user/alice/resources/skills-report.md") == "resource"
 
@@ -81,6 +81,8 @@ def test_exact_memory_and_skill_root_detection():
     assert classify_uri("viking://user/alice/skills/demo/SKILL.md").is_skill
     assert classify_uri("viking://user/alice/skills/demo").is_skill_root
     assert classify_uri("viking://user/skills/demo").is_skill_root
+    assert classify_uri("viking://agent/skills").is_skill_namespace
+    assert classify_uri("viking://agent/skills/demo").is_skill_root
     assert not classify_uri("viking://user/alice/skills").is_skill_root
     assert not classify_uri("viking://user/alice/skills/demo/assets").is_skill_root
 
@@ -111,11 +113,13 @@ def test_session_uri_helpers_use_user_namespace():
         canonicalize_uri("viking://session/s1/history/archive_001/messages.jsonl", ctx)
         == "viking://user/alice/sessions/s1/history/archive_001/messages.jsonl"
     )
-    assert legacy_session_uri("s1") == "viking://session/s1"
     assert is_session_uri("viking://user/alice/sessions/s1")
     assert is_session_uri("viking://user/sessions/s1")
     assert is_session_uri("viking://session/s1")
-    assert "viking://session" not in visible_roots(ctx)
+    roots = visible_roots(ctx)
+    assert "viking://session" not in roots
+    assert "viking://agent" not in roots
+    assert "viking://agent/skills" in roots
 
 
 def test_current_user_short_content_roots_are_canonicalized_from_content_segments():
@@ -141,17 +145,4 @@ def test_current_user_short_content_roots_are_canonicalized_from_content_segment
     assert canonicalize_uri("viking://user/alice/resources", ctx) == (
         "viking://user/alice/resources"
     )
-    assert is_content_namespace_root_uri("viking://user/resources", ctx)
-    assert is_content_namespace_root_uri("viking://user/resources/", ctx)
-    assert is_content_namespace_root_uri("viking://resources", ctx)
     assert is_content_root_uri("viking://resources", ctx, kind="resource")
-    assert not is_content_namespace_root_uri("viking://user/resources/docs", ctx)
-
-
-def test_user_root_short_form_uses_current_identity():
-    ctx = RequestContext(
-        user=UserIdentifier(account_id="acct", user_id="alice"),
-        role=Role.ROOT,
-    )
-
-    assert canonicalize_uri("viking://user", ctx) == "viking://user/alice"

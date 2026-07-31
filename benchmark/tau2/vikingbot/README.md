@@ -58,7 +58,7 @@ env vars. Override any of these by exporting before sourcing:
 
 The tau2 **user simulator** talks to an OpenAI-compatible endpoint — set `ARK_API_KEY` (e.g.
 Doubao through volcengine ARK) before sourcing, or the simulator will fail. The user-simulator
-model is configured in [`tau2_env/tau2_environment.py`](tau2_env/tau2_environment.py).
+model is configured in [`../common/tau2_env/tau2_environment.py`](../common/tau2_env/tau2_environment.py).
 
 > Note: the sibling `llm/` harness ([`../llm/README.md`](../llm/README.md)) pins a tau2-bench ref
 > with a confirmation-aware user-simulator prompt (sierra-research/tau2-bench#297). Set
@@ -234,16 +234,16 @@ Two VikingBot behaviours need to change for tau2 self-improvement:
    turn. For tau2 we want accumulated **experience** memory pulled once per task, with a larger
    character budget per experience.
 
-Both are now controlled by config — set these three flags in the `bot.ov_server` section of the
-`ov.conf` pointed to by `OPENVIKING_CONFIG_FILE`:
+Experience recall is enabled by default and retrieves experience memory once on the first user turn.
+You can tune these two flags in the `bot.ov_server` section of the `ov.conf` pointed to by
+`OPENVIKING_CONFIG_FILE`:
 
 ```jsonc
 {
   "bot": {
     "ov_server": {
-      "recall_exp_first_round_only": true,  // skip per-turn recall; inject exp once on the first user turn
-      "exp_recall_limit": 2,                // fetch 2 experiences per task (default: 5)
-      "exp_recall_max_chars": 10000         // character budget for the injected experience block (default: 2000)
+      "exp_recall_limit": 2,        // fetch 2 experiences per task (default: 5)
+      "exp_recall_max_chars": 10000 // character budget for the injected experience block (default: 2000)
     }
   }
 }
@@ -251,10 +251,6 @@ Both are now controlled by config — set these three flags in the `bot.ov_serve
 
 What each flag does:
 
-- **`recall_exp_first_round_only`** — when `true`, `ContextBuilder._build_user_memory` skips the
-  default per-turn memory recall and instead calls `get_viking_experience_context` once, on the
-  first user-turn of the session. The runner only ever sends one user turn per task, so this
-  becomes "fetch experience once per task."
 - **`exp_recall_limit`** — how many experiences to retrieve. tau2 prefers **fewer but longer**
   (2) over many shallow hits (5).
 - **`exp_recall_max_chars`** — total character budget for the formatted experience block. Bumped
@@ -271,7 +267,7 @@ runtime identity, so each domain reads and writes `viking://user/<domain_user>/.
 - `setup_env.sh` — environment setup (PYTHONPATH, tau2 data root, simulator LLM)
 - `run_full_test.sh` — full pipeline for one epoch (run → eval → commit)
 - `run_airline_2epochs.sh` — multi-epoch example (cold start → memory-augmented epochs)
-- `tau2_env/` — tau2 environment integration (`tau2_environment.py`, `tau2_tool_provider.py`)
+- `../common/tau2_env/` — tau2 environment integration (`tau2_environment.py`, `tau2_tool_provider.py`)
 - `scripts/`
   - `provision_openviking_user.py` — create/refresh a benchmark user and write a user-key config
   - `vikingbot_tau2_runner.py` — runs a single tau2 task through the VikingBot agent loop

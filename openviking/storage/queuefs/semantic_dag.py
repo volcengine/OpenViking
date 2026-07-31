@@ -4,15 +4,16 @@
 
 import asyncio
 import threading
-from weakref import WeakKeyDictionary
 from dataclasses import dataclass, field
-from typing import ClassVar, Dict, List, Optional, Set
+from typing import Any, ClassVar, Dict, List, Optional, Set
+from weakref import WeakKeyDictionary
 
 from openviking.server.identity import RequestContext
+from openviking.service.task_work_index import bind_task_context, get_task_context
 from openviking.storage.queuefs.semantic_sidecar import write_semantic_sidecars
-from openviking.storage.transaction import NO_LOCK, LockLease
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.logger import get_logger
 
@@ -63,6 +64,7 @@ class VectorizeTask:
     summary_dict: Optional[Dict[str, str]] = None
     parent_uri: Optional[str] = None
     use_summary: bool = False
+    ingest_options: IngestOptions = field(default_factory=IngestOptions)
     # For directory tasks
     abstract: Optional[str] = None
     overview: Optional[str] = None
@@ -123,6 +125,7 @@ class SemanticNodeScheduler:
                     return
                 continue
 
+            item.executor._start_scheduled_work()
             try:
                 if not item.executor.closed:
                     await item.executor._run_work(item.work)
@@ -131,6 +134,7 @@ class SemanticNodeScheduler:
             except Exception as exc:
                 item.executor.fail(exc)
             finally:
+                item.executor._finish_scheduled_work()
                 self._queue.task_done()
 
 
@@ -167,10 +171,11 @@ class SemanticDagExecutor:
         semantic_msg_id: Optional[str] = None,
         telemetry_id: str = "",
         recursive: bool = True,
-        lock: LockLease = NO_LOCK,
+        lock: Optional[Dict[str, Any]] = None,
         is_code_repo: bool = False,
         changes: Optional[Dict[str, List[str]]] = None,
         skip_vectorization: bool = False,
+        ingest_options: IngestOptions | None = None,
         coalesce_key: str = "",
         coalesce_version: int = 0,
     ):
@@ -186,8 +191,10 @@ class SemanticDagExecutor:
         self._is_code_repo = is_code_repo
         self._changes = changes or {}
         self._skip_vectorization = skip_vectorization
+        self._ingest_options = IngestOptions.from_value(ingest_options)
         self._coalesce_key = coalesce_key
         self._coalesce_version = coalesce_version
+        self._task_context = get_task_context()
         self._stale = False
         self._changed_paths = {
             path for key in ("added", "modified", "deleted") for path in self._changes.get(key, [])
@@ -200,6 +207,9 @@ class SemanticDagExecutor:
         self._root_uri: Optional[str] = None
         self._root_done: Optional[asyncio.Event] = None
         self._scheduler: Optional[SemanticNodeScheduler] = None
+        self._active_scheduled_work = 0
+        self._active_work_idle = asyncio.Event()
+        self._active_work_idle.set()
         self._closed = False
         self._failure: Optional[Exception] = None
         self._stats = DagStats()
@@ -226,15 +236,12 @@ class SemanticDagExecutor:
             if self._failure:
                 raise self._failure
 
-            # Release owned semantic locks after downstream vectorization finishes.
+            # Mark semantic done after downstream vectorization finishes.
             async def wrapped_on_complete() -> None:
-                try:
-                    if self._telemetry_id and self._semantic_msg_id:
-                        get_request_wait_tracker().mark_semantic_done(
-                            self._telemetry_id, self._semantic_msg_id
-                        )
-                finally:
-                    await self._lock.close()
+                if self._telemetry_id and self._semantic_msg_id:
+                    get_request_wait_tracker().mark_semantic_done(
+                        self._telemetry_id, self._semantic_msg_id
+                    )
 
             async with self._vectorize_lock:
                 task_count = self._vectorize_task_count
@@ -260,13 +267,11 @@ class SemanticDagExecutor:
                     logger.error(f"Error in on_complete callback: {e}", exc_info=True)
         except BaseException:
             self._closed = True
-            try:
-                await self._lock.close()
-            except Exception:
-                pass
+            await self._active_work_idle.wait()
             raise
         finally:
             self._closed = True
+            await self._active_work_idle.wait()
             self._unregister_active()
 
     def _schedule_work(self, work: DagWork) -> None:
@@ -275,6 +280,15 @@ class SemanticDagExecutor:
         if self._scheduler is None:
             self._scheduler = get_semantic_node_scheduler(self._node_concurrency)
         self._scheduler.submit(self, work)
+
+    def _start_scheduled_work(self) -> None:
+        self._active_scheduled_work += 1
+        self._active_work_idle.clear()
+
+    def _finish_scheduled_work(self) -> None:
+        self._active_scheduled_work = max(0, self._active_scheduled_work - 1)
+        if self._active_scheduled_work == 0:
+            self._active_work_idle.set()
 
     def _schedule_dir(self, dir_uri: str, parent_uri: Optional[str]) -> None:
         if self._closed:
@@ -341,6 +355,17 @@ class SemanticDagExecutor:
         return stats
 
     async def _run_work(self, work: DagWork) -> None:
+        if self._task_context is not None:
+            with bind_task_context(
+                self._task_context.task_id,
+                self._task_context.account_id,
+                self._task_context.user_id,
+            ):
+                await self._run_work_bound(work)
+            return
+        await self._run_work_bound(work)
+
+    async def _run_work_bound(self, work: DagWork) -> None:
         if work.kind == "vectorize":
             await self._run_vectorize_work(work.vectorize_task)
             return
@@ -406,6 +431,7 @@ class SemanticDagExecutor:
                 ctx=task.ctx,
                 semantic_msg_id=task.semantic_msg_id,
                 use_summary=task.use_summary,
+                ingest_options=task.ingest_options,
             )
             return
 
@@ -416,6 +442,7 @@ class SemanticDagExecutor:
             task.overview,
             ctx=task.ctx,
             semantic_msg_id=task.semantic_msg_id,
+            ingest_options=task.ingest_options,
         )
 
     async def _dispatch_dir(self, dir_uri: str, parent_uri: Optional[str]) -> bool:
@@ -678,6 +705,8 @@ class SemanticDagExecutor:
             self._stats.done_nodes += 1
             self._stats.in_progress_nodes = max(0, self._stats.in_progress_nodes - 1)
 
+        if self._closed:
+            return
         try:
             if need_vectorize:
                 use_summary = self._is_code_repo and bool(summary_dict.get("summary"))
@@ -691,6 +720,7 @@ class SemanticDagExecutor:
                     summary_dict=summary_dict,
                     parent_uri=parent_uri,
                     use_summary=use_summary,
+                    ingest_options=self._ingest_options,
                 )
                 await self._add_vectorize_task(task)
         except Exception as e:
@@ -812,8 +842,10 @@ class SemanticDagExecutor:
                     overview = await self._processor._generate_overview(
                         dir_uri, file_summaries, children_abstracts
                     )
-                abstract = self._processor._extract_abstract_from_overview(overview)
-                overview, abstract = self._processor._enforce_size_limits(overview, abstract)
+                overview, abstract = self._processor._normalize_overview_generation(overview)
+
+            if self._closed:
+                return
 
             # Write directly, protected by the outer semantic lock.
             try:
@@ -833,6 +865,7 @@ class SemanticDagExecutor:
                         semantic_msg_id=self._semantic_msg_id,
                         abstract=abstract,
                         overview=overview,
+                        ingest_options=self._ingest_options,
                     )
                     await self._add_vectorize_task(task)
             except Exception as e:

@@ -1,11 +1,20 @@
 import argparse
+import asyncio
 import csv
 import json
 import os
-import asyncio
-from openai import AsyncOpenAI
-from dotenv import load_dotenv
+import sys
+import time
 from pathlib import Path
+
+from dotenv import load_dotenv
+from openai import AsyncOpenAI
+from progress_utils import (
+    AsyncProgressTracker,
+    format_duration,
+    make_three_state_progress,
+    should_show_progress,
+)
 
 # 加载本地环境变量文件
 env_file = Path.home() / ".openviking_benchmark_env"
@@ -91,8 +100,8 @@ async def main():
     )
     parser.add_argument(
         "--input",
-        default="./result/locomo_qa_result_only_sys_memory.csv",
-        help="Path to QA result csv file, default: ./result/locomo_qa_result.csv",
+        default="./result/locomo/locomo_qa_result_only_sys_memory.csv",
+        help="Path to QA result csv file, default: ./result/locomo/locomo_qa_result.csv",
     )
     parser.add_argument(
         "--base-url",
@@ -110,9 +119,15 @@ async def main():
         help="Judge model name, default: doubao-seed-2-0-pro-260215",
     )
     parser.add_argument(
-        "--parallel", type=int, default=5, help="Parallel request count, default: 5"
+        "--parallel", type=int, default=100, help="Parallel request count, default: 100"
+    )
+    parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable the live progress bar (fall back to line-by-line logs). Auto-disabled when stderr is not a TTY.",
     )
     args = parser.parse_args()
+    started_at = time.perf_counter()
 
     if not args.token:
         print("Error: API token is required")
@@ -128,7 +143,7 @@ async def main():
     total = len(rows)
     # 筛选未评分的行
     ungraded = [i for i, row in enumerate(rows) if not row.get("result")]
-    print(f"Total answers: {total}, ungraded: {len(ungraded)}")
+    print(f"Total answers: {total}, ungraded: {len(ungraded)}", file=sys.stderr)
 
     if not ungraded:
         print("All answers already graded, exit")
@@ -140,6 +155,15 @@ async def main():
     # 并发处理
     semaphore = asyncio.Semaphore(args.parallel)
     file_lock = asyncio.Lock()  # 用于同步文件写入
+
+    show_progress = should_show_progress(args.no_progress)
+
+    if show_progress:
+        progress, task_id = make_three_state_progress(description="Judge")
+        progress_tracker = AsyncProgressTracker(progress, task_id, total=len(ungraded))
+    else:
+        progress = None
+        progress_tracker = None
 
     async def save_results():
         """保存当前所有结果到CSV文件，使用临时文件+原子替换避免文件损坏"""
@@ -153,29 +177,55 @@ async def main():
 
     async def process_row(idx):
         async with semaphore:
-            row = rows[idx]
-            question = row["question"]
-            gold = row["answer"]
-            response = row["response"]
-            print(f"Grading {idx + 1}/{total}: {question[:60]}...")
-            is_correct, reasoning = await grade_answer(client, args.model, question, gold, response)
-            row["result"] = "CORRECT" if is_correct else "WRONG"
-            row["reasoning"] = reasoning
+            if progress_tracker is not None:
+                progress_tracker.job_started()
 
-            # 处理完一条就立即保存结果
-            await save_results()
-            print(f"Saved result for {idx + 1}/{total}: {row['result']}")
+            failed = False
+            try:
+                row = rows[idx]
+                question = row["question"]
+                gold = row["answer"]
+                response = row["response"]
+                if not show_progress:
+                    print(f"Grading {idx + 1}/{total}: {question[:60]}...")
 
-            return idx, row
+                is_correct, reasoning = await grade_answer(
+                    client, args.model, question, gold, response
+                )
+
+                row["result"] = "CORRECT" if is_correct else "WRONG"
+                row["reasoning"] = reasoning
+
+                # 处理完一条就立即保存结果
+                await save_results()
+                if not show_progress:
+                    print(f"Saved result for {idx + 1}/{total}: {row['result']}")
+
+                return idx, row
+            except Exception:
+                failed = True
+                raise
+            finally:
+                if progress_tracker is not None:
+                    progress_tracker.job_finished(failed=failed)
 
     tasks = [process_row(idx) for idx in ungraded]
-    await asyncio.gather(*tasks)
+
+    if show_progress:
+        with progress:
+            await asyncio.gather(*tasks)
+    else:
+        await asyncio.gather(*tasks)
 
     # 统计结果
     correct = sum(1 for row in rows if row.get("result") == "CORRECT")
     total_graded = sum(1 for row in rows if row.get("result"))
     accuracy = correct / total_graded if total_graded > 0 else 0.0
-    print(f"\nGrading completed: {correct}/{total_graded} correct, accuracy: {accuracy:.2%}")
+    elapsed = format_duration(time.perf_counter() - started_at)
+    print(
+        f"\nGrading completed: {correct}/{total_graded} correct, "
+        f"accuracy: {accuracy:.2%}, elapsed: {elapsed}"
+    )
     print(f"All results saved to {args.input}")
 
 

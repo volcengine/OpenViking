@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import {
-  BotIcon,
   CheckCircle2Icon,
   CircleAlertIcon,
   HistoryIcon,
@@ -19,17 +19,16 @@ import {
   DialogTitle,
 } from '#/components/ui/dialog'
 import { cn } from '#/lib/utils'
+import { useAppConnection } from '#/hooks/use-app-connection'
+import { createRandomUuid } from '#/lib/browser-crypto'
 import { useChat } from '#/lib/sessions/use-chat'
 import {
   useBotHealth,
   useCreateSession,
-  useSessionList,
+  useSessionListByRecency,
   useSessionMessages,
 } from '#/lib/sessions/use-sessions'
-import {
-  setSessionTitle,
-  useSessionTitles,
-} from '#/lib/sessions/use-session-titles'
+import { useSessionTitles } from '#/lib/sessions/use-session-titles'
 import { Composer } from '#/routes/sessions/-components/composer'
 import { MessageList } from '#/routes/sessions/-components/message-list'
 
@@ -45,58 +44,39 @@ export function AgentPanel({
   initialSessionId,
   onOpenResource,
   onSessionChange,
+  toolbarContainer,
 }: {
   initialSessionId?: string
   onOpenResource: ResourceOpenHandler
   onSessionChange: (sessionId: string) => void
+  toolbarContainer: HTMLDivElement | null
 }) {
   const { t } = useTranslation('playground')
-  const [sessionId, setSessionId] = useState(initialSessionId ?? '')
+  const { identityScopeKey } = useAppConnection()
+  const [sessionId, setSessionId] = useState(
+    initialSessionId ?? createRandomUuid(),
+  )
   const [historyOpen, setHistoryOpen] = useState(false)
   const [sessionError, setSessionError] = useState<string | null>(null)
   const [isCreatingSession, setIsCreatingSession] = useState(false)
   const creationStartedRef = useRef(false)
   const botHealth = useBotHealth()
   const createSession = useCreateSession()
-  const { data: sessions, isLoading: isLoadingSessions } = useSessionList()
-  const { getTitle } = useSessionTitles()
+  const { data: sessions, isLoading: isLoadingSessions } =
+    useSessionListByRecency()
+  const { getTitle, setTitle } = useSessionTitles(identityScopeKey)
   const [playgroundSessionIds, setPlaygroundSessionIds] = useState<string[]>(
-    () => readPlaygroundAgentSessionIds(),
+    () => readPlaygroundAgentSessionIds(identityScopeKey),
   )
-  const { data: historyMessages } = useSessionMessages(sessionId || undefined)
+  const { data: historyMessages } = useSessionMessages(sessionId)
   const chat = useChat({
+    identityScopeKey,
     initialMessages: historyMessages,
-    persistMessages: Boolean(sessionId),
-    sessionId: sessionId || 'playground-preview',
+    persistMessages: true,
+    sessionId,
   })
   const scrollRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
-
-  const startSession = useCallback(async () => {
-    if (sessionId || creationStartedRef.current) return
-
-    creationStartedRef.current = true
-    setIsCreatingSession(true)
-    setSessionError(null)
-
-    try {
-      const result = await withTimeout(
-        createSession.mutateAsync(undefined),
-        12_000,
-        t('agent.createTimeout'),
-      )
-      setPlaygroundSessionIds(
-        registerPlaygroundAgentSessionId(result.session_id),
-      )
-      setSessionId(result.session_id)
-      onSessionChange(result.session_id)
-    } catch (error) {
-      creationStartedRef.current = false
-      setSessionError(error instanceof Error ? error.message : String(error))
-    } finally {
-      setIsCreatingSession(false)
-    }
-  }, [createSession, onSessionChange, sessionId, t])
 
   const handleNewSession = useCallback(async () => {
     if (isCreatingSession) return
@@ -114,9 +94,9 @@ export function AgentPanel({
         t('agent.createTimeout'),
       )
       setPlaygroundSessionIds(
-        registerPlaygroundAgentSessionId(result.session_id),
+        registerPlaygroundAgentSessionId(result.session_id, identityScopeKey),
       )
-      setSessionTitle(result.session_id, t('agent.newSessionTitle'))
+      setTitle(result.session_id, t('agent.newSessionTitle'))
       setSessionId(result.session_id)
       onSessionChange(result.session_id)
       setHistoryOpen(false)
@@ -126,7 +106,15 @@ export function AgentPanel({
     } finally {
       setIsCreatingSession(false)
     }
-  }, [chat, createSession, isCreatingSession, onSessionChange, t])
+  }, [
+    chat,
+    createSession,
+    identityScopeKey,
+    isCreatingSession,
+    onSessionChange,
+    setTitle,
+    t,
+  ])
 
   const handleSwitchSession = useCallback(
     (nextSessionId: string) => {
@@ -134,28 +122,31 @@ export function AgentPanel({
       creationStartedRef.current = true
       setSessionError(null)
       setIsCreatingSession(false)
-      setPlaygroundSessionIds(registerPlaygroundAgentSessionId(nextSessionId))
+      setPlaygroundSessionIds(
+        registerPlaygroundAgentSessionId(nextSessionId, identityScopeKey),
+      )
       setSessionId(nextSessionId)
       onSessionChange(nextSessionId)
       setHistoryOpen(false)
     },
-    [chat, onSessionChange],
+    [chat, identityScopeKey, onSessionChange],
   )
 
+  // Notify parent of the initial sessionId so the URL stays in sync.
+  // The session is lazily created on the backend by the first addMessage call.
   useEffect(() => {
-    // Only create a session once bot mode is confirmed available, otherwise we
-    // leave orphan sessions behind and flash "creating" before the bot-mode
-    // prompt.
-    if (!sessionId && !sessionError && botHealth.isSuccess) {
-      void startSession()
+    if (sessionId) {
+      onSessionChange(sessionId)
     }
-  }, [botHealth.isSuccess, sessionError, sessionId, startSession])
+  }, [])
 
   useEffect(() => {
     if (sessionId) {
-      setPlaygroundSessionIds(registerPlaygroundAgentSessionId(sessionId))
+      setPlaygroundSessionIds(
+        registerPlaygroundAgentSessionId(sessionId, identityScopeKey),
+      )
     }
-  }, [sessionId])
+  }, [identityScopeKey, sessionId])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -175,14 +166,18 @@ export function AgentPanel({
 
   const isStreaming = chat.status === 'streaming'
   const botModeError = botHealth.isError ? getErrorMessage(botHealth.error) : ''
-  const isCreating = !sessionId && isCreatingSession
+  const sessionTitle = getTitle(sessionId)
+  const displayedSessionTitle =
+    sessionTitle === sessionId ? t('agent.newSessionTitle') : sessionTitle
   const reversedSessions = useMemo(() => {
+    // `sessions` is already sorted by recency (newest first). Filter to
+    // sessions that were opened in this playground, preserving recency order.
     const sessionById = new Map(
-      (sessions ?? []).map((session) => [session.session_id, session]),
+      sessions.map((session) => [session.session_id, session]),
     )
 
     return playgroundSessionIds
-      .map((sessionId) => sessionById.get(sessionId))
+      .map((playgroundSessionId) => sessionById.get(playgroundSessionId))
       .filter((session): session is NonNullable<typeof session> =>
         Boolean(session),
       )
@@ -190,51 +185,21 @@ export function AgentPanel({
 
   return (
     <>
+      <AgentToolbar
+        container={toolbarContainer}
+        historyLabel={t('agent.history')}
+        isCreatingSession={isCreatingSession}
+        newSessionLabel={t('agent.newSession')}
+        onNewSession={() => void handleNewSession()}
+        onOpenHistory={() => setHistoryOpen(true)}
+        sessionTitle={displayedSessionTitle}
+      />
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="flex h-14 shrink-0 items-center border-b bg-background/70 px-4">
-          <div className="flex min-w-0 flex-1 items-center gap-2 text-xs text-muted-foreground">
-            <BotIcon className="size-3.5 shrink-0" />
-            <span className="min-w-0 flex-1 truncate">
-              {t('agent.autoRetrieve')}
-            </span>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              className="size-7 shrink-0"
-              title={t('agent.history')}
-              onClick={() => setHistoryOpen(true)}
-            >
-              <HistoryIcon className="size-3.5" />
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              className="size-7 shrink-0"
-              title={t('agent.newSession')}
-              disabled={isCreatingSession}
-              onClick={() => void handleNewSession()}
-            >
-              {isCreatingSession ? (
-                <Loader2Icon className="size-3.5 animate-spin" />
-              ) : (
-                <SquarePenIcon className="size-3.5" />
-              )}
-            </Button>
-          </div>
-        </div>
-
         <div
           ref={scrollRef}
           className="min-h-0 flex-1 overflow-y-auto px-4 py-4"
         >
-          {isCreating ? (
-            <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
-              <Loader2Icon className="size-4 animate-spin" />
-              {t('agent.creating')}
-            </div>
-          ) : botHealth.isLoading ? (
+          {botHealth.isLoading ? (
             <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
               <Loader2Icon className="size-4 animate-spin" />
               {t('agent.detectingBot')}
@@ -254,7 +219,7 @@ export function AgentPanel({
                 className="w-fit"
                 onClick={() => {
                   setSessionError(null)
-                  void startSession()
+                  void handleNewSession()
                 }}
               >
                 {t('agent.retry')}
@@ -369,6 +334,63 @@ export function AgentPanel({
   )
 }
 
+export function AgentToolbar({
+  container,
+  historyLabel,
+  isCreatingSession,
+  newSessionLabel,
+  onNewSession,
+  onOpenHistory,
+  sessionTitle,
+}: {
+  container: HTMLDivElement | null
+  historyLabel: string
+  isCreatingSession: boolean
+  newSessionLabel: string
+  onNewSession: () => void
+  onOpenHistory: () => void
+  sessionTitle: string
+}) {
+  if (!container) return null
+
+  return createPortal(
+    <>
+      <span
+        className="min-w-0 max-w-48 truncate px-1 text-sm font-medium text-foreground"
+        title={sessionTitle}
+      >
+        {sessionTitle}
+      </span>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        className="size-7 shrink-0"
+        title={historyLabel}
+        onClick={onOpenHistory}
+      >
+        <HistoryIcon className="size-3.5" />
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        className="size-7 shrink-0"
+        title={newSessionLabel}
+        disabled={isCreatingSession}
+        onClick={onNewSession}
+      >
+        {isCreatingSession ? (
+          <Loader2Icon className="size-3.5 animate-spin" />
+        ) : (
+          <SquarePenIcon className="size-3.5" />
+        )}
+      </Button>
+    </>,
+    container,
+  )
+}
+
 export function BotModePrompt({
   detail,
   onRetry,
@@ -394,7 +416,7 @@ export function BotModePrompt({
           </div>
         </div>
         <code className="rounded-lg border bg-background px-3 py-2 font-mono text-xs text-foreground">
-          openviking-server --with-bot
+          {t('agent.botPrompt.command')}
         </code>
         {detail ? (
           <div className="rounded-lg bg-muted/50 px-3 py-2 text-xs leading-5 text-muted-foreground">

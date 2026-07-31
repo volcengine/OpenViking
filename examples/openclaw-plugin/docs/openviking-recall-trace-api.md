@@ -6,10 +6,10 @@
 
 Recall Trace 是 OpenViking 插件的召回可观测能力。启用后，插件会把每一次自动召回、显式记忆召回、资源搜索、归档搜索记录成结构化 trace，便于回答以下问题：
 
-- 本轮到底搜索了哪些语义召回范围：`resource`、`user`、`agent`？归档搜索会单独记录为 session archive trace。
+- 本轮到底搜索了哪些范围：`resource`、`user`、`agent`？
 - 每个范围请求的目标 URI、limit、阈值和耗时是多少？
 - 候选结果有哪些？最终哪些被注入 prompt 或展示给用户？
-- 为什么没有召回？是低于分数阈值、预算不足，还是搜索失败？
+- 为什么没有召回？是没有 session 上下文、低于分数阈值、预算不足，还是搜索失败？
 - Gateway 重启后，是否还能从 JSONL 持久化文件查到近期 trace？
 
 核心实现位于 `recall-trace.ts:20`、`index.ts:704`、`index.ts:774` 和 `index.ts:784`。
@@ -91,11 +91,9 @@ Trace 会记录实际召回范围，但召回范围本身由 `recallTargetTypes`
 
 | resourceType | target URI | 说明 |
 | --- | --- | --- |
-| `resource` | `context_type=resource` | resource 知识库；target URI 可为空，由服务端解析当前可检索 resource 范围。 |
-| `user` | `context_type=memory` | 兼容目标类型；与 `agent` 合并为一次 memory 类型检索。 |
-| `agent` | `context_type=memory` + `X-OpenViking-Actor-Peer` | 兼容目标类型；不再依赖废弃的 `viking://agent/...` 目录。 |
-
-Session history is not a semantic recall target because the server does not vector-index session archives. Use `ov_archive_search` and `ov_archive_expand` for exact session-history recovery.
+| `resource` | `viking://resources` | 全局资源库。 |
+| `user` | `viking://user/memories` | 当前用户长期记忆。 |
+| `agent` | `agent recall target` | 当前 Agent 长期记忆。 |
 
 ## 3. Trace 记录来源
 
@@ -123,7 +121,7 @@ Session history is not a semantic recall target because the server does not vect
 | `agentId` | string? | 实际发送到 OpenViking 的 agent ID。 |
 | `source` | enum | `auto_recall`、`memory_recall`、`ov_search`、`ov_archive_search`。 |
 | `operationType` | enum | `semantic_find` 或 `archive_grep`。 |
-| `resourceTypes` | array | 本次 trace 覆盖的召回类型：semantic recall 使用 `resource`、`user`、`agent`；`ov_archive_search` trace 会标记为 `session`。 |
+| `resourceTypes` | array | 本次 trace 覆盖的召回类型：`resource`、`user`、`agent`。 |
 | `trigger.query` | string | 触发搜索的查询文本，受 `traceRecallQueryMaxChars` 限制。 |
 | `trigger.derivedKeywords` | string[]? | 派生关键词；归档搜索通常保存原 query。 |
 | `trigger.rawUserTextPreview` | string? | 原始用户输入预览；默认不持久化。 |
@@ -148,7 +146,7 @@ Session history is not a semantic recall target because the server does not vect
 | `results` | array | 候选结果摘要，最多 `traceRecallMaxResultsPerSearch` 条。 |
 | `archiveId` | string? | 归档搜索指定 archive 时存在。 |
 | `caseInsensitive` | boolean? | 归档 grep 是否大小写不敏感。 |
-| `error` | string? | 子搜索失败原因。 |
+| `error` | string? | 子搜索失败或跳过原因。 |
 
 ### 4.3 `results[]`
 
@@ -541,7 +539,7 @@ curl 'http://127.0.0.1:<gateway-port>/api/openviking/recall-traces/ov_search-178
 /ov-recall-trace --turn all --source memory_recall --limit 5
 ```
 
-重点查看 `resourceTypes`、`searches[].contextType` 和 `searches[].targetUriResolved`，确认是否使用 `context_type=memory` / `context_type=resource`，或是否按请求 `resourceTypes` 改变范围。
+重点查看 `resourceTypes` 和 `searches[].targetUriResolved`，确认是否默认查了 `viking://user/memories` 与 `agent recall target`，或是否按请求 `resourceTypes` 改变范围。
 
 ### 9.3 排查 `/ov-search` 或 `ov_search` 为什么结果不符合预期
 
@@ -565,7 +563,7 @@ curl 'http://127.0.0.1:<gateway-port>/api/openviking/recall-traces/ov_search-178
 重点查看：
 
 - `operationType` 是否为 `archive_grep`。
-- `searches[].targetUriResolved` 是否指向正确 session history 或 archive。
+- `searches[].targetUriResolved` 是否指向正确 session archive。
 - `searches[].caseInsensitive` 是否为 true。
 - `stats.candidateCount` 与 `selected[].line`。
 

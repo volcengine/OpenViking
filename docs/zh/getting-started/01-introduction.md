@@ -26,11 +26,18 @@ OpenViking 正是为解决这些痛点而设计的上下文数据库。
 viking://
 ├── resources/              # 资源：项目文档、代码库、网页等
 │   └── my_project/
-├── user/                   # 用户：个人偏好、习惯等
-│   └── memories/
-└── agent/                  # Agent：技能、指令、任务记忆等
-    ├── skills/
-    └── memories/
+├── user/
+│   └── {user_id}/          # 当前用户的私有上下文
+│       ├── memories/       # 用户记忆
+│       ├── resources/      # 用户私有资源
+│       ├── skills/         # 用户私有技能（默认）
+│       ├── peers/
+│       │   └── {peer_id}/
+│       │       ├── memories/
+│       │       └── resources/
+│       └── sessions/
+└── agent/
+    └── skills/             # account 全局共享技能（可选）
 ```
 
 **三种上下文类型**：
@@ -92,18 +99,17 @@ OpenViking 的组织方式采用层次化虚拟文件系统结构，所有上下
 
 ### 5. 会话自动管理
 
-OpenViking 内置了记忆自迭代闭环。在每次会话结束时，开发者可以主动触发记忆提取机制，系统会异步分析任务执行结果与用户反馈，并自动更新至 User 和 Agent 的记忆目录下。
+OpenViking 内置记忆自迭代闭环。提交会话后，系统会异步分析任务执行结果与用户反馈，并根据记忆策略更新当前用户或 Peer 的记忆。
 
-**6 种记忆分类**：
+**内置记忆类型**：
 
-| 分类 | 归属 | 说明 |
-|------|------|------|
-| **profile** | user | 用户基本信息 |
-| **preferences** | user | 按主题的用户偏好 |
-| **entities** | user | 实体记忆（人物、项目） |
-| **events** | user | 事件记录（决策、里程碑） |
-| **cases** | agent | 学习的案例 |
-| **patterns** | agent | 学习的模式 |
+| 用途 | 内置类型 | 说明 |
+|------|----------|------|
+| **用户与环境理解** | `profile`、`preferences`、`entities`、`events` | 记录用户画像、偏好、实体和事件 |
+| **助手身份与连续性** | `identity`、`soul` | 记录助手身份、边界、风格和连续性 |
+| **任务执行与学习** | `cases`、`trajectories`、`experiences`、`tools`、`skills` | 沉淀可训练案例、执行轨迹、经验和工具/技能使用知识 |
+
+OpenViking 支持根据业务需要扩展或调整记忆类型。
 
 让 Agent 在与世界的交互中"越用越聪明"，实现自我进化。
 

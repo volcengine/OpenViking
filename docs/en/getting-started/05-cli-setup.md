@@ -92,6 +92,12 @@ Install or upgrade the npm package:
 npm i -g @openviking/cli
 ```
 
+Or build the Rust CLI from source:
+
+```bash
+cargo install --git https://github.com/volcengine/OpenViking ov_cli
+```
+
 The npm package is the simplest standalone CLI install. If you also want the Python SDK or server package, the Python package exposes `ov` too:
 
 ```bash
@@ -484,3 +490,13 @@ ov --help
 ov config --help
 ov add-resource --help
 ```
+
+## Rebuilding Indexes
+
+`ov reindex <uri>` rebuilds the indexes of already-imported content. Three modes are available:
+
+- `--mode vectors_only` — refresh vectors only.
+- `--mode semantic_and_vectors` — regenerate semantic artifacts (`.abstract.md`, `.overview.md`) before refreshing vectors.
+- `--mode prune_orphans` — remove vector records whose source files no longer exist. Add `--dry-run` to preview the cleanup without applying it.
+
+There is no `semantic` or `full` mode alias.

@@ -2,13 +2,17 @@ import axios from 'axios'
 
 import { createClient } from '#/gen/ov-client/client'
 import {
+  deleteAdminAccountIdUserByUserId,
   getAdminAccountIdUsers,
   getAdminAccounts,
   getOvResult,
   postAdminAccountIdUserIdKey,
   postAdminAccountIdUsers,
   postAdminAccounts,
+  putAdminAccountIdUserIdRole,
 } from '#/lib/ov-client'
+
+export type AdminUserRole = 'admin' | 'root' | 'user'
 
 export type AdminConnection = {
   accountId: string
@@ -46,6 +50,12 @@ export type KeyResult = {
   accountId?: string
   apiKey: string
   userId?: string
+}
+
+export type UpdateUserRoleInput = {
+  accountId: string
+  role: AdminUserRole
+  userId: string
 }
 
 export type ProbeState = 'ok' | 'error' | 'skipped'
@@ -157,7 +167,10 @@ async function probeAdminAccess(
     }
   }
 
-  const controlKey = input.adminApiKey || input.apiKey
+  // The Root API key is the only control-plane credential. The User API key is
+  // never promoted to admin access, so management stays gated behind the root
+  // or account-admin key alone.
+  const controlKey = input.adminApiKey.trim()
   if (input.serverMode === 'api_key' && !controlKey) {
     return {
       detail: 'A root or account-admin API key is required',
@@ -406,4 +419,38 @@ export async function regenerateAdminUserKey(
     account_id: accountId,
     user_id: userId,
   })
+}
+
+export async function removeAdminUser(
+  connection: AdminConnection,
+  accountId: string,
+  userId: string,
+): Promise<void> {
+  await getOvResult<unknown>(
+    deleteAdminAccountIdUserByUserId({
+      client: createAdminClient(connection),
+      path: {
+        account_id: accountId,
+        user_id: userId,
+      },
+    }),
+  )
+}
+
+export async function updateAdminUserRole(
+  connection: AdminConnection,
+  input: UpdateUserRoleInput,
+): Promise<void> {
+  await getOvResult<unknown>(
+    putAdminAccountIdUserIdRole({
+      body: {
+        role: input.role,
+      },
+      client: createAdminClient(connection),
+      path: {
+        account_id: input.accountId,
+        user_id: input.userId,
+      },
+    }),
+  )
 }

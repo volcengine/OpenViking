@@ -13,8 +13,8 @@ class MemoryConfig(BaseModel):
     """Memory configuration for OpenViking."""
 
     version: str = Field(
-        default="v2",
-        description="Memory implementation version. Only 'v2' is supported.",
+        default="v3",
+        description="Deprecated and ignored. Memory extraction always uses v3.",
     )
     custom_templates_dir: str = Field(
         default="",
@@ -90,22 +90,31 @@ class MemoryConfig(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def drop_deprecated_agent_memory_enabled(cls, data: Any) -> Any:
-        if isinstance(data, dict) and "agent_memory_enabled" in data:
+    def drop_deprecated_memory_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
             data = dict(data)
-            data.pop("agent_memory_enabled", None)
-            logger.warning(
-                "memory.agent_memory_enabled is deprecated and ignored; "
-                "use session memory_policy.memory_types to control trajectory/experience extraction"
-            )
+            if "agent_memory_enabled" in data:
+                data.pop("agent_memory_enabled", None)
+                logger.debug(
+                    "memory.agent_memory_enabled is deprecated and ignored; "
+                    "use session memory_policy.memory_types to control trajectory/experience extraction"
+                )
+            if "working_memory_enabled" in data:
+                data.pop("working_memory_enabled", None)
+                logger.debug(
+                    "memory.working_memory_enabled is deprecated and ignored; "
+                    "use session memory_policy.working_memory.enabled to control archive summaries"
+                )
         return data
 
-    @field_validator("version")
+    @field_validator("version", mode="before")
     @classmethod
-    def validate_version(cls, value: str) -> str:
-        if value != "v2":
-            raise ValueError("memory.version only supports 'v2'; legacy memory v1 has been removed")
-        return value
+    def accept_deprecated_version(cls, value: Any) -> str:
+        if value not in (None, ""):
+            logger.debug(
+                "memory.version is deprecated and ignored; memory extraction always uses v3"
+            )
+        return "v3"
 
     @classmethod
     def from_dict(cls, config: Dict[str, Any]) -> "MemoryConfig":

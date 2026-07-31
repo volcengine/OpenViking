@@ -6,22 +6,49 @@ Embedding utilities for OpenViking.
 Common logic for creating Context objects and enqueuing them to EmbeddingQueue.
 """
 
-import base64
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+from charset_normalizer import from_bytes
+
 from openviking.core.context import Context, ContextLevel, ResourceContentType, Vectorize
-from openviking.core.namespace import context_type_for_uri, is_session_uri, owner_space_for_uri
+from openviking.core.namespace import (
+    context_type_for_uri,
+    is_session_uri,
+    owner_space_for_uri,
+)
 from openviking.server.identity import RequestContext
+from openviking.service.task_work_index import TaskWorkRejected
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
+from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+from openviking.utils.image_search import image_bytes_to_data_uri
+from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
+
+# The `abstract` scalar is persisted as a vector-store bytes_row string field,
+# which is length-prefixed with a uint16 (STRING_MAX_UINT16_LENGTH = 65535). An
+# oversized abstract raises "string field 'abstract' exceeds 65535 bytes" and
+# fails embedding enqueue, so the resource is silently never vectorized (and thus
+# not retrievable). Cap it with headroom, mirroring
+# memory_updater._truncate_memory_abstract introduced for the memory path (#2774).
+_ABSTRACT_MAX_BYTES = 50_000
+
+
+def _truncate_abstract_bytes(abstract: str) -> str:
+    """Cap an abstract scalar below the vector-store bytes_row byte limit."""
+    encoded = (abstract or "").encode("utf-8")
+    if len(encoded) <= _ABSTRACT_MAX_BYTES:
+        return abstract or ""
+    return encoded[:_ABSTRACT_MAX_BYTES].decode("utf-8", errors="ignore")
+
+
 _PORTABLE_SCALAR_FIELDS = frozenset(
     {
         "type",
@@ -41,6 +68,19 @@ def _apply_scalar_overrides(embedding_msg, overrides: Optional[Dict[str, Any]]) 
         value = overrides.get(field)
         if value is not None:
             embedding_msg.context_data[field] = value
+
+
+def _apply_ingest_options(
+    embedding_msg,
+    ingest_options: IngestOptions | None,
+) -> None:
+    ingest_options = IngestOptions.from_value(ingest_options)
+    if not embedding_msg or ingest_options.search_tags is None:
+        return
+    embedding_msg.context_data["search_tags"] = list(ingest_options.search_tags or [])
+    embedding_msg.context_data["_upsert_options"] = {
+        "search_tag_mode": ingest_options.search_tag_mode
+    }
 
 
 async def _decrement_embedding_tracker(semantic_msg_id: Optional[str], count: int) -> None:
@@ -126,13 +166,17 @@ def get_resource_content_type(file_name: str) -> Optional[ResourceContentType]:
         ".md",
         ".csv",
         ".json",
+        ".jsonl",
         ".xml",
+        ".svg",
         ".py",
         ".js",
         ".ts",
         ".java",
         ".cpp",
         ".c",
+        ".cu",
+        ".cuh",
         ".h",
         ".go",
         ".rs",
@@ -179,9 +223,9 @@ def get_resource_content_type(file_name: str) -> Optional[ResourceContentType]:
         ".jl",
         ".mm",
     }
-    image_extensions = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".webp"}
-    video_extensions = {".mp4", ".avi", ".mov", ".wmv", ".flv"}
-    audio_extensions = {".mp3", ".wav", ".aac", ".flac"}
+    image_extensions = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
+    video_extensions = {".mp4", ".avi", ".mov", ".wmv", ".flv", ".mkv", ".webm"}
+    audio_extensions = {".mp3", ".wav", ".aac", ".flac", ".ogg", ".m4a", ".opus", ".ac3"}
 
     if any(file_name.endswith(ext) for ext in text_extensions):
         return ResourceContentType.TEXT
@@ -193,23 +237,6 @@ def get_resource_content_type(file_name: str) -> Optional[ResourceContentType]:
         return ResourceContentType.AUDIO
 
     return None
-
-
-_IMAGE_MIME_TYPES = {
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".gif": "image/gif",
-    ".bmp": "image/bmp",
-    ".svg": "image/svg+xml",
-    ".webp": "image/webp",
-}
-
-
-def _image_mime_type(file_name: str) -> str:
-    """Resolve the MIME type for an image file based on its extension."""
-    _, ext = os.path.splitext(file_name.lower())
-    return _IMAGE_MIME_TYPES.get(ext, "image/png")
 
 
 async def _build_image_data_uri(
@@ -224,11 +251,77 @@ async def _build_image_data_uri(
     """
     try:
         content = await viking_fs.read_file_bytes(file_path, ctx=ctx)
-        encoded = base64.b64encode(content).decode("ascii")
-        return f"data:{_image_mime_type(file_name)};base64,{encoded}"
+        return image_bytes_to_data_uri(content, file_name)
     except Exception as e:
         logger.warning(f"Failed to read image for multimodal vectorization {file_path}: {e}")
         return None
+
+
+def _coerce_text_file_content(raw: Any) -> str:
+    """Coerce known text-file content returned by VikingFS into str."""
+    if isinstance(raw, bytes):
+        return _decode_text_bytes(raw)
+    return raw or ""
+
+
+def _looks_like_binary_bytes(raw: bytes) -> bool:
+    """Conservative binary check for unknown file bytes."""
+    if not raw:
+        return False
+    if b"\x00" in raw[:4096]:
+        return True
+
+    allowed_controls = {9, 10, 12, 13}
+    sample = raw[:4096]
+    control_count = sum(byte < 32 and byte not in allowed_controls for byte in sample)
+    return control_count / len(sample) > 0.3
+
+
+def _decode_text_bytes(raw: bytes) -> str:
+    """Decode file bytes for BM25 content.
+
+    Prefer UTF-8. If UTF-8 fails, reject binary-looking bytes, then try charset
+    sniffing. Return an empty string when no text encoding can be recognized.
+    """
+    if not raw:
+        return ""
+
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+
+    if _looks_like_binary_bytes(raw):
+        return ""
+
+    best = from_bytes(raw).best()
+    if best is None:
+        return ""
+
+    return str(best)
+
+
+def _decode_unknown_file_bytes(raw: bytes) -> str:
+    """Decode unknown file bytes with the shared text-byte decoding strategy."""
+    return _decode_text_bytes(raw)
+
+
+async def _read_unknown_file_text_for_fulltext(
+    file_path: str,
+    viking_fs,
+    ctx: Optional[RequestContext],
+) -> str:
+    """Best-effort raw file text for BM25/full-text indexing.
+
+    This text is intentionally separate from the embedding input. Unknown file
+    types may still embed their generated summary, while grep/BM25 should index
+    the original text when the file can be read as text-like content.
+    """
+    try:
+        return _decode_unknown_file_bytes(await viking_fs.read_file_bytes(file_path, ctx=ctx))
+    except Exception as e:
+        logger.debug(f"Failed to read full-text content for {file_path}: {e}")
+        return ""
 
 
 async def vectorize_directory_meta(
@@ -240,6 +333,7 @@ async def vectorize_directory_meta(
     semantic_msg_id: Optional[str] = None,
     include_overview: bool = True,
     scalar_overrides: Optional[Dict[int, Dict[str, Any]]] = None,
+    ingest_options: IngestOptions | None = None,
 ) -> None:
     """
     Vectorize directory metadata (.abstract.md and .overview.md).
@@ -260,6 +354,11 @@ async def vectorize_directory_meta(
         owner_space = owner_space_for_uri(uri, ctx)
 
         created_at, updated_at = await _resolve_context_timestamps(uri, ctx)
+        # Cap the abstract scalar below the bytes_row 65535-byte limit. #2774
+        # added this for the memory path; the resource indexing paths (here and
+        # index_resource, which feeds this function) were missed, so an
+        # .abstract.md / overview > 65535 UTF-8 bytes still fails embedding enqueue.
+        abstract = _truncate_abstract_bytes(abstract)
 
         # Vectorize L0: .abstract.md (abstract)
         context_abstract = Context(
@@ -275,18 +374,22 @@ async def vectorize_directory_meta(
             account_id=ctx.account_id,
             owner_space=owner_space,
         )
-        context_abstract.set_vectorize(Vectorize(text=abstract))
+        context_abstract.set_vectorize(Vectorize(text=abstract, full_text=abstract))
         msg_abstract = EmbeddingMsgConverter.from_context(context_abstract)
         _apply_scalar_overrides(
             msg_abstract,
             (scalar_overrides or {}).get(int(ContextLevel.ABSTRACT.value)),
         )
+        _apply_ingest_options(msg_abstract, ingest_options)
         if msg_abstract:
             msg_abstract.semantic_msg_id = semantic_msg_id
             try:
                 await embedding_queue.enqueue(msg_abstract)
                 enqueued += 1
                 logger.debug(f"Enqueued directory L0 (abstract) for vectorization: {uri}")
+            except TaskWorkRejected:
+                logger.debug("Skipped directory vectorization for cancelling task: %s", uri)
+                return
             except Exception as e:
                 logger.error(
                     f"Failed to enqueue directory L0 (abstract) for vectorization: {uri}: {e}",
@@ -308,18 +411,22 @@ async def vectorize_directory_meta(
                 account_id=ctx.account_id,
                 owner_space=owner_space,
             )
-            context_overview.set_vectorize(Vectorize(text=overview))
+            context_overview.set_vectorize(Vectorize(text=overview, full_text=overview))
             msg_overview = EmbeddingMsgConverter.from_context(context_overview)
             _apply_scalar_overrides(
                 msg_overview,
                 (scalar_overrides or {}).get(int(ContextLevel.OVERVIEW.value)),
             )
+            _apply_ingest_options(msg_overview, ingest_options)
             if msg_overview:
                 msg_overview.semantic_msg_id = semantic_msg_id
                 try:
                     await embedding_queue.enqueue(msg_overview)
                     enqueued += 1
                     logger.debug(f"Enqueued directory L1 (overview) for vectorization: {uri}")
+                except TaskWorkRejected:
+                    logger.debug("Skipped directory vectorization for cancelling task: %s", uri)
+                    return
                 except Exception as e:
                     logger.error(
                         f"Failed to enqueue directory L1 (overview) for vectorization: {uri}: {e}",
@@ -337,7 +444,7 @@ async def vectorize_directory_meta(
 
 async def vectorize_file(
     file_path: str,
-    summary_dict: Dict[str, str],
+    summary_dict: Dict[str, Any],
     parent_uri: str,
     context_type: str = "resource",
     ctx: Optional[RequestContext] = None,
@@ -345,6 +452,8 @@ async def vectorize_file(
     use_summary: bool = False,
     preserve_existing_created_at: bool = False,
     scalar_override: Optional[Dict[str, Any]] = None,
+    register_request_wait: bool = False,
+    ingest_options: IngestOptions | None = None,
 ) -> None:
     """
     Vectorize a single file.
@@ -354,6 +463,7 @@ async def vectorize_file(
     `use_summary` flag (code path override) or the embedding config.
     """
     enqueued = False
+    registered_wait_root: Optional[tuple[str, str]] = None
 
     try:
         if not ctx:
@@ -366,13 +476,18 @@ async def vectorize_file(
 
         file_name = summary_dict.get("name") or os.path.basename(file_path)
         summary = summary_dict.get("summary", "")
+        # Cap below the bytes_row 65535-byte abstract-scalar limit (#2774 parity).
+        summary = _truncate_abstract_bytes(summary)
+        has_reusable_content = "content" in summary_dict
+        reusable_content = (
+            _coerce_text_file_content(summary_dict.get("content")) if has_reusable_content else ""
+        )
 
         created_at, updated_at = await _resolve_context_timestamps(
             file_path,
             ctx,
             preserve_existing_created_at=preserve_existing_created_at,
         )
-
         context = Context(
             uri=file_path,
             parent_uri=parent_uri,
@@ -390,7 +505,6 @@ async def vectorize_file(
         embedding_cfg = get_openviking_config().embedding
         configured_text_source = getattr(embedding_cfg, "text_source", "content_only")
         effective_text_source = "summary_only" if use_summary else configured_text_source
-        image_vectorization = getattr(embedding_cfg, "image_vectorization", "summary_only")
 
         if content_type is None:
             # Unsupported file type: fall back to summary if available
@@ -398,44 +512,48 @@ async def vectorize_file(
                 logger.warning(
                     f"Unsupported file type for {file_path}, falling back to summary for vectorization"
                 )
-                context.set_vectorize(Vectorize(text=summary))
+                full_content = (
+                    reusable_content
+                    if has_reusable_content
+                    else await _read_unknown_file_text_for_fulltext(file_path, viking_fs, ctx)
+                )
+                context.set_vectorize(Vectorize(text=summary, full_text=full_content or summary))
             else:
                 logger.warning(
                     f"Unsupported file type for {file_path} and no summary available, skipping vectorization"
                 )
                 return
         elif content_type == ResourceContentType.TEXT:
-            if summary and effective_text_source in {"summary_first", "summary_only"}:
-                context.set_vectorize(Vectorize(text=summary))
+            # Known text files use VikingFS' text read path once, then reuse that
+            # content for BM25 regardless of whether embedding uses summary or raw text.
+            try:
+                content = (
+                    reusable_content
+                    if has_reusable_content
+                    else _coerce_text_file_content(await viking_fs.read_file(file_path, ctx=ctx))
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to read file content for {file_path}, falling back to summary: {e}"
+                )
+                if summary:
+                    context.set_vectorize(Vectorize(text=summary, full_text=summary))
+                else:
+                    logger.warning(f"No summary available for {file_path}, skipping vectorization")
+                    return
             else:
-                # Read raw file content; embedders apply their own input guard.
-                try:
-                    content = await viking_fs.read_file(file_path, ctx=ctx)
-                    if isinstance(content, bytes):
-                        content = content.decode("utf-8", errors="replace")
-                    context.set_vectorize(Vectorize(text=content))
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to read file content for {file_path}, falling back to summary: {e}"
-                    )
-                    if summary:
-                        context.set_vectorize(Vectorize(text=summary))
-                    else:
-                        logger.warning(
-                            f"No summary available for {file_path}, skipping vectorization"
-                        )
-                        return
-        elif content_type == ResourceContentType.IMAGE and image_vectorization in {
-            "image_only",
-            "image_and_summary",
-        }:
-            # Multimodal: embed the image itself (optionally with its text summary).
+                if summary and effective_text_source in {"summary_first", "summary_only"}:
+                    # Use summary for vectorization, but reuse the single raw text read for BM25.
+                    context.set_vectorize(Vectorize(text=summary, full_text=content or summary))
+                else:
+                    # Embedders apply their own input guard.
+                    context.set_vectorize(Vectorize(text=content, full_text=content))
+        elif content_type == ResourceContentType.IMAGE:
+            # Multimodal embedders consume both parts; text-only embedders fall back to summary.
             image_uri = await _build_image_data_uri(file_path, file_name, viking_fs, ctx)
             if image_uri:
-                text = summary if image_vectorization == "image_and_summary" else ""
-                context.set_vectorize(Vectorize(text=text, images=[image_uri]))
+                context.set_vectorize(Vectorize(text=summary, images=[image_uri]))
             elif summary:
-                # Could not load image; fall back to summary text.
                 context.set_vectorize(Vectorize(text=summary))
             else:
                 logger.debug(
@@ -444,7 +562,7 @@ async def vectorize_file(
                 return
         elif summary:
             # For non-text files, use summary
-            context.set_vectorize(Vectorize(text=summary))
+            context.set_vectorize(Vectorize(text=summary, full_text=summary))
         else:
             logger.debug(f"Skipping file {file_path} (no text content or summary)")
             return
@@ -454,13 +572,41 @@ async def vectorize_file(
             return
 
         _apply_scalar_overrides(embedding_msg, scalar_override)
+        _apply_ingest_options(embedding_msg, ingest_options)
         embedding_msg.semantic_msg_id = semantic_msg_id
-        await embedding_queue.enqueue(embedding_msg)
+        if register_request_wait:
+            get_request_wait_tracker().register_embedding_root(
+                embedding_msg.telemetry_id,
+                embedding_msg.id,
+            )
+            registered_wait_root = (embedding_msg.telemetry_id, embedding_msg.id)
+        enqueued_id = await embedding_queue.enqueue(embedding_msg)
+        if register_request_wait and not enqueued_id:
+            get_request_wait_tracker().mark_embedding_failed(
+                embedding_msg.telemetry_id,
+                embedding_msg.id,
+                f"Failed to enqueue file vector for {file_path}",
+            )
+            return
         enqueued = True
         logger.debug(f"Enqueued file for vectorization: {file_path}")
 
+    except TaskWorkRejected:
+        logger.debug("Skipped file vectorization for cancelling task: %s", file_path)
+        if registered_wait_root is not None:
+            get_request_wait_tracker().mark_embedding_failed(
+                registered_wait_root[0],
+                registered_wait_root[1],
+                f"Task cancellation skipped file vector for {file_path}",
+            )
     except Exception as e:
         logger.error(f"Failed to vectorize file {file_path}: {e}", exc_info=True)
+        if registered_wait_root is not None:
+            get_request_wait_tracker().mark_embedding_failed(
+                registered_wait_root[0],
+                registered_wait_root[1],
+                f"Failed to enqueue file vector for {file_path}: {e}",
+            )
     finally:
         if not enqueued:
             await _decrement_embedding_tracker(semantic_msg_id, 1)
@@ -469,6 +615,7 @@ async def vectorize_file(
 async def index_resource(
     uri: str,
     ctx: RequestContext,
+    ingest_options: IngestOptions | None = None,
 ) -> None:
     """
     Build vector index for a resource directory.
@@ -503,7 +650,14 @@ async def index_resource(
         overview = content.decode("utf-8") if isinstance(content, bytes) else content
 
     if abstract or overview:
-        await vectorize_directory_meta(uri, abstract, overview, context_type=context_type, ctx=ctx)
+        await vectorize_directory_meta(
+            uri,
+            abstract,
+            overview,
+            context_type=context_type,
+            ctx=ctx,
+            ingest_options=ingest_options,
+        )
 
     # 2. Index Files
     try:
@@ -529,6 +683,7 @@ async def index_resource(
                 parent_uri=uri,
                 context_type=context_type,
                 ctx=ctx,
+                ingest_options=ingest_options,
             )
 
     except Exception as e:

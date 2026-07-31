@@ -1,10 +1,12 @@
 """Message tool for sending messages to users."""
 
-from typing import Any, Callable, Awaitable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from vikingbot.agent.tools.base import Tool
 from vikingbot.bus.events import OutboundMessage
-from vikingbot.config.schema import SessionKey
+
+if TYPE_CHECKING:
+    from vikingbot.agent.tools.base import ToolContext
 
 
 class MessageTool(Tool):
@@ -39,14 +41,16 @@ class MessageTool(Tool):
         }
 
     async def execute(self, tool_context: "ToolContext", **kwargs: Any) -> str:
-        from loguru import logger
-
         content = kwargs.get("content")
 
         if not self._send_callback:
             return "Error: Message sending not configured"
 
-        msg = OutboundMessage(session_key=tool_context.session_key, content=content)
+        msg = OutboundMessage(
+            session_key=tool_context.session_key,
+            content=content,
+            metadata=dict(getattr(tool_context, "channel_metadata", None) or {}),
+        )
 
         try:
             await self._send_callback(msg)

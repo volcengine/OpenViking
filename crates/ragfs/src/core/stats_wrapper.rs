@@ -7,8 +7,8 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 use super::{
-    FileInfo, FileSystem, FsOperation, GrepResult, OperationTimer, Result, StatsCollector,
-    TreeEntry, WriteFlag,
+    FileInfo, FileSystem, FsOperation, GlobPage, GrepResult, OperationTimer, Result,
+    StatsCollector, TreeEntry, WriteFlag,
 };
 
 /// A wrapper around FileSystem that automatically collects operation statistics
@@ -127,6 +127,13 @@ impl FileSystem for StatsWrappedFS {
         result
     }
 
+    async fn replace(&self, src_path: &str, dst_path: &str) -> Result<()> {
+        let timer = OperationTimer::start(FsOperation::Rename, Arc::clone(&self.stats));
+        let result = self.inner.replace(src_path, dst_path).await;
+        timer.finish().await;
+        result
+    }
+
     async fn chmod(&self, path: &str, mode: u32) -> Result<()> {
         let timer = OperationTimer::start(FsOperation::Chmod, Arc::clone(&self.stats));
         let result = self.inner.chmod(path, mode).await;
@@ -193,6 +200,31 @@ impl FileSystem for StatsWrappedFS {
         let result = self
             .inner
             .tree_directory(path, show_hidden, node_limit, level_limit)
+            .await;
+        timer.finish().await;
+        result
+    }
+
+    async fn glob_directory(
+        &self,
+        path: &str,
+        pattern: &str,
+        show_hidden: bool,
+        page_size: Option<usize>,
+        level_limit: Option<usize>,
+        continuation_token: Option<String>,
+    ) -> Result<GlobPage> {
+        let timer = OperationTimer::start(FsOperation::GlobDir, Arc::clone(&self.stats));
+        let result = self
+            .inner
+            .glob_directory(
+                path,
+                pattern,
+                show_hidden,
+                page_size,
+                level_limit,
+                continuation_token,
+            )
             .await;
         timer.finish().await;
         result

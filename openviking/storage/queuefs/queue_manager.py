@@ -12,6 +12,7 @@ import time
 import traceback
 from typing import Any, Dict, Optional, Set, Union
 
+from openviking.service.task_work_index import TaskWorkIndex
 from openviking_cli.utils.logger import get_logger
 
 from .embedding_queue import EmbeddingQueue
@@ -30,6 +31,7 @@ def init_queue_manager(
     mount_point: str = "/queue",
     max_concurrent_embedding: int = 10,
     max_concurrent_semantic: int = 64,
+    max_concurrent_external_parse: int = 4,
 ) -> "QueueManager":
     """Initialize QueueManager singleton.
 
@@ -47,6 +49,7 @@ def init_queue_manager(
         mount_point=mount_point,
         max_concurrent_embedding=max_concurrent_embedding,
         max_concurrent_semantic=max_concurrent_semantic,
+        max_concurrent_external_parse=max_concurrent_external_parse,
     )
     return _instance
 
@@ -67,6 +70,10 @@ class QueueManager:
     # Standard queue names
     EMBEDDING = "Embedding"
     SEMANTIC = "Semantic"
+    # Keep the on-disk name stable so pre-upgrade jobs remain recoverable.
+    EXTERNAL_PARSE = "ExternalParse"
+    ADD_RESOURCE = "AddResource"
+    SESSION_COMMIT = "SessionCommit"
 
     def __init__(
         self,
@@ -75,6 +82,7 @@ class QueueManager:
         mount_point: str = "/queue",
         max_concurrent_embedding: int = 10,
         max_concurrent_semantic: int = 64,
+        max_concurrent_external_parse: int = 4,
     ):
         """Initialize QueueManager."""
         self._agfs = agfs
@@ -82,11 +90,13 @@ class QueueManager:
         self.mount_point = mount_point
         self._max_concurrent_embedding = max_concurrent_embedding
         self._max_concurrent_semantic = max_concurrent_semantic
+        self._max_concurrent_external_parse = max_concurrent_external_parse
         self._queues: Dict[str, NamedQueue] = {}
         self._started = False
         self._queue_threads: Dict[str, threading.Thread] = {}
         self._queue_stop_events: Dict[str, threading.Event] = {}
         self._poll_interval = 0.2
+        self._task_work_index = TaskWorkIndex()
 
         atexit.register(self.stop)
         logger.info(
@@ -105,6 +115,13 @@ class QueueManager:
             self._start_queue_worker(queue)
 
         logger.info(f"[QueueManager] mount_point={self.mount_point} Started")
+
+    async def prepare_task_tracking(self, tracker: Any) -> None:
+        """Rebuild task work from QueueFS before any consumer starts."""
+        snapshots = {name: await queue.snapshot() for name, queue in self._queues.items()}
+        owners = self._task_work_index.rebuild(snapshots)
+        tracker.attach_work_index(self._task_work_index)
+        await tracker.restore_work_tasks(owners)
 
     def setup_standard_queues(self, vector_store: Any, start: bool = True) -> None:
         """
@@ -149,11 +166,12 @@ class QueueManager:
             if thread.is_alive():
                 return
 
-        max_concurrent = (
-            self._max_concurrent_embedding
-            if queue.name == self.EMBEDDING
-            else self._max_concurrent_semantic
-        )
+        if queue.name == self.EMBEDDING:
+            max_concurrent = self._max_concurrent_embedding
+        elif queue.name in {self.EXTERNAL_PARSE, self.SESSION_COMMIT}:
+            max_concurrent = self._max_concurrent_external_parse
+        else:
+            max_concurrent = self._max_concurrent_semantic
         stop_event = threading.Event()
         self._queue_stop_events[queue.name] = stop_event
         thread = threading.Thread(
@@ -214,7 +232,7 @@ class QueueManager:
                 try:
                     await queue.process_dequeued(data)
                     # Ack after successful processing (delete from persistent storage).
-                    await queue.ack(msg_id)
+                    await queue.ack(msg_id, data)
                 except Exception as e:
                     # Handler did not call report_error; decrement in_progress manually.
                     # Do NOT ack — let RecoverStale re-queue on next startup.
@@ -311,6 +329,7 @@ class QueueManager:
                     name,
                     enqueue_hook=enqueue_hook,
                     dequeue_handler=dequeue_handler,
+                    task_work_index=self._task_work_index,
                 )
             elif name == self.SEMANTIC:
                 self._queues[name] = SemanticQueue(
@@ -319,6 +338,7 @@ class QueueManager:
                     name,
                     enqueue_hook=enqueue_hook,
                     dequeue_handler=dequeue_handler,
+                    task_work_index=self._task_work_index,
                 )
             else:
                 self._queues[name] = NamedQueue(
@@ -327,6 +347,7 @@ class QueueManager:
                     name,
                     enqueue_hook=enqueue_hook,
                     dequeue_handler=dequeue_handler,
+                    task_work_index=self._task_work_index,
                 )
             if self._started:
                 self._start_queue_worker(self._queues[name])

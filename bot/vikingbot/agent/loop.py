@@ -8,6 +8,7 @@ import re
 import time
 import uuid
 from contextlib import AsyncExitStack
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -21,7 +22,6 @@ from vikingbot.agent.tools import register_default_tools
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.bus.events import InboundMessage, OutboundEventType, OutboundMessage
 from vikingbot.bus.queue import MessageBus
-from vikingbot.config import load_config
 from vikingbot.config.schema import BotMode, Config, SessionKey
 from vikingbot.heartbeat.service import HEARTBEAT_METADATA_KEY, is_heartbeat_noop_response
 from vikingbot.hooks import HookContext
@@ -53,6 +53,39 @@ def _is_tool_result_success(result: Any) -> bool:
     return bool(text) and not text.startswith("Error:")
 
 
+@dataclass(slots=True)
+class _PlainTextContext:
+    """Context passed to an `on_plain_text` callback when the model emits plain text."""
+
+    messages: list[dict]
+    session_key: SessionKey
+    text: str
+    reasoning_content: str | None
+    iteration: int
+    tools: ToolRegistry
+    sandbox_manager: SandboxManager | None
+    sender_id: str | None
+    memory_peer_ids: list[str] | None
+    memory_owner_user_ids: list[str] | None
+    openviking_connection: dict[str, Any] | None
+
+
+@dataclass(slots=True)
+class _PlainTextDelivered:
+    """Signal that the text was delivered externally; continue the loop with new state."""
+
+    messages: list[dict]
+    tools_used: list[dict]
+    user_terminates: bool = False
+
+
+@dataclass(slots=True)
+class _PlainTextFinal:
+    """Signal that the text should be treated as the final reply; exit the loop."""
+
+    content: str | None = None
+
+
 class AgentLoop:
     """
     The agent loop is the core processing engine.
@@ -71,6 +104,7 @@ class AgentLoop:
         provider: LLMProvider,
         workspace: Path,
         model: str | None = None,
+        temperature: float = 0.7,
         max_iterations: int = 50,
         memory_window: int = 50,
         brave_api_key: str | None = None,
@@ -92,6 +126,7 @@ class AgentLoop:
             provider: LLMProvider instance for making LLM calls.
             workspace: Path to the workspace directory for file operations.
             model: Optional model identifier. If not provided, uses the provider's default.
+            temperature: Sampling temperature for LLM requests (default: 0.7).
             max_iterations: Maximum number of tool execution iterations per message (default: 50).
             memory_window: Maximum number of messages to keep in session memory (default: 50).
             brave_api_key: Optional API key for Brave search integration.
@@ -122,6 +157,7 @@ class AgentLoop:
         self.provider = provider
         self.workspace = workspace
         self.model = model or provider.get_default_model()
+        self.temperature = temperature
         self.max_iterations = max_iterations
         self.memory_window = memory_window
         self.brave_api_key = brave_api_key
@@ -132,13 +168,18 @@ class AgentLoop:
         self.sandbox_manager = sandbox_manager
         self.config = config
 
-        self.context = ContextBuilder(workspace, sandbox_manager=sandbox_manager)
+        self.context = ContextBuilder(
+            workspace,
+            sandbox_manager=sandbox_manager,
+            enable_subagents=self._subagents_enabled(),
+            config=self.config,
+        )
 
         self._register_builtin_hooks()
         self.sessions = session_manager or SessionManager(
             self.config.bot_data_path, sandbox_manager=sandbox_manager
         )
-        self.tools = ToolRegistry()
+        self.tools = ToolRegistry(config=self.config)
         self._eval = eval
         self.subagents = SubagentManager(
             provider=provider,
@@ -146,6 +187,7 @@ class AgentLoop:
             bus=bus,
             config=self.config,
             model=self.model,
+            temperature=self.temperature,
             sandbox_manager=sandbox_manager,
         )
 
@@ -192,45 +234,6 @@ class AgentLoop:
                 pass  # MCP SDK cancel scope cleanup is noisy but harmless
             self._mcp_stack = None
         self._mcp_connected = False
-
-    async def _publish_thinking_event(
-        self, session_key: SessionKey, event_type: OutboundEventType, content: str
-    ) -> None:
-        """
-        Publish a thinking event to the message bus.
-
-        Thinking events are used to communicate the agent's internal processing
-        state to the user, such as when the agent is executing a tool or
-        processing a complex request.
-
-        Args:
-            session_key: The session key identifying the conversation.
-            event_type: The type of thinking event (e.g., THINKING, TOOL_START).
-            content: The message content to display to the user.
-
-        Note:
-            This is an internal method used by the agent loop to communicate
-            progress to users during long-running operations.
-
-        Example:
-            async def notify_tool_call() -> None:
-                await self._publish_thinking_event(
-                    session_key=SessionKey(
-                        type="telegram",
-                        channel_id="default",
-                        chat_id="123",
-                    ),
-                    event_type=OutboundEventType.TOOL_CALL,
-                    content="Executing web search...",
-                )
-        """
-        await self.bus.publish_outbound(
-            OutboundMessage(
-                session_key=session_key,
-                content=content,
-                event_type=event_type,
-            )
-        )
 
     async def _publish_auto_memory_context(
         self,
@@ -281,6 +284,7 @@ class AgentLoop:
             messages=messages,
             tools=tools,
             model=self.model,
+            temperature=self.temperature,
             session_id=session_key.safe_name(),
         ):
             if event.type == "content_delta":
@@ -313,6 +317,7 @@ class AgentLoop:
                 messages=messages,
                 tools=tools,
                 model=self.model,
+                temperature=self.temperature,
                 session_id=session_key.safe_name(),
             )
         return response, streamed_content, streamed_reasoning
@@ -329,11 +334,21 @@ class AgentLoop:
             send_callback=self.bus.publish_outbound,
             subagent_manager=self.subagents,
             cron_service=self.cron_service,
+            include_spawn_tool=self._subagents_enabled(),
+            include_viking_tools=self.config.ov_server.is_available(),
         )
+
+    def _subagents_enabled(self) -> bool:
+        agents_config = getattr(self.config, "agents", None)
+        return bool(getattr(agents_config, "subagent_enabled", True))
 
     def _ov_session_context_enabled(self) -> bool:
         agents_config = getattr(self.config, "agents", None)
-        return bool(agents_config and getattr(agents_config, "session_context_enabled", False))
+        return bool(
+            self.config.ov_server.is_available()
+            and agents_config
+            and getattr(agents_config, "session_context_enabled", False)
+        )
 
     def _get_ov_workspace_id(self, session_key: SessionKey) -> str:
         if self.sandbox_manager:
@@ -344,18 +359,24 @@ class AgentLoop:
         self,
         session_key: SessionKey,
         openviking_connection: dict[str, Any] | None = None,
+        actor_peer_id: str | None = None,
     ):
         workspace_id = self._get_ov_workspace_id(session_key)
-        if openviking_connection:
+        if openviking_connection or actor_peer_id:
             from vikingbot.openviking_mount.ov_server import VikingClient
 
-            return await VikingClient.create(workspace_id, connection=openviking_connection)
+            return await VikingClient.create(
+                workspace_id,
+                connection=openviking_connection,
+                actor_peer_id=actor_peer_id,
+                config=self.config,
+            )
 
         client = self._ov_clients.get(workspace_id)
         if client is None:
             from vikingbot.openviking_mount.ov_server import VikingClient
 
-            client = await VikingClient.create(workspace_id)
+            client = await VikingClient.create(workspace_id, config=self.config)
             self._ov_clients[workspace_id] = client
         return client
 
@@ -428,11 +449,242 @@ class AgentLoop:
             provider_name=provider_name,
         )
 
+    @staticmethod
+    def _history_message_tokens(message: dict[str, Any]) -> int:
+        """Estimate prompt tokens for one formatted history message."""
+        content = message.get("content", "")
+        if not isinstance(content, str):
+            content = json.dumps(content, ensure_ascii=False, default=str)
+        # Reserve a small amount for the role and provider message framing.
+        return cal_str_tokens(content, text_type="mixed") + 4
+
+    @classmethod
+    def _truncate_history_message(
+        cls,
+        message: dict[str, Any],
+        token_budget: int,
+    ) -> dict[str, Any] | None:
+        """Return a prompt-only copy of a message clipped to ``token_budget``."""
+        if token_budget <= 4:
+            return None
+
+        content = message.get("content", "")
+        if not isinstance(content, str) or not content:
+            return None
+
+        content_budget = token_budget - 4
+        marker = "\n[History truncated to fit session context token budget]"
+
+        def fits(value: str) -> bool:
+            return cal_str_tokens(value, text_type="mixed") <= content_budget
+
+        low = 0
+        high = len(content)
+        best = ""
+        while low <= high:
+            mid = (low + high) // 2
+            candidate = content[:mid] + (marker if mid < len(content) else "")
+            if fits(candidate):
+                best = candidate
+                low = mid + 1
+            else:
+                high = mid - 1
+
+        # Very small budgets may not fit the marker. Preserve as much raw text
+        # as possible while still honoring the hard limit.
+        if not best:
+            # Empty content is not a valid candidate and breaks the monotonic
+            # assumption of this binary search: "" is rejected while a
+            # one-character prefix may fit.
+            low = 1
+            high = len(content)
+            while low <= high:
+                mid = (low + high) // 2
+                candidate = content[:mid]
+                if candidate and fits(candidate):
+                    best = candidate
+                    low = mid + 1
+                else:
+                    high = mid - 1
+
+        if not best:
+            return None
+
+        clipped = dict(message)
+        clipped["content"] = best
+        # Reasoning is not part of OV session messages. Drop any provider-only
+        # reasoning field from a clipped local fallback message so it cannot
+        # silently exceed the session-history budget.
+        clipped.pop("reasoning_content", None)
+        return clipped
+
+    @classmethod
+    def _trim_history_to_token_budget(
+        cls,
+        messages: list[dict[str, Any]],
+        token_budget: int,
+    ) -> list[dict[str, Any]]:
+        """Fit history to a hard budget without dropping the latest User anchor."""
+        if token_budget <= 0 or not messages:
+            return []
+
+        total_tokens = sum(cls._history_message_tokens(message) for message in messages)
+        if total_tokens <= token_budget:
+            return messages
+
+        latest_anchor_index = next(
+            (
+                index
+                for index in range(len(messages) - 1, -1, -1)
+                if messages[index].get("role") == "user"
+            ),
+            None,
+        )
+        if latest_anchor_index is None:
+            # Legacy assistant-only history has no Turn boundary to preserve.
+            remaining = token_budget
+            retained_reversed: list[dict[str, Any]] = []
+            for message in reversed(messages):
+                message_tokens = cls._history_message_tokens(message)
+                if message_tokens <= remaining:
+                    retained_reversed.append(message)
+                    remaining -= message_tokens
+                    continue
+
+                clipped = cls._truncate_history_message(message, remaining)
+                if clipped is not None:
+                    retained_reversed.append(clipped)
+                break
+            return list(reversed(retained_reversed))
+
+        final_index = next(
+            (
+                index
+                for index in range(len(messages) - 1, latest_anchor_index, -1)
+                if messages[index].get("role") == "assistant"
+            ),
+            None,
+        )
+
+        selected: dict[int, dict[str, Any]] = {}
+        used_tokens = 0
+
+        def _select_message(
+            index: int,
+            *,
+            allow_truncate: bool,
+            max_budget: int | None = None,
+        ) -> tuple[bool, bool]:
+            nonlocal used_tokens
+            remaining = max(0, token_budget - used_tokens)
+            if max_budget is not None:
+                remaining = min(remaining, max(0, int(max_budget)))
+
+            message = messages[index]
+            message_tokens = cls._history_message_tokens(message)
+            chosen = message
+            truncated = False
+            if message_tokens > remaining:
+                if not allow_truncate or remaining <= 0:
+                    return False, False
+                clipped = cls._truncate_history_message(message, remaining)
+                if clipped is None:
+                    return False, False
+                chosen = clipped
+                truncated = True
+
+            selected[index] = chosen
+            used_tokens += cls._history_message_tokens(chosen)
+            return True, truncated
+
+        def _minimum_message_budget(index: int) -> int | None:
+            message = messages[index]
+            message_tokens = cls._history_message_tokens(message)
+            if message_tokens == 0:
+                return 0
+
+            low = 1
+            high = min(message_tokens, token_budget)
+            minimum: int | None = None
+            while low <= high:
+                candidate = (low + high) // 2
+                if cls._truncate_history_message(message, candidate) is not None:
+                    minimum = candidate
+                    high = candidate - 1
+                else:
+                    low = candidate + 1
+            return minimum
+
+        # OpenViking already returns Turn-aware context, but VikingBot applies a
+        # second budget with a different estimator after adding the local tail.
+        # Jointly reserve room for the latest User anchor and final Assistant so
+        # this final boundary cannot turn the prompt back into a half Turn.
+        final_reserve = 0
+        if final_index is not None:
+            anchor_minimum = _minimum_message_budget(latest_anchor_index)
+            final_minimum = _minimum_message_budget(final_index)
+            if (
+                anchor_minimum is not None
+                and final_minimum is not None
+                and anchor_minimum + final_minimum <= token_budget
+            ):
+                final_reserve = min(
+                    cls._history_message_tokens(messages[final_index]),
+                    max(final_minimum, token_budget // 2),
+                    token_budget - anchor_minimum,
+                )
+
+        _select_message(
+            latest_anchor_index,
+            allow_truncate=True,
+            max_budget=token_budget - final_reserve,
+        )
+        if final_index is not None:
+            _select_message(final_index, allow_truncate=True)
+
+        # Prefer the newest remaining Steps in the latest Turn. At most one Step
+        # is clipped; older material is useful only while this suffix remains
+        # lossless.
+        latest_turn_end = final_index if final_index is not None else len(messages)
+        for index in range(latest_turn_end - 1, latest_anchor_index, -1):
+            kept, truncated = _select_message(index, allow_truncate=True)
+            if not kept or truncated:
+                break
+
+        # Add older Turns only as complete units so the final prompt never starts
+        # from the assistant half of an earlier Turn. An assistant-only prefix
+        # such as the archive overview is treated as one conservative unit.
+        older_turns: list[list[int]] = []
+        current_turn: list[int] = []
+        for index in range(latest_anchor_index):
+            if messages[index].get("role") == "user" and current_turn:
+                older_turns.append(current_turn)
+                current_turn = []
+            current_turn.append(index)
+        if current_turn:
+            older_turns.append(current_turn)
+
+        remaining = token_budget
+        remaining -= used_tokens
+        for turn_indexes in reversed(older_turns):
+            turn_tokens = sum(
+                cls._history_message_tokens(messages[index]) for index in turn_indexes
+            )
+            if turn_tokens > remaining:
+                break
+            for index in turn_indexes:
+                selected[index] = messages[index]
+            used_tokens += turn_tokens
+            remaining -= turn_tokens
+
+        return [selected[index] for index in sorted(selected)]
+
     async def _build_prompt_history(
         self,
         session: Session,
         provider_name: str | None = None,
         openviking_connection: dict[str, Any] | None = None,
+        actor_peer_id: str | None = None,
     ) -> list[dict[str, Any]]:
         if not self._ov_session_context_enabled():
             return session.get_history(provider_name=provider_name)
@@ -446,8 +698,9 @@ class AgentLoop:
             client = await self._get_ov_client(
                 session.key,
                 openviking_connection=openviking_connection,
+                actor_peer_id=actor_peer_id,
             )
-            if openviking_connection:
+            if openviking_connection or actor_peer_id:
                 request_client = client
             context_payload = await client.get_session_context(
                 session_id=session_id,
@@ -463,7 +716,25 @@ class AgentLoop:
                 get_unsynced_messages(session),
                 provider_name=provider_name,
             )
-            return ov_history + local_tail
+            combined_history = ov_history + local_tail
+            trimmed_history = self._trim_history_to_token_budget(
+                combined_history,
+                token_budget,
+            )
+            if len(trimmed_history) != len(combined_history) or any(
+                before.get("content") != after.get("content")
+                for before, after in zip(
+                    combined_history[-len(trimmed_history) :],
+                    trimmed_history,
+                    strict=False,
+                )
+            ):
+                logger.info(
+                    f"Trimmed OpenViking session history for {session_id} to "
+                    f"token_budget={token_budget}: messages={len(combined_history)}"
+                    f"->{len(trimmed_history)}"
+                )
+            return trimmed_history
         except Exception as e:
             logger.warning(
                 f"Failed to load OpenViking session context for {session_id}: {e}. "
@@ -479,7 +750,7 @@ class AgentLoop:
         session: Session,
         *,
         force_commit: bool = False,
-        keep_recent_count: int | None = None,
+        keep_recent_turn_count: int | None = None,
         commit_message_threshold: int | None = None,
         openviking_connection: dict[str, Any] | None = None,
     ) -> bool:
@@ -492,8 +763,8 @@ class AgentLoop:
             "session": session,
             "force_commit": force_commit,
         }
-        if keep_recent_count is not None:
-            kwargs["keep_recent_count"] = keep_recent_count
+        if keep_recent_turn_count is not None:
+            kwargs["keep_recent_turn_count"] = keep_recent_turn_count
         if commit_message_threshold is not None:
             kwargs["commit_message_threshold"] = commit_message_threshold
         if openviking_connection:
@@ -505,6 +776,8 @@ class AgentLoop:
                 session_id=get_openviking_session_id(session),
                 workspace_id=self._get_ov_workspace_id(session.key),
                 session_key=session.key,
+                config=self.config,
+                openviking_connection=openviking_connection,
             ),
             **kwargs,
         )
@@ -516,14 +789,14 @@ class AgentLoop:
         session: Session,
         *,
         force_commit: bool = False,
-        keep_recent_count: int | None = None,
+        keep_recent_turn_count: int | None = None,
         commit_message_threshold: int | None = None,
         openviking_connection: dict[str, Any] | None = None,
     ) -> bool:
         success = await self._submit_openviking_session(
             session,
             force_commit=force_commit,
-            keep_recent_count=keep_recent_count,
+            keep_recent_turn_count=keep_recent_turn_count,
             commit_message_threshold=commit_message_threshold,
             openviking_connection=openviking_connection,
         )
@@ -569,7 +842,9 @@ class AgentLoop:
         await self._submit_openviking_session_and_clear_if_committed(
             session,
             force_commit=True,
-            keep_recent_count=int(getattr(agents_config, "commit_keep_recent_count", 10) or 0),
+            keep_recent_turn_count=int(
+                getattr(agents_config, "commit_keep_recent_turn_count", 3) or 0
+            ),
             commit_message_threshold=self.memory_window,
             openviking_connection=getattr(msg, "openviking_connection", None),
         )
@@ -578,7 +853,7 @@ class AgentLoop:
         self,
         session: Session,
         *,
-        keep_recent_count: int = 0,
+        keep_recent_turn_count: int = 0,
         clear_local_session: bool = False,
         rotate_session_id: bool = False,
         openviking_connection: dict[str, Any] | None = None,
@@ -586,7 +861,7 @@ class AgentLoop:
         success = await self._submit_openviking_session(
             session,
             force_commit=True,
-            keep_recent_count=keep_recent_count,
+            keep_recent_turn_count=keep_recent_turn_count,
             openviking_connection=openviking_connection,
         )
         if not success:
@@ -639,11 +914,20 @@ class AgentLoop:
         session_key: SessionKey,
         publish_events: bool = True,
         sender_id: str | None = None,
+        actor_peer_id: str | None = None,
         ov_tools_enable: bool = True,
         memory_peer_ids: list[str] | None = None,
         memory_owner_user_ids: list[str] | None = None,
         disabled_tools: list[str] | None = None,
         openviking_connection: dict[str, Any] | None = None,
+        stop_tool_names: list[str] | None = None,
+        on_plain_text: Any | None = None,
+        channel_metadata: dict[str, Any] | None = None,
+        captured_turns: list[dict[str, Any]] | None = None,
+        tool_registry: ToolRegistry | None = None,
+        openviking_tool_names: list[str] | set[str] | None = None,
+        allow_final_fallback: bool = True,
+        inject_write_experience: bool = True,
     ) -> tuple[str | None, str | None, list[dict], dict[str, int], int]:
         """
         Run the core agent loop: call LLM, execute tools, repeat until done.
@@ -652,17 +936,43 @@ class AgentLoop:
             messages: Initial message list
             session_key: Session key for tool execution context
             publish_events: Whether to publish ITERATION/REASONING/TOOL_CALL events to the bus
+            sender_id: Sender identity forwarded to the tool execution context
+            actor_peer_id: Authenticated OpenViking peer identity for tools
             ov_tools_enable: Whether to enable OpenViking tools for this session
             memory_peer_ids: List of peer IDs for memory retrieval
             memory_owner_user_ids: List of explicit OpenViking user IDs for
-                legacy root-key fanout searches
+                trusted-mode owner-user memory lookup
             disabled_tools: Tool names to hide from the model for this request
             openviking_connection: Request-scoped OpenViking identity for tools
+            stop_tool_names: Tool names that terminate the loop immediately after execution
+            on_plain_text: Optional async callback invoked when the model returns a non-empty
+                plain-text reply (no tool calls). It receives (messages, text, iteration) and
+                must return a PlainTextRouteResult to either deliver the text and continue the
+                loop (e.g. forward it to a user simulator) or treat it as the final reply. When
+                None, plain text is treated as the final assistant reply (default chatbot
+                semantics).
+            channel_metadata: Channel-specific metadata for tools that publish outbound messages
+            captured_turns: Optional mutable list populated with each intermediate assistant
+                turn and the tool calls/results produced by that same model response. Reasoning
+                content is intentionally excluded.
+            tool_registry: Optional request-scoped registry used for tool definitions and
+                execution. Defaults to the agent's shared tool registry.
+            openviking_tool_names: Optional collection of tool names allowed to receive the
+                request-scoped OpenViking connection. None preserves the legacy behavior of
+                forwarding the connection to all tools; an empty collection forwards it to none.
+            allow_final_fallback: Whether to make a final tool-free LLM call after the
+                tool-use iteration limit is reached.
+            inject_write_experience: Whether to retrieve and inject relevant agent experience
+                before executing configured write tools.
 
         Returns:
             tuple of (final_content, final_reasoning_content, tools_used, token_usage, iteration)
         """
         iteration = 0
+        active_tools = tool_registry or self.tools
+        scoped_openviking_tools = (
+            set(openviking_tool_names) if openviking_tool_names is not None else None
+        )
         final_content = None
         final_reasoning_content = None
         tools_used: list[dict] = []
@@ -672,6 +982,15 @@ class AgentLoop:
             "total_tokens": 0,
         }
         write_exp_injected = False
+        stop_tools = set(stop_tool_names or [])
+
+        def accumulate_token_usage(response: Any) -> None:
+            if not response.usage:
+                return
+            cur_token = response.usage
+            token_usage["prompt_tokens"] += cur_token.get("prompt_tokens", 0)
+            token_usage["completion_tokens"] += cur_token.get("completion_tokens", 0)
+            token_usage["total_tokens"] += cur_token.get("total_tokens", 0)
 
         while iteration < self.max_iterations:
             iteration += 1
@@ -685,7 +1004,7 @@ class AgentLoop:
                     )
                 )
 
-            tool_definitions = self.tools.get_definitions(
+            tool_definitions = active_tools.get_definitions(
                 ov_tools_enable=ov_tools_enable,
                 disabled_tools=disabled_tools,
             )
@@ -695,11 +1014,7 @@ class AgentLoop:
                 session_key=session_key,
                 publish_events=publish_events,
             )
-            if response.usage:
-                cur_token = response.usage
-                token_usage["prompt_tokens"] += cur_token["prompt_tokens"]
-                token_usage["completion_tokens"] += cur_token["completion_tokens"]
-                token_usage["total_tokens"] += cur_token["total_tokens"]
+            accumulate_token_usage(response)
 
             if publish_events and response.reasoning_content and not streamed_reasoning:
                 await self.bus.publish_outbound(
@@ -712,8 +1027,8 @@ class AgentLoop:
 
             if response.has_tool_calls:
                 # Inject experience memory before write-related tool calls (once per session)
-                if not write_exp_injected:
-                    _ov_cfg = load_config().ov_server
+                if inject_write_experience and not write_exp_injected:
+                    _ov_cfg = self.config.ov_server
                     _write_tools = set(_ov_cfg.exp_write_tools)
                     if any(tc.name in _write_tools for tc in response.tool_calls):
                         write_exp_injected = True
@@ -773,15 +1088,23 @@ class AgentLoop:
                 async def execute_single_tool(idx: int, tool_call):
                     """Execute a single tool and track execution time."""
                     tool_execute_start_time = time.time()
-                    result = await self.tools.execute(
+                    tool_connection = (
+                        openviking_connection
+                        if scoped_openviking_tools is None
+                        or tool_call.name in scoped_openviking_tools
+                        else None
+                    )
+                    result = await active_tools.execute(
                         tool_call.name,
                         tool_call.arguments,
                         session_key=session_key,
                         sandbox_manager=self.sandbox_manager,
                         sender_id=sender_id,
+                        actor_peer_id=actor_peer_id or sender_id,
                         memory_peer_ids=memory_peer_ids,
                         memory_owner_user_ids=memory_owner_user_ids,
-                        openviking_connection=openviking_connection,
+                        openviking_connection=tool_connection,
+                        channel_metadata=channel_metadata,
                     )
                     tool_execute_duration = (time.time() - tool_execute_start_time) * 1000
                     return idx, tool_call, result, tool_execute_duration
@@ -804,6 +1127,7 @@ class AgentLoop:
                 results = await asyncio.gather(*tool_tasks)
 
                 # Stage 3: Process results sequentially in original order
+                turn_tools: list[dict[str, Any]] = []
                 for _idx, tool_call, result, tool_execute_duration in results:
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.info(f"[TOOL_CALL]: {tool_call.name}({args_str[:200]})")
@@ -822,6 +1146,7 @@ class AgentLoop:
                     )
 
                     tool_used_dict = {
+                        "tool_call_id": tool_call.id,
                         "tool_name": tool_call.name,
                         "args": args_str,
                         "result": result,
@@ -831,22 +1156,187 @@ class AgentLoop:
                         "output_token": cal_str_tokens(result, text_type="mixed"),
                     }
                     tools_used.append(tool_used_dict)
+                    turn_tools.append(tool_used_dict)
+
+                if captured_turns is not None:
+                    captured_turns.append(
+                        {
+                            "role": "assistant",
+                            "content": response.content or "",
+                            "tool_calls": turn_tools,
+                            "timestamp": datetime.now().isoformat(),
+                        }
+                    )
+
+                if any(
+                    tool_call.name in stop_tools and _is_tool_result_success(_result)
+                    for _idx, tool_call, _result, _duration in results
+                ):
+                    final_content = ""
+                    break
 
                 messages.append(
                     {"role": "user", "content": "Reflect on the results and decide next steps."}
                 )
             else:
+                text = (response.content or "").strip()
+                routed = False
+                if text and on_plain_text is not None:
+                    try:
+                        route = await on_plain_text(
+                            _PlainTextContext(
+                                messages=messages,
+                                session_key=session_key,
+                                text=text,
+                                reasoning_content=response.reasoning_content,
+                                iteration=iteration,
+                                tools=active_tools,
+                                sandbox_manager=self.sandbox_manager,
+                                sender_id=sender_id,
+                                memory_peer_ids=memory_peer_ids,
+                                memory_owner_user_ids=memory_owner_user_ids,
+                                openviking_connection=openviking_connection,
+                            )
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "[PLAIN_TEXT_HOOK]: hook raised; treating as final answer: %s", exc
+                        )
+                        route = None
+                    if isinstance(route, _PlainTextDelivered):
+                        messages = route.messages
+                        tools_used.extend(route.tools_used)
+                        if captured_turns is not None:
+                            captured_turns.append(
+                                {
+                                    "role": "assistant",
+                                    "content": text,
+                                    "tool_calls": list(route.tools_used),
+                                    "timestamp": datetime.now().isoformat(),
+                                }
+                            )
+                        if route.user_terminates:
+                            final_content = ""
+                            break
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": "Reflect on the results and decide next steps.",
+                            }
+                        )
+                        routed = True
+                        continue
+                    if isinstance(route, _PlainTextFinal):
+                        final_content = route.content if route.content is not None else text
+                        final_reasoning_content = response.reasoning_content
+                        break
+                    # Unknown / None result: fall through to default final-answer handling.
                 final_content = response.content
                 final_reasoning_content = response.reasoning_content
+                if routed:
+                    continue
                 break
+
+        if final_content == "" and tools_used and tools_used[-1].get("tool_name") in stop_tools:
+            pass
+        elif final_content is None or (
+            isinstance(final_content, str) and not final_content.strip()
+        ):
+            if iteration >= self.max_iterations and allow_final_fallback:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Tool-use iteration limit reached. Do not call any more tools. "
+                            "Answer the user's original request directly using only the "
+                            "conversation, tool calls, and tool results already available above. "
+                            "If the gathered information is incomplete, explain the best-known "
+                            "answer and clearly note what remains uncertain."
+                        ),
+                    }
+                )
+                (
+                    response,
+                    _streamed_content,
+                    streamed_reasoning,
+                ) = await self._chat_with_stream_events(
+                    messages=messages,
+                    tools=[],
+                    session_key=session_key,
+                    publish_events=publish_events,
+                )
+                accumulate_token_usage(response)
+                final_content = response.content
+                final_reasoning_content = response.reasoning_content
+
+                if publish_events and response.reasoning_content and not streamed_reasoning:
+                    await self.bus.publish_outbound(
+                        OutboundMessage(
+                            session_key=session_key,
+                            content=response.reasoning_content,
+                            event_type=OutboundEventType.REASONING,
+                        )
+                    )
 
         if final_content is None or (isinstance(final_content, str) and not final_content.strip()):
             if iteration >= self.max_iterations:
-                final_content = f"Reached {self.max_iterations} iterations without completion."
+                final_content = (
+                    "I reached the tool-use limit before completing every step, and the "
+                    "available tool results are not enough for a reliable final answer."
+                )
             else:
                 final_content = "I've completed processing but have no response to give."
 
         return final_content, final_reasoning_content, tools_used, token_usage, iteration
+
+    async def run_structured_task(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        session_key: SessionKey,
+        tool_registry: ToolRegistry,
+        openviking_tool_names: list[str] | set[str],
+        stop_tool_names: list[str],
+        openviking_connection: dict[str, Any] | None,
+    ) -> tuple[Any, list[dict], dict[str, int], int]:
+        """Run a tool-terminated structured task through the existing agent loop."""
+
+        async def require_submission(context: _PlainTextContext) -> _PlainTextDelivered:
+            messages = self.context.add_assistant_message(context.messages, context.text, [])
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "Your response was not submitted. Continue the task and call "
+                        "submit_wiki_bundle with the complete final bundle."
+                    ),
+                }
+            )
+            return _PlainTextDelivered(messages=messages, tools_used=[])
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        _content, _reasoning, tools_used, token_usage, iteration = await self._run_agent_loop(
+            messages=messages,
+            session_key=session_key,
+            publish_events=False,
+            ov_tools_enable=True,
+            openviking_connection=openviking_connection,
+            stop_tool_names=stop_tool_names,
+            on_plain_text=require_submission,
+            tool_registry=tool_registry,
+            openviking_tool_names=openviking_tool_names,
+            allow_final_fallback=False,
+            inject_write_experience=False,
+        )
+        submit_tool = tool_registry.get("submit_wiki_bundle")
+        bundle = getattr(submit_tool, "bundle", None)
+        if bundle is None:
+            raise ValueError("AGENT_OUTPUT_INVALID: Agent did not submit a valid Wiki bundle")
+        return bundle, tools_used, token_usage, iteration
 
     @trace(
         name="process_message",
@@ -919,11 +1409,11 @@ class AgentLoop:
             if not isinstance(disabled_tools, list):
                 disabled_tools = []
             openviking_connection = getattr(msg, "openviking_connection", None)
-            if openviking_connection is None and msg.metadata:
-                openviking_connection = msg.metadata.get("openviking_connection")
             if not isinstance(openviking_connection, dict):
                 openviking_connection = None
             msg.openviking_connection = openviking_connection
+            actor_peer_id = getattr(msg, "actor_peer_id", None) or msg.sender_id
+            msg.actor_peer_id = actor_peer_id
             profile_user_list = []
             memory_peer_ids = self._metadata_memory_peer_ids(msg.metadata)
             memory_owner_user_ids = self._metadata_memory_owner_user_ids(msg.metadata)
@@ -972,7 +1462,7 @@ class AgentLoop:
                 if self._ov_session_context_enabled():
                     committed = await self._commit_openviking_session(
                         session,
-                        keep_recent_count=0,
+                        keep_recent_turn_count=0,
                         clear_local_session=True,
                         openviking_connection=openviking_connection,
                     )
@@ -987,7 +1477,11 @@ class AgentLoop:
                     session.clear()
                     await self.sessions.save(session)
                     # Run consolidation in background
-                    await self._safe_consolidate_memory(session_clone, archive_all=True)
+                    await self._safe_consolidate_memory(
+                        session_clone,
+                        archive_all=True,
+                        openviking_connection=openviking_connection,
+                    )
                 return OutboundMessage(
                     session_key=msg.session_key,
                     content="🐈 New session started. Memory consolidated.",
@@ -1003,7 +1497,7 @@ class AgentLoop:
                 if self._ov_session_context_enabled():
                     remembered = await self._commit_openviking_session(
                         session,
-                        keep_recent_count=self.config.agents.commit_keep_recent_count,
+                        keep_recent_turn_count=self.config.agents.commit_keep_recent_turn_count,
                         openviking_connection=openviking_connection,
                     )
                     if not remembered:
@@ -1014,7 +1508,10 @@ class AgentLoop:
                         )
                 elif ov_tools_enable:
                     session_clone = session.clone()
-                    await self._consolidate_viking_memory(session_clone)
+                    await self._consolidate_viking_memory(
+                        session_clone,
+                        openviking_connection=openviking_connection,
+                    )
                 return OutboundMessage(
                     session_key=msg.session_key,
                     content="This conversation has been submitted to memory storage.",
@@ -1058,7 +1555,11 @@ class AgentLoop:
                 session.messages = session.messages[-keep_count:] if keep_count else []
                 await self.sessions.save(session)
                 # Run consolidation in background
-                await self._safe_consolidate_memory(session_clone, archive_all=False)
+                await self._safe_consolidate_memory(
+                    session_clone,
+                    archive_all=False,
+                    openviking_connection=openviking_connection,
+                )
 
             if self.sandbox_manager:
                 message_workspace = self.sandbox_manager.get_workspace_path(session_key)
@@ -1071,10 +1572,13 @@ class AgentLoop:
                 message_workspace,
                 sandbox_manager=self.sandbox_manager,
                 sender_id=msg.sender_id,
+                actor_peer_id=actor_peer_id,
                 sender_name=msg.sender_name,
                 is_group_chat=is_group_chat,
                 eval=self._eval,
                 openviking_connection=openviking_connection,
+                enable_subagents=self._subagents_enabled(),
+                config=self.config,
             )
 
             # Build initial messages (use OpenViking session context when enabled)
@@ -1083,7 +1587,15 @@ class AgentLoop:
                 session,
                 provider_name=provider_name,
                 openviking_connection=openviking_connection,
+                actor_peer_id=actor_peer_id,
             )
+
+            # Experience recall deduplication: URIs already recalled in this session
+            # are stored in session.metadata and survive restarts (persisted to JSONL).
+            exp_exclude_uris = session.metadata.get("recalled_exp_uris", [])
+            if not isinstance(exp_exclude_uris, list):
+                exp_exclude_uris = []
+
             messages = await message_context.build_messages(
                 history=history,
                 current_message=msg.content,
@@ -1093,6 +1605,7 @@ class AgentLoop:
                 profile_user_list=profile_user_list,
                 memory_peer_ids=memory_peer_ids,
                 memory_owner_user_ids=memory_owner_user_ids,
+                exp_exclude_uris=exp_exclude_uris,
             )
             relevant_memories = message_context.latest_relevant_memories
             auto_memory_tool = None
@@ -1102,10 +1615,21 @@ class AgentLoop:
                     query=msg.content,
                     result=relevant_memories,
                 )
-            # logger.info(f"New messages: {json.dumps(messages, indent=4)}")
+
+            # Track newly recalled experience URIs for deduplication
+            newly_recalled_exp_uris = getattr(message_context, "latest_recalled_exp_uris", [])
+            newly_recalled_exp_content = getattr(message_context, "latest_recalled_exp_content", "")
+            if newly_recalled_exp_uris:
+                existing_uris = set(exp_exclude_uris)
+                for uri in newly_recalled_exp_uris:
+                    if uri not in existing_uris:
+                        existing_uris.add(uri)
+                        exp_exclude_uris.append(uri)
+                session.metadata["recalled_exp_uris"] = exp_exclude_uris
 
             # Run agent loop within a stable response identity for tracing/tool spans.
             response_id = uuid.uuid4().hex
+            agent_turns: list[dict[str, Any]] = []
             with set_response_id(response_id):
                 (
                     final_content,
@@ -1118,11 +1642,14 @@ class AgentLoop:
                     session_key=session_key,
                     publish_events=True,
                     sender_id=msg.sender_id,
+                    actor_peer_id=actor_peer_id,
                     ov_tools_enable=ov_tools_enable,
                     memory_peer_ids=memory_peer_ids,
                     memory_owner_user_ids=memory_owner_user_ids,
                     disabled_tools=disabled_tools,
                     openviking_connection=openviking_connection,
+                    channel_metadata=msg.metadata,
+                    captured_turns=agent_turns,
                 )
 
             if auto_memory_tool:
@@ -1145,6 +1672,15 @@ class AgentLoop:
 
             is_heartbeat = bool(msg.metadata.get(HEARTBEAT_METADATA_KEY))
             if not (is_heartbeat and is_heartbeat_noop_response(final_content)):
+                # Write experience reminder into session history so it persists
+                # across turns and survives bot restarts (in JSONL).
+                if newly_recalled_exp_content:
+                    session.add_message(
+                        "user",
+                        f"[Experience Reminder]\n## Relevant Agent Experience\n{newly_recalled_exp_content}",
+                        exp_uris=newly_recalled_exp_uris,
+                        experience_reminder=True,
+                    )
                 session.add_message("user", msg.content, sender_id=msg.sender_id)
                 session.add_message(
                     "assistant",
@@ -1154,6 +1690,7 @@ class AgentLoop:
                     token_usage=token_usage,
                     sender_id=msg.sender_id,
                     reasoning_content=final_reasoning_content,
+                    agent_turns=agent_turns if agent_turns else None,
                 )
                 session.metadata.setdefault("response_facts", {})[response_id] = response_completed
                 await self.sessions.save(session)
@@ -1336,6 +1873,8 @@ class AgentLoop:
         Returns:
             True if ov tools should be enabled, False otherwise
         """
+        if not self.config.ov_server.is_available():
+            return False
         channel_config = self._get_channel_config(session_key)
         return getattr(channel_config, "ov_tools_enable", True) if channel_config else True
 
@@ -1359,8 +1898,30 @@ class AgentLoop:
 
         # Build messages with the announce content
         provider_name = self.config.get_provider_name(self.model) if self.config else None
-        history = await self._build_prompt_history(session, provider_name=provider_name)
-        messages = await self.context.build_messages(
+        actor_peer_id = getattr(msg, "actor_peer_id", None) or msg.sender_id
+        history = await self._build_prompt_history(
+            session,
+            provider_name=provider_name,
+            openviking_connection=msg.openviking_connection,
+            actor_peer_id=actor_peer_id,
+        )
+        from vikingbot.agent.context import ContextBuilder
+
+        message_workspace = (
+            self.sandbox_manager.get_workspace_path(msg.session_key)
+            if self.sandbox_manager
+            else self.workspace
+        )
+        message_context = ContextBuilder(
+            message_workspace,
+            sandbox_manager=self.sandbox_manager,
+            sender_id=msg.sender_id,
+            actor_peer_id=actor_peer_id,
+            openviking_connection=msg.openviking_connection,
+            enable_subagents=self._subagents_enabled(),
+            config=self.config,
+        )
+        messages = await message_context.build_messages(
             history=history,
             current_message=msg.content,
             session_key=msg.session_key,
@@ -1369,6 +1930,7 @@ class AgentLoop:
         )
 
         # Run agent loop (no events published)
+        agent_turns: list[dict[str, Any]] = []
         (
             final_content,
             final_reasoning_content,
@@ -1379,8 +1941,13 @@ class AgentLoop:
             messages=messages,
             session_key=msg.session_key,
             publish_events=False,
+            sender_id=msg.sender_id,
+            actor_peer_id=actor_peer_id,
             ov_tools_enable=ov_tools_enable,
             memory_peer_ids=None,
+            openviking_connection=msg.openviking_connection,
+            channel_metadata=msg.metadata,
+            captured_turns=agent_turns,
         )
 
         if final_content is None or (isinstance(final_content, str) and not final_content.strip()):
@@ -1393,12 +1960,22 @@ class AgentLoop:
             final_content,
             tools_used=tools_used if tools_used else None,
             reasoning_content=final_reasoning_content,
+            agent_turns=agent_turns if agent_turns else None,
         )
         await self.sessions.save(session)
 
-        return OutboundMessage(session_key=msg.session_key, content=final_content)
+        return OutboundMessage(
+            session_key=msg.session_key,
+            content=final_content,
+            metadata=dict(msg.metadata or {}),
+        )
 
-    async def _consolidate_memory(self, session, archive_all: bool = False) -> None:
+    async def _consolidate_memory(
+        self,
+        session,
+        archive_all: bool = False,
+        openviking_connection: dict[str, Any] | None = None,
+    ) -> None:
         """Consolidate old messages into MEMORY.md + HISTORY.md. Works on a cloned session."""
         try:
             if not session.messages:
@@ -1416,14 +1993,18 @@ class AgentLoop:
                             allow_from.extend(channel_config.allow_from)
                 messages = [msg for msg in session.messages if msg.get("sender_id") in allow_from]
                 session.messages = messages
-            await self._consolidate_viking_memory(session)
+            if self.config.ov_server.is_available():
+                await self._consolidate_viking_memory(
+                    session,
+                    openviking_connection=openviking_connection,
+                )
 
             if self.sandbox_manager:
                 memory_workspace = self.sandbox_manager.get_workspace_path(session.key)
             else:
                 memory_workspace = self.workspace
 
-            memory = MemoryStore(memory_workspace)
+            memory = MemoryStore(memory_workspace, config=self.config)
             if archive_all:
                 old_messages = session.messages
                 keep_count = 0
@@ -1478,6 +2059,7 @@ Respond with ONLY valid JSON, no markdown fences."""
                     {"role": "user", "content": prompt},
                 ],
                 model=self.model,
+                temperature=self.temperature,
                 session_id=session.key.safe_name(),
             )
             text = (response.content or "").strip()
@@ -1488,7 +2070,7 @@ Respond with ONLY valid JSON, no markdown fences."""
             if entry := result.get("history_entry"):
                 memory.append_history(entry)
             if update := result.get("memory_update"):
-                if load_config().use_local_memory and update != current_memory:
+                if self.config.use_local_memory and update != current_memory:
                     memory.write_long_term(update)
 
             # Session trimming and saving is handled by the caller before calling _consolidate_memory
@@ -1497,7 +2079,11 @@ Respond with ONLY valid JSON, no markdown fences."""
         except Exception as e:
             logger.exception(f"Memory consolidation failed: {e}")
 
-    async def _consolidate_viking_memory(self, session) -> None:
+    async def _consolidate_viking_memory(
+        self,
+        session,
+        openviking_connection: dict[str, Any] | None = None,
+    ) -> None:
         """Consolidate old messages into MEMORY.md + HISTORY.md. Works on a cloned session."""
         try:
             if not session.messages:
@@ -1511,18 +2097,30 @@ Respond with ONLY valid JSON, no markdown fences."""
                 context=HookContext(
                     event_type="message.compact",
                     session_id=session.key.safe_name(),
-                    workspace_id=self.sandbox_manager.to_workspace_id(session.key),
+                    workspace_id=self._get_ov_workspace_id(session.key),
                     session_key=session.key,
+                    config=self.config,
+                    openviking_connection=openviking_connection,
                 ),
                 session=session,
+                openviking_connection=openviking_connection,
             )
         except Exception as e:
             logger.exception(f"Memory consolidation failed: {e}")
 
-    async def _safe_consolidate_memory(self, session, archive_all: bool = False) -> None:
+    async def _safe_consolidate_memory(
+        self,
+        session,
+        archive_all: bool = False,
+        openviking_connection: dict[str, Any] | None = None,
+    ) -> None:
         """Safe wrapper for _consolidate_memory that ensures all exceptions are caught."""
         try:
-            await self._consolidate_memory(session, archive_all)
+            await self._consolidate_memory(
+                session,
+                archive_all,
+                openviking_connection=openviking_connection,
+            )
         except Exception as e:
             logger.exception(f"Background memory consolidation task failed: {e}")
 

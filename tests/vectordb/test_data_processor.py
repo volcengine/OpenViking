@@ -35,7 +35,7 @@ class TestDataProcessor(unittest.TestCase):
         self.assertIn(("geo_lon", "float32"), mapped)
         self.assertIn(("geo_lat", "float32"), mapped)
         self.assertIn(("uri", "path"), mapped)
-        self.assertIn(("tags", "string"), mapped)
+        self.assertIn(("tags", "list<string>"), mapped)
 
     def test_datetime_and_geo_point_conversion(self):
         data = {

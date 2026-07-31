@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next'
 import {
   CheckCircle2Icon,
   ChevronDownIcon,
+  ChevronRightIcon,
   CircleAlertIcon,
   FileTextIcon,
   LoaderIcon,
@@ -84,18 +85,32 @@ export function ReasoningBlock({ reasoning, isRunning }: ReasoningBlockProps) {
   if (!reasoning) return null
 
   return (
-    <details
-      className="mb-3 rounded-lg border border-border/30 bg-muted/20"
-      open={isRunning}
-    >
-      <summary className="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-xs font-medium text-muted-foreground select-none">
-        {isRunning && <LoaderIcon className="size-3 animate-spin" />}
+    <details className="group/reasoning mb-3" open={isRunning}>
+      <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-md px-1 py-1 text-xs font-medium text-muted-foreground/70 transition-colors hover:bg-muted/50 hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 select-none [&::-webkit-details-marker]:hidden">
+        <ChevronRightIcon className="size-3.5 transition-transform duration-200 group-open/reasoning:rotate-90 motion-reduce:transition-none" />
+        {isRunning && (
+          <LoaderIcon className="size-3 animate-spin motion-reduce:animate-none" />
+        )}
         <span>{isRunning ? t('chat.thinking') : t('chat.reasoning')}</span>
       </summary>
-      <div className="border-t border-border/30 px-3 py-2 text-xs text-muted-foreground/80 leading-relaxed whitespace-pre-wrap">
+      <div className="ml-[7px] mt-1 border-l border-border/50 py-1 pl-4 text-[13px] leading-6 text-muted-foreground/75 whitespace-pre-wrap">
         {reasoning}
       </div>
     </details>
+  )
+}
+
+export function IterationDivider({ iteration }: { iteration: number }) {
+  const { t } = useTranslation('sessions')
+
+  return (
+    <div className="my-3 flex items-center gap-2 text-[11px] text-muted-foreground/70">
+      <span className="h-px flex-1 bg-border/40" />
+      <span className="rounded-full bg-muted/50 px-2 py-0.5 font-medium">
+        {t('chat.iteration', { count: iteration })}
+      </span>
+      <span className="h-px flex-1 bg-border/40" />
+    </div>
   )
 }
 
@@ -131,10 +146,11 @@ export function ToolCallBlock({
   }, [result])
 
   return (
-    <details className="my-2 rounded-lg border border-border/30 bg-muted/20">
-      <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 text-xs select-none">
+    <details className="group/tool my-2" open={isRunning}>
+      <summary className="flex w-full cursor-pointer list-none items-center gap-1.5 rounded-md px-1 py-1 text-xs text-muted-foreground/70 transition-colors hover:bg-muted/50 hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 select-none [&::-webkit-details-marker]:hidden">
+        <ChevronRightIcon className="size-3.5 shrink-0 transition-transform duration-200 group-open/tool:rotate-90 motion-reduce:transition-none" />
         <ToolStatusIcon isRunning={isRunning} isError={isError} />
-        <WrenchIcon className="size-3 text-muted-foreground/60" />
+        <WrenchIcon className="size-3 shrink-0 text-muted-foreground/60" />
         <span className="font-mono font-medium text-foreground/80">
           {toolName}
         </span>
@@ -146,26 +162,26 @@ export function ToolCallBlock({
               : t('chat.toolStatus.completed')}
         </span>
       </summary>
-      <div className="space-y-2 border-t border-border/30 px-3 py-2">
+      <div className="ml-[7px] mt-1 space-y-3 border-l border-border/50 py-1 pl-4">
         {args && Object.keys(args).length > 0 && (
           <div>
-            <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/50">
+            <div className="mb-1.5 text-[11px] font-medium text-muted-foreground/60">
               {t('chat.toolInput')}
             </div>
-            <pre className="overflow-x-auto rounded-md bg-muted/50 p-2 text-xs leading-relaxed">
+            <pre className="overflow-x-auto rounded-md bg-muted/40 p-2.5 text-xs leading-relaxed">
               {JSON.stringify(args, null, 2)}
             </pre>
           </div>
         )}
         {result !== undefined && (
           <div>
-            <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/50">
+            <div className="mb-1.5 text-[11px] font-medium text-muted-foreground/60">
               {t('chat.toolResult')}
             </div>
             <pre
               className={cn(
-                'max-h-48 overflow-x-auto overflow-y-auto rounded-md p-2 text-xs leading-relaxed',
-                isError ? 'bg-destructive/10 text-destructive' : 'bg-muted/50',
+                'max-h-48 overflow-x-auto overflow-y-auto rounded-md p-2.5 text-xs leading-relaxed',
+                isError ? 'bg-destructive/10 text-destructive' : 'bg-muted/40',
               )}
             >
               {result}
@@ -217,7 +233,9 @@ function ToolStatusIcon({
   isError?: boolean
 }) {
   if (isRunning)
-    return <LoaderIcon className="size-3 animate-spin text-muted-foreground" />
+    return (
+      <LoaderIcon className="size-3 animate-spin text-muted-foreground motion-reduce:animate-none" />
+    )
   if (isError) return <CircleAlertIcon className="size-3 text-destructive" />
   return <CheckCircle2Icon className="size-3 text-primary/70" />
 }

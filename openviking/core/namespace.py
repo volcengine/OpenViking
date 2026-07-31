@@ -114,7 +114,9 @@ def relative_uri_path(root_uri: str, uri: str) -> str:
 
 
 def _content_segment_index(parts: tuple[str, ...]) -> Optional[int]:
-    """Return the first content segment after a user namespace root."""
+    """Return the content segment for a supported namespace shape."""
+    if len(parts) >= 2 and parts[:2] == ("agent", "skills"):
+        return 1
     if len(parts) >= 3 and parts[0] == "agent" and parts[2] in _CONTENT_TYPES_BY_SCOPE["agent"]:
         return 2
     if len(parts) < 2 or parts[0] != "user":
@@ -173,15 +175,6 @@ def canonical_session_uri(ctx: RequestContext, session_id: Optional[str] = None)
     return f"{root}/{session_id}"
 
 
-def canonical_user_content_root(ctx: RequestContext, kind: str) -> str:
-    segment = _CONTENT_SEGMENT_BY_KIND[kind]
-    return f"{canonical_user_root(ctx)}/{segment}"
-
-
-def legacy_session_uri(session_id: Optional[str] = None) -> str:
-    if not session_id:
-        return "viking://session"
-    return f"viking://session/{session_id}"
 
 
 def is_session_uri(uri: str) -> bool:
@@ -193,9 +186,13 @@ def is_session_uri(uri: str) -> bool:
     return len(parts) >= 3 and parts[0] == "user" and parts[2] == "sessions"
 
 
+AGENT_SHARED_ROOTS: tuple[str, ...] = ("viking://agent/skills",)
+
+
 def visible_roots(ctx: RequestContext) -> list[str]:
     return [
         "viking://resources",
+        *AGENT_SHARED_ROOTS,
         canonical_user_root(ctx),
     ]
 
@@ -308,19 +305,6 @@ def is_content_root_uri(
     )
 
 
-def is_content_namespace_root_uri(uri: str, ctx: RequestContext) -> bool:
-    try:
-        canonical_uri = canonicalize_uri(uri, ctx)
-    except (ValueError, NamespaceShapeError):
-        return False
-    parts = uri_parts(canonical_uri)
-    if parts == ["resources"]:
-        return True
-    classification = classify_uri(canonical_uri)
-    return (
-        classification.content_index is not None and len(parts) == classification.content_index + 1
-    )
-
 
 def _validate_peer_id_segments(parts: list[str]) -> None:
     if len(parts) >= 3 and parts[0] == "user" and parts[1] == "peers":
@@ -391,12 +375,6 @@ def _resolve_user_uri(
 ) -> ResolvedNamespace:
     normalized = "viking://" + "/".join(parts)
     if len(parts) == 1:
-        if ctx is not None:
-            return ResolvedNamespace(
-                uri=canonical_user_root(ctx),
-                scope="user",
-                owner_user_id=ctx.user.user_id,
-            )
         return ResolvedNamespace(uri="viking://user", scope="user", is_container=True)
 
     if _is_current_user_relative_uri(parts, ctx):

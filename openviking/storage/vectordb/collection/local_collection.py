@@ -5,9 +5,11 @@ import json
 import os
 import random
 import shutil
+import threading
 import time
+from contextlib import contextmanager
 from itertools import zip_longest
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -48,19 +50,116 @@ from openviking.storage.vectordb.utils.path_safety import (
     safe_join_name,
 )
 from openviking.storage.vectordb.utils.str_to_uint64 import str_to_uint64
-from openviking.storage.vectordb.vectorize.base import BaseVectorizer
-from openviking.storage.vectordb.vectorize.vectorizer import VectorizerAdapter
-from openviking.storage.vectordb.vectorize.vectorizer_factory import VectorizerFactory
 from openviking_cli.utils.logger import default_logger as logger
 
 # Use imported constants, no longer defined here
 AUTO_ID_KEY = SpecialFields.AUTO_ID.value
 
 
+class _MutationMarker:
+    def __init__(self):
+        self.changed = False
+
+    def mark_changed(self) -> None:
+        self.changed = True
+
+
+class _IndexMutationBarrier:
+    """Coordinate index replacement with concurrent Store/index mutations.
+
+    Normal mutations share the barrier so independent writers retain their
+    existing concurrency. Index publication is exclusive: it waits for writes
+    already in flight and prevents a new write from selecting the index being
+    replaced. A monotonically increasing generation lets an off-lock rebuild
+    reject a Store snapshot that became stale while the replacement was built.
+    """
+
+    def __init__(self):
+        self._condition = threading.Condition(threading.Lock())
+        self._active_mutations = 0
+        self._publisher = False
+        self._waiting_publishers = 0
+        self._generation = 0
+
+    @contextmanager
+    def mutation(self) -> Iterator[_MutationMarker]:
+        with self._condition:
+            while self._publisher or self._waiting_publishers:
+                self._condition.wait()
+            self._active_mutations += 1
+        marker = _MutationMarker()
+        try:
+            yield marker
+        except BaseException:
+            # The Store may already have committed before a later step raises.
+            marker.mark_changed()
+            raise
+        finally:
+            with self._condition:
+                if marker.changed:
+                    self._generation += 1
+                self._active_mutations -= 1
+                if self._active_mutations == 0:
+                    self._condition.notify_all()
+
+    @contextmanager
+    def exclusive_mutation(self) -> Iterator[None]:
+        with self._exclusive() as _:
+            try:
+                yield
+            finally:
+                with self._condition:
+                    self._generation += 1
+
+    def snapshot_generation(self) -> int:
+        """Return a boundary ordered after any exclusive collection mutation."""
+
+        with self._condition:
+            while self._publisher or self._waiting_publishers:
+                self._condition.wait()
+            return self._generation
+
+    def is_current(self, expected_generation: int) -> bool:
+        """Check whether a snapshot is already known to be stale."""
+
+        with self._condition:
+            return (
+                not self._publisher
+                and self._active_mutations == 0
+                and self._generation == expected_generation
+            )
+
+    @contextmanager
+    def publish_if_current(self, expected_generation: int) -> Iterator[bool]:
+        """Reserve publication and report whether the snapshot is still current."""
+
+        with self._exclusive():
+            with self._condition:
+                current = self._generation == expected_generation
+            yield current
+
+    @contextmanager
+    def _exclusive(self) -> Iterator[None]:
+        with self._condition:
+            self._waiting_publishers += 1
+            try:
+                while self._publisher or self._active_mutations:
+                    self._condition.wait()
+                self._publisher = True
+            finally:
+                self._waiting_publishers -= 1
+        try:
+            yield
+        finally:
+            with self._condition:
+                self._publisher = False
+                self._condition.notify_all()
+
+
 def get_or_create_local_collection(
     meta_data: Optional[Dict[str, Any]] = None,
     path: str = "",
-    vectorizer: Optional[BaseVectorizer] = None,
+    *,
     config: Optional[Dict[str, Any]] = None,
 ):
     """Create or retrieve a local Collection.
@@ -68,7 +167,6 @@ def get_or_create_local_collection(
     Args:
         meta_data: Collection metadata configuration
         path: Persistence path. If empty, creates an in-memory collection
-        vectorizer: Vectorizer for embedding generation
         config: Configuration parameters, optional settings include:
             - "ttl_cleanup_seconds": Interval (in seconds) for TTL expiration data cleanup
             - "index_maintenance_seconds": Interval (in seconds) for index maintenance tasks
@@ -102,30 +200,18 @@ def get_or_create_local_collection(
     collection: ICollection
     if not path:
         meta = create_collection_meta(path, meta_data)
-        vectorizer = (
-            VectorizerFactory.create(meta.vectorize)
-            if meta.vectorize and vectorizer is None
-            else vectorizer
-        )
         store_mgr = create_store_manager("local")
-        collection = VolatileCollection(
-            meta=meta, store=store_mgr, vectorizer=vectorizer, config=config
-        )
+        collection = VolatileCollection(meta=meta, store=store_mgr, config=config)
         return Collection(collection)
     else:
         collection_dir = str(resolve_storage_path(path))
         os.makedirs(collection_dir, exist_ok=True)
         meta_path = str(safe_join(collection_dir, "collection_meta.json"))
         meta = create_collection_meta(meta_path, meta_data)
-        vectorizer = (
-            VectorizerFactory.create(meta.vectorize)
-            if meta.vectorize and vectorizer is None
-            else vectorizer
-        )
         storage_path = str(safe_join(collection_dir, STORAGE_DIR_NAME))
         store_mgr = create_store_manager("local", storage_path)
         collection = PersistCollection(
-            path=collection_dir, meta=meta, store=store_mgr, vectorizer=vectorizer, config=config
+            path=collection_dir, meta=meta, store=store_mgr, config=config
         )
         return Collection(collection)
 
@@ -135,10 +221,12 @@ class LocalCollection(ICollection):
         self,
         meta: CollectionMeta,
         store_mgr: StoreManager,
-        vectorizer: Optional[BaseVectorizer] = None,
         config: Optional[Dict[str, Any]] = None,
     ):
         self.indexes = ThreadSafeDictManager[IIndex]()
+        self._index_mutation_barrier = _IndexMutationBarrier()
+        self._bulk_ingest_lock = threading.RLock()
+        self._bulk_ingest_depth = 0
         self.meta: CollectionMeta = meta
         self.collection_name = ""
 
@@ -151,15 +239,12 @@ class LocalCollection(ICollection):
             ENV_INDEX_MAINTENANCE_SECONDS,
             DEFAULT_INDEX_MAINTENANCE_SECONDS,
         )
+        self.dense_search_config = dict((config or {}).get("dense_search", {}))
 
         self.store_mgr: Optional[StoreManager] = store_mgr
         self.data_processor = DataProcessor(
             self.meta.fields_dict, collection_name=self.meta.collection_name
         )
-        self.vectorizer_adapter = None
-        if meta.vectorize and vectorizer:
-            self.vectorizer_adapter = VectorizerAdapter(vectorizer, meta.vectorize)
-            self.meta.vector_dim = self.vectorizer_adapter.get_dim()
 
         self.ttl_cleanup_job_id: Optional[str] = None
         self.index_manage_job_id: Optional[str] = None
@@ -176,15 +261,16 @@ class LocalCollection(ICollection):
             meta_data["Description"] = description
         if not meta_data:
             return
-        self.meta.update(meta_data)
-        self.data_processor = DataProcessor(
-            self.meta.fields_dict, collection_name=self.meta.collection_name
-        )
+        with self._index_mutation_barrier.exclusive_mutation():
+            self.meta.update(meta_data)
+            self.data_processor = DataProcessor(
+                self.meta.fields_dict, collection_name=self.meta.collection_name
+            )
 
     def get_meta_data(self):
         return self.meta.get_meta_data()
 
-    def close(self):
+    def _close_unlocked(self) -> None:
         self._delete_scheduler_job()
 
         # Shutdown scheduler
@@ -204,6 +290,125 @@ class LocalCollection(ICollection):
         self.indexes.iterate(close_index)
         self.indexes.clear()
 
+    def close(self):
+        with self._index_mutation_barrier.exclusive_mutation():
+            self._close_unlocked()
+
+    def begin_bulk_ingest(self) -> None:
+        """Defer optional derived-index rebuilds until the outer scope exits."""
+
+        with self._bulk_ingest_lock:
+            if self._bulk_ingest_depth > 0:
+                self._bulk_ingest_depth += 1
+                return
+            suspended: List[IIndex] = []
+            try:
+                for index in self.indexes.get_all().values():
+                    index.begin_bulk_ingest()
+                    suspended.append(index)
+            except Exception:
+                for index in reversed(suspended):
+                    try:
+                        index.end_bulk_ingest()
+                    except Exception:
+                        logger.warning(
+                            "Failed to roll back bulk-ingest suspension",
+                            exc_info=True,
+                        )
+                raise
+            self._bulk_ingest_depth = 1
+
+    def end_bulk_ingest(self) -> None:
+        """Resume derived-index maintenance after a matching begin call."""
+
+        with self._bulk_ingest_lock:
+            if self._bulk_ingest_depth <= 0:
+                raise RuntimeError("bulk ingest scope is not active")
+            if self._bulk_ingest_depth > 1:
+                self._bulk_ingest_depth -= 1
+                return
+            first_error: Optional[Exception] = None
+            for index in self.indexes.get_all().values():
+                try:
+                    index.end_bulk_ingest()
+                except Exception as exc:
+                    if first_error is None:
+                        first_error = exc
+                    logger.warning("Failed to end bulk-ingest suspension", exc_info=True)
+            self._bulk_ingest_depth = 0
+            if first_error is not None:
+                raise first_error
+
+    @staticmethod
+    def _start_index_background_rebuild(index: IIndex) -> None:
+        start = getattr(index, "_start_dense_rebuild_worker", None)
+        if callable(start):
+            start()
+
+    @staticmethod
+    def _stop_index_background_rebuild(index: IIndex) -> None:
+        stop = getattr(index, "_stop_dense_rebuild_worker", None)
+        if callable(stop):
+            stop()
+
+    def _publish_index(
+        self,
+        index_name: str,
+        index: IIndex,
+    ) -> Optional[IIndex]:
+        """Publish an index while the caller holds the mutation barrier."""
+
+        with self._bulk_ingest_lock:
+            replaced = self.indexes.get(index_name)
+            if self._bulk_ingest_depth > 0:
+                index.begin_bulk_ingest()
+            self.indexes.set(index_name, index)
+            return replaced
+
+    def _install_index(
+        self,
+        index_name: str,
+        index: IIndex,
+        *,
+        expected_generation: int,
+        expected_replaced: IIndex,
+        start_background_rebuild: bool = False,
+    ) -> bool:
+        """Publish a replacement only if its Store snapshot is still current."""
+
+        replaced: Optional[IIndex] = None
+        with self._index_mutation_barrier.publish_if_current(expected_generation) as current:
+            if not current or self.indexes.get(index_name) is not expected_replaced:
+                return False
+            replaced = self._publish_index(index_name, index)
+        if replaced is not None and replaced is not index:
+            try:
+                # Retire the old worker before starting the replacement so two
+                # full GPU builds do not overlap. This happens after the map
+                # swap, so Store writes keep flowing to the new index while a
+                # possibly in-flight old build winds down.
+                self._stop_index_background_rebuild(replaced)
+            except Exception:
+                # Publication is the commit point. Post-swap maintenance
+                # failures must not make the caller discard the installed index.
+                logger.warning(
+                    "Failed to stop background rebuild for replaced index '%s'",
+                    index_name,
+                    exc_info=True,
+                )
+        if start_background_rebuild:
+            try:
+                self._start_index_background_rebuild(index)
+            except Exception:
+                # Publication is the commit point. A worker-start failure must
+                # not be reported as though the old index remained installed.
+                logger.warning(
+                    "Failed to start background rebuild for installed index '%s'",
+                    index_name,
+                    exc_info=True,
+                )
+        return True
+
     def drop(self):
         self.close()
 
@@ -213,10 +418,43 @@ class LocalCollection(ICollection):
             meta_data = {}
         if not self.store_mgr:
             raise RuntimeError("Store manager is not initialized")
-        cands_list: List[CandidateData] = self.store_mgr.get_all_cands_data()
-        index = self._new_index(index_name, meta_data, cands_list)
-        self.indexes.set(index_name, index)
-        self._delete_expire_delta_record()
+        # Index creation has no older index that can absorb concurrent writes.
+        # Keep its initial Store snapshot and publication in one exclusive
+        # mutation scope; later steady-state rebuilds use generation validation
+        # instead and remain off the write hot path.
+        replaced: Optional[IIndex] = None
+        published = False
+        try:
+            with self._index_mutation_barrier.exclusive_mutation():
+                cands_list: List[CandidateData] = self.store_mgr.get_all_cands_data()
+                index = self._new_index(
+                    index_name,
+                    meta_data,
+                    cands_list,
+                    defer_dense_rebuild_start=True,
+                )
+                replaced = self._publish_index(index_name, index)
+                published = True
+                self._delete_expire_delta_record()
+        finally:
+            if replaced is not None and replaced is not index:
+                try:
+                    self._stop_index_background_rebuild(replaced)
+                except Exception:
+                    logger.warning(
+                        "Failed to stop background rebuild for replaced index '%s'",
+                        index_name,
+                        exc_info=True,
+                    )
+            if published:
+                try:
+                    self._start_index_background_rebuild(index)
+                except Exception:
+                    logger.warning(
+                        "Failed to start background rebuild for installed index '%s'",
+                        index_name,
+                        exc_info=True,
+                    )
         return index
 
     def has_index(self, index_name: str) -> bool:
@@ -226,9 +464,10 @@ class LocalCollection(ICollection):
         return self.indexes.get(index_name)
 
     def drop_index(self, index_name: str) -> None:
-        index = self.indexes.remove(index_name)
-        if index:
-            index.drop()
+        with self._index_mutation_barrier.exclusive_mutation():
+            index = self.indexes.remove(index_name)
+            if index:
+                index.drop()
 
     def get_indexes(self) -> Dict[str, IIndex]:
         return self.indexes.get_all()
@@ -239,10 +478,12 @@ class LocalCollection(ICollection):
         scalar_index: Optional[Dict[str, Any]] = None,
         description: Optional[str] = None,
     ) -> None:
-        index = self.indexes.get(index_name)
-        if not index:
-            return
-        index.update(scalar_index, description)
+        with self._index_mutation_barrier.mutation() as mutation:
+            index = self.indexes.get(index_name)
+            if not index:
+                return
+            index.update(scalar_index, description)
+            mutation.mark_changed()
 
     def get_index_meta_data(self, index_name: str) -> Optional[Dict[str, Any]]:
         index = self.indexes.get(index_name)
@@ -292,46 +533,64 @@ class LocalCollection(ICollection):
 
         pk_list = label_list
         fields_list = []
-        if not output_fields:
-            output_fields = list(self.meta.fields_dict.keys())
-        if self.meta.primary_key or output_fields:
+        projected_fields = (
+            list(self.meta.fields_dict.keys()) if not output_fields else list(output_fields)
+        )
+        include_vector = bool(self.meta.vector_key) and self.meta.vector_key in projected_fields
+        if self.meta.primary_key or projected_fields:
             if not self.store_mgr:
                 raise RuntimeError("Store manager is not initialized")
-            cands_list = self.store_mgr.fetch_cands_data(label_list)
+
+            cands_vectors: Optional[List[List[float]]] = None
+            if include_vector:
+                cands_list = self.store_mgr.fetch_cands_data(label_list)
+                cands_fields_payloads = [
+                    cand.fields if cand is not None else None for cand in cands_list
+                ]
+                cands_vectors = [cand.vector if cand is not None else [] for cand in cands_list]
+            else:
+                cands_fields_payloads = self.store_mgr.fetch_cands_fields(label_list)
 
             valid_indices = []
-            for i, cand in enumerate(cands_list):
-                if cand is not None:
+            for i, fields_payload in enumerate(cands_fields_payloads):
+                if fields_payload is not None:
                     valid_indices.append(i)
                 else:
                     logger.warning(
                         f"Candidate data is None for label index {i} (label: {label_list[i] if i < len(label_list) else 'unknown'}), skipping."
                     )
 
-            if len(valid_indices) < len(cands_list):
-                cands_list = [cands_list[i] for i in valid_indices]
+            if len(valid_indices) < len(cands_fields_payloads):
+                cands_fields_payloads = [cands_fields_payloads[i] for i in valid_indices]
+                if cands_vectors is not None:
+                    cands_vectors = [cands_vectors[i] for i in valid_indices]
                 pk_list = [pk_list[i] for i in valid_indices]
                 scores_list = [scores_list[i] for i in valid_indices]
 
             # Parse each candidate's fields defensively: a single corrupted JSON
             # string (e.g. truncated by the storage layer's uint16 length prefix)
-            # must not fail the whole query. Skip the bad ones and keep cands_list,
-            # pk_list and scores_list aligned, mirroring the None-skip above.
+            # must not fail the whole query. Skip the bad ones and keep payloads,
+            # vectors, pk_list and scores_list aligned, mirroring the None-skip above.
             cands_fields = []
             json_valid_indices = []
-            for i, cand in enumerate(cands_list):
+            for i, fields_payload in enumerate(cands_fields_payloads):
                 try:
-                    cands_fields.append(json.loads(cand.fields))
+                    parsed_fields = json.loads(fields_payload)
+                    if not isinstance(parsed_fields, dict):
+                        raise TypeError("candidate fields JSON must be an object")
+                    cands_fields.append(parsed_fields)
                     json_valid_indices.append(i)
                 except (json.JSONDecodeError, TypeError) as e:
                     logger.warning(
-                        f"Failed to parse candidate fields as JSON (label={cand.label}, "
-                        f"fields_len={len(cand.fields) if cand.fields else 0}), skipping. "
+                        f"Failed to parse candidate fields as JSON (label={pk_list[i]}, "
+                        f"fields_len={len(fields_payload) if fields_payload else 0}), skipping. "
                         f"Error: {e}"
                     )
 
-            if len(json_valid_indices) < len(cands_list):
-                cands_list = [cands_list[i] for i in json_valid_indices]
+            if len(json_valid_indices) < len(cands_fields_payloads):
+                cands_fields_payloads = [cands_fields_payloads[i] for i in json_valid_indices]
+                if cands_vectors is not None:
+                    cands_vectors = [cands_vectors[i] for i in json_valid_indices]
                 pk_list = [pk_list[i] for i in json_valid_indices]
                 scores_list = [scores_list[i] for i in json_valid_indices]
 
@@ -340,12 +599,12 @@ class LocalCollection(ICollection):
                     cands_field.get(self.meta.primary_key, "") for cands_field in cands_fields
                 ]
             fields_list = [
-                {field: cands_field.get(field, None) for field in output_fields}
+                {field: cands_field.get(field, None) for field in projected_fields}
                 for cands_field in cands_fields
             ]
-            if self.meta.vector_key:
-                for i, cands in enumerate(cands_list):
-                    fields_list[i][self.meta.vector_key] = cands.vector
+            if include_vector and self.meta.vector_key and cands_vectors is not None:
+                for i, vector in enumerate(cands_vectors):
+                    fields_list[i][self.meta.vector_key] = vector
 
         search_result.data = [
             SearchItemResult(id=pk, fields=fields, score=score)
@@ -405,7 +664,7 @@ class LocalCollection(ICollection):
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
     ) -> SearchResult:
-        """Search using multimodal data by generating vectors and calling search_by_vector.
+        """Local backend does not generate vectors from multimodal input.
 
         Args:
             index_name: Name of the index to search
@@ -420,18 +679,9 @@ class LocalCollection(ICollection):
         Returns:
             SearchResult: Search results
         """
-        if not self.vectorizer_adapter:
-            raise ValueError("vectorizer is not initialized")
-
-        # Currently mainly supports text vectorization
-        if not text and not image and not video:
-            raise ValueError("At least one of text, image, or video must be provided")
-
-        dense_vector, sparse_vector = self.vectorizer_adapter.vectorize_one(
-            text=text, image=image, video=video
-        )
-        return self.search_by_vector(
-            index_name, dense_vector, limit, offset, filters, sparse_vector, output_fields
+        raise NotImplementedError(
+            "LocalCollection.search_by_multimodal no longer performs automatic vectorization; "
+            "call search_by_vector with caller-provided vectors"
         )
 
     def search_by_random(
@@ -457,7 +707,7 @@ class LocalCollection(ICollection):
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
     ) -> SearchResult:
-        """Search by keywords by generating vectors and calling search_by_vector.
+        """Local backend does not generate vectors from keywords.
 
         Args:
             index_name: Name of the index to search
@@ -471,26 +721,9 @@ class LocalCollection(ICollection):
         Returns:
             SearchResult: Search results
         """
-        if not self.vectorizer_adapter:
-            raise ValueError("vectorizer is not initialized")
-
-        if not keywords and not query:
-            raise ValueError("At least one of keywords or query must be provided")
-
-        # Construct query text
-        if query:
-            query_text = query
-        elif keywords:
-            # Join keyword list into a string
-            query_text = " ".join(keywords)
-        else:
-            raise ValueError("No valid query input provided")
-
-        # Call vectorization interface to generate vectors
-        dense_vector, sparse_vector = self.vectorizer_adapter.vectorize_one(text=query_text)
-
-        return self.search_by_vector(
-            index_name, dense_vector, limit, offset, filters, sparse_vector, output_fields
+        raise NotImplementedError(
+            "LocalCollection.search_by_keywords no longer performs automatic vectorization; "
+            "call search_by_vector with caller-provided vectors"
         )
 
     def search_by_scalar(
@@ -541,26 +774,52 @@ class LocalCollection(ICollection):
 
     # data interface
     def upsert_data(self, raw_data_list: List[Dict[str, Any]], ttl=0):
-        result = UpsertDataResult()
-        data_list = []
+        data_list = self._validate_raw_data_list(raw_data_list)
+        return self._write_data_list(data_list, ttl=ttl)
 
+    def update_data(self, raw_data_list: List[Dict[str, Any]]):
+        if not raw_data_list:
+            return UpsertDataResult()
+
+        pk = self.meta.primary_key
+        primary_keys = []
+        for raw_data in raw_data_list:
+            if pk not in raw_data:
+                raise ValueError(f"primary key '{pk}' is required for update")
+            primary_keys.append(raw_data[pk])
+
+        existing = self.fetch_data(primary_keys)
+        existing_map = {item.id: item.fields for item in existing.items}
+        missing_ids = [key for key in primary_keys if key not in existing_map]
+        if missing_ids:
+            raise ValueError(f"record not found for primary key(s): {missing_ids}")
+
+        merged_list = []
+        for raw_data in raw_data_list:
+            existing_fields = existing_map[raw_data[pk]] or {}
+            merged = dict(existing_fields)
+            merged.update(raw_data)
+            merged_list.append(merged)
+
+        processed_list = self._validate_raw_data_list(merged_list)
+        return self._write_data_list(processed_list, ttl=0)
+
+    def _validate_raw_data_list(self, raw_data_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        data_list = []
         for raw_data in raw_data_list:
             if self.data_processor:
                 try:
                     data = self.data_processor.validate_and_process(raw_data)
                 except ValueError as e:
                     logger.error(f"Data validation failed: {e}, raw_data: {raw_data}")
-                    return result
+                    raise
             else:
-                # Should not happen given init logic, but for safety
                 data = raw_data
             data_list.append(data)
+        return data_list
 
-        dense_emb, sparse_emb = (
-            self.vectorizer_adapter.vectorize_raw_data(data_list)
-            if self.vectorizer_adapter
-            else ([], [])
-        )
+    def _write_data_list(self, data_list: List[Dict[str, Any]], ttl=0):
+        result = UpsertDataResult()
 
         cands_list = [CandidateData() for _ in range(len(data_list))]
         pk = self.meta.primary_key
@@ -576,35 +835,29 @@ class LocalCollection(ICollection):
                 data[AUTO_ID_KEY] = label
 
             cands_list[i].label = label
-            if self.vectorizer_adapter:
-                if dense_emb:
-                    cands_list[i].vector = dense_emb[i]
-                if sparse_emb:
-                    cands_list[i].sparse_raw_terms = list(sparse_emb[i].keys())
-                    cands_list[i].sparse_values = list(sparse_emb[i].values())
-            else:
-                cands_list[i].vector = data.pop(vk, None)
-                if svk:
-                    sparse_dict = data.pop(svk, None)
-                    if sparse_dict and isinstance(sparse_dict, dict):
-                        cands_list[i].sparse_raw_terms = list(sparse_dict.keys())
-                        cands_list[i].sparse_values = list(sparse_dict.values())
+            cands_list[i].vector = data.pop(vk, None)
+            if svk:
+                sparse_dict = data.pop(svk, None)
+                if sparse_dict and isinstance(sparse_dict, dict):
+                    cands_list[i].sparse_raw_terms = list(sparse_dict.keys())
+                    cands_list[i].sparse_values = list(sparse_dict.values())
             cands_list[i].fields = safe_json_dumps(data, ensure_ascii=False)
             cands_list[i].expire_ns_ts = time.time_ns() + ttl * 1000000000 if ttl > 0 else 0
 
         if not self.store_mgr:
             raise RuntimeError("Store manager is not initialized")
-        need_record_delta = True if self.indexes.count() > 0 else False
-        delta_list = self.store_mgr.add_cands_data(cands_list, ttl, need_record_delta)
+        with self._index_mutation_barrier.mutation() as mutation:
+            need_record_delta = True if self.indexes.count() > 0 else False
+            delta_list = self.store_mgr.add_cands_data(cands_list, ttl, need_record_delta)
+            mutation.mark_changed()
 
-        def upsert_to_index(name, index):
-            index.upsert_data(delta_list)
+            def upsert_to_index(name, index):
+                index.upsert_data(delta_list)
 
-        self.indexes.iterate(upsert_to_index)
+            self.indexes.iterate(upsert_to_index)
 
-        if not self.vectorizer_adapter:
-            for i, data in enumerate(data_list):
-                data[vk] = list(cands_list[i].vector) if cands_list[i].vector else []
+        for i, data in enumerate(data_list):
+            data[vk] = list(cands_list[i].vector) if cands_list[i].vector else []
 
         if pk != AUTO_ID_KEY:
             primary_keys = [data.get(pk) for data in data_list]
@@ -633,12 +886,11 @@ class LocalCollection(ICollection):
                 raw_data_list.append(None)
                 continue
             raw_data = json.loads(cand_data.fields)
-            if not self.vectorizer_adapter:
-                raw_data[vk] = list(cand_data.vector)
-                if svk and cand_data.sparse_raw_terms and cand_data.sparse_values:
-                    raw_data[svk] = dict(
-                        zip(cand_data.sparse_raw_terms, cand_data.sparse_values, strict=False)
-                    )
+            raw_data[vk] = list(cand_data.vector)
+            if svk and cand_data.sparse_raw_terms and cand_data.sparse_values:
+                raw_data[svk] = dict(
+                    zip(cand_data.sparse_raw_terms, cand_data.sparse_values, strict=False)
+                )
             raw_data = validation.fix_fields_data(raw_data, self.meta.fields_dict)
             raw_data_list.append(raw_data)
 
@@ -658,13 +910,15 @@ class LocalCollection(ICollection):
         )
         if not self.store_mgr:
             raise RuntimeError("Store manager is not initialized")
-        need_record_delta = True if self.indexes.count() > 0 else False
-        delta_list = self.store_mgr.delete_data(labels_list, need_record_delta)
+        with self._index_mutation_barrier.mutation() as mutation:
+            need_record_delta = True if self.indexes.count() > 0 else False
+            delta_list = self.store_mgr.delete_data(labels_list, need_record_delta)
+            mutation.mark_changed()
 
-        def delete_from_index(name, index):
-            index.delete_data(delta_list)
+            def delete_from_index(name, index):
+                index.delete_data(delta_list)
 
-        self.indexes.iterate(delete_from_index)
+            self.indexes.iterate(delete_from_index)
 
     def delete_all_data(self):
         """Delete all data and rebuild indexes (thread-safe).
@@ -677,53 +931,65 @@ class LocalCollection(ICollection):
 
         Uses locks to ensure no concurrent read/write requests cause errors during the operation.
         """
-        # Use get_all_with_lock() to ensure atomicity of the entire operation
-        with self.indexes.get_all_with_lock() as indexes_dict:
-            # 1. Save metadata and names for all indexes
-            indexes_metadata = []
-            for index_name, index in indexes_dict.items():
+        # Keep one lock order everywhere: mutation barrier, bulk-ingest state,
+        # then the index map.
+        # This also lets replacement indexes inherit an active suspension before
+        # they become visible to concurrent readers or writers.
+        with self._index_mutation_barrier.exclusive_mutation():
+            with self._bulk_ingest_lock, self.indexes.get_all_with_lock() as indexes_dict:
+                # 1. Save metadata and names for all indexes
+                indexes_metadata = []
+                for index_name, index in indexes_dict.items():
+                    try:
+                        meta_data = index.get_meta_data()
+                        indexes_metadata.append((index_name, meta_data))
+                        logger.debug(f"Saved metadata for index: {index_name}")
+                    except Exception as e:
+                        logger.error(f"Failed to get metadata for index {index_name}: {e}")
+
+                # 2. Delete all indexes
+                index_names = list(indexes_dict.keys())
+                for index_name in index_names:
+                    try:
+                        index = indexes_dict.pop(index_name, None)
+                        if index:
+                            index.drop()
+                            logger.debug(f"Dropped index: {index_name}")
+                    except Exception as e:
+                        logger.error(f"Failed to drop index {index_name}: {e}")
+
+                # 3. Clear storage data
                 try:
-                    meta_data = index.get_meta_data()
-                    indexes_metadata.append((index_name, meta_data))
-                    logger.debug(f"Saved metadata for index: {index_name}")
+                    if self.store_mgr:
+                        self.store_mgr.clear()
+                        logger.info(
+                            "Storage cleared successfully",
+                            extra={"collection": self.collection_name},
+                        )
                 except Exception as e:
-                    logger.error(f"Failed to get metadata for index {index_name}: {e}")
+                    logger.error(f"Failed to clear storage: {e}")
+                    raise
 
-            # 2. Delete all indexes
-            index_names = list(indexes_dict.keys())
-            for index_name in index_names:
-                try:
-                    index = indexes_dict.pop(index_name, None)
-                    if index:
-                        index.drop()
-                        logger.debug(f"Dropped index: {index_name}")
-                except Exception as e:
-                    logger.error(f"Failed to drop index {index_name}: {e}")
+                # 4. Rebuild empty indexes using saved metadata
+                for index_name, meta_data in indexes_metadata:
+                    try:
+                        empty_cands_list: List[CandidateData] = []
+                        new_index = self._new_index(
+                            index_name,
+                            meta_data,
+                            empty_cands_list,
+                            defer_dense_rebuild_start=True,
+                        )
+                        if self._bulk_ingest_depth > 0:
+                            new_index.begin_bulk_ingest()
+                        indexes_dict[index_name] = new_index
+                        self._start_index_background_rebuild(new_index)
+                        logger.info(f"Rebuilt index: {index_name}")
+                    except Exception as e:
+                        logger.error(f"Failed to rebuild index {index_name}: {e}")
+                        # Continue rebuilding other indexes, don't interrupt the process
 
-            # 3. Clear storage data
-            try:
-                if self.store_mgr:
-                    self.store_mgr.clear()
-                    logger.info(
-                        "Storage cleared successfully", extra={"collection": self.collection_name}
-                    )
-            except Exception as e:
-                logger.error(f"Failed to clear storage: {e}")
-                raise
-
-            # 4. Rebuild empty indexes using saved metadata
-            for index_name, meta_data in indexes_metadata:
-                try:
-                    # Rebuild index with empty data list
-                    empty_cands_list: List[CandidateData] = []
-                    new_index = self._new_index(index_name, meta_data, empty_cands_list)
-                    indexes_dict[index_name] = new_index
-                    logger.info(f"Rebuilt index: {index_name}")
-                except Exception as e:
-                    logger.error(f"Failed to rebuild index {index_name}: {e}")
-                    # Continue rebuilding other indexes, don't interrupt the process
-
-            logger.info(f"delete_all_data completed. Rebuilt {len(indexes_dict)} indexes")
+                logger.info(f"delete_all_data completed. Rebuilt {len(indexes_dict)} indexes")
 
     def _delete_expire_delta_record(self):
         oldest_version = 0
@@ -737,12 +1003,15 @@ class LocalCollection(ICollection):
     def _expire_timeout_data(self):
         if not self.store_mgr:
             return
-        delta_list = self.store_mgr.expire_data()
+        with self._index_mutation_barrier.mutation() as mutation:
+            delta_list = self.store_mgr.expire_data()
+            if delta_list:
+                mutation.mark_changed()
 
-        def delete_from_index(name, index):
-            index.delete_data(delta_list)
+            def delete_from_index(name, index):
+                index.delete_data(delta_list)
 
-        self.indexes.iterate(delete_from_index)
+            self.indexes.iterate(delete_from_index)
 
     def _register_scheduler_job(self):
         if self.ttl_cleanup_seconds > 0:
@@ -822,28 +1091,76 @@ class LocalCollection(ICollection):
             index_name: Name of the index
             old_index: Old index object
         """
+        # PersistentIndex deliberately reports need_rebuild=False. Its builder
+        # writes version markers into the live index directory before map
+        # publication, so it cannot use the optimistic discard protocol below
+        # without a separate staging directory and atomic filesystem commit.
+        if not isinstance(old_index, VolatileIndex):
+            logger.debug("Skipping optimistic replacement for persistent index '%s'", index_name)
+            return
+
+        new_index: Optional[IIndex] = None
+        installed = False
         try:
+            expected_generation = self._index_mutation_barrier.snapshot_generation()
+
             # 1. Retrieve all data
             if not self.store_mgr:
                 raise RuntimeError("Store manager is not initialized")
             cands_list: List[CandidateData] = self.store_mgr.get_all_cands_data()
+            if not self._index_mutation_barrier.is_current(expected_generation):
+                logger.debug(
+                    "Skipping stale replacement build for index '%s' after Store snapshot",
+                    index_name,
+                )
+                return
 
             # 2. Get index metadata
             meta_data = old_index.get_meta_data()
 
             # 3. Create new index (this process is safe and doesn't affect the old index)
-            new_index = self._new_index(index_name, meta_data, cands_list, True)
+            new_index = self._new_index(
+                index_name,
+                meta_data,
+                cands_list,
+                True,
+                defer_dense_rebuild_start=True,
+            )
 
-            # 4. Atomically replace the old index (ThreadSafeDictManager ensures thread safety)
-            self.indexes.set(index_name, new_index)
+            # 4. Publish only if no Store/index mutation completed after the
+            # snapshot boundary and this is still the index being rebuilt.
+            # Otherwise the continuously updated old index remains authoritative
+            # and a later maintenance pass can retry compaction.
+            installed = self._install_index(
+                index_name,
+                new_index,
+                expected_generation=expected_generation,
+                expected_replaced=old_index,
+                start_background_rebuild=True,
+            )
+            if not installed:
+                logger.debug(
+                    "Discarding stale replacement for index '%s' after a concurrent mutation",
+                    index_name,
+                )
 
-            # 5. Don't manually close the old index, let Python GC automatically reclaim it
-            #    This avoids errors for threads currently using old_index
-            #    The object will be automatically destructed when all references are released
+            # 5. _install_index stops only the old background maintenance
+            #    worker. It deliberately leaves the old search object usable
+            #    until concurrent readers release their references.
 
         except Exception as e:
             logger.error(f"Failed to rebuild index {index_name}: {e}")
             # Rebuild failed, keep the old index unchanged
+        finally:
+            if new_index is not None and not installed:
+                try:
+                    new_index.close()
+                except Exception:
+                    logger.warning(
+                        "Failed to close unpublished replacement index '%s'",
+                        index_name,
+                        exc_info=True,
+                    )
 
     def aggregate_data(
         self,
@@ -915,6 +1232,7 @@ class LocalCollection(ICollection):
         meta_data: Dict[str, Any],
         cands_list: List[CandidateData],
         force_rebuild: bool = False,
+        defer_dense_rebuild_start: bool = False,
     ):
         raise NotImplementedError
 
@@ -924,10 +1242,9 @@ class VolatileCollection(LocalCollection):
         self,
         meta: CollectionMeta,
         store: StoreManager,
-        vectorizer: Optional[BaseVectorizer] = None,
         config: Optional[Dict[str, Any]] = None,
     ):
-        super().__init__(meta, store, vectorizer, config)
+        super().__init__(meta, store, config=config)
         LocalCollection._register_scheduler_job(self)
 
     def _new_index(
@@ -936,12 +1253,15 @@ class VolatileCollection(LocalCollection):
         meta_data: Dict[str, Any],
         cands_list: List[CandidateData],
         force_rebuild: bool = False,
+        defer_dense_rebuild_start: bool = False,
     ):
         meta = create_index_meta(self.meta, "", meta_data)
         index = VolatileIndex(
             name=index_name,
             meta=meta,
             cands_list=cands_list,
+            dense_search_config=self.dense_search_config,
+            defer_dense_rebuild_start=defer_dense_rebuild_start,
         )
         return index
 
@@ -955,14 +1275,13 @@ class PersistCollection(LocalCollection):
         path: str,
         meta: CollectionMeta,
         store: StoreManager,
-        vectorizer: Optional[BaseVectorizer] = None,
         config: Optional[Dict[str, Any]] = None,
     ):
         self.collection_dir = str(resolve_storage_path(path))
         os.makedirs(self.collection_dir, exist_ok=True)
         self.index_dir = str(safe_join(self.collection_dir, "index"))
         os.makedirs(self.index_dir, exist_ok=True)
-        super().__init__(meta, store, vectorizer, config)
+        super().__init__(meta, store, config=config)
         self._recover()
         LocalCollection._register_scheduler_job(self)  # TTL expiration data cleanup
 
@@ -1006,8 +1325,21 @@ class PersistCollection(LocalCollection):
             # This ensures the index's base version starts at 0, allowing it to ingest
             # all data from the delta log (CandidateData) regardless of when that data was created.
             # If we used the default (current time), the index would ignore older data in the log.
+            # Keep the dense worker stopped until the native snapshot has replayed those deltas.
+            # Create a fresh lazy stream for each index.  In particular, cuVS can pack
+            # one candidate at a time instead of retaining every deserialized FP32
+            # vector alongside its compact host shadow during collection recovery.
+            recovery_candidates = (
+                self.store_mgr.iter_all_cands_data() if self.store_mgr is not None else iter(())
+            )
             index = PersistentIndex(
-                name=index_name, path=self.index_dir, meta=meta, initial_timestamp=0
+                name=index_name,
+                path=self.index_dir,
+                meta=meta,
+                cands_list=recovery_candidates,
+                initial_timestamp=0,
+                dense_search_config=self.dense_search_config,
+                defer_dense_rebuild_start=True,
             )
             newest_version = index.get_newest_version()
             if not self.store_mgr:
@@ -1067,6 +1399,7 @@ class PersistCollection(LocalCollection):
                     operation="delete",
                 )
             logger.info("Index '%s': replay complete (%d records)", index_name, _processed)
+            index._start_dense_rebuild_worker()
             self.indexes.set(index_name, index)
 
     def _replay_recovery_records(
@@ -1119,8 +1452,9 @@ class PersistCollection(LocalCollection):
 
     def close(self):
         """Close the collection and release resources."""
-        self.flush_all_indexes()
-        super().close()  # Call parent close (includes TTL scheduling deletion)
+        with self._index_mutation_barrier.exclusive_mutation():
+            self.flush_all_indexes()
+            self._close_unlocked()
 
     def flush_all_indexes(self):
         """Manually trigger persistence of all indexes.
@@ -1151,6 +1485,7 @@ class PersistCollection(LocalCollection):
         meta_data: Dict[str, Any],
         cands_list: List[CandidateData],
         force_rebuild: bool = False,
+        defer_dense_rebuild_start: bool = False,
     ):
         new_index_dir = str(safe_join_name(self.index_dir, index_name))
         os.makedirs(new_index_dir, exist_ok=True)
@@ -1162,6 +1497,8 @@ class PersistCollection(LocalCollection):
             meta=meta,
             cands_list=cands_list,
             force_rebuild=force_rebuild,
+            dense_search_config=self.dense_search_config,
+            defer_dense_rebuild_start=defer_dense_rebuild_start,
         )
         return index
 

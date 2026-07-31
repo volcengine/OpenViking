@@ -66,6 +66,8 @@ export async function fetchFsList(
           abs_limit: options.absLimit,
           recursive: options.recursive,
           simple: options.simple,
+          sort_by: options.sortBy ?? 'mtime',
+          sort_order: options.sortOrder ?? 'desc',
         },
       }),
     )

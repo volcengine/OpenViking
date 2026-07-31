@@ -47,6 +47,24 @@ Explain the purpose of this API, point to the corresponding code entry, and brie
 
 #### 3. Usage Examples
 
+**Python SDK**
+
+```python
+<SDK call example>
+```
+
+**TypeScript SDK**
+
+```typescript
+<SDK call example>
+```
+
+**Go SDK**
+
+```go
+<SDK call example>
+```
+
 **HTTP API**
 
 ```
@@ -55,12 +73,6 @@ Explain the purpose of this API, point to the corresponding code entry, and brie
 
 ```bash
 <curl example>
-```
-
-**Python SDK**
-
-```python
-<SDK call example>
 ```
 
 **CLI**
@@ -76,7 +88,9 @@ Explain the purpose of this API, point to the corresponding code entry, and brie
 ```
 
 
-#### 4. Response Example, Error Handling, and Exception Handling (Optional)
+#### 4. Response Contract (Required) and Error Handling (Optional)
+
+Every public operation must document its successful return value. JSON endpoints need at least one response-envelope example that matches the implementation. Non-JSON endpoints such as file downloads, SSE, and WebDAV must document the HTTP status, important response headers, body, or event format. A prose-only list of returned fields is not sufficient. Error and exception examples remain optional.
 
 ---
 
@@ -122,11 +136,32 @@ Each API is organized in the following three parts:
 
 #### 3. Usage Examples
 
-Provide in order:
-- HTTP API (method + path + curl example)
+When an operation presents all transports together, prefer this order:
 - Python SDK example
+- TypeScript SDK example
+- Go SDK example, when it adds endpoint-specific value and can stay concise
+- HTTP API (method + path + curl example)
 - CLI example
 - Response example
+
+Example tabs are generated from bold labels. Put each invocation label in its own
+paragraph and use one of these fixed base forms: `**Python SDK**`, `**TypeScript SDK**`,
+`**Go SDK**`, `**HTTP API**`, or `**CLI**`. When a transport qualifier is useful,
+put it inside the same bold label with ASCII parentheses, for example
+`**Python SDK (Embedded / HTTP)**`. Do not put the qualifier after the bold label
+or use full-width parentheses. Show only surfaces that are actually
+implemented. If an SDK or CLI does not expose the capability, omit that tab and
+briefly identify the available alternative. Do not wrap a handwritten HTTP request
+and present it as a nonexistent SDK method.
+
+For an existing operation with a workflow-specific structure, keep the local
+structure stable and place TypeScript next to the other SDK examples.
+
+Keep API documentation organized around API modules and individual operations,
+not around client languages. SDK snippets should be short call examples inside
+the relevant operation's Usage Examples. Put language-specific quick references,
+walkthroughs, and combined workflows in that SDK's own documentation instead of
+adding language-owned sections to API module pages.
 
 ## Example: Complete API Documentation
 
@@ -233,5 +268,6 @@ When adding or modifying API documentation, please check:
 - [ ] Implementation introduction is clear and code entry paths are correct
 - [ ] Parameter table is complete and accurate
 - [ ] Example code is concise and runnable
+- [ ] Invocation examples use fixed bold labels and every SDK/CLI tab maps to a real implementation
 - [ ] HTTP method and path are correct
-- [ ] Response example matches actual output
+- [ ] Every public operation has a successful response contract and its example matches actual output

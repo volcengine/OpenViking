@@ -12,7 +12,7 @@ import litellm
 
 from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.bus.events import OutboundMessage
-from vikingbot.utils import get_data_path
+from vikingbot.utils import detect_image_format, get_data_path
 
 
 class ImageGenerationTool(Tool):
@@ -128,11 +128,22 @@ class ImageGenerationTool(Tool):
             return data_uri, "data"
 
     async def _url_to_base64(self, url: str) -> str:
-        """Download image from URL and convert to base64."""
+        """Download image from URL and convert to a data URI."""
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.get(url)
             response.raise_for_status()
-            return base64.b64encode(response.content).decode("utf-8")
+            mime_type = response.headers.get("content-type", "application/octet-stream")
+            encoded = base64.b64encode(response.content).decode("utf-8")
+            return f"data:{mime_type};base64,{encoded}"
+
+    @staticmethod
+    def _decode_image_payload(image_payload: str) -> tuple[bytes, str | None]:
+        """Decode a b64_json or data URI image payload."""
+        fallback_mime = None
+        if image_payload.startswith("data:"):
+            header, image_payload = image_payload.split(",", 1)
+            fallback_mime = header[5:].split(";", 1)[0] or None
+        return base64.b64decode(image_payload), fallback_mime
 
     def _build_common_kwargs(
         self,
@@ -283,11 +294,10 @@ class ImageGenerationTool(Tool):
             saved_filenames = []
 
             for img in images:
-                random_filename = f"{uuid.uuid4().hex}.png"
+                image_bytes, fallback_mime = self._decode_image_payload(img)
+                image_format = detect_image_format(image_bytes, fallback_mime)
+                random_filename = f"{uuid.uuid4().hex}.{image_format.extension}"
                 image_path = images_dir / random_filename
-                if img.startswith("data:"):
-                    _, img = img.split(",", 1)
-                image_bytes = base64.b64decode(img)
                 with open(image_path, "wb") as f:
                     f.write(image_bytes)
                 saved_paths.append(f"send://{random_filename}")
@@ -298,7 +308,11 @@ class ImageGenerationTool(Tool):
             if send_to_user and self._send_callback:
                 try:
                     msg_content = "\n".join([f"send://{f}" for f in saved_filenames])
-                    msg = OutboundMessage(session_key=tool_context.session_key, content=msg_content)
+                    msg = OutboundMessage(
+                        session_key=tool_context.session_key,
+                        content=msg_content,
+                        metadata=dict(getattr(tool_context, "channel_metadata", None) or {}),
+                    )
                     await self._send_callback(msg)
                     sent_to_user = True
                 except Exception as e:

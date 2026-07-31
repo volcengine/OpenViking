@@ -101,7 +101,7 @@ ov rm viking://resources/old-project/ --recursive
 
 ```bash
 # Grep content
-ov grep viking://resources/ "TODO" --ignore-case
+ov grep "TODO" --uri viking://resources/ --ignore-case
 
 # Glob files
 ov glob "**/*.md" --uri viking://resources/

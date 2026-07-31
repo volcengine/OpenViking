@@ -21,6 +21,9 @@ from openviking_cli.utils.logger import default_logger as logger
 class VikingDBCollection(ICollection):
     """
     VikingDB collection implementation for private deployment.
+
+    Data-plane operations in this class target the VikingDB V2 API surface
+    under /api/vikingdb/data/*.
     """
 
     def __init__(
@@ -155,6 +158,17 @@ class VikingDBCollection(ICollection):
             "collection_name": self.collection_name,
             "data": data_list,
             "ttl": ttl,
+            "ignore_unknown_fields": True,
+        }
+        return self._data_post(path, data)
+
+    def update_data(self, data_list: List[Dict[str, Any]]):
+        path = "/api/vikingdb/data/update"
+        data = {
+            "project": self.project_name,
+            "collection_name": self.collection_name,
+            "data": data_list,
+            "ignore_unknown_fields": True,
         }
         return self._data_post(path, data)
 
@@ -164,6 +178,7 @@ class VikingDBCollection(ICollection):
             "project": self.project_name,
             "collection_name": self.collection_name,
             "ids": primary_keys,
+            "ignore_unknown_fields": True,
         }
         resp_data = self._data_post(path, data)
         return self._parse_fetch_result(resp_data)
@@ -236,6 +251,7 @@ class VikingDBCollection(ICollection):
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
+            "ignore_unknown_fields": True,
         }
         if sparse_vector:
             data["sparse_vector"] = sparse_vector
@@ -261,6 +277,7 @@ class VikingDBCollection(ICollection):
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
+            "ignore_unknown_fields": True,
         }
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)
@@ -288,6 +305,7 @@ class VikingDBCollection(ICollection):
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
+            "ignore_unknown_fields": True,
         }
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)
@@ -309,6 +327,7 @@ class VikingDBCollection(ICollection):
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
+            "ignore_unknown_fields": True,
         }
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)
@@ -334,7 +353,9 @@ class VikingDBCollection(ICollection):
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
+            "ignore_unknown_fields": True,
         }
+        data = {k: v for k, v in data.items() if v is not None}
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)
 
@@ -359,6 +380,7 @@ class VikingDBCollection(ICollection):
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
+            "ignore_unknown_fields": True,
         }
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)

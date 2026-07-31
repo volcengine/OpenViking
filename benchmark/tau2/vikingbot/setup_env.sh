@@ -42,6 +42,15 @@ TAU2_BENCH_REPO="${TAU2_BENCH_REPO:-https://github.com/sierra-research/tau2-benc
 (return 0 2>/dev/null) && _SOURCED=1 || _SOURCED=0
 _abort() { echo "[setup_env] ERROR: $*" >&2; if [[ "${_SOURCED}" -eq 1 ]]; then return 1; else exit 1; fi; }
 
+_tau2_user_simulator_ready() {
+  local py="$1"
+  "${py}" - <<'PYEOF' >/dev/null 2>&1
+from tau2.gym.gym_agent import AgentGymEnv
+import gymnasium  # noqa: F401
+assert AgentGymEnv is not None
+PYEOF
+}
+
 # --- parse args ---
 REINSTALL=0
 for _arg in "$@"; do
@@ -61,7 +70,26 @@ _setup_install() {
   fi
 
   if [[ -f "${SETUP_MARKER}" && "${REINSTALL}" -eq 0 ]]; then
-    return 0  # already installed; nothing to do
+    local PY="${VENV}/bin/python"
+    if [[ -x "${PY}" ]] && _tau2_user_simulator_ready "${PY}"; then
+      return 0  # already installed; nothing to do
+    fi
+    echo "[setup_env] Existing setup marker found, but tau2 gym user simulator is missing; repairing tau2-bench[gym] install."
+    if [[ ! -x "${PY}" ]]; then
+      echo "[setup_env] venv python not found at ${PY}; continuing with full setup."
+    else
+      if [[ ! -d "${TAU2_BENCH_ROOT}" ]]; then
+        echo "[setup_env] tau2-bench checkout missing at ${TAU2_BENCH_ROOT}; continuing with full setup."
+      else
+        echo "[setup_env] Installing tau2-bench with gym extra (pip install -e ${TAU2_BENCH_ROOT}[gym])"
+        "${PY}" -m pip install -e "${TAU2_BENCH_ROOT}[gym]" || { echo "[setup_env] tau2-bench gym repair failed"; return 1; }
+        if ! _tau2_user_simulator_ready "${PY}"; then
+          echo "[setup_env] tau2 gym user simulator still unavailable after repair; try: source ${BASH_SOURCE[0]} --reinstall"
+          return 1
+        fi
+        return 0
+      fi
+    fi
   fi
 
   if [[ ! -f "${VENV}/bin/activate" ]]; then
@@ -145,6 +173,10 @@ PYEOF
   # tau2-bench: install the [gym] extra so tau2.gym (gymnasium) is available to the runner.
   echo "[setup_env] Installing tau2-bench with gym extra (pip install -e ${TAU2_BENCH_ROOT}[gym])"
   "${PY}" -m pip install -e "${TAU2_BENCH_ROOT}[gym]" || { echo "[setup_env] tau2-bench install failed"; return 1; }
+  if ! _tau2_user_simulator_ready "${PY}"; then
+    echo "[setup_env] tau2 gym user simulator is unavailable after installing tau2-bench[gym]"
+    return 1
+  fi
 
   echo "[setup_env] Installing smolagents"
   "${PY}" -m pip install smolagents || { echo "[setup_env] smolagents install failed"; return 1; }
@@ -156,7 +188,7 @@ PYEOF
 
 if ! _setup_install; then
   _abort "environment install failed (see messages above)"
-  unset -f _setup_install _abort
+  unset -f _setup_install _abort _tau2_user_simulator_ready
   return 1 2>/dev/null || exit 1
 fi
 unset -f _setup_install
@@ -187,6 +219,9 @@ export OPENVIKING_CONFIG_FILE="${OPENVIKING_CONFIG_FILE:-${HOME}/.openviking/ov.
 # Provide your own key via ARK_API_KEY (do NOT commit real keys).
 export OPENAI_API_KEY="${OPENAI_API_KEY:-${ARK_API_KEY:-}}"
 export OPENAI_API_BASE="${OPENAI_API_BASE:-https://ark.cn-beijing.volces.com/api/v3}"
+export OPENAI_BASE_URL="${OPENAI_BASE_URL:-${OPENAI_API_BASE}}"
+export AGENT_API_BASE="${AGENT_API_BASE:-${OPENAI_API_BASE}}"
+export USER_API_BASE="${USER_API_BASE:-${OPENAI_API_BASE}}"
 if [[ -z "${OPENAI_API_KEY}" ]]; then
   echo "[setup_env] WARNING: OPENAI_API_KEY/ARK_API_KEY is empty; the tau2 user simulator will fail."
 fi
@@ -195,4 +230,4 @@ echo "[setup_env] PYTHONPATH includes openviking (${OPENVIKING_TAU2_ROOT}) and v
 echo "[setup_env] TAU2_DATA_ROOT=${TAU2_DATA_ROOT}"
 echo "[setup_env] OPENAI_API_BASE=${OPENAI_API_BASE}"
 
-unset -f _abort 2>/dev/null || true
+unset -f _abort _tau2_user_simulator_ready 2>/dev/null || true

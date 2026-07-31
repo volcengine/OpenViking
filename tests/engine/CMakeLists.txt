@@ -12,6 +12,13 @@ include_directories(${CMAKE_SOURCE_DIR}/../../third_party/spdlog-1.14.1/include)
 
 find_package(Threads REQUIRED)
 
+if(NOT TARGET engine_impl)
+    add_subdirectory(
+        ${CMAKE_CURRENT_LIST_DIR}/../../src
+        ${CMAKE_CURRENT_BINARY_DIR}/openviking_cpp
+    )
+endif()
+
 add_executable(test_common
     test_common.cpp
     ${CMAKE_SOURCE_DIR}/../../src/common/log_utils.cpp
@@ -24,10 +31,6 @@ target_link_libraries(test_common PRIVATE
 add_executable(test_index_engine
     test_index_engine.cpp
 )
-
-if(NOT TARGET engine_impl)
-    message(FATAL_ERROR "engine_impl compatibility target was not created")
-endif()
 
 target_link_libraries(test_index_engine PRIVATE
     engine_impl

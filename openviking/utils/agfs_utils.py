@@ -4,12 +4,16 @@
 RAGFS Client utilities for creating and configuring RAGFS clients.
 """
 
+import asyncio
 import multiprocessing
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Thread
 from typing import Any, Callable, Dict
 
+from openviking_cli.utils.config.config_loader import resolve_config_path
+from openviking_cli.utils.config.consts import DEFAULT_OV_CONF, OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -29,7 +33,10 @@ class RagfsBindingConfig:
 
     def to_binding_dict(self) -> Dict[str, Any]:
         """Convert the runtime config into the sectioned dict consumed by `RAGFSBindingClient`."""
-        binding_config: Dict[str, Any] = {}
+        binding_config: Dict[str, Any] = {
+            "cache": self.agfs.cache.model_dump(mode="json"),
+            "pathlock": self.agfs.pathlock.model_dump(mode="json"),
+        }
 
         if self.root_key is not None:
             if len(self.root_key) != 32:
@@ -42,6 +49,72 @@ class RagfsBindingConfig:
             }
 
         return binding_config
+
+
+def _run_coro_blocking(coro: Any) -> Any:
+    """Run an async coroutine from sync startup code, even if an event loop is already running."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    result: list[Any] = []
+    error: list[BaseException] = []
+
+    def _runner() -> None:
+        try:
+            result.append(asyncio.run(coro))
+        except BaseException as exc:
+            error.append(exc)
+
+    thread = Thread(target=_runner, daemon=True)
+    thread.start()
+    thread.join()
+    if error:
+        raise error[0]
+    return result[0] if result else None
+
+
+def _dump_openviking_config(config: Any) -> Dict[str, Any]:
+    """Return a full OpenViking config dict for encryption bootstrap."""
+    if hasattr(config, "to_dict"):
+        dumped = config.to_dict()
+    elif hasattr(config, "model_dump"):
+        dumped = config.model_dump()
+    elif isinstance(config, dict):
+        dumped = config
+    else:
+        raise TypeError("OpenViking config must expose to_dict() or model_dump()")
+    if not isinstance(dumped, dict):
+        raise TypeError("OpenViking config dump must be a dictionary")
+    return dumped
+
+
+def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig, Any | None]:
+    """Build the runtime AGFS binding config from storage and encryption settings."""
+    from openviking.crypto.config import bootstrap_encryption
+
+    storage = _get_config_value(config, "storage")
+    agfs_config = _get_config_value(storage, "agfs") if storage is not None else None
+    if agfs_config is None:
+        raise ValueError("OpenViking config storage.agfs is required")
+
+    encryptor = _run_coro_blocking(bootstrap_encryption(_dump_openviking_config(config)))
+    if encryptor is None:
+        return RagfsBindingConfig(agfs=agfs_config), None
+
+    root_key = _run_coro_blocking(encryptor.provider.get_root_key())
+    if not isinstance(root_key, (bytes, bytearray)) or len(root_key) != 32:
+        raise RuntimeError("encryption root_key must be exactly 32 bytes")
+
+    return (
+        RagfsBindingConfig(
+            agfs=agfs_config,
+            root_key=bytes(root_key),
+            provider_type=encryptor.provider_type,
+        ),
+        encryptor,
+    )
 
 
 def resolve_queuefs_mount_point(config: Any = None) -> str:
@@ -230,6 +303,7 @@ def _serialize_s3_plugin_params(s3_config: Any) -> Dict[str, Any]:
         "normalize_encoding_chars": _get_config_value(
             s3_config, "normalize_encoding_chars", "?#%+@"
         ),
+        "auto_detect_content_type": _get_config_value(s3_config, "auto_detect_content_type", False),
     }
 
 
@@ -258,12 +332,12 @@ def _serialize_s3_backup_params(
 def _serialize_local_backup_params(
     item: Any, backend_config: Any, data_path: Path
 ) -> Dict[str, Any]:
-    """Serialize one local backup item and fill the default workspace local_dir."""
+    """Serialize one local backup item and map workspace to the localfs local_dir param."""
     local_dir = (
-        _get_config_value(backend_config, "local_dir") if backend_config is not None else None
+        _get_config_value(backend_config, "workspace") if backend_config is not None else None
     )
     if local_dir is None:
-        local_dir = data_path / "viking" / "_backups" / _get_config_value(item, "name")
+        local_dir = data_path / "_backups" / _get_config_value(item, "name")
     local_dir_path = Path(local_dir).expanduser()
     return {"local_dir": str(local_dir_path)}
 
@@ -327,13 +401,72 @@ def _serialize_redirect_policy(policy: Any) -> Dict[str, Any]:
     return _dump_config_object(policy)
 
 
-def create_agfs_client(config: RagfsBindingConfig) -> Any:
+def _build_git_config_dict(git_config: Any, storage_path: Path) -> Dict[str, Any]:
+    """Build an in-memory git config dict consumed by the ragfs binding.
+
+    The returned dict mirrors the Rust ``GitConfig`` serde struct so the binding
+    deserializes it verbatim from the ``config["git"]`` section, without writing
+    any TOML file. For ``backend == "local"`` a ``local`` sub-dict is emitted
+    (defaulting ``base_dir`` to ``{storage_path}/.ovgit`` when empty); for
+    ``backend == "s3"`` an ``s3`` sub-dict is emitted with keys matching the Rust
+    ``GitS3ConfigPy`` struct.
+    """
+    backend = getattr(git_config, "backend", "local")
+    result: Dict[str, Any] = {
+        "enabled": bool(getattr(git_config, "enabled", False)),
+        "backend": backend,
+        "default_branch": getattr(git_config, "default_branch", "main"),
+        "author_name": getattr(git_config, "author_name", "viking-bot"),
+        "author_email": getattr(git_config, "author_email", "bot@viking.local"),
+    }
+
+    if backend == "s3":
+        s3_cfg = getattr(git_config, "s3", None)
+        if s3_cfg is None:
+            raise ValueError("git backend 's3' requires a [git.s3] section")
+        s3_dict: Dict[str, Any] = {
+            "bucket": getattr(s3_cfg, "bucket", ""),
+            "region": getattr(s3_cfg, "region", "us-east-1"),
+            "prefix": getattr(s3_cfg, "prefix", ".ovgit"),
+            "endpoint": getattr(s3_cfg, "endpoint", ""),
+            "cas_mode": getattr(s3_cfg, "cas_mode", "native"),
+            "use_path_style": bool(getattr(s3_cfg, "use_path_style", True)),
+        }
+        # Only emit credentials when provided; otherwise the binding falls back
+        # to the SDK default credentials chain.
+        access_key = getattr(s3_cfg, "access_key", None)
+        secret_key = getattr(s3_cfg, "secret_key", None)
+        if access_key:
+            s3_dict["access_key"] = access_key
+        if secret_key:
+            s3_dict["secret_key"] = secret_key
+        result["s3"] = s3_dict
+        return result
+
+    # Default: local backend
+    local_cfg = getattr(git_config, "local", None)
+    base_dir = getattr(local_cfg, "base_dir", "") if local_cfg is not None else ""
+    if not base_dir:
+        base_dir = str(storage_path / ".ovgit")
+    else:
+        base_dir = str(Path(base_dir).expanduser())
+
+    result["local"] = {"base_dir": base_dir}
+    return result
+
+
+def create_agfs_client(config: RagfsBindingConfig, *, git_config: Any = None) -> Any:
     """
     Create a RAGFS client based on the provided configuration.
 
     Args:
         config: Single runtime config object containing both backend mount settings and
             construction-time binding sections.
+        git_config: Optional GitConfig. When provided and ``enabled`` is True,
+            the git config is built into an in-memory dict and injected into the
+            binding ``config`` under the ``git`` key so the binding exposes git_*
+            methods. No file is written to disk. When None or disabled, the client
+            is constructed without a git section (legacy behavior).
 
     Returns:
         A RAGFSBindingClient instance.
@@ -353,8 +486,21 @@ def create_agfs_client(config: RagfsBindingConfig) -> Any:
             "to build and install the RAGFS SDK with native bindings."
         )
 
+    agfs_config = config.agfs if isinstance(config, RagfsBindingConfig) else config
+    binding_dict = config.to_binding_dict()
+    if git_config is not None and getattr(git_config, "enabled", False):
+        path_str = getattr(agfs_config, "path", None)
+        if path_str is None:
+            raise ValueError("agfs_config.path is required when git is enabled")
+        storage_path = Path(path_str).resolve()
+        binding_dict["git"] = _build_git_config_dict(git_config, storage_path)
+
     # Construction-time decides whether the stack includes the encryption layer.
-    client = RAGFSBindingClient(config=config.to_binding_dict())
+    config_path = resolve_config_path(None, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
+    client = RAGFSBindingClient(
+        str(config_path) if config_path else None,
+        config=binding_dict,
+    )
 
     # Automatically mount backend for binding client
     mount_agfs_backend(client, config)

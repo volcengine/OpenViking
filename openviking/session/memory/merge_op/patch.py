@@ -75,8 +75,8 @@ class PatchOp(MergeOpBase):
 
         # Case 2: dict form of StrPatch (from JSON parsing)
         if isinstance(patch_value, dict):
-            try:
-                if "blocks" in patch_value:
+            if "blocks" in patch_value:
+                try:
                     blocks = []
                     for block_dict in patch_value["blocks"]:
                         if isinstance(block_dict, dict):
@@ -85,13 +85,15 @@ class PatchOp(MergeOpBase):
                             blocks.append(block_dict)
                     # Filter out empty-search blocks when there's existing content
                     valid_blocks = [b for b in blocks if b.search]
-                    if valid_blocks:
-                        return apply_str_patch(current_str, StrPatch(blocks=valid_blocks))
-                    # All blocks have empty search → keep original
-                    return current_value
-            except Exception:
-                # If conversion fails, treat as simple replacement
-                return str(patch_value) if patch_value is not None else ""
+                    converted_patch = StrPatch(blocks=valid_blocks) if valid_blocks else None
+                except Exception:
+                    # If conversion fails, treat as simple replacement
+                    return str(patch_value) if patch_value is not None else ""
+
+                if converted_patch is not None:
+                    return apply_str_patch(current_str, converted_patch)
+                # All blocks have empty search → keep original
+                return current_value
 
         # Case 3: Simple full replacement
         # 空字符串和 None 都保持原值

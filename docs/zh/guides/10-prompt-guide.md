@@ -113,6 +113,8 @@ embedding_template: |
 directory: "viking://user/{{ user_space }}/memories/..."
 enabled: true
 operation_mode: "upsert"
+stage: "user"
+peer_enabled: true
 ```
 
 字段含义：
@@ -135,6 +137,10 @@ operation_mode: "upsert"
   - 是否启用该类记忆
 - `operation_mode`
   - 该类记忆的更新模式，例如 `upsert`
+- `stage`
+  - 抽取阶段。默认是 `user`，参与会话用户记忆抽取；`agent` 用于 trajectories、experiences 这类执行派生 schema。
+- `peer_enabled`
+  - 当 `peer_id` 或消息 ranges 指向某个 peer 时，是否将该类记忆按 peer 分目录存储。默认是 `true`；如果该类记忆必须保留在当前 user 目录下，设置为 `false`。
 
 编写 memory schema 时，建议重点关注：
 
@@ -186,13 +192,13 @@ operation_mode: "upsert"
 
 ### Memory
 
-这一类 YAML 定义不同记忆类型的结构，不是单次推理 prompt。它们共同决定用户记忆和 agent 记忆如何落盘、如何更新、如何被后续检索使用。
+这一类 YAML 定义不同记忆类型的结构，不是单次推理 prompt。它们共同决定当前用户或 Peer 的记忆如何落盘、如何更新、如何被后续检索使用。
 
 - `cases`
   - 生效环节：案例型记忆落盘与更新阶段
-  - 影响能力：问题到解决方案的案例沉淀与复用
-  - 作用：定义“遇到了什么问题、如何解决”的案例型记忆
-  - 关键字段：`case_name`、`problem`、`solution`、`content`
+  - 影响能力：可训练、可评估的任务案例沉淀
+  - 作用：定义具体任务输入、评估标准和支撑证据
+  - 关键字段：`case_name`、`task_signature`、`input`、`rubric`、`evidence`
 
 - `entities`
   - 生效环节：实体型记忆落盘与更新阶段
@@ -206,17 +212,17 @@ operation_mode: "upsert"
   - 作用：定义事件摘要、目标、时间范围等结构化事件记忆
   - 关键字段：`event_name`、`goal`、`summary`、`ranges`
 
+- `experiences`
+  - 生效环节：经验型记忆落盘与更新阶段
+  - 影响能力：从任务结果中沉淀可复用指导
+  - 作用：记录持久的执行经验及其替代的旧记忆
+  - 关键字段：`experience_name`、`content`、`supersedes`
+
 - `identity`
   - 生效环节：agent identity 记忆落盘阶段
   - 影响能力：agent 身份设定的长期一致性
   - 作用：定义 agent 的名字、形象、风格、自我介绍等身份字段
-  - 关键字段：`name`、`creature`、`vibe`、`emoji`、`avatar`
-
-- `patterns`
-  - 生效环节：模式型记忆落盘与更新阶段
-  - 影响能力：可复用流程和方法的长期积累
-  - 作用：定义“在什么情况下按什么流程处理”的模式记忆
-  - 关键字段：`pattern_name`、`pattern_type`、`content`
+  - 关键字段：`name`、`creature`、`vibe`、`emoji`、`avatar`、`introduction`
 
 - `preferences`
   - 生效环节：偏好型记忆落盘与更新阶段
@@ -249,7 +255,7 @@ operation_mode: "upsert"
   - 关键字段：`tool_name`、`static_desc`、`call_count`、`success_time`、`when_to_use`、`optimal_params`
 
 - `trajectories`
-  - 生效环节：agent 轨迹型记忆落盘阶段（agent_only，仅追加）
+  - 生效环节：agent 轨迹型记忆落盘阶段（`stage: agent`，仅追加）
   - 影响能力：agent 任务轨迹中可复用的操作契约沉淀——多步决策、工具调用、执行链路
   - 作用：定义"任务轨迹中提炼出哪些可复用的操作/契约"这一类轨迹型记忆
   - 关键字段：`trajectory_name`、`outcome`、`retrieval_anchor`、`content`
@@ -317,12 +323,6 @@ operation_mode: "upsert"
 ### Semantic
 
 这一类 prompt 主要用于文件级和目录级摘要生成，是语义索引构建的重要部分。
-
-- `semantic.code_ast_summary`
-  - 生效环节：大型代码文件 AST 骨架总结阶段
-  - 影响能力：代码文件摘要、代码检索和结构理解效果
-  - 作用：基于 AST 骨架而不是完整源码生成代码摘要
-  - 关键输入：`file_name`、`skeleton`、`output_language`
 
 - `semantic.code_summary`
   - 生效环节：代码文件摘要阶段

@@ -4,6 +4,7 @@
 
 import pytest
 
+from openviking.utils.exceptions import AllCredentialsFailedError
 from openviking.utils.model_retry import (
     ERROR_CLASS_AUTH,
     ERROR_CLASS_CONTENT_SAFETY,
@@ -19,6 +20,16 @@ from openviking.utils.model_retry import (
 
 def test_classify_api_error_recognizes_request_burst_too_fast():
     assert classify_api_error(RuntimeError("RequestBurstTooFast")) == ERROR_CLASS_TRANSIENT
+
+
+def test_classify_all_credentials_failed_prefers_transient_over_auth():
+    err = AllCredentialsFailedError(
+        [
+            ("cred-a", ERROR_CLASS_AUTH, RuntimeError("401 Unauthorized"), 0),
+            ("cred-b", ERROR_CLASS_TRANSIENT, RuntimeError("500 server error"), 1),
+        ]
+    )
+    assert classify_api_error(err) == ERROR_CLASS_TRANSIENT
 
 
 def test_retry_sync_retries_transient_error_until_success():

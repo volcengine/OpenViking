@@ -37,6 +37,7 @@ def _load_image_module(monkeypatch):
     """Load the image tool module directly so this regression stays isolated."""
     repo_root = Path(__file__).resolve().parents[2]
     image_path = repo_root / "bot" / "vikingbot" / "agent" / "tools" / "image.py"
+    image_format_path = repo_root / "bot" / "vikingbot" / "utils" / "image_format.py"
 
     base_mod = types.ModuleType("vikingbot.agent.tools.base")
 
@@ -59,6 +60,13 @@ def _load_image_module(monkeypatch):
 
     utils_mod = types.ModuleType("vikingbot.utils")
     utils_mod.get_data_path = lambda: repo_root
+    image_format_spec = importlib.util.spec_from_file_location(
+        "image_format_under_test", image_format_path
+    )
+    image_format_module = importlib.util.module_from_spec(image_format_spec)
+    assert image_format_spec.loader is not None
+    image_format_spec.loader.exec_module(image_format_module)
+    utils_mod.detect_image_format = image_format_module.detect_image_format
 
     monkeypatch.setitem(sys.modules, "vikingbot", types.ModuleType("vikingbot"))
     monkeypatch.setitem(sys.modules, "vikingbot.agent", types.ModuleType("vikingbot.agent"))
@@ -193,3 +201,25 @@ async def test_edit_mode_reads_base_image_and_mask_from_sandbox(monkeypatch, tmp
     )
     assert base64.b64decode(captured_kwargs["mask"].split(",", 1)[1]) == b"SANDBOX_MASK_IMAGE_BYTES"
     assert result.startswith("生成图片：")
+
+
+@pytest.mark.asyncio
+async def test_image_tool_saves_generated_jpeg_with_jpg_extension(monkeypatch, tmp_path):
+    module = _load_image_module(monkeypatch)
+    monkeypatch.setattr(module, "get_data_path", lambda: tmp_path)
+    jpeg_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01fake-jpeg"
+
+    async def fake_image_generation(**kwargs):
+        return SimpleNamespace(data=[SimpleNamespace(b64_json=base64.b64encode(jpeg_bytes).decode())])
+
+    monkeypatch.setattr(module.litellm, "aimage_generation", fake_image_generation)
+    context = SimpleNamespace(session_key="session", channel_metadata={})
+    tool = module.ImageGenerationTool()
+
+    result = await tool.execute(context, mode="generate", prompt="make a jpeg", send_to_user=False)
+
+    saved_files = list((tmp_path / "images").iterdir())
+    assert len(saved_files) == 1
+    assert saved_files[0].suffix == ".jpg"
+    assert saved_files[0].read_bytes() == jpeg_bytes
+    assert f"send://{saved_files[0].name}" in result

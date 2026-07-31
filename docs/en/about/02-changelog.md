@@ -3,6 +3,127 @@
 All notable changes to OpenViking will be documented in this file.
 This changelog is automatically generated from [GitHub Releases](https://github.com/volcengine/OpenViking/releases).
 
+## v0.4.9 (2026-07-10)
+
+### Highlights
+
+- **Agent workspace isolation**: Codex, Claude Code, OpenCode, and Pi integrations gain workspace-derived peer identity for per-project memory, together with broader shared installer and hybrid MCP support.
+- **Retrieval and memory correctness**: image search is supported, agent-only and peer-only memory scopes are respected, and nested rendered memory links are avoided.
+- **Storage and security hardening**: local collection loading is serialized, VikingDB content writes are backend-aware, and Git submodule ingestion blocks SSRF targets.
+- **VikingBot and platform fixes**: unified gateway routing and OpenViking authentication were added, with fixes for channel sender metadata, VLM-only configurations, Windows vector backends, and benchmark concurrency.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.4.8...v0.4.9)
+
+## v0.4.8 (2026-07-08)
+
+### Highlights
+
+- **NVIDIA cuVS vector backend**: opt-in exact and approximate GPU retrieval, plus memory-aware fallback from the local backend.
+- **Recursive web ingestion**: bounded same-site crawling with depth, page, path, and download-link controls, backed by Scrapy and trafilatura.
+- **Memory v3 and training**: v3 extraction is the active pipeline, with streaming patch-merge updates and session train/eval support.
+- **Agent plugin installation**: Codex and Claude Code support remote marketplaces and a stdio MCP proxy that shares `ovcli.conf` credentials with hooks.
+- **Filesystem and RAGFS improvements**: backend-paged glob, stable directory-first ordering, and standard relative-path matching.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.4.7...v0.4.8)
+
+## v0.4.7 (2026-07-02)
+
+### Highlights
+
+- **MCP local-file flow**: compact tool descriptions reduce context usage, while signed `temp_upload` tokens automatically ingest local uploads.
+- **Filesystem and versioning**: filesystem attrs and account-level `.ovgitignore` rules expand metadata and snapshot controls.
+- **SDK and authentication**: the Go SDK adds skill scoping and grep depth controls; OAuth client scopes are persisted and seeded API keys are supported.
+- **Studio and setup UX**: Connection & Identity was redesigned, assumed accounts are pinned correctly, and initialization gains a TUI-style setup wizard.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.4.6...v0.4.7)
+
+## v0.4.6 (2026-06-29)
+
+### Highlights
+
+- **VikingFS snapshot versioning**: Git-backed `commit`, `log`, `show`, and `restore` across HTTP, Python SDK, and CLI surfaces.
+- **Whole-site ingestion**: sitemap, sitemap-index, RSS, and Atom imports produce watchable resource trees.
+- **Shared Agent Skills**: `viking://agent/skills` is restored as the account-shared skill root, while user-private skills remain the default.
+- **VikingDB BM25 grep and Studio metrics**: keyword retrieval and user-visible usage dashboards expand search and observability.
+
+### Upgrade Notes
+
+- Deployments upgrading from 0.3.x with legacy agent/session data should migrate and clean up on v0.4.5 before upgrading to v0.4.6 or later.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.4.5...v0.4.6)
+
+## v0.4.5 (2026-06-24)
+
+### Highlights
+
+- **Auth role serialization and trusted mode**: request identity roles are now serialized consistently as string roles across storage, resource, session, queue, watch, summarizer, and semantic-processing paths, and OpenViking-backed VikingBot flows gain trusted `auth_mode` support.
+- **CLI, Web Studio, and bot setup reliability**: user-management setup in the CLI config wizard is clearer, Web Studio account selection is more stable, VikingBot auth handling is simplified, and failed session archives can now be skipped.
+- **Agent integration recall and OpenCode docs**: Codex and OpenCode integrations now include session-aware recall, while the OpenCode plugin docs are consolidated around the single maintained plugin.
+- **Storage and session hardening**: QueueFS semantic processing handles non-directory memory URIs, glob URI schemes are preserved, event summaries fall back more safely, memory abstracts are truncated defensively, and path-lock progress logging is improved.
+- **CLI / SDK surface polish**: CLI validation errors are clearer, requests omit newer fields when talking to older servers, the Go SDK exposes `set_tags`, and the standalone Python HTTP SDK extraction is included.
+- **New integration examples**: OpenWebUI and Pi coding-agent examples were added.
+
+### Upgrade Notes
+
+- Upgrade to this release if you run authenticated or trusted-mode multi-tenant deployments and need the role serialization fix.
+- The Python package version is derived from the `v0.4.5` tag.
+- Docker images are published with both `v0.4.5` and `latest` tags by the release workflow.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.4.4...v0.4.5)
+
+## v0.4.4 (2026-06-18)
+
+### Highlights
+
+- **Plugin-based authentication architecture**: authentication internals were refactored around a plugin-based architecture, laying groundwork for cleaner auth-mode extension and maintenance.
+- **Go SDK search filters**: the Go SDK now exposes search date and level filters so clients can constrain retrieval more precisely.
+- **RAGFS encryption-account fix**: RAGFS now handles root-directory encryption account ID acquisition correctly, avoiding exceptions in that path.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.4.3...v0.4.4)
+
+## v0.4.3 (2026-06-18)
+
+### Highlights
+
+- **RAGFS cache and migration reliability**: CachedFileSystem was added with Redis, Mooncake, and Yuanrong cache providers, while legacy shape probing skips zero-byte files and path locks, S3 head-object handling is clearer, and encrypted reads gain a plaintext fallback for migration.
+- **Go SDK and code navigation**: the Go HTTP SDK is supported and documented, and new code navigation endpoints were added for the OpenCode plugin.
+- **Docs search and localization**: OpenViking-powered documentation search was added, localized, and refreshed alongside SDK and Hermes wording updates.
+- **Parser, session, and task fixes**: session ID encoding, Feishu URL host matching, task tracker encryption binding, and event overview refresh behavior were fixed.
+- **Security dependency updates**: `python-multipart` and `cryptography` floors were raised to address high-severity advisories, and UnderstandingAPI zip downloads now use safe extraction to close Zip Slip risk.
+- **Plugin and memory follow-ups**: memory plugin recall/auth handling, OpenClaw plugin release metadata, session skill YAML rules, and tag-setting support were updated.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.4.2...v0.4.3)
+
+## v0.4.2 (2026-06-17)
+
+### Highlights
+
+- **OpenClaw installer and runtime docs hardening**: the OpenClaw installer flow, runtime setup modules, and related documentation tests were refreshed so plugin setup contracts stay covered.
+- **Wiki and RAGFS follow-ups**: wiki links were corrected, and RAGFS shape probing now ignores legacy task records.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.4.1...v0.4.2)
+
+## v0.4.1 (2026-06-16)
+
+### Highlights
+
+- **User / Peer identity model**: OpenViking now separates data ownership (`user`) from interaction counterparts (`peer`), with legacy `agent_id` mapped as a transition setting.
+- **0.3.x legacy migration path**: legacy `viking://agent/...` and `viking://session/...` data can be read compatibly, migrated to the new `viking://user/...` layout, verified, and cleaned up after rollback is no longer needed.
+- **Multimodal ingestion expansion**: sessions and resources now cover image messages, Markdown image rewrites, Feishu user tokens, external parser routing, and richer image/vectorization flows.
+- **OpenClaw and retrieval diagnostics**: retrieval supports `context_type`, while OpenClaw adds Recall Trace, runtime query config, feature gates, and actor peer scope wiring.
+- **Skills and plugin lifecycle updates**: Skills are user-scoped context assets, and the Codex / Claude Code plugin path gains stronger install, pending-queue, recall-cache, and failure-cache support.
+- **Model and storage reliability**: ordered VLM/embedding credentials, failover/failback classification, RAGFS multi-write, S3 content-type autodetection, vector migration fixes, and task durability improve production operation.
+
+### Upgrade Notes
+
+- New writes should move to `viking://user/...`; `viking://agent/...` remains readable for old data but is no longer the target for new memory, resource, session, or skill writes.
+- `agent_id` is a legacy transition setting that maps to request-level `actor_peer_id`; do not configure `agent_id` and `actor_peer_id` together, and do not send message-level `peer_id` from a legacy `agent_id` client.
+- Legacy `role_id` memory isolation is no longer supported; use the User / Peer model for isolation boundaries.
+- Before upgrading a 0.3.x deployment, back up data, upgrade server / CLI / SDK to 0.4.1, verify legacy reads, run `ov --sudo admin migrate --output json`, inspect the task result, and only then run cleanup.
+- Regenerate clients or pinned schemas for integrations that use the new retrieval, skill, migration, or OpenClaw surfaces.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.3.24...v0.4.1)
+
 ## v0.3.24 (2026-06-05)
 
 ### Highlights
@@ -26,7 +147,7 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 
 - **Native `ov` CLI refresh**: `ov config` is now the interactive configuration manager for adding, editing, deleting, and switching saved configs, while `ov config show`, `ov config validate`, and `ov config switch` remain explicit subcommands. New `ov language` / `ov lang` selects the display language, `ov status [--verbose]` provides aggregated diagnostics, and `ov health` plus runtime errors render with clearer guidance.
 - **Web Studio Playground and identity management**: Studio adds a Playground with a context tree, Terminal, and Agent panel, plus a Connection & Identity page that can save connection state, select account/user identity, create accounts and users, and copy or regenerate API keys.
-- **Config-driven VikingBot experience recall**: New `bot.ov_server.recall_exp_first_round_only`, `exp_recall_limit`, and `exp_recall_max_chars` inject agent experience only on the first turn, and both local and remote modes isolate experience namespaces by incoming `agent_id`.
+- **Config-driven VikingBot experience recall**: New `bot.ov_server.exp_recall_limit` and `exp_recall_max_chars` tune agent experience recall, and both local and remote modes isolate experience namespaces by incoming `agent_id`.
 - **Simpler resource watches**: `add_resource` no longer requires an explicit `to` when `watch_interval > 0`; when the import returns a stable `root_uri`, the watch task binds to it automatically, with CLI, MCP, and docs examples updated to match.
 - **Structured plugin tool results and CJK token estimation**: Claude Code and OpenClaw plugins now write structured tool parts instead of flattening calls and results into text only, and CJK-aware token estimation is shared across Python and plugin code to reduce budget underestimation for Chinese, Japanese, and Korean sessions.
 

@@ -12,7 +12,6 @@ class CollectionCreateRequest(BaseModel):
     ProjectName: Optional[str] = Field("default", description="Project name")
     Description: Optional[str] = Field("", description="Collection description")
     Fields: Optional[Any] = Field(None, description="Field definitions")
-    Vectorize: Optional[Any] = Field(None, description="Vectorize configuration")
 
 
 class CollectionUpdateRequest(BaseModel):

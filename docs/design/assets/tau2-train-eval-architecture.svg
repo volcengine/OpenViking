@@ -1,0 +1,169 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="760" viewBox="0 0 1280 760" role="img" aria-labelledby="title desc">
+  <title id="title">tau2 接入 OpenViking 新训练评测框架架构图</title>
+  <desc id="desc">展示 tau2 runtime service、batch train/eval runner 和 OpenViking server 之间的 case 查询、rollout 执行、session.commit 训练写入和当前 memories 读取关系。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/>
+    </marker>
+    <marker id="arrowBlue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrowGreen" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#16a34a"/>
+    </marker>
+    <marker id="arrowOrange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#ea580c"/>
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .panel { fill: #ffffff; stroke-width: 2; rx: 18; }
+      .tau2 { stroke: #2563eb; }
+      .runner { stroke: #16a34a; }
+      .ov { stroke: #ea580c; }
+      .box { fill: #f8fafc; stroke: #94a3b8; stroke-width: 1.5; rx: 10; }
+      .boxBlue { fill: #eff6ff; stroke: #60a5fa; }
+      .boxGreen { fill: #f0fdf4; stroke: #4ade80; }
+      .boxOrange { fill: #fff7ed; stroke: #fb923c; }
+      .store { fill: #fffbeb; stroke: #f59e0b; stroke-width: 1.8; rx: 10; }
+      .title { font: 700 24px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .panelTitle { font: 700 18px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .text { font: 600 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1e293b; }
+      .small { font: 500 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .edge { fill: none; stroke: #334155; stroke-width: 2; marker-end: url(#arrow); }
+      .edgeBlue { fill: none; stroke: #2563eb; stroke-width: 2.5; marker-end: url(#arrowBlue); }
+      .edgeGreen { fill: none; stroke: #16a34a; stroke-width: 2.5; marker-end: url(#arrowGreen); }
+      .edgeOrange { fill: none; stroke: #ea580c; stroke-width: 2.5; marker-end: url(#arrowOrange); }
+      .edgeDashed { fill: none; stroke: #2563eb; stroke-width: 2.5; stroke-dasharray: 8 6; marker-end: url(#arrowBlue); }
+      .label { font: 600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #334155; }
+      .legendText { font: 500 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1280" height="760"/>
+  <text class="title" x="40" y="46">tau2 接入 OpenViking 新训练评测框架</text>
+  <text class="small" x="40" y="70">baseline_eval → train epoch(s) → final_eval；tau2 service 执行 rollout 时读取 OV memories，训练写入通过 session.commit 回到 OV。</text>
+
+  <!-- Panels -->
+  <rect class="panel tau2" x="40" y="105" width="360" height="540" rx="18"/>
+  <text class="panelTitle" x="65" y="138">Tau2 Runtime Service :1944</text>
+  <text class="small" x="65" y="160">依赖 tau2 / VikingBot / 环境工具</text>
+
+  <rect class="panel runner" x="460" y="105" width="360" height="540" rx="18"/>
+  <text class="panelTitle" x="485" y="138">Batch Train/Eval Runner</text>
+  <text class="small" x="485" y="160">通用训练评测编排，不直接依赖 tau2 runtime</text>
+
+  <rect class="panel ov" x="880" y="105" width="360" height="540" rx="18"/>
+  <text class="panelTitle" x="905" y="138">OpenViking Server :1933</text>
+  <text class="small" x="905" y="160">session.commit / memory extraction / experience update</text>
+
+  <!-- Tau2 boxes -->
+  <rect class="box boxBlue" x="80" y="195" width="280" height="58" rx="10"/>
+  <text class="text" x="220" y="220" text-anchor="middle">tau2 data</text>
+  <text class="small" x="220" y="239" text-anchor="middle">tasks / split / domain fixtures</text>
+
+  <rect class="box boxBlue" x="80" y="285" width="280" height="58" rx="10"/>
+  <text class="text" x="220" y="310" text-anchor="middle">POST /v1/cases/query</text>
+  <text class="small" x="220" y="329" text-anchor="middle">返回通用 Case JSON</text>
+
+  <rect class="box boxBlue" x="80" y="375" width="280" height="58" rx="10"/>
+  <text class="text" x="220" y="400" text-anchor="middle">POST /v1/rollouts/execute</text>
+  <text class="small" x="220" y="419" text-anchor="middle">执行 case batch</text>
+
+  <rect class="box boxBlue" x="80" y="465" width="280" height="70" rx="10"/>
+  <text class="text" x="220" y="492" text-anchor="middle">Tau2RolloutExecutor</text>
+  <text class="small" x="220" y="511" text-anchor="middle">VikingBot + tau2 env tools</text>
+  <text class="small" x="220" y="529" text-anchor="middle">生成 Message / ToolPart</text>
+
+  <rect class="box boxBlue" x="80" y="565" width="280" height="58" rx="10"/>
+  <text class="text" x="220" y="590" text-anchor="middle">RubricEvaluation</text>
+  <text class="small" x="220" y="609" text-anchor="middle">reward / passed / feedback</text>
+
+  <!-- Runner boxes -->
+  <rect class="box boxGreen" x="500" y="195" width="280" height="58" rx="10"/>
+  <text class="text" x="640" y="220" text-anchor="middle">RemoteCaseLoader</text>
+  <text class="small" x="640" y="239" text-anchor="middle">拉取 train/test cases</text>
+
+  <rect class="box boxGreen" x="500" y="285" width="280" height="58" rx="10"/>
+  <text class="text" x="640" y="310" text-anchor="middle">OfflinePolicyOptimizationPipeline</text>
+  <text class="small" x="640" y="329" text-anchor="middle">baseline_eval / train / final_eval</text>
+
+  <rect class="box boxGreen" x="500" y="375" width="280" height="58" rx="10"/>
+  <text class="text" x="640" y="400" text-anchor="middle">RemoteRolloutExecutor</text>
+  <text class="small" x="640" y="419" text-anchor="middle">HTTP 调用 tau2 rollout service</text>
+
+  <rect class="box boxGreen" x="500" y="475" width="280" height="58" rx="10"/>
+  <text class="text" x="640" y="500" text-anchor="middle">SessionCommitPolicyTrainer</text>
+  <text class="small" x="640" y="519" text-anchor="middle">CaseSpec + Rollout + OutcomeEvaluation</text>
+
+  <rect class="box boxGreen" x="500" y="565" width="280" height="58" rx="10"/>
+  <text class="text" x="640" y="590" text-anchor="middle">Report</text>
+  <text class="small" x="640" y="609" text-anchor="middle">accuracy / avg_reward / delta</text>
+
+  <!-- OV boxes -->
+  <rect class="box boxOrange" x="920" y="190" width="280" height="56" rx="10"/>
+  <text class="text" x="1060" y="215" text-anchor="middle">session.commit</text>
+  <text class="small" x="1060" y="234" text-anchor="middle">接收训练 rollout</text>
+
+  <rect class="box boxOrange" x="920" y="270" width="280" height="56" rx="10"/>
+  <text class="text" x="1060" y="295" text-anchor="middle">SessionCompressorV3</text>
+  <text class="small" x="1060" y="314" text-anchor="middle">commit 后台抽取与训练入口</text>
+
+  <rect class="box boxOrange" x="920" y="350" width="280" height="56" rx="10"/>
+  <text class="text" x="1060" y="375" text-anchor="middle">TrajectoryRolloutAnalyzer</text>
+  <text class="small" x="1060" y="394" text-anchor="middle">extract trajectories</text>
+
+  <rect class="box boxOrange" x="920" y="430" width="280" height="56" rx="10"/>
+  <text class="text" x="1060" y="455" text-anchor="middle">ExperienceGradientEstimator</text>
+  <text class="small" x="1060" y="474" text-anchor="middle">trajectory → gradient</text>
+
+  <rect class="box boxOrange" x="920" y="510" width="280" height="56" rx="10"/>
+  <text class="text" x="1060" y="535" text-anchor="middle">PatchMergePolicyOptimizer</text>
+  <text class="small" x="1060" y="554" text-anchor="middle">全局 merge / split / delete plan</text>
+
+  <rect class="store" x="920" y="590" width="280" height="56" rx="10"/>
+  <text class="text" x="1060" y="615" text-anchor="middle">memories / experiences</text>
+  <text class="small" x="1060" y="634" text-anchor="middle">PolicyStore / latest experience set</text>
+
+  <!-- Internal arrows -->
+  <path class="edgeBlue" d="M220 253 L220 285"/>
+  <path class="edgeBlue" d="M220 433 L220 465"/>
+  <path class="edgeBlue" d="M220 535 L220 565"/>
+
+  <path class="edgeGreen" d="M640 253 L640 285"/>
+  <path class="edgeGreen" d="M640 343 L640 375"/>
+  <path class="edgeGreen" d="M640 433 L640 475"/>
+
+  <path class="edgeOrange" d="M1060 246 L1060 270"/>
+  <path class="edgeOrange" d="M1060 326 L1060 350"/>
+  <path class="edgeOrange" d="M1060 406 L1060 430"/>
+  <path class="edgeOrange" d="M1060 486 L1060 510"/>
+  <path class="edgeOrange" d="M1060 566 L1060 590"/>
+
+  <!-- Cross-panel arrows -->
+  <path class="edgeGreen" d="M500 224 C445 224 420 314 360 314"/>
+  <text class="label" x="388" y="254" text-anchor="middle">query cases</text>
+
+  <path class="edgeGreen" d="M500 404 C445 404 420 404 360 404"/>
+  <text class="label" x="429" y="392" text-anchor="middle">execute rollout</text>
+
+  <path class="edgeBlue" d="M360 594 C420 594 445 404 500 404"/>
+  <text class="label" x="430" y="575" text-anchor="middle">Rollout + evaluation</text>
+
+  <path class="edgeOrange" d="M780 504 C835 504 860 218 920 218"/>
+  <text class="label" x="850" y="355" text-anchor="middle">session.commit</text>
+
+  <path class="edgeDashed" d="M360 500 C560 690 800 690 920 618"/>
+  <text class="label" x="650" y="704" text-anchor="middle">read current OV memories via VikingBot / openviking tools</text>
+
+  <path class="edgeGreen" d="M780 594 C840 594 855 618 920 618"/>
+  <text class="label" x="852" y="590" text-anchor="middle">final_eval sees latest experiences</text>
+
+  <!-- Legend -->
+  <rect x="40" y="685" width="1200" height="44" rx="12" fill="#ffffff" stroke="#cbd5e1"/>
+  <line x1="70" y1="707" x2="120" y2="707" class="edgeGreen"/>
+  <text class="legendText" x="132" y="711">runner 编排调用</text>
+  <line x1="270" y1="707" x2="320" y2="707" class="edgeOrange"/>
+  <text class="legendText" x="332" y="711">训练写入链路</text>
+  <line x1="470" y1="707" x2="520" y2="707" class="edgeDashed"/>
+  <text class="legendText" x="532" y="711">rollout 执行时读取当前 OpenViking memories</text>
+</svg>

@@ -157,7 +157,7 @@ describe("RecallTraceJsonlStore", () => {
   it("persists traces by day and lets a new store query them after flush", async () => {
     const dir = makeTempDir();
     const store = new RecallTraceJsonlStore({ dir });
-    await store.append(makeTrace({ traceId: "persisted", ts: Date.UTC(2026, 5, 1), sessionId: "session-jsonl" }));
+    await store.append(makeTrace({ traceId: "persisted", ts: Date.now(), sessionId: "session-jsonl" }));
     await store.flush();
 
     const reloaded = new RecallTraceJsonlStore({ dir });
@@ -173,7 +173,7 @@ describe("RecallTraceJsonlStore", () => {
     const store = new RecallTraceJsonlStore({ dir });
     await store.append(makeTrace({
       traceId: "redacted-preview",
-      ts: Date.UTC(2026, 5, 1),
+      ts: Date.now(),
       trigger: {
         query: "safe query",
         rawUserTextPreview: "private user wording",
@@ -276,7 +276,7 @@ describe("RecallTraceRecorder", () => {
     await recorder.recordAndFlush(makeTrace({
       traceId: "durable-before-return",
       sessionId: "durable-session",
-      ts: Date.UTC(2026, 5, 1),
+      ts: Date.now(),
     }));
 
     const freshReader = new RecallTraceRecorder({

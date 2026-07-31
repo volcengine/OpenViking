@@ -240,6 +240,10 @@ impl ConfigStore {
         write_config_file(&self.active_path, config)
     }
 
+    pub(crate) fn save_active_config(&self, config: &Config) -> Result<()> {
+        write_config_file(&self.active_path, config)
+    }
+
     pub fn save_edited_config(
         &self,
         old_name: &str,
@@ -536,9 +540,17 @@ pub(crate) fn normalize_custom_url(url: &str) -> String {
 pub fn redacted_config_value(config: &Config) -> Result<Value> {
     let mut value = serde_json::to_value(config)?;
     if let Some(object) = value.as_object_mut() {
-        for key in ["api_key", "root_api_key"] {
+        for key in ["api_key", "root_api_key", "gateway_token"] {
             if object.get(key).is_some_and(|value| !value.is_null()) {
                 object.insert(key.to_string(), Value::String("********".to_string()));
+            }
+        }
+        if let Some(headers) = object
+            .get_mut("extra_headers")
+            .and_then(Value::as_object_mut)
+        {
+            for value in headers.values_mut() {
+                *value = Value::String("********".to_string());
             }
         }
     }
@@ -577,8 +589,9 @@ pub(crate) async fn validate_candidate_config_with_role(
         config.actor_peer_id.clone(),
         timeout,
         config.profile,
-        config.extra_headers.clone(),
-    );
+        config.effective_extra_headers(),
+    )
+    .with_gateway_token(config.effective_gateway_token());
 
     let value: Value = client.get("/health", &[]).await?;
     if value
@@ -609,7 +622,17 @@ async fn detect_api_key_role(client: &BaseClient) -> Result<ApiKeyRole> {
             status: Some(status),
             ..
         }) if admin_probe_regular_key_status(status) => Ok(ApiKeyRole::Regular),
-        Err(Error::Api { message, status }) => Err(Error::Api { message, status }),
+        Err(Error::Api {
+            code,
+            message,
+            details,
+            status,
+        }) => Err(Error::Api {
+            code,
+            message,
+            details,
+            status,
+        }),
         Err(error) => Err(error),
     }
 }
@@ -647,14 +670,59 @@ fn should_run_authenticated_probe(
     }
 }
 
-pub(crate) fn validation_error_copy(kind: ConfigKind, _error: &Error) -> String {
-    match kind {
-        ConfigKind::OpenVikingService => {
-            "Validation failed. Check your API key and try again.".to_string()
+pub(crate) fn validation_error_copy(kind: ConfigKind, error: &Error) -> String {
+    match error {
+        Error::Network(msg) if msg.contains("unhealthy") => {
+            "Server is reachable but reported unhealthy status. Check the server logs.".to_string()
         }
-        ConfigKind::Custom => {
-            "Validation failed. Check the server URL and API key if required.".to_string()
+        Error::Network(_) => match kind {
+            ConfigKind::OpenVikingService => {
+                "Cannot reach OpenViking Service. Check your network connection.".to_string()
+            }
+            ConfigKind::Custom => {
+                "Cannot reach the server. Check the URL and your network connection.".to_string()
+            }
+        },
+        Error::Timeout(_) => {
+            "Connection timed out. Increase the request timeout or check the server.".to_string()
         }
+        error @ Error::Api { .. } if error.code() == "UNAUTHENTICATED" => {
+            "API key was rejected. Check your API key.".to_string()
+        }
+        Error::Api { message, .. } => message.clone(),
+        Error::Config(msg) => msg.clone(),
+        _ => match kind {
+            ConfigKind::OpenVikingService => {
+                "Validation failed. Check your API key and try again.".to_string()
+            }
+            ConfigKind::Custom => {
+                "Validation failed. Check the server URL and API key if required.".to_string()
+            }
+        },
+    }
+}
+
+pub(crate) fn validation_error_copy_zh(kind: ConfigKind, error: &Error) -> String {
+    match error {
+        Error::Network(msg) if msg.contains("unhealthy") => {
+            "服务器可连接，但健康状态异常。请检查服务器日志。".to_string()
+        }
+        Error::Network(_) => match kind {
+            ConfigKind::OpenVikingService => {
+                "无法连接 OpenViking 服务。请检查网络连接。".to_string()
+            }
+            ConfigKind::Custom => "无法连接服务器。请检查 URL 和网络连接。".to_string(),
+        },
+        Error::Timeout(_) => "连接超时。请提高请求超时时间或检查服务器状态。".to_string(),
+        error @ Error::Api { .. } if error.code() == "UNAUTHENTICATED" => {
+            "API Key 被拒绝。请检查 API Key。".to_string()
+        }
+        Error::Api { message, .. } => message.clone(),
+        Error::Config(msg) => msg.clone(),
+        _ => match kind {
+            ConfigKind::OpenVikingService => "验证失败。请检查 API Key 后重试。".to_string(),
+            ConfigKind::Custom => "验证失败。请检查服务器 URL，以及是否需要 API Key。".to_string(),
+        },
     }
 }
 
@@ -709,7 +777,7 @@ mod tests {
         ApiKeyRole, ConfigDraft, ConfigKind, ConfigStore, OPENVIKING_SERVICE_URL,
         admin_probe_ambiguous_status, admin_probe_regular_key_status, build_config,
         should_run_authenticated_probe, validate_candidate_config,
-        validate_candidate_config_with_role, validate_config_name, validation_error_copy,
+        validate_candidate_config_with_role, validate_config_name,
     };
     use crate::config::Config;
     use std::fs;
@@ -731,6 +799,21 @@ mod tests {
         config.url = url.to_string();
         config.api_key = api_key.map(ToString::to_string);
         config
+    }
+
+    #[test]
+    fn redacted_config_masks_gateway_and_header_secrets() {
+        let mut config = sample_config("http://local", Some("api-secret"));
+        config.gateway_token = Some("gateway-secret".to_string());
+        config.extra_headers = Some(std::collections::HashMap::from([
+            ("Authorization".to_string(), "Bearer secret".to_string()),
+            ("X-Gateway-Token".to_string(), "header-secret".to_string()),
+        ]));
+
+        let redacted = super::redacted_config_value(&config).unwrap();
+        assert_eq!(redacted["gateway_token"], "********");
+        assert_eq!(redacted["extra_headers"]["Authorization"], "********");
+        assert_eq!(redacted["extra_headers"]["X-Gateway-Token"], "********");
     }
 
     #[test]
@@ -1063,28 +1146,6 @@ mod tests {
         assert!(admin_probe_ambiguous_status(500));
         assert!(admin_probe_ambiguous_status(503));
         assert!(!admin_probe_regular_key_status(500));
-    }
-
-    #[test]
-    fn validation_error_copy_hides_raw_backend_details() {
-        let error = crate::error::Error::api(
-            "[AuthenticationError] invalid key. Request ID: 02177930089909800000000000000000ffff"
-                .to_string(),
-        );
-
-        let cloud = validation_error_copy(ConfigKind::OpenVikingService, &error);
-        let custom = validation_error_copy(ConfigKind::Custom, &error);
-
-        assert_eq!(
-            cloud,
-            "Validation failed. Check your API key and try again."
-        );
-        assert_eq!(
-            custom,
-            "Validation failed. Check the server URL and API key if required."
-        );
-        assert!(!cloud.contains("Request ID"));
-        assert!(!custom.contains("AuthenticationError"));
     }
 
     #[test]

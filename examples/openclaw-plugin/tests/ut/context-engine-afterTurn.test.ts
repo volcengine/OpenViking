@@ -14,7 +14,7 @@ function makeLogger() {
 
 function makeEngine(opts?: {
   autoCapture?: boolean;
-  commitTokenThreshold?: number;
+  commitTokenThresholdRatio?: number;
   getSession?: Record<string, unknown>;
   addSessionMessageError?: Error;
   cfgOverrides?: Record<string, unknown>;
@@ -24,7 +24,7 @@ function makeEngine(opts?: {
     baseUrl: "http://127.0.0.1:1933",
     autoCapture: opts?.autoCapture ?? true,
     autoRecall: false,
-    commitTokenThreshold: opts?.commitTokenThreshold ?? 20000,
+    commitTokenThresholdRatio: opts?.commitTokenThresholdRatio ?? 0.5,
     emitStandardDiagnostics: true,
     ...(opts?.cfgOverrides ?? {}),
   });
@@ -35,7 +35,6 @@ function makeEngine(opts?: {
     : vi.fn().mockResolvedValue(undefined);
 
   const client = {
-    ensureSession: vi.fn().mockResolvedValue(true),
     addSessionMessage,
     commitSession: vi.fn().mockResolvedValue({
       status: "accepted",
@@ -71,7 +70,6 @@ function makeEngine(opts?: {
   return {
     engine,
     client: client as unknown as {
-      ensureSession: ReturnType<typeof vi.fn>;
       addSessionMessage: ReturnType<typeof vi.fn>;
       commitSession: ReturnType<typeof vi.fn>;
       getSession: ReturnType<typeof vi.fn>;
@@ -197,13 +195,13 @@ describe("context-engine afterTurn()", () => {
     // user + assistant + toolResult(→user) = 3 calls (toolResult merges with no adjacent user)
     expect(client.addSessionMessage).toHaveBeenCalled();
     const lastCallIdx = client.addSessionMessage.mock.calls.length - 1;
-    const createdAt = client.addSessionMessage.mock.calls[lastCallIdx][3] as string;
+    const createdAt = client.addSessionMessage.mock.calls[lastCallIdx][4] as string;
     expect(createdAt).toBe("2026-04-01T10:03:00.000Z");
   });
 
   it("records senderId from runtimeContext in afterTurn diagnostics", async () => {
     const { engine, logger } = makeEngine({
-      commitTokenThreshold: 50,
+      commitTokenThresholdRatio: 0.01,
       getSession: { pending_tokens: 5000 },
     });
 
@@ -223,7 +221,7 @@ describe("context-engine afterTurn()", () => {
     );
   });
 
-  it("does not pass peer_id by default", async () => {
+  it("does not attribute user messages to the sender in assistant mode", async () => {
     const { engine, client } = makeEngine();
 
     await engine.afterTurn!({
@@ -235,65 +233,17 @@ describe("context-engine afterTurn()", () => {
     });
 
     expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
-    expect(client.addSessionMessage.mock.calls[0][4]).toBeUndefined();
+    expect(client.addSessionMessage.mock.calls[0][3]).toBeUndefined();
+    expect(client.addSessionMessage.mock.calls[0][5]).toBeUndefined();
   });
 
-  it("passes sanitized senderId as peer_id when peer_role is person", async () => {
-    const { engine, client } = makeEngine({
-      cfgOverrides: { peer_role: "person" },
-    });
-
-    await engine.afterTurn!({
-      sessionId: "s1",
-      sessionFile: "",
-      messages: [{ role: "user", content: "hello world" }],
-      prePromptMessageCount: 0,
-      runtimeContext: { senderId: "telegram:12345" },
-    });
-
-    expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
-    expect(client.addSessionMessage.mock.calls[0][4]).toBe("telegram_12345");
-    expect(client.ensureSession).toHaveBeenCalledWith(
-      "s1",
-      {
-        memoryPolicy: {
-          self: { enabled: true },
-          peer: { enabled: true },
-        },
-      },
-    );
-  });
-
-  it("passes runtime agent as peer_id only for assistant messages when peer_role is assistant", async () => {
-    const { engine, client } = makeEngine({
-      cfgOverrides: { peer_role: "assistant" },
-    });
-
-    await engine.afterTurn!({
-      sessionId: "s1",
-      sessionFile: "",
-      messages: [
-        { role: "user", content: "hello world" },
-        { role: "assistant", content: "hi there" },
-      ],
-      prePromptMessageCount: 0,
-      runtimeContext: { senderId: "telegram:12345" },
-    });
-
-    expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
-    expect(client.addSessionMessage.mock.calls[0][1]).toBe("user");
-    expect(client.addSessionMessage.mock.calls[0][4]).toBeUndefined();
-    expect(client.addSessionMessage.mock.calls[1][1]).toBe("assistant");
-    expect(client.addSessionMessage.mock.calls[1][4]).toBe("test-agent");
-  });
-
-  it("sanitizes injected context blocks from user content", async () => {
+  it("sanitizes <relevant-memories> from user content but not from assistant", async () => {
     const { engine, client } = makeEngine();
 
     const messages = [
       {
         role: "user",
-        content: "my question <openviking-context>injected memory data</openviking-context> more text",
+        content: "my question <relevant-memories>injected memory data</relevant-memories> more text",
       },
     ];
 
@@ -307,14 +257,14 @@ describe("context-engine afterTurn()", () => {
     expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
     expect(client.addSessionMessage.mock.calls[0][1]).toBe("user");
     const storedContent = (client.addSessionMessage.mock.calls[0][2] as Array<{ text?: string }>)[0].text;
-    expect(storedContent).not.toContain("openviking-context");
+    expect(storedContent).not.toContain("relevant-memories");
     expect(storedContent).not.toContain("injected memory data");
     expect(storedContent).toContain("my question");
   });
 
   it("does not commit when pendingTokens < threshold", async () => {
     const { engine, client } = makeEngine({
-      commitTokenThreshold: 20000,
+      commitTokenThresholdRatio: 0.8,
       getSession: { pending_tokens: 100 },
     });
 
@@ -335,7 +285,7 @@ describe("context-engine afterTurn()", () => {
 
   it("commits when pendingTokens >= threshold", async () => {
     const { engine, client } = makeEngine({
-      commitTokenThreshold: 20000,
+      commitTokenThresholdRatio: 0.1,
       getSession: { pending_tokens: 25000 },
     });
 
@@ -356,26 +306,29 @@ describe("context-engine afterTurn()", () => {
     expect(commitCall[1]).toMatchObject({ wait: false });
   });
 
-  it("passes peer memory policy to commit when peer_role is person", async () => {
+  it("keeps afterTurn write and commit enabled when recall target types default to resources only", async () => {
     const { engine, client } = makeEngine({
-      commitTokenThreshold: 100,
-      getSession: { pending_tokens: 5000 },
-      cfgOverrides: { peer_role: "person" },
+      commitTokenThresholdRatio: 0.1,
+      getSession: { pending_tokens: 25000 },
+      cfgOverrides: {
+        recallTargetTypes: [],
+      },
     });
 
     await engine.afterTurn!({
       sessionId: "s1",
       sessionFile: "",
-      messages: [{ role: "user", content: "remember my table tennis preference" }],
+      messages: [
+        { role: "user", content: "persist this user turn even with resource-only recall" },
+        { role: "assistant", content: "persist this assistant turn too" },
+      ],
       prePromptMessageCount: 0,
-      runtimeContext: { senderId: "openclaw-tui" },
     });
 
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
+    expect(client.addSessionMessage.mock.calls[0][1]).toBe("user");
+    expect(client.addSessionMessage.mock.calls[1][1]).toBe("assistant");
     expect(client.commitSession).toHaveBeenCalledTimes(1);
-    expect(client.commitSession.mock.calls[0][1]).toMatchObject({
-      wait: false,
-    });
-    expect(client.commitSession.mock.calls[0][1]).not.toHaveProperty("memoryPolicy");
   });
 
   it("catches errors without throwing", async () => {
@@ -403,7 +356,7 @@ describe("context-engine afterTurn()", () => {
 
   it("commit uses OV session ID derived from sessionId", async () => {
     const { engine, client } = makeEngine({
-      commitTokenThreshold: 100,
+      commitTokenThresholdRatio: 0.01,
       getSession: { pending_tokens: 5000 },
     });
 
@@ -425,7 +378,7 @@ describe("context-engine afterTurn()", () => {
 
   it("commit passes wait=false for afterTurn (async Phase 2)", async () => {
     const { engine, client } = makeEngine({
-      commitTokenThreshold: 100,
+      commitTokenThresholdRatio: 0.01,
       getSession: { pending_tokens: 5000 },
     });
 
@@ -484,7 +437,7 @@ describe("context-engine afterTurn()", () => {
     expect(assistantParts.map(p => p.text).join(" ")).toContain("export const x = 1");
   });
 
-  it("does not pass agentId to addSessionMessage by default", async () => {
+  it("does not pass actor peer to addSessionMessage", async () => {
     const { engine, client } = makeEngine();
 
     await engine.afterTurn!({
@@ -496,7 +449,6 @@ describe("context-engine afterTurn()", () => {
 
     expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
     expect(client.addSessionMessage.mock.calls[0][3]).toBeUndefined();
-    expect(client.addSessionMessage.mock.calls[0][4]).toBeUndefined();
   });
 
   it("checks pending tokens after addSessionMessage", async () => {
@@ -515,7 +467,7 @@ describe("context-engine afterTurn()", () => {
     expect(client.getSession).toHaveBeenCalled();
   });
 
-  it("maps toolResult to user role", async () => {
+  it("maps toolResult to assistant role", async () => {
     const { engine, client } = makeEngine();
 
     const messages = [
@@ -535,9 +487,9 @@ describe("context-engine afterTurn()", () => {
     });
 
     expect(client.addSessionMessage).toHaveBeenCalledTimes(3);
-    // assistant → user(toolResult) → assistant
+    // assistant → assistant(toolResult) → assistant
     expect(client.addSessionMessage.mock.calls[0][1]).toBe("assistant");
-    expect(client.addSessionMessage.mock.calls[1][1]).toBe("user");
+    expect(client.addSessionMessage.mock.calls[1][1]).toBe("assistant");
     expect(client.addSessionMessage.mock.calls[1][2][0].tool_output).toContain("file1.txt");
     expect(client.addSessionMessage.mock.calls[1][2][0].tool_output).toContain("file2.txt");
     expect(client.addSessionMessage.mock.calls[2][1]).toBe("assistant");
@@ -569,7 +521,7 @@ describe("context-engine afterTurn()", () => {
     expect(client.addSessionMessage.mock.calls[2][1]).toBe("assistant");
   });
 
-  it("coalesces adjacent toolResults into one user group for turn-level budgets", async () => {
+  it("coalesces adjacent toolResults into one assistant group for turn-level budgets", async () => {
     const { engine, client } = makeEngine();
 
     const messages = [
@@ -591,7 +543,7 @@ describe("context-engine afterTurn()", () => {
 
     expect(client.addSessionMessage).toHaveBeenCalledTimes(3);
     expect(client.addSessionMessage.mock.calls[0][1]).toBe("assistant");
-    expect(client.addSessionMessage.mock.calls[1][1]).toBe("user");
+    expect(client.addSessionMessage.mock.calls[1][1]).toBe("assistant");
     const toolParts = client.addSessionMessage.mock.calls[1][2] as Array<{ tool_output?: string }>;
     expect(toolParts).toHaveLength(2);
     expect(toolParts[0]?.tool_output).toContain("content of a");
@@ -599,12 +551,12 @@ describe("context-engine afterTurn()", () => {
     expect(client.addSessionMessage.mock.calls[2][1]).toBe("assistant");
   });
 
-  it("sanitizes injected context blocks from assistant content", async () => {
+  it("sanitizes <relevant-memories> from assistant content", async () => {
     const { engine, client } = makeEngine();
 
     const messages = [
       { role: "user", content: "question" },
-      { role: "assistant", content: "Here is context <openviking-context>data</openviking-context> end" },
+      { role: "assistant", content: "Here is context <relevant-memories>data</relevant-memories> end" },
     ];
 
     await engine.afterTurn!({
@@ -616,11 +568,11 @@ describe("context-engine afterTurn()", () => {
 
     expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
     const assistantParts = client.addSessionMessage.mock.calls[1][2] as Array<{ text?: string }>;
-    expect(assistantParts.map(p => p.text).join(" ")).not.toContain("openviking-context");
+    expect(assistantParts.map(p => p.text).join(" ")).not.toContain("relevant-memories");
     expect(assistantParts.map(p => p.text).join(" ")).toContain("Here is context");
   });
 
-  it("skips heartbeat messages from being stored", async () => {
+  it("stores heartbeat-looking messages when host does not flag the turn", async () => {
     const { engine, client } = makeEngine();
 
     const messages = [
@@ -635,7 +587,35 @@ describe("context-engine afterTurn()", () => {
       prePromptMessageCount: 0,
     });
 
-    expect(client.addSessionMessage).not.toHaveBeenCalled();
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
+    expect(client.addSessionMessage.mock.calls[0][1]).toBe("user");
+    const userParts = client.addSessionMessage.mock.calls[0][2] as Array<{ text?: string }>;
+    expect(userParts.map(p => p.text).join(" ")).toContain("HEARTBEAT.md");
+  });
+
+  it("stores normal user messages that mention heartbeat artifacts", async () => {
+    const { engine, client } = makeEngine();
+
+    const messages = [
+      {
+        role: "user",
+        content:
+          "Please explain why HEARTBEAT.md appeared in the logs and whether HEARTBEAT_OK means success.",
+      },
+      { role: "assistant", content: "HEARTBEAT_OK is the heartbeat acknowledgement token." },
+    ];
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages,
+      prePromptMessageCount: 0,
+    });
+
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
+    expect(client.addSessionMessage.mock.calls[0][1]).toBe("user");
+    const userParts = client.addSessionMessage.mock.calls[0][2] as Array<{ text?: string }>;
+    expect(userParts.map(p => p.text).join(" ")).toContain("HEARTBEAT.md");
   });
 
   it("skips heartbeat via isHeartbeat flag", async () => {

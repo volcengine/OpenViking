@@ -10,6 +10,7 @@ from vikingbot.bus.events import OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.chat import ChatChannel, ChatChannelConfig
 from vikingbot.channels.single_turn import SingleTurnChannel, SingleTurnChannelConfig
+from vikingbot.cli.commands import _CHAT_PROMPT_MESSAGE, _CHAT_PROMPT_STYLE
 from vikingbot.config.schema import SessionKey
 from vikingbot.session.manager import Session
 
@@ -119,6 +120,13 @@ class TestSessionHistoryProviderSpecificFields:
 
 
 class TestChatChannel:
+    def test_interactive_prompt_uses_terminal_foreground_and_visible_label(self):
+        assert _CHAT_PROMPT_MESSAGE == [("class:user-label", "You: ")]
+        rules = dict(_CHAT_PROMPT_STYLE.style_rules)
+        assert rules[""] == "fg:ansidefault"
+        assert rules["user-label"] == "bold fg:ansicyan"
+        assert all("ansiblack" not in style for style in rules.values())
+
     def test_chat_channel_initialization(self, message_bus, temp_workspace):
         """Test that ChatChannel can be initialized correctly."""
         config = ChatChannelConfig()

@@ -3,14 +3,23 @@
 
 """Focused tests for HTTP server exception-to-error mapping."""
 
-from openviking.pyagfs.exceptions import AGFSClientError, AGFSHTTPError, AGFSIsADirectoryError
+from openviking.pyagfs.exceptions import (
+    AGFSClientError,
+    AGFSHTTPError,
+    AGFSIsADirectoryError,
+    AGFSNotSupportedError,
+    AGFSResourceExhaustedError,
+    GitConcurrentCommitError,
+)
 from openviking.server.error_mapping import map_exception
+from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking_cli.exceptions import (
     FailedPreconditionError,
     InvalidArgumentError,
     InvalidURIError,
     NotFoundError,
+    ResourceExhaustedError,
 )
 
 
@@ -80,6 +89,23 @@ def test_agfs_is_directory_maps_to_structured_invalid_argument():
         "expected": "file",
         "actual": "directory",
     }
+
+
+def test_agfs_not_supported_maps_to_unimplemented():
+    mapped = map_exception(AGFSNotSupportedError("git feature disabled"))
+
+    assert mapped is not None
+    assert mapped.code == "UNIMPLEMENTED"
+
+
+def test_agfs_resource_limit_maps_to_resource_exhausted():
+    mapped = map_exception(
+        AGFSResourceExhaustedError("blob exceeds configured limit"),
+        resource="viking://user/test/memories/experiences/example.md",
+    )
+
+    assert isinstance(mapped, ResourceExhaustedError)
+    assert mapped.code == "RESOURCE_EXHAUSTED"
 
 
 def test_value_error_invalid_uri_maps_to_invalid_uri():
@@ -198,3 +224,11 @@ def test_lock_acquisition_maps_to_structured_conflict():
         "conflict_type": "path_busy",
         "retryable": True,
     }
+
+
+def test_git_concurrent_commit_maps_to_conflict():
+    err = GitConcurrentCommitError("ref moved")
+    mapped = map_exception(err)
+    assert mapped is not None
+    assert mapped.code == "CONFLICT"
+    assert ERROR_CODE_TO_HTTP_STATUS.get(mapped.code) == 409

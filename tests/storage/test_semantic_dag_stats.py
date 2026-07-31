@@ -2,12 +2,18 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecutor
+from openviking.service.task_work_index import TaskWorkIndex, TaskWorkRejected
+from openviking.storage.queuefs.named_queue import NamedQueue
+from openviking.storage.queuefs.semantic_dag import (
+    DagStats,
+    DagWork,
+    SemanticDagExecutor,
+    SemanticNodeScheduler,
+)
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -16,10 +22,11 @@ class _FakeVikingFS:
         self._tree = tree
         self.writes = []
 
-    async def ls(self, uri, ctx=None):
+    async def ls(self, uri, node_limit=None, ctx=None):
+        del node_limit
         return self._tree.get(uri, [])
 
-    async def write_file(self, path, content, ctx=None):
+    async def write_file(self, path, content, ctx=None, lock_handle=None):
         self.writes.append((path, content))
 
     def _uri_to_path(self, uri, ctx=None):
@@ -37,11 +44,8 @@ class _FakeProcessor:
     async def _generate_overview(self, dir_uri, file_summaries, children_abstracts):
         return "overview"
 
-    def _extract_abstract_from_overview(self, overview):
-        return "abstract"
-
-    def _enforce_size_limits(self, overview, abstract):
-        return overview, abstract
+    def _normalize_overview_generation(self, overview):
+        return overview, "abstract"
 
     async def _vectorize_directory(
         self, uri, context_type, abstract, overview, ctx=None, semantic_msg_id=None
@@ -89,6 +93,25 @@ class _DummyTracker:
         return None
 
 
+class _ScheduledExecutor:
+    def __init__(self, run) -> None:
+        self.closed = False
+        self.failure = None
+        self._run = run
+
+    def _start_scheduled_work(self) -> None:
+        return None
+
+    def _finish_scheduled_work(self) -> None:
+        return None
+
+    async def _run_work(self, _work) -> None:
+        await self._run()
+
+    def fail(self, exc: Exception) -> None:
+        self.failure = exc
+
+
 @pytest.mark.asyncio
 async def test_semantic_dag_stats_collects_nodes(monkeypatch):
     root_uri = "viking://resources/root"
@@ -107,21 +130,6 @@ async def test_semantic_dag_stats_collects_nodes(monkeypatch):
     monkeypatch.setattr(
         "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
         lambda: _DummyTracker(),
-    )
-
-    # Mock lock layer: LockContext as no-op passthrough
-    mock_handle = MagicMock()
-    monkeypatch.setattr(
-        "openviking.storage.transaction.lock_context.LockContext.__aenter__",
-        AsyncMock(return_value=mock_handle),
-    )
-    monkeypatch.setattr(
-        "openviking.storage.transaction.lock_context.LockContext.__aexit__",
-        AsyncMock(return_value=False),
-    )
-    monkeypatch.setattr(
-        "openviking.storage.transaction.get_lock_manager",
-        lambda: MagicMock(),
     )
 
     processor = _FakeProcessor()
@@ -143,7 +151,11 @@ async def test_semantic_dag_stats_collects_nodes(monkeypatch):
     assert stats.in_progress_nodes == 0
     assert processor.vectorized_dirs == [f"{root_uri}/child", root_uri]
     assert sorted(processor.vectorized_files) == sorted(
-        [f"{root_uri}/a.txt", f"{root_uri}/b.txt", f"{root_uri}/child/c.txt"]
+        [
+            f"{root_uri}/a.txt",
+            f"{root_uri}/b.txt",
+            f"{root_uri}/child/c.txt",
+        ]
     )
 
 
@@ -226,6 +238,54 @@ async def test_semantic_dag_shares_node_scheduler_across_roots(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_task_work_rejection_does_not_stop_shared_semantic_worker():
+    work_index = TaskWorkIndex()
+
+    async def finalize_before_ack(_metadata):
+        return None
+
+    work_index.set_callbacks(
+        finalize_before_ack=finalize_before_ack,
+        is_cancellation_requested=lambda _task_id: True,
+    )
+    embedding_queue = NamedQueue(
+        None,
+        "/queue",
+        "Embedding",
+        task_work_index=work_index,
+    )
+    embedding_queue._initialized = True
+    unrelated_ran = asyncio.Event()
+
+    async def rejected_work() -> None:
+        await embedding_queue.enqueue(
+            {
+                "task_id": "task-a",
+                "account_id": "account-a",
+                "user_id": "user-a",
+            }
+        )
+
+    async def unrelated_work() -> None:
+        unrelated_ran.set()
+
+    rejected = _ScheduledExecutor(rejected_work)
+    unrelated = _ScheduledExecutor(unrelated_work)
+    scheduler = SemanticNodeScheduler(max_workers=1)
+    scheduler.submit(rejected, DagWork(kind="vectorize", dir_uri="a"))
+    scheduler.submit(unrelated, DagWork(kind="vectorize", dir_uri="b"))
+
+    await asyncio.wait_for(unrelated_ran.wait(), timeout=0.5)
+    await asyncio.wait_for(scheduler._queue.join(), timeout=0.5)
+    await asyncio.sleep(scheduler._idle_timeout * 2)
+
+    assert isinstance(rejected.failure, TaskWorkRejected)
+    assert unrelated.failure is None
+    assert scheduler._queue.empty()
+    assert all(worker.done() for worker in scheduler._workers)
+
+
+@pytest.mark.asyncio
 async def test_semantic_dag_skip_vectorization_does_not_schedule_tasks(monkeypatch):
     root_uri = "viking://resources/root"
     tree = {
@@ -243,20 +303,6 @@ async def test_semantic_dag_skip_vectorization_does_not_schedule_tasks(monkeypat
     monkeypatch.setattr(
         "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
         lambda: tracker,
-    )
-
-    mock_handle = MagicMock()
-    monkeypatch.setattr(
-        "openviking.storage.transaction.lock_context.LockContext.__aenter__",
-        AsyncMock(return_value=mock_handle),
-    )
-    monkeypatch.setattr(
-        "openviking.storage.transaction.lock_context.LockContext.__aexit__",
-        AsyncMock(return_value=False),
-    )
-    monkeypatch.setattr(
-        "openviking.storage.transaction.get_lock_manager",
-        lambda: MagicMock(),
     )
 
     processor = _FakeProcessor()

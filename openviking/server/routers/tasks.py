@@ -16,7 +16,11 @@ from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
 from openviking.service.task_store import SYSTEM_TASK_ACCOUNT_ID, SYSTEM_TASK_USER_ID
 from openviking.service.task_tracker import get_task_tracker
-from openviking_cli.exceptions import OpenVikingError
+from openviking_cli.exceptions import (
+    FailedPreconditionError,
+    OpenVikingError,
+    PermissionDeniedError,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["tasks"])
 
@@ -51,11 +55,38 @@ async def get_task(
     return Response(status="ok", result=task.to_dict())
 
 
+@router.post("/tasks/{task_id}/cancel")
+async def cancel_task(
+    task_id: str,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Request cooperative cancellation of a background task."""
+    if _ctx.role == Role.ROOT:
+        raise PermissionDeniedError("ROOT may not cancel tasks")
+    tracker = get_task_tracker()
+    try:
+        task = await tracker.cancel(
+            task_id,
+            account_id=_ctx.account_id,
+            user_id=_ctx.user.user_id,
+        )
+    except ValueError as exc:
+        raise FailedPreconditionError(str(exc)) from exc
+    if task is None:
+        raise OpenVikingError(
+            "Task not found or expired",
+            code="NOT_FOUND",
+            details={"resource": task_id, "type": "task"},
+        )
+    return Response(status="ok", result=task.to_dict())
+
+
 @router.get("/tasks")
 async def list_tasks(
     task_type: Optional[str] = Query(None, description="Filter by task type (e.g. session_commit)"),
     status: Optional[str] = Query(
-        None, description="Filter by status (pending/running/completed/failed)"
+        None,
+        description="Filter by status (pending/running/cancelling/completed/failed/cancelled)",
     ),
     resource_id: Optional[str] = Query(None, description="Filter by resource ID (e.g. session_id)"),
     limit: int = Query(50, le=200, description="Max results"),

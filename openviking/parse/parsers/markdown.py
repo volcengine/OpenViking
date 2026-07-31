@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from openviking.parse.accessors.mime_types import IANA_MEDIA_TYPE_TO_EXTENSION
 from openviking.parse.base import NodeType, ParseResult, ResourceNode, create_parse_result
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking.parse.parsers.code.ast.providers import supports_code_skeleton
 from openviking.parse.parsers.constants import (
     CODE_EXTENSIONS,
     DOCUMENTATION_EXTENSIONS,
@@ -83,6 +84,13 @@ def _smart_stem(path_or_name: str | Path) -> str:
 
 
 logger = get_logger(__name__)
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _gh_slug(text: str) -> str:
@@ -154,25 +162,27 @@ class MarkdownParser(BaseParser):
 
     def __init__(
         self,
-        extract_frontmatter: bool = True,
+        extract_frontmatter: Optional[bool] = None,
         config: Optional[ParserConfig] = None,
     ):
         """
         Initialize the enhanced markdown parser.
 
         Args:
-            extract_frontmatter: Whether to extract YAML frontmatter
+            extract_frontmatter: Whether to extract YAML frontmatter. When None, uses config.
             config: Parser configuration (uses default if None)
         """
-        self.extract_frontmatter = extract_frontmatter
         self.config = config or ParserConfig()
+        if extract_frontmatter is None:
+            extract_frontmatter = getattr(self.config, "extract_frontmatter", True)
+        self.extract_frontmatter = extract_frontmatter
 
         # Compile regex patterns for better performance
         self._heading_pattern = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
         self._code_block_pattern = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
         self._inline_code_pattern = re.compile(r"`([^`]+)`")
         self._link_pattern = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
-        self._image_pattern = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+        self._image_pattern = re.compile(r"!\[([^\]]*)\]\(((?:[^()]|\([^()]*\))+)\)")
         self._list_pattern = re.compile(r"^(\s*)[-*+]\s+(.+)$", re.MULTILINE)
         self._numbered_list_pattern = re.compile(r"^(\s*)\d+\.\s+(.+)$", re.MULTILINE)
         self._frontmatter_pattern = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
@@ -340,9 +350,7 @@ class MarkdownParser(BaseParser):
             content, frontmatter = self._extract_frontmatter(content)
             if frontmatter:
                 meta["frontmatter"] = frontmatter
-                logger.debug(
-                    f"[MarkdownParser] Extracted frontmatter: {list(frontmatter.keys())}"
-                )
+                logger.debug(f"[MarkdownParser] Extracted frontmatter: {list(frontmatter.keys())}")
 
         explicit_name = kwargs.get("resource_name")
         if not explicit_name and kwargs.get("source_name"):
@@ -359,7 +367,12 @@ class MarkdownParser(BaseParser):
             else "Document",
         )
         doc_name = self._sanitize_for_path(doc_title)
-        root_dir = f"{temp_uri}/{doc_name}"
+        # Preserve code source filenames as the temp document directory.
+        source_name = kwargs.get("source_name")
+        root_name = (
+            source_name if source_name and supports_code_skeleton(source_name) else doc_name
+        )
+        root_dir = f"{temp_uri}/{self._sanitize_for_path(root_name)}"
 
         # Find all headings
         headings = self._find_headings(content)
@@ -389,18 +402,79 @@ class MarkdownParser(BaseParser):
         """Phase 2 (write only): replay ``layout.ops`` against the real VikingFS —
         create dirs, write each section (rewriting relative links when enabled), then
         ingest the local images those sections reference."""
+        started = time.perf_counter()
         viking_fs = self._get_viking_fs()
+        mkdir_ops = [op for op in layout.ops if op.kind == "mkdir"]
+        write_ops = [op for op in layout.ops if op.kind == "write"]
+        write_chars = sum(len(op.content or "") for op in write_ops)
+
+        rewrite_enabled = bool(
+            self._rewrite_ctx
+            and self._rewrite_ctx.get("enabled")
+            and self._rewrite_ctx.get("source_path")
+            and self._rewrite_ctx.get("import_root")
+        )
+
+        mkdir_started = time.perf_counter()
+        mkdir_count = 0
         for op in layout.ops:
             if op.kind == "mkdir":
                 await viking_fs.mkdir(op.uri, exist_ok=op.exist_ok)
-            else:
-                await self._write_section(op.uri, op.content)
+                mkdir_count += 1
+        mkdir_s = time.perf_counter() - mkdir_started
+
+        write_started = time.perf_counter()
+        for op in write_ops:
+            await self._write_section(op.uri, op.content)
+        write_s = time.perf_counter() - write_started
 
         # Ingest local image files, placing each image next to the markdown file
-        # that references it.
-        await self._ingest_local_images(layout.root_dir, base_dir, allowed_media_dirs)
+        # that references it. For generated tables with no image references, avoid
+        # glob+read over every chunk file we just wrote.
+        images_started = time.perf_counter()
+        has_image_refs = self._layout_has_local_image_refs(write_ops)
+        if has_image_refs:
+            await self._ingest_local_images(layout.root_dir, base_dir, allowed_media_dirs)
+        images_s = time.perf_counter() - images_started
+
+        total_s = time.perf_counter() - started
+        if _env_bool("OPENVIKING_MARKDOWN_APPLY_PROFILE", False):
+            logger.info(
+                f"[MarkdownApplyProfile] total={total_s:.3f}s mkdir={mkdir_s:.3f}s "
+                f"write={write_s:.3f}s images={images_s:.3f}s ops={len(layout.ops)} "
+                f"mkdir_ops={len(mkdir_ops)} mkdir_count={mkdir_count} "
+                f"write_ops={len(write_ops)} write_chars={write_chars} "
+                f"rewrite_enabled={rewrite_enabled} has_image_refs={has_image_refs} "
+                f"root={layout.root_dir}"
+            )
 
     # ========== Helper Methods ==========
+
+    def _layout_has_local_image_refs(self, write_ops: List[_LayoutOp]) -> bool:
+        """Return True when planned markdown content references local images.
+
+        This mirrors the image patterns consumed by _ingest_local_images, but runs
+        against in-memory layout content so pure-text imports avoid a VFS glob/read
+        pass over every generated markdown chunk.
+        """
+        try:
+            from openviking.parse.image_rewrite import HTML_IMG_PATTERN
+        except ImportError:
+            HTML_IMG_PATTERN = re.compile(
+                r"""(<img\s[^>]*?src=["'])([^"']+)(["'][^>]*>)""", re.IGNORECASE
+            )
+
+        for op in write_ops:
+            content = op.content or ""
+            if "![" in content:
+                for match in self._image_pattern.finditer(content):
+                    if not self._is_remote_uri(match.group(2)):
+                        return True
+            if "<img" in content.lower():
+                for match in HTML_IMG_PATTERN.finditer(content):
+                    if not self._is_remote_uri(match.group(2)):
+                        return True
+        return False
 
     def _extract_frontmatter(self, content: str) -> Tuple[str, Optional[Dict[str, Any]]]:
         """
@@ -561,7 +635,7 @@ class MarkdownParser(BaseParser):
         viking_fs = self._get_viking_fs()
 
         # Find all processed markdown files under the root directory
-        glob_result = await viking_fs.glob("*.md", uri=root_dir)
+        glob_result = await viking_fs.glob("**/*.md", uri=root_dir)
         md_uris = glob_result.get("matches", [])
         if not md_uris:
             return
@@ -593,7 +667,6 @@ class MarkdownParser(BaseParser):
             seen_paths = set()
 
             for path_str in image_refs:
-
                 # Skip remote URIs
                 if self._is_remote_uri(path_str):
                     continue
@@ -619,7 +692,7 @@ class MarkdownParser(BaseParser):
             # Copy each local image next to the markdown file, deduplicating names
             used_names: set[str] = set()
             file_mappings: Dict[str, str] = {}  # original_path_str -> unique_filename
-            for origin_link, resolved_path in zip(origin_images_links, local_images):
+            for origin_link, resolved_path in zip(origin_images_links, local_images, strict=False):
                 try:
                     if not await asyncio.to_thread(resolved_path.exists):
                         logger.warning(f"[MarkdownParser] Image file not found: {resolved_path}")
@@ -629,7 +702,9 @@ class MarkdownParser(BaseParser):
                     image_bytes = await asyncio.to_thread(resolved_path.read_bytes)
 
                     # Validate pixel size and file size; skip non-compliant images
-                    if not await asyncio.to_thread(self._is_valid_image, image_bytes, resolved_path):
+                    if not await asyncio.to_thread(
+                        self._is_valid_image, image_bytes, resolved_path
+                    ):
                         continue
 
                     # Get filename and deduplicate
@@ -649,7 +724,9 @@ class MarkdownParser(BaseParser):
                     logger.warning(f"[MarkdownParser] Failed to ingest image {resolved_path}: {e}")
 
             if file_mappings:
-                rel_md_path = md_uri[len(root_prefix) + 1 :] if md_uri.startswith(root_prefix) else md_uri
+                rel_md_path = (
+                    md_uri[len(root_prefix) + 1 :] if md_uri.startswith(root_prefix) else md_uri
+                )
                 mappings[rel_md_path] = file_mappings
 
         # Write a single mapping file at the root directory for rewrite_image_uris
@@ -688,9 +765,7 @@ class MarkdownParser(BaseParser):
 
             # Reject absolute paths: they can point anywhere on the host
             if path.is_absolute():
-                logger.warning(
-                    f"[MarkdownParser] Rejected absolute image path: {path_str}"
-                )
+                logger.warning(f"[MarkdownParser] Rejected absolute image path: {path_str}")
                 return None
 
             # Build the list of allowed roots to confine resolution to.
@@ -760,9 +835,7 @@ class MarkdownParser(BaseParser):
         """
         # File size check (local file path limit: 10 MB)
         if len(image_bytes) > self.IMAGE_MAX_FILE_BYTES:
-            logger.warning(
-                f"[MarkdownParser] Image exceeds 10MB, skipping: {source_path}"
-            )
+            logger.warning(f"[MarkdownParser] Image exceeds 10MB, skipping: {source_path}")
             return False
 
         # Pixel size check
@@ -932,20 +1005,15 @@ class MarkdownParser(BaseParser):
                     rel
                     for rel, text in layout.items()
                     if any(
-                        _gh_slug(h) == anchor
-                        for h in re.findall(r"^#{1,6}\s+(.+)$", text, re.M)
+                        _gh_slug(h) == anchor for h in re.findall(r"^#{1,6}\s+(.+)$", text, re.M)
                     )
                 ]
                 if len(hits) == 1:
-                    return _to_rel(
-                        os.path.join(target_parent, hits[0]), keep_suffix=True
-                    )
+                    return _to_rel(os.path.join(target_parent, hits[0]), keep_suffix=True)
             # B) Single-file document (a bare file, or a directory holding exactly one
             #    file) → the anchor/query lives in that one file; keep the suffix.
             if len(layout) == 1:
-                return _to_rel(
-                    os.path.join(target_parent, next(iter(layout))), keep_suffix=True
-                )
+                return _to_rel(os.path.join(target_parent, next(iter(layout))), keep_suffix=True)
 
         # C) Single bare file with no suffix to place (e.g. a future small .md kept as
         #    a file) → point at the file itself (empty suffix ⇒ no trailing slash).
@@ -971,9 +1039,7 @@ class MarkdownParser(BaseParser):
             if resolved is not None:
                 try:
                     image_bytes = await asyncio.to_thread(resolved.read_bytes)
-                    handled = await asyncio.to_thread(
-                        self._is_valid_image, image_bytes, resolved
-                    )
+                    handled = await asyncio.to_thread(self._is_valid_image, image_bytes, resolved)
                 except Exception:
                     handled = False
             cache[link] = handled

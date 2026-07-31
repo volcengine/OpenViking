@@ -13,6 +13,7 @@
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { deriveCodexSessionId } from "./shared/session-model.mjs";
 
 const DEFAULT_STATE_DIR = join(homedir(), ".openviking", "codex-plugin-state");
 
@@ -25,13 +26,14 @@ function safeId(codexSessionId) {
 }
 
 export function deriveOvSessionId(codexSessionId) {
-  return `cx-${safeId(codexSessionId || "unknown")}`;
+  return deriveCodexSessionId(codexSessionId);
 }
 
 export function resolveOvSessionId(state) {
-  // Keep legacy persisted UUIDs so already-captured turns are not orphaned
-  // before their next commit. Fresh or cleared state derives the cx-* id.
-  if (state.ovSessionId) return state.ovSessionId;
+  // Always derive the deterministic cx-* id. Legacy persisted UUIDs from
+  // before the cx-* scheme are no longer preserved: the migration window
+  // has closed and keeping them would desync recall (which derives cx-*)
+  // from capture (which used to echo back the legacy value).
   state.ovSessionId = deriveOvSessionId(state.codexSessionId);
   return state.ovSessionId;
 }
@@ -45,6 +47,7 @@ function defaultState(codexSessionId) {
   return {
     codexSessionId,
     ovSessionId: null,
+    workspacePeerId: "",
     capturedTurnCount: 0,
     createdAt: now,
     lastUpdatedAt: now,

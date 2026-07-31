@@ -42,7 +42,7 @@ Create a new session. Sessions are containers for conversations, storing message
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | session_id | str | No | None | Session ID. Creates new session with auto-generated ID if None |
-| memory_policy | object | No | None | Default memory extraction policy for the session. Optional `self` and `peer` switches control write targets, and optional top-level `memory_types` limits extraction to specific enabled memory schemas. When `memory_types` is omitted or `null`, all enabled memory schemas are allowed. Invalid shapes or unknown memory types are rejected with `InvalidArgumentError`. |
+| memory_policy | object | No | None | Default memory extraction policy for the session. Optional `self` and `peer` switches control write targets, optional `working_memory.enabled=false` skips archive summaries, and optional top-level `memory_types` limits extraction to specific enabled memory schemas. When `memory_types` is omitted or `null`, all enabled memory schemas are allowed. Invalid shapes or unknown memory types are rejected with `InvalidArgumentError`. |
 
 #### 3. Usage Examples
 
@@ -80,6 +80,25 @@ print(f"Session ID: {result['session_id']}")
 # Create new session with specified ID
 result = await client.create_session(session_id="my-custom-session-id")
 print(f"Session ID: {result['session_id']}")
+```
+
+**TypeScript SDK**
+
+```typescript
+const session = await client.createSession();
+console.log(session);
+```
+
+**Go SDK**
+
+```go
+session, err := client.CreateSession(ctx, &openviking.CreateSessionOptions{
+    SessionID: "my-custom-session-id",
+})
+if err != nil {
+    return err
+}
+fmt.Println(session["session_id"])
 ```
 
 **CLI**
@@ -147,6 +166,24 @@ client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
 sessions = await client.list_sessions()
 for s in sessions:
     print(f"{s['session_id']} -> {s['uri']}")
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.listSessions());
+```
+
+**Go SDK**
+
+```go
+sessions, err := client.ListSessions(ctx)
+if err != nil {
+    return err
+}
+for _, session := range sessions {
+    fmt.Println(session)
+}
 ```
 
 **CLI**
@@ -236,6 +273,32 @@ print(f"Commits: {info['commit_count']}")
 info = await client.get_session("a1b2c3d4", auto_create=True)
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.getSession("session-id"));
+```
+
+**Go SDK**
+
+```go
+// Get an existing session.
+info, err := client.GetSession(ctx, "a1b2c3d4", nil)
+if err != nil {
+    return err
+}
+fmt.Println(info["message_count"])
+
+// Get or create session.
+info, err = client.GetSession(ctx, "a1b2c3d4", &openviking.GetSessionOptions{
+    AutoCreate: true,
+})
+if err != nil {
+    return err
+}
+fmt.Println(info["session_id"])
+```
+
 **CLI**
 
 ```bash
@@ -259,11 +322,14 @@ ov session get a1b2c3d4
       "preferences": 2,
       "entities": 3,
       "events": 1,
+      "identity": 1,
+      "soul": 1,
       "cases": 2,
-      "patterns": 1,
+      "trajectories": 1,
+      "experiences": 2,
       "tools": 0,
       "skills": 0,
-      "total": 10
+      "total": 14
     },
     "last_commit_at": "2026-03-23T11:00:00+08:00",
     "llm_token_usage": {
@@ -281,6 +347,145 @@ ov session get a1b2c3d4
   }
 }
 ```
+
+---
+
+### list_tool_results()
+
+List large tool results externalized from a session.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `session_id` | string | Yes | - | Session ID |
+| `tool_name` | string | No | - | Filter by tool name |
+| `limit` | integer | No | `50` | Maximum results |
+
+**HTTP API**
+
+```http
+GET /api/v1/sessions/{session_id}/tool-results
+```
+
+```bash
+curl --get http://localhost:1933/api/v1/sessions/session-id/tool-results \
+  -H "X-API-Key: your-key" \
+  --data-urlencode "tool_name=search" \
+  --data-urlencode "limit=50"
+```
+
+**Response example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "tool_results": [
+      {
+        "tool_result_id": "tr_search_a1b2c3",
+        "tool_name": "search",
+        "original_chars": 48210,
+        "preview_chars": 2000,
+        "mime_type": "text/plain",
+        "synopsis_kind": "text",
+        "storage_uri": "viking://user/default/sessions/session-id/tool-results/tr_search_a1b2c3",
+        "offset_unit": "unicode_code_point"
+      }
+    ]
+  }
+}
+```
+
+### read_tool_result()
+
+Read one externalized tool result by Unicode character range.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `session_id` | string | Yes | - | Session ID |
+| `tool_result_id` | string | Yes | - | Tool-result ID |
+| `offset` | integer | No | `0` | Starting character offset |
+| `limit` | integer | No | `20000` | Maximum characters; `-1` reads to the end |
+| `include_metadata` | boolean | No | `true` | Include metadata in the response |
+
+**HTTP API**
+
+```http
+GET /api/v1/sessions/{session_id}/tool-results/{tool_result_id}
+```
+
+```bash
+curl --get http://localhost:1933/api/v1/sessions/session-id/tool-results/tool-result-id \
+  -H "X-API-Key: your-key" \
+  --data-urlencode "offset=0" \
+  --data-urlencode "limit=20000"
+```
+
+**Response example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "tool_result_id": "tr_search_a1b2c3",
+    "content": "A chunk of the tool output...",
+    "offset": 0,
+    "limit": 20000,
+    "offset_unit": "unicode_code_point",
+    "total_chars": 48210,
+    "has_more": true,
+    "metadata": {
+      "tool_name": "search",
+      "mime_type": "text/plain",
+      "sha256": "..."
+    }
+  }
+}
+```
+
+`metadata` is omitted when `include_metadata=false`. To continue reading, set the next request's `offset` to the current `offset` plus the Unicode character count of `content`.
+
+### search_tool_result()
+
+Search within one externalized tool result and return context around each match.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `q` | string | Yes | - | Search text |
+| `limit` | integer | No | `20` | Maximum matches |
+| `context_chars` | integer | No | `300` | Context characters around each match |
+
+**HTTP API**
+
+```http
+GET /api/v1/sessions/{session_id}/tool-results/{tool_result_id}/search?q={query}
+```
+
+```bash
+curl --get http://localhost:1933/api/v1/sessions/session-id/tool-results/tool-result-id/search \
+  -H "X-API-Key: your-key" \
+  --data-urlencode "q=authentication" \
+  --data-urlencode "limit=20"
+```
+
+**Response example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "tool_result_id": "tr_search_a1b2c3",
+    "matches": [
+      {
+        "offset": 1284,
+        "offset_unit": "unicode_code_point",
+        "snippet": "...authentication failed because..."
+      }
+    ]
+  }
+}
+```
+
+These endpoints are currently used by the Server and Web Studio. The public SDKs and CLI do not wrap them, so the sections above show only the HTTP tab.
 
 ---
 
@@ -340,6 +545,22 @@ client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
 context = await client.get_session_context("a1b2c3d4", token_budget=128000)
 print(context["latest_archive_overview"])
 print(len(context["messages"]))
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.getSessionContext("session-id"));
+```
+
+**Go SDK**
+
+```go
+contextPayload, err := client.GetSessionContext(ctx, "a1b2c3d4", 128000)
+if err != nil {
+    return err
+}
+fmt.Println(contextPayload["latest_archive_overview"])
 ```
 
 **CLI**
@@ -436,6 +657,22 @@ print(archive["overview"])
 print(len(archive["messages"]))
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.getSessionArchive("session-id", "archive-id"));
+```
+
+**Go SDK**
+
+```go
+archive, err := client.GetSessionArchive(ctx, "a1b2c3d4", "archive_002")
+if err != nil {
+    return err
+}
+fmt.Println(archive["archive_id"])
+```
+
 **CLI**
 
 ```bash
@@ -530,6 +767,20 @@ client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
 
 # Delete session
 await client.delete_session("a1b2c3d4")
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.deleteSession("session-id");
+```
+
+**Go SDK**
+
+```go
+if err := client.DeleteSession(ctx, "a1b2c3d4"); err != nil {
+    return err
+}
 ```
 
 **CLI**
@@ -719,6 +970,25 @@ await client.add_message(
 )
 ```
 
+**TypeScript SDK**
+
+```typescript
+await client.addMessage("session-id", { role: "user", content: "Hello" });
+```
+
+**Go SDK**
+
+```go
+result, err := client.AddMessage(ctx, "a1b2c3d4", "user", openviking.AddMessageOptions{
+    Content: openviking.String("How do I authenticate users?"),
+    PeerID:  "web-visitor-alice",
+})
+if err != nil {
+    return err
+}
+fmt.Println(result["message_count"])
+```
+
 **CLI**
 
 ```bash
@@ -809,6 +1079,29 @@ result = await client.batch_add_messages(
 print(f"Added: {result['added']}, Total: {result['message_count']}")
 ```
 
+**TypeScript SDK**
+
+```typescript
+await client.batchAddMessages("session-id", [
+  { role: "user", content: "Hello" },
+  { role: "assistant", content: "Hi" },
+]);
+```
+
+**Go SDK**
+
+```go
+result, err := client.BatchAddMessages(ctx, "a1b2c3d4", []openviking.Message{
+    {Role: "user", Content: openviking.String("How do I authenticate users?")},
+    {Role: "assistant", Content: openviking.String("You can use OAuth 2.0 for authentication.")},
+    {Role: "user", Content: openviking.String("Any specific recommendations?")},
+}, nil)
+if err != nil {
+    return err
+}
+fmt.Println(result["added"], result["message_count"])
+```
+
 **CLI**
 
 ```bash
@@ -877,31 +1170,6 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
   -d '{"skill": {"uri": "viking://user/skills/search-web/", "input": {"query": "OAuth"}, "output": "Results...", "success": true}}'
 ```
 
-**Python SDK**
-
-```python
-import openviking as ov
-
-client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
-
-# Record used contexts
-await client.session_used(
-    session_id="a1b2c3d4",
-    contexts=["viking://resources/docs/auth/"]
-)
-
-# Record used skill
-await client.session_used(
-    session_id="a1b2c3d4",
-    skill={
-        "uri": "viking://user/skills/search-web/",
-        "input": {"query": "OAuth"},
-        "output": "Results...",
-        "success": True
-    }
-)
-```
-
 **Response Example**
 
 ```json
@@ -922,7 +1190,7 @@ await client.session_used(
 
 #### 1. API Implementation Introduction
 
-Commit a session. Message archiving (Phase 1) completes immediately. Summary generation and memory extraction (Phase 2) run asynchronously in the background. Returns a `task_id` for polling status.
+Commit a session. Message archiving (Phase 1) completes immediately. Summary generation and memory extraction (Phase 2) run asynchronously in the background when messages are archived. Archived commits return `status: "accepted"` with a `task_id`; no-op commits return `status: "skipped"` with `task_id: null`.
 
 **Two-Phase Commit Flow:**
 - **Phase 1 (Synchronous)**: Snapshot current messages, clear live session, create archive directory, write original messages
@@ -930,8 +1198,10 @@ Commit a session. Message archiving (Phase 1) completes immediately. Summary gen
 
 **Notes:**
 - Rapid consecutive commits on the same session are accepted; each request gets its own `task_id`.
+- Empty sessions, or commits where all messages remain inside `keep_recent_count`, complete synchronously with `archived: false`.
 - Background Phase 2 work is serialized by archive order: archive `N+1` waits until archive `N` writes `.done`.
 - If an earlier archive failed and left no `.done`, later commit requests fail with `FAILED_PRECONDITION` until that failure is resolved.
+- If committed messages contain durable facts, judgments, preferences, or events that mention `viking://resources/...`, memory extraction preserves the resource as a markdown link and records it in `MEMORY_FIELDS.resource_refs`.
 
 **Code Entries:**
 - `openviking/session/session.py:Session.commit_async()` - Core implementation
@@ -987,6 +1257,31 @@ if task["status"] == "completed":
     print(f"Memories extracted: {total}")
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.commitSession("session-id"));
+```
+
+**Go SDK**
+
+```go
+commit, err := client.CommitSession(ctx, "a1b2c3d4", &openviking.CommitSessionOptions{
+    KeepRecentCount: 0,
+})
+if err != nil {
+    return err
+}
+fmt.Println(commit["status"], commit["task_id"])
+
+taskID, _ := commit["task_id"].(string)
+task, err := client.GetTask(ctx, taskID)
+if err != nil {
+    return err
+}
+fmt.Println(task["status"])
+```
+
 **CLI**
 
 ```bash
@@ -1008,13 +1303,29 @@ ov session commit a1b2c3d4
 }
 ```
 
+**No-op Response Example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "session_id": "a1b2c3d4",
+    "status": "skipped",
+    "task_id": null,
+    "archive_uri": null,
+    "archived": false,
+    "reason": "no_messages"
+  }
+}
+```
+
 ---
 
 ### extract()
 
 #### 1. API Implementation Introduction
 
-HTTP API only. Trigger memory extraction immediately for an existing session without creating a new commit task.
+Trigger memory extraction immediately for an existing session without creating a new commit task.
 
 **Code Entries:**
 - `openviking/server/routers/sessions.py:extract_session()` - HTTP route
@@ -1045,170 +1356,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/extract \
 
 The endpoint returns the extracted memory write results as a JSON list. The exact item shape depends on which memories were produced for that session.
 
----
-
-### get_task()
-
-#### 1. API Implementation Introduction
-
-Query background task status for APIs that return `task_id`, such as session commit, `add_resource`, and admin reindex.
-
-**Task Statuses:**
-- `pending`: Task waiting to execute
-- `running`: Task in progress
-- `completed`: Task successfully completed
-- `failed`: Task failed
-
-**Code Entries:**
-- `openviking/server/routers/tasks.py:get_task()` - HTTP route
-
-Task records are persisted in AGFS and can be queried after server restart, subject to task retention cleanup.
-
-#### 2. Interface and Parameter Description
-
-**Parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| task_id | str | Yes | - | Task ID returned by a background API |
-
-#### 3. Usage Examples
-
-**HTTP API**
-
-```http
-GET /api/v1/tasks/{task_id}
-```
-
-```bash
-curl -X GET http://localhost:1933/api/v1/tasks/uuid-xxx \
-  -H "X-API-Key: your-key"
-```
-
-**Python SDK**
-
-```python
-import openviking as ov
-
-client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
-
-task = await client.get_task(task_id="uuid-xxx")
-print(f"Status: {task['status']}")
-```
-
-**Response Example (resource import in progress)**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "task_id": "uuid-xxx",
-    "task_type": "add_resource",
-    "status": "running",
-    "resource_id": "viking://resources/guide",
-    "stage": "processing_queue"
-  }
-}
-```
-
-`stage` is nullable. Git repository resource import tasks may report `queued`, `fetching`, `parsing`, `finalizing`, or `processing_queue`; other task types may leave it as `null`. Live queue counters are intentionally not part of task status; use observer queue APIs for live counts, or read `result.queue_status` after completion.
-
-**Response Example (completed)**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "task_id": "uuid-xxx",
-    "task_type": "session_commit",
-    "status": "completed",
-    "result": {
-      "session_id": "a1b2c3d4",
-      "archive_uri": "viking://user/alice/sessions/a1b2c3d4/history/archive_001",
-      "memories_extracted": {
-        "profile": 1,
-        "preferences": 2,
-        "entities": 1,
-        "cases": 1
-      },
-      "active_count_updated": 2,
-      "token_usage": {
-        "llm": {
-          "prompt_tokens": 5200,
-          "completion_tokens": 1800,
-          "total_tokens": 7000
-        },
-        "embedding": {
-          "total_tokens": 1500
-        },
-        "total": {
-          "total_tokens": 8500
-        }
-      }
-    }
-  }
-}
-```
-
-`memories_extracted` in the completed task result reports per-category counts for this commit only. Sum its values when you want the total for this commit.
-
----
-
-### list_tasks()
-
-#### 1. API Implementation Introduction
-
-HTTP API only. List background tasks visible to the current caller, supporting filtering by type, status, resource.
-
-**Code Entries:**
-- `openviking/server/routers/tasks.py:list_tasks()` - HTTP route
-
-#### 2. Interface and Parameter Description
-
-**Parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| task_type | str | No | None | Filter by task type, for example `session_commit` |
-| status | str | No | None | Filter by task status: `pending`, `running`, `completed`, `failed` |
-| resource_id | str | No | None | Filter by task resource ID, for example a session ID |
-| limit | int | No | 50 | Maximum number of task records to return |
-
-#### 3. Usage Examples
-
-**HTTP API**
-
-```http
-GET /api/v1/tasks?task_type=session_commit&status=running&limit=20
-```
-
-```bash
-curl -X GET "http://localhost:1933/api/v1/tasks?task_type=session_commit&status=running&limit=20" \
-  -H "X-API-Key: your-key"
-```
-
-**Response Example**
-
-```json
-{
-  "status": "ok",
-  "result": [
-    {
-      "task_id": "uuid-xxx",
-      "task_type": "session_commit",
-      "status": "running",
-      "resource_id": "a1b2c3d4",
-      "created_at": 1770000000.0,
-      "updated_at": 1770000005.0,
-      "result": null,
-      "error": null,
-      "stage": null
-    }
-  ]
-}
-```
-
----
+<a id="get_task"></a><a id="list_tasks"></a>
 
 ## Session Properties
 
@@ -1240,7 +1388,7 @@ viking://user/{user_id}/sessions/{session_id}/
     |   +-- .abstract.md      # Written in Phase 2 (background)
     |   +-- .overview.md      # Written in Phase 2 (background)
     |   +-- .meta.json        # Archive metadata
-    |   +-- memory_diff.json  # Written in Phase 2 (background, on memory changes)
+    |   +-- memory_diff.json  # Written when long-term memory extraction completes
     |   +-- .done             # Phase 2 completion marker
     |   +-- .failed.json      # Phase 2 failure marker
     +-- archive_002/
@@ -1248,7 +1396,7 @@ viking://user/{user_id}/sessions/{session_id}/
 
 ### memory_diff.json Structure
 
-Each commit writes a `memory_diff.json` to the archive directory, recording all memory changes for auditing and rollback:
+When long-term memory extraction runs successfully, the commit writes a `memory_diff.json` to the archive directory, recording all memory changes for auditing and rollback:
 
 ```json
 {
@@ -1297,24 +1445,9 @@ Each commit writes a `memory_diff.json` to the archive directory, recording all 
 | `summary.total_updates` | int | Number of modified memories |
 | `summary.total_deletes` | int | Number of deleted memories |
 
-An empty `memory_diff.json` (all counts zero) is written even when no memory operations occurred.
+An empty `memory_diff.json` (all counts zero) is written when long-term memory extraction runs but produces no memory operations.
 
----
-
-## Memory Categories
-
-| Category | Location | Description |
-|----------|----------|-------------|
-| profile | `user/memories/profile.md` | User profile information |
-| preferences | `user/memories/preferences/` | User preferences by topic |
-| entities | `user/memories/entities/` | Important entities (people, projects) |
-| events | `user/memories/events/` | Significant events |
-| trajectories | `user/memories/trajectories/` | Reusable operation contracts |
-| experiences | `user/memories/experiences/` | Reusable execution insights |
-| tools | `user/memories/tools/` | Tool usage knowledge and best practices |
-| skills | `user/memories/skills/` | Skill execution knowledge and workflow strategies |
-
----
+<a id="built-in-memory-types"></a>
 
 ## Full Example
 
@@ -1356,13 +1489,6 @@ if results.resources:
             )
         ]
     )
-
-    # Track actually used contexts
-    await client.session_used(
-        session_id=session_id,
-        contexts=[results.resources[0].uri]
-    )
-
 # Commit session (returns immediately; summary + memory extraction runs in background)
 commit_result = await client.commit_session(session_id)
 print(f"Task ID: {commit_result['task_id']}")
@@ -1430,14 +1556,6 @@ if session_info["message_count"] > 10:
     await client.commit_session(session_id)
 ```
 
-### Track What's Actually Used
-
-```python
-# Only mark contexts that were actually helpful
-if context_was_useful:
-    await client.session_used(session_id=session_id, contexts=[ctx.uri])
-```
-
 ### Use Session Context for Search
 
 ```python
@@ -1450,5 +1568,7 @@ results = await client.search(query, session_id=session_id)
 ## Related Documentation
 
 - [Context Types](../concepts/02-context-types.md) - Memory types
+- [Memory](16-memory.md) - memory types and type-quota recall
 - [Retrieval](06-retrieval.md) - Search with session
 - [Resources](02-resources.md) - Resource management
+- [Background Tasks](17-tasks.md) - track commit tasks

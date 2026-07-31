@@ -28,7 +28,7 @@ class LocalAccessor(DataAccessor):
     - Provides clear local source type metadata
     """
 
-    def can_handle(self, source: Union[str, Path]) -> bool:
+    def can_handle(self, source: Union[str, Path], **kwargs) -> bool:
         """
         Check if this accessor can handle the source.
 

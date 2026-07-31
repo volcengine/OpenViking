@@ -19,8 +19,10 @@ import { formatSize, normalizeReadContent } from '../-lib/normalize'
 import { fetchDirectoryLevelContent, saveFileContent } from '../-lib/api'
 import {
   useVikingFilePreview,
+  useVikingFsStat,
   useInvalidateVikingFs,
 } from '../-hooks/viking-fm'
+import { useJsonFormat } from '../-hooks/use-json-format'
 import type { VikingFsEntry } from '../-types/viking-fm'
 import type { CodeEditorHandle } from './code-editor'
 
@@ -134,7 +136,10 @@ const DIRECTORY_LEVEL_META: Array<{
 ]
 
 const JSONL_MESSAGE_PREVIEW_LIMIT = 720
+const LARGE_FILE_PREVIEW_BYTES = 2 * 1024 * 1024
 const JSONL_TOOLCALL_STORAGE_KEY = 'openviking.playground.jsonlToolCall'
+const COLLAPSE_SYMBOL = '▾'
+const EXPAND_SYMBOL = '▸'
 
 type JsonlRecord = {
   error: Error | null
@@ -776,7 +781,7 @@ function JsonlRawRow({ record }: { record: JsonlRecord }) {
         onClick={() => setOpen((current) => !current)}
       >
         <span>{record.index + 1}</span>
-        <span>{open ? '▾' : '▸'}</span>
+        <span aria-hidden="true">{open ? COLLAPSE_SYMBOL : EXPAND_SYMBOL}</span>
       </button>
       <div className="min-w-0 px-3 py-2">
         {open ? (
@@ -813,6 +818,7 @@ function JsonlRawRow({ record }: { record: JsonlRecord }) {
 }
 
 function JsonlToolBody({ text, toolName }: { text: string; toolName: string }) {
+  const { t } = useTranslation('resources')
   const afterTag = text.replace(/^\[tool:\s*[^\]]+\]\s*/, '')
   const parsed = useMemo(() => {
     if (!toolName || !afterTag.trim()) return null
@@ -829,25 +835,27 @@ function JsonlToolBody({ text, toolName }: { text: string; toolName: string }) {
     </pre>
   ) : (
     <pre className="whitespace-pre-wrap break-words text-xs leading-5">
-      {afterTag || 'No arguments'}
+      {afterTag || t('filePreview.jsonl.noArguments')}
     </pre>
   )
 }
 
 function JsonlMarkdownBody({ content }: { content: string }) {
+  const { t } = useTranslation('resources')
   return (
     <div className="prose prose-sm max-w-none break-words dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={markdownComponents}
       >
-        {content || 'Empty message'}
+        {content || t('filePreview.jsonl.emptyMessage')}
       </ReactMarkdown>
     </div>
   )
 }
 
 function JsonlMessageCard({ record }: { record: JsonlRecord }) {
+  const { t } = useTranslation('resources')
   const [expanded, setExpanded] = useState(false)
   const message = useMemo(() => getJsonlMessage(record), [record])
   const isTool = Boolean(message.toolName || message.kind === 'tool-result')
@@ -893,7 +901,7 @@ function JsonlMessageCard({ record }: { record: JsonlRecord }) {
         <JsonlMarkdownBody content={body} />
       ) : (
         <pre className="whitespace-pre-wrap break-words text-xs leading-5">
-          {body || 'Empty message'}
+          {body || t('filePreview.jsonl.emptyMessage')}
         </pre>
       )}
 
@@ -908,7 +916,9 @@ function JsonlMessageCard({ record }: { record: JsonlRecord }) {
             className="ml-auto rounded border px-2 py-0.5 font-medium text-primary hover:border-primary"
             onClick={() => setExpanded((current) => !current)}
           >
-            {expanded ? 'Collapse' : 'Expand'}
+            {expanded
+              ? t('filePreview.jsonl.collapse')
+              : t('filePreview.jsonl.expand')}
           </button>
         ) : null}
       </div>
@@ -917,6 +927,7 @@ function JsonlMessageCard({ record }: { record: JsonlRecord }) {
 }
 
 function JsonlPreview({ content }: { content: string }) {
+  const { t } = useTranslation('resources')
   const [dialogMode, setDialogMode] = useState(true)
   const [showTools, setShowTools] = useState(() => {
     if (typeof window === 'undefined') return true
@@ -943,7 +954,7 @@ function JsonlPreview({ content }: { content: string }) {
   if (!records.length) {
     return (
       <div className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">
-        Empty JSONL.
+        {t('filePreview.jsonl.emptyJsonl')}
       </div>
     )
   }
@@ -952,12 +963,14 @@ function JsonlPreview({ content }: { content: string }) {
     <div className="grid gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
         <span className="font-medium text-primary">
-          {records.length} record{records.length === 1 ? '' : 's'}
+          {t('filePreview.jsonl.recordCount', { count: records.length })}
         </span>
         <div className="flex items-center gap-2">
           {dialogMode && hasTools ? (
             <label className="inline-flex cursor-pointer items-center gap-2">
-              <span className="font-medium">toolcall</span>
+              <span className="font-medium">
+                {t('filePreview.jsonl.toolcall')}
+              </span>
               <input
                 type="checkbox"
                 className="peer sr-only"
@@ -975,7 +988,9 @@ function JsonlPreview({ content }: { content: string }) {
           ) : null}
           <label className="inline-flex cursor-pointer items-center gap-2">
             <span className="font-medium">
-              {dialogMode ? 'Dialog' : 'JSONL'}
+              {dialogMode
+                ? t('filePreview.jsonl.dialogMode')
+                : t('filePreview.jsonl.rawMode')}
             </span>
             <input
               type="checkbox"
@@ -1012,25 +1027,52 @@ export function FilePreview({
   showCloseButton = true,
 }: FilePreviewProps) {
   const { t } = useTranslation('resources')
+  const isJsonPath = Boolean(
+    file && !file.isDir && file.name.toLowerCase().endsWith('.json'),
+  )
+  const needsMetadata = Boolean(
+    isJsonPath && file && (file.sizeBytes === null || !file.modTime),
+  )
+  const statQuery = useVikingFsStat(needsMetadata ? file?.uri : undefined)
+  const resolvedFile = useMemo(() => {
+    if (!file || !statQuery.data || statQuery.data.uri !== file.uri) {
+      return file
+    }
+    return {
+      ...file,
+      ...statQuery.data,
+    }
+  }, [file, statQuery.data])
+  const isJsonFile = isJsonPath
   const previewQuery = useVikingFilePreview(
-    file,
+    resolvedFile,
     {
-      maxAutoReadBytes: 2 * 1024 * 1024,
+      maxAutoReadBytes: LARGE_FILE_PREVIEW_BYTES,
       defaultReadLimit: -1,
+      requireKnownSize: isJsonFile,
     },
     {
       raw: true,
     },
   )
   const preview = previewQuery.preview
+  const metadataLoading = needsMetadata && statQuery.isPending
+  const hasPreviewContent =
+    Boolean(preview?.shouldAutoRead) || previewQuery.isContentLoaded
+  const previewLoading = metadataLoading || previewQuery.isLoading
   const displayContent = useMemo(
     () => memoryFieldsDisplayContent(preview?.content || ''),
     [preview?.content],
+  )
+  const jsonFormat = useJsonFormat(
+    displayContent,
+    isJsonFile && hasPreviewContent,
   )
   const directoryPreview = useDirectoryPreview(file)
   const [markdownMode, setMarkdownMode] = useState<'preview' | 'source'>(
     'preview',
   )
+  const [jsonMode, setJsonMode] = useState<'preview' | 'source'>('preview')
   const [activeDirectoryLevels, setActiveDirectoryLevels] = useState<
     Set<DirectoryLevelId>
   >(new Set(['abstract', 'overview']))
@@ -1049,6 +1091,7 @@ export function FilePreview({
 
   useEffect(() => {
     setMarkdownMode('preview')
+    setJsonMode('preview')
     setEditing(false)
     setActiveDirectoryLevels(new Set(['abstract', 'overview']))
   }, [file?.uri])
@@ -1070,7 +1113,7 @@ export function FilePreview({
   const [highlightedCodeHtml, setHighlightedCodeHtml] = useState('')
 
   const needsHighlight =
-    preview?.fileType === 'code' ||
+    (preview?.fileType === 'code' && !isJsonFile) ||
     (preview?.fileType === 'markdown' && markdownMode === 'source')
 
   useEffect(() => {
@@ -1196,11 +1239,18 @@ export function FilePreview({
     activeDirectoryLevels.has(level.id),
   )
   const showHeader = !(hideDirectoryHeader && file.isDir)
+  const previewFile = resolvedFile || file
+  const showJsonPreview =
+    !editing &&
+    !previewLoading &&
+    preview?.fileType === 'code' &&
+    hasPreviewContent &&
+    isJsonFile
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       {showHeader ? (
-        <div className="flex min-h-14 items-center justify-between border-b px-4">
+        <div className="flex min-h-14 shrink-0 items-center justify-between border-b px-4">
           <div className="flex min-w-0 items-center gap-2">
             <div className="min-w-0">
               <div className="truncate text-sm font-medium leading-5">
@@ -1208,8 +1258,8 @@ export function FilePreview({
               </div>
               {!file.isDir ? (
                 <div className="text-xs leading-5 text-muted-foreground">
-                  {formatSize(file.sizeBytes ?? file.size)} ·{' '}
-                  {file.modTime || '-'}
+                  {formatSize(previewFile.sizeBytes ?? previewFile.size)} ·{' '}
+                  {previewFile.modTime || '-'}
                 </div>
               ) : null}
             </div>
@@ -1265,7 +1315,7 @@ export function FilePreview({
       ) : null}
 
       {editing && preview?.content != null ? (
-        <div className="h-full min-h-0 p-2">
+        <div className="min-h-0 flex-1 p-2">
           <Suspense
             fallback={
               <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
@@ -1282,8 +1332,80 @@ export function FilePreview({
             />
           </Suspense>
         </div>
+      ) : showJsonPreview ? (
+        <div className="min-h-0 flex-1 p-2">
+          <div className="flex h-full min-h-0 flex-col">
+            <div className="mb-2 inline-flex shrink-0 self-start overflow-hidden rounded-md border">
+              <button
+                type="button"
+                className={`px-3 py-1.5 text-xs ${
+                  jsonMode === 'preview'
+                    ? 'bg-muted font-medium text-foreground'
+                    : 'text-muted-foreground hover:bg-muted/60'
+                }`}
+                onClick={() => setJsonMode('preview')}
+              >
+                {t('filePreview.markdownPreview')}
+              </button>
+              <button
+                type="button"
+                className={`px-3 py-1.5 text-xs ${
+                  jsonMode === 'source'
+                    ? 'bg-muted font-medium text-foreground'
+                    : 'text-muted-foreground hover:bg-muted/60'
+                }`}
+                onClick={() => setJsonMode('source')}
+              >
+                {t('filePreview.markdownSource')}
+              </button>
+            </div>
+
+            {jsonMode === 'preview' && jsonFormat.isFormatting ? (
+              <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-muted-foreground">
+                <Loader2 className="mr-2 size-4 animate-spin" />
+                {t('filePreview.formattingJson')}
+              </div>
+            ) : (
+              <div className="flex min-h-0 flex-1 flex-col gap-2">
+                {jsonMode === 'preview' && jsonFormat.error ? (
+                  <div className="shrink-0 text-xs text-destructive">
+                    {t('filePreview.jsonFormatFailed')}
+                  </div>
+                ) : null}
+                <div className="min-h-0 flex-1">
+                  <Suspense
+                    fallback={
+                      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                        <Loader2 className="mr-2 size-4 animate-spin" />
+                        {t('filePreview.loadingEditor')}
+                      </div>
+                    }
+                  >
+                    <LazyCodeEditor
+                      initialContent={
+                        jsonMode === 'preview'
+                          ? jsonFormat.content
+                          : displayContent
+                      }
+                      filename={previewFile.name}
+                      isDark={isDark}
+                      readOnly
+                      appearance={jsonMode === 'preview' ? 'plain' : 'editor'}
+                      enableLanguageSupport={
+                        (previewFile.sizeBytes ?? 0) <= LARGE_FILE_PREVIEW_BYTES
+                      }
+                      lineWrapping={
+                        jsonMode === 'source' || Boolean(jsonFormat.error)
+                      }
+                    />
+                  </Suspense>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       ) : (
-        <ScrollArea className="h-full min-h-0">
+        <ScrollArea className="min-h-0 flex-1">
           <div className="mx-auto min-h-full w-full max-w-5xl p-4">
             {isMarkdown && !editing ? (
               <div className="mb-3 inline-flex overflow-hidden rounded-md border">
@@ -1355,11 +1477,11 @@ export function FilePreview({
                   </div>
                 ) : availableDirectoryLevels.length === 0 ? (
                   <div className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">
-                    No abstract or overview available for this folder.
+                    {t('filePreview.noDirectoryContext')}
                   </div>
                 ) : visibleDirectoryLevels.length === 0 ? (
                   <div className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">
-                    Select a chip to show folder context.
+                    {t('filePreview.selectDirectoryContext')}
                   </div>
                 ) : (
                   <div className="grid gap-5">
@@ -1425,27 +1547,42 @@ export function FilePreview({
               )
             ) : null}
 
-            {previewQuery.isLoading && preview?.fileType !== 'image' ? (
+            {previewLoading && preview?.fileType !== 'image' ? (
               <div className="text-sm text-muted-foreground">
                 {t('filePreview.loadingContent')}
               </div>
             ) : null}
 
-            {!previewQuery.isLoading &&
+            {!previewLoading &&
             preview &&
             !file.isDir &&
             preview.fileType !== 'image' &&
-            !preview.shouldAutoRead ? (
-              <div className="text-sm text-muted-foreground">
-                {preview.reason === 'binary'
-                  ? t('filePreview.unsupportedBinary')
-                  : t('filePreview.largeFileSkipped')}
+            !hasPreviewContent ? (
+              <div className="space-y-3 text-sm text-muted-foreground">
+                <div>
+                  {preview.reason === 'binary'
+                    ? t('filePreview.unsupportedBinary')
+                    : t('filePreview.largeFileSkipped')}
+                </div>
+                {previewQuery.canLoadContent && isJsonFile ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={previewQuery.isFetching}
+                    onClick={() => void previewQuery.refetch()}
+                  >
+                    {previewQuery.isFetching ? (
+                      <Loader2 className="mr-2 size-4 animate-spin" />
+                    ) : null}
+                    {t('filePreview.loadFile')}
+                  </Button>
+                ) : null}
               </div>
             ) : null}
 
-            {!previewQuery.isLoading &&
+            {!previewLoading &&
             preview?.fileType === 'markdown' &&
-            preview.shouldAutoRead &&
+            hasPreviewContent &&
             markdownMode === 'preview' ? (
               <article className="prose prose-sm max-w-none break-words dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
                 <ReactMarkdown
@@ -1484,9 +1621,9 @@ export function FilePreview({
               </article>
             ) : null}
 
-            {!previewQuery.isLoading &&
+            {!previewLoading &&
             preview?.fileType === 'markdown' &&
-            preview.shouldAutoRead &&
+            hasPreviewContent &&
             markdownMode === 'source' ? (
               <pre className="overflow-auto rounded-md border bg-muted/20 p-3 text-xs leading-6">
                 <code
@@ -1500,9 +1637,10 @@ export function FilePreview({
               </pre>
             ) : null}
 
-            {!previewQuery.isLoading &&
+            {!previewLoading &&
             preview?.fileType === 'code' &&
-            preview.shouldAutoRead ? (
+            hasPreviewContent &&
+            !isJsonFile ? (
               <pre className="overflow-auto rounded-md border bg-muted/20 p-3 text-xs leading-6">
                 <code
                   className="hljs block"
@@ -1515,19 +1653,19 @@ export function FilePreview({
               </pre>
             ) : null}
 
-            {!previewQuery.isLoading &&
+            {!previewLoading &&
             preview?.fileType === 'jsonl' &&
-            preview.shouldAutoRead ? (
+            hasPreviewContent ? (
               <JsonlPreview content={displayContent || ''} />
             ) : null}
 
-            {!previewQuery.isLoading &&
+            {!previewLoading &&
             preview &&
             preview.fileType !== 'image' &&
             preview.fileType !== 'markdown' &&
             preview.fileType !== 'jsonl' &&
             preview.fileType !== 'code' &&
-            preview.shouldAutoRead ? (
+            hasPreviewContent ? (
               <pre className="whitespace-pre-wrap break-words text-xs leading-6">
                 {displayContent || emptyFileText}
               </pre>

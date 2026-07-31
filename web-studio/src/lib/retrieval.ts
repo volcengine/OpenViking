@@ -2,6 +2,8 @@ import {
   getOvResult,
   normalizeOvClientError,
   postSearchFind,
+  postSearchGlob,
+  postSearchGrep,
   postSearchSearch,
 } from '#/lib/ov-client'
 import type { FindContextType, SearchResult } from '@ov-server/api/v1/search'
@@ -18,6 +20,8 @@ export interface FindResultItem {
   category: string
   match_reason: string
   relations: Array<{ uri: string; abstract: string }>
+  result_kind?: 'semantic' | 'grep' | 'glob'
+  line?: number
 }
 
 export interface FindQueryPlanItem {
@@ -44,19 +48,38 @@ export interface GroupedFindResult {
 export interface VikingApiError {
   code: string
   message: string
+  requestId?: string
   statusCode?: number
   details?: unknown
 }
 
 export interface FetchFindOptions {
+  contextTypes?: FindContextType[]
+  includeProvenance?: boolean
+  levels?: number[]
   targetUri?: string
   limit?: number
   scoreThreshold?: number
   filter?: Record<string, unknown>
+  since?: string
+  tags?: string[]
+  timeField?: 'created_at' | 'updated_at'
+  until?: string
 }
 
 export interface FetchSearchOptions extends FetchFindOptions {
   sessionId?: string
+}
+
+export interface FetchGrepOptions {
+  caseInsensitive?: boolean
+  limit?: number
+  uri: string
+}
+
+export interface FetchGlobOptions {
+  limit?: number
+  uri?: string
 }
 
 const FIND_CONTEXT_TYPES = ['resource', 'memory', 'skill'] as const
@@ -67,6 +90,7 @@ function toVikingApiError(error: unknown): VikingApiError {
     code: normalized.code,
     details: normalized.details,
     message: normalized.message,
+    requestId: normalized.requestId,
     statusCode: normalized.statusCode,
   }
 }
@@ -184,10 +208,24 @@ export async function fetchFind(
       postSearchFind({
         body: {
           filter: options.filter,
+          context_type:
+            options.contextTypes && options.contextTypes.length > 0
+              ? options.contextTypes
+              : undefined,
+          include_provenance: options.includeProvenance,
+          level:
+            options.levels && options.levels.length > 0
+              ? options.levels
+              : undefined,
           limit: options.limit ?? 10,
           query,
           score_threshold: options.scoreThreshold,
+          since: options.since,
+          tags:
+            options.tags && options.tags.length > 0 ? options.tags : undefined,
           target_uri: options.targetUri,
+          time_field: options.timeField,
+          until: options.until,
         },
       }),
     )
@@ -207,11 +245,25 @@ export async function fetchSearch(
       postSearchSearch({
         body: {
           filter: options.filter,
+          context_type:
+            options.contextTypes && options.contextTypes.length > 0
+              ? options.contextTypes
+              : undefined,
+          include_provenance: options.includeProvenance,
+          level:
+            options.levels && options.levels.length > 0
+              ? options.levels
+              : undefined,
           limit: options.limit ?? 10,
           query,
           score_threshold: options.scoreThreshold,
+          since: options.since,
           session_id: options.sessionId,
+          tags:
+            options.tags && options.tags.length > 0 ? options.tags : undefined,
           target_uri: options.targetUri,
+          time_field: options.timeField,
+          until: options.until,
         },
       }),
     )
@@ -222,35 +274,115 @@ export async function fetchSearch(
   }
 }
 
-export async function fetchFindAllTypes(
+/**
+ * Fetch all context types in one request.
+ *
+ * The server already groups resources, memories, and skills in its response,
+ * so issuing one request per type only duplicates work and can exceed the
+ * requested global limit.
+ */
+export function fetchFindAllTypes(
   query: string,
   options: Omit<FetchFindOptions, 'targetUri' | 'filter'> = {},
 ): Promise<GroupedFindResult> {
-  const results = await Promise.allSettled(
-    FIND_CONTEXT_TYPES.map((ct) =>
-      fetchFind(query, {
-        ...options,
-        filter: { op: 'must', field: 'context_type', conds: [ct] },
-      }),
-    ),
-  )
+  return fetchFind(query, options)
+}
 
-  const merged: GroupedFindResult = {
+function emptyPatternResult(resources: FindResultItem[]): GroupedFindResult {
+  return {
     memories: [],
-    resources: [],
+    resources,
     skills: [],
-    total: 0,
+    total: resources.length,
   }
+}
 
-  const [resourceResult, memoryResult, skillResult] = results
-  if (resourceResult.status === 'fulfilled')
-    merged.resources = resourceResult.value.resources
-  if (memoryResult.status === 'fulfilled')
-    merged.memories = memoryResult.value.memories
-  if (skillResult.status === 'fulfilled')
-    merged.skills = skillResult.value.skills
+function patternResultItem(
+  uri: string,
+  kind: 'grep' | 'glob',
+  options: { content?: string; line?: number } = {},
+): FindResultItem {
+  return {
+    abstract: options.content ?? '',
+    category: '',
+    context_type: 'resource',
+    level: 2,
+    line: options.line,
+    match_reason: '',
+    relations: [],
+    result_kind: kind,
+    score: 0,
+    uri,
+  }
+}
 
-  merged.total =
-    merged.memories.length + merged.resources.length + merged.skills.length
-  return merged
+export async function fetchGrep(
+  pattern: string,
+  options: FetchGrepOptions,
+): Promise<GroupedFindResult> {
+  try {
+    const result = await getOvResult<unknown>(
+      postSearchGrep({
+        body: {
+          case_insensitive: options.caseInsensitive,
+          node_limit: options.limit ?? 10,
+          pattern,
+          uri: options.uri,
+        },
+      }),
+    )
+    const matches =
+      result && typeof result === 'object' && 'matches' in result
+        ? (result as { matches?: unknown }).matches
+        : undefined
+    const resources = Array.isArray(matches)
+      ? matches
+          .filter(
+            (match): match is Record<string, unknown> =>
+              match !== null &&
+              typeof match === 'object' &&
+              !Array.isArray(match) &&
+              typeof match.uri === 'string',
+          )
+          .map((match) =>
+            patternResultItem(match.uri as string, 'grep', {
+              content:
+                typeof match.content === 'string' ? match.content : undefined,
+              line: typeof match.line === 'number' ? match.line : undefined,
+            }),
+          )
+      : []
+    return emptyPatternResult(resources)
+  } catch (error) {
+    throw toVikingApiError(error)
+  }
+}
+
+export async function fetchGlob(
+  pattern: string,
+  options: FetchGlobOptions = {},
+): Promise<GroupedFindResult> {
+  try {
+    const result = await getOvResult<unknown>(
+      postSearchGlob({
+        body: {
+          node_limit: options.limit ?? 10,
+          pattern,
+          uri: options.uri ?? 'viking://',
+        },
+      }),
+    )
+    const matches =
+      result && typeof result === 'object' && 'matches' in result
+        ? (result as { matches?: unknown }).matches
+        : undefined
+    const resources = Array.isArray(matches)
+      ? matches
+          .filter((uri): uri is string => typeof uri === 'string')
+          .map((uri) => patternResultItem(uri, 'glob'))
+      : []
+    return emptyPatternResult(resources)
+  } catch (error) {
+    throw toVikingApiError(error)
+  }
 }

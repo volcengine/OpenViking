@@ -7,7 +7,11 @@ from openviking.core.namespace import uri_parts
 class LinkRenderer:
     """Renders and strips local markdown links in memory file content based on StoredLink metadata."""
 
-    _RELATIVE_LINK_RE = re.compile(r"\[(?P<text>[^\]]+)\]\((?P<target>[^)\s]+)\)")
+    # Target may contain spaces (e.g. `[Frank Ocean](entities/frank ocean.md)`).
+    # Markdown permits literal spaces in destinations, though they are not portable
+    # across renderers; `render_links` therefore percent-encodes spaces in generated
+    # targets so they round-trip cleanly. We accept both forms when matching.
+    _RELATIVE_LINK_RE = re.compile(r"\[(?P<text>[^\]]+)\]\((?P<target>[^)]+)\)")
     _MEMORY_FIELDS_RE = re.compile(r"(\n\n<!--\s*MEMORY_FIELDS\s*\n)", re.DOTALL)
     _CJK_RE = re.compile(r"[㐀-䶿一-鿿豈-﫿]")
     _ASCII_WORD_CHAR_RE = re.compile(r"[A-Za-z0-9_]")
@@ -21,17 +25,51 @@ class LinkRenderer:
         return bool(char and LinkRenderer._ASCII_WORD_CHAR_RE.fullmatch(char))
 
     @staticmethod
-    def _find_match_span(content: str, match_text: str) -> Optional[tuple[int, int]]:
+    def protected_markdown_spans(content: str) -> List[tuple[int, int]]:
+        """Return spans where Compile must never insert a generated WikiLink."""
+        spans = [(m.start(), m.end()) for m in LinkRenderer._RELATIVE_LINK_RE.finditer(content)]
+        spans.extend(
+            (m.start(), m.end())
+            for m in re.finditer(r"(?ms)^(?:```|~~~).*?^(?:```|~~~)[ \t]*$", content)
+        )
+        spans.extend((m.start(), m.end()) for m in re.finditer(r"`+[^\n`]*?`+", content))
+
+        for match in re.finditer(r"(?m)^# Citations[ \t]*$", content):
+            if not any(start <= match.start() < end for start, end in spans):
+                spans.append((match.start(), len(content)))
+                break
+        return sorted(spans)
+
+    @staticmethod
+    def _find_match_span(
+        content: str,
+        match_text: str,
+        protected_spans: Optional[List[tuple[int, int]]] = None,
+    ) -> Optional[tuple[int, int]]:
         escaped = re.escape(match_text)
+        # Character spans already covered by an existing [text](target) link. A match
+        # inside one is already linked, so wrapping it again would produce a broken
+        # nested link like "[[Frank](..) Ocean](..)"; skip those candidates.
+        linked_spans = protected_spans or [
+            (m.start(), m.end()) for m in LinkRenderer._RELATIVE_LINK_RE.finditer(content)
+        ]
+
+        def _overlaps_protected_span(start: int, end: int) -> bool:
+            return any(not (end <= span_start or start >= span_end) for span_start, span_end in linked_spans)
+
         if LinkRenderer._contains_cjk(match_text):
-            match = re.search(escaped, content)
-            if not match:
-                return None
-            return match.start(), match.end()
+            for match in re.finditer(escaped, content):
+                start, end = match.start(), match.end()
+                if _overlaps_protected_span(start, end):
+                    continue
+                return start, end
+            return None
 
         pattern = re.compile(escaped, re.IGNORECASE)
         for match in pattern.finditer(content):
             start, end = match.start(), match.end()
+            if _overlaps_protected_span(start, end):
+                continue
             left_char = content[start - 1] if start > 0 else ""
             right_char = content[end] if end < len(content) else ""
             if LinkRenderer._is_ascii_word_char(left_char) or LinkRenderer._is_ascii_word_char(
@@ -50,13 +88,22 @@ class LinkRenderer:
             source_uri: The viking:// URI of the file being written.
             links: List of link dicts (from links + backlinks in MEMORY_FIELDS).
         """
+        rendered, _count = LinkRenderer.render_links_with_count(content, source_uri, links)
+        return rendered
+
+    @staticmethod
+    def render_links_with_count(
+        content: str, source_uri: str, links: List[Dict]
+    ) -> tuple[str, int]:
+        """Render links outside protected Markdown spans and return the inserted count."""
         eligible = [l for l in links if l.get("match_text")]
         if not eligible:
-            return content
+            return content, 0
 
         eligible.sort(key=lambda l: l.get("weight", 0), reverse=True)
 
         replacements: List[tuple] = []  # (start, end, replacement_text)
+        protected_spans = LinkRenderer.protected_markdown_spans(content)
         for link in eligible:
             match_text = link["match_text"]
             to_uri = link["to_uri"]
@@ -67,7 +114,9 @@ class LinkRenderer:
             rel = LinkRenderer.relative_path(source_uri, to_uri)
             link_target = rel if rel is not None else to_uri
 
-            match_span = LinkRenderer._find_match_span(content, match_text)
+            match_span = LinkRenderer._find_match_span(
+                content, match_text, protected_spans=protected_spans
+            )
             if not match_span:
                 continue
 
@@ -76,7 +125,17 @@ class LinkRenderer:
             if any(not (end <= rs or start >= re_) for rs, re_, _ in replacements):
                 continue
 
-            rendered = f"[{content[start:end]}]({link_target})"
+            # Percent-encode spaces in the rendered target so the link is portable
+            # across markdown renderers (e.g. `[Frank](entities/frank ocean.md)`
+            # would otherwise be ambiguous). We accept the literal-space form when
+            # matching existing links, but always emit the encoded form when
+            # generating new ones.
+            encoded_target = (
+                link_target.replace(" ", "%20")
+                .replace("(", "%28")
+                .replace(")", "%29")
+            )
+            rendered = f"[{content[start:end]}]({encoded_target})"
             replacements.append((start, end, rendered))
 
         # Apply in reverse order to preserve indices
@@ -84,7 +143,7 @@ class LinkRenderer:
         for start, end, repl in sorted(replacements, key=lambda x: x[0], reverse=True):
             result[start:end] = list(repl)
 
-        return "".join(result)
+        return "".join(result), len(replacements)
 
     @staticmethod
     def strip_links(content: str) -> str:
@@ -106,6 +165,12 @@ class LinkRenderer:
         return LinkRenderer._RELATIVE_LINK_RE.sub(_replace_link, content)
 
     @staticmethod
+    def strip_all_links(content: str) -> str:
+        """Remove markdown links regardless of target scheme, keeping only link text."""
+
+        return LinkRenderer._RELATIVE_LINK_RE.sub(lambda m: m.group("text"), content)
+
+    @staticmethod
     def relative_path(source_uri: str, target_uri: str) -> Optional[str]:
         """Compute a relative path from source_uri to target_uri in the viking:// namespace.
 
@@ -122,7 +187,7 @@ class LinkRenderer:
             return None
 
         common = 0
-        for s, t in zip(src, tgt):
+        for s, t in zip(src, tgt, strict=False):
             if s == t:
                 common += 1
             else:
@@ -136,7 +201,13 @@ class LinkRenderer:
         down_parts = tgt[common:]
 
         if up_count == 0:
-            return "/".join(down_parts) or "./"
+            relative = "/".join(down_parts)
+            if not relative:
+                return ""
+            # Make a sibling-file target visibly relative.  Descendant paths remain
+            # unchanged (for example, ``events/today.md``), while a file in the
+            # source file's own directory is rendered as ``./target.md``.
+            return f"./{relative}" if len(down_parts) == 1 else relative
 
         up_parts = [".."] * up_count
         return "/".join(up_parts + list(down_parts))

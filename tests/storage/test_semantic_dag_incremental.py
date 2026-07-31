@@ -11,22 +11,6 @@ from openviking.storage.queuefs.semantic_dag import SemanticDagExecutor
 from openviking_cli.session.user_id import UserIdentifier
 
 
-def _mock_transaction_layer(monkeypatch):
-    mock_handle = MagicMock()
-    monkeypatch.setattr(
-        "openviking.storage.transaction.lock_context.LockContext.__aenter__",
-        AsyncMock(return_value=mock_handle),
-    )
-    monkeypatch.setattr(
-        "openviking.storage.transaction.lock_context.LockContext.__aexit__",
-        AsyncMock(return_value=False),
-    )
-    monkeypatch.setattr(
-        "openviking.storage.transaction.get_lock_manager",
-        lambda: MagicMock(),
-    )
-
-
 class _FakeVikingFS:
     def __init__(self, tree, file_contents):
         self._tree = {self._norm(k): v for k, v in tree.items()}
@@ -86,11 +70,8 @@ class _FakeProcessor:
             lines.append(f"- {name}: {summary}")
         return "\n".join(lines)
 
-    def _extract_abstract_from_overview(self, overview):
-        return "abstract"
-
-    def _enforce_size_limits(self, overview, abstract):
-        return overview, abstract
+    def _normalize_overview_generation(self, overview):
+        return overview, "abstract"
 
     async def _sync_topdown_recursive(
         self, root_uri, target_uri, ctx=None, file_change_status=None, lock=None
@@ -113,7 +94,6 @@ class _FakeProcessor:
 
 @pytest.mark.asyncio
 async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypatch):
-    _mock_transaction_layer(monkeypatch)
 
     root_uri = "viking://resources/root"
     tree = {

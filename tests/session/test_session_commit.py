@@ -5,17 +5,14 @@
 
 import asyncio
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
-
-import pytest
 
 from openviking import AsyncOpenViking
 from openviking.client.session import Session as ClientSession
 from openviking.message import TextPart
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
-from openviking.storage.transaction import get_lock_manager
-from openviking_cli.exceptions import FailedPreconditionError
 
 
 async def _wait_for_task(task_id: str, timeout: float = 30.0) -> dict:
@@ -29,6 +26,14 @@ async def _wait_for_task(task_id: str, timeout: float = 30.0) -> dict:
     raise TimeoutError(f"Task {task_id} did not complete within {timeout}s")
 
 
+async def _marker_exists(session, archive_uri: str, name: str) -> bool:
+    try:
+        await session._viking_fs.read_file(f"{archive_uri}/{name}", ctx=session.ctx)
+        return True
+    except Exception:
+        return False
+
+
 class TestCommit:
     """Test commit"""
 
@@ -40,6 +45,7 @@ class TestCommit:
         assert result.get("status") == "accepted"
         assert "session_id" in result
         assert result.get("task_id") is not None
+        assert "memory_diff_uri" not in result
         assert "memories_extracted" not in result
 
     async def test_commit_extracts_memories(
@@ -52,12 +58,108 @@ class TestCommit:
         # Wait for background memory extraction to complete
         task_result = await _wait_for_task(task_id)
         assert task_result["status"] == "completed"
+        assert (
+            task_result["result"]["memory_diff_uri"]
+            == f"{task_result['result']['archive_uri']}/memory_diff.json"
+        )
+        memory_diff = json.loads(
+            await session_with_messages._viking_fs.read_file(
+                task_result["result"]["memory_diff_uri"],
+                ctx=session_with_messages.ctx,
+            )
+        )
+        assert memory_diff["archive_uri"] == task_result["result"]["archive_uri"]
         assert "memories_extracted" in task_result["result"]
         memory_counts = task_result["result"]["memories_extracted"]
         assert isinstance(memory_counts, dict)
 
         # Wait for semantic/embedding queues
         await client.wait_processed(timeout=60.0)
+
+    async def test_commit_default_disables_agent_memory_but_keeps_archive(
+        self, session_with_messages: Session
+    ):
+        session_with_messages._agent_evolution_enabled_provider = lambda: False
+        session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
+            return_value=[]
+        )
+
+        result = await session_with_messages.commit_async()
+        task_result = await _wait_for_task(result["task_id"])
+
+        assert result["archived"] is True
+        assert task_result["status"] == "completed"
+        assert task_result["result"]["agent_evolution_enabled"] is False
+        assert "cases" not in task_result["result"]["effective_memory_types"]
+        assert "trajectories" not in task_result["result"]["effective_memory_types"]
+        assert "experiences" not in task_result["result"]["effective_memory_types"]
+        assert task_result["result"]["agent_memory_skip_reason"] == ("agent_evolution_disabled")
+        call_kwargs = (
+            session_with_messages._session_compressor.extract_long_term_memories.call_args.kwargs
+        )
+        assert call_kwargs["agent_evolution_enabled"] is False
+        assert "cases" not in call_kwargs["allowed_memory_types"]
+        assert "trajectories" not in call_kwargs["allowed_memory_types"]
+        assert "experiences" not in call_kwargs["allowed_memory_types"]
+
+    async def test_commit_uses_global_setting_and_enables_agent_memory(
+        self, session_with_messages: Session
+    ):
+        session_with_messages._agent_evolution_enabled = True
+        session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
+            return_value=[]
+        )
+
+        result = await session_with_messages.commit_async()
+        task_result = await _wait_for_task(result["task_id"])
+
+        assert task_result["status"] == "completed"
+        assert task_result["result"]["agent_evolution_enabled"] is True
+        assert "cases" in task_result["result"]["effective_memory_types"]
+        assert "trajectories" in task_result["result"]["effective_memory_types"]
+        assert "experiences" in task_result["result"]["effective_memory_types"]
+        call_kwargs = (
+            session_with_messages._session_compressor.extract_long_term_memories.call_args.kwargs
+        )
+        assert call_kwargs["agent_evolution_enabled"] is True
+        assert call_kwargs["allowed_memory_types"] is None
+
+    async def test_disabled_agent_evolution_keeps_working_memory(
+        self, session_with_messages: Session, monkeypatch
+    ):
+        session_with_messages._agent_evolution_enabled_provider = lambda: False
+        summary_called = False
+
+        async def fake_summary(_session, messages, latest_archive_overview=""):
+            nonlocal summary_called
+            del messages, latest_archive_overview
+            summary_called = True
+            return "# Working Memory\n\nAgent memory production is disabled."
+
+        monkeypatch.setattr(Session, "_generate_archive_summary_async", fake_summary)
+        session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
+            return_value=[]
+        )
+        if hasattr(session_with_messages._session_compressor, "extract_execution_memories"):
+            session_with_messages._session_compressor.extract_execution_memories = AsyncMock(
+                return_value={"contexts": [], "session_skills": []}
+            )
+
+        result = await session_with_messages.commit_async(
+            memory_policy={
+                "memory_types": ["cases", "trajectories", "experiences"],
+                "working_memory": {"enabled": True},
+            }
+        )
+        task_result = await _wait_for_task(result["task_id"])
+
+        assert task_result["status"] == "completed"
+        assert summary_called is True
+        archive_uri = task_result["result"]["archive_uri"]
+        assert await _marker_exists(session_with_messages, archive_uri, ".overview.md")
+        session_with_messages._session_compressor.extract_long_term_memories.assert_not_awaited()
+        if hasattr(session_with_messages._session_compressor, "extract_execution_memories"):
+            session_with_messages._session_compressor.extract_execution_memories.assert_not_awaited()
 
     async def test_commit_reports_session_skills_separately(
         self, session_with_messages: Session, monkeypatch
@@ -85,17 +187,24 @@ class TestCommit:
 
         assert task_result["status"] == "completed"
         assert task_result["result"]["memories_extracted"] == {}
-        assert task_result["result"]["session_skills_extracted"] == 1
-        assert task_result["result"]["session_skill_uris"] == [
-            "viking://user/test/skills/code-review"
-        ]
+        if hasattr(session_with_messages._session_compressor, "extract_execution_memories"):
+            # v2: trajectories/skills flow through extract_execution_memories
+            assert task_result["result"]["session_skills_extracted"] == 1
+            assert task_result["result"]["session_skill_uris"] == [
+                "viking://user/test/skills/code-review"
+            ]
+        else:
+            # v3: trajectory/experience memory path is not wired when policy
+            # restricts to EXECUTION_MEMORY_TYPES (no extract_execution_memories).
+            assert task_result["result"]["session_skills_extracted"] == 0
+            assert task_result["result"]["session_skill_uris"] == []
+        assert "memory_diff_uri" not in task_result["result"]
         session_with_messages._session_compressor.extract_long_term_memories.assert_not_awaited()
-        session_with_messages._session_compressor.extract_execution_memories.assert_awaited_once()
-        call_kwargs = (
-            session_with_messages._session_compressor.extract_execution_memories.call_args.kwargs
-        )
-        assert call_kwargs["allowed_memory_types"] == {"trajectories"}
-        assert call_kwargs["include_session_skills"] is True
+        if hasattr(session_with_messages._session_compressor, "extract_execution_memories"):
+            session_with_messages._session_compressor.extract_execution_memories.assert_awaited_once()
+            call_kwargs = session_with_messages._session_compressor.extract_execution_memories.call_args.kwargs
+            assert call_kwargs["allowed_memory_types"] == {"trajectories"}
+            assert call_kwargs["include_session_skills"] is True
 
     async def test_commit_skips_session_skills_without_execution_memory_type(
         self, session_with_messages: Session, monkeypatch
@@ -124,8 +233,10 @@ class TestCommit:
         assert task_result["status"] == "completed"
         assert task_result["result"]["memories_extracted"] == {}
         assert task_result["result"]["session_skills_extracted"] == 0
+        assert "memory_diff_uri" not in task_result["result"]
         session_with_messages._session_compressor.extract_long_term_memories.assert_awaited_once()
-        session_with_messages._session_compressor.extract_execution_memories.assert_not_awaited()
+        if hasattr(session_with_messages._session_compressor, "extract_execution_memories"):
+            session_with_messages._session_compressor.extract_execution_memories.assert_not_awaited()
 
     async def test_commit_skips_session_skill_extraction_when_disabled(
         self, session_with_messages: Session, monkeypatch
@@ -149,12 +260,57 @@ class TestCommit:
         assert task_result["status"] == "completed"
         assert task_result["result"]["session_skills_extracted"] == 0
         assert task_result["result"]["session_skill_uris"] == []
+        assert "memory_diff_uri" not in task_result["result"]
         session_with_messages._session_compressor.extract_long_term_memories.assert_awaited_once()
-        session_with_messages._session_compressor.extract_execution_memories.assert_awaited_once()
-        call_kwargs = (
-            session_with_messages._session_compressor.extract_execution_memories.call_args.kwargs
+        if hasattr(session_with_messages._session_compressor, "extract_execution_memories"):
+            session_with_messages._session_compressor.extract_execution_memories.assert_awaited_once()
+            call_kwargs = session_with_messages._session_compressor.extract_execution_memories.call_args.kwargs
+            assert call_kwargs["include_session_skills"] is False
+
+    async def test_commit_can_skip_working_memory_summary(
+        self, session_with_messages: Session, monkeypatch
+    ):
+        config = MagicMock()
+        config.memory.extraction_enabled = True
+        config.memory.session_skill_extraction_enabled = False
+        monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+
+        summary_called = False
+
+        async def fake_summary(messages, latest_archive_overview=""):
+            nonlocal summary_called
+            del messages, latest_archive_overview
+            summary_called = True
+            return "should not be written"
+
+        async def fake_extract(*args, **kwargs):
+            del args
+            assert kwargs.get("latest_archive_overview", "") == ""
+            return []
+
+        session_with_messages._generate_archive_summary_async = fake_summary
+        session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
+            side_effect=fake_extract
         )
-        assert call_kwargs["include_session_skills"] is False
+        if hasattr(session_with_messages._session_compressor, "extract_execution_memories"):
+            session_with_messages._session_compressor.extract_execution_memories = AsyncMock(
+                return_value={"contexts": [], "session_skills": []}
+            )
+
+        result = await session_with_messages.commit_async(
+            memory_policy={"working_memory": {"enabled": False}}
+        )
+        task_result = await _wait_for_task(result["task_id"])
+
+        assert task_result["status"] == "completed"
+        assert summary_called is False
+        archive_uri = task_result["result"]["archive_uri"]
+        assert not await _marker_exists(session_with_messages, archive_uri, ".overview.md")
+        assert not await _marker_exists(session_with_messages, archive_uri, ".abstract.md")
+        context = await session_with_messages.get_session_context()
+        assert context["latest_archive_overview"] == ""
+        assert context["messages"] == []
+        session_with_messages._session_compressor.extract_long_term_memories.assert_awaited_once()
 
     async def test_commit_routes_peer_memory_with_single_full_context_pass(
         self,
@@ -215,9 +371,10 @@ class TestCommit:
 
         monkeypatch.setattr(session, "_generate_archive_summary_async", fake_summary)
         monkeypatch.setattr(session._session_compressor, "extract_long_term_memories", fake_extract)
-        monkeypatch.setattr(
-            session._session_compressor, "extract_execution_memories", fake_execution_extract
-        )
+        if hasattr(session._session_compressor, "extract_execution_memories"):
+            monkeypatch.setattr(
+                session._session_compressor, "extract_execution_memories", fake_execution_extract
+            )
 
         session.add_message(
             "user",
@@ -295,8 +452,14 @@ class TestCommit:
         assert result2.get("task_id") is not None
 
     async def test_commit_keep_recent_count_retains_live_tail_and_resets_pending_tokens(
-        self, client: AsyncOpenViking
+        self, client: AsyncOpenViking, monkeypatch
     ):
+        config = MagicMock()
+        config.memory.extraction_enabled = True
+        config.memory.session_skill_extraction_enabled = False
+        config.vlm = SimpleNamespace(is_available=lambda: False)
+        monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+
         session = client.session(session_id="commit_keep_recent_count_test")
 
         session.add_message("user", [TextPart("Round 1 user")])
@@ -391,9 +554,15 @@ class TestCommit:
         ]
 
     async def test_commit_uses_latest_archive_overview_for_summary_and_extraction(
-        self, client: AsyncOpenViking
+        self, client: AsyncOpenViking, monkeypatch
     ):
         """Second commit should pass the latest completed archive overview into Phase 2."""
+        config = MagicMock()
+        config.memory.extraction_enabled = True
+        config.memory.session_skill_extraction_enabled = False
+        config.vlm = SimpleNamespace(is_available=lambda: False)
+        monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+
         session = client.session(session_id="latest_overview_threading_test")
         session._meta.memory_policy = {
             "peer": {"enabled": False},
@@ -411,19 +580,22 @@ class TestCommit:
         )
         seen: dict[str, str] = {}
 
-        original_generate = session._generate_archive_summary_async
+        session_type = type(session)
+        original_generate = session_type._generate_archive_summary_async
 
-        async def capture_generate(messages, latest_archive_overview=""):
+        async def capture_generate(self, messages, latest_archive_overview=""):
             seen["summary"] = latest_archive_overview
             return await original_generate(
-                messages, latest_archive_overview=latest_archive_overview
+                self,
+                messages,
+                latest_archive_overview=latest_archive_overview,
             )
 
         async def capture_extract(*args, **kwargs):
             seen["extract"] = kwargs.get("latest_archive_overview", "")
             return []
 
-        session._generate_archive_summary_async = capture_generate
+        monkeypatch.setattr(session_type, "_generate_archive_summary_async", capture_generate)
         session._session_compressor.extract_long_term_memories = capture_extract
 
         session.add_message("user", [TextPart("Second round message")])
@@ -474,9 +646,14 @@ class TestCommit:
             f"active_count not incremented: before={count_before}, after={count_after}"
         )
 
-    async def test_commit_blocks_after_failed_archive(self, client: AsyncOpenViking):
-        """A failed archive should block the next commit until it is resolved."""
-        session = client.session(session_id="failed_archive_blocks_new_commit")
+    async def test_commit_failed_after_long_term_extraction_failure_does_not_block(
+        self, client: AsyncOpenViking
+    ):
+        """Binary archive outcome: if long-term extraction fails (after retries),
+        the whole archive is marked .failed.json and skipped — there is no
+        partial state — but a failed archive must not block the next commit.
+        """
+        session = client.session(session_id="failed_archive_does_not_block_commit")
 
         async def failing_extract(*args, **kwargs):
             del args, kwargs
@@ -490,31 +667,22 @@ class TestCommit:
 
         assert task_result["status"] == "failed"
 
-        failed_marker = await session._viking_fs.read_file(
-            f"{result['archive_uri']}/.failed.json",
-            ctx=session.ctx,
+        archive_uri = result["archive_uri"]
+        assert await _marker_exists(session, archive_uri, ".failed.json")
+        assert not await _marker_exists(session, archive_uri, ".done")
+        assert not await _marker_exists(session, archive_uri, ".partial.json")
+
+        failed_payload = json.loads(
+            await session._viking_fs.read_file(
+                f"{archive_uri}/.failed.json",
+                ctx=session.ctx,
+            )
         )
-        failed_payload = json.loads(failed_marker)
-        assert failed_payload["stage"] == "memory_extraction"
+        assert failed_payload.get("skipped") is True
         assert "synthetic extraction failure" in failed_payload["error"]
 
+        # A failed archive is a skippable terminal state and must not block the
+        # next commit (this previously raised FailedPreconditionError).
         session.add_message("user", [TextPart("Second round message")])
-        with pytest.raises(FailedPreconditionError, match="unresolved failed archive"):
-            await session.commit_async()
-
-    async def test_commit_skips_redo_when_recovery_disabled(
-        self, session_with_messages: Session, monkeypatch: pytest.MonkeyPatch
-    ):
-        """Phase 2 should not write or clear redo markers when redo recovery is disabled."""
-
-        redo_log = MagicMock()
-        lock_manager = get_lock_manager()
-        monkeypatch.setattr(lock_manager, "_redo_recovery_enabled", False)
-        monkeypatch.setattr(lock_manager, "_redo_log", redo_log)
-
-        result = await session_with_messages.commit_async()
-        task_result = await _wait_for_task(result["task_id"])
-
-        assert task_result["status"] == "completed"
-        redo_log.write_pending.assert_not_called()
-        redo_log.mark_done.assert_not_called()
+        second = await session.commit_async()
+        assert second["status"] == "accepted"

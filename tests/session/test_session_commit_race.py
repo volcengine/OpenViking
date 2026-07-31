@@ -32,26 +32,32 @@ class TestCommitRace:
         # Compression index should have incremented exactly once
         assert session._compression.compression_index == 1
 
-    async def test_message_added_during_commit_not_lost(self, client: AsyncOpenViking):
+    async def test_message_added_during_commit_not_lost(
+        self,
+        client: AsyncOpenViking,
+        monkeypatch,
+    ):
         """Messages added while commit is running should not be lost."""
         session = client.session(session_id="race_test_msg_safety")
         session.add_message("user", [TextPart("Original message")])
 
         # Use an Event for deterministic synchronization instead of sleeps
         phase1_done = asyncio.Event()
-        original_generate = session._generate_archive_summary_async
+        session_type = type(session)
+        original_generate = session_type._generate_archive_summary_async
 
-        async def slow_generate(messages, latest_archive_overview=""):
+        async def slow_generate(self, messages, latest_archive_overview=""):
             # Signal that Phase 1 is complete (lock released, messages cleared)
             phase1_done.set()
             # Yield control so add_message can run before archive completes
             await asyncio.sleep(0)
             return await original_generate(
+                self,
                 messages,
                 latest_archive_overview=latest_archive_overview,
             )
 
-        session._generate_archive_summary_async = slow_generate
+        monkeypatch.setattr(session_type, "_generate_archive_summary_async", slow_generate)
 
         async def commit_and_add():
             """Start commit, then add a message after Phase 1 completes."""

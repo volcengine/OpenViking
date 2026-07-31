@@ -25,7 +25,10 @@ from openviking.storage.errors import (
 )
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
-from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
+from openviking.storage.viking_vector_index_backend import (
+    VikingVectorIndexBackend,
+    normalize_upsert_options,
+)
 from openviking.telemetry import bind_telemetry, resolve_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.circuit_breaker import (
@@ -33,13 +36,19 @@ from openviking.utils.circuit_breaker import (
     CircuitBreakerOpen,
     classify_api_error,
 )
-from openviking.utils.model_retry import ERROR_CLASS_INPUT_TOO_LARGE, ERROR_CLASS_PERMANENT
+from openviking.utils.model_retry import (
+    ERROR_CLASS_AUTH,
+    ERROR_CLASS_INPUT_TOO_LARGE,
+    ERROR_CLASS_PERMANENT,
+)
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 
 logger = get_logger(__name__)
 EMBEDDING_META_MARKER = "\n\n[openviking.embedding]\n"
+
+_EMBEDDING_COMPATIBILITY_KEYS = ("provider", "model", "dimension", "model_identity")
 
 
 @dataclass
@@ -102,7 +111,9 @@ class CollectionSchemas:
                 {"FieldName": "name", "FieldType": "string"},
                 {"FieldName": "description", "FieldType": "string"},
                 {"FieldName": "tags", "FieldType": "string"},
+                {"FieldName": "search_tags", "FieldType": "list<string>"},
                 {"FieldName": "abstract", "FieldType": "string"},
+                {"FieldName": "content", "FieldType": "text"},
                 {"FieldName": "account_id", "FieldType": "string"},
                 {"FieldName": "owner_user_id", "FieldType": "string"},
             ]
@@ -120,6 +131,7 @@ class CollectionSchemas:
                 "level",
                 "name",
                 "tags",
+                "search_tags",
                 "account_id",
                 "owner_user_id",
             ]
@@ -129,6 +141,12 @@ class CollectionSchemas:
             "Description": description or "Unified context collection",
             "Fields": fields,
             "ScalarIndex": scalar_index,
+            "FullText": [
+                {
+                    "Field": "content",
+                    "Analyzer": {"Tokenizer": "standard", "StopWordsFilters": ["symbol"]},
+                },
+            ],
         }
 
 
@@ -183,6 +201,35 @@ def _build_embedding_metadata(config: "OpenVikingConfig") -> Dict[str, Any]:
         "dimension": dimension,
         "model_identity": model_identity,
     }
+
+
+def _embedding_metadata_compatible(
+    existing_meta: Optional[Dict[str, Any]],
+    current_meta: Dict[str, Any],
+) -> bool:
+    if existing_meta is None:
+        return False
+    return all(
+        existing_meta.get(key) == current_meta.get(key)
+        for key in _EMBEDDING_COMPATIBILITY_KEYS
+    )
+
+
+def _collection_has_content_fulltext(meta: Dict[str, Any]) -> bool:
+    fields = meta.get("Fields", [])
+    has_content = any(
+        f.get("FieldName") == "content" and f.get("FieldType") == "text" for f in fields
+    )
+    fulltext = meta.get("FullText") or []
+    if isinstance(fulltext, str):
+        try:
+            fulltext = json.loads(fulltext)
+        except json.JSONDecodeError:
+            fulltext = []
+    has_content_fulltext = any(
+        isinstance(ft, dict) and ft.get("Field") == "content" for ft in fulltext
+    )
+    return has_content and has_content_fulltext
 
 
 def _encode_collection_description(
@@ -261,7 +308,21 @@ async def init_context_collection(storage) -> bool:
     base_description, existing_embedding_meta = _decode_collection_description(
         existing_meta.get("Description")
     )
-    if existing_embedding_meta == embedding_meta:
+
+    # Schema compatibility check: actual collection schema controls whether
+    # VikingDB full-text grep can be used. Missing content/FullText should only
+    # disable the vikingdb grep path, not block server startup.
+    if (
+        "Fields" in existing_meta or "FullText" in existing_meta
+    ) and not _collection_has_content_fulltext(existing_meta):
+        logger.warning(
+            "Collection schema does not support VikingDB full-text grep "
+            "Missing 'content' field or FullText config. "
+            "grep engine=auto will fall back to fs. "
+            "Recreate the collection to enable vikingdb-based grep."
+        )
+
+    if _embedding_metadata_compatible(existing_embedding_meta, embedding_meta):
         return False
 
     existing_count = await storage.count() if hasattr(storage, "count") else 0
@@ -601,6 +662,19 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                             report_error_args = (error_msg, data)
                             return None
 
+                        if error_class == ERROR_CLASS_AUTH:
+                            # Bad/expired credential: retrying cannot succeed. Fail
+                            # terminally instead of re-enqueueing, which would cycle
+                            # forever and hold this resource's tree lock and its
+                            # add-resource --wait open. Don't trip the breaker: an open
+                            # breaker re-enqueues later messages and reintroduces the
+                            # same leak. See #2916.
+                            logger.error(error_msg)
+                            self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
+                            request_failed_message = error_msg
+                            report_error_args = (error_msg, data)
+                            return None
+
                         # Transient or unknown — re-enqueue for retry
                         logger.warning(error_msg)
                         self._circuit_breaker.record_failure(embed_err)
@@ -675,6 +749,10 @@ class TextEmbeddingHandler(DequeueHandlerBase):
 
                 # Write to vector database
                 try:
+                    raw_upsert_options = inserted_data.pop("_upsert_options", {})
+                    upsert_options = normalize_upsert_options(
+                        {**raw_upsert_options, "partial_update": True}
+                    )
                     # Ensure vector DB has deterministic IDs per semantic layer.
                     uri = inserted_data.get("uri")
                     account_id = inserted_data.get("account_id", "default")
@@ -688,7 +766,12 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         user_id="default",
                     )
                     ctx = RequestContext(user=user, role=Role.ROOT)
-                    record_id = await self._vikingdb.upsert(inserted_data, ctx=ctx)
+                    result = await self._vikingdb.upsert(
+                        inserted_data,
+                        ctx=ctx,
+                        options=upsert_options,
+                    )
+                    record_id = result
                     if record_id:
                         logger.debug(
                             f"Successfully wrote embedding to database: {record_id} abstract {inserted_data['abstract']} vector {inserted_data['vector'][:5]}"
@@ -765,6 +848,28 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 self.report_error(*report_error_args)
             elif report_success:
                 self.report_success()
+
+    async def on_cancelled(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Settle semantic joins when a queued embedding is cancelled."""
+        embedding_msg: Optional[EmbeddingMsg] = None
+        try:
+            if data:
+                payload = data.get("data", data)
+                if isinstance(payload, str):
+                    payload = json.loads(payload)
+                embedding_msg = EmbeddingMsg.from_dict(payload)
+        except (KeyError, TypeError, ValueError) as exc:
+            self.report_error(str(exc), data)
+            return None
+
+        if embedding_msg is not None:
+            self._record_request_success(embedding_msg)
+            if embedding_msg.semantic_msg_id:
+                from openviking.storage.queuefs.embedding_tracker import EmbeddingTaskTracker
+
+                await EmbeddingTaskTracker.get_instance().decrement(embedding_msg.semantic_msg_id)
+        self.report_success()
+        return None
 
     @staticmethod
     def _record_request_success(embedding_msg: EmbeddingMsg) -> None:
