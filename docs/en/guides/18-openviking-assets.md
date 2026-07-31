@@ -398,7 +398,6 @@ Options used with `--manifest`:
 | `--wait` | Wait for each resource to finish processing. |
 | `--timeout <seconds>` | Timeout used with `--wait`. |
 | `--watch-interval <minutes>` | Override the refresh interval for all assets. |
-| `--processing-mode <mode>` | Use `semantic_and_vectors` or `vectors_only` for every asset. |
 
 Run options supported by `--args`:
 
@@ -413,34 +412,6 @@ Run options supported by `--args`:
 
 Run options are consumed locally by the CLI and are never sent to the server as resource
 arguments; an unknown key is an error.
-
-## Structured Output
-
-Default output is intended for terminal use. With JSON output, `--manifest` runs emit NDJSON: one
-complete JSON event per line rather than one JSON document.
-
-```bash
-ov --output json add-resource --manifest manifest.yaml --args dry_run:true
-```
-
-Events can include:
-
-- `plan`
-- `orphan`
-- `asset_preflight_start`
-- `asset_preflight_ok`
-- `asset_preflight_failed`
-- `asset_planned`
-- `asset_start`
-- `asset_done`
-- `asset_failed`
-- `asset_skipped`
-- `summary`
-
-Automation should parse one line at a time and always use the process exit code. When a `summary`
-event is emitted, it can provide additional result details. A preflight failure exits before
-`summary`. Do not assume the first line is `plan`: `orphan` events, when present, are emitted
-before it.
 
 ## Current Limitations
 

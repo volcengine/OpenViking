@@ -377,7 +377,6 @@ ov add-resource --manifest manifest.yaml --args skip_failed:true
 | `--wait` | 等待每个资源处理完成。 |
 | `--timeout <seconds>` | `--wait` 的超时时间。 |
 | `--watch-interval <minutes>` | 覆盖全部资产的更新周期。 |
-| `--processing-mode <mode>` | 所有资产使用 `semantic_and_vectors` 或 `vectors_only`。 |
 
 `--args` 支持的运行选项：
 
@@ -391,33 +390,6 @@ ov add-resource --manifest manifest.yaml --args skip_failed:true
 `--args '{"dry_run": true, "catalog": "shared/catalog.yaml"}'`。
 
 运行选项由 CLI 在本地消费，不会作为资源参数发送给服务端；未知的键会直接报错。
-
-## 结构化输出
-
-默认输出适合终端阅读。使用 JSON 输出时，带 `--manifest` 的执行会输出 NDJSON，即每行一个
-完整的 JSON 事件，而不是一个单独的 JSON 文档：
-
-```bash
-ov --output json add-resource --manifest manifest.yaml --args dry_run:true
-```
-
-可能出现的事件包括：
-
-- `plan`
-- `orphan`
-- `asset_preflight_start`
-- `asset_preflight_ok`
-- `asset_preflight_failed`
-- `asset_planned`
-- `asset_start`
-- `asset_done`
-- `asset_failed`
-- `asset_skipped`
-- `summary`
-
-自动化程序应逐行解析，并始终以进程退出码判断结果；执行到 `summary` 时可结合该事件。
-preflight 失败会在 `summary` 之前立即退出。注意不要假设第一行一定是 `plan`：存在 orphan
-时，`orphan` 事件会先于 `plan` 输出。
 
 ## 当前限制
 
