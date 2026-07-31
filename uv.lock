@@ -3823,7 +3823,7 @@ requires-dist = [
     { name = "google-genai", marker = "extra == 'gemini'", specifier = ">=1.0.0" },
     { name = "google-genai", marker = "extra == 'gemini-async'", specifier = ">=1.0.0" },
     { name = "gradio", marker = "extra == 'bot'", specifier = ">=6.6.0" },
-    { name = "grep-ast", specifier = ">=0.8.1" },
+    { name = "grep-ast", specifier = ">=0.9.0" },
     { name = "html2text", marker = "extra == 'bot'", specifier = ">=2020.1.16" },
     { name = "httpx", specifier = ">=0.25.0" },
     { name = "httpx", extras = ["socks"], marker = "extra == 'bot'", specifier = ">=0.25.0" },
