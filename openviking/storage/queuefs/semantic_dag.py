@@ -700,13 +700,23 @@ class SemanticDagExecutor:
                 )
         except Exception as e:
             logger.warning(f"Failed to generate summary for {file_path}: {e}")
-            summary_dict = {"name": file_name, "summary": ""}
+            summary_dict = {"name": file_name, "summary": "", "has_substantive_content": False}
         finally:
             self._stats.done_nodes += 1
             self._stats.in_progress_nodes = max(0, self._stats.in_progress_nodes - 1)
 
         if self._closed:
             return
+        # Skip vectorization for entries that carry no substantive content
+        # (heading-only / empty / whitespace-only docs). Such entries would
+        # produce misleading retrieval vectors.
+        has_substantive = summary_dict.get("has_substantive_content", True)
+        if need_vectorize and not has_substantive:
+            need_vectorize = False
+            logger.info(
+                "Skipping vectorization for non-substantive file: %s",
+                file_path,
+            )
         try:
             if need_vectorize:
                 use_summary = self._is_code_repo and bool(summary_dict.get("summary"))
