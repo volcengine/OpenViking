@@ -76,6 +76,7 @@ def test_checkpoint_record_respects_remaining_retained_budget():
     )
 
     assert records[0]["estimated_tokens"] <= 5
+    assert records[0]["checkpoint_version"] == 2
 
 
 async def test_two_pending_archives_are_visible_independent_of_commit_count(
@@ -757,6 +758,7 @@ async def test_phase2_persists_checkpoint_from_same_summary_call(
     )
     context = await session.get_session_context()
     assert calls == 1
+    assert meta["checkpoints"][0]["checkpoint_version"] == 2
     assert meta["checkpoints"][0]["turn_anchor_message_id"] == "u1"
     assert meta["checkpoints"][0]["source_message_ids"] == ["a1"]
     assert meta["checkpoints"][0]["abstract"] == (
@@ -910,6 +912,8 @@ Confirm the database state.
                 source_message_ids=(source.id,),
                 retained_message_token_budget=6000,
                 estimated_active_tokens=100,
+                previous_checkpoint_abstract=("Queried the service and found pool saturation."),
+                previous_checkpoint_source_message_ids=("older-source-id",),
             )
         ],
     )
@@ -920,6 +924,9 @@ Confirm the database state.
     assert len(calls) == 1
     assert calls[0]["tools"][0]["function"]["name"] == "update_working_memory"
     assert "checkpoint_summaries" in calls[0]["prompt"]
+    assert '<checkpoint_previous index="0">' in calls[0]["prompt"]
+    assert "Queried the service and found pool saturation." in calls[0]["prompt"]
+    assert "Never return only the new delta" in calls[0]["prompt"]
 
 
 async def test_roll_forward_collects_multiple_checkpoint_requests(
@@ -976,6 +983,135 @@ async def test_roll_forward_collects_multiple_checkpoint_requests(
     assert [request.source_message_ids for request in requests] == [("a1",), ("a2",)]
     assert formatted.count('<checkpoint_source index="0">') == 1
     assert formatted.count('<checkpoint_source index="1">') == 1
+
+
+async def test_phase2_rolls_previous_cumulative_checkpoint_into_v2_record(
+    client: AsyncOpenViking,
+):
+    session = client.session(session_id="cumulative_checkpoint_roll_forward_test")
+    await session.ensure_exists()
+    anchor = _text_message("u1", "user", "investigate the outage")
+    await _write_archive(
+        session,
+        1,
+        [anchor, _text_message("a1", "assistant", "first archived step")],
+        overview="# Working Memory\n\n## Current State\nFirst prefix covered.",
+        meta={
+            "checkpoints": [
+                {
+                    "checkpoint_version": 2,
+                    "turn_anchor_message_id": "u1",
+                    "source_message_ids": ["a1"],
+                    "abstract": "Pool saturation was confirmed.",
+                    "estimated_tokens": 7,
+                }
+            ]
+        },
+        done={"starting_message_id": "u1", "ending_message_id": "a1"},
+    )
+    current_source = _text_message("a2", "assistant", "second archived step")
+    current_uri = await _write_archive(
+        session,
+        2,
+        [anchor, current_source],
+        meta={
+            "retention_plan": {
+                "partial_turn": True,
+                "turn_anchor_message_id": "u1",
+                "checkpoint_source_message_ids": ["a2"],
+                "retained_message_token_budget": 6000,
+                "estimated_active_tokens": 100,
+            }
+        },
+    )
+
+    requests = await session._collect_checkpoint_requests_for_phase2(
+        current_uri,
+        [],
+        [anchor, current_source],
+    )
+
+    assert len(requests) == 1
+    assert requests[0].source_message_ids == ("a2",)
+    assert requests[0].previous_checkpoint_source_message_ids == ("a1",)
+    assert requests[0].previous_checkpoint_abstract == "Pool saturation was confirmed."
+    records = session._build_checkpoint_records(
+        requests,
+        ("Pool saturation was confirmed; the network path was ruled out.",),
+    )
+    assert records == [
+        {
+            "checkpoint_version": 2,
+            "turn_anchor_message_id": "u1",
+            "source_message_ids": ["a1", "a2"],
+            "abstract": ("Pool saturation was confirmed; the network path was ruled out."),
+            "estimated_tokens": records[0]["estimated_tokens"],
+        }
+    ]
+
+
+async def test_phase2_migrates_legacy_checkpoint_deltas_to_cumulative_v2(
+    client: AsyncOpenViking,
+):
+    session = client.session(session_id="legacy_checkpoint_migration_test")
+    await session.ensure_exists()
+    anchor = _text_message("u1", "user", "investigate the outage")
+    for index, source_id, abstract in (
+        (1, "a1", "Pool saturation was confirmed."),
+        (2, "a2", "The network path was ruled out."),
+    ):
+        await _write_archive(
+            session,
+            index,
+            [anchor, _text_message(source_id, "assistant", f"archived step {index}")],
+            overview=f"# Working Memory\n\n## Current State\nPrefix {index} covered.",
+            meta={
+                "checkpoints": [
+                    {
+                        # Missing checkpoint_version means legacy delta semantics.
+                        "turn_anchor_message_id": "u1",
+                        "source_message_ids": [source_id],
+                        "abstract": abstract,
+                    }
+                ]
+            },
+            done={"starting_message_id": "u1", "ending_message_id": source_id},
+        )
+    current_source = _text_message("a3", "assistant", "third archived step")
+    current_uri = await _write_archive(
+        session,
+        3,
+        [anchor, current_source],
+        meta={
+            "retention_plan": {
+                "partial_turn": True,
+                "turn_anchor_message_id": "u1",
+                "checkpoint_source_message_ids": ["a3"],
+                "retained_message_token_budget": 6000,
+                "estimated_active_tokens": 100,
+            }
+        },
+    )
+
+    requests = await session._collect_checkpoint_requests_for_phase2(
+        current_uri,
+        [],
+        [anchor, current_source],
+    )
+
+    assert requests[0].previous_checkpoint_source_message_ids == ("a1", "a2")
+    assert requests[0].previous_checkpoint_abstract == (
+        "Pool saturation was confirmed.\n\nThe network path was ruled out."
+    )
+    record = session._build_checkpoint_records(
+        requests,
+        (
+            "Pool saturation was confirmed, the network was ruled out, "
+            "and the database remains under investigation.",
+        ),
+    )[0]
+    assert record["checkpoint_version"] == 2
+    assert record["source_message_ids"] == ["a1", "a2", "a3"]
 
 
 async def test_checkpoint_request_rejects_user_or_cross_turn_sources(
@@ -1203,14 +1339,59 @@ async def test_covered_failed_partial_turn_checkpoint_points_to_covering_overvie
     assert checkpoint["source_message_ids"] == ["a1"]
 
 
-async def test_repeated_partial_commits_restore_only_newest_checkpoint(
+async def test_failed_terminal_checkpoint_metadata_is_never_restored(
     client: AsyncOpenViking,
 ):
-    """Terminal-stop keeps checkpoint reads O(1), so only archive_002 is restored.
+    session = client.session(session_id="failed_terminal_checkpoint_test")
+    await session.ensure_exists()
+    anchor = _text_message("u1", "user", "investigate the outage")
+    tail = _text_message("a3", "assistant", "latest raw step")
+    await _write_archive(
+        session,
+        1,
+        [anchor, _text_message("a1", "assistant", "completed prefix")],
+        overview="# Working Memory\n\n## Current State\nCompleted prefix.",
+        meta={
+            "checkpoints": [
+                {
+                    "checkpoint_version": 2,
+                    "turn_anchor_message_id": "u1",
+                    "source_message_ids": ["a1"],
+                    "abstract": "Completed prefix.",
+                }
+            ]
+        },
+        done={"starting_message_id": "u1", "ending_message_id": "a1"},
+    )
+    await _write_archive(
+        session,
+        2,
+        [anchor, _text_message("a2", "assistant", "failed prefix")],
+        failed=True,
+        meta={
+            "checkpoints": [
+                {
+                    "checkpoint_version": 2,
+                    "turn_anchor_message_id": "u1",
+                    "source_message_ids": ["a1", "a2"],
+                    "abstract": "This incomplete checkpoint must not be visible.",
+                }
+            ]
+        },
+    )
+    session._messages = [anchor, tail]
+    await session._write_to_agfs_async(messages=session._messages)
 
-    The earlier disjoint prefix from archive_001 is intentionally not merged
-    anymore; restoring it would require walking the whole archive history.
-    """
+    context = await session.get_session_context()
+
+    assert [message["id"] for message in context["messages"]] == ["u1", "a3"]
+    assert not any(message.get("message_kind") == "checkpoint" for message in context["messages"])
+
+
+async def test_repeated_legacy_partial_commits_merge_checkpoint_deltas(
+    client: AsyncOpenViking,
+):
+    """Legacy records have no version marker, so older deltas remain readable."""
     session = client.session(session_id="repeated_partial_checkpoint_merge_test")
     await session.ensure_exists()
     anchor = _text_message("u1", "user", "investigate the outage")
@@ -1260,9 +1441,79 @@ async def test_repeated_partial_commits_restore_only_newest_checkpoint(
         "a3",
     ]
     checkpoint = context["messages"][1]
-    assert checkpoint["source_message_ids"] == ["a2"]
+    assert checkpoint["source_message_ids"] == ["a1", "a2"]
     assert checkpoint["parts"][0]["uri"] == second_uri
-    assert checkpoint["parts"][0]["abstract"] == "Second prefix ruled out the network path."
+    assert checkpoint["parts"][0]["abstract"] == (
+        "First prefix found pool saturation.\n\nSecond prefix ruled out the network path."
+    )
+
+
+async def test_repeated_v2_partial_commits_restore_newest_cumulative_checkpoint_only(
+    client: AsyncOpenViking,
+    monkeypatch,
+):
+    """The newest v2 record is complete, so context does not read older archives."""
+    session = client.session(session_id="repeated_cumulative_checkpoint_test")
+    await session.ensure_exists()
+    anchor = _text_message("u1", "user", "investigate the outage")
+    tail = _text_message("a3", "assistant", "latest raw step")
+    await _write_archive(
+        session,
+        1,
+        [anchor, _text_message("a1", "assistant", "first old step")],
+        overview="# Working Memory\n\n## Current State\nFirst prefix covered.",
+        meta={
+            "checkpoints": [
+                {
+                    "checkpoint_version": 2,
+                    "turn_anchor_message_id": "u1",
+                    "source_message_ids": ["a1"],
+                    "abstract": "First prefix found pool saturation.",
+                    "estimated_tokens": 9,
+                }
+            ]
+        },
+        done={"starting_message_id": "u1", "ending_message_id": "a1"},
+    )
+    second_uri = await _write_archive(
+        session,
+        2,
+        [anchor, _text_message("a2", "assistant", "second old step")],
+        overview="# Working Memory\n\n## Current State\nSecond prefix covered.",
+        meta={
+            "checkpoints": [
+                {
+                    "checkpoint_version": 2,
+                    "turn_anchor_message_id": "u1",
+                    "source_message_ids": ["a1", "a2"],
+                    "abstract": ("Pool saturation was found, then the network path was ruled out."),
+                    "estimated_tokens": 15,
+                }
+            ]
+        },
+        done={"starting_message_id": "u1", "ending_message_id": "a2"},
+    )
+    session._messages = [anchor, tail]
+    await session._write_to_agfs_async(messages=session._messages)
+
+    touched: list[str] = []
+    original_read_file = session._viking_fs.read_file
+
+    async def tracking_read_file(*args, **kwargs):
+        uri = args[0] if args else kwargs.get("uri")
+        touched.append(uri)
+        return await original_read_file(*args, **kwargs)
+
+    monkeypatch.setattr(session._viking_fs, "read_file", tracking_read_file)
+    context = await session.get_session_context()
+
+    checkpoint = context["messages"][1]
+    assert checkpoint["source_message_ids"] == ["a1", "a2"]
+    assert checkpoint["parts"][0]["uri"] == second_uri
+    assert checkpoint["parts"][0]["abstract"] == (
+        "Pool saturation was found, then the network path was ruled out."
+    )
+    assert not any(isinstance(uri, str) and "archive_001" in uri for uri in touched)
 
 
 async def test_commit_externalizes_tool_outputs_across_the_whole_turn(

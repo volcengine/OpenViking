@@ -840,7 +840,24 @@ async def test_add_resource_processor_persists_final_resource_uri(monkeypatch):
     )
     task_tracker.complete.assert_awaited_once_with(
         "task-1",
-        {"status": "success", "root_uri": final_uri},
+        {
+            "status": "success",
+            "root_uri": final_uri,
+            "queue_status": {
+                "Semantic": {
+                    "processed": 0,
+                    "requeue_count": 0,
+                    "error_count": 0,
+                    "errors": [],
+                },
+                "Embedding": {
+                    "processed": 0,
+                    "requeue_count": 0,
+                    "error_count": 0,
+                    "errors": [],
+                },
+            },
+        },
         account_id="account-1",
         user_id="user-1",
         resource_id=final_uri,

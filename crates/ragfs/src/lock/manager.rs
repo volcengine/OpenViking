@@ -432,6 +432,14 @@ impl PathLockManager {
         now_ns.saturating_sub(token.time_ns) > expire_ns
     }
 
+    /// Return whether an acquire-loop error should be retried within the wait budget.
+    fn is_retryable_error(error: &PathLockError) -> bool {
+        matches!(
+            error,
+            PathLockError::Conflict { .. } | PathLockError::Busy { .. }
+        )
+    }
+
     /// Resolve a trusted reentrant owner from an active local lease capability.
     async fn resolve_owner_id(
         &self,
@@ -658,7 +666,7 @@ impl PathLockManager {
                     .await?;
                 acquired_lock_paths.clear();
 
-                if !matches!(err, PathLockError::Conflict { .. }) {
+                if !Self::is_retryable_error(&err) {
                     if is_waiting {
                         let mut metrics = self.metrics.write().await;
                         metrics.waiting_lock_count = metrics.waiting_lock_count.saturating_sub(1);
@@ -778,7 +786,7 @@ impl PathLockManager {
                     .await?;
                 acquired_lock_paths.clear();
 
-                if !matches!(err, PathLockError::Conflict { .. }) {
+                if !Self::is_retryable_error(&err) {
                     if is_waiting {
                         let mut metrics = self.metrics.write().await;
                         metrics.waiting_lock_count = metrics.waiting_lock_count.saturating_sub(1);
@@ -925,8 +933,8 @@ impl PathLockManager {
                     kind: existing.lock_type,
                 });
             }
-            // Stale — remove it.
-            let _ = self.provider.remove_token(lock_path, &existing.owner_id).await;
+            // Stale — remove it before attempting to create our own token.
+            self.provider.remove_token(lock_path, &existing.owner_id).await?;
         }
 
         self.provider.try_create_token(lock_path, &token).await?;
@@ -1622,6 +1630,8 @@ mod tests {
         fail_next_read: AtomicBool,
         fail_next_remove: AtomicBool,
         return_false_next_remove: AtomicBool,
+        busy_next_remove: AtomicBool,
+        busy_remove_count: AtomicUsize,
     }
 
     impl FailNextRemoveProvider {
@@ -1632,9 +1642,22 @@ mod tests {
                 fail_next_read: AtomicBool::new(true),
                 fail_next_remove: AtomicBool::new(false),
                 return_false_next_remove: AtomicBool::new(false),
+                busy_next_remove: AtomicBool::new(false),
+                busy_remove_count: AtomicUsize::new(0),
             }
         }
 
+        /// Build a memory provider whose next remove reports a retryable busy error.
+        fn with_busy_remove() -> Self {
+            Self {
+                inner: crate::lock::provider::MemoryPathLockProvider::new(),
+                fail_next_read: AtomicBool::new(false),
+                fail_next_remove: AtomicBool::new(false),
+                return_false_next_remove: AtomicBool::new(false),
+                busy_next_remove: AtomicBool::new(true),
+                busy_remove_count: AtomicUsize::new(0),
+            }
+        }
     }
 
     #[async_trait]
@@ -1685,6 +1708,13 @@ mod tests {
             lock_path: &str,
             owner_id: &str,
         ) -> PathLockResult<bool> {
+            if self.busy_next_remove.swap(false, Ordering::SeqCst) {
+                self.busy_remove_count.fetch_add(1, Ordering::SeqCst);
+                return Err(PathLockError::Busy {
+                    lock_path: lock_path.to_string(),
+                    operation: "remove".to_string(),
+                });
+            }
             if self.return_false_next_remove.swap(false, Ordering::SeqCst) {
                 return Ok(false);
             }
@@ -2032,5 +2062,40 @@ mod tests {
                 .await,
             Err(PathLockError::Io(message)) if message == "injected read failure"
         ));
+    }
+
+    #[tokio::test]
+    async fn busy_cleanup_is_retried() {
+        let fs = Arc::new(MemFileSystem::new());
+        fs.mkdir("/data", 0o755).await.unwrap();
+        let provider = Arc::new(FailNextRemoveProvider::with_busy_remove());
+        provider
+            .inner
+            .try_create_token(
+                "/data/file.txt/.path.ovlock",
+                &LockToken {
+                    owner_id: "stale-owner".to_string(),
+                    time_ns: 1,
+                    lock_type: PathLockKind::Tree,
+                },
+            )
+            .await
+            .unwrap();
+        let mgr = PathLockManager::new(
+            fs,
+            provider.clone(),
+            PathLockConfig {
+                lock_expire_secs: 1.0,
+                ..PathLockConfig::default()
+            },
+        );
+
+        let lease = mgr
+            .acquire_tree("/data/file.txt", Duration::from_millis(200), None)
+            .await
+            .unwrap();
+
+        assert_eq!(provider.busy_remove_count.load(Ordering::SeqCst), 1);
+        mgr.release(&lease).await.unwrap();
     }
 }
