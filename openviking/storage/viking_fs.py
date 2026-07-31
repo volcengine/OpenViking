@@ -4115,7 +4115,13 @@ class VikingFS:
         """
         real_ctx = self._ctx_or_default(ctx)
         account = real_ctx.account_id
-        if path is not None:
+        if path is None:
+            if real_ctx.role not in {Role.ROOT, Role.ADMIN}:
+                raise PermissionDeniedError(
+                    "Account-wide snapshot metadata requires an administrator role",
+                    resource="viking://",
+                )
+        else:
             self._ensure_access(path, real_ctx)
         tree_path = self._uri_to_tree_path(path, ctx=real_ctx) if path else None
         kwargs: Dict[str, Any] = {
@@ -4159,6 +4165,25 @@ class VikingFS:
             )
         return resp
 
+    async def _resolve_snapshot_oid(
+        self,
+        target_ref: str,
+        *,
+        ctx: RequestContext,
+    ) -> str:
+        """Resolve a snapshot ref after the caller has authorized its scoped operation."""
+        resp = await self._async_agfs.run(
+            "git_show",
+            account=ctx.account_id,
+            target_ref=target_ref,
+            path=None,
+        )
+        if not isinstance(resp, dict):
+            raise TypeError(
+                f"git_show returned unexpected shape for commit metadata: {type(resp).__name__}"
+            )
+        return str(resp.get("oid", target_ref))
+
     async def diff(
         self,
         *,
@@ -4172,19 +4197,16 @@ class VikingFS:
         path = canonicalize_uri(path, ctx=real_ctx)
         self._ensure_access(path, real_ctx)
 
-        from_meta: Optional[Dict[str, Any]] = None
+        from_oid = ""
         if from_ref:
             try:
-                from_meta = await self.show(from_ref, ctx=real_ctx)
+                from_oid = await self._resolve_snapshot_oid(from_ref, ctx=real_ctx)
             except AGFSNotFoundError as exc:
                 raise NotFoundError(from_ref, "git_ref") from exc
         try:
-            to_meta = await self.show(to_ref, ctx=real_ctx)
+            to_oid = await self._resolve_snapshot_oid(to_ref, ctx=real_ctx)
         except AGFSNotFoundError as exc:
             raise NotFoundError(to_ref, "git_ref") from exc
-
-        from_oid = str(from_meta.get("oid", from_ref)) if isinstance(from_meta, dict) else ""
-        to_oid = str(to_meta.get("oid", to_ref)) if isinstance(to_meta, dict) else to_ref
 
         async def read_optional(ref: str) -> Optional[bytes]:
             try:

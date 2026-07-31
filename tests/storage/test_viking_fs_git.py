@@ -74,6 +74,9 @@ async def test_diff_reads_blobs_from_resolved_commit_oids():
         def _ensure_access(self, uri, ctx):
             return None
 
+        async def _resolve_snapshot_oid(self, target_ref, *, ctx):
+            return from_oid if target_ref == "base" else to_oid
+
         async def show(self, target_ref, *, path=None, ctx=None, max_blob_bytes=None):
             if path is None:
                 return {"oid": from_oid if target_ref == "base" else to_oid}
@@ -121,6 +124,9 @@ class _DiffVikingFS:
 
     def _ensure_access(self, uri, ctx):
         self.access_checks.append((uri, ctx))
+
+    async def _resolve_snapshot_oid(self, target_ref, *, ctx):
+        return target_ref
 
     async def show(self, target_ref, *, path=None, ctx=None, max_blob_bytes=None):
         if path is None:
@@ -225,6 +231,21 @@ async def test_log_rejects_another_users_path_before_reading_history():
     assert vfs._async_agfs.calls == []
 
 
+async def test_show_rejects_account_wide_metadata_for_user():
+    vfs = _bare_viking_fs(
+        {
+            "oid": "a" * 40,
+            "parents": ["b" * 40],
+            "message": "another user's snapshot",
+        }
+    )
+
+    with pytest.raises(PermissionDeniedError, match="Account-wide snapshot metadata"):
+        await vfs.show("main", ctx=_user_context())
+
+    assert vfs._async_agfs.calls == []
+
+
 async def test_log_allows_user_history_for_an_accessible_path():
     vfs = _bare_viking_fs()
 
@@ -244,6 +265,25 @@ async def test_log_allows_user_history_for_an_accessible_path():
             },
         )
     ]
+
+
+async def test_diff_allows_user_for_an_accessible_path():
+    path = "viking://user/user/memories/experiences/example.md"
+    vfs = _DiffVikingFS(b"old\n", b"new\n")
+
+    result = await VikingFS.diff(
+        vfs,
+        path=path,
+        from_ref="from",
+        to_ref="to",
+        ctx=_user_context(),
+    )
+
+    assert vfs.access_checks == [(path, _user_context())]
+    assert result["from_commit"] == "from"
+    assert result["to_commit"] == "to"
+    assert "-old" in result["diff_text"]
+    assert "+new" in result["diff_text"]
 
 
 async def test_restore_rejects_account_wide_restore_for_user():
