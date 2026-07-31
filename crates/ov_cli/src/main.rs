@@ -33,15 +33,15 @@ use std::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum ParseMode {
     Default,
-    #[value(name = "no_parse", alias = "no-parse")]
-    NoParse,
+    #[value(name = "no_split", alias = "no-split")]
+    NoSplit,
 }
 
 impl ParseMode {
     pub(crate) fn api_value(self) -> Option<&'static str> {
         match self {
             Self::Default => None,
-            Self::NoParse => Some("no_parse"),
+            Self::NoSplit => Some("no_split"),
         }
     }
 }
@@ -405,7 +405,7 @@ enum Commands {
             help_heading = "Advanced options"
         )]
         processing_mode: String,
-        /// Resource staging strategy: default parser behavior or no parser-driven splitting
+        /// Parsing layout: default behavior or one Markdown body per source document
         #[arg(
             long,
             value_enum,
@@ -4149,22 +4149,36 @@ mod tests {
     }
 
     #[test]
-    fn cli_add_resource_parses_no_parse_mode() {
+    fn cli_add_resource_parses_no_split_mode() {
         let cli = Cli::try_parse_from([
             "ov",
             "add-resource",
             "./README.md",
             "--parse-mode",
-            "no_parse",
+            "no_split",
         ])
-        .expect("no_parse should be accepted");
+        .expect("no_split should be accepted");
 
         match cli.command {
             Commands::AddResource { parse_mode, .. } => {
-                assert_eq!(parse_mode, ParseMode::NoParse);
+                assert_eq!(parse_mode, ParseMode::NoSplit);
             }
             _ => panic!("expected add-resource command"),
         }
+    }
+
+    #[test]
+    fn cli_add_resource_rejects_removed_no_parse_mode() {
+        assert!(
+            Cli::try_parse_from([
+                "ov",
+                "add-resource",
+                "./README.md",
+                "--parse-mode",
+                "no_parse",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

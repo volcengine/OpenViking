@@ -1899,10 +1899,10 @@ mod tests {
             .expect("request should be captured");
         assert!(!default_request.contains("parse_mode"));
 
-        let (no_parse_url, no_parse_request_rx) = spawn_request_capture_server().await;
-        let no_parse_client =
-            HttpClient::new(no_parse_url, None, None, None, None, 5.0, false, None);
-        no_parse_client
+        let (no_split_url, no_split_request_rx) = spawn_request_capture_server().await;
+        let no_split_client =
+            HttpClient::new(no_split_url, None, None, None, None, 5.0, false, None);
+        no_split_client
             .add_resource(
                 "https://example.com/manual.pdf",
                 None,
@@ -1920,7 +1920,7 @@ mod tests {
                 true,
                 0.0,
                 "semantic_and_vectors".to_string(),
-                Some("no_parse".to_string()),
+                Some("no_split".to_string()),
                 None,
                 Vec::new(),
                 "replace".to_string(),
@@ -1928,11 +1928,11 @@ mod tests {
                 false,
             )
             .await
-            .expect("no_parse add-resource request should succeed");
-        let no_parse_request = no_parse_request_rx
+            .expect("no_split add-resource request should succeed");
+        let no_split_request = no_split_request_rx
             .await
             .expect("request should be captured");
-        assert!(no_parse_request.contains(r#""parse_mode":"no_parse""#));
+        assert!(no_split_request.contains(r#""parse_mode":"no_split""#));
     }
 
     #[test]

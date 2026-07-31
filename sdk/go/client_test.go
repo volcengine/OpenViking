@@ -593,10 +593,10 @@ func TestAddResourceUploadsLocalFile(t *testing.T) {
 	}
 }
 
-func TestAddResourceSendsNoParseMode(t *testing.T) {
+func TestAddResourceSendsNoSplitMode(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body := readJSONBody(t, r)
-		if body["parse_mode"] != "no_parse" {
+		if body["parse_mode"] != "no_split" {
 			t.Fatalf("parse_mode = %#v", body["parse_mode"])
 		}
 		writeOK(t, w, map[string]any{"uri": "viking://resources/manual"})
@@ -606,7 +606,7 @@ func TestAddResourceSendsNoParseMode(t *testing.T) {
 	if _, err := client.AddResource(
 		context.Background(),
 		"https://example.com/manual.pdf",
-		&AddResourceOptions{ParseMode: ParseModeNoParse},
+		&AddResourceOptions{ParseMode: ParseModeNoSplit},
 	); err != nil {
 		t.Fatal(err)
 	}

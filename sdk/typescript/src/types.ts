@@ -9,8 +9,8 @@ export type ClientHeaders =
 export type UploadMode = "local" | "shared";
 /** Resource post-ingest processing modes accepted by addResource. */
 export type ProcessingMode = "semantic_and_vectors" | "vectors_only";
-/** Resource staging strategy supported by addResource. */
-export type ParseMode = "default" | "no_parse";
+/** Parsed document layout supported by addResource. */
+export type ParseMode = "default" | "no_split";
 /** Conflict policy accepted when importing an OVPack. */
 export type PackConflictPolicy = "fail" | "overwrite" | "skip";
 /** Vector handling strategy accepted when importing an OVPack. */

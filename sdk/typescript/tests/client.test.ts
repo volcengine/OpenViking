@@ -390,13 +390,13 @@ describe("OpenVikingClient", () => {
 
     await client.addResource("https://example.com/default.md");
     await client.addResource("https://example.com/raw.pdf", {
-      parseMode: "no_parse",
+      parseMode: "no_split",
     });
 
     const defaultBody = JSON.parse(String(fetcher.mock.calls[0]![1]?.body));
-    const noParseBody = JSON.parse(String(fetcher.mock.calls[1]![1]?.body));
+    const noSplitBody = JSON.parse(String(fetcher.mock.calls[1]![1]?.body));
     expect(defaultBody).not.toHaveProperty("parse_mode");
-    expect(noParseBody.parse_mode).toBe("no_parse");
+    expect(noSplitBody.parse_mode).toBe("no_split");
   });
 
   it("streams OVPack exports to a normalized local file", async () => {

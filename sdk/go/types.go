@@ -5,12 +5,12 @@ import (
 	"time"
 )
 
-// ParseMode controls whether add-resource parsers split source files.
+// ParseMode controls whether parsed document bodies are split into multiple files.
 type ParseMode string
 
 const (
 	ParseModeDefault ParseMode = "default"
-	ParseModeNoParse ParseMode = "no_parse"
+	ParseModeNoSplit ParseMode = "no_split"
 )
 
 // Config configures an HTTP OpenViking client.

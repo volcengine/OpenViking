@@ -25,14 +25,14 @@ func (c *Client) AddResource(ctx context.Context, path string, opts *AddResource
 	switch opts.ParseMode {
 	case "", ParseModeDefault:
 		// Omit the default for compatibility with servers predating parse_mode.
-	case ParseModeNoParse:
+	case ParseModeNoSplit:
 		payload["parse_mode"] = string(opts.ParseMode)
 	default:
 		return nil, fmt.Errorf(
 			"openviking: invalid ParseMode %q (expected %q or %q)",
 			opts.ParseMode,
 			ParseModeDefault,
-			ParseModeNoParse,
+			ParseModeNoSplit,
 		)
 	}
 	setString(payload, "to", opts.To)
