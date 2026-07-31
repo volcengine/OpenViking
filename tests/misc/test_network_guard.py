@@ -266,6 +266,11 @@ class TestEnsurePublicRemoteTarget:
         mock_resolve.return_value = {"8.8.8.8", "8.8.4.4"}
         assert ensure_public_remote_target("http://dns-rr.example.com/path") == "8.8.4.4"
 
+    @patch("openviking.utils.network_guard._resolve_host_addresses")
+    def test_prefers_ipv4_for_mixed_address_families(self, mock_resolve) -> None:
+        mock_resolve.return_value = {"2606:4700:4700::1111", "1.1.1.1"}
+        assert ensure_public_remote_target("https://dual-stack.example/") == "1.1.1.1"
+
 
 # ── build_httpx_request_validation_hooks ─────────────────────────────────────
 

@@ -120,7 +120,13 @@ def ensure_public_remote_target(source: str) -> Optional[str]:
             f"host '{host}' resolves to non-public address '{non_public[0]}'. "
             "To allow private destinations, set allow_private_networks=true in your ov.conf."
         )
-    return sorted(resolved_addresses)[0]
+    # Scrapy's threaded resolver exposes an IPv4-only interface. Prefer a
+    # validated IPv4 address when the host publishes both families, while
+    # retaining IPv6 for IPv6-only destinations and HTTPX callers.
+    return sorted(
+        resolved_addresses,
+        key=lambda address: (ipaddress.ip_address(address).version, address),
+    )[0]
 
 
 class ValidatedAsyncHTTPTransport(httpx.AsyncBaseTransport):
