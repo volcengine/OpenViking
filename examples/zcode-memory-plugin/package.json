@@ -1,0 +1,10 @@
+{
+  "name": "zcode-openviking-memory",
+  "version": "0.1.0",
+  "description": "OpenViking memory plugin for ZCode — semantic long-term memory",
+  "type": "module",
+  "scripts": {
+    "test": "node --test scripts/zcode-turns.test.mjs scripts/zcode-hooks.test.mjs"
+  },
+  "private": true
+}
