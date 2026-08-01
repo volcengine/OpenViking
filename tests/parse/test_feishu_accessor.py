@@ -298,6 +298,118 @@ def test_access_expands_drive_folder_recursively(monkeypatch):
         resource.cleanup()
 
 
+def test_access_drive_folder_skips_item_failures_by_default(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+    accessor = FeishuAccessor()
+    accessor._config = SimpleNamespace(download_images=False)
+
+    monkeypatch.setattr(
+        accessor,
+        "_list_drive_folder_children",
+        lambda folder_token, **_kwargs: [
+            SimpleNamespace(token="doc_token", name="Spec Doc", type="docx", url=""),
+            SimpleNamespace(token="blocked_file", name="Blocked.pptx", type="file", url=""),
+        ],
+    )
+
+    async def fake_fetch_document(url, **_kwargs):
+        from openviking.parse.accessors.feishu_accessor import FeishuDocument
+
+        doc_type, token = accessor._parse_feishu_url(url)
+        return FeishuDocument(
+            doc_type=doc_type,
+            token=token,
+            markdown_content="# ok",
+            title="Spec Doc",
+            meta={},
+        )
+
+    def fake_download(file_token, **_kwargs):
+        raise RuntimeError("HTTP 403")
+
+    monkeypatch.setattr(accessor, "_fetch_document", fake_fetch_document)
+    monkeypatch.setattr(accessor, "_download_drive_file", fake_download)
+
+    resource = asyncio.run(
+        accessor.access(
+            "https://bytedance.larkoffice.com/drive/folder/root_folder",
+            feishu_access_token="u-test",
+        )
+    )
+    try:
+        assert (resource.path / "Spec Doc.md").read_text(encoding="utf-8") == "# ok"
+        skipped = resource.meta["feishu_folder_skipped_items"]
+        assert len(skipped) == 1
+        assert skipped[0]["name"] == "Blocked.pptx"
+        assert skipped[0]["type"] == "file"
+        assert skipped[0]["token"] == "blocked_file"
+        assert "HTTP 403" in skipped[0]["reason"]
+    finally:
+        resource.cleanup()
+
+
+def test_access_drive_folder_reports_unsupported_items(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+    accessor = FeishuAccessor()
+    accessor._config = SimpleNamespace(download_images=False)
+
+    monkeypatch.setattr(
+        accessor,
+        "_list_drive_folder_children",
+        lambda folder_token, **_kwargs: [
+            SimpleNamespace(token="slides_token", name="Deck", type="slides", url=""),
+        ],
+    )
+
+    resource = asyncio.run(
+        accessor.access(
+            "https://bytedance.larkoffice.com/drive/folder/root_folder",
+            feishu_access_token="u-test",
+        )
+    )
+    try:
+        skipped = resource.meta["feishu_folder_skipped_items"]
+        assert skipped == [
+            {
+                "path": str(resource.path / "Deck"),
+                "name": "Deck",
+                "type": "slides",
+                "token": "slides_token",
+                "reason": "Unsupported Feishu Drive item type: slides",
+            }
+        ]
+    finally:
+        resource.cleanup()
+
+
+def test_access_drive_folder_strict_raises_item_failures(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+    accessor = FeishuAccessor()
+    accessor._config = SimpleNamespace(download_images=False)
+
+    monkeypatch.setattr(
+        accessor,
+        "_list_drive_folder_children",
+        lambda folder_token, **_kwargs: [
+            SimpleNamespace(token="blocked_file", name="Blocked.pptx", type="file", url=""),
+        ],
+    )
+    monkeypatch.setattr(
+        accessor,
+        "_download_drive_file",
+        lambda file_token, **_kwargs: (_ for _ in ()).throw(RuntimeError("HTTP 403")),
+    )
+
+    with pytest.raises(RuntimeError, match="HTTP 403"):
+        asyncio.run(
+            accessor.access(
+                "https://bytedance.larkoffice.com/drive/folder/root_folder",
+                feishu_access_token="u-test",
+                strict=True,
+            )
+        )
+
+
 def test_list_drive_folder_children_paginates_with_user_token(monkeypatch):
     _install_fake_lark_modules(monkeypatch)
     request = MagicMock(

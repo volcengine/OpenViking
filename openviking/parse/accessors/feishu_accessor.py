@@ -315,11 +315,14 @@ class FeishuAccessor(DataAccessor):
 
             if doc_type == "folder":
                 temp_dir = Path(tempfile.mkdtemp(prefix="ov_feishu_folder_"))
+                skipped_items: list[dict[str, Any]] = []
                 try:
                     await self._materialize_drive_folder(
                         token,
                         temp_dir,
                         feishu_access_token=feishu_access_token,
+                        skipped_items=skipped_items,
+                        strict=bool(kwargs.get("strict", False)),
                     )
                 except Exception:
                     shutil.rmtree(temp_dir, ignore_errors=True)
@@ -332,6 +335,7 @@ class FeishuAccessor(DataAccessor):
                         "feishu_doc_type": doc_type,
                         "feishu_token": token,
                         "original_filename": _safe_path_segment(token, fallback="folder"),
+                        "feishu_folder_skipped_items": skipped_items,
                     },
                     is_temporary=True,
                 )
@@ -515,6 +519,8 @@ class FeishuAccessor(DataAccessor):
         *,
         feishu_access_token: Optional[str] = None,
         _seen: Optional[set[str]] = None,
+        skipped_items: Optional[list[dict[str, Any]]] = None,
+        strict: bool = False,
     ) -> None:
         """Expand a Feishu Drive folder into a local directory tree."""
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -524,80 +530,157 @@ class FeishuAccessor(DataAccessor):
             return
         seen.add(folder_token)
 
-        children = await asyncio.to_thread(
-            self._list_drive_folder_children,
-            folder_token,
-            feishu_access_token=feishu_access_token,
-        )
-        for item in children:
-            item_type, item_token, item_name, item_url = self._normalize_drive_item(item)
-            if not item_token:
-                logger.warning("[FeishuAccessor] Skipping Drive item without token: %s", item)
-                continue
-
-            if item_type == "folder":
-                folder_name = _safe_path_segment(item_name or item_token, fallback=item_token)
-                child_dir = self._unique_child_path(target_dir, folder_name)
-                await self._materialize_drive_folder(
-                    item_token,
-                    child_dir,
-                    feishu_access_token=feishu_access_token,
-                    _seen=seen,
-                )
-                continue
-
-            doc_path_type = _FEISHU_DRIVE_DOC_TYPES.get(item_type)
-            if doc_path_type:
-                url = item_url or self._build_feishu_doc_url(doc_path_type, item_token)
-                doc = await self._fetch_document(
-                    url,
-                    feishu_access_token=feishu_access_token,
-                )
-                markdown_content, downloaded_images = await asyncio.to_thread(
-                    self._resolve_image_refs,
-                    doc.markdown_content,
-                    feishu_access_token=feishu_access_token,
-                    media_download_extras=doc.media_download_extras,
-                )
-                doc_name = _safe_path_segment(
-                    item_name or doc.title or item_token,
-                    fallback=item_token,
-                )
-                markdown_path = self._unique_child_path(
-                    target_dir,
-                    self._markdown_file_name(doc_name),
-                )
-                markdown_path.write_text(markdown_content, encoding="utf-8")
-                for rel_path, image_bytes in downloaded_images.items():
-                    image_path = markdown_path.parent / rel_path
-                    image_path.parent.mkdir(parents=True, exist_ok=True)
-                    image_path.write_bytes(image_bytes)
-                continue
-
-            if item_type == "file":
-                content, content_type, downloaded_name = await asyncio.to_thread(
-                    self._download_drive_file,
-                    item_token,
-                    feishu_access_token=feishu_access_token,
-                    filename_hint=item_name,
-                )
-                file_name = self._drive_file_name(
-                    item_token,
-                    content,
-                    content_type,
-                    filename_hint=downloaded_name or item_name,
-                )
-                file_path = self._unique_child_path(target_dir, file_name)
-                file_path.write_bytes(content)
-                continue
-
-            logger.warning(
-                "[FeishuAccessor] Skipping unsupported Drive item type %s for token %s",
-                item_type,
-                item_token,
+        try:
+            children = await asyncio.to_thread(
+                self._list_drive_folder_children,
+                folder_token,
+                feishu_access_token=feishu_access_token,
             )
+            for item in children:
+                item_type, item_token, item_name, item_url = self._normalize_drive_item(item)
+                if not item_token:
+                    logger.warning("[FeishuAccessor] Skipping Drive item without token: %s", item)
+                    continue
 
-        seen.remove(folder_token)
+                if item_type == "folder":
+                    folder_name = _safe_path_segment(item_name or item_token, fallback=item_token)
+                    child_dir = self._unique_child_path(target_dir, folder_name)
+                    try:
+                        await self._materialize_drive_folder(
+                            item_token,
+                            child_dir,
+                            feishu_access_token=feishu_access_token,
+                            _seen=seen,
+                            skipped_items=skipped_items,
+                            strict=strict,
+                        )
+                    except Exception as exc:
+                        shutil.rmtree(child_dir, ignore_errors=True)
+                        self._record_skipped_drive_item(
+                            skipped_items,
+                            item_type=item_type,
+                            token=item_token,
+                            name=item_name,
+                            target_dir=target_dir,
+                            error=exc,
+                        )
+                        if strict:
+                            raise
+                    continue
+
+                doc_path_type = _FEISHU_DRIVE_DOC_TYPES.get(item_type)
+                if doc_path_type:
+                    try:
+                        url = item_url or self._build_feishu_doc_url(doc_path_type, item_token)
+                        doc = await self._fetch_document(
+                            url,
+                            feishu_access_token=feishu_access_token,
+                        )
+                        markdown_content, downloaded_images = await asyncio.to_thread(
+                            self._resolve_image_refs,
+                            doc.markdown_content,
+                            feishu_access_token=feishu_access_token,
+                            media_download_extras=doc.media_download_extras,
+                        )
+                        doc_name = _safe_path_segment(
+                            item_name or doc.title or item_token,
+                            fallback=item_token,
+                        )
+                        markdown_path = self._unique_child_path(
+                            target_dir,
+                            self._markdown_file_name(doc_name),
+                        )
+                        markdown_path.write_text(markdown_content, encoding="utf-8")
+                        for rel_path, image_bytes in downloaded_images.items():
+                            image_path = markdown_path.parent / rel_path
+                            image_path.parent.mkdir(parents=True, exist_ok=True)
+                            image_path.write_bytes(image_bytes)
+                    except Exception as exc:
+                        self._record_skipped_drive_item(
+                            skipped_items,
+                            item_type=item_type,
+                            token=item_token,
+                            name=item_name,
+                            target_dir=target_dir,
+                            error=exc,
+                        )
+                        if strict:
+                            raise
+                    continue
+
+                if item_type == "file":
+                    try:
+                        content, content_type, downloaded_name = await asyncio.to_thread(
+                            self._download_drive_file,
+                            item_token,
+                            feishu_access_token=feishu_access_token,
+                            filename_hint=item_name,
+                        )
+                        file_name = self._drive_file_name(
+                            item_token,
+                            content,
+                            content_type,
+                            filename_hint=downloaded_name or item_name,
+                        )
+                        file_path = self._unique_child_path(target_dir, file_name)
+                        file_path.write_bytes(content)
+                    except Exception as exc:
+                        self._record_skipped_drive_item(
+                            skipped_items,
+                            item_type=item_type,
+                            token=item_token,
+                            name=item_name,
+                            target_dir=target_dir,
+                            error=exc,
+                        )
+                        if strict:
+                            raise
+                    continue
+
+                error = ValueError(f"Unsupported Feishu Drive item type: {item_type}")
+                self._record_skipped_drive_item(
+                    skipped_items,
+                    item_type=item_type,
+                    token=item_token,
+                    name=item_name,
+                    target_dir=target_dir,
+                    error=error,
+                )
+                if strict:
+                    raise error
+
+        finally:
+            seen.discard(folder_token)
+
+    @staticmethod
+    def _record_skipped_drive_item(
+        skipped_items: Optional[list[dict[str, Any]]],
+        *,
+        item_type: str,
+        token: str,
+        name: str,
+        target_dir: Path,
+        error: Exception,
+    ) -> None:
+        message = str(error).replace("\n", " ")
+        logger.warning(
+            "[FeishuAccessor] Skipping Drive %s %s under %s: %s",
+            item_type,
+            token,
+            target_dir,
+            message,
+        )
+        if skipped_items is None:
+            return
+        skipped_items.append(
+            {
+                "path": str(target_dir / _safe_path_segment(name or token, fallback=token)),
+                "name": name or token,
+                "type": item_type,
+                "token": token,
+                "reason": message,
+            }
+        )
 
     def _list_drive_folder_children(
         self,
