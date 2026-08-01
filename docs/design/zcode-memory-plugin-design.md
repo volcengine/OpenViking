@@ -168,12 +168,16 @@ An open draft PR (#3544 by `now-ing`) already exists for this feature, and a mai
 **Prior art**: `examples/trae-memory-hooks/scripts/trae-hooks.test.mjs` — tests `buildTraeTurns(input, state)` with mock inputs covering: tag stripping, turn building, empty-turn dropping, state fallback.
 
 **Test cases for ZCode**:
-- Input with `prompt` + `last_assistant_message` → produces `[user, assistant]` turns
-- Input with only `prompt` → produces `[user]` turn (no assistant)
+- Input with `prompt` + `responseText` → produces `[user, assistant]` turns
+- Input with `prompt` + `responsePreview` → produces `[user, assistant]` turns
+- Input with only `responseText` → produces `[assistant]` turn (no user)
 - Input with empty prompt + state fallback → uses `state.pendingPrompt`
 - Input with `<openviking-context>` tags in content → tags stripped
 - Input with `<relevant-memories>` tags → tags stripped
 - Empty input → produces `[]`
+- Rollout fallback: stdin lacks user content → reads rollout file for complete conversation
+- Rollout incremental: `state.lastTurnId` set → returns only unseen entries
+- Rollout turnId propagation: turns from rollout carry `turnId` for dedup
 
 **Why this seam**: The transcript parser is pure (no I/O, no network, no filesystem), making it the highest-value, lowest-cost test. It validates the only ZCode-specific logic that can break silently — if the field names don't match ZCode's actual payload, turns are empty and capture silently no-ops.
 
