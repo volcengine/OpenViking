@@ -7,9 +7,11 @@ Logging utilities for OpenViking.
 import atexit
 import contextvars
 import logging
+import os
 import queue
 import sys
 import threading
+import time
 from contextlib import contextmanager
 from logging.handlers import QueueHandler, QueueListener, TimedRotatingFileHandler
 from pathlib import Path
@@ -92,13 +94,6 @@ def _reopen_rust_tracing_file() -> None:
         sys.stderr.write(f"Warning: Failed to reopen Rust tracing log file: {exc}\n")
 
 
-class _RustAwareTimedRotatingFileHandler(TimedRotatingFileHandler):
-    """Timed rotating file handler that refreshes the Rust tracing file handle."""
-
-    def doRollover(self) -> None:
-        """Rotate the active Python log file and then refresh the Rust writer."""
-        super().doRollover()
-        _reopen_rust_tracing_file()
 
 
 @contextmanager
@@ -746,6 +741,105 @@ def _add_trace_id_filter(handler: logging.Handler) -> None:
         handler.addFilter(TraceIdLoggingFilter())
 
 
+class _ResilientTimedRotatingFileHandler(TimedRotatingFileHandler):
+    """A rotating file handler that recovers from rollover failures.
+
+    The stdlib TimedRotatingFileHandler.doRollover() closes the active stream
+    and sets self.stream = None *before* performing the rename/remove. If that
+    rename raises (notably Windows sharing/locking violations, or any other
+    filesystem error), the stream is left as None permanently, because the
+    reopen only runs after a successful rotate. emit() swallows the exception
+    via handleError and all subsequent records are silently lost.
+
+    This subclass:
+      - serializes rotation across processes via an advisory file lock, so two
+        uvicorn workers don't race to rename the same file;
+      - on a failed doRollover(), reopens the original log file so the next
+        record is written; and
+      - reschedules the next rollover so the failed rotation is retried on the
+        next record instead of being abandoned forever.
+    """
+
+    def __init__(self, filename: str, *args: Any, **kwargs: Any) -> None:
+        super().__init__(filename, *args, **kwargs)
+        self._rollover_lock_path = Path(filename).with_name(
+            f".{Path(filename).name}.rollover.lock"
+        )
+        self._rollover_thread_lock = threading.Lock()
+
+    @contextmanager
+    def _rollover_lock(self) -> Iterator[None]:
+        lock_fd: Optional[int] = None
+        if os.name != "nt":
+            try:
+                import fcntl  # type: ignore[import-not-found]
+
+                lock_fd = os.open(
+                    self._rollover_lock_path, os.O_CREAT | os.O_RDWR, 0o600
+                )
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            except (ImportError, OSError):
+                lock_fd = None
+        # On Windows fcntl is unavailable. Cross-process rename races are
+        # possible but recoverable: a failed doRollover reopens the original
+        # stream and reschedules, so no records are permanently lost.
+        try:
+            with self._rollover_thread_lock:
+                yield
+        finally:
+            if lock_fd is not None:
+                try:
+                    import fcntl  # type: ignore[import-not-found]
+
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                    os.close(lock_fd)
+                except OSError:
+                    pass
+
+    def doRollover(self) -> None:  # noqa: N802 - matches stdlib name
+        # Hold the cross-process lock for the entire close+rename+reopen so two
+        # workers cannot rotate simultaneously.
+        with self._rollover_lock():
+            # Snapshot the currently-open stream; if super().doRollover() fails
+            # partway, we need to know whether a recovery reopen is required.
+            had_stream = self.stream is not None
+            try:
+                super().doRollover()
+                _reopen_rust_tracing_file()
+            except Exception:
+                # super().doRollover() closes self.stream and sets it to None
+                # before renaming. If the rename failed, reopen the original
+                # file so subsequent emits are not silently dropped.
+                if self.stream is None and had_stream:
+                    try:
+                        self.stream = self._open()
+                    except Exception:
+                        # As a last resort, leave stream None; the next emit
+                        # will hit shouldRollover -> doRollover again.
+                        pass
+                # Reschedule rollover so the next record retries instead of
+                # abandoning rotation forever. super().doRollover() already
+                # recomputed rolloverAt on success paths that got far enough;
+                # if it failed early, recompute from now.
+                try:
+                    current_time = int(time.time())
+                    new_rollover_at = self.computeRollover(current_time)
+                    while new_rollover_at <= current_time:
+                        new_rollover_at = new_rollover_at + self.interval
+                    self.rolloverAt = new_rollover_at
+                except Exception:
+                    pass
+                # Do not re-raise: the stdlib caller (BaseRotatingHandler.emit)
+                # treats any exception as an emit failure and calls
+                # handleError, which by default silently drops the record. We
+                # want logging to continue on the reopened stream instead.
+                # Surface a one-line warning so the failure is observable.
+                sys.stderr.write(
+                    f"WARNING: log rotation failed for {self.baseFilename!r}; "
+                    "logging continues on the current file.\n"
+                )
+
+
 def _create_log_handler(log_output: str, config: Optional[Any]) -> logging.Handler:
     # Prevent creating a file literally named "file"
     if log_output == "file":
@@ -768,7 +862,7 @@ def _create_log_handler(log_output: str, config: Optional[Any]) -> logging.Handl
                         when = log_rotation_interval
                         interval = 1
 
-                    return _RustAwareTimedRotatingFileHandler(
+                    return _ResilientTimedRotatingFileHandler(
                         log_output,
                         when=when,
                         interval=interval,
