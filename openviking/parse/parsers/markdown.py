@@ -97,7 +97,12 @@ def _gh_slug(text: str) -> str:
     """GitHub-style heading slug: lowercase, strip punctuation, spaces→'-', keep CJK."""
     s = text.strip().lower()
     s = re.sub(r"[^\w\s-]", "", s)
-    s = re.sub(r"\s+", "-", s)
+    # Map each whitespace character to its own hyphen (do NOT collapse runs).
+    # GitHub's reference slugger does `.replace(/ /g, '-')` — one hyphen per
+    # space, no collapsing. Removing punctuation can leave adjacent spaces
+    # (e.g. "Foo & Bar" → "foo  bar"); collapsing them produces "foo-bar"
+    # while GitHub generates "foo--bar", breaking intra-doc anchor links.
+    s = re.sub(r"\s", "-", s)
     return s
 
 
