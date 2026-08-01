@@ -3,6 +3,7 @@
 """SemanticProcessor: Processes messages from SemanticQueue, generates .abstract.md and .overview.md."""
 
 import asyncio
+import json
 import re
 import threading
 from contextlib import nullcontext
@@ -31,7 +32,6 @@ from openviking.parse.parsers.media.utils import (
     get_media_type,
 )
 from openviking.prompts import render_prompt
-from openviking.utils.ingest_options import IngestOptions
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.internal_names import MEMORY_SUMMARY_CACHE_FILENAME
@@ -50,6 +50,7 @@ from openviking.utils.circuit_breaker import (
     CircuitBreakerOpen,
     classify_api_error,
 )
+from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.model_retry import ERROR_CLASS_INPUT_TOO_LARGE, ERROR_CLASS_PERMANENT
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import VikingURI
@@ -596,15 +597,31 @@ class SemanticProcessor(DequeueHandlerBase):
 
             existing_summaries: Dict[str, str] = {}
             if msg.changes:
+                valid_summary_cache = False
                 try:
-                    old_overview = await viking_fs.read_file(f"{dir_uri}/.overview.md", ctx=ctx)
-                    if old_overview:
-                        existing_summaries = self._parse_overview_md(old_overview)
+                    raw_cache = await viking_fs.read_file(
+                        f"{dir_uri}/{MEMORY_SUMMARY_CACHE_FILENAME}", ctx=ctx
+                    )
+                    parsed_cache = self._parse_memory_summary_cache(raw_cache)
+                    if parsed_cache is not None:
+                        valid_summary_cache = True
+                        existing_summaries.update(parsed_cache)
                         logger.info(
-                            f"Parsed {len(existing_summaries)} existing summaries from overview.md"
+                            f"Loaded {len(existing_summaries)} summaries from memory sidecar cache"
                         )
                 except Exception as e:
-                    logger.debug(f"No existing overview.md found for {dir_uri}: {e}")
+                    logger.debug(f"No memory summary sidecar found for {dir_uri}: {e}")
+
+                if not valid_summary_cache:
+                    try:
+                        old_overview = await viking_fs.read_file(f"{dir_uri}/.overview.md", ctx=ctx)
+                        if old_overview:
+                            existing_summaries.update(self._parse_overview_md(old_overview))
+                            logger.info(
+                                f"Parsed {len(existing_summaries)} existing summaries from overview.md"
+                            )
+                    except Exception as e:
+                        logger.debug(f"No existing overview.md found for {dir_uri}: {e}")
 
             changed_files: Set[str] = set()
             if msg.changes:
@@ -693,12 +710,14 @@ class SemanticProcessor(DequeueHandlerBase):
             overview, abstract = self._normalize_overview_generation(generated_content)
 
             try:
+                summary_cache = self._serialize_memory_summary_cache(completed_summaries)
                 wrote_semantics = await self._write_memory_directory_semantics(
                     msg=msg,
                     viking_fs=viking_fs,
                     dir_uri=dir_uri,
                     overview=overview,
                     abstract=abstract,
+                    summary_cache=summary_cache,
                     ctx=ctx,
                     lock=lock,
                 )
@@ -756,6 +775,7 @@ class SemanticProcessor(DequeueHandlerBase):
         dir_uri: str,
         overview: str,
         abstract: str,
+        summary_cache: str,
         ctx: Optional[RequestContext],
         lock: Optional[Dict[str, Any]] = None,
     ) -> bool:
@@ -764,6 +784,7 @@ class SemanticProcessor(DequeueHandlerBase):
             dir_uri=dir_uri,
             overview=overview,
             abstract=abstract,
+            summary_cache=summary_cache,
             ctx=ctx,
             is_stale=lambda: is_semantic_msg_stale(msg),
             lock=lock,
@@ -1299,6 +1320,40 @@ class SemanticProcessor(DequeueHandlerBase):
             summaries[current_file] = " ".join(current_summary_lines).strip()
 
         return summaries
+
+    def _parse_memory_summary_cache(self, cache_content: str) -> Optional[Dict[str, str]]:
+        """Parse the deterministic per-file cache, preserving invalid-vs-empty state."""
+        if not cache_content:
+            return None
+        try:
+            payload = json.loads(cache_content)
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(payload, dict) or payload.get("version") != MEMORY_SUMMARY_CACHE_VERSION:
+            return None
+        entries = payload.get("entries")
+        if not isinstance(entries, dict):
+            return None
+        return {
+            name: summary
+            for name, summary in entries.items()
+            if isinstance(name, str) and isinstance(summary, str) and summary.strip()
+        }
+
+    def _serialize_memory_summary_cache(self, file_summaries: List[Dict[str, str]]) -> str:
+        """Serialize summaries by exact filename, independent of LLM headings."""
+        entries = {
+            item["name"]: item["summary"]
+            for item in file_summaries
+            if isinstance(item.get("name"), str)
+            and isinstance(item.get("summary"), str)
+            and item["summary"].strip()
+        }
+        return json.dumps(
+            {"version": MEMORY_SUMMARY_CACHE_VERSION, "entries": entries},
+            ensure_ascii=False,
+            sort_keys=True,
+        )
 
     async def _generate_overview(
         self,

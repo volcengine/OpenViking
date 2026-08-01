@@ -16,8 +16,9 @@ async def write_semantic_sidecars(
     dir_uri: str,
     overview: str,
     abstract: str,
-    ctx: Optional[RequestContext],
     is_stale: Callable[[], bool],
+    summary_cache: Optional[str] = None,
+    ctx: Optional[RequestContext] = None,
     lock: Optional[Dict[str, Any]] = None,
     log_prefix: str = "[Semantic]",
 ) -> bool:
@@ -26,9 +27,11 @@ async def write_semantic_sidecars(
         logger.info("%s Skipping stale semantic write for %s", log_prefix, dir_uri)
         return False
 
+    sidecar_names = [".overview.md", ".abstract.md"]
+    if summary_cache is not None:
+        sidecar_names.append(".summary_cache.json")
     lock_paths = [
-        viking_fs._uri_to_path(f"{dir_uri}/.overview.md", ctx=ctx),
-        viking_fs._uri_to_path(f"{dir_uri}/.abstract.md", ctx=ctx),
+        viking_fs._uri_to_path(f"{dir_uri}/{name}", ctx=ctx) for name in sidecar_names
     ]
     sidecar_lease = lock
     owns_lease = sidecar_lease is None
@@ -38,7 +41,9 @@ async def write_semantic_sidecars(
         if is_stale():
             logger.info("%s Skipping stale semantic write for %s", log_prefix, dir_uri)
             return False
-        await _write_sidecars(viking_fs, dir_uri, overview, abstract, ctx, sidecar_lease)
+        await _write_sidecars(
+            viking_fs, dir_uri, overview, abstract, summary_cache, ctx, sidecar_lease
+        )
         return True
     finally:
         if owns_lease:
@@ -50,6 +55,7 @@ async def _write_sidecars(
     dir_uri: str,
     overview: str,
     abstract: str,
+    summary_cache: Optional[str],
     ctx: Optional[RequestContext],
     lease_ref: Optional[Dict[str, Any]] = None,
 ) -> None:
@@ -66,3 +72,10 @@ async def _write_sidecars(
         ctx=ctx,
         lease_ref=lease_ref,
     )
+    if summary_cache is not None:
+        await viking_fs.write_file(
+            f"{dir_uri}/.summary_cache.json",
+            summary_cache,
+            ctx=ctx,
+            lease_ref=lease_ref,
+        )
