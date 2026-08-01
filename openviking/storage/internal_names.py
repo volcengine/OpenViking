@@ -6,6 +6,7 @@ MULTIWRITE_PATH_LOCK_FILE = ".path.ovlock"
 MULTIWRITE_EXACT_LOCK_FILE_PREFIX = ".exact.ovlock."
 MULTIWRITE_REDIRECT_FILE = ".redirect.json"
 MULTIWRITE_SYNC_LOG_FILE = ".sync_log.json"
+MEMORY_SUMMARY_CACHE_FILENAME = ".summary_cache.json"
 
 MULTIWRITE_INTERNAL_FILE_NAMES = frozenset(
     {

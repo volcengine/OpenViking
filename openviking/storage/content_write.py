@@ -28,6 +28,7 @@ from openviking.session.memory.utils.resource_refs import (
     sync_memory_resource_refs,
 )
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+from openviking.storage.internal_names import MEMORY_SUMMARY_CACHE_FILENAME
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.viking_fs import VikingFS
@@ -50,7 +51,9 @@ from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_DERIVED_FILENAMES = frozenset({".abstract.md", ".overview.md", ".relations.json"})
+_DERIVED_FILENAMES = frozenset(
+    {".abstract.md", ".overview.md", ".relations.json", MEMORY_SUMMARY_CACHE_FILENAME}
+)
 _CREATE_ALLOWED_EXTENSIONS = frozenset(
     {
         ".md",
