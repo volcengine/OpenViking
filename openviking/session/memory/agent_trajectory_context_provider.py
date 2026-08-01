@@ -3,15 +3,21 @@
 """
 Agent Trajectory Context Provider - Phase 1 of agent-scope extraction.
 
-Extracts execution trajectories from the conversation and can optionally
-co-extract reusable executable skills in the same ReAct pass.
+Extracts memories that depend on execution evidence from the conversation and
+can optionally co-extract reusable executable session skills in the same pass.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from openviking.server.identity import RequestContext
+from openviking.session.memory.constants import (
+    DIRECT_EXECUTION_MEMORY_TYPES,
+    SKILL_MEMORY_TYPE,
+    TOOL_MEMORY_TYPE,
+    TRAJECTORY_MEMORY_TYPE,
+)
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
 from openviking.session.skill.session_skill_context_provider import (
@@ -23,11 +29,9 @@ from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
-TRAJECTORY_MEMORY_TYPE = "trajectories"
-
 
 class AgentTrajectoryContextProvider(SessionExtractContextProvider):
-    """Phase 1 provider: extract trajectories and optional session skills."""
+    """Phase 1 provider for memories grounded in execution evidence."""
 
     include_tool_parts_in_conversation = True
     split_long_text_messages_for_extraction = False
@@ -49,10 +53,16 @@ class AgentTrajectoryContextProvider(SessionExtractContextProvider):
         *args,
         include_trajectories: bool = True,
         include_session_skills: bool = False,
+        allowed_memory_types: Optional[set[str]] = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
-        self._include_trajectories = include_trajectories
+        if allowed_memory_types is None:
+            direct_memory_types = {TRAJECTORY_MEMORY_TYPE} if include_trajectories else set()
+        else:
+            direct_memory_types = set(allowed_memory_types) & DIRECT_EXECUTION_MEMORY_TYPES
+        self._direct_memory_types = direct_memory_types
+        self._include_trajectories = TRAJECTORY_MEMORY_TYPE in direct_memory_types
         self._include_session_skills = include_session_skills
         self._skill_provider = SessionSkillContextProvider(*args, **kwargs)
         self._sync_skill_provider_state()
@@ -81,12 +91,18 @@ class AgentTrajectoryContextProvider(SessionExtractContextProvider):
         )
 
     def get_memory_schemas(self, ctx: RequestContext) -> List[Any]:
-        """Expose trajectory schema and optionally session skill schema."""
+        """Expose requested execution schemas and optional session skill schema."""
         del ctx
         registry = self._get_registry()
-        memory_types: List[str] = []
-        if self._include_trajectories:
-            memory_types.append(TRAJECTORY_MEMORY_TYPE)
+        memory_types = [
+            memory_type
+            for memory_type in (
+                TRAJECTORY_MEMORY_TYPE,
+                TOOL_MEMORY_TYPE,
+                SKILL_MEMORY_TYPE,
+            )
+            if memory_type in self._direct_memory_types
+        ]
         if self._include_session_skills:
             memory_types.append(SESSION_SKILL_MEMORY_TYPE)
 
@@ -118,7 +134,7 @@ class AgentTrajectoryContextProvider(SessionExtractContextProvider):
 
     def _get_registry(self) -> MemoryTypeRegistry:
         if self._registry is None:
-            registry = MemoryTypeRegistry(load_schemas=self._include_trajectories)
+            registry = MemoryTypeRegistry(load_schemas=bool(self._direct_memory_types))
             if self._include_session_skills:
                 loaded = registry.load_from_directory(str(resolve_skill_extract_templates_dir()))
                 if loaded == 0:

@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from openviking.message import Message
+from openviking.message.part import TextPart, ToolPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.agent_experience_context_provider import (
     AgentExperienceContextProvider,
@@ -18,8 +20,6 @@ from openviking.session.memory.memory_updater import ExtractContext
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
-from openviking.message import Message
-from openviking.message.part import TextPart
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -77,6 +77,63 @@ def test_agent_only_schemas_are_excluded_from_peer_user_memory_extraction():
 
     assert "experiences" not in schema_types
     assert "trajectories" not in schema_types
+
+
+def test_tool_and_skill_schemas_are_execution_scoped_and_receive_tool_evidence():
+    messages = [
+        Message(
+            id="tool-memory",
+            role="assistant",
+            parts=[
+                TextPart(text="I will inspect the repository."),
+                ToolPart(
+                    tool_id="tool-1",
+                    tool_name="read_file",
+                    tool_input={"path": "README.md", "skill_name": "code-review"},
+                    tool_output="OpenViking",
+                    tool_status="completed",
+                ),
+            ],
+        )
+    ]
+    config = SimpleNamespace(
+        output_language_override="en",
+        memory=SimpleNamespace(
+            eager_prefetch=False,
+            prefetch_search_topn=5,
+            link_enabled=False,
+            custom_templates_dir="/nonexistent/openviking-memory-templates",
+            experimental_memory_switch=False,
+        ),
+    )
+    with (
+        patch(
+            "openviking.session.memory.session_extract_context_provider.get_openviking_config",
+            return_value=config,
+        ),
+        patch(
+            "openviking.session.memory.utils.language.get_openviking_config",
+            return_value=config,
+        ),
+        patch("openviking_cli.utils.config.get_openviking_config", return_value=config),
+    ):
+        user_provider = SessionExtractContextProvider(messages=messages)
+        execution_provider = AgentTrajectoryContextProvider(
+            messages=messages,
+            allowed_memory_types={"tools", "skills"},
+        )
+        user_schema_types = {
+            schema.memory_type for schema in user_provider.get_memory_schemas(ctx=None)
+        }
+        execution_schema_types = {
+            schema.memory_type for schema in execution_provider.get_memory_schemas(ctx=None)
+        }
+        conversation = execution_provider._assemble_conversation(messages)
+
+    assert {"tools", "skills"}.isdisjoint(user_schema_types)
+    assert execution_schema_types == {"tools", "skills"}
+    assert "ToolCall: tool_name=read_file" in conversation
+    assert "skill_name" in conversation
 
 
 @pytest.mark.asyncio

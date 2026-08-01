@@ -4,6 +4,7 @@ description: |
 directory: "viking://user/{{ user_space }}/memories/skills"
 filename_template: "{{ skill_name }}.md"
 enabled: true
+stage: agent
 content_template: |
   Skill: {{ skill_name }}
   
