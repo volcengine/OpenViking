@@ -31,7 +31,6 @@ from openviking.parse.parsers.media.utils import (
     get_media_type,
 )
 from openviking.prompts import render_prompt
-from openviking.utils.ingest_options import IngestOptions
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
@@ -49,6 +48,7 @@ from openviking.utils.circuit_breaker import (
     CircuitBreakerOpen,
     classify_api_error,
 )
+from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.model_retry import ERROR_CLASS_INPUT_TOO_LARGE, ERROR_CLASS_PERMANENT
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import VikingURI
@@ -578,13 +578,40 @@ class SemanticProcessor(DequeueHandlerBase):
                 raise RuntimeError(f"Failed to list memory directory {dir_uri}: {e}") from e
 
             file_paths: List[str] = []
+            subdirs: List[str] = []
             for entry in entries:
                 name = entry.get("name", "")
                 if not name or name.startswith(".") or name in [".", ".."]:
                     continue
-                if not entry.get("isDir", False):
+                if entry.get("isDir", False):
+                    subdirs.append(name)
+                else:
                     item_uri = VikingURI(dir_uri).join(name).uri
                     file_paths.append(item_uri)
+
+            # Recursively process subdirectories when recursive=True (reindex path).
+            # Write-path messages use recursive=False so this block is skipped.
+            if msg.recursive and subdirs:
+                for subdir_name in subdirs:
+                    child_uri = VikingURI(dir_uri).join(subdir_name).uri
+                    child_msg = SemanticMsg(
+                        uri=child_uri,
+                        context_type="memory",
+                        recursive=True,
+                        skip_vectorization=msg.skip_vectorization,
+                        account_id=msg.account_id,
+                        user_id=msg.user_id,
+                        peer_id=msg.peer_id,
+                        role=msg.role,
+                    )
+                    try:
+                        await self._process_memory_directory(child_msg, ctx=ctx, lock=None)
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to recursively process memory subdirectory %s: %s",
+                            child_uri,
+                            e,
+                        )
 
             if not file_paths:
                 logger.info(f"No memory files found in {dir_uri}")

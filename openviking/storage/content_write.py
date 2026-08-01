@@ -320,7 +320,9 @@ class ContentWriteCoordinator:
                 classification.content_index is None
                 or len(parts) <= classification.content_index + 1
             ):
-                raise InvalidArgumentError("batch-write root must be inside a memory type directory")
+                raise InvalidArgumentError(
+                    "batch-write root must be inside a memory type directory"
+                )
         elif parts == ["resources"] or (
             classification.content_index is not None
             and len(parts) <= classification.content_index + 1
@@ -329,7 +331,9 @@ class ContentWriteCoordinator:
         self._viking_fs._ensure_mutable_access(root_uri, ctx)
         stat = await self._safe_stat(root_uri, ctx=ctx)
         if not stat.get("isDir"):
-            raise InvalidArgumentError(f"batch-write root must be an existing directory: {root_uri}")
+            raise InvalidArgumentError(
+                f"batch-write root must be an existing directory: {root_uri}"
+            )
 
     def _normalize_batch_operations(
         self,
@@ -359,7 +363,9 @@ class ContentWriteCoordinator:
             if not relative_uri_path(root_uri, uri):
                 raise InvalidArgumentError(f"batch-write target is outside root_uri: {uri}")
             if context_type_for_uri(uri) != context_type:
-                raise InvalidArgumentError(f"batch-write target has a different context type: {uri}")
+                raise InvalidArgumentError(
+                    f"batch-write target has a different context type: {uri}"
+                )
             self._validate_target_uri(uri)
             self._viking_fs._ensure_mutable_access(uri, ctx)
 
@@ -459,9 +465,7 @@ class ContentWriteCoordinator:
                 parent = VikingURI(uri).parent
                 memory_groups[parent.uri if parent is not None else uri].append(uri)
                 continue
-            refresh_root = await self._resolve_root_uri(
-                uri, ctx=ctx, anchor_to_parent=True
-            )
+            refresh_root = await self._resolve_root_uri(uri, ctx=ctx, anchor_to_parent=True)
             resource_groups[(refresh_root, context_type)][change_type].append(uri)
 
         for (refresh_root, context_type), changes in sorted(resource_groups.items()):
@@ -545,9 +549,7 @@ class ContentWriteCoordinator:
             await semantic_queue.enqueue(msg)
         except Exception as exc:
             if msg.telemetry_id:
-                get_request_wait_tracker().mark_semantic_failed(
-                    msg.telemetry_id, msg.id, str(exc)
-                )
+                get_request_wait_tracker().mark_semantic_failed(msg.telemetry_id, msg.id, str(exc))
             raise
 
     @staticmethod
@@ -991,6 +993,42 @@ class ContentWriteCoordinator:
                 directory_uri=root_uri,
                 ctx=ctx,
             )
+            # Vectorize the direct parent directory overview as L1.
+            # For nested paths (e.g. entities/category/file.md), the direct parent
+            # differs from root_uri (the memory type root). Refresh its overview and
+            # create an L1 record so thinking-mode retrieval can discover it.
+            file_parent = VikingURI(uri).parent
+            if file_parent and file_parent.uri.rstrip("/") != root_uri.rstrip("/"):
+                await MemoryUpdater.refresh_schema_overview(
+                    viking_fs=self._viking_fs,
+                    directory_uri=file_parent.uri,
+                    ctx=ctx,
+                )
+            if file_parent:
+                parent_dir = file_parent.uri.rstrip("/")
+                overview_uri = f"{parent_dir}/.overview.md"
+                try:
+                    overview_text = await self._viking_fs.read_file(overview_uri, ctx=ctx) or ""
+                    if isinstance(overview_text, bytes):
+                        overview_text = overview_text.decode("utf-8", errors="ignore")
+                    if overview_text.strip():
+                        from openviking.utils.embedding_utils import vectorize_directory_meta
+
+                        await vectorize_directory_meta(
+                            uri=parent_dir,
+                            abstract="",
+                            overview=overview_text,
+                            context_type="memory",
+                            ctx=ctx,
+                            include_overview=True,
+                            include_abstract=False,
+                        )
+                except Exception:
+                    logger.warning(
+                        "Failed to vectorize memory parent L1 for %s",
+                        uri,
+                        exc_info=True,
+                    )
             embedding_requested = await MemoryUpdater.refresh_file_embedding(
                 viking_fs=self._viking_fs,
                 vikingdb=self._vikingdb,
@@ -1018,7 +1056,7 @@ class ContentWriteCoordinator:
                 written_bytes=written_bytes,
                 wait=wait,
                 queue_status=queue_status,
-                semantic_status="skipped",
+                semantic_status="partial",
                 vector_status=vector_status,
                 overview_status="complete",
             )
