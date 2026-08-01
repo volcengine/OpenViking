@@ -15,6 +15,7 @@ from dataclasses import asdict, is_dataclass
 from types import UnionType
 from typing import (
     Any,
+    Dict,
     List,
     Optional,
     Tuple,
@@ -411,8 +412,25 @@ def parse_json_with_stability(
     # Layer 3: Structure tolerance
     # Handle case where model returns [{"xxx": ...}] instead of {"xxx": ...}
     if isinstance(parsed_data, list) and len(parsed_data) > 0:
-        parsed_data = parsed_data[0]
-        tracer.info("Extracted first item from list response")
+        if not all(isinstance(item, dict) for item in parsed_data):
+            return None, "Expected dict after parsing, got list of non-dict items"
+        merged_data: Dict[str, Any] = {}
+        for item in parsed_data:
+            for key, value in item.items():
+                if key not in merged_data:
+                    merged_data[key] = value
+                    continue
+                current = merged_data[key]
+                if isinstance(current, list) and isinstance(value, list):
+                    merged_data[key] = [*current, *value]
+                elif current is None:
+                    merged_data[key] = value
+                elif value is None or current == value:
+                    continue
+                else:
+                    return None, f"Conflicting values for '{key}' in list response"
+        parsed_data = merged_data
+        tracer.info("Merged object fields from list response")
     elif (
         isinstance(parsed_data, list)
         and len(parsed_data) == 0
@@ -434,6 +452,11 @@ def parse_json_with_stability(
         for k, v in parsed_data.items():
             if k in expected_fields:
                 filtered_data[k] = v
+        if not filtered_data and parsed_data:
+            return None, (
+                "No expected fields found in response; "
+                f"expected one of {expected_fields}, got {list(parsed_data)}"
+            )
         parsed_data = filtered_data
 
     # If no model class, return the raw dict

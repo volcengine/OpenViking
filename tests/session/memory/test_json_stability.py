@@ -165,6 +165,19 @@ class TestParseJsonWithStability:
         assert error is None
         assert data.reasonning == "test"
 
+    def test_merges_multiple_items_from_list_response(self):
+        content = '[{"tags": ["a"]}, {"tags": ["b"], "reasonning": "test"}]'
+        data, error = parse_json_with_stability(content, model_class=self.TestModel)
+        assert error is None
+        assert data.reasonning == "test"
+        assert data.tags == ["a", "b"]
+
+    def test_reports_conflicting_scalar_values_from_list_response(self):
+        content = '[{"count": 1}, {"count": 2}]'
+        data, error = parse_json_with_stability(content, model_class=self.TestModel)
+        assert data is None
+        assert "Conflicting values" in error
+
     def test_handles_empty_list_for_operations_model(self):
         """A bare [] from the operations model (opted in via _allow_empty_list_response)
         is a valid 'no operations' outcome: mapped to an empty object, not an error."""
@@ -205,6 +218,18 @@ class TestParseJsonWithStability:
         assert error is None
         assert data.reasonning == "test"
         assert data.count == 42
+
+    def test_fails_loud_when_all_fields_are_filtered(self):
+        content = '{"current_status": "test", "memories": [{"content": "x"}]}'
+        data, error = parse_json_with_stability(
+            content,
+            model_class=self.TestModel,
+            expected_fields=["preferences", "entities"],
+        )
+        assert data is None
+        assert "No expected fields found" in error
+        assert "current_status" in error
+        assert "memories" in error
 
     def test_returns_raw_dict_when_no_model_class(self):
         """Test returns dict when no model_class is provided."""
