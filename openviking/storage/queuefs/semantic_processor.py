@@ -687,6 +687,43 @@ class SemanticProcessor(DequeueHandlerBase):
             generated_content = await self._generate_overview(
                 dir_uri, completed_summaries, [], llm_sem=llm_sem
             )
+
+            if generated_content is None:
+                logger.error(
+                    f"Skipping semantic write for {dir_uri}: overview generation failed "
+                    "(no placeholder persisted; next extraction will retry)."
+                )
+                if msg.telemetry_id and msg.id:
+                    try:
+                        from openviking.storage.queuefs.embedding_tracker import EmbeddingTaskTracker
+
+                        tracker = EmbeddingTaskTracker.get_instance()
+                        await tracker.register(
+                            semantic_msg_id=msg.id,
+                            total_count=len(file_vectorize_items),
+                            on_complete=None,
+                            metadata={"uri": dir_uri},
+                        )
+                    except Exception:
+                        pass
+                for file_path, summary_dict in file_vectorize_items:
+                    try:
+                        await self._vectorize_single_file(
+                            parent_uri=dir_uri,
+                            context_type="memory",
+                            file_path=file_path,
+                            summary_dict=summary_dict,
+                            ctx=ctx,
+                            semantic_msg_id=msg.id,
+                            preserve_existing_created_at=True,
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to vectorize file {file_path} during overview failure handling: {e}"
+                        )
+                _mark_done()
+                return
+
             overview, abstract = self._normalize_overview_generation(generated_content)
 
             try:
@@ -1416,8 +1453,12 @@ class SemanticProcessor(DequeueHandlerBase):
         children_abstracts_str: str,
         file_index_map: Dict[int, str],
         output_language: str = "en",
-    ) -> str:
-        """Generate overview from a single prompt (small directories)."""
+    ) -> Optional[str]:
+        """Generate overview from a single prompt (small directories).
+
+        Returns:
+            Generated overview string on success, or None if generation failed.
+        """
         config = get_openviking_config()
         vlm = config.vlm
 
@@ -1441,10 +1482,10 @@ class SemanticProcessor(DequeueHandlerBase):
 
         except Exception as e:
             logger.error(
-                f"Failed to generate overview for {dir_uri}: {e}",
+                f"_single_generate_overview failed for {dir_uri}: {e}",
                 exc_info=True,
             )
-            return f"# {dir_uri.split('/')[-1]}\n\n[Directory overview is not generated]"
+            return None
 
     async def _batched_generate_overview(
         self,
@@ -1454,11 +1495,14 @@ class SemanticProcessor(DequeueHandlerBase):
         file_index_map: Dict[int, str],
         llm_sem: Optional[asyncio.Semaphore] = None,
         output_language: str = "en",
-    ) -> str:
+    ) -> Optional[str]:
         """Generate overview by batching file and subdirectory summaries.
 
         Splits both input kinds into batches, generates a partial overview per
         batch, then merges the partials without repeating the raw inputs.
+
+        Returns:
+            Generated overview string on success, or None if ALL batches failed.
         """
         config = get_openviking_config()
         vlm = config.vlm
@@ -1518,7 +1562,11 @@ class SemanticProcessor(DequeueHandlerBase):
         partial_overviews = [p for p in partial_overviews if p is not None]
 
         if not partial_overviews:
-            return f"# {dir_name}\n\n[Directory overview is not generated]"
+            logger.error(
+                f"_batched_generate_overview: all {len(batches)} batches failed for {dir_uri}. "
+                "Skipping write so next extraction retries."
+            )
+            return None
 
         # If only one batch succeeded, use it directly
         if len(partial_overviews) == 1:
@@ -1541,8 +1589,9 @@ class SemanticProcessor(DequeueHandlerBase):
             overview = self._replace_index_references(overview, file_index_map)
             return overview.strip()
         except Exception as e:
-            logger.error(
-                f"Failed to merge partial overviews for {dir_uri}: {e}",
+            logger.warning(
+                f"Failed to merge partial overviews for {dir_uri}: {e}, "
+                "falling back to first partial overview.",
                 exc_info=True,
             )
             return partial_overviews[0]
