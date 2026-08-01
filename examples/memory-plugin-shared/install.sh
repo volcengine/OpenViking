@@ -2202,6 +2202,7 @@ if (fs.existsSync(mcpPath)) {
 }
 
 // --- Atomic write: backup + tmp + rename ---
+if (exists) fs.copyFileSync(configPath, `${configPath}.bak`);
 const tmp = `${configPath}.${process.pid}.tmp`;
 fs.writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n");
 fs.renameSync(tmp, configPath);

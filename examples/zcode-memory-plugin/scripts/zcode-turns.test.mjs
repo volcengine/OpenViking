@@ -105,7 +105,7 @@ function createFakeRolloutHome(entries) {
   return { fakeHome, sessionId };
 }
 
-test("extractUnseenRolloutTurns returns last entry when no lastKnownTurnId", () => {
+test("extractUnseenRolloutTurns returns ALL entries when no lastKnownTurnId", () => {
   const { fakeHome, sessionId } = createFakeRolloutHome([
     { turnId: "turn-001", request: { messages: [{ role: "user", content: "first q" }] }, response: { text: "first a" } },
     { turnId: "turn-002", request: { messages: [{ role: "user", content: "second q" }] }, response: { text: "second a" } },
@@ -117,10 +117,14 @@ test("extractUnseenRolloutTurns returns last entry when no lastKnownTurnId", () 
     null,
   );
   process.env.HOME = originalHome;
-  // No lastKnownTurnId → returns only the last entry
-  assert.equal(turns.length, 2); // user + assistant from last entry
-  assert.equal(turns[0].content, "second q");
-  assert.equal(turns[0].turnId, "turn-002");
+  // No lastKnownTurnId → returns ALL entries (first-time capture should not lose prior turns)
+  assert.equal(turns.length, 4); // user+assistant × 2 entries
+  assert.equal(turns[0].content, "first q");
+  assert.equal(turns[0].turnId, "turn-001");
+  assert.equal(turns[1].content, "first a");
+  assert.equal(turns[1].turnId, "turn-001");
+  assert.equal(turns[2].content, "second q");
+  assert.equal(turns[2].turnId, "turn-002");
 });
 
 test("extractUnseenRolloutTurns returns all entries after lastKnownTurnId", () => {
@@ -187,4 +191,49 @@ test("buildZcodeTurns respects lastTurnId in state for incremental capture", () 
   assert.equal(turns.length, 2); // user + assistant from turn-002
   assert.equal(turns[0].content, "new q");
   assert.equal(turns[0].turnId, "turn-002");
+});
+
+// ---------------------------------------------------------------------------
+// Lifecycle tests: duplicate Stop, missed Stop, repeated content on distinct turns
+// ---------------------------------------------------------------------------
+
+test("lifecycle: missed Stop recovers all unseen turns on next fire", () => {
+  // Simulate: Stop fires after turn-001, then hook fails, then Stop fires again
+  // after turn-003. With lastTurnId=turn-001, should get turn-002 AND turn-003.
+  const { fakeHome, sessionId } = createFakeRolloutHome([
+    { turnId: "turn-001", request: { messages: [{ role: "user", content: "q1" }] }, response: { text: "a1" } },
+    { turnId: "turn-002", request: { messages: [{ role: "user", content: "q2" }] }, response: { text: "a2" } },
+    { turnId: "turn-003", request: { messages: [{ role: "user", content: "q3" }] }, response: { text: "a3" } },
+  ]);
+  const originalHome = process.env.HOME;
+  process.env.HOME = fakeHome;
+  const turns = buildZcodeTurns(
+    { session_id: sessionId, responseText: "ignored" },
+    { lastTurnId: "turn-001" },
+  );
+  process.env.HOME = originalHome;
+  assert.equal(turns.length, 4); // turn-002 (user+assistant) + turn-003 (user+assistant)
+  assert.equal(turns[0].turnId, "turn-002");
+  assert.equal(turns[2].turnId, "turn-003");
+});
+
+test("lifecycle: user and assistant from same rollout entry both captured", () => {
+  // This is the regression test for the dedup bug where user and assistant
+  // shared the same turnId and the assistant was silently dropped.
+  const { fakeHome, sessionId } = createFakeRolloutHome([
+    { turnId: "turn-001", request: { messages: [{ role: "user", content: "user msg" }] }, response: { text: "assistant msg" } },
+  ]);
+  const originalHome = process.env.HOME;
+  process.env.HOME = fakeHome;
+  const turns = buildZcodeTurns({
+    session_id: sessionId,
+    responseText: "ignored", // triggers rollout fallback (no user content in stdin)
+  });
+  process.env.HOME = originalHome;
+  assert.equal(turns.length, 2);
+  assert.equal(turns[0].role, "user");
+  assert.equal(turns[0].content, "user msg");
+  assert.equal(turns[1].role, "assistant");
+  assert.equal(turns[1].content, "assistant msg");
+  assert.equal(turns[0].turnId, turns[1].turnId); // same turnId, different role
 });

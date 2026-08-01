@@ -148,14 +148,16 @@ async function main() {
       let newLastTurnId = state.lastTurnId || null;
 
       for (const turn of buildZcodeTurns(input, state)) {
-        // Prefer rollout turnId for stable dedup; fall back to stableHash
-        // for stdin-only turns (no rollout fallback fired).
-        const dedupKey = turn.turnId || stableHash(turn.role, turn.content);
+        // Dedup key: turnId + role ensures user and assistant from the same
+        // rollout entry (which share a turnId) are treated as distinct turns.
+        // For stdin-only turns without turnId, fall back to stableHash.
+        const dedupKey = turn.turnId
+          ? `${turn.turnId}:${turn.role}`
+          : stableHash(turn.role, turn.content);
         if (capturedTurnIds.has(dedupKey)) continue;
         toSend.push({ dedupKey, turn });
         if (turn.turnId) {
           newLastTurnId = turn.turnId;
-          capturedTurnIds.add(dedupKey);
         }
       }
 

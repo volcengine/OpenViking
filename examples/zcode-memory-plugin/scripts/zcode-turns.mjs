@@ -48,7 +48,8 @@ function resolveRolloutPath(input = {}) {
   const sessionId =
     input.session_id || input.sessionId || input.conversation_id || "";
   if (!sessionId) return null;
-  return join(process.env.HOME || process.env.USERPROFILE || "", ".zcode", "cli", "rollout", `model-io-sess-${sessionId}.jsonl`);
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  return join(home, ".zcode", "cli", "rollout", `model-io-sess-${sessionId}.jsonl`);
 }
 
 /**
@@ -104,9 +105,9 @@ export function extractUnseenRolloutTurns(rolloutPath, lastKnownTurnId = null) {
       }
     });
     if (foundIndex >= 0) startIndex = foundIndex + 1;
-  } else {
-    startIndex = Math.max(0, lines.length - 1);
   }
+  // No lastKnownTurnId → capture ALL entries (first-time capture should not
+  // lose prior turns). Previously only returned the last entry.
 
   const turns = [];
   for (let i = startIndex; i < lines.length; i++) {
