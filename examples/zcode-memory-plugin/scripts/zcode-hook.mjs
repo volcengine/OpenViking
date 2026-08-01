@@ -143,21 +143,38 @@ async function main() {
     if (!cfg.autoCapture) return;
     await withAgentHookLock("zcode", nativeSessionId, async () => {
       state = await readHookState("zcode", nativeSessionId);
-      const hashes = new Set(Array.isArray(state.capturedHashes) ? state.capturedHashes : []);
-      const turnKey = state.pendingPrompt?.at || state.lastTurnKey || state.promptHash || "unknown-turn";
+      const capturedTurnIds = new Set(Array.isArray(state.capturedTurnIds) ? state.capturedTurnIds : []);
       const toSend = [];
+      let newLastTurnId = state.lastTurnId || null;
+
       for (const turn of buildZcodeTurns(input, state)) {
-        const hash = stableHash(turnKey, turn.role, turn.content);
-        if (hashes.has(hash)) continue;
-        toSend.push({ hash, turn });
+        // Prefer rollout turnId for stable dedup; fall back to stableHash
+        // for stdin-only turns (no rollout fallback fired).
+        const dedupKey = turn.turnId || stableHash(turn.role, turn.content);
+        if (capturedTurnIds.has(dedupKey)) continue;
+        toSend.push({ dedupKey, turn });
+        if (turn.turnId) {
+          newLastTurnId = turn.turnId;
+          capturedTurnIds.add(dedupKey);
+        }
       }
+
+      // Fail-closed: if no turns and no dedup keys, skip silently (not an error —
+      // could be a Stop with no new content, or a race with UserPromptSubmit).
+      if (toSend.length === 0) return;
+
       const result = await addAgentMessages(
         fetchJSON,
         sessionId,
         toSend.map((item) => item.turn),
       );
       const captured = result.sent + result.queued;
-      for (const item of toSend.slice(0, captured)) hashes.add(item.hash);
+      // Only record dedup keys for successfully sent turns
+      for (const item of toSend.slice(0, captured)) {
+        if (!item.turn.turnId) {
+          capturedTurnIds.add(item.dedupKey);
+        }
+      }
       let nextCount = Number(state.capturedSinceCommit || 0) + captured;
       if (captured > 0) {
         const committed = await commitAgentSession(fetchJSON, sessionId);
@@ -165,10 +182,10 @@ async function main() {
       }
       await writeHookState("zcode", nativeSessionId, {
         ...state,
-        capturedHashes: [...hashes].slice(-1000),
+        capturedTurnIds: [...capturedTurnIds].slice(-1000),
         capturedSinceCommit: nextCount,
         pendingPrompt: null,
-        lastTurnKey: turnKey,
+        lastTurnId: newLastTurnId,
       });
     });
     // Stop: no output needed (pass-through)

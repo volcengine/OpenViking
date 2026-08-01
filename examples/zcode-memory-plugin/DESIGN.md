@@ -53,9 +53,10 @@ ZCode's strict JSON schema rejects unrecognized keys. The dispatcher emits ONLY 
 
 ## Primary unknowns
 
-1. **Hook stdin field names**: ZCode's `Stop` payload field names for prompt/assistant response. The parser probes multiple field names with fallbacks.
+1. **Hook stdin field names**: Verified via ZCode source reverse-engineering (#3127 by @quinn-zenith). The Stop hook exposes `responseText`/`responsePreview` for assistant content. User content is NOT in stdin — the parser falls back to ZCode's rollout file (`~/.zcode/cli/rollout/model-io-sess-<sessionId>.jsonl`) which contains the complete conversation per line: `{ sessionId, turnId, request: { messages: [...] }, response: { text } }`.
 2. **Output schema acceptance**: Whether `hookSpecificOutput` wrapper is accepted as-is. Must be tested against a live ZCode session.
 3. **MCP tool name format**: Namespaced as `plugin:openviking:openviking` — verify tool names match expectations.
+4. **Turn identity**: Rollout entries carry a monotonic `turnId` — the adapter uses it for deduplication (`capturedTurnIds` set in hook state) and incremental capture (`lastTurnId` tracks the last processed entry). This satisfies the maintainer's contract option 2 (`session_id` + monotonic `turn_id` + per-turn content).
 
 ## Adversarial review incorporation
 

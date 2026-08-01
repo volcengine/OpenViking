@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { buildZcodeTurns, cleanZcodeText } from "./zcode-turns.mjs";
+import { buildZcodeTurns, cleanZcodeText, extractUnseenRolloutTurns } from "./zcode-turns.mjs";
 
 test("cleanZcodeText strips openviking-context blocks", () => {
   const input = "hello <openviking-context source=\"test\">secret</openviking-context> world";
@@ -92,51 +92,73 @@ test("buildZcodeTurns probes alternative field names", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Rollout fallback tests — when stdin lacks user content, read from rollout
+// Rollout fallback + turnId tests
 // ---------------------------------------------------------------------------
 
-test("buildZcodeTurns falls back to rollout when user content missing", () => {
-  // Create a temp rollout file
-  const tmpDir = mkdtempSync(join(tmpdir(), "zcode-rollout-test-"));
+function createFakeRolloutHome(entries) {
   const sessionId = "test-sess-rollout";
-  const rolloutPath = join(tmpDir, `model-io-sess-${sessionId}.jsonl`);
-  const rolloutEntry = {
-    sessionId,
-    turnId: "turn-001",
-    type: "model_io",
-    request: {
-      messages: [
-        { role: "user", content: "rollout user question" },
-        { role: "assistant", content: "rollout prev answer" },
-        { role: "user", content: "rollout latest question" },
-      ],
-    },
-    response: { text: "rollout assistant response" },
-  };
-  writeFileSync(rolloutPath, JSON.stringify(rolloutEntry) + "\n");
-
-  // Create the expected directory structure under a fake HOME
   const fakeHome = mkdtempSync(join(tmpdir(), "zcode-home-"));
-  mkdirSync(join(fakeHome, ".zcode", "cli", "rollout"), { recursive: true });
-  writeFileSync(
-    join(fakeHome, ".zcode", "cli", "rollout", `model-io-sess-${sessionId}.jsonl`),
-    JSON.stringify(rolloutEntry) + "\n",
-  );
+  const rolloutDir = join(fakeHome, ".zcode", "cli", "rollout");
+  mkdirSync(rolloutDir, { recursive: true });
+  const lines = entries.map((e) => JSON.stringify(e)).join("\n");
+  writeFileSync(join(rolloutDir, `model-io-sess-${sessionId}.jsonl`), lines + "\n");
+  return { fakeHome, sessionId };
+}
 
-  const originalHomedir = process.env.HOME;
+test("extractUnseenRolloutTurns returns last entry when no lastKnownTurnId", () => {
+  const { fakeHome, sessionId } = createFakeRolloutHome([
+    { turnId: "turn-001", request: { messages: [{ role: "user", content: "first q" }] }, response: { text: "first a" } },
+    { turnId: "turn-002", request: { messages: [{ role: "user", content: "second q" }] }, response: { text: "second a" } },
+  ]);
+  const originalHome = process.env.HOME;
   process.env.HOME = fakeHome;
+  const turns = extractUnseenRolloutTurns(
+    join(fakeHome, ".zcode", "cli", "rollout", `model-io-sess-${sessionId}.jsonl`),
+    null,
+  );
+  process.env.HOME = originalHome;
+  // No lastKnownTurnId → returns only the last entry
+  assert.equal(turns.length, 2); // user + assistant from last entry
+  assert.equal(turns[0].content, "second q");
+  assert.equal(turns[0].turnId, "turn-002");
+});
 
+test("extractUnseenRolloutTurns returns all entries after lastKnownTurnId", () => {
+  const { fakeHome, sessionId } = createFakeRolloutHome([
+    { turnId: "turn-001", request: { messages: [{ role: "user", content: "q1" }] }, response: { text: "a1" } },
+    { turnId: "turn-002", request: { messages: [{ role: "user", content: "q2" }] }, response: { text: "a2" } },
+    { turnId: "turn-003", request: { messages: [{ role: "user", content: "q3" }] }, response: { text: "a3" } },
+  ]);
+  const originalHome = process.env.HOME;
+  process.env.HOME = fakeHome;
+  const turns = extractUnseenRolloutTurns(
+    join(fakeHome, ".zcode", "cli", "rollout", `model-io-sess-${sessionId}.jsonl`),
+    "turn-001",
+  );
+  process.env.HOME = originalHome;
+  // Should return turn-002 and turn-003 (4 turns: user+assistant × 2)
+  assert.equal(turns.length, 4);
+  assert.equal(turns[0].content, "q2");
+  assert.equal(turns[0].turnId, "turn-002");
+  assert.equal(turns[2].content, "q3");
+  assert.equal(turns[2].turnId, "turn-003");
+});
+
+test("buildZcodeTurns falls back to rollout when user content missing", () => {
+  const { fakeHome, sessionId } = createFakeRolloutHome([
+    { turnId: "turn-001", request: { messages: [{ role: "user", content: "rollout question" }] }, response: { text: "rollout answer" } },
+  ]);
+  const originalHome = process.env.HOME;
+  process.env.HOME = fakeHome;
   const turns = buildZcodeTurns({
     session_id: sessionId,
     responseText: "stdin assistant only",
   });
-
-  process.env.HOME = originalHomedir;
-
-  // Should prefer rollout turns (has both user + assistant)
-  assert.ok(turns.length >= 2, `expected >= 2 turns, got ${turns.length}`);
+  process.env.HOME = originalHome;
+  assert.ok(turns.length >= 2);
   assert.equal(turns[0].role, "user");
-  assert.ok(turns[0].content.includes("rollout"), `expected rollout content, got "${turns[0].content}"`);
+  assert.ok(turns[0].content.includes("rollout"));
+  assert.ok(turns[0].turnId, "turn from rollout should carry turnId");
 });
 
 test("buildZcodeTurns handles missing rollout file gracefully", () => {
@@ -144,8 +166,25 @@ test("buildZcodeTurns handles missing rollout file gracefully", () => {
     session_id: "nonexistent-session",
     responseText: "assistant only",
   });
-  // Falls back to just the assistant turn from stdin
   assert.equal(turns.length, 1);
   assert.equal(turns[0].role, "assistant");
   assert.equal(turns[0].content, "assistant only");
+});
+
+test("buildZcodeTurns respects lastTurnId in state for incremental capture", () => {
+  const { fakeHome, sessionId } = createFakeRolloutHome([
+    { turnId: "turn-001", request: { messages: [{ role: "user", content: "old q" }] }, response: { text: "old a" } },
+    { turnId: "turn-002", request: { messages: [{ role: "user", content: "new q" }] }, response: { text: "new a" } },
+  ]);
+  const originalHome = process.env.HOME;
+  process.env.HOME = fakeHome;
+  // Pass state with lastTurnId = turn-001 → should only get turn-002
+  const turns = buildZcodeTurns(
+    { session_id: sessionId, responseText: "ignored" },
+    { lastTurnId: "turn-001" },
+  );
+  process.env.HOME = originalHome;
+  assert.equal(turns.length, 2); // user + assistant from turn-002
+  assert.equal(turns[0].content, "new q");
+  assert.equal(turns[0].turnId, "turn-002");
 });
