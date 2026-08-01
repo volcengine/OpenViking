@@ -150,6 +150,9 @@ class MarkdownParser(BaseParser):
     # Configuration constants
     DEFAULT_MAX_SECTION_SIZE = 2048  # Maximum tokens per section
     DEFAULT_MIN_SECTION_TOKENS = 512  # Minimum tokens to create a separate section
+    # Worst-case token density used by _estimate_token_count (CJK ~0.7 tok/char).
+    # Used to bound force-split chunk size so it also respects the token budget.
+    MAX_TOKENS_PER_CHAR = 0.7
     MAX_MERGED_FILENAME_LENGTH = 32  # Maximum length for merged section filenames
 
     # Image validation constants
@@ -581,8 +584,14 @@ class MarkdownParser(BaseParser):
                         parts.append(current.strip())
                     current = ""
                     current_tokens = 0
-                for i in range(0, len(para), max_chars):
-                    parts.append(para[i : i + max_chars].strip())
+                # Step by the smaller of the char limit and the token-safe
+                # width, so a paragraph that is under max_chars but over
+                # max_size tokens (e.g. dense CJK text) is still split enough
+                # to keep every chunk within the token budget.
+                token_safe_chars = max(1, int(max_size / self.MAX_TOKENS_PER_CHAR))
+                step = min(max_chars, token_safe_chars)
+                for i in range(0, len(para), step):
+                    parts.append(para[i : i + step].strip())
             elif (
                 current_tokens + para_tokens > max_size or len(current) + len(para) + 2 > max_chars
             ) and current:
@@ -1574,4 +1583,4 @@ class MarkdownParser(BaseParser):
         # This provides better coverage for multilingual documents
         cjk_chars = len(re.findall(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]", content))
         other_chars = len(re.findall(r"[^\s]", content)) - cjk_chars
-        return int(cjk_chars * 0.7 + other_chars * 0.3)
+        return int(cjk_chars * self.MAX_TOKENS_PER_CHAR + other_chars * 0.3)
