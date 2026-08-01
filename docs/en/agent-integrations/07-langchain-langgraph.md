@@ -158,6 +158,47 @@ chain.invoke(
 )
 ```
 
+### Runtime actor peers for concurrent agents
+
+`OpenVikingContextMiddleware` can resolve the active actor peer from each
+LangGraph run while reusing its credential-bound HTTP clients:
+
+```python
+from openviking.integrations.langchain import OpenVikingContextMiddleware
+
+
+def resolve_actor_peer(_state, runtime):
+    context = runtime.context or {}
+    return context.get("actor_peer_id")
+
+
+middleware = OpenVikingContextMiddleware(
+    url="http://localhost:1933",
+    api_key="user-api-key",
+    actor_peer_resolver=resolve_actor_peer,
+)
+```
+
+The resolved actor peer scopes OpenViking HTTP calls made during recall and
+capture. Concurrent runs are isolated, and middleware capture progress is keyed
+by actor peer as well as session and message peer. OpenViking session endpoints
+remain user-scoped and do not use the actor-peer header for message attribution;
+set `peer_id_resolver` as well when captured messages must be attributed to the
+same logical peer. Distinct peers with independent histories should also resolve
+distinct session IDs. When `actor_peer_resolver` is omitted, the existing fixed
+client behavior is unchanged.
+
+The resolver cannot change the OpenViking account or user. Those identities
+remain bound to the API key or OAuth credential, so multi-user applications
+must select a credential-bound client before invoking the middleware. Resolve
+the actor peer only from authenticated, server-owned runtime fields; do not
+trust model state or client-controlled configurable values. Runtime actor-peer
+resolution is available only for HTTP-backed middleware, not embedded `path=`
+clients. An injected custom client must set
+`supports_request_actor_peer = True` and honor the `openviking_sdk` actor-peer
+scope. Upgrade `openviking-sdk` together with `openviking` before enabling this
+feature in an existing environment.
+
 ## Which adapter should I use?
 
 | I want to… | Use this |

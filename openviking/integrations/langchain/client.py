@@ -114,6 +114,12 @@ class OpenVikingClientHandle:
         self._client_lock = threading.Lock()
 
     @property
+    def supports_request_actor_peer(self) -> bool:
+        """Return whether this handle supports request-scoped actor peers."""
+
+        return _uses_http_client(self._connection)
+
+    @property
     def _initialized(self) -> bool:
         client = self._client
         return bool(client is not None and getattr(client, "_initialized", False))
@@ -208,6 +214,12 @@ class OpenVikingAsyncClientHandle:
             self._loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
         except RuntimeError:
             self._loop = None
+
+    @property
+    def supports_request_actor_peer(self) -> bool:
+        """Return whether this handle supports request-scoped actor peers."""
+
+        return _uses_http_client(self._connection)
 
     @property
     def _initialized(self) -> bool:

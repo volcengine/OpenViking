@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -24,6 +25,11 @@ except ImportError as exc:  # pragma: no cover - exercised by optional import pa
 
     raise missing_dependency("langgraph", "langchain/langgraph") from exc
 
+from openviking.integrations.langchain.actor_peer import (
+    get_actor_peer_id,
+    require_request_actor_peer_support,
+    use_actor_peer,
+)
 from openviking.integrations.langchain.client import (
     OpenVikingCommitPolicy,
     extract_message_text,
@@ -46,13 +52,19 @@ _SESSION_ID_ERROR = (
     'config={"configurable": {"thread_id": "..."}}, set state["session_id"], '
     "or provide session_id_resolver."
 )
+_CaptureKey = tuple[str, str] | tuple[str, str, str]
+_ActorPeerResolver = Callable[
+    [dict[str, Any], Any],
+    str | None,
+]
 
 
 @dataclass(slots=True)
 class _CapturePlan:
     session_id: str
     peer_id: str | None
-    key: tuple[str, str]
+    actor_peer_id: str | None
+    key: _CaptureKey
     messages: list[Any]
     signatures: tuple[str, ...]
     start: int
@@ -88,6 +100,7 @@ class OpenVikingContextMiddleware(AgentMiddleware):
         token_budget: int = 128_000,
         session_id_resolver: Callable[[dict[str, Any], Any], str] | None = None,
         peer_id_resolver: Callable[[dict[str, Any], Any], str | None] | None = None,
+        actor_peer_resolver: _ActorPeerResolver | None = None,
         capture_on_after_agent: bool = True,
         commit_on_after_agent: bool = False,
         commit_policy: OpenVikingCommitPolicy | None = None,
@@ -95,6 +108,13 @@ class OpenVikingContextMiddleware(AgentMiddleware):
         include_active_messages: bool = False,
     ):
         super().__init__()
+        _validate_actor_peer_transport(
+            actor_peer_resolver=actor_peer_resolver,
+            client=client,
+            async_client=async_client,
+            retriever=retriever,
+            path=path,
+        )
         self.recorder = OpenVikingSessionRecorder(
             client=client,
             async_client=async_client,
@@ -146,13 +166,14 @@ class OpenVikingContextMiddleware(AgentMiddleware):
         self.session_id_resolver = session_id_resolver
         self.peer_id = peer_id
         self.peer_id_resolver = peer_id_resolver
+        self.actor_peer_resolver = actor_peer_resolver
         self.capture_on_after_agent = capture_on_after_agent
         self.commit_policy = commit_policy
         if commit_on_after_agent and self.commit_policy is None:
             self.commit_policy = OpenVikingCommitPolicy(mode="always")
         self.recall_header = recall_header
-        self._captured_signatures: dict[tuple[str, str], tuple[str, ...]] = {}
-        self._pending_context_parts: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        self._captured_signatures: dict[_CaptureKey, tuple[str, ...]] = {}
+        self._pending_context_parts: dict[_CaptureKey, list[dict[str, Any]]] = {}
 
     async def aclose(self) -> None:
         """Release all clients internally owned by this middleware."""
@@ -174,11 +195,12 @@ class OpenVikingContextMiddleware(AgentMiddleware):
         plan = self._model_context_plan(request)
         if plan is None:
             return handler(request)
-        session_id, pending_key, query = plan
-        assembled = self.assembler.assemble(
-            session_id=session_id,
-            query=query,
-        )
+        session_id, pending_key, query, actor_peer_id = plan
+        with self._actor_peer_scope(actor_peer_id):
+            assembled = self.assembler.assemble(
+                session_id=session_id,
+                query=query,
+            )
         updated_request = self._request_with_context(request, pending_key, assembled)
         if updated_request is None:
             return handler(request)
@@ -198,11 +220,12 @@ class OpenVikingContextMiddleware(AgentMiddleware):
         plan = self._model_context_plan(request)
         if plan is None:
             return await handler(request)
-        session_id, pending_key, query = plan
-        assembled = await self.assembler.aassemble(
-            session_id=session_id,
-            query=query,
-        )
+        session_id, pending_key, query, actor_peer_id = plan
+        with self._actor_peer_scope(actor_peer_id):
+            assembled = await self.assembler.aassemble(
+                session_id=session_id,
+                query=query,
+            )
         updated_request = self._request_with_context(request, pending_key, assembled)
         if updated_request is None:
             return await handler(request)
@@ -217,7 +240,7 @@ class OpenVikingContextMiddleware(AgentMiddleware):
     def _model_context_plan(
         self,
         request: ModelRequest,
-    ) -> tuple[str, tuple[str, str], str] | None:
+    ) -> tuple[str, _CaptureKey, str, str | None] | None:
         query = get_latest_user_text(request.messages)
         if not query:
             return None
@@ -225,14 +248,15 @@ class OpenVikingContextMiddleware(AgentMiddleware):
         runtime = getattr(request, "runtime", None)
         session_id = self._resolve_session_id(state, runtime)
         peer_id = self._resolve_peer_id(state, runtime)
-        pending_key = _capture_key(session_id, peer_id)
+        actor_peer_id = self._resolve_actor_peer_id(state, runtime)
+        pending_key = _capture_key(session_id, peer_id, actor_peer_id)
         self._pending_context_parts.pop(pending_key, None)
-        return session_id, pending_key, query
+        return session_id, pending_key, query, actor_peer_id
 
     def _request_with_context(
         self,
         request: ModelRequest,
-        pending_key: tuple[str, str],
+        pending_key: _CaptureKey,
         assembled: OpenVikingAssembledContext,
     ) -> ModelRequest | None:
         context_block = assembled.block
@@ -255,16 +279,18 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             return None
         self.recorder.commit_policy = self.commit_policy
         if plan.unchanged:
-            self.recorder.record(plan.session_id, ())
+            with self._actor_peer_scope(plan.actor_peer_id):
+                self.recorder.record(plan.session_id, ())
             self._pending_context_parts.pop(plan.key, None)
             return None
         try:
-            result = self.recorder.record(
-                plan.session_id,
-                plan.messages[plan.start :],
-                peer_id=plan.peer_id,
-                context_parts=plan.context_parts,
-            )
+            with self._actor_peer_scope(plan.actor_peer_id):
+                result = self.recorder.record(
+                    plan.session_id,
+                    plan.messages[plan.start :],
+                    peer_id=plan.peer_id,
+                    context_parts=plan.context_parts,
+                )
         except OpenVikingPartialWriteError as exc:
             self._handle_partial_capture(plan, exc)
             raise
@@ -284,16 +310,18 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             return None
         self.recorder.commit_policy = self.commit_policy
         if plan.unchanged:
-            await self.recorder.arecord(plan.session_id, ())
+            with self._actor_peer_scope(plan.actor_peer_id):
+                await self.recorder.arecord(plan.session_id, ())
             self._pending_context_parts.pop(plan.key, None)
             return None
         try:
-            result = await self.recorder.arecord(
-                plan.session_id,
-                plan.messages[plan.start :],
-                peer_id=plan.peer_id,
-                context_parts=plan.context_parts,
-            )
+            with self._actor_peer_scope(plan.actor_peer_id):
+                result = await self.recorder.arecord(
+                    plan.session_id,
+                    plan.messages[plan.start :],
+                    peer_id=plan.peer_id,
+                    context_parts=plan.context_parts,
+                )
         except OpenVikingPartialWriteError as exc:
             self._handle_partial_capture(plan, exc)
             raise
@@ -318,7 +346,8 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             return None
         session_id = self._resolve_session_id(state, runtime)
         peer_id = self._resolve_peer_id(state, runtime)
-        key = _capture_key(session_id, peer_id)
+        actor_peer_id = self._resolve_actor_peer_id(state, runtime)
+        key = _capture_key(session_id, peer_id, actor_peer_id)
         previous_signatures = self._captured_signatures.get(key, ())
         signatures = tuple(_message_signature(message) for message in messages)
         unchanged = signatures == previous_signatures
@@ -333,6 +362,7 @@ class OpenVikingContextMiddleware(AgentMiddleware):
         return _CapturePlan(
             session_id=session_id,
             peer_id=peer_id,
+            actor_peer_id=actor_peer_id,
             key=key,
             messages=messages,
             signatures=signatures,
@@ -399,6 +429,31 @@ class OpenVikingContextMiddleware(AgentMiddleware):
                 return resolved
         return None
 
+    def _resolve_actor_peer_id(
+        self,
+        state: Any,
+        runtime: Any,
+    ) -> str | None:
+        if self.actor_peer_resolver is None:
+            return get_actor_peer_id()
+        actor_peer_id = self.actor_peer_resolver(state, runtime)
+        if actor_peer_id is None:
+            return None
+        if not isinstance(actor_peer_id, str):
+            raise TypeError("OpenViking actor_peer_resolver must return a string or None")
+        normalized = actor_peer_id.strip()
+        if not normalized:
+            raise ValueError("OpenViking actor_peer_resolver must not return an empty string")
+        return normalized
+
+    def _actor_peer_scope(
+        self,
+        actor_peer_id: str | None,
+    ) -> AbstractContextManager[None]:
+        if self.actor_peer_resolver is None:
+            return nullcontext()
+        return use_actor_peer(actor_peer_id)
+
 
 def _nested_get(value: Any, *keys: str) -> Any:
     current = value
@@ -426,8 +481,42 @@ def _normalize_peer_id(value: Any) -> str | None:
     return text or None
 
 
-def _capture_key(session_id: str, peer_id: str | None) -> tuple[str, str]:
-    return (session_id, peer_id or "")
+def _capture_key(
+    session_id: str,
+    peer_id: str | None,
+    actor_peer_id: str | None,
+) -> _CaptureKey:
+    if actor_peer_id is None:
+        return (session_id, peer_id or "")
+    return (actor_peer_id, session_id, peer_id or "")
+
+
+def _validate_actor_peer_transport(
+    *,
+    actor_peer_resolver: _ActorPeerResolver | None,
+    client: Any,
+    async_client: Any,
+    retriever: OpenVikingRetriever | None,
+    path: str | None,
+) -> None:
+    if actor_peer_resolver is None:
+        return
+    require_request_actor_peer_support()
+    if path is not None or (retriever is not None and retriever.path is not None):
+        raise ValueError("actor_peer_resolver requires an OpenViking HTTP connection")
+    transports = [client, async_client]
+    if retriever is not None:
+        transports.extend([retriever.client, retriever.async_client])
+    for transport in transports:
+        if transport is not None and not getattr(
+            transport,
+            "supports_request_actor_peer",
+            False,
+        ):
+            raise ValueError(
+                "actor_peer_resolver requires OpenViking HTTP clients that support "
+                "request-scoped actor peers"
+            )
 
 
 def _message_role(message: Any) -> str:

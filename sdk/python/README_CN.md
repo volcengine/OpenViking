@@ -78,6 +78,35 @@ client = SyncHTTPClient(
 )
 ```
 
+## 请求级 Actor Peer
+
+应用可以复用一个已经绑定凭证并完成初始化的 client，同时为每个请求选择当前的
+actor peer：
+
+```python
+from openviking_sdk import (
+    SyncHTTPClient,
+    use_actor_peer,
+)
+
+client = SyncHTTPClient(
+    url="http://127.0.0.1:1933",
+    api_key="your-user-key",
+)
+client.initialize()
+
+with use_actor_peer("assistant-a"):
+    memories = client.find("部署偏好")
+```
+
+该作用域通过 Python `ContextVar` 隔离，因此并发 async task 以及由 SDK worker loop
+执行的同步调用不会互相覆盖。嵌套作用域会自动恢复之前的 actor peer。
+
+该作用域不会改变认证或租户归属。Account 和 user 身份仍然由 API Key 或 OAuth
+凭证决定。每个 OpenViking user 应使用各自绑定凭证的 client，actor peer 只能从应用
+已经认证的状态中解析。服务端只会在支持 actor-peer view 的接口上应用该值；Session
+接口仍然以 user 为作用域。
+
 ## 快速开始：同步客户端
 
 ```python

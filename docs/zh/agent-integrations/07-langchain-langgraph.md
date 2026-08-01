@@ -148,6 +148,42 @@ chain.invoke(
 )
 ```
 
+### 并发 Agent 的运行时 Actor Peer
+
+`OpenVikingContextMiddleware` 可以在复用绑定凭证的 HTTP client 时，从每次
+LangGraph 运行中解析当前 actor peer：
+
+```python
+from openviking.integrations.langchain import OpenVikingContextMiddleware
+
+
+def resolve_actor_peer(_state, runtime):
+    context = runtime.context or {}
+    return context.get("actor_peer_id")
+
+
+middleware = OpenVikingContextMiddleware(
+    url="http://localhost:1933",
+    api_key="user-api-key",
+    actor_peer_resolver=resolve_actor_peer,
+)
+```
+
+解析出的 actor peer 会作用于召回和捕获期间发出的 OpenViking HTTP 请求。并发运行
+互相隔离，middleware 的捕获进度也会按 actor peer、session 和 message peer 共同
+隔离。OpenViking 的 Session 接口仍然以 user 为作用域，不会使用 actor-peer header
+标记消息归属；如果捕获的消息也需要归属于同一个逻辑 peer，应同时设置
+`peer_id_resolver`。拥有独立历史的不同 peer 也应解析为不同的 session ID。未传入
+`actor_peer_resolver` 时，现有固定 client 行为保持不变。
+
+该 resolver 不能改变 OpenViking account 或 user；这些身份继续由 API Key 或 OAuth
+凭证决定。因此，多用户应用必须先选择绑定对应用户凭证的 client，再调用 middleware。
+Actor peer 只能从已经认证、由服务端控制的 runtime 字段中解析；不要信任 model state
+或客户端可控的 configurable 值。运行时 actor-peer 解析仅支持 HTTP-backed
+middleware，不支持 embedded `path=` client。注入的自定义 client 必须设置
+`supports_request_actor_peer = True`，并遵循 `openviking_sdk` 的 actor-peer
+作用域。在已有环境中启用该能力前，应同时升级 `openviking-sdk` 和 `openviking`。
+
 ## 选哪个适配器？
 
 | 我想… | 用这个 |

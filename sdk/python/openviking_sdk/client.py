@@ -15,6 +15,7 @@ from urllib.parse import quote
 import httpx
 
 from ._utils import run_async
+from .actor_peer import _request_actor_peer_headers
 from .config import resolve_client_config
 from .errors import (
     AbortedError,
@@ -334,6 +335,8 @@ class _HTTPObserver:
 
 
 class AsyncHTTPClient:
+    supports_request_actor_peer = True
+
     def __init__(
         self,
         url: Optional[str] = None,
@@ -446,7 +449,8 @@ class AsyncHTTPClient:
             raise RuntimeError("Client is not initialized")
 
         request_kwargs = dict(kwargs)
-        headers = dict(request_kwargs.pop("headers", {}) or {})
+        headers = _request_actor_peer_headers()
+        headers.update(dict(request_kwargs.pop("headers", {}) or {}))
         has_explicit_gateway_header = self._has_explicit_gateway_header(headers)
 
         # Multipart streams cannot be replayed safely after the first request. Probe the
@@ -1819,6 +1823,8 @@ class AsyncHTTPClient:
 
 
 class SyncHTTPClient:
+    supports_request_actor_peer = True
+
     def __init__(self, *args, **kwargs):
         self._async_client = AsyncHTTPClient(*args, **kwargs)
         self._initialized = False

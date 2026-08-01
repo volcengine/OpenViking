@@ -10,6 +10,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from openviking.integrations.langchain.actor_peer import (
+    has_request_actor_peer_support,
+)
+
 __all__ = [
     "InMemoryOpenVikingClient",
     "OpenVikingChatMessageHistory",
@@ -25,6 +29,7 @@ __all__ = [
     "OpenVikingStore",
     "create_openviking_tools",
     "get_openviking_cancellation_progress",
+    "has_request_actor_peer_support",
     "with_openviking_context",
 ]
 
