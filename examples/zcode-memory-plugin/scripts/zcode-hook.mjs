@@ -63,6 +63,12 @@ function outputContext(additionalContext, hookEventName) {
 }
 
 const input = await readHookInput();
+
+// ZCode may pass sessionId in camelCase or snake_case. Ensure both are present
+// so resolveNativeSessionId() finds it via the direct lookup path — avoids the
+// cwd fallback that would collide for two windows in the same directory.
+if (!input.session_id && input.sessionId) input.session_id = input.sessionId;
+
 const nativeSessionId = resolveNativeSessionId(input);
 const sessionId = deriveAgentSessionId("zc-", input);
 const cwd = resolveAgentCwd(input);
