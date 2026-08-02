@@ -10,7 +10,7 @@
  *     message — NOT a complete conversation)
  *   - responseText / responsePreview (the last assistant response text)
  *
- * The rollout files at ~/.zcode/cli/rollout/model-io-sess-*.jsonl contain
+ * The rollout files at ~/.zcode/cli/rollout/model-io-*.jsonl contain
  * the COMPLETE conversation with this structure per line:
  *   { sessionId, turnId, type: "model_io",
  *     request: { messages: [{ role, content }] },
@@ -42,7 +42,7 @@ export function cleanZcodeText(value) {
 
 /**
  * Resolve the rollout file path for a given session ID.
- * ZCode stores rollout at ~/.zcode/cli/rollout/model-io-sess-<sessionId>.jsonl
+ * ZCode stores rollout at ~/.zcode/cli/rollout/model-io-<sessionId>.jsonl
  */
 function resolveRolloutPath(input = {}) {
   const sessionId =
