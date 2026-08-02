@@ -327,6 +327,7 @@ async def recall(
     min_score: float = DEFAULT_MIN_SCORE,
     peer_scope: str = "all",
     other_peer_penalty: Optional[Union[float, Dict[str, float]]] = None,
+    admission: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Type-quota memory recall. Searches events, entities, preferences, and experiences separately, then returns a bounded memory_group block."""
     service = get_service()
@@ -340,6 +341,7 @@ async def recall(
         min_score=min_score,
         peer_scope=effective_peer_scope,
         other_peer_penalty=other_peer_penalty,
+        admission=admission,
         render=True,
     )
     if result.rendered.strip():

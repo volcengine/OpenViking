@@ -122,12 +122,23 @@ export OPENVIKING_RECALL_COMPRESS=1
 export OPENVIKING_RECALL_COMPRESS_MODEL=gpt-5.3-codex-spark
 export OPENVIKING_RECALL_COMPRESS_THINKING=default
 export OPENVIKING_RECALL_TIMEOUT_MS=120000
+# Observe a stricter, model-free guard without changing injected results.
+export OPENVIKING_RECALL_ADMISSION_MODE=shadow
+export OPENVIKING_RECALL_ADMISSION_TYPE_MIN_SCORES='{"events":0.50,"entities":0.50,"preferences":0.50}'
+export OPENVIKING_RECALL_ADMISSION_OTHER_PEER_SCORE_DELTA=0.08
 export OPENVIKING_CAPTURE_ASSISTANT_TURNS=1
 export OPENVIKING_AUTO_COMMIT_ON_COMPACT=1
 export OPENVIKING_DEBUG=1
 ```
 
 Full list: see the `Misc env vars` block in `scripts/config.mjs`. Tuning fields have `OPENVIKING_*` counterparts and env vars win for those tuning fields.
+
+Recall admission is `off` by default, so existing installations send the same
+request as before. Use `shadow` to collect aggregate accept/reject telemetry,
+then switch to `enforce` only after validating both negative queries and known
+positive memories. Enforcement fails closed when the configured server does
+not support admission, preventing an automatic fallback from bypassing the
+guard. The guard adds no LLM, embedding, rerank, or compressor call.
 
 #### Legacy `codex` block in `ov.conf`
 

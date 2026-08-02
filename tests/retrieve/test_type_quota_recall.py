@@ -173,3 +173,85 @@ async def test_recall_hides_persisted_memory_fields_metadata():
     assert "Visible memory body" in result.rendered
     assert "MEMORY_FIELDS" not in result.rendered
     assert "internal-event" not in result.rendered
+
+
+async def test_shadow_admission_reports_rejection_but_keeps_legacy_entry():
+    read_uris: list[str] = []
+    memory_uri = "viking://user/test_user/memories/events/weak.md"
+
+    async def fake_find(**kwargs):
+        if kwargs["target_uri"].endswith("/events") and "/peers/" not in kwargs["target_uri"]:
+            return _FakeFindResult([{"uri": memory_uri, "score": 0.4, "abstract": "weak"}])
+        return _FakeFindResult()
+
+    async def fake_read(uri, **kwargs):
+        del kwargs
+        read_uris.append(uri)
+        return "weak memory"
+
+    service = SimpleNamespace(
+        search=SimpleNamespace(find=fake_find),
+        fs=SimpleNamespace(read=fake_read),
+    )
+    ctx = RequestContext(
+        user=UserIdentifier.the_default_user("test_user"),
+        role=Role.USER,
+        actor_peer_id="current",
+    )
+
+    result = await search_type_quota_recall(
+        service=service,
+        ctx=ctx,
+        query="unrelated query",
+        peer_scope="actor",
+        quotas={"events": 1, "entities": 0, "preferences": 0, "experiences": 0},
+        min_score=0.35,
+        admission={"mode": "shadow", "type_min_scores": {"events": 0.5}},
+    )
+
+    assert [entry.uri for entry in result.entries] == [memory_uri]
+    assert read_uris == [memory_uri]
+    assert result.stats["admission"]["rejected"] == 1
+    assert result.stats["admission"]["would_abstain"] is True
+    assert result.stats["admission"]["abstained"] is False
+
+
+async def test_enforce_admission_rejects_before_content_read():
+    read_uris: list[str] = []
+    memory_uri = "viking://user/test_user/memories/events/weak.md"
+
+    async def fake_find(**kwargs):
+        if kwargs["target_uri"].endswith("/events") and "/peers/" not in kwargs["target_uri"]:
+            return _FakeFindResult([{"uri": memory_uri, "score": 0.4, "abstract": "weak"}])
+        return _FakeFindResult()
+
+    async def fake_read(uri, **kwargs):
+        del kwargs
+        read_uris.append(uri)
+        return "must not be read"
+
+    service = SimpleNamespace(
+        search=SimpleNamespace(find=fake_find),
+        fs=SimpleNamespace(read=fake_read),
+    )
+    ctx = RequestContext(
+        user=UserIdentifier.the_default_user("test_user"),
+        role=Role.USER,
+        actor_peer_id="current",
+    )
+
+    result = await search_type_quota_recall(
+        service=service,
+        ctx=ctx,
+        query="negative query",
+        peer_scope="actor",
+        quotas={"events": 1, "entities": 0, "preferences": 0, "experiences": 0},
+        min_score=0.35,
+        admission={"mode": "enforce", "type_min_scores": {"events": 0.5}},
+    )
+
+    assert result.entries == []
+    assert result.rendered == ""
+    assert read_uris == []
+    assert result.stats["admission"]["rejected"] == 1
+    assert result.stats["admission"]["abstained"] is True
