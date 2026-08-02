@@ -237,3 +237,100 @@ test("lifecycle: user and assistant from same rollout entry both captured", () =
   assert.equal(turns[1].content, "assistant msg");
   assert.equal(turns[0].turnId, turns[1].turnId); // same turnId, different role
 });
+
+// ---------------------------------------------------------------------------
+// Concurrent session isolation: two sessions in the same workspace must not
+// cross-read each other's rollout data
+// ---------------------------------------------------------------------------
+
+test("isolation: two sessions read their own rollout files, not each other's", () => {
+  const fakeHome = mkdtempSync(join(tmpdir(), "zcode-iso-"));
+  const rolloutDir = join(fakeHome, ".zcode", "cli", "rollout");
+  mkdirSync(rolloutDir, { recursive: true });
+
+  const sessA = "sess-isolation-AAA";
+  const sessB = "sess-isolation-BBB";
+
+  // Each session has its own rollout file with distinct sentinel content
+  writeFileSync(
+    join(rolloutDir, `model-io-sess-${sessA}.jsonl`),
+    JSON.stringify({ turnId: "turn-A1", request: { messages: [{ role: "user", content: "amber-sentinel-A" }] }, response: { text: "response-A" } }) + "\n",
+  );
+  writeFileSync(
+    join(rolloutDir, `model-io-sess-${sessB}.jsonl`),
+    JSON.stringify({ turnId: "turn-B1", request: { messages: [{ role: "user", content: "sapphire-sentinel-B" }] }, response: { text: "response-B" } }) + "\n",
+  );
+
+  const originalHome = process.env.HOME;
+  process.env.HOME = fakeHome;
+
+  // Session A reads its own rollout
+  const turnsA = buildZcodeTurns({ session_id: sessA, responseText: "ignored" });
+  // Session B reads its own rollout
+  const turnsB = buildZcodeTurns({ session_id: sessB, responseText: "ignored" });
+
+  process.env.HOME = originalHome;
+
+  // Session A must NOT contain session B's content
+  const aContents = turnsA.map((t) => t.content).join(" ");
+  assert.ok(aContents.includes("amber-sentinel-A"), "session A should see its own content");
+  assert.ok(!aContents.includes("sapphire-sentinel-B"), "session A must NOT see session B's content");
+
+  // Session B must NOT contain session A's content
+  const bContents = turnsB.map((t) => t.content).join(" ");
+  assert.ok(bContents.includes("sapphire-sentinel-B"), "session B should see its own content");
+  assert.ok(!bContents.includes("amber-sentinel-A"), "session B must NOT see session A's content");
+
+  // Turn IDs must not cross
+  assert.equal(turnsA[0].turnId, "turn-A1");
+  assert.equal(turnsB[0].turnId, "turn-B1");
+});
+
+test("isolation: independent lastTurnId state per session", () => {
+  const fakeHome = mkdtempSync(join(tmpdir(), "zcode-iso-state-"));
+  const rolloutDir = join(fakeHome, ".zcode", "cli", "rollout");
+  mkdirSync(rolloutDir, { recursive: true });
+
+  const sessA = "sess-state-AAA";
+  const sessB = "sess-state-BBB";
+
+  writeFileSync(
+    join(rolloutDir, `model-io-sess-${sessA}.jsonl`),
+    [
+      JSON.stringify({ turnId: "A-001", request: { messages: [{ role: "user", content: "A1" }] }, response: { text: "a1" } }),
+      JSON.stringify({ turnId: "A-002", request: { messages: [{ role: "user", content: "A2" }] }, response: { text: "a2" } }),
+    ].join("\n") + "\n",
+  );
+  writeFileSync(
+    join(rolloutDir, `model-io-sess-${sessB}.jsonl`),
+    [
+      JSON.stringify({ turnId: "B-001", request: { messages: [{ role: "user", content: "B1" }] }, response: { text: "b1" } }),
+      JSON.stringify({ turnId: "B-002", request: { messages: [{ role: "user", content: "B2" }] }, response: { text: "b2" } }),
+    ].join("\n") + "\n",
+  );
+
+  const originalHome = process.env.HOME;
+  process.env.HOME = fakeHome;
+
+  // Session A processed turn A-001 first; now reads A-002 only
+  const turnsA = buildZcodeTurns(
+    { session_id: sessA, responseText: "ignored" },
+    { lastTurnId: "A-001" },
+  );
+  // Session B is fresh — reads ALL its entries
+  const turnsB = buildZcodeTurns(
+    { session_id: sessB, responseText: "ignored" },
+    {}, // no lastTurnId — first capture
+  );
+
+  process.env.HOME = originalHome;
+
+  // Session A: only A-002 (2 turns: user+assistant)
+  assert.equal(turnsA.length, 2);
+  assert.equal(turnsA[0].turnId, "A-002");
+
+  // Session B: both entries (4 turns: user+assistant × 2)
+  assert.equal(turnsB.length, 4);
+  assert.equal(turnsB[0].turnId, "B-001");
+  assert.equal(turnsB[2].turnId, "B-002");
+});
