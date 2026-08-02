@@ -214,6 +214,7 @@ OpenViking welcomes collaboration with other open-source projects to build the c
 - [heima](https://github.com/litentry/heima) - Substrate-based EVM-compatible L1 chain
 
 Interested in joining our partner list? Please submit an issue to our community to apply.
+- [Pixel Pet](https://letmethink.cc/app/pixel-pet/) - Turn a personality description into a deterministic ASCII pixel companion in the browser.
 
 ## Community & contributing
 
