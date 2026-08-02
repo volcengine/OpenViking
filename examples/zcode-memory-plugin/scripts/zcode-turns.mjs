@@ -49,7 +49,9 @@ function resolveRolloutPath(input = {}) {
     input.session_id || input.sessionId || input.conversation_id || "";
   if (!sessionId) return null;
   const home = process.env.HOME || process.env.USERPROFILE || "";
-  return join(home, ".zcode", "cli", "rollout", `model-io-sess-${sessionId}.jsonl`);
+  // ZCode rollout files are named: model-io-<sessionId>.jsonl
+  // sessionId already includes the "sess_" prefix, so no extra "sess-" needed.
+  return join(home, ".zcode", "cli", "rollout", `model-io-${sessionId}.jsonl`);
 }
 
 /**

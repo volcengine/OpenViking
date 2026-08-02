@@ -101,7 +101,7 @@ function createFakeRolloutHome(entries) {
   const rolloutDir = join(fakeHome, ".zcode", "cli", "rollout");
   mkdirSync(rolloutDir, { recursive: true });
   const lines = entries.map((e) => JSON.stringify(e)).join("\n");
-  writeFileSync(join(rolloutDir, `model-io-sess-${sessionId}.jsonl`), lines + "\n");
+  writeFileSync(join(rolloutDir, `model-io-${sessionId}.jsonl`), lines + "\n");
   return { fakeHome, sessionId };
 }
 
@@ -113,7 +113,7 @@ test("extractUnseenRolloutTurns returns ALL entries when no lastKnownTurnId", ()
   const originalHome = process.env.HOME;
   process.env.HOME = fakeHome;
   const turns = extractUnseenRolloutTurns(
-    join(fakeHome, ".zcode", "cli", "rollout", `model-io-sess-${sessionId}.jsonl`),
+    join(fakeHome, ".zcode", "cli", "rollout", `model-io-${sessionId}.jsonl`),
     null,
   );
   process.env.HOME = originalHome;
@@ -136,7 +136,7 @@ test("extractUnseenRolloutTurns returns all entries after lastKnownTurnId", () =
   const originalHome = process.env.HOME;
   process.env.HOME = fakeHome;
   const turns = extractUnseenRolloutTurns(
-    join(fakeHome, ".zcode", "cli", "rollout", `model-io-sess-${sessionId}.jsonl`),
+    join(fakeHome, ".zcode", "cli", "rollout", `model-io-${sessionId}.jsonl`),
     "turn-001",
   );
   process.env.HOME = originalHome;
@@ -253,11 +253,11 @@ test("isolation: two sessions read their own rollout files, not each other's", (
 
   // Each session has its own rollout file with distinct sentinel content
   writeFileSync(
-    join(rolloutDir, `model-io-sess-${sessA}.jsonl`),
+    join(rolloutDir, `model-io-${sessA}.jsonl`),
     JSON.stringify({ turnId: "turn-A1", request: { messages: [{ role: "user", content: "amber-sentinel-A" }] }, response: { text: "response-A" } }) + "\n",
   );
   writeFileSync(
-    join(rolloutDir, `model-io-sess-${sessB}.jsonl`),
+    join(rolloutDir, `model-io-${sessB}.jsonl`),
     JSON.stringify({ turnId: "turn-B1", request: { messages: [{ role: "user", content: "sapphire-sentinel-B" }] }, response: { text: "response-B" } }) + "\n",
   );
 
@@ -295,14 +295,14 @@ test("isolation: independent lastTurnId state per session", () => {
   const sessB = "sess-state-BBB";
 
   writeFileSync(
-    join(rolloutDir, `model-io-sess-${sessA}.jsonl`),
+    join(rolloutDir, `model-io-${sessA}.jsonl`),
     [
       JSON.stringify({ turnId: "A-001", request: { messages: [{ role: "user", content: "A1" }] }, response: { text: "a1" } }),
       JSON.stringify({ turnId: "A-002", request: { messages: [{ role: "user", content: "A2" }] }, response: { text: "a2" } }),
     ].join("\n") + "\n",
   );
   writeFileSync(
-    join(rolloutDir, `model-io-sess-${sessB}.jsonl`),
+    join(rolloutDir, `model-io-${sessB}.jsonl`),
     [
       JSON.stringify({ turnId: "B-001", request: { messages: [{ role: "user", content: "B1" }] }, response: { text: "b1" } }),
       JSON.stringify({ turnId: "B-002", request: { messages: [{ role: "user", content: "B2" }] }, response: { text: "b2" } }),
