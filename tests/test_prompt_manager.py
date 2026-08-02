@@ -79,10 +79,27 @@ def test_profile_memory_template_includes_stable_identity_work_style_and_prefere
     assert '"who the user is"' in text
     assert "identity, work style, and preferences" in text
     assert "profession, experience level, technical background" in text
-    assert "communication style, work habits" in text
+    assert "communication style, recurring work habits" in text
     assert "Do NOT include transient conversation content" in text
     assert "Each item: self-contained" in text
-    assert "Only record objective statuses" in text
+    assert "Slowly changing personal attributes such as current occupation" in text
+
+
+def test_profile_memory_template_excludes_transient_project_and_task_state():
+    template_path = PromptManager._get_bundled_templates_dir() / "memory" / "profile.yaml"
+    schema = yaml.safe_load(template_path.read_text(encoding="utf-8"))
+    text = "\n".join(
+        [
+            schema["description"],
+            schema["fields"][0]["description"],
+        ]
+    )
+
+    assert "repository-specific activity, current project phases, one-off tasks" in text
+    assert "branches, tickets, local paths, blockers, and deadlines" in text
+    assert "date or timestamp does not make transient project/task state eligible" in text
+    assert "project/task status even when it has a date" in text
+    assert "entities or events instead of profile attributes" in text
 
 
 def test_preferences_memory_template_keeps_topic_specific_preferences():
