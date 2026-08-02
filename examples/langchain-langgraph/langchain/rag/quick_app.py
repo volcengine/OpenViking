@@ -7,7 +7,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableLambda, RunnablePassthrough
 
-from openviking.integrations.langchain import InMemoryOpenVikingClient, OpenVikingRetriever
+from langchain_openviking import InMemoryOpenVikingClient, OpenVikingRetriever
 
 
 def build_app(client: InMemoryOpenVikingClient | None = None):

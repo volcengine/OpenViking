@@ -11,8 +11,7 @@ from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.runnables import RunnableLambda
 from langchain_core.runnables.history import RunnableWithMessageHistory
-
-from openviking.integrations.langchain import (
+from langchain_openviking import (
     InMemoryOpenVikingClient,
     OpenVikingChatMessageHistory,
     OpenVikingContextMiddleware,
