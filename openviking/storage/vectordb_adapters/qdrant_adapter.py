@@ -316,9 +316,13 @@ class QdrantCollectionAdapter(CollectionAdapter):
             field = payload.get("field")
             branches: List[Dict[str, Any]] = []
             if payload.get("gte") is not None:
-                branches.append({"must": [self._range_condition(field, {"lt": payload["gte"]})]})
+                branches.append(
+                    {"must": [self._range_condition(field, {"lt": self._coerce_datetime_value(payload["gte"])})]}
+                )
             if payload.get("lte") is not None:
-                branches.append({"must": [self._range_condition(field, {"gt": payload["lte"]})]})
+                branches.append(
+                    {"must": [self._range_condition(field, {"gt": self._coerce_datetime_value(payload["lte"])})]}
+                )
             return self._should_clause(*branches)
         if op == "contains":
             return {

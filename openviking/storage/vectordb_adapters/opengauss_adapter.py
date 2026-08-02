@@ -609,10 +609,10 @@ class OpenGaussCollection(ICollection):
             params = []
             if payload.get("gte") is not None:
                 clauses.append(f"{_quote_ident(field)} < %s")
-                params.append(payload["gte"])
+                params.append(_coerce_sql_value(payload["gte"], self._field_types.get(field)))
             if payload.get("lte") is not None:
                 clauses.append(f"{_quote_ident(field)} > %s")
-                params.append(payload["lte"])
+                params.append(_coerce_sql_value(payload["lte"], self._field_types.get(field)))
             return " OR ".join(clauses), params
         if op == "contains":
             field = str(payload.get("field") or "")

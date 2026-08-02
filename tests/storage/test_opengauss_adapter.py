@@ -95,6 +95,24 @@ def test_collection_filter_to_sql_for_path_scope():
     ]
 
 
+def test_range_out_coerces_values_like_range():
+    # range_out must coerce filter values by field type, exactly like range /
+    # time_range do. Without coercion an int64 bound passed as a string reaches
+    # the SQL layer un-typed, producing an inconsistent (and potentially wrong)
+    # comparison versus the same bound expressed via `range`.
+    collection = object.__new__(OpenGaussCollection)
+    collection._field_types = {"score": "int64"}
+
+    clause, params = collection._compile_filter(
+        {"op": "range_out", "field": "score", "gte": "10", "lte": "20"}
+    )
+
+    assert '"score" < %s' in clause
+    assert '"score" > %s' in clause
+    # coerced to int, not left as the raw "10" / "20" strings
+    assert params == [10, 20]
+
+
 def test_vector_literal_and_identifier_safety():
     assert _vector_literal([1, 2.5, float("nan")]) == "[1,2.5,0]"
 
