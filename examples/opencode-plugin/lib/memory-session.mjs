@@ -53,6 +53,9 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     const intervalMs = Math.max(10000, Number(config.periodicFlushIntervalMs) || 60000)
     if (flushTimer) clearInterval(flushTimer)
     flushTimer = setInterval(() => {
+      // A tick may have been queued just before flushAll's clearInterval; skip it
+      // during teardown so a periodic flush cannot start concurrently with flushAll.
+      if (shuttingDown) return
       runPeriodicFlush().catch((error) => {
         log("ERROR", "session", "Periodic flush failed", { error: error?.message })
       })
@@ -305,7 +308,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     debouncedSaveState()
   }
 
-  async function flushAll({ commit = false, shutdown = commit } = {}) {
+  async function flushAll({ commit = false, shutdown = false } = {}) {
     if (shutdown) shuttingDown = true
     if (saveTimer) {
       clearTimeout(saveTimer)
