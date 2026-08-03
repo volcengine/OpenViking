@@ -429,12 +429,6 @@ class OpenVikingService:
             )
             await self._queue_manager.prepare_task_tracking(get_task_tracker())
 
-        # Do not let watches produce queue work while task ownership is being
-        # rebuilt from QueueFS. Consumers start only after the scheduler is ready.
-        #
-        # Read-only replicas (enable_watch_scheduler=false) keep the scheduler
-        # instance wired for on-demand read paths but never start its background
-        # loop, so only the writer runs the periodic watch/refresh writes.
         if self._config.enable_watch_scheduler:
             await self._watch_scheduler.start()
             logger.info("WatchScheduler started")
