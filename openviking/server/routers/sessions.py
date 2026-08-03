@@ -348,9 +348,8 @@ async def get_session_archive(
     try:
         result = await session.get_session_archive(archive_id)
     except NotFoundError:
-        return Response(
-            status="error",
-            error=ErrorInfo(code="NOT_FOUND", message=f"Archive {archive_id} not found"),
+        return error_response(
+            code="NOT_FOUND", message=f"Archive {archive_id} not found"
         )
     return Response(status="ok", result=_to_jsonable(result))
 
