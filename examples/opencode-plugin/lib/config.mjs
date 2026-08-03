@@ -1,13 +1,8 @@
 import fs from "fs"
 import path from "path"
 import { homedir } from "os"
-import { buildUserAgent, readManifestVersion, resolveOpenVikingCredentials } from "./shared/credentials.mjs"
+import { resolveOpenVikingCredentials } from "./shared/credentials.mjs"
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs"
-
-const USER_AGENT = buildUserAgent(
-  "opencode",
-  readManifestVersion(new URL("../package.json", import.meta.url)),
-)
 
 const DEFAULT_CONFIG = {
   endpoint: "http://127.0.0.1:1933",
@@ -42,6 +37,7 @@ const DEFAULT_CONFIG = {
   captureToolMaxChars: 2000,
   commitTokenThreshold: 20000,
   commitKeepRecentCount: 10,
+  periodicFlushIntervalMs: 60000,
   profileTokenBudget: 10000,
   resumeContextBudget: 32000,
   noAutoInject: false,
@@ -148,6 +144,7 @@ function applyBehaviorConfig(config, fileConfig = {}) {
     "captureToolMaxChars",
     "commitTokenThreshold",
     "commitKeepRecentCount",
+    "periodicFlushIntervalMs",
     "profileTokenBudget",
     "resumeContextBudget",
     "noAutoInject",
@@ -221,7 +218,6 @@ function normalizeConfig(config) {
   config.baseUrl = config.endpoint
   config.accountId = config.account
   config.userId = config.user
-  config.userAgent = USER_AGENT
   config.timeoutMs = normalizeNumber(config.timeoutMs, DEFAULT_CONFIG.timeoutMs, 1000, 300000)
   config.repoContext.cacheTtlMs = normalizeNumber(
     config.repoContext.cacheTtlMs,
@@ -248,6 +244,7 @@ function normalizeConfig(config) {
     ? Math.max(0, Math.round(commitKeepRecentCount))
     : DEFAULT_CONFIG.commitKeepRecentCount
   config.profileTokenBudget = Math.max(500, Math.round(Number(config.profileTokenBudget) || 10000))
+  config.periodicFlushIntervalMs = Math.max(10000, Math.round(Number(config.periodicFlushIntervalMs) || 60000))
   config.resumeContextBudget = Math.max(1024, Math.round(Number(config.resumeContextBudget) || 32000))
   if (!Array.isArray(config.bypassSessionPatterns)) config.bypassSessionPatterns = []
 
