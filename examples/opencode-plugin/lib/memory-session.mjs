@@ -28,6 +28,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   const oldSessionMapPath = path.join(pluginRoot, "openviking-session-map.json")
   let saveTimer = null
   let flushTimer = null
+  let periodicFlushRunning = false
 
   async function init() {
     if (config.autoCapture) await migrateLegacySessionMap()
@@ -56,17 +57,23 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   }
 
   async function runPeriodicFlush() {
-    for (const [opencodeSessionId, state] of sessions.entries()) {
-      let hasPending = false
-      for (const message of state.messages.values()) {
-        if (!message.captured) {
-          hasPending = true
-          break
+    if (periodicFlushRunning) return
+    periodicFlushRunning = true
+    try {
+      for (const [opencodeSessionId, state] of sessions.entries()) {
+        let hasPending = false
+        for (const message of state.messages.values()) {
+          if (!message.captured) {
+            hasPending = true
+            break
+          }
+        }
+        if (hasPending) {
+          await flushSession(opencodeSessionId, { commit: false, reason: "periodic" })
         }
       }
-      if (hasPending) {
-        await flushSession(opencodeSessionId, { commit: false, reason: "periodic" })
-      }
+    } finally {
+      periodicFlushRunning = false
     }
   }
 
@@ -311,9 +318,13 @@ export function createMemorySessionManager({ config, pluginRoot }) {
 
     const previous = state.flushing || Promise.resolve()
     const current = previous.then(run, run)
-    state.flushing = current.finally(() => {
-      if (state.flushing === current) state.flushing = undefined
+    // Track the same promise we store so the reset actually fires. Swallow the
+    // rejection on the gate branch (callers still observe it via `current`) to
+    // avoid an unhandled rejection when no subsequent flush chains onto it.
+    const tracked = current.catch(() => {}).finally(() => {
+      if (state.flushing === tracked) state.flushing = undefined
     })
+    state.flushing = tracked
     return current
   }
 
