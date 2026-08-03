@@ -3115,6 +3115,9 @@ class VikingFS:
                     uri=uri,
                     new_uri=new_uri,
                 )
+                if updated is None:
+                    logger.debug(f"[VikingFS] No vector URI to update: {uri}")
+                    continue
                 if not updated:
                     raise RuntimeError(
                         f"Vector store URI mapping returned false for {uri} -> {new_uri}"
@@ -3128,7 +3131,7 @@ class VikingFS:
                             uri=mapped_uri,
                             new_uri=old_uri,
                         )
-                        if not rolled_back:
+                        if rolled_back is not True:
                             raise RuntimeError(
                                 f"Vector store URI rollback returned false for "
                                 f"{mapped_uri} -> {old_uri}"

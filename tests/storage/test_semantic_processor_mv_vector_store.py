@@ -4,6 +4,7 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.viking_fs import VikingFS
+from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -122,6 +123,35 @@ async def test_update_vector_store_uris_raises_false_result():
 
 
 @pytest.mark.asyncio
+async def test_update_vector_store_uris_allows_missing_vector_record():
+    ctx = _ctx()
+    fs = VikingFS.__new__(VikingFS)
+    fs.vector_store = AsyncMock()
+    fs.vector_store.update_uri_mapping.return_value = None
+
+    await fs._update_vector_store_uris(
+        ["viking://resources/unindexed"],
+        "viking://resources/unindexed",
+        "viking://resources/moved",
+        ctx=ctx,
+    )
+
+
+@pytest.mark.asyncio
+async def test_vector_backend_distinguishes_missing_record_from_failure():
+    backend = VikingVectorIndexBackend.__new__(VikingVectorIndexBackend)
+    backend.filter = AsyncMock(return_value=[])
+
+    result = await backend.update_uri_mapping(
+        ctx=_ctx(),
+        uri="viking://resources/unindexed",
+        new_uri="viking://resources/moved",
+    )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
 async def test_update_vector_store_uris_rolls_back_partial_batch():
     ctx = _ctx()
     old_base = "viking://resources/source"
@@ -194,6 +224,23 @@ async def test_mv_vector_remap_failure_keeps_source_and_cleans_destination(
 @pytest.mark.asyncio
 async def test_mv_complete_vector_remap_deletes_source(monkeypatch, source_is_dir):
     vector_results = [True, True] if source_is_dir else [True]
+    fs, agfs, _, source_uri, target_uri, source_path, _ = _move_fs(
+        monkeypatch,
+        source_is_dir=source_is_dir,
+        vector_results=vector_results,
+    )
+
+    await fs.mv(source_uri, target_uri, ctx=_ctx())
+
+    assert [(path, recursive) for path, recursive, _ in agfs.rm_calls] == [
+        (source_path, source_is_dir)
+    ]
+
+
+@pytest.mark.parametrize("source_is_dir", [False, True], ids=["file", "directory"])
+@pytest.mark.asyncio
+async def test_mv_without_vector_record_deletes_source(monkeypatch, source_is_dir):
+    vector_results = [None, None] if source_is_dir else [None]
     fs, agfs, _, source_uri, target_uri, source_path, _ = _move_fs(
         monkeypatch,
         source_is_dir=source_is_dir,

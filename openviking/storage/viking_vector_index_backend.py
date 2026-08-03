@@ -1392,7 +1392,8 @@ class VikingVectorIndexBackend:
         uri: str,
         new_uri: str,
         levels: Optional[List[int]] = None,
-    ) -> bool:
+    ) -> Optional[bool]:
+        """Return True when remapped, None when absent, or False on invalid records."""
         import hashlib
 
         canonical_uri = canonicalize_uri(uri, ctx)
@@ -1408,7 +1409,7 @@ class VikingVectorIndexBackend:
             ctx=ctx,
         )
         if not records:
-            return False
+            return None
         record_ids = [str(record["id"]) for record in records if record.get("id")]
         if not record_ids:
             logger.warning(
