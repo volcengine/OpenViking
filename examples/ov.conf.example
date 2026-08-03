@@ -205,6 +205,7 @@
         "rotation_interval": "midnight",
     },
     "parsers": {
+        "max_concurrent_parse": 4,
         "pdf": {
             "strategy": "auto",
             "max_content_length": 100000,

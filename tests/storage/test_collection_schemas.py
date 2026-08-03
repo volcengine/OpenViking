@@ -1,7 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-import asyncio
 import hashlib
 import inspect
 import json
@@ -22,20 +21,20 @@ from openviking.storage.errors import EmbeddingRebuildRequiredError
 from openviking.storage.expr import Eq
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.vectordb import engine as vectordb_engine
+from openviking.storage.vectordb.collection.result import UpsertDataResult
+from openviking.storage.vectordb.collection.vikingdb_collection import VikingDBCollection
 from openviking.storage.vectordb.collection.volcengine_api_key_collection import (
     VolcengineApiKeyCollection,
 )
-from openviking.storage.vectordb.collection.vikingdb_collection import VikingDBCollection
 from openviking.storage.vectordb.collection.volcengine_collection import VolcengineCollection
-from openviking.storage.vectordb.collection.result import UpsertDataResult
 from openviking.storage.vectordb_adapters.base import (
     VIKINGDB_TEXT_FIELD_BYTE_LIMIT,
     _truncate_text_field,
 )
 from openviking.storage.vectordb_adapters.local_adapter import LocalCollectionAdapter
 from openviking.storage.viking_vector_index_backend import (
-    UpsertOptions,
     VIKINGDB_CONTENT_MAX_SIZE,
+    UpsertOptions,
     VikingVectorIndexBackend,
     _SingleAccountBackend,
 )
@@ -604,7 +603,7 @@ async def test_embedding_handler_preserves_parent_uri_for_backend_upsert_logic(m
 
 
 @pytest.mark.asyncio
-async def test_embedding_handler_marks_success_only_after_tracker_completion(monkeypatch):
+async def test_embedding_handler_settles_request_wait_by_message_id(monkeypatch):
     class _CapturingVikingDB:
         is_closing = False
         mode = "local"
@@ -619,46 +618,25 @@ async def test_embedding_handler_marks_success_only_after_tracker_completion(mon
         lambda: _DummyConfig(embedder),
     )
 
-    decrement_started = asyncio.Event()
-    allow_decrement_finish = asyncio.Event()
-
-    class _FakeTracker:
-        async def decrement(self, _semantic_msg_id):
-            decrement_started.set()
-            await allow_decrement_finish.wait()
-            return 0
-
+    completed = []
     monkeypatch.setattr(
-        "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
-        lambda: _FakeTracker(),
+        "openviking.storage.collection_schemas.get_request_wait_tracker",
+        lambda: SimpleNamespace(
+            mark_embedding_done=lambda telemetry_id, root_id: completed.append(
+                (telemetry_id, root_id)
+            )
+        ),
     )
 
     handler = TextEmbeddingHandler(_CapturingVikingDB())
-    status = {"success": 0, "requeue": 0, "error": 0}
-    handler.set_callbacks(
-        on_success=lambda: status.__setitem__("success", status["success"] + 1),
-        on_requeue=lambda: status.__setitem__("requeue", status["requeue"] + 1),
-        on_error=lambda *_: status.__setitem__("error", status["error"] + 1),
-    )
-
     payload = _build_queue_payload()
     queue_data = json.loads(payload["data"])
-    queue_data["semantic_msg_id"] = "semantic-1"
+    queue_data["telemetry_id"] = "request-1"
     payload["data"] = json.dumps(queue_data)
 
-    task = asyncio.create_task(handler.on_dequeue(payload))
-    await decrement_started.wait()
+    await handler.on_dequeue(payload)
 
-    assert status["success"] == 0
-    assert status["requeue"] == 0
-    assert status["error"] == 0
-
-    allow_decrement_finish.set()
-    await task
-
-    assert status["success"] == 1
-    assert status["requeue"] == 0
-    assert status["error"] == 0
+    assert completed == [("request-1", queue_data["id"])]
 
 
 def test_context_collection_excludes_parent_uri():

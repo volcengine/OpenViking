@@ -2,9 +2,9 @@ import types
 
 import pytest
 
-from openviking.utils.ingest_options import IngestOptions
 from openviking.core.context import Context, ResourceContentType
 from openviking.utils import embedding_utils
+from openviking.utils.ingest_options import IngestOptions
 
 
 class DummyQueue:
@@ -77,6 +77,11 @@ class DummyReq:
         self.account_id = "default"
 
 
+def _context_as_embedding_msg(context):
+    context.telemetry_id = ""
+    return context
+
+
 @pytest.mark.parametrize("extension", [".ogg", ".m4a", ".opus", ".ac3"])
 def test_get_resource_content_type_recognizes_supported_audio_extensions(extension):
     assert (
@@ -122,7 +127,7 @@ async def test_vectorize_file_uses_summary_first(monkeypatch):
     monkeypatch.setattr(
         embedding_utils.EmbeddingMsgConverter,
         "from_context",
-        lambda context: context,
+        _context_as_embedding_msg,
     )
 
     await embedding_utils.vectorize_file(
@@ -165,7 +170,6 @@ async def test_vectorize_file_registers_request_wait_with_embedding_msg_id(monke
         summary_dict={"name": "test.md", "summary": ""},
         parent_uri="viking://user/default/resources",
         ctx=DummyReq(),
-        register_request_wait=True,
     )
 
     assert len(queue.items) == 1
@@ -205,7 +209,6 @@ async def test_vectorize_file_marks_registered_wait_root_failed_when_enqueue_rai
         summary_dict={"name": "test.md", "summary": ""},
         parent_uri="viking://user/default/resources",
         ctx=DummyReq(),
-        register_request_wait=True,
     )
 
     assert len(queue.items) == 1
@@ -336,9 +339,19 @@ async def test_vectorize_file_append_does_not_read_existing_tags(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_vectorize_directory_meta_writes_search_tags_into_embedding_context(monkeypatch):
-    queue = DummyQueue()
+    queue = DummyQueueWithId()
+    registered = []
     monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
     monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("ignored"))
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_request_wait_tracker",
+        lambda: types.SimpleNamespace(
+            register_embedding_root=lambda telemetry_id, root_id: registered.append(
+                (telemetry_id, root_id)
+            )
+        ),
+    )
 
     await embedding_utils.vectorize_directory_meta(
         uri="viking://user/default/resources/demo",
@@ -349,6 +362,7 @@ async def test_vectorize_directory_meta_writes_search_tags_into_embedding_contex
     )
 
     assert len(queue.items) == 2
+    assert registered == [(msg.telemetry_id, msg.id) for msg in queue.items]
     for msg in queue.items:
         assert msg.context_data["search_tags"] == ["team=search", "env=test"]
 
@@ -718,7 +732,7 @@ async def test_vectorize_file_preserves_content_until_embedder_input_guard(monke
     monkeypatch.setattr(
         embedding_utils.EmbeddingMsgConverter,
         "from_context",
-        lambda context: context,
+        _context_as_embedding_msg,
     )
 
     await embedding_utils.vectorize_file(
@@ -748,7 +762,7 @@ async def test_index_resource_skips_session_namespace(monkeypatch):
     monkeypatch.setattr(
         embedding_utils.EmbeddingMsgConverter,
         "from_context",
-        lambda context: context,
+        _context_as_embedding_msg,
     )
 
     await embedding_utils.index_resource(
@@ -787,7 +801,9 @@ async def test_vectorize_file_truncates_oversized_abstract(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        embedding_utils.EmbeddingMsgConverter, "from_context", lambda context: context
+        embedding_utils.EmbeddingMsgConverter,
+        "from_context",
+        _context_as_embedding_msg,
     )
 
     oversized = "你" * 30_000  # 90,000 UTF-8 bytes
@@ -812,7 +828,9 @@ async def test_vectorize_directory_meta_truncates_oversized_abstract(monkeypatch
     monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
     monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("ignored"))
     monkeypatch.setattr(
-        embedding_utils.EmbeddingMsgConverter, "from_context", lambda context: context
+        embedding_utils.EmbeddingMsgConverter,
+        "from_context",
+        _context_as_embedding_msg,
     )
 
     oversized = "你" * 30_000  # 90,000 UTF-8 bytes

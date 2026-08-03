@@ -593,7 +593,7 @@ provider，并设置 `storage.vectordb.sparse_weight > 0`。自托管模型的�
 | `model` | str | 模型名称 |
 | `api_base` | str | API 端点（可选） |
 | `thinking` | bool | 启用思考模式（仅对部分火山模型生效，默认：`false`） |
-| `max_concurrent` | int | 语义处理阶段 LLM 最大并发调用数（默认：`64`） |
+| `max_concurrent` | int | 语义处理阶段 LLM 最大并发调用数（默认：`32`） |
 | `max_retries` | int | VLM provider 瞬时错误的最大重试次数（默认：`3`；`0` 表示禁用重试） |
 | `credentials` | array | 有序 VLM 凭据/模型列表，索引 0 优先级最高。每项可单独覆盖 `provider`、`model`、`api_key`、`api_base`、`api_version`、`extra_headers`、`extra_request_body` 和 `stream` |
 | `failback_timeout_seconds` | float | 切换到低优先级 credential 后，尝试逐级切回的时间阈值（默认：`600`） |
@@ -1656,7 +1656,7 @@ Task 记录文件位于所属账号的系统目录：
     "model": "string",
     "api_base": "string",
     "thinking": false,
-    "max_concurrent": 64,
+    "max_concurrent": 32,
     "max_retries": 3,
     "extra_headers": {},
     "extra_request_body": {},

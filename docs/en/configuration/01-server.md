@@ -301,6 +301,7 @@ Parsers live under `parsers`:
 ```json
 {
   "parsers": {
+    "max_concurrent_parse": 4,
     "pdf": {},
     "code": {
       "code_summary_mode": "ast",
@@ -329,6 +330,7 @@ Parsers live under `parsers`:
 
 | Setting | Purpose |
 |---|---|
+| `max_concurrent_parse` | Maximum concurrency for parse-related queue tasks; defaults to `4` |
 | `pdf` | PDF text, image, and layout parsing |
 | `code` | Repository file types, ignore rules, and network safety |
 | `image` | Image understanding and OCR |

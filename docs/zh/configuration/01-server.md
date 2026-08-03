@@ -301,6 +301,7 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
 ```json
 {
   "parsers": {
+    "max_concurrent_parse": 4,
     "pdf": {},
     "code": {
       "code_summary_mode": "ast",
@@ -329,6 +330,7 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
 
 | 配置项 | 作用 |
 |---|---|
+| `max_concurrent_parse` | 解析相关队列任务的最大并发数，默认 `4` |
 | `pdf` | PDF 文本、图片和版面解析 |
 | `code` | 代码仓库文件类型、忽略规则和安全限制 |
 | `image` | 图片理解和 OCR |

@@ -836,21 +836,13 @@ class TextEmbeddingHandler(DequeueHandlerBase):
         finally:
             if embedding_msg is not None and request_failed_message is not None:
                 self._record_request_failure(embedding_msg, request_failed_message)
-            if embedding_msg and embedding_msg.semantic_msg_id:
-                from openviking.storage.queuefs.embedding_tracker import EmbeddingTaskTracker
-
-                tracker = EmbeddingTaskTracker.get_instance()
-                try:
-                    await tracker.decrement(embedding_msg.semantic_msg_id)
-                except Exception as tracker_err:
-                    logger.warning(f"Failed to decrement embedding tracker: {tracker_err}")
             if report_error_args is not None:
                 self.report_error(*report_error_args)
             elif report_success:
                 self.report_success()
 
     async def on_cancelled(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        """Settle semantic joins when a queued embedding is cancelled."""
+        """Settle request-scoped waiting when a queued embedding is cancelled."""
         embedding_msg: Optional[EmbeddingMsg] = None
         try:
             if data:
@@ -864,25 +856,20 @@ class TextEmbeddingHandler(DequeueHandlerBase):
 
         if embedding_msg is not None:
             self._record_request_success(embedding_msg)
-            if embedding_msg.semantic_msg_id:
-                from openviking.storage.queuefs.embedding_tracker import EmbeddingTaskTracker
-
-                await EmbeddingTaskTracker.get_instance().decrement(embedding_msg.semantic_msg_id)
         self.report_success()
         return None
 
     @staticmethod
     def _record_request_success(embedding_msg: EmbeddingMsg) -> None:
-        tracker = get_request_wait_tracker()
-        if embedding_msg.semantic_msg_id:
-            tracker.record_embedding_processed(embedding_msg.telemetry_id)
-        else:
-            tracker.mark_embedding_done(embedding_msg.telemetry_id, embedding_msg.id)
+        get_request_wait_tracker().mark_embedding_done(
+            embedding_msg.telemetry_id,
+            embedding_msg.id,
+        )
 
     @staticmethod
     def _record_request_failure(embedding_msg: EmbeddingMsg, message: str) -> None:
-        tracker = get_request_wait_tracker()
-        if embedding_msg.semantic_msg_id:
-            tracker.record_embedding_error(embedding_msg.telemetry_id, message)
-        else:
-            tracker.mark_embedding_failed(embedding_msg.telemetry_id, embedding_msg.id, message)
+        get_request_wait_tracker().mark_embedding_failed(
+            embedding_msg.telemetry_id,
+            embedding_msg.id,
+            message,
+        )

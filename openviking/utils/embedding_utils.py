@@ -83,20 +83,34 @@ def _apply_ingest_options(
     }
 
 
-async def _decrement_embedding_tracker(semantic_msg_id: Optional[str], count: int) -> None:
-    if not semantic_msg_id or count <= 0:
-        return
-    try:
-        from openviking.storage.queuefs.embedding_tracker import EmbeddingTaskTracker
+async def _enqueue_embedding_message(
+    embedding_queue,
+    embedding_msg,
+    *,
+    failure_message: str,
+) -> bool:
+    """Persist one embedding message and settle request tracking on enqueue failure."""
+    wait_tracker = get_request_wait_tracker()
+    wait_tracker.register_embedding_root(embedding_msg.telemetry_id, embedding_msg.id)
 
-        tracker = EmbeddingTaskTracker.get_instance()
-        for _ in range(count):
-            await tracker.decrement(semantic_msg_id)
-    except Exception as e:
-        logger.error(
-            f"Failed to decrement embedding tracker for semantic_msg_id={semantic_msg_id}: {e}",
-            exc_info=True,
+    try:
+        enqueue_id = await embedding_queue.enqueue(embedding_msg)
+    except BaseException as exc:
+        wait_tracker.mark_embedding_failed(
+            embedding_msg.telemetry_id,
+            embedding_msg.id,
+            f"{failure_message}: {exc}",
         )
+        raise
+
+    if not enqueue_id:
+        wait_tracker.mark_embedding_failed(
+            embedding_msg.telemetry_id,
+            embedding_msg.id,
+            failure_message,
+        )
+        return False
+    return True
 
 
 def _coerce_datetime(value: object) -> Optional[datetime]:
@@ -330,7 +344,6 @@ async def vectorize_directory_meta(
     overview: str,
     context_type: str = "resource",
     ctx: Optional[RequestContext] = None,
-    semantic_msg_id: Optional[str] = None,
     include_overview: bool = True,
     scalar_overrides: Optional[Dict[int, Dict[str, Any]]] = None,
     ingest_options: IngestOptions | None = None,
@@ -340,8 +353,6 @@ async def vectorize_directory_meta(
 
     Creates Context objects for abstract and overview and enqueues them.
     """
-    enqueued = 0
-    expected = 2 if include_overview else 1
     try:
         if not ctx:
             logger.warning("No context provided for vectorization")
@@ -382,11 +393,14 @@ async def vectorize_directory_meta(
         )
         _apply_ingest_options(msg_abstract, ingest_options)
         if msg_abstract:
-            msg_abstract.semantic_msg_id = semantic_msg_id
             try:
-                await embedding_queue.enqueue(msg_abstract)
-                enqueued += 1
-                logger.debug(f"Enqueued directory L0 (abstract) for vectorization: {uri}")
+                enqueued = await _enqueue_embedding_message(
+                    embedding_queue,
+                    msg_abstract,
+                    failure_message=f"Failed to enqueue directory L0 vector for {uri}",
+                )
+                if enqueued:
+                    logger.debug(f"Enqueued directory L0 (abstract) for vectorization: {uri}")
             except TaskWorkRejected:
                 logger.debug("Skipped directory vectorization for cancelling task: %s", uri)
                 return
@@ -419,11 +433,14 @@ async def vectorize_directory_meta(
             )
             _apply_ingest_options(msg_overview, ingest_options)
             if msg_overview:
-                msg_overview.semantic_msg_id = semantic_msg_id
                 try:
-                    await embedding_queue.enqueue(msg_overview)
-                    enqueued += 1
-                    logger.debug(f"Enqueued directory L1 (overview) for vectorization: {uri}")
+                    enqueued = await _enqueue_embedding_message(
+                        embedding_queue,
+                        msg_overview,
+                        failure_message=f"Failed to enqueue directory L1 vector for {uri}",
+                    )
+                    if enqueued:
+                        logger.debug(f"Enqueued directory L1 (overview) for vectorization: {uri}")
                 except TaskWorkRejected:
                     logger.debug("Skipped directory vectorization for cancelling task: %s", uri)
                     return
@@ -438,8 +455,6 @@ async def vectorize_directory_meta(
             exc_info=True,
         )
         raise
-    finally:
-        await _decrement_embedding_tracker(semantic_msg_id, expected - enqueued)
 
 
 async def vectorize_file(
@@ -448,11 +463,9 @@ async def vectorize_file(
     parent_uri: str,
     context_type: str = "resource",
     ctx: Optional[RequestContext] = None,
-    semantic_msg_id: Optional[str] = None,
     use_summary: bool = False,
     preserve_existing_created_at: bool = False,
     scalar_override: Optional[Dict[str, Any]] = None,
-    register_request_wait: bool = False,
     ingest_options: IngestOptions | None = None,
 ) -> None:
     """
@@ -462,9 +475,6 @@ async def vectorize_file(
     The effective vectorization strategy is resolved once from either the explicit
     `use_summary` flag (code path override) or the embedding config.
     """
-    enqueued = False
-    registered_wait_root: Optional[tuple[str, str]] = None
-
     try:
         if not ctx:
             logger.warning("No context provided for vectorization")
@@ -573,43 +583,19 @@ async def vectorize_file(
 
         _apply_scalar_overrides(embedding_msg, scalar_override)
         _apply_ingest_options(embedding_msg, ingest_options)
-        embedding_msg.semantic_msg_id = semantic_msg_id
-        if register_request_wait:
-            get_request_wait_tracker().register_embedding_root(
-                embedding_msg.telemetry_id,
-                embedding_msg.id,
-            )
-            registered_wait_root = (embedding_msg.telemetry_id, embedding_msg.id)
-        enqueued_id = await embedding_queue.enqueue(embedding_msg)
-        if register_request_wait and not enqueued_id:
-            get_request_wait_tracker().mark_embedding_failed(
-                embedding_msg.telemetry_id,
-                embedding_msg.id,
-                f"Failed to enqueue file vector for {file_path}",
-            )
+        enqueued = await _enqueue_embedding_message(
+            embedding_queue,
+            embedding_msg,
+            failure_message=f"Failed to enqueue file vector for {file_path}",
+        )
+        if not enqueued:
             return
-        enqueued = True
         logger.debug(f"Enqueued file for vectorization: {file_path}")
 
     except TaskWorkRejected:
         logger.debug("Skipped file vectorization for cancelling task: %s", file_path)
-        if registered_wait_root is not None:
-            get_request_wait_tracker().mark_embedding_failed(
-                registered_wait_root[0],
-                registered_wait_root[1],
-                f"Task cancellation skipped file vector for {file_path}",
-            )
     except Exception as e:
         logger.error(f"Failed to vectorize file {file_path}: {e}", exc_info=True)
-        if registered_wait_root is not None:
-            get_request_wait_tracker().mark_embedding_failed(
-                registered_wait_root[0],
-                registered_wait_root[1],
-                f"Failed to enqueue file vector for {file_path}: {e}",
-            )
-    finally:
-        if not enqueued:
-            await _decrement_embedding_tracker(semantic_msg_id, 1)
 
 
 async def index_resource(

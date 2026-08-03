@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from openviking.utils.ingest_options import IngestOptions
 from openviking.server.identity import RequestContext, Role
+from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -121,7 +121,6 @@ async def test_vectors_only_persists_tree_and_vectorizes_files_only(monkeypatch,
         search_tags=["team=search"],
         search_tag_mode="append",
     )
-    assert vectorize_file.await_args.kwargs["register_request_wait"] is True
     processor._delete_resource_semantic_markers.assert_not_awaited()
     processor._delete_resource_semantic_vectors.assert_not_awaited()
     viking_fs._async_agfs.pathlock_release.assert_awaited_once_with(lock)

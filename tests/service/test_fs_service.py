@@ -92,11 +92,11 @@ class _FakeWaitTracker:
     def register_request(self, telemetry_id):
         self.registered_requests.append(telemetry_id)
 
-    def register_semantic_root(self, telemetry_id, semantic_msg_id):
+    def register_semantic_root(self, telemetry_id, root_id):
         self.registered_roots.append(
             {
                 "telemetry_id": telemetry_id,
-                "semantic_msg_id": semantic_msg_id,
+                "root_id": root_id,
                 "request_was_registered": telemetry_id in self.registered_requests,
             }
         )
@@ -110,7 +110,7 @@ class _FakeWaitTracker:
             "Embedding": {"processed": 0, "error_count": 0, "errors": []},
         }
 
-    def mark_semantic_failed(self, telemetry_id, semantic_msg_id, message):
+    def mark_semantic_failed(self, telemetry_id, root_id, message):
         pass
 
     def cleanup(self, telemetry_id):

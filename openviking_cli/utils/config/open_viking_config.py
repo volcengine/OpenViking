@@ -134,6 +134,18 @@ class ParserApiConfig(BaseModel):
         return self
 
 
+class ParserRuntimeConfig(BaseModel):
+    """Shared parser runtime configuration."""
+
+    max_concurrent_parse: int = Field(
+        default=4,
+        gt=0,
+        description="Maximum number of concurrent parse-related queue tasks",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
 class OpenVikingConfig(BaseModel):
     """Main configuration for OpenViking."""
 
@@ -186,6 +198,11 @@ class OpenVikingConfig(BaseModel):
     )
 
     # Parser configurations
+    parsers: ParserRuntimeConfig = Field(
+        default_factory=ParserRuntimeConfig,
+        description="Shared parser runtime configuration",
+    )
+
     pdf: PDFConfig = Field(default_factory=PDFConfig, description="PDF parsing configuration")
 
     code: CodeConfig = Field(default_factory=CodeConfig, description="Code parsing configuration")
@@ -413,6 +430,12 @@ class OpenVikingConfig(BaseModel):
                     parser_configs = {}
                 if not isinstance(parser_configs, dict):
                     raise ValueError("Invalid parsers config: 'parsers' section must be an object")
+                parser_configs = parser_configs.copy()
+            parser_runtime_config = {}
+            if "max_concurrent_parse" in parser_configs:
+                parser_runtime_config["max_concurrent_parse"] = parser_configs.pop(
+                    "max_concurrent_parse"
+                )
             raise_unknown_config_fields(
                 data=parser_configs,
                 valid_fields=set(parser_types),
@@ -421,6 +444,7 @@ class OpenVikingConfig(BaseModel):
             for parser_type in parser_types:
                 if parser_type in config_copy:
                     parser_configs[parser_type] = config_copy.pop(parser_type)
+            config_copy["parsers"] = parser_runtime_config
 
             # Handle log configuration from nested "log" section
             log_config_data = None
