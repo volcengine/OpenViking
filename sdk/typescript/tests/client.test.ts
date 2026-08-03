@@ -22,7 +22,7 @@ describe("OpenVikingClient", () => {
     );
   });
 
-  it("sends identity headers and the Python/Go compatible search body", async () => {
+  it("sends the exact retrieval body when optional fields are set", async () => {
     const fetcher = vi
       .fn<typeof fetch>()
       .mockResolvedValue(ok({ resources: [] }));
@@ -34,20 +34,33 @@ describe("OpenVikingClient", () => {
       actorPeerId: "peer",
       fetch: fetcher,
     });
-    await client.find("hello", { targetUri: "viking://resources", limit: 5 });
+    await client.find("hello", {
+      targetUri: "viking://resources",
+      limit: 5,
+      since: "2026-08-01T00:00:00Z",
+      until: "2026-08-02T00:00:00Z",
+      timeField: "created_at",
+      level: [0, 2],
+      includeProvenance: true,
+    });
     const [url, init] = fetcher.mock.calls[0]!;
     expect(String(url)).toBe("https://example.com/api/v1/search/find");
     expect(new Headers(init?.headers).get("X-OpenViking-Actor-Peer")).toBe(
       "peer",
     );
-    expect(JSON.parse(String(init?.body))).toMatchObject({
+    expect(JSON.parse(String(init?.body))).toEqual({
       query: "hello",
       target_uri: "viking://resources",
       limit: 5,
+      since: "2026-08-01T00:00:00Z",
+      until: "2026-08-02T00:00:00Z",
+      time_field: "created_at",
+      level: [0, 2],
+      include_provenance: true,
     });
   });
 
-  it("uses the Python/Go empty default retrieval target", async () => {
+  it("omits unset retrieval options from the exact body", async () => {
     const fetcher = vi
       .fn<typeof fetch>()
       .mockResolvedValue(ok({ resources: [] }));
@@ -58,8 +71,10 @@ describe("OpenVikingClient", () => {
 
     await client.search("hello");
 
-    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toMatchObject({
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
+      query: "hello",
       target_uri: "",
+      limit: 10,
     });
   });
 

@@ -16,6 +16,47 @@ def test_add_resource_signatures_keep_telemetry_position():
         assert params.index("telemetry") < params.index("tag_mode")
 
 
+@pytest.mark.parametrize(
+    ("method_name", "expected_extra"),
+    [
+        ("find", {}),
+        ("search", {"session_id": None}),
+    ],
+)
+def test_sync_http_client_forwards_retrieval_contract_fields(method_name, expected_extra):
+    client = SyncHTTPClient(url="http://localhost:1933")
+    retrieval_options = {
+        "since": "2026-08-01T00:00:00Z",
+        "until": "2026-08-02T00:00:00Z",
+        "time_field": "updated_at",
+        "level": [1, 2],
+        "include_provenance": True,
+    }
+
+    with patch.object(
+        client._async_client,
+        method_name,
+        return_value={"total": 0, "resources": []},
+    ) as mock_retrieval:
+        result = getattr(client, method_name)(query="sample", **retrieval_options)
+
+    assert result == {"total": 0, "resources": []}
+    mock_retrieval.assert_called_once_with(
+        query="sample",
+        target_uri="",
+        limit=10,
+        node_limit=None,
+        score_threshold=None,
+        filter=None,
+        context_type=None,
+        tags=None,
+        telemetry=False,
+        image=None,
+        **retrieval_options,
+        **expected_extra,
+    )
+
+
 @pytest.mark.asyncio
 async def test_async_http_client_initialize_forwards_event_hooks():
     async def request_hook(_request):
@@ -728,7 +769,7 @@ async def test_add_resource_sends_tags_and_tag_mode():
 
 
 @pytest.mark.asyncio
-async def test_find_uses_node_limit_as_http_limit_and_normalizes_target_uri_list():
+async def test_find_sends_exact_retrieval_body_when_optional_fields_are_set():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
     client._http = fake_http
@@ -744,6 +785,11 @@ async def test_find_uses_node_limit_as_http_limit_and_normalizes_target_uri_list
         context_type="resource",
         tags=["k:v"],
         telemetry={"enabled": True},
+        since="2026-08-01T00:00:00Z",
+        until="2026-08-02T00:00:00Z",
+        time_field="created_at",
+        level=[0, 2],
+        include_provenance=True,
     )
 
     fake_http.post.assert_awaited_once_with(
@@ -756,20 +802,35 @@ async def test_find_uses_node_limit_as_http_limit_and_normalizes_target_uri_list
             "filter": {"type": "resource"},
             "context_type": "resource",
             "tags": ["k:v"],
+            "since": "2026-08-01T00:00:00Z",
+            "until": "2026-08-02T00:00:00Z",
+            "time_field": "created_at",
+            "level": [0, 2],
+            "include_provenance": True,
             "telemetry": {"enabled": True},
         },
     )
 
 
 @pytest.mark.asyncio
-async def test_search_uses_session_wrapper_session_id_in_payload():
+async def test_search_sends_exact_retrieval_body_with_session_context():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
     client._http = fake_http
     client._handle_response_data = lambda _response: {"result": {"total": 0, "resources": []}}
 
     session = Session(client, "thread-123")
-    await client.search(query="sample", target_uri="/resources/demo", session=session, limit=5)
+    await client.search(
+        query="sample",
+        target_uri="/resources/demo",
+        session=session,
+        limit=5,
+        since="7d",
+        until="now",
+        time_field="updated_at",
+        level=[1],
+        include_provenance=False,
+    )
 
     fake_http.post.assert_awaited_once_with(
         "/api/v1/search/search",
@@ -778,6 +839,31 @@ async def test_search_uses_session_wrapper_session_id_in_payload():
             "target_uri": "viking://resources/demo",
             "session_id": "thread-123",
             "limit": 5,
+            "since": "7d",
+            "until": "now",
+            "time_field": "updated_at",
+            "level": [1],
+            "include_provenance": False,
+            "telemetry": False,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_find_omits_unset_retrieval_fields_from_exact_body():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {"result": {"total": 0, "resources": []}}
+
+    await client.find(query="sample")
+
+    fake_http.post.assert_awaited_once_with(
+        "/api/v1/search/find",
+        json={
+            "query": "sample",
+            "target_uri": "",
+            "limit": 10,
             "telemetry": False,
         },
     )
