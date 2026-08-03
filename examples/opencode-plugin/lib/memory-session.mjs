@@ -107,7 +107,12 @@ export function createMemorySessionManager({ config, pluginRoot }) {
             try {
               process.kill(Number(match[1]), 0) // probe: process is alive
               continue // skip — this temp file may be in active use
-            } catch {
+            } catch (err) {
+              if (err?.code !== "ESRCH") {
+                // EPERM or other error — process may be alive (possibly a
+                // different OS user); skip to be safe.
+                continue
+              }
               // ESRCH — process not found, safe to clean up
             }
           }
