@@ -37,7 +37,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   async function init() {
     if (config.autoCapture) await migrateLegacySessionMap()
     await loadState()
-    sweepStaleTempFiles()
+    await sweepStaleTempFiles()
     const health = await fetchJSON(config, "/health", {}, { timeoutMs: 5000 })
     if (health.ok) {
       await replayPending(
@@ -51,7 +51,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   function startPeriodicFlush() {
     if (!config.autoCapture) return
     if (shuttingDown) return
-    const intervalMs = Math.max(10000, Number(config.periodicFlushIntervalMs) || 60000)
+    const intervalMs = config.periodicFlushIntervalMs
     if (flushTimer) clearInterval(flushTimer)
     flushTimer = setInterval(() => {
       // A tick may have been queued just before flushAll's clearInterval; skip it
@@ -90,17 +90,29 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     return done
   }
 
-  function sweepStaleTempFiles() {
+  async function sweepStaleTempFiles() {
     // saveState writes to a unique temp file (`${statePath}.${pid}.${n}.tmp`) then
     // renames it onto statePath. A crash between writeFile and rename leaves an
     // orphan temp behind; sweep them on startup so they don't accumulate forever.
+    // We parse the PID from the filename and skip files whose PID is still alive
+    // to avoid removing a concurrent process's in-flight temp.
     try {
       const dir = path.dirname(statePath)
       const base = path.basename(statePath)
-      for (const name of fs.readdirSync(dir)) {
+      const entries = await fs.promises.readdir(dir)
+      for (const name of entries) {
         if (name.startsWith(`${base}.`) && name.endsWith(".tmp")) {
+          const match = name.match(/\.(\d+)\.\d+\.tmp$/)
+          if (match) {
+            try {
+              process.kill(Number(match[1]), 0) // probe: process is alive
+              continue // skip — this temp file may be in active use
+            } catch {
+              // ESRCH — process not found, safe to clean up
+            }
+          }
           try {
-            fs.unlinkSync(path.join(dir, name))
+            await fs.promises.unlink(path.join(dir, name))
           } catch {
             // best effort; ignore files removed by a concurrent process
           }
