@@ -2,4 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Compatibility wrapper for :mod:`langchain_openviking.store`."""
 
-from langchain_openviking.store import *  # noqa: F403
+from openviking.integrations.langchain import _forward_legacy_module
+
+_forward_legacy_module("store", globals())

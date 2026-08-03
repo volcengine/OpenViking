@@ -36,6 +36,22 @@ def _missing_standalone_error() -> ImportError:
     )
 
 
+def _forward_legacy_module(module_name: str, namespace: dict[str, Any]) -> None:
+    """Populate a legacy submodule with the canonical package's public names."""
+
+    try:
+        canonical = import_module(f"langchain_openviking.{module_name}")
+    except ModuleNotFoundError as exc:
+        if exc.name != "langchain_openviking":
+            raise
+        raise _missing_standalone_error() from exc
+
+    public_names = getattr(canonical, "__all__", None)
+    if public_names is None:
+        public_names = (name for name in vars(canonical) if not name.startswith("_"))
+    namespace.update({name: getattr(canonical, name) for name in public_names})
+
+
 try:
     from langchain_openviking import __all__, __getattr__, has_request_actor_peer_support
 except ModuleNotFoundError as exc:

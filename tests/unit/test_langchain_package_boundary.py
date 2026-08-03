@@ -111,6 +111,7 @@ def test_legacy_namespace_remains_importable_without_standalone_package(tmp_path
     env["PYTHONPATH"] = os.pathsep.join((str(PROJECT_ROOT), str(SDK_ROOT)))
     probe = """
 import importlib.abc
+import importlib
 import sys
 
 
@@ -139,6 +140,29 @@ except ImportError as exc:
     assert "openviking[langchain]" in message
 else:
     raise AssertionError("missing standalone package should produce an installation error")
+
+for submodule in (
+    "actor_peer",
+    "client",
+    "context",
+    "history",
+    "messages",
+    "middleware",
+    "recording",
+    "retrievers",
+    "store",
+    "testing",
+    "tools",
+):
+    try:
+        importlib.import_module(f"openviking.integrations.langchain.{submodule}")
+    except ImportError as exc:
+        assert not isinstance(exc, ModuleNotFoundError)
+        message = str(exc)
+        assert "langchain-openviking" in message
+        assert "openviking[langchain]" in message
+    else:
+        raise AssertionError(f"legacy {submodule} import should produce an installation error")
 """
 
     subprocess.run(
@@ -156,12 +180,31 @@ def test_legacy_imports_resolve_to_canonical_objects():
     pytest.importorskip("langchain_openviking")
     canonical = import_module("langchain_openviking")
     legacy = import_module("openviking.integrations.langchain")
-    legacy_client = import_module("openviking.integrations.langchain.client")
-    canonical_client = import_module("langchain_openviking.client")
 
     for name in canonical.__all__:
         assert getattr(legacy, name) is getattr(canonical, name)
-    assert legacy_client.OpenVikingConnection is canonical_client.OpenVikingConnection
+
+    for submodule in (
+        "actor_peer",
+        "client",
+        "context",
+        "history",
+        "messages",
+        "middleware",
+        "recording",
+        "retrievers",
+        "store",
+        "testing",
+        "tools",
+    ):
+        legacy_module = import_module(f"openviking.integrations.langchain.{submodule}")
+        canonical_module = import_module(f"langchain_openviking.{submodule}")
+        legacy_public = {name for name in vars(legacy_module) if not name.startswith("_")}
+        canonical_public = {name for name in vars(canonical_module) if not name.startswith("_")}
+
+        assert legacy_public == canonical_public
+        for name in sorted(canonical_public):
+            assert getattr(legacy_module, name) is getattr(canonical_module, name)
 
 
 @pytest.mark.parametrize(
