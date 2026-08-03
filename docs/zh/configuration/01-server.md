@@ -2,7 +2,7 @@
 
 首次配置建议使用 `openviking-server init`，保存后运行 `openviking-server doctor`。
 
-OpenViking 服务端和 Python SDK 嵌入模式读取 `ov.conf`。默认路径是：
+OpenViking 服务端读取 `ov.conf`。默认路径是：
 
 ```text
 ~/.openviking/ov.conf
@@ -42,8 +42,8 @@ openviking-server --config /path/to/ov.conf
 
 | 配置项 | 类型 / 可选值 | 默认值 | 作用 |
 |---|---|---|---|
-| `default_account` | string | `"default"` | SDK 嵌入模式使用的默认账号 |
-| `default_user` | string | `"default"` | SDK 嵌入模式使用的默认用户 |
+| `default_account` | string | `"default"` | Service context 使用的默认账号 |
+| `default_user` | string | `"default"` | Service context 使用的默认用户 |
 | `embedding` | object | 内置本地 Dense 模型 | 向量化模型和稀疏/混合检索配置；默认使用 `local` / `bge-small-zh-v1.5-f16` |
 | `vlm` | object | 空配置 | 内容理解、摘要和记忆抽取使用的模型；使用相关能力前需要配置可用模型 |
 | `query_planner` | object / `null` | `null` | 检索意图分析模型；未配置时回退到 `vlm` |

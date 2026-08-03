@@ -4,69 +4,23 @@
 
 ## 连接模式
 
-OpenViking 支持两种使用模式：**嵌入式模式**（直接调用 Python API）和 **Client-Server 模式**（通过 HTTP API 连接）。
-
-本 API 文档主要介绍 **Client-Server 模式**的 HTTP API 使用方式。嵌入式模式虽然可用，但后续文档将不单独展开介绍。
+OpenViking 客户端通过 HTTP 连接 OpenViking Server。
 
 | 模式 | 适用场景 | 说明 |
 |------|----------|------|
-| **嵌入式模式** | 本地开发、单进程 | 使用本地数据存储运行 |
 | **HTTP** | 连接 OpenViking 服务器 | 通过 HTTP API 连接远程服务器 |
 | **CLI** | Shell 脚本、Agent 工具使用 | 通过 CLI 命令连接服务器 |
 
-### 嵌入式模式（简要说明）
-
-嵌入式模式允许在 Python 进程内直接调用 OpenViking API，无需启动独立的服务器进程。
-
-```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-```
-
-嵌入式模式通过 `ov.conf` 配置 embedding、vlm、storage 等模块。默认配置路径为 `~/.openviking/ov.conf`，也可通过环境变量指定：
-
-```bash
-export OPENVIKING_CONFIG_FILE=/path/to/ov.conf
-```
-
-最小配置示例：
-
-```json
-{
-  "embedding": {
-    "dense": {
-      "api_base": "<api-endpoint>",
-      "api_key": "<your-api-key>",
-      "provider": "<volcengine|openai|jina|...>",
-      "dimension": 1024,
-      "model": "<model-name>"
-    }
-  },
-  "vlm": {
-    "api_base": "<api-endpoint>",
-    "api_key": "<your-api-key>",
-    "provider": "<volcengine|openai|openai-codex|kimi|glm>",
-    "model": "<model-name>"
-  }
-}
-```
-
-对于 `provider: "openai-codex"`，通过 `openviking-server init` 配置 Codex OAuth 后，`vlm.api_key` 是可选的。
-
-完整的配置选项和 provider 特定示例，请参见 [配置指南](../guides/01-configuration.md)。
-
-### Client-Server 模式（主要介绍）
+### Client-Server 模式
 
 Client-Server 模式通过 HTTP API 连接 OpenViking 服务器，支持多租户、远程访问等特性。OpenViking 的服务器启动方式请参见相关部署文档。
 
 #### Python SDK 客户端
 
 ```python
-import openviking as ov
+from openviking_sdk import SyncHTTPClient
 
-client = ov.SyncHTTPClient(
+client = SyncHTTPClient(
     url="http://localhost:1933",
     api_key="your-key",
     timeout=120.0,
@@ -104,7 +58,7 @@ Go SDK 发送的身份请求头与 Python HTTP client 一致：
 
 普通 `api_key` 部署下只需要设置 `APIKey`，服务端会从 API key 推导租户身份。只有在 trusted 部署或网关显式透传租户身份时，才需要设置 `Account` 和 `User`。
 
-Go SDK 不支持 Python embedded 模式，也不保留旧 `agent_id` 兼容路径。更多示例见 [`sdk/go/README_CN.md`](../../../sdk/go/README_CN.md)。
+Go SDK 不保留旧 `agent_id` 兼容路径。更多示例见 [`sdk/go/README_CN.md`](../../../sdk/go/README_CN.md)。
 
 #### JavaScript/TypeScript SDK 客户端
 
@@ -223,19 +177,6 @@ openviking -o json ls viking://resources/
 ```
 
 ## 生命周期
-
-### 嵌入式模式
-
-```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
-# ... 使用 client ...
-
-client.close()
-```
 
 ### Client-Server 模式
 

@@ -6,12 +6,9 @@
 import asyncio
 import shutil
 from pathlib import Path
-from typing import AsyncGenerator, Generator
+from typing import Generator
 
 import pytest
-import pytest_asyncio
-
-from openviking import AsyncOpenViking
 
 # Test data root directory
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -138,59 +135,3 @@ This is batch file number {i} for testing batch operations.
         )
         files.append(file_path)
     return files
-
-
-# ============ Client Fixtures ============
-
-
-@pytest_asyncio.fixture(scope="function")
-async def client(test_data_dir: Path) -> AsyncGenerator[AsyncOpenViking, None]:
-    """Create initialized OpenViking client"""
-    await AsyncOpenViking.reset()
-
-    client = AsyncOpenViking(path=str(test_data_dir))
-    await client.initialize()
-
-    yield client
-
-    await client.close()
-    await AsyncOpenViking.reset()
-
-
-@pytest_asyncio.fixture(scope="function")
-async def uninitialized_client(test_data_dir: Path) -> AsyncGenerator[AsyncOpenViking, None]:
-    """Create uninitialized OpenViking client (for testing initialization flow)"""
-    await AsyncOpenViking.reset()
-
-    client = AsyncOpenViking(path=str(test_data_dir))
-
-    yield client
-
-    try:
-        await client.close()
-    except Exception:
-        pass
-    await AsyncOpenViking.reset()
-
-
-@pytest_asyncio.fixture(scope="function")
-async def client_with_resource_sync(
-    client: AsyncOpenViking, sample_markdown_file: Path
-) -> AsyncGenerator[tuple[AsyncOpenViking, str], None]:
-    """Create client with resource (sync mode, wait for vectorization)"""
-    result = await client.add_resource(
-        path=str(sample_markdown_file), reason="Test resource", wait=True
-    )
-    uri = result.get("root_uri", "")
-
-    yield client, uri
-
-
-@pytest_asyncio.fixture(scope="function")
-async def client_with_resource(
-    client: AsyncOpenViking, sample_markdown_file: Path
-) -> AsyncGenerator[tuple[AsyncOpenViking, str], None]:
-    """Create client with resource (async mode, no wait for vectorization)"""
-    result = await client.add_resource(path=str(sample_markdown_file), reason="Test resource")
-    uri = result.get("root_uri", "")
-    yield client, uri

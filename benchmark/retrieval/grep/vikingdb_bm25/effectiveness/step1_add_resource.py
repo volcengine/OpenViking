@@ -1,33 +1,22 @@
 #!/usr/bin/env python3
-"""Step 1 (Effectiveness): Import real code repos into OpenViking (with indexing).
-
-Imports the entire source directory as a single resource via
-SyncOpenViking.add_resource (wait=True, build_index=True, summarize=True).
-add_resource handles recursive traversal internally.
-
-After import, run step2_quality.py to evaluate retrieval quality.
-
-Prerequisites:
-  - Download code repos and place them under the source directory manually.
-
-Usage:
-  python3 step1_add_resource.py
-  python3 step1_add_resource.py --source ~/.openviking/data/benchmark/OpenViking-main
-"""
+"""Import real code repos through the shared Service layer with indexing enabled."""
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import os
 import time
 
-from openviking.sync_client import SyncOpenViking
+from openviking.server.identity import RequestContext, Role
+from openviking.service.core import OpenVikingService
+from openviking_cli.session.user_id import UserIdentifier
 
 DEFAULT_SOURCE = os.path.expanduser("~/.openviking/data/benchmark/OpenViking-main")
 BENCHMARK_PARENT = "viking://resources/benchmark/effectiveness"
 
 
-def main():
+async def main():
     parser = argparse.ArgumentParser(
         description="Step 1 (Effectiveness): Import real code repos (with indexing)"
     )
@@ -56,13 +45,16 @@ def main():
     print("  Indexing: ENABLED (build_index=True, summarize=True)")
     print()
 
-    client = SyncOpenViking()
-    client.initialize()
+    user = UserIdentifier.the_default_user()
+    service = OpenVikingService(user=user)
+    ctx = RequestContext(user=user, role=Role.USER)
+    await service.initialize()
 
     t0 = time.monotonic()
     try:
-        result = client.add_resource(
+        result = await service.resources.add_resource(
             path=source,
+            ctx=ctx,
             parent=args.parent,
             reason="benchmark effectiveness",
             wait=True,
@@ -76,12 +68,12 @@ def main():
         print()
         print("Import completed successfully.")
         print("Next step: run step2_quality.py to evaluate retrieval quality")
-    except Exception as e:
+    except Exception as exc:
         elapsed = time.monotonic() - t0
-        print(f"FAILED ({elapsed:.1f}s): {e}")
-
-    client.close()
+        print(f"FAILED ({elapsed:.1f}s): {exc}")
+    finally:
+        await service.close()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

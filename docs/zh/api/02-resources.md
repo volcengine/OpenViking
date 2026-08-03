@@ -144,8 +144,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 8. 如指定 `--watch-interval`，设置定时更新任务
 
 **代码入口**：
-- `openviking/client/local.py:LocalClient.add_resource` - SDK 入口（嵌入式）
-- `openviking_cli/client/http.py:AsyncHTTPClient.add_resource` - SDK 入口（HTTP）
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.add_resource` - Python SDK 入口
 - `openviking/server/routers/resources.py:add_resource` - HTTP 路由
 - `openviking/service/resource_service.py` - 核心服务实现
 - `crates/ov_cli/src/handlers.rs:handle_add_resource` - CLI 处理
@@ -313,14 +312,9 @@ curl -X POST http://localhost:1933/api/v1/resources \
 **Python SDK**
 
 ```python
-import openviking as ov
+from openviking_sdk import SyncHTTPClient
 
-# 使用嵌入式模式（以后不再推荐和详细介绍）
-client = ov.OpenViking(path="./data")
-client.initialize()
-
-# 使用 HTTP 客户端模式
-client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 ## 添加本地文件

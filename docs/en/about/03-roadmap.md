@@ -64,7 +64,7 @@ This document outlines the development roadmap for OpenViking.
 - HTTP Server (FastAPI)
 - Native MCP endpoint built into openviking-server
 - Python HTTP Client
-- Client abstraction layer (LocalClient / HTTPClient)
+- Python HTTP client SDK
 - Web Console
 
 ### CLI

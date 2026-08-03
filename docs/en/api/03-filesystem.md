@@ -41,7 +41,7 @@ List directory contents.
 ```
 
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK**
 
 ```python
 entries = client.ls(
@@ -138,7 +138,7 @@ Get directory tree structure.
 | level_limit | int | No | 3 | Maximum directory depth to traverse |
 
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK**
 
 ```python
 entries = client.tree("viking://resources/")
@@ -222,7 +222,7 @@ Get file or directory status information. For directories, returns the count of 
 | uri | str | Yes | - | Viking URI |
 
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK**
 
 ```python
 info = client.stat("viking://resources/docs/api.md")
@@ -432,7 +432,7 @@ Create a directory.
 | description | str | No | `null` | Initial directory description. When provided, it is written to `.abstract.md` and queued for L0 vectorization. |
 
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK**
 
 ```python
 client.mkdir("viking://resources/new-project/")
@@ -506,7 +506,7 @@ Invalid URI formats, unsupported schemes, and non-public scopes return `INVALID_
 | recursive | bool | No | False | Remove directory recursively |
 
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK**
 
 ```python
 # Remove single file
@@ -599,7 +599,7 @@ Move file or directory.
 | to_uri | str | Yes | - | Destination Viking URI |
 
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK**
 
 ```python
 client.mv(

@@ -50,36 +50,36 @@ pytest tests/client tests/server tests/session tests/vectordb tests/misc tests/i
 
 ```bash
 # Run a specific test module
-pytest tests/client/test_lifecycle.py -v
+pytest tests/client/test_http_client_config.py -v
 
 # Run a specific test class
-pytest tests/client/test_lifecycle.py::TestClientInitialization -v
+pytest tests/client/test_http_client_config.py::test_async_http_client_explicit_values_override_ovcli_config -v
 
 # Run a specific test function
-pytest tests/client/test_lifecycle.py::TestClientInitialization::test_initialize_success -v
+pytest tests/client/test_http_client_config.py -v
 
 # Run tests matching a keyword
 pytest tests/ -k "lifecycle" -v
 pytest tests/ -k "initialize" -v
 
 # Run tests with print output visible
-pytest tests/client/test_lifecycle.py -v -s
+pytest tests/client/test_http_client_config.py -v -s
 ```
 
 ### Common Test Scenarios
 
 ```bash
-# Test client lifecycle (init, close, reset)
-pytest tests/client/test_lifecycle.py -v
+# Test HTTP client configuration
+pytest tests/client/test_http_client_config.py -v
 
 # Test resource add and processing
-pytest tests/client/test_resource_management.py -v
+pytest tests/server/test_api_resources.py -v
 
 # Test skill management
-pytest tests/client/test_skill_management.py -v
+pytest tests/server/test_api_skills.py -v
 
 # Test semantic search
-pytest tests/client/test_search.py -v
+pytest tests/server/test_api_search.py -v
 
 # Test server HTTP API
 pytest tests/server/ -v
@@ -111,18 +111,15 @@ make
 
 ### client/
 
-Tests for the OpenViking client API (`AsyncOpenViking` / `SyncOpenViking`).
+Tests for the Python HTTP client API.
 
 | File | Description | Key Test Cases |
 |------|-------------|----------------|
-| `test_lifecycle.py` | Client lifecycle management | `initialize()` success and idempotency, `close()` cleanup, `reset()` singleton clearing, embedded mode singleton behavior |
-| `test_resource_management.py` | Resource operations | `add_resource()` with sync/async modes, custom target URI, file not found handling; `wait_processed()` for single and batch resources |
-| `test_skill_management.py` | Skill operations | `add_skill()` from SKILL.md file, YAML string, MCP tool dict, skill directory with auxiliary files; skill search |
-| `test_filesystem.py` | Virtual filesystem | `ls()` with simple/recursive modes; `read()` file content; `abstract()` L0 summary; `overview()` L1 overview; `tree()` directory structure |
-| `test_search.py` | Semantic search | `find()` fast vector search with limit/threshold/target_uri; `search()` with intent analysis and session context |
-| `test_relations.py` | Resource linking | `link()` single/multiple URIs with reason; `unlink()` existing/nonexistent; `relations()` query |
-| `test_file_operations.py` | File manipulation | `rm()` file/directory with recursive; `mv()` rename/move; `grep()` content search with case sensitivity; `glob()` pattern matching |
-| `test_import_export.py` | Import/Export | `export_ovpack()` file/directory; `import_ovpack()` with conflict policy; roundtrip verification |
+| `test_http_client_config.py` | Connection and identity configuration | URL, API key, headers, timeout, and compatibility behavior |
+| `test_http_client_local_upload.py` | Local uploads | File and directory upload behavior |
+| `test_http_client_snapshot.py` | Snapshot operations | Snapshot namespace and response handling |
+| `test_http_error_mapping.py` | Error mapping | Server, network, timeout, and conflict errors |
+| `test_rebuild_clients.py` | Reindex and message operations | Async and sync HTTP request forwarding |
 
 ### server/
 

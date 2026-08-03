@@ -1892,7 +1892,7 @@ PPR 传播（多种子叠加，按 3.2.7.4 配置表）:
 | `session/compressor_v2.py` | `_create_relations()` 使用新 `link()` 签名 |
 | `session/session.py` | `_run_memory_extraction()` 使用新 `link()` 签名 |
 | `server/routers/relations.py` | `LinkRequest` 扩展 `direction`/`link_type`/`weight` 等字段 |
-| `openviking_cli/client/base.py` | `link()` 方法签名扩展 |
+| `sdk/python/openviking_sdk/client.py` | `link()` 方法签名扩展 |
 | YAML templates | 新增 `report` + `report_candidate` memory_type 定义 + `dream_tasks` 配置；现有模板默认 link_enabled=true |
 | 新增模块 | `memory/dream_context_provider.py` — 整理上下文提供者；`utils/links_merge.py` — links/backlinks 合并逻辑；`retrieve/ppr.py` — PPR 算法 |
 

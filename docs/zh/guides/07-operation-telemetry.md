@@ -332,9 +332,9 @@ curl -X POST http://localhost:1933/api/v1/resources \
 ### Python SDK
 
 ```python
-from openviking import AsyncOpenVikingClient
+from openviking_sdk import AsyncHTTPClient
 
-client = AsyncOpenVikingClient(config_path="/path/to/config.yaml")
+client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 await client.initialize()
 
 result = await client.find("memory dedup", telemetry=True)

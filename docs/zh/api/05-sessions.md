@@ -33,7 +33,7 @@ Session API 按认证用户作用域访问会话，并返回 canonical user sess
 - `openviking/session/session.py:Session.__init__()` - Session 核心类
 - `openviking/session/auto_commit_policy.py:AutoCommitPolicy` - 自动 commit 策略的默认值与校验
 - `openviking/server/routers/sessions.py:create_session()` - HTTP 路由
-- `openviking_cli/client/base.py:BaseClient.create_session()` - Python SDK
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.create_session()` - Python SDK
 - `crates/ov_cli/src/commands/session.rs:new_session()` - CLI 命令
 
 #### 2. 接口和参数说明
@@ -175,7 +175,7 @@ ov session new
 
 **代码入口**：
 - `openviking/server/routers/sessions.py:list_sessions()` - HTTP 路由
-- `openviking_cli/client/base.py:BaseClient.list_sessions()` - Python SDK
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.list_sessions()` - Python SDK
 - `crates/ov_cli/src/commands/session.rs:list_sessions()` - CLI 命令
 
 #### 2. 接口和参数说明
@@ -273,7 +273,7 @@ ov session list
 **代码入口**：
 - `openviking/session/session.py:Session.load()` - 会话加载
 - `openviking/server/routers/sessions.py:get_session()` - HTTP 路由
-- `openviking_cli/client/base.py:BaseClient.get_session()` - Python SDK
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.get_session()` - Python SDK
 - `crates/ov_cli/src/commands/session.rs:get_session()` - CLI 命令
 
 #### 2. 接口和参数说明
@@ -567,7 +567,7 @@ curl --get http://localhost:1933/api/v1/sessions/session-id/tool-results/tool-re
 **代码入口**：
 - `openviking/session/session.py:Session.get_session_context()` - 核心实现
 - `openviking/server/routers/sessions.py:get_session_context()` - HTTP 路由
-- `openviking_cli/client/base.py:BaseClient.get_session_context()` - Python SDK
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.get_session_context()` - Python SDK
 - `crates/ov_cli/src/commands/session.rs:get_session_context()` - CLI 命令
 
 #### 2. 接口和参数说明
@@ -676,7 +676,7 @@ ov session get-session-context a1b2c3d4 --token-budget 128000
 **代码入口**：
 - `openviking/session/session.py:Session.get_session_archive()` - 核心实现
 - `openviking/server/routers/sessions.py:get_session_archive()` - HTTP 路由
-- `openviking_cli/client/base.py:BaseClient.get_session_archive()` - Python SDK
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.get_session_archive()` - Python SDK
 - `crates/ov_cli/src/commands/session.rs:get_session_archive()` - CLI 命令
 
 #### 2. 接口和参数说明
@@ -791,7 +791,7 @@ ov session get-session-archive a1b2c3d4 archive_002
 
 **代码入口**：
 - `openviking/server/routers/sessions.py:delete_session()` - HTTP 路由
-- `openviking_cli/client/base.py:BaseClient.delete_session()` - Python SDK
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.delete_session()` - Python SDK
 - `crates/ov_cli/src/commands/session.rs:delete_session()` - CLI 命令
 
 #### 2. 接口和参数说明
@@ -874,7 +874,7 @@ ov session delete a1b2c3d4
 **代码入口**：
 - `openviking/session/session.py:Session.add_message()` - 核心实现
 - `openviking/server/routers/sessions.py:add_message()` - HTTP 路由
-- `openviking_cli/client/base.py:BaseClient.add_message()` - Python SDK
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.add_message()` - Python SDK
 - `crates/ov_cli/src/commands/session.rs:add_message()` - CLI 命令
 
 #### 2. 接口和参数说明
@@ -1054,7 +1054,7 @@ ov session add-message a1b2c3d4 --role user --content "How do I authenticate use
 **代码入口**：
 - `openviking/session/session.py:Session.add_messages()` - 核心实现
 - `openviking/server/routers/sessions.py:batch_add_messages()` - HTTP 路由
-- `openviking_cli/client/base.py:BaseClient.batch_add_messages()` - Python SDK
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.batch_add_messages()` - Python SDK
 - `crates/ov_cli/src/commands/session.rs:add_messages()` - CLI 命令
 
 #### 2. 接口和参数说明
@@ -1237,7 +1237,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
 **代码入口**：
 - `openviking/session/session.py:Session.commit_async()` - 核心实现
 - `openviking/server/routers/sessions.py:commit_session()` - HTTP 路由
-- `openviking_cli/client/base.py:BaseClient.commit_session()` - Python SDK
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.commit_session()` - Python SDK
 - `crates/ov_cli/src/commands/session.rs:commit_session()` - CLI 命令
 
 #### 2. 接口和参数说明

@@ -2,7 +2,7 @@
 
 For initial setup, run `openviking-server init`, then run `openviking-server doctor` after saving the configuration.
 
-The OpenViking server and embedded Python SDK mode read `ov.conf`. The default path is:
+The OpenViking server reads `ov.conf`. The default path is:
 
 ```text
 ~/.openviking/ov.conf
@@ -42,8 +42,8 @@ Optional sections use their defaults when omitted. Unknown fields are rejected.
 
 | Setting | Type / values | Default | Purpose |
 |---|---|---|---|
-| `default_account` | string | `"default"` | Default account in embedded SDK mode |
-| `default_user` | string | `"default"` | Default user in embedded SDK mode |
+| `default_account` | string | `"default"` | Default account for the service context |
+| `default_user` | string | `"default"` | Default user for the service context |
 | `embedding` | object | built-in local dense model | Dense, sparse, and hybrid embedding; defaults to `local` / `bge-small-zh-v1.5-f16` |
 | `vlm` | object | empty config | Content understanding, summaries, and memory extraction; configure a working model before using these capabilities |
 | `query_planner` | object / `null` | `null` | Retrieval intent model; falls back to `vlm` |

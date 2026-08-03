@@ -50,8 +50,6 @@ The package also provides `OpenVikingSessionRecorder`,
 - A client supplied through `client=` or `async_client=` remains caller-owned.
 - Clients created from `url=` are managed by the adapter and can be closed with
   `close()` or `aclose()` as documented by each adapter.
-- Embedded `path=` mode requires the full `openviking` package. It is kept for
-  compatibility, while the standalone package's default boundary is HTTP.
 
 The previous `openviking.integrations.langchain` import path remains available
 from the full `openviking` distribution as a compatibility shim.

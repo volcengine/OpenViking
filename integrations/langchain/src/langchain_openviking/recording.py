@@ -202,7 +202,6 @@ class OpenVikingSessionRecorder:
         user: str | None = None,
         user_id: str | None = None,
         actor_peer_id: str | None = None,
-        path: str | None = None,
         timeout: float = 60.0,
         extra_headers: dict[str, str] | None = None,
         auto_initialize: bool = True,
@@ -220,7 +219,6 @@ class OpenVikingSessionRecorder:
             user=user,
             user_id=user_id,
             actor_peer_id=actor_peer_id,
-            path=path,
             timeout=timeout,
             extra_headers=extra_headers,
             auto_initialize=auto_initialize,
@@ -545,15 +543,12 @@ class OpenVikingSessionRecorder:
         whose method calls support recovery. Direct attributes on that handle
         are best-effort during recovery; use ``await handle.get()`` only to read
         raw properties immediately because recovery may replace that snapshot.
-        Embedded ``path=`` connections return an adapter-owned synchronous
-        client whose calls are dispatched through a worker thread.
         """
 
         self._raise_if_closed()
         client = await ensure_async_client(
             self._connection,
             client_cache=self._async_clients,
-            embedded_client_factory=lambda: self.client,
         )
         self._raise_if_closed()
         return client
@@ -572,14 +567,11 @@ class OpenVikingSessionRecorder:
 
         if self._closed:
             return
-        uses_http_client = bool(self._connection.url) or self._connection.path is None
-        if uses_http_client and self._async_clients.has_clients():
+        if self._async_clients.has_clients():
             raise RuntimeError(
                 "OpenVikingSessionRecorder has an active async client; "
                 "use `await recorder.aclose()`"
             )
-        if not uses_http_client:
-            self._async_clients.pop_all()
         self._closed = True
         self._clear_pending_commits()
         with self._client_cache_lock:

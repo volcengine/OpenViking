@@ -159,13 +159,13 @@ export OPENVIKING_CONFIG_FILE=/path/to/your/ov.conf
 创建 `example.py`：
 
 ```python
-import openviking as ov
+from openviking_sdk import SyncHTTPClient
 
-# Initialize OpenViking client with data directory
-client = ov.OpenViking(path="./data")
+# 连接 OpenViking Server
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 
 try:
-    # Initialize the client
+    # 检查连接
     client.initialize()
 
     # Add resource (supports URL, file, or directory)
@@ -196,8 +196,8 @@ try:
     # Perform semantic search
     results = client.find("what is openviking", target_uri=root_uri)
     print("Search results:")
-    for r in results.resources:
-        print(f"  {r.uri} (score: {r.score:.4f})")
+    for result in results.get("resources", []):
+        print(f"  {result['uri']} (score: {result.get('score', 0.0):.4f})")
 
     # Close the client
     client.close()

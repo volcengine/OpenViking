@@ -72,7 +72,11 @@ def fake_viking_fs():
 
 
 @pytest_asyncio.fixture
-async def settings_http(fake_viking_fs):
+async def settings_http(fake_viking_fs, monkeypatch):
+    monkeypatch.setattr(
+        "openviking.server.routers.admin.get_openviking_config",
+        lambda: SimpleNamespace(default_account="default"),
+    )
     sessions = SessionService(viking_fs=fake_viking_fs)
     service = SimpleNamespace(sessions=sessions, viking_fs=fake_viking_fs)
     app = create_app(config=ServerConfig(), service=service)
@@ -95,12 +99,6 @@ def test_agent_evolution_can_be_enabled_as_account_default():
     config = ServerConfig.model_validate({"agent_evolution": {"enabled": True}})
 
     assert config.agent_evolution.enabled is True
-
-
-async def test_embedded_session_service_preserves_agent_evolution_default():
-    service = SessionService()
-
-    assert await service.get_agent_evolution_enabled("default") is True
 
 
 async def test_existing_session_observes_updated_account_value(fake_viking_fs):
