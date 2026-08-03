@@ -101,6 +101,30 @@ class SemanticProcessor(DequeueHandlerBase):
     _request_stats_by_telemetry_id: Dict[str, RequestQueueStats] = {}
     _request_stats_order: List[str] = []
     _max_cached_stats = 256
+    _non_terminal_abbreviations = frozenset(
+        {
+            "approx",
+            "co",
+            "dept",
+            "dr",
+            "e.g",
+            "etc",
+            "fig",
+            "i.e",
+            "inc",
+            "jr",
+            "ltd",
+            "mr",
+            "mrs",
+            "ms",
+            "mx",
+            "no",
+            "prof",
+            "sr",
+            "st",
+            "vs",
+        }
+    )
 
     def __init__(self, max_concurrent_llm: int = 64):
         """
@@ -1188,6 +1212,75 @@ class SemanticProcessor(DequeueHandlerBase):
 
         return re.sub(r"\[(\d+)\]", replace_index, generated_content)
 
+    @staticmethod
+    def _is_list_marker_period(text: str, period_index: int) -> bool:
+        line_start = text.rfind("\n", 0, period_index) + 1
+        marker = text[line_start:period_index]
+        return re.fullmatch(r"\s*(?:\d+(?:\.\d+)*|[A-Za-z])", marker) is not None
+
+    @classmethod
+    def _is_abbreviation_period(cls, text: str, period_index: int) -> bool:
+        if not text[period_index + 1 :].strip():
+            return False
+
+        token_match = re.search(r"[A-Za-z]+(?:\.[A-Za-z]+)*$", text[:period_index])
+        if token_match is None:
+            return False
+
+        token = token_match.group(0).lower()
+        return (
+            token in cls._non_terminal_abbreviations
+            or re.fullmatch(r"(?:[a-z]\.)+[a-z]", token) is not None
+        )
+
+    @staticmethod
+    def _is_structural_paragraph(text: str, paragraph_end: int) -> bool:
+        preceding_text = text[:paragraph_end]
+        previous_breaks = list(re.finditer(r"\n[ \t]*\n+", preceding_text))
+        paragraph_start = previous_breaks[-1].end() if previous_breaks else 0
+        paragraph = preceding_text[paragraph_start:].strip()
+        if re.fullmatch(r"#{1,6}\s+\S[^\n]*", paragraph):
+            return True
+        marker = r"(?:\((?:\d+(?:\.\d+)*|[A-Za-z])\)|(?:\d+(?:\.\d+)*|[A-Za-z])[.)])"
+        return re.fullmatch(rf"{marker}\s+\S[^\n]*", paragraph) is not None
+
+    def _find_sentence_boundaries(self, text: str) -> List[int]:
+        boundaries = set()
+
+        for paragraph_break in re.finditer(r"\n[ \t]*\n+", text):
+            paragraph_end = paragraph_break.start()
+            if not self._is_structural_paragraph(text, paragraph_end):
+                boundaries.add(paragraph_end)
+
+        closing_characters = "\"'”’)]}）】》〉」』"
+        for punctuation_match in re.finditer(r"[.!?。？！]", text):
+            punctuation_index = punctuation_match.start()
+            punctuation = punctuation_match.group(0)
+            boundary = punctuation_match.end()
+
+            while boundary < len(text) and text[boundary] in closing_characters:
+                boundary += 1
+
+            if punctuation in ".!?":
+                if boundary < len(text) and not text[boundary].isspace():
+                    continue
+                if punctuation == ".":
+                    if (
+                        punctuation_index > 0
+                        and punctuation_index + 1 < len(text)
+                        and text[punctuation_index - 1].isdigit()
+                        and text[punctuation_index + 1].isdigit()
+                    ):
+                        continue
+                    if self._is_list_marker_period(text, punctuation_index):
+                        continue
+                    if self._is_abbreviation_period(text, punctuation_index):
+                        continue
+
+            boundaries.add(boundary)
+
+        return sorted(boundaries)
+
     def _truncate_generated_text(self, text: str, max_chars: int) -> str:
         if max_chars <= 0 or len(text) <= max_chars:
             return text
@@ -1197,8 +1290,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
         first_sentence_end = None
         last_sentence_end_within_limit = None
-        for sentence_end_match in re.finditer(r"\.(?!\d)(?=\s|$)|[!?](?=\s|$)|[。？！]", text):
-            sentence_end = sentence_end_match.end()
+        for sentence_end in self._find_sentence_boundaries(text):
             if first_sentence_end is None:
                 first_sentence_end = sentence_end
             if sentence_end <= max_chars:
