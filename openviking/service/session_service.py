@@ -87,6 +87,12 @@ class SessionService:
             else None
         )
 
+    def set_agent_evolution_runtime_enabled(self, enabled: bool, revision: str) -> None:
+        """Apply an instance-wide value before the projected config refreshes."""
+        self._agent_evolution_enabled = bool(enabled)
+        if self._agent_evolution_config_provider is not None:
+            self._agent_evolution_config_provider.set_runtime_override(enabled, revision)
+
     def get_agent_evolution_enabled(self) -> bool:
         """Return the live instance-wide Agent Evolution switch."""
         if self._agent_evolution_config_provider is None:

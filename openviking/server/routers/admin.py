@@ -5,7 +5,7 @@
 import asyncio
 
 from fastapi import APIRouter, Body, Depends, Path, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from openviking.server.api_keys.models import validate_account_user_role
 from openviking.server.auth import (
@@ -68,6 +68,11 @@ class MigrateLegacyDataRequest(BaseModel):
     action: str = "migrate"
 
 
+class SetAgentEvolutionRequest(BaseModel):
+    enabled: bool
+    revision: str = Field(min_length=1, max_length=128)
+
+
 @router.get("/agent-evolution")
 @require_auth_root
 async def get_agent_evolution_status(
@@ -81,6 +86,27 @@ async def get_agent_evolution_status(
         status="ok",
         result={
             "enabled": get_service().sessions.get_agent_evolution_enabled(),
+            "account_id": get_openviking_config().default_account,
+        },
+    )
+
+
+@router.put("/agent-evolution")
+@require_auth_root
+async def set_agent_evolution_status(
+    body: SetAgentEvolutionRequest,
+    request: Request,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Apply the instance-wide Agent Evolution switch immediately."""
+    del request
+    del ctx
+    sessions = get_service().sessions
+    sessions.set_agent_evolution_runtime_enabled(body.enabled, body.revision)
+    return Response(
+        status="ok",
+        result={
+            "enabled": sessions.get_agent_evolution_enabled(),
             "account_id": get_openviking_config().default_account,
         },
     )

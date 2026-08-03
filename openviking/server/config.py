@@ -85,6 +85,7 @@ class AgentEvolutionConfig(BaseModel):
     """Server-wide Agent Evolution production switch."""
 
     enabled: bool = False
+    revision: Optional[str] = None
 
     model_config = {"extra": "forbid"}
 

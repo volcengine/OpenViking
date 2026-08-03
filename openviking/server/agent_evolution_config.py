@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from threading import Lock
 from typing import Optional
 
 from openviking.server.config import ServerConfig
@@ -30,14 +31,29 @@ class AgentEvolutionConfigProvider:
     ) -> None:
         self._last_valid_enabled = bool(default_enabled)
         self._config_path = Path(config_path).expanduser() if config_path else None
+        self._runtime_override: Optional[tuple[bool, str]] = None
+        self._lock = Lock()
 
     def set_default_enabled(self, enabled: bool) -> None:
-        self._last_valid_enabled = bool(enabled)
+        with self._lock:
+            self._last_valid_enabled = bool(enabled)
+
+    def set_runtime_override(self, enabled: bool, revision: str) -> None:
+        """Use a value immediately until the projected config catches up."""
+        with self._lock:
+            self._runtime_override = (bool(enabled), revision)
+            self._last_valid_enabled = bool(enabled)
+
+    def _fallback_enabled(self) -> bool:
+        with self._lock:
+            if self._runtime_override is not None:
+                return self._runtime_override[0]
+            return self._last_valid_enabled
 
     def is_enabled(self) -> bool:
         config_path = self._config_path
         if config_path is None:
-            return self._last_valid_enabled
+            return self._fallback_enabled()
 
         try:
             payload = load_json_config(config_path)
@@ -48,21 +64,30 @@ class AgentEvolutionConfigProvider:
                 server_config = {}
             if not isinstance(server_config, dict):
                 raise ValueError("server must be an object")
-            enabled = ServerConfig.model_validate(server_config).agent_evolution.enabled
+            agent_evolution = ServerConfig.model_validate(server_config).agent_evolution
+            enabled = agent_evolution.enabled
+            revision = agent_evolution.revision
         except OSError as exc:
             logger.warning(
                 "Failed to access Agent Evolution config file %s, using last valid value: %s",
                 config_path,
                 exc,
             )
-            return self._last_valid_enabled
+            return self._fallback_enabled()
         except (KeyError, TypeError, ValueError) as exc:
             logger.warning(
                 "Failed to read Agent Evolution config from %s, using last valid value: %s",
                 config_path,
                 exc,
             )
-            return self._last_valid_enabled
+            return self._fallback_enabled()
 
-        self._last_valid_enabled = enabled
-        return enabled
+        with self._lock:
+            if self._runtime_override is not None:
+                override_enabled, override_revision = self._runtime_override
+                if enabled == override_enabled and revision == override_revision:
+                    self._runtime_override = None
+                else:
+                    return override_enabled
+            self._last_valid_enabled = enabled
+            return enabled

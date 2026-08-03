@@ -96,6 +96,105 @@ def test_agent_evolution_provider_reloads_config_file(tmp_path):
     assert provider.is_enabled() is True
 
 
+def test_agent_evolution_runtime_override_waits_for_projected_config(tmp_path):
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(
+        json.dumps({"server": {"agent_evolution": {"enabled": False}}}),
+        encoding="utf-8",
+    )
+    provider = AgentEvolutionConfigProvider(
+        default_enabled=False,
+        config_path=config_path,
+    )
+
+    provider.set_runtime_override(True, "revision-1")
+
+    assert provider.is_enabled() is True
+
+    config_path.write_text(
+        json.dumps(
+            {
+                "server": {
+                    "agent_evolution": {
+                        "enabled": True,
+                        "revision": "revision-1",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert provider.is_enabled() is True
+
+    config_path.write_text(
+        json.dumps({"server": {"agent_evolution": {"enabled": False}}}),
+        encoding="utf-8",
+    )
+    assert provider.is_enabled() is False
+
+    config_path.write_text(
+        json.dumps(
+            {
+                "server": {
+                    "agent_evolution": {
+                        "enabled": True,
+                        "revision": "revision-3",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert provider.is_enabled() is True
+
+
+def test_agent_evolution_runtime_override_uses_latest_rapid_update(tmp_path):
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(
+        json.dumps({"server": {"agent_evolution": {"enabled": False}}}),
+        encoding="utf-8",
+    )
+    provider = AgentEvolutionConfigProvider(
+        default_enabled=False,
+        config_path=config_path,
+    )
+
+    provider.set_runtime_override(True, "revision-1")
+    provider.set_runtime_override(False, "revision-2")
+
+    assert provider.is_enabled() is False
+
+    config_path.write_text(
+        json.dumps(
+            {
+                "server": {
+                    "agent_evolution": {
+                        "enabled": True,
+                        "revision": "revision-1",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert provider.is_enabled() is False
+
+    config_path.write_text(
+        json.dumps(
+            {
+                "server": {
+                    "agent_evolution": {
+                        "enabled": False,
+                        "revision": "revision-2",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert provider.is_enabled() is False
+
+
 def test_session_service_reloads_from_resolved_server_config_path(tmp_path):
     config_path = tmp_path / "ov.conf"
     config_path.write_text(
@@ -241,6 +340,27 @@ async def test_agent_evolution_admin_endpoint_returns_runtime_value(
         "enabled": True,
         "account_id": "default",
     }
+
+
+async def test_agent_evolution_admin_endpoint_sets_runtime_value(
+    service,
+    client: httpx.AsyncClient,
+):
+    service.sessions.set_agent_evolution_config(AgentEvolutionConfig(enabled=False))
+
+    response = await client.put(
+        "/api/v1/admin/agent-evolution",
+        json={"enabled": True, "revision": "revision-1"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["result"] == {
+        "enabled": True,
+        "account_id": "default",
+    }
+    status = await client.get("/api/v1/admin/agent-evolution")
+    assert status.status_code == 200, status.text
+    assert status.json()["result"]["enabled"] is True
 
 
 async def test_manual_extract_respects_disabled_agent_evolution(
