@@ -54,18 +54,29 @@ class CircuitBreaker:
         self._state = _STATE_CLOSED
         self._failure_count = 0
         self._last_failure_time: float = 0
+        self._probe_started_at: float = 0
 
     def check(self) -> None:
         """Allow the request through, or raise ``CircuitBreakerOpen``."""
         with self._lock:
             if self._state == _STATE_CLOSED:
                 return
+            now = time.monotonic()
             if self._state == _STATE_HALF_OPEN:
-                return  # allow probe request
+                elapsed = now - self._probe_started_at
+                if elapsed >= self._current_reset_timeout:
+                    self._probe_started_at = now
+                    logger.info("Circuit breaker replacing timed-out HALF_OPEN probe")
+                    return
+                raise CircuitBreakerOpen(
+                    "Circuit breaker is HALF_OPEN with a probe in progress, "
+                    f"retry after {self._current_reset_timeout - elapsed:.0f}s"
+                )
             # OPEN — check if timeout elapsed
-            elapsed = time.monotonic() - self._last_failure_time
+            elapsed = now - self._last_failure_time
             if elapsed >= self._current_reset_timeout:
                 self._state = _STATE_HALF_OPEN
+                self._probe_started_at = now
                 logger.info("Circuit breaker transitioning OPEN -> HALF_OPEN (timeout elapsed)")
                 return
             raise CircuitBreakerOpen(
@@ -92,6 +103,7 @@ class CircuitBreaker:
             self._failure_count = 0
             self._state = _STATE_CLOSED
             self._current_reset_timeout = self._base_reset_timeout
+            self._probe_started_at = 0
 
     def record_failure(self, error: Exception) -> None:
         """Record a failed API call. May trip the breaker."""
@@ -106,6 +118,7 @@ class CircuitBreaker:
 
             if self._state == _STATE_HALF_OPEN:
                 self._state = _STATE_OPEN
+                self._probe_started_at = 0
                 self._current_reset_timeout = min(
                     self._current_reset_timeout * 2,
                     self._max_reset_timeout,

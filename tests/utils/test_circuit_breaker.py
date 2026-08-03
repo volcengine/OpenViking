@@ -3,8 +3,61 @@
 
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
+
+
+class _Clock:
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += seconds
+
+
+def _run_concurrent_checks(circuit_breaker, worker_count):
+    from openviking.utils.circuit_breaker import CircuitBreakerOpen
+
+    barrier = threading.Barrier(worker_count + 1)
+    outcomes = []
+    outcomes_lock = threading.Lock()
+
+    def check():
+        barrier.wait()
+        try:
+            circuit_breaker.check()
+            outcome = "admitted"
+        except CircuitBreakerOpen:
+            outcome = "blocked"
+        with outcomes_lock:
+            outcomes.append(outcome)
+
+    threads = [threading.Thread(target=check) for _ in range(worker_count)]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert all(not thread.is_alive() for thread in threads)
+    return outcomes
+
+
+@pytest.fixture
+def circuit_breaker_clock(monkeypatch):
+    import openviking.utils.circuit_breaker as circuit_breaker_module
+
+    clock = _Clock()
+    monkeypatch.setattr(
+        circuit_breaker_module,
+        "time",
+        SimpleNamespace(monotonic=clock.monotonic),
+    )
+    return clock
 
 
 def test_circuit_breaker_starts_closed():
@@ -109,6 +162,98 @@ def test_half_open_success_resets_backoff(monkeypatch):
     cb.record_success()
 
     assert cb._current_reset_timeout == 60
+
+
+def test_half_open_concurrent_checks_admit_exactly_one_probe(circuit_breaker_clock):
+    from openviking.utils.circuit_breaker import CircuitBreaker
+
+    cb = CircuitBreaker(failure_threshold=1, reset_timeout=10)
+    cb.record_failure(RuntimeError("500"))
+    circuit_breaker_clock.advance(10)
+
+    outcomes = _run_concurrent_checks(cb, worker_count=8)
+
+    assert outcomes.count("admitted") == 1
+    assert outcomes.count("blocked") == 7
+
+
+def test_half_open_probe_success_closes_for_waiting_callers(circuit_breaker_clock):
+    from openviking.utils.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
+
+    cb = CircuitBreaker(failure_threshold=1, reset_timeout=10)
+    cb.record_failure(RuntimeError("500"))
+    circuit_breaker_clock.advance(10)
+
+    cb.check()
+    with pytest.raises(CircuitBreakerOpen):
+        cb.check()
+    assert cb.retry_after == 0
+
+    cb.record_success()
+
+    assert _run_concurrent_checks(cb, worker_count=4) == ["admitted"] * 4
+
+
+def test_half_open_probe_failure_reopens_for_waiting_callers(circuit_breaker_clock):
+    from openviking.utils.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
+
+    cb = CircuitBreaker(failure_threshold=1, reset_timeout=10, max_reset_timeout=40)
+    cb.record_failure(RuntimeError("500"))
+    circuit_breaker_clock.advance(10)
+    cb.check()
+
+    cb.record_failure(RuntimeError("500 again"))
+
+    assert cb._current_reset_timeout == 20
+    assert cb.retry_after == 20
+    with pytest.raises(CircuitBreakerOpen):
+        cb.check()
+
+
+def test_half_open_probe_success_resets_failure_state(circuit_breaker_clock):
+    from openviking.utils.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
+
+    cb = CircuitBreaker(failure_threshold=2, reset_timeout=10, max_reset_timeout=40)
+    cb.record_failure(RuntimeError("500"))
+    cb.record_failure(RuntimeError("500"))
+    circuit_breaker_clock.advance(10)
+    cb.check()
+    cb.record_failure(RuntimeError("500 again"))
+    circuit_breaker_clock.advance(20)
+    cb.check()
+
+    cb.record_success()
+
+    assert cb._failure_count == 0
+    assert cb._current_reset_timeout == 10
+    cb.record_failure(RuntimeError("500"))
+    cb.check()
+    cb.record_failure(RuntimeError("500"))
+    with pytest.raises(CircuitBreakerOpen):
+        cb.check()
+
+
+def test_half_open_abandoned_probe_allows_one_replacement_after_timeout(
+    circuit_breaker_clock,
+):
+    from openviking.utils.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
+
+    cb = CircuitBreaker(failure_threshold=1, reset_timeout=10)
+    cb.record_failure(RuntimeError("500"))
+    circuit_breaker_clock.advance(10)
+    cb.check()
+
+    with pytest.raises(CircuitBreakerOpen):
+        cb.check()
+    circuit_breaker_clock.advance(9)
+    with pytest.raises(CircuitBreakerOpen):
+        cb.check()
+    circuit_breaker_clock.advance(1)
+
+    outcomes = _run_concurrent_checks(cb, worker_count=8)
+
+    assert outcomes.count("admitted") == 1
+    assert outcomes.count("blocked") == 7
 
 
 def test_permanent_error_trips_immediately():
