@@ -29,6 +29,8 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   let saveTimer = null
   let flushTimer = null
   let periodicFlushRunning = false
+  let periodicFlushPromise = null
+  let shuttingDown = false
   let savePromise = Promise.resolve()
   let saveCounter = 0
 
@@ -47,6 +49,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
 
   function startPeriodicFlush() {
     if (!config.autoCapture) return
+    if (shuttingDown) return
     const intervalMs = Math.max(10000, Number(config.periodicFlushIntervalMs) || 60000)
     if (flushTimer) clearInterval(flushTimer)
     flushTimer = setInterval(() => {
@@ -61,22 +64,26 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   async function runPeriodicFlush() {
     if (periodicFlushRunning) return
     periodicFlushRunning = true
-    try {
-      for (const [opencodeSessionId, state] of sessions.entries()) {
-        let hasPending = false
-        for (const message of state.messages.values()) {
-          if (!message.captured) {
-            hasPending = true
-            break
+    const done = (async () => {
+      try {
+        for (const [opencodeSessionId, state] of sessions.entries()) {
+          let hasPending = false
+          for (const message of state.messages.values()) {
+            if (!message.captured) {
+              hasPending = true
+              break
+            }
+          }
+          if (hasPending) {
+            await flushSession(opencodeSessionId, { commit: false, reason: "periodic" })
           }
         }
-        if (hasPending) {
-          await flushSession(opencodeSessionId, { commit: false, reason: "periodic" })
-        }
+      } finally {
+        periodicFlushRunning = false
       }
-    } finally {
-      periodicFlushRunning = false
-    }
+    })()
+    periodicFlushPromise = done
+    return done
   }
 
   async function loadState() {
@@ -128,6 +135,9 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       try {
         await fs.promises.unlink(tempPath)
       } catch {}
+      // Rethrow so callers awaiting saveState() can observe persistent failures
+      // (e.g. ENOSPC/EACCES). Fire-and-forget callers already attach a .catch.
+      throw error
     }
   }
 
@@ -295,7 +305,8 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     debouncedSaveState()
   }
 
-  async function flushAll({ commit = false } = {}) {
+  async function flushAll({ commit = false, shutdown = commit } = {}) {
+    if (shutdown) shuttingDown = true
     if (saveTimer) {
       clearTimeout(saveTimer)
       saveTimer = null
@@ -304,10 +315,21 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       clearInterval(flushTimer)
       flushTimer = null
     }
+    // Drain any in-flight periodic flush so it cannot interleave with the loop
+    // below and make commit ordering nondeterministic at teardown.
+    if (periodicFlushPromise) {
+      try {
+        await periodicFlushPromise
+      } catch {
+        // periodic flush errors are already logged at their source
+      }
+    }
     for (const sessionId of sessions.keys()) {
       await flushSession(sessionId, { commit, reason: "flushAll" })
     }
     await saveState()
+    // If this was not a shutdown, keep periodic flushing alive.
+    if (!shutdown) startPeriodicFlush()
   }
 
   async function flushSession(opencodeSessionId, { commit = false, reason = "manual" } = {}) {
