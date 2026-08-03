@@ -8,6 +8,7 @@ import pytest
 
 pytest.importorskip("langchain_core")
 pytest.importorskip("langgraph")
+pytest.importorskip("langchain_openviking")
 
 import langchain_openviking.client as client_helpers
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage

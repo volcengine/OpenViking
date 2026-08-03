@@ -8,6 +8,7 @@ import pytest
 pytest.importorskip("langchain")
 pytest.importorskip("langchain_core")
 pytest.importorskip("langgraph")
+pytest.importorskip("langchain_openviking")
 
 from langchain.agents import create_agent
 from langchain_core.language_models.fake_chat_models import FakeListChatModel

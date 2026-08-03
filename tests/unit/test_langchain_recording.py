@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 pytest.importorskip("langchain_core")
+pytest.importorskip("langchain_openviking")
 
 import langchain_openviking.recording as recording_module
 from langchain_core.messages import (

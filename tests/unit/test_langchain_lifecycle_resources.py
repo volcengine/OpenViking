@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 pytest.importorskip("langchain_core")
+pytest.importorskip("langchain_openviking")
 
 from langchain_openviking import (
     OpenVikingCommitPolicy,

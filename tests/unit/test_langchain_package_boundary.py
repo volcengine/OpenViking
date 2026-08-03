@@ -9,9 +9,10 @@ from pathlib import Path
 
 import pytest
 
-PACKAGE_ROOT = Path(__file__).resolve().parents[2] / "integrations" / "langchain"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PACKAGE_ROOT = PROJECT_ROOT / "integrations" / "langchain"
 SOURCE_ROOT = PACKAGE_ROOT / "src"
-SDK_ROOT = Path(__file__).resolve().parents[2] / "sdk" / "python"
+SDK_ROOT = PROJECT_ROOT / "sdk" / "python"
 
 
 def test_standalone_package_has_no_server_imports_at_module_scope():
@@ -105,8 +106,54 @@ assert "OpenVikingRetriever" in namespace
     )
 
 
+def test_legacy_namespace_remains_importable_without_standalone_package(tmp_path):
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join((str(PROJECT_ROOT), str(SDK_ROOT)))
+    probe = """
+import importlib.abc
+import sys
+
+
+class BlockStandalonePackage(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "langchain_openviking" or fullname.startswith("langchain_openviking."):
+            raise ModuleNotFoundError(
+                "No module named 'langchain_openviking'",
+                name="langchain_openviking",
+            )
+        return None
+
+
+sys.meta_path.insert(0, BlockStandalonePackage())
+
+import openviking.integrations.langchain as legacy
+
+assert "OpenVikingRetriever" in legacy.__all__
+assert isinstance(legacy.has_request_actor_peer_support(), bool)
+
+try:
+    legacy.OpenVikingRetriever
+except ImportError as exc:
+    message = str(exc)
+    assert "langchain-openviking" in message
+    assert "openviking[langchain]" in message
+else:
+    raise AssertionError("missing standalone package should produce an installation error")
+"""
+
+    subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_legacy_imports_resolve_to_canonical_objects():
     pytest.importorskip("langchain_core")
+    pytest.importorskip("langchain_openviking")
     canonical = import_module("langchain_openviking")
     legacy = import_module("openviking.integrations.langchain")
     legacy_client = import_module("openviking.integrations.langchain.client")
@@ -176,6 +223,7 @@ def test_private_uri_classification_preserves_server_namespace_shapes(
     expected_scope,
     expected_content_index,
 ):
+    pytest.importorskip("langchain_openviking")
     from langchain_openviking._uri import classify_uri
 
     classification = classify_uri(uri)

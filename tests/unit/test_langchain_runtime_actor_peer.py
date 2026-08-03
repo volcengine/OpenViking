@@ -8,6 +8,7 @@ import pytest
 
 pytest.importorskip("langchain_core")
 pytest.importorskip("langgraph")
+pytest.importorskip("langchain_openviking")
 
 from langchain_core.messages import AIMessage, HumanMessage
 
