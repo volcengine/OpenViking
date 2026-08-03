@@ -334,20 +334,23 @@ export function createMemorySessionManager({ config, pluginRoot }) {
 
     const previous = state.flushing || Promise.resolve()
     const current = previous.then(run, run)
-    // Track the same promise we store so the reset actually fires. Swallow the
-    // rejection on the gate branch (callers still observe it via `current`) to
-    // avoid an unhandled rejection when no subsequent flush chains onto it.
-    const tracked = current.catch(() => {}).finally(() => {
-      if (state.flushing === tracked) state.flushing = undefined
-    })
-    state.flushing = tracked
+    // Store the same promise the next flush will chain on. Swallow the rejection
+    // on the gate branch (callers still observe it via `current`) so a failed run
+    // does not become an unhandled rejection when nothing chains onto it. We do
+    // NOT reset state.flushing afterwards: chaining on an already-settled promise
+    // is effectively free, and an auto-reset opens a window where a rapidly queued
+    // flush sees `undefined` and starts in parallel instead of serializing.
+    state.flushing = current.catch(() => {})
     return current
   }
 
   async function commitSession(sessionId, opencodeSessionId, abortSignal) {
     if (opencodeSessionId) {
-      const state = sessions.get(opencodeSessionId)
-      if (state) await flushPendingMessages(opencodeSessionId, state)
+      // Route through flushSession so the send goes through the same
+      // per-session serialization gate. Calling flushPendingMessages directly
+      // would bypass state.flushing and could double-send a batch that a
+      // concurrent periodic/idle flush is already sending.
+      await flushSession(opencodeSessionId, { commit: false, reason: "tool" })
     }
     return commitOvSession(sessionId, { force: true, abortSignal, reason: "tool" })
   }
