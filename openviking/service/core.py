@@ -25,13 +25,13 @@ from openviking.service.search_service import SearchService
 from openviking.service.session_service import SessionService
 from openviking.service.task_tracker import get_task_tracker, set_task_tracker
 from openviking.session import create_session_compressor
-from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.storage.collection_schemas import init_context_collection
 from openviking.storage.index_consistency import check_index_consistency
 from openviking.storage.queuefs.add_resource_processor import AddResourceProcessor
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
 from openviking.storage.queuefs.session_commit_processor import SessionCommitProcessor
 from openviking.storage.viking_fs import VikingFS, init_viking_fs
+from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.utils.agfs_utils import (
     build_runtime_ragfs_binding_config,
     resolve_queuefs_mount_point,
@@ -120,8 +120,9 @@ class OpenVikingService:
         # Initialize storage
         self._init_storage(
             config.storage,
-            config.embedding.max_concurrent,
-            config.vlm.max_concurrent,
+            max_concurrent_embedding=config.embedding.max_concurrent,
+            max_concurrent_semantic=config.vlm.max_concurrent,
+            max_concurrent_external_parse=config.parser_api.max_concurrent,
             binding_config=binding_config,
             git_config=config.git,
         )
@@ -137,6 +138,7 @@ class OpenVikingService:
         config: StorageConfig,
         max_concurrent_embedding: int = 10,
         max_concurrent_semantic: int = 64,
+        max_concurrent_external_parse: int = 4,
         binding_config: Any = None,
         *,
         git_config: Optional[GitConfig] = None,
@@ -157,6 +159,7 @@ class OpenVikingService:
                 mount_point=queue_mount_point,
                 max_concurrent_embedding=max_concurrent_embedding,
                 max_concurrent_semantic=max_concurrent_semantic,
+                max_concurrent_external_parse=max_concurrent_external_parse,
             )
         else:
             logger.warning("RAGFS client not initialized, skipping queue manager")
@@ -288,8 +291,9 @@ class OpenVikingService:
         if self._vikingdb_manager is None:
             self._init_storage(
                 self._config.storage,
-                self._config.embedding.max_concurrent,
-                self._config.vlm.max_concurrent,
+                max_concurrent_embedding=self._config.embedding.max_concurrent,
+                max_concurrent_semantic=self._config.vlm.max_concurrent,
+                max_concurrent_external_parse=self._config.parser_api.max_concurrent,
                 binding_config=self._build_ragfs_binding_config(),
                 git_config=self._config.git,
             )

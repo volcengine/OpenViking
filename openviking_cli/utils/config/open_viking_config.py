@@ -99,6 +99,11 @@ class ParserApiConfig(BaseModel):
     http_timeout_seconds: float = 10.0
     response_timeout_seconds: int = 1800
     poll_interval_ms: int = 3000
+    max_concurrent: int = Field(
+        default=4,
+        gt=0,
+        description="Maximum number of concurrent ExternalParse queue jobs",
+    )
 
     model_config = {"extra": "forbid"}
 

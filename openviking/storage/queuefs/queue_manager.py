@@ -21,6 +21,8 @@ from .semantic_queue import SemanticQueue
 
 logger = get_logger(__name__)
 
+DEFAULT_MAX_CONCURRENT_SESSION_COMMIT = 4
+
 # ========== Singleton Pattern ==========
 _instance: Optional["QueueManager"] = None
 
@@ -41,6 +43,7 @@ def init_queue_manager(
         mount_point: Path where QueueFS is mounted.
         max_concurrent_embedding: Max concurrent embedding tasks.
         max_concurrent_semantic: Max concurrent semantic node work.
+        max_concurrent_external_parse: Max concurrent ExternalParse tasks.
     """
     global _instance
     _instance = QueueManager(
@@ -166,12 +169,7 @@ class QueueManager:
             if thread.is_alive():
                 return
 
-        if queue.name == self.EMBEDDING:
-            max_concurrent = self._max_concurrent_embedding
-        elif queue.name in {self.EXTERNAL_PARSE, self.SESSION_COMMIT}:
-            max_concurrent = self._max_concurrent_external_parse
-        else:
-            max_concurrent = self._max_concurrent_semantic
+        max_concurrent = self._max_concurrent_for_queue(queue.name)
         stop_event = threading.Event()
         self._queue_stop_events[queue.name] = stop_event
         thread = threading.Thread(
@@ -181,6 +179,16 @@ class QueueManager:
         )
         self._queue_threads[queue.name] = thread
         thread.start()
+
+    def _max_concurrent_for_queue(self, queue_name: str) -> int:
+        """Return the worker concurrency limit for a named queue."""
+        if queue_name == self.EMBEDDING:
+            return self._max_concurrent_embedding
+        if queue_name == self.EXTERNAL_PARSE:
+            return self._max_concurrent_external_parse
+        if queue_name == self.SESSION_COMMIT:
+            return DEFAULT_MAX_CONCURRENT_SESSION_COMMIT
+        return self._max_concurrent_semantic
 
     def _queue_worker_loop(
         self, queue: NamedQueue, stop_event: threading.Event, max_concurrent: int = 1
