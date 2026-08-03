@@ -184,12 +184,6 @@ benchmark = [
     "datasets>=2.0.0",
     "pandas>=2.0.0",
 ]
-langchain = [
-    "langchain-openviking>=0.1.0",
-]
-langgraph = [
-    "langchain-openviking[langgraph]>=0.1.0",
-]
 local-embed = [
     "llama-cpp-python>=0.3.0",
 ]
@@ -298,6 +292,3 @@ line-ending = "auto"
 dev = [
     "pytest>=9.0.2",
 ]
-
-[tool.uv.sources]
-langchain-openviking = { path = "integrations/langchain" }

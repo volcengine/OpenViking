@@ -12,9 +12,9 @@ pip install langchain-openviking                 # LangChain adapters
 pip install "langchain-openviking[langgraph]"    # LangGraph middleware support
 ```
 
-Existing applications may continue to use `openviking[langchain]` or
-`openviking[langgraph]`; the full package forwards the legacy import path to
-`langchain-openviking`.
+The integration is released independently from the OpenViking server. The full
+package keeps forwarding the legacy `openviking.integrations.langchain` import
+path to `langchain-openviking` for existing applications.
 
 ## Connection
 
