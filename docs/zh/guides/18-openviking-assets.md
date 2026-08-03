@@ -26,8 +26,8 @@ OpenViking Assets 包含三个主要对象：
 
 - **Manifest**：实际执行的文件。可以在 `catalog:` 下直接定义要接入的资产，也可以按名称
   从单独的 Catalog 文件中选择资产。
-- **Catalog**：团队可接入资源的目录，包含来源、分支、默认更新周期和凭据别名。只有在多个
-  Manifest 需要共享时才作为单独文件存在，否则直接写在 Manifest 里。
+- **Catalog**：团队可接入资源的目录，包含来源、分支或固定 commit、默认更新周期和凭据别名。
+  只有在多个 Manifest 需要共享时才作为单独文件存在，否则直接写在 Manifest 里。
 - **State**：某个 Manifest 上次执行的结果，以及资产到 `viking://` 资源的映射。
 
 ```text
@@ -111,9 +111,21 @@ Git 资产支持：
 | `connector` | 是 | v1 只支持 `git`。 |
 | `description` | 否 | 资产用途说明。 |
 | `params.repo_url` | 是 | Git clone URL。 |
-| `params.branch` | 否 | 要接入的分支；设置时不能为空。 |
+| `params.branch` | 否 | 要接入的分支或 tag；设置时不能为空。与 `params.commit` 互斥。 |
+| `params.commit` | 否 | 要接入的精确 commit，必须是完整 40 位十六进制 SHA。与 `params.branch` 互斥。 |
 | `auth_ref` | 否 | 覆盖 `defaults.git.auth_ref`。 |
 | `watch_interval` | 否 | 覆盖 `defaults.git.watch_interval`。 |
+
+需要可复现的固定版本导入时，使用 commit 而不是分支：
+
+```yaml
+params:
+  repo_url: https://github.com/example/repository
+  commit: 0123456789abcdef0123456789abcdef01234567
+```
+
+commit SHA 会统一转成小写。协议拒绝缩写 SHA，以确保同一份 Manifest 在标准导入流水线和
+外置 Git Connector 上具有一致语义。
 
 校验是严格的：未知字段、重复资产名和不支持的连接器都会使整个解析失败，即使有问题的资产
 没有被本次执行选择。`params` 内容和 clone URL 安全性针对被选中的资产校验。这些规则与
@@ -177,10 +189,10 @@ connector + normalized locator + ref
 ```
 
 Git URL 会去除协议、用户名前缀、端口、结尾的 `.git` 和 `/`，并把主机名统一为小写。
-因此，同一仓库的 HTTPS、SSH 和 SCP 风格地址通常会得到相同定位符；不同分支会得到不同资产。
+因此，同一仓库的 HTTPS、SSH 和 SCP 风格地址通常会得到相同定位符；不同分支或 commit 会得到不同资产。
 
-资产名称不参与身份计算。重命名资产但保持来源和分支不变时，会继续关联原资源；修改来源或
-分支时会产生新资产，旧资源被报告为 orphan。
+资产名称不参与身份计算。重命名资产但保持来源和 Git ref 不变时，会继续关联原资源；修改来源、
+分支或 commit 时会产生新资产，旧资源被报告为 orphan。
 
 出于安全原因，clone URL 不能：
 
@@ -274,7 +286,9 @@ export OPENVIKING_ASSETS_CREDENTIALS_FILE=/secure/path/assets-credentials.yaml
 ```
 
 执行前，CLI 会先解析所有选中资产的 `auth_ref`，然后由服务端在实际执行环境中用
-`git ls-remote` 校验每个仓库的读取权限。只要有一个别名不存在或仓库不可读，整个操作都会
+`git ls-remote` 校验每个仓库的读取权限。固定 commit 的预检会校验完整 SHA 格式和仓库权限；
+由于 `ls-remote` 无法证明任意历史 commit 是否可达，精确 commit 会在导入流水线 fetch 时验证。
+只要有一个别名不存在或仓库不可读，整个操作都会
 在提交任何资源之前失败；`dry_run` 也执行相同预检。解析出的 Git 参数会通过当前配置的
 OpenViking 服务连接发送给 preflight 和资源接口，因此远程部署应使用 TLS，并限制凭据文件
 的本地访问权限。
@@ -308,7 +322,7 @@ State 使用 `openviking-assets-state/1` 协议，记录：
 | State 中没有该 `asset_id` 的资源 URI | create：创建新资源。 |
 | State 中已有资源 URI | sync：把 URI 作为 `to` 再次调用 `add_resource`。 |
 | 资产不再被 Manifest 选择 | 报告 orphan，保留资源和 State，不自动删除。 |
-| `asset_id` 因来源或分支变化 | 创建新资产，旧资产成为 orphan。 |
+| `asset_id` 因来源、分支或 commit 变化 | 创建新资产，旧资产成为 orphan。 |
 
 State 属于执行环境，不是 Catalog 或 Manifest 协议的一部分。共享 Manifest 仓库通常应在
 `.gitignore` 中加入：
@@ -329,6 +343,9 @@ State 属于执行环境，不是 Catalog 或 Manifest 协议的一部分。共�
 2. 单个资产的 `watch_interval`；
 3. `defaults.git.watch_interval`；
 4. `0`，不自动刷新。
+
+固定 commit 对应不可变快照。允许配置正数更新周期，但每次 Watch 都会导入同一版本；除非确实
+需要周期性重新处理，否则应设置 `watch_interval: 0`。
 
 例如，临时把 Manifest 中全部资产调整为每 60 分钟刷新：
 
@@ -398,7 +415,8 @@ ov add-resource --manifest manifest.yaml --args skip_failed:true
 - 只支持 Git 资产；
 - Manifest 必须平铺，不支持递归 `include`；
 - 服务端 resolver 只返回计划，不执行批量提交；
-- 服务端 preflight 通过只读 `git ls-remote` 校验仓库权限，不下载仓库内容；
+- 服务端 preflight 通过只读 `git ls-remote` 校验仓库权限，不下载仓库内容；固定 commit 的
+  精确可用性在导入阶段校验；
 - CLI 按顺序逐个执行资产；
 - 不自动删除 orphan；
 - 不包含 `ov share` 指针码或从现有知识库导出 Manifest 的能力；

@@ -36,6 +36,7 @@ pub struct ResolvedAsset {
     pub connector: String,
     pub repo_url: String,
     pub branch: Option<String>,
+    pub commit: Option<String>,
     pub auth_ref: Option<String>,
     pub watch_interval: f64,
     pub locator: String,
@@ -381,12 +382,17 @@ fn build_args(
     asset: &ResolvedAsset,
     credential_args: &Map<String, Value>,
 ) -> Option<Map<String, Value>> {
-    let mut args = Map::new();
-    if let Some(branch) = &asset.branch {
-        args.insert("branch".to_string(), json!(branch));
+    let mut args = credential_args.clone();
+    // Source selection belongs to the manifest, not the credential alias. Drop
+    // any legacy selector smuggled through the credentials file so the resolved
+    // plan remains authoritative and branch/commit cannot become ambiguous.
+    for key in ["branch", "ref", "commit"] {
+        args.remove(key);
     }
-    for (key, value) in credential_args {
-        args.insert(key.clone(), value.clone());
+    if let Some(commit) = &asset.commit {
+        args.insert("commit".to_string(), json!(commit));
+    } else if let Some(branch) = &asset.branch {
+        args.insert("branch".to_string(), json!(branch));
     }
     if args.is_empty() { None } else { Some(args) }
 }
@@ -637,6 +643,7 @@ impl Submitter for HttpSubmitter {
                     "connector": asset.connector,
                     "repo_url": asset.repo_url,
                     "branch": asset.branch,
+                    "commit": asset.commit,
                     "auth_config": git_auth_config(args.as_ref()),
                 }),
             )
@@ -922,6 +929,32 @@ mod tests {
     }
 
     #[test]
+    fn build_args_uses_manifest_commit_as_authoritative_selector() {
+        let (_dir, _manifest, _catalog, mut assets) = workspace();
+        assets[0].branch = None;
+        assets[0].commit = Some("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef".into());
+        let credentials = json!({
+            "token": "sekrit",
+            "branch": "credential-branch",
+            "ref": "credential-ref",
+            "commit": "credential-commit",
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        let args = build_args(&assets[0], &credentials).unwrap();
+
+        assert_eq!(args["token"], json!("sekrit"));
+        assert_eq!(
+            args["commit"],
+            json!("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+        );
+        assert!(!args.contains_key("branch"));
+        assert!(!args.contains_key("ref"));
+    }
+
+    #[test]
     fn manifest_run_args_parse_known_keys() {
         let args = serde_json::json!({
             "catalog": "shared/catalog.yaml",
@@ -940,7 +973,7 @@ mod tests {
 
     #[test]
     fn manifest_run_args_reject_unknown_keys_and_bad_types() {
-        // Catalog params (e.g. git branch) belong in the catalog file, not
+        // Catalog params (e.g. git branch or commit) belong in the catalog file, not
         // here; an unknown key must not silently do nothing.
         let unknown = serde_json::json!({"branch": "main"});
         let err = parse_manifest_run_args(unknown.as_object()).unwrap_err();
@@ -1007,6 +1040,7 @@ mod tests {
                 connector: "git".into(),
                 repo_url: "https://github.com/org/alpha".into(),
                 branch: Some("main".into()),
+                commit: None,
                 auth_ref: None,
                 watch_interval: 30.0,
                 locator: "github.com/org/alpha".into(),
@@ -1018,6 +1052,7 @@ mod tests {
                 connector: "git".into(),
                 repo_url: "https://github.com/org/beta".into(),
                 branch: None,
+                commit: None,
                 auth_ref: None,
                 watch_interval: 30.0,
                 locator: "github.com/org/beta".into(),
@@ -1029,6 +1064,7 @@ mod tests {
                 connector: "git".into(),
                 repo_url: "git@github.com:org/gamma.git".into(),
                 branch: Some("dev".into()),
+                commit: None,
                 auth_ref: None,
                 watch_interval: 0.0,
                 locator: "github.com/org/gamma".into(),

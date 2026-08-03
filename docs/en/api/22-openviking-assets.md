@@ -67,6 +67,7 @@ and its label in `catalog_label`.
         "connector": "git",
         "repo_url": "https://github.com/volcengine/OpenViking",
         "branch": "main",
+        "commit": null,
         "auth_ref": null,
         "watch_interval": 1440.0,
         "locator": "github.com/volcengine/OpenViking",
@@ -81,7 +82,7 @@ and its label in `catalog_label`.
 Where:
 
 - `locator` is the normalized repository locator.
-- `git_ref` is the resolved Git reference.
+- `git_ref` is the resolved branch, tag, or full commit SHA.
 - `asset_id` is a stable 12-character identifier derived from the connector,
   normalized locator, and Git reference. The value above illustrates the format.
 - `watch_interval` is measured in minutes.
@@ -101,6 +102,8 @@ Protocol or content validation failures return HTTP `400` with the error code
 - a Manifest that selects assets by name without any `catalog_yaml`;
 - a Manifest referencing an asset absent from the Catalog;
 - an invalid connector, repository URL, Git reference, or asset identity;
+- a commit that is not a full 40-character hexadecimal SHA, or an asset that sets both
+  `branch` and `commit`;
 - duplicate asset identities in one Manifest.
 
 Empty fields, incorrect field types, or length-limit violations are rejected by
@@ -124,7 +127,8 @@ calls it during both dry-run and pre-submission validation.
 | `name` | string | Yes | Asset name |
 | `connector` | string | Yes | Must currently be `git` |
 | `repo_url` | string | Yes | Git clone URL |
-| `branch` | string | No | Branch or tag to verify; the remote `HEAD` is checked when omitted |
+| `branch` | string | No | Branch or tag to verify. Mutually exclusive with `commit` |
+| `commit` | string | No | Full 40-character commit SHA. Mutually exclusive with `branch`; preflight checks repository access via `HEAD` |
 | `auth_config.username` | string | No | HTTP Basic username; defaults to `oauth2` |
 | `auth_config.token` | string | No | One-shot Git token; never persisted |
 
@@ -148,6 +152,10 @@ When a token is provided explicitly, preflight does not fall back to a server
 Git credential helper. The token is passed through the child-process
 environment and does not appear in Git command arguments or the response.
 
+`git ls-remote` cannot verify that an arbitrary historical commit is reachable without fetching
+repository data. For `commit`, preflight validates the SHA format and repository access; the exact
+commit is verified by the ingestion pipeline when it fetches and checks out the pinned snapshot.
+
 ### Success response
 
 ```json
@@ -167,6 +175,7 @@ environment and does not appear in Git command arguments or the response.
 
 | HTTP status | Error code | Meaning |
 | --- | --- | --- |
+| `400` | `INVALID_ARGUMENT` | Invalid commit SHA, or both branch and commit were supplied |
 | `403` | `PERMISSION_DENIED` | Repository missing, invalid credentials, or insufficient read permission |
 | `404` | `NOT_FOUND` | Repository is readable, but the requested branch/tag is absent |
 | `503` | `UNAVAILABLE` | DNS, connection, or Git executable unavailable |
