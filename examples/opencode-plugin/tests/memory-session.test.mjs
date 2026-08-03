@@ -15,8 +15,24 @@ async function withTempDir(prefix, fn) {
   }
 }
 
-async function withCaptureServer(fn) {
+// Find a PID that is definitely not running. process.kill(pid, 0) throws
+// ESRCH for a non-existent PID; probe upward from a large base so the test
+// does not rely on a hard-coded value that could be alive on high-pid_max
+// systems.
+function findDeadPid() {
+  for (let pid = 999983; pid < 4194304; pid += 104729) {
+    try {
+      process.kill(pid, 0)
+    } catch (err) {
+      if (err?.code === "ESRCH") return pid
+    }
+  }
+  throw new Error("could not find a dead PID")
+}
+
+async function withCaptureServer(fn, options = {}) {
   const requests = []
+  const { onBatch } = options
   const server = createServer(async (req, res) => {
     let body = ""
     req.setEncoding("utf8")
@@ -27,6 +43,9 @@ async function withCaptureServer(fn) {
     if (req.url === "/health") {
       res.end(JSON.stringify({ status: "ok" }))
     } else if (req.url?.startsWith("/api/v1/sessions/") && req.url.endsWith("/messages/batch")) {
+      // Optional hook lets a test hold a batch open so it can observe an
+      // in-flight send (e.g. a periodic flush) racing another operation.
+      if (typeof onBatch === "function") await onBatch(req.url)
       res.end(JSON.stringify({ status: "ok", result: { accepted: true } }))
     } else if (req.url?.startsWith("/api/v1/sessions/")) {
       res.end(JSON.stringify({ status: "ok", result: { pending_tokens: 0 } }))
@@ -249,25 +268,66 @@ test("concurrent flushSession on the same session sends each pending batch once"
 })
 
 test("flushAll shutdown drains an in-flight periodic flush before its own loop", async () => {
-  await withCaptureServer(async ({ endpoint, requests }) => {
-    await withTempDir("ov-oc-session-", async (dir) => {
-      const manager = createMemorySessionManager({
-        config: { ...baseConfig(endpoint), periodicFlushIntervalMs: 10000 },
-        pluginRoot: dir,
-      })
-      await manager.init()
-      await manager.handleEvent({ type: "session.created", properties: { info: { id: "oc-drain" } } })
-      await seedUserMessage(manager, "oc-drain", "msg-drain-1", "Teardown must drain periodic work.")
-
-      // Shutdown flush should complete without double-sending and archive via commit.
-      await manager.flushAll({ commit: true, shutdown: true })
-
-      const batches = requests.filter((r) => r.url === "/api/v1/sessions/oc-oc-drain/messages/batch")
-      assert.equal(batches.length, 1, "shutdown must send pending messages exactly once")
-      const commits = requests.filter((r) => r.method === "POST" && r.url === "/api/v1/sessions/oc-oc-drain/commit")
-      assert.equal(commits.length, 1, "shutdown with commit:true must commit once")
-    })
+  // Gate the first batch send so a periodic flush is genuinely mid-flight when
+  // flushAll({shutdown:true}) runs. This exercises the drain branch
+  // (`if (periodicFlushPromise) await periodicFlushPromise`) in flushAll and
+  // proves the shutdown waits for in-flight periodic work instead of racing it.
+  let releaseBatch
+  const batchGate = new Promise((resolve) => {
+    releaseBatch = resolve
   })
+  let firstBatchSeen
+  const firstBatch = new Promise((resolve) => {
+    firstBatchSeen = resolve
+  })
+  let batchCount = 0
+
+  await withCaptureServer(
+    async ({ endpoint, requests }) => {
+      await withTempDir("ov-oc-session-", async (dir) => {
+        const manager = createMemorySessionManager({
+          config: { ...baseConfig(endpoint), periodicFlushIntervalMs: 10 },
+          pluginRoot: dir,
+        })
+        await manager.init()
+        await manager.handleEvent({ type: "session.created", properties: { info: { id: "oc-drain" } } })
+        await seedUserMessage(manager, "oc-drain", "msg-drain-1", "Teardown must drain periodic work.")
+
+        // Wait until the periodic timer has actually started a batch send that
+        // is now blocked in the gate, then tear down while it is in-flight.
+        await firstBatch
+        const shutdown = manager.flushAll({ commit: true, shutdown: true })
+        // Let the in-flight periodic batch complete; flushAll must have awaited it.
+        releaseBatch()
+        await shutdown
+
+        const batches = requests.filter((r) => r.url === "/api/v1/sessions/oc-oc-drain/messages/batch")
+        assert.equal(batches.length, 1, "shutdown must not double-send the in-flight periodic batch")
+        const commits = requests.filter((r) => r.method === "POST" && r.url === "/api/v1/sessions/oc-oc-drain/commit")
+        assert.equal(commits.length, 1, "shutdown with commit:true must commit exactly once")
+        // The gated batch must have been fully sent before the commit fired.
+        const order = requests
+          .filter((r) => r.method === "POST" && r.url?.startsWith("/api/v1/sessions/oc-oc-drain/"))
+          .map((r) => r.url)
+        assert.deepEqual(
+          order,
+          ["/api/v1/sessions/oc-oc-drain/messages/batch", "/api/v1/sessions/oc-oc-drain/commit"],
+          "the drained periodic batch must complete before the shutdown commit",
+        )
+      })
+    },
+    {
+      onBatch: async (url) => {
+        if (url === "/api/v1/sessions/oc-oc-drain/messages/batch") {
+          batchCount += 1
+          if (batchCount === 1) {
+            firstBatchSeen()
+            await batchGate
+          }
+        }
+      },
+    },
+  )
 })
 
 test("commitSession routes the send through the per-session gate", async () => {
@@ -298,8 +358,10 @@ test("startup sweep reclaims orphan temp files from a dead PID but keeps live/re
   await withCaptureServer(async ({ endpoint }) => {
     await withTempDir("ov-oc-session-", async (dir) => {
       const statePath = join(dir, "openviking-session-state.json")
-      // Dead PID: pick an implausibly large PID that is not running.
-      const deadTmp = `${statePath}.999999.0.tmp`
+      // Dead PID: derived at runtime so the test is not flaky on systems with
+      // a high pid_max where a hard-coded large PID could be alive.
+      const deadPid = findDeadPid()
+      const deadTmp = `${statePath}.${deadPid}.0.tmp`
       // Live PID (this test process), recent mtime -> must be kept.
       const liveRecentTmp = `${statePath}.${process.pid}.0.tmp`
       // Live PID but stale mtime (simulated recycled PID) -> must be reclaimed.
@@ -314,7 +376,10 @@ test("startup sweep reclaims orphan temp files from a dead PID but keeps live/re
       await manager.init()
 
       const remaining = (await readdir(dir)).filter((n) => n.endsWith(".tmp"))
-      assert.ok(!remaining.includes(`openviking-session-state.json.999999.0.tmp`), "dead-PID orphan must be removed")
+      assert.ok(
+        !remaining.includes(`openviking-session-state.json.${deadPid}.0.tmp`),
+        "dead-PID orphan must be removed",
+      )
       assert.ok(
         remaining.includes(`openviking-session-state.json.${process.pid}.0.tmp`),
         "recent live-PID temp must be kept",
