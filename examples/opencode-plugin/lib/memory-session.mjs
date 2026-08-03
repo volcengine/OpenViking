@@ -51,7 +51,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   function startPeriodicFlush() {
     if (!config.autoCapture) return
     if (shuttingDown) return
-    const intervalMs = config.periodicFlushIntervalMs
+    const intervalMs = Number(config.periodicFlushIntervalMs) > 0 ? config.periodicFlushIntervalMs : 60000
     if (flushTimer) clearInterval(flushTimer)
     flushTimer = setInterval(() => {
       // A tick may have been queued just before flushAll's clearInterval; skip it
