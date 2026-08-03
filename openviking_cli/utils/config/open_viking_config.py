@@ -247,6 +247,15 @@ class OpenVikingConfig(BaseModel):
         description="External Connector service configuration for data import",
     )
 
+    enable_watch_scheduler: bool = Field(
+        default=True,
+        description=(
+            "Whether to start the background WatchScheduler that periodically re-processes "
+            "watched resources. Disable on read-only replicas that share a writer's data "
+            "so only the writer runs the watch/refresh background loop."
+        ),
+    )
+
     auto_generate_l0: bool = Field(
         default=True, description="Automatically generate L0 (abstract) if not provided"
     )
