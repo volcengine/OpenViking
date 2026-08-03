@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 from dataclasses import dataclass
@@ -23,6 +24,10 @@ class ClientConfig:
     extra_headers: dict[str, str]
     gateway_token: Optional[str]
     upload_mode: Optional[str]
+    # LDAP authentication (None when auth mode is not LDAP)
+    auth_mode: Optional[str]
+    ldap_username: Optional[str]
+    ldap_password: Optional[str]
 
 
 @dataclass(frozen=True)
@@ -39,6 +44,10 @@ class OVCLIConfig:
     gateway_token: Optional[str]
     upload_mode: Optional[str]
     output: Optional[str]
+    # LDAP authentication
+    auth_mode: Optional[str]
+    ldap_username: Optional[str]
+    ldap_password: Optional[str]
 
 
 def _resolve_ovcli_config_path() -> Optional[Path]:
@@ -118,20 +127,17 @@ def load_ovcli_config(config_path: Optional[str] = None) -> Optional[OVCLIConfig
         data = _require_mapping(raw, path="ovcli")
 
         allowed_keys = {
-            "url",
-            "api_key",
-            "account",
-            "user",
-            "actor_peer_id",
-            "agent_id",
-            "timeout",
-            "profile",
-            "upload",
-            "extra_headers",
-            "extra_header",
-            "output",
-            "root_api_key",
+            "url", "api_key", "root_api_key", "account", "user",
+            "actor_peer_id", "agent_id",
+            "timeout", "profile", "output",
+            "upload", "extra_headers", "extra_header",
             "gateway_token",
+            # Authentication
+            "auth_mode",
+            # LDAP
+            "ldap_username", "ldap_password",
+            # OIDC
+            "oidc_token",
         }
         unknown_keys = sorted(set(data) - allowed_keys)
         if unknown_keys:
@@ -148,9 +154,7 @@ def load_ovcli_config(config_path: Optional[str] = None) -> Optional[OVCLIConfig
             unknown_upload_keys = sorted(set(upload) - allowed_upload_keys)
             if unknown_upload_keys:
                 raise _unknown_field_error(
-                    "ovcli.upload",
-                    unknown_upload_keys[0],
-                    allowed_upload_keys,
+                    "ovcli.upload", unknown_upload_keys[0], allowed_upload_keys
                 )
             upload_mode = _optional_string(upload.get("mode"), path="ovcli.upload.mode")
 
@@ -161,6 +165,16 @@ def load_ovcli_config(config_path: Optional[str] = None) -> Optional[OVCLIConfig
 
         timeout = _optional_float(data.get("timeout"), path="ovcli.timeout")
         profile = _optional_bool(data.get("profile"), path="ovcli.profile")
+        
+        # Parse LDAP config
+        auth_mode = _optional_string(data.get("auth_mode"), path="ovcli.auth_mode")
+        ldap_username = _optional_string(
+            data.get("ldap_username"), path="ovcli.ldap_username"
+        )
+        ldap_password = _optional_string(
+            data.get("ldap_password"), path="ovcli.ldap_password"
+        )
+        
         return OVCLIConfig(
             url=_optional_string(data.get("url"), path="ovcli.url"),
             api_key=_optional_string(data.get("api_key"), path="ovcli.api_key"),
@@ -174,9 +188,22 @@ def load_ovcli_config(config_path: Optional[str] = None) -> Optional[OVCLIConfig
             gateway_token=_optional_string(data.get("gateway_token"), path="ovcli.gateway_token"),
             upload_mode=upload_mode,
             output=_optional_string(data.get("output"), path="ovcli.output"),
+            auth_mode=auth_mode,
+            ldap_username=ldap_username,
+            ldap_password=ldap_password,
         )
     except ValueError as exc:
         raise ValueError(f"Invalid CLI config in {path}: {exc}") from exc
+
+
+def _resolve_env_or_config(env_var: str, explicit: Optional[str], config_value: Optional[str]) -> Optional[str]:
+    """Helper to resolve value: explicit arg > env var > config file."""
+    if explicit is not None:
+        return explicit
+    env_value = os.getenv(env_var)
+    if env_value is not None:
+        return env_value
+    return config_value
 
 
 def resolve_client_config(
@@ -190,8 +217,26 @@ def resolve_client_config(
     extra_headers: Optional[dict[str, str]] = None,
     profile_enabled: Optional[bool] = None,
     upload_mode: Optional[str] = None,
+    # LDAP parameters
+    auth_mode: Optional[str] = None,
+    ldap_username: Optional[str] = None,
+    ldap_password: Optional[str] = None,
 ) -> ClientConfig:
     cli_config = load_ovcli_config()
+
+    # Resolve LDAP config (explicit arg > env var > config file)
+    resolved_auth_mode = _resolve_env_or_config(
+        "OPENVIKING_AUTH_MODE", auth_mode,
+        cli_config.auth_mode if cli_config else None
+    )
+    resolved_ldap_username = _resolve_env_or_config(
+        "OPENVIKING_USERNAME", ldap_username,
+        cli_config.ldap_username if cli_config else None
+    )
+    resolved_ldap_password = _resolve_env_or_config(
+        "OPENVIKING_PASSWORD", ldap_password,
+        cli_config.ldap_password if cli_config else None
+    )
 
     resolved_url = url or os.getenv("OPENVIKING_URL") or (cli_config.url if cli_config else None)
     resolved_api_key = (
@@ -258,4 +303,14 @@ def resolve_client_config(
         extra_headers=resolved_extra_headers,
         gateway_token=resolved_gateway_token,
         upload_mode=resolved_upload_mode,
+        auth_mode=resolved_auth_mode,
+        ldap_username=resolved_ldap_username,
+        ldap_password=resolved_ldap_password,
     )
+
+
+def get_basic_auth_header(username: str, password: str) -> str:
+    """生成 HTTP Basic Auth header 值."""
+    credentials = f"{username}:{password}".encode("utf-8")
+    encoded = base64.b64encode(credentials).decode("ascii")
+    return f"Basic {encoded}"

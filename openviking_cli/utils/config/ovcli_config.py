@@ -39,6 +39,12 @@ class OVCLIConfig(BaseModel):
     extra_headers: Optional[Dict[str, str]] = None
     gateway_token: Optional[str] = None
 
+    # Authentication mode: "api_key", "ldap", "oidc"
+    auth_mode: Optional[str] = None
+    # LDAP credentials
+    ldap_username: Optional[str] = None
+    ldap_password: Optional[str] = None
+
     model_config = {"extra": "forbid"}
 
     @model_validator(mode="before")
@@ -46,7 +52,6 @@ class OVCLIConfig(BaseModel):
     def handle_extra_headers_aliases(cls, data: Any) -> Any:
         if isinstance(data, dict):
             data = dict(data)
-            # 支持 extra_header 作为 extra_headers 的别名
             extra_header = data.pop("extra_header", None)
             if extra_header is not None and "extra_headers" not in data:
                 data["extra_headers"] = extra_header
@@ -56,6 +61,19 @@ class OVCLIConfig(BaseModel):
     def reject_mixed_actor_and_agent_identity(self) -> "OVCLIConfig":
         if self.actor_peer_id is not None and self.agent_id is not None:
             raise ValueError("actor_peer_id cannot be used with agent_id")
+
+        # auth_mode must be one of the supported types
+        valid_auth_modes = {None, "api_key", "ldap", "oidc"}
+        if self.auth_mode not in valid_auth_modes:
+            raise ValueError(
+                f"auth_mode must be one of: "
+                f"{', '.join(str(m) for m in valid_auth_modes if m is not None)}"
+            )
+
+        # In ldap mode, username is required (user field may serve as an alias)
+        if self.auth_mode == "ldap" and not self.ldap_username and not self.user:
+            pass
+
         return self
 
 

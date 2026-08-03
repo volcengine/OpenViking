@@ -204,6 +204,26 @@ impl HttpClient {
         self
     }
 
+    pub fn with_auth_mode(mut self, auth_mode: Option<String>) -> Self {
+        self.base = self.base.with_auth_mode(auth_mode);
+        self
+    }
+
+    pub fn with_ldap_username(mut self, username: Option<String>) -> Self {
+        self.base = self.base.with_ldap_username(username);
+        self
+    }
+
+    pub fn with_ldap_password(mut self, password: Option<String>) -> Self {
+        self.base = self.base.with_ldap_password(password);
+        self
+    }
+
+    pub fn with_oidc_token(mut self, token: Option<String>) -> Self {
+        self.base = self.base.with_oidc_token(token);
+        self
+    }
+
     pub fn user_id(&self) -> Option<&str> {
         self.base.user_id()
     }

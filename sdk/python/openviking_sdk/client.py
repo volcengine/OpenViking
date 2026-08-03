@@ -351,6 +351,10 @@ class AsyncHTTPClient:
         profile_enabled: Optional[bool] = None,
         upload_mode: Optional[str] = None,
         event_hooks: Optional[Dict[str, List[Callable[..., Any]]]] = None,
+        # LDAP parameters
+        auth_mode: Optional[str] = None,
+        ldap_username: Optional[str] = None,
+        ldap_password: Optional[str] = None,
     ):
         if actor_peer_id and agent_id:
             raise ValueError("actor_peer_id cannot be used with agent_id")
@@ -366,6 +370,9 @@ class AsyncHTTPClient:
             extra_headers=extra_headers,
             profile_enabled=profile_enabled,
             upload_mode=upload_mode,
+            auth_mode=auth_mode,
+            ldap_username=ldap_username,
+            ldap_password=ldap_password,
         )
         self._url = config.url
         self._api_key = config.api_key
@@ -377,6 +384,9 @@ class AsyncHTTPClient:
         self._extra_headers = config.extra_headers
         self._profile_enabled = config.profile_enabled
         self._upload_mode = config.upload_mode
+        self._auth_mode = config.auth_mode
+        self._ldap_username = config.ldap_username
+        self._ldap_password = config.ldap_password
         self._event_hooks = {
             event: list(hooks) for event, hooks in (event_hooks or {}).items()
         }
@@ -394,6 +404,12 @@ class AsyncHTTPClient:
             headers["X-OpenViking-User"] = self._user_id
         if self._actor_peer_id:
             headers["X-OpenViking-Actor-Peer"] = self._actor_peer_id
+        
+        # LDAP Basic Auth 支持
+        if self._auth_mode == "ldap" and self._ldap_username and self._ldap_password:
+            from .config import get_basic_auth_header
+            headers["Authorization"] = get_basic_auth_header(self._ldap_username, self._ldap_password)
+        
         headers.update(self._extra_headers)
         self._http = httpx.AsyncClient(
             base_url=self._url,

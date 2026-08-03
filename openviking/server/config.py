@@ -8,6 +8,8 @@ from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 # Import auth plugin registry for config validation
+from openviking.server.auth.ldap_config import LDAPConfig
+from openviking.server.auth.oidc_config import OIDCConfig
 from openviking.server.auth.registry import get_registry
 from openviking.server.identity import AuthMode
 from openviking_cli.utils import get_logger
@@ -270,6 +272,9 @@ class ServerConfig(BaseModel):
     workers: int = 1
     auth_mode: Optional[str] = None  # If None, auto-detect based on root_api_key
     root_api_key: Optional[str] = None
+    # OIDC/LDAP authentication configuration
+    oidc: Optional[OIDCConfig] = None
+    ldap: Optional[LDAPConfig] = None
     profile_enabled: bool = False
     cors_origins: List[str] = Field(default_factory=lambda: ["*"])
     with_bot: bool = False  # Enable Bot API proxy to Vikingbot
