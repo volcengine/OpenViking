@@ -292,14 +292,29 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     const state = sessions.get(opencodeSessionId)
     if (!state) return false
 
-    const added = await flushPendingMessages(opencodeSessionId, state)
-    if (commit && config.autoCapture) {
-      await commitOvSession(state.ovSessionId, { force: true, reason })
-    } else if (added > 0) {
-      await maybeCommitByThreshold(state)
+    // Serialize overlapping flushes on the same session. flushPendingMessages
+    // only marks messages captured=true after the network send resolves, so two
+    // concurrent flushes (periodic timer + session.idle, or a slow flush the
+    // timer did not await) would read the same captured=false batch and send it
+    // twice. Chaining on state.flushing forces them to run one-after-another,
+    // so each subsequent flush re-reads the post-send captured state.
+    const run = async () => {
+      const added = await flushPendingMessages(opencodeSessionId, state)
+      if (commit && config.autoCapture) {
+        await commitOvSession(state.ovSessionId, { force: true, reason })
+      } else if (added > 0) {
+        await maybeCommitByThreshold(state)
+      }
+      await saveState()
+      return true
     }
-    await saveState()
-    return true
+
+    const previous = state.flushing || Promise.resolve()
+    const current = previous.then(run, run)
+    state.flushing = current.finally(() => {
+      if (state.flushing === current) state.flushing = undefined
+    })
+    return current
   }
 
   async function commitSession(sessionId, opencodeSessionId, abortSignal) {
