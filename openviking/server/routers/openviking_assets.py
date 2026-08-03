@@ -47,6 +47,7 @@ class PreflightOpenVikingAssetRequest(BaseModel):
     connector: Literal["git"]
     repo_url: str = Field(min_length=1, max_length=8192)
     branch: str | None = Field(default=None, min_length=1, max_length=1024)
+    commit: str | None = Field(default=None, min_length=1, max_length=40)
     auth_config: GitAuthConfig | None = None
 
 
@@ -78,6 +79,7 @@ async def preflight_asset(
         asset_name=request.name,
         repo_url=request.repo_url,
         branch=request.branch,
+        commit=request.commit,
         username=auth.username if auth else None,
         token=auth.token.get_secret_value() if auth and auth.token else None,
     )

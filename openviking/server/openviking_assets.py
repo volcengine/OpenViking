@@ -27,6 +27,7 @@ from openviking_cli.exceptions import (
 PROTOCOL = "openviking-assets/1"
 GIT_PREFLIGHT_TIMEOUT_SECONDS = 15.0
 _ASSET_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_FULL_COMMIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 _REMOTE_HELPER_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*::")
 _NETWORK_FAILURE_PATTERNS = (
     "could not resolve host",
@@ -85,6 +86,7 @@ class _Manifest(_StrictModel):
 class _GitParams(_StrictModel):
     repo_url: str
     branch: str | None = None
+    commit: str | None = None
 
 
 class ResolvedAsset(_StrictModel):
@@ -94,6 +96,7 @@ class ResolvedAsset(_StrictModel):
     connector: str
     repo_url: str
     branch: str | None = None
+    commit: str | None = None
     auth_ref: str | None = None
     watch_interval: float
     locator: str
@@ -201,6 +204,17 @@ def _asset_id(connector: str, locator: str, git_ref: str) -> str:
     return hashlib.sha1(identity).hexdigest()[:12]  # noqa: S324 - stable identity, not security
 
 
+def _normalize_commit_sha(commit: str | None, where: str) -> str | None:
+    if commit is None:
+        return None
+    normalized = commit.strip()
+    if not normalized:
+        raise InvalidArgumentError(f"{where}: commit must be a non-empty string when set")
+    if not _FULL_COMMIT_SHA_RE.fullmatch(normalized):
+        raise InvalidArgumentError(f"{where}: commit must be a full 40-character hexadecimal SHA")
+    return normalized.lower()
+
+
 def _append_git_process_config(env: dict[str, str], key: str, value: str) -> None:
     """Append one process-local Git config entry without putting secrets in argv."""
 
@@ -218,6 +232,7 @@ async def preflight_git_repository(
     asset_name: str,
     repo_url: str,
     branch: str | None = None,
+    commit: str | None = None,
     username: str | None = None,
     token: str | None = None,
     timeout: float = GIT_PREFLIGHT_TIMEOUT_SECONDS,
@@ -234,6 +249,12 @@ async def preflight_git_repository(
         raise InvalidArgumentError(
             f"asset '{asset_name}': branch must be a non-empty string when set"
         )
+    normalized_commit = _normalize_commit_sha(commit, f"asset '{asset_name}'")
+    if normalized_branch and normalized_commit:
+        raise InvalidArgumentError(
+            f"asset '{asset_name}': branch and commit are mutually exclusive"
+        )
+    git_ref = normalized_commit or normalized_branch
 
     normalized_token = token or ""
     normalized_username = (username or ("oauth2" if normalized_token else "")).strip()
@@ -254,9 +275,7 @@ async def preflight_git_repository(
         # An explicit auth_ref must be authoritative: disable credential-helper
         # fallback and pass HTTP Basic auth through process-local config.
         _append_git_process_config(env, "credential.helper", "")
-        encoded = base64.b64encode(
-            f"{normalized_username}:{normalized_token}".encode()
-        ).decode()
+        encoded = base64.b64encode(f"{normalized_username}:{normalized_token}".encode()).decode()
         _append_git_process_config(env, "http.extraHeader", f"Authorization: Basic {encoded}")
     elif normalized_username:
         _append_git_process_config(env, "credential.username", normalized_username)
@@ -270,6 +289,10 @@ async def preflight_git_repository(
             ]
         )
     else:
+        # ls-remote cannot prove that an arbitrary historical commit is
+        # reachable. For a pinned commit, preflight therefore verifies repository
+        # access via HEAD; the import pipeline validates the exact SHA when it
+        # fetches and checks out the commit.
         command.append("HEAD")
 
     try:
@@ -295,7 +318,7 @@ async def preflight_git_repository(
             "name": asset_name,
             "connector": "git",
             "locator": locator,
-            "git_ref": normalized_branch,
+            "git_ref": git_ref,
             "accessible": True,
         }
 
@@ -359,9 +382,7 @@ def resolve_openviking_assets(
                 f"manifest '{manifest_label}': 'protocol' is required when the manifest "
                 f"defines 'catalog' (expected '{PROTOCOL}')"
             )
-        catalog = _Catalog(
-            protocol=PROTOCOL, defaults=manifest.defaults, catalog=manifest.catalog
-        )
+        catalog = _Catalog(protocol=PROTOCOL, defaults=manifest.defaults, catalog=manifest.catalog)
         catalog_label = manifest_label
     else:
         if manifest.defaults is not None:
@@ -462,8 +483,13 @@ def resolve_openviking_assets(
             raise InvalidArgumentError(
                 f"{where}: params.branch must be a non-empty string when set"
             )
+        commit = _normalize_commit_sha(params.commit, f"{where}: params")
+        if branch and commit:
+            raise InvalidArgumentError(
+                f"{where}: params.branch and params.commit are mutually exclusive"
+            )
         locator = normalize_repo_url(repo_url)
-        git_ref = branch or ""
+        git_ref = commit or branch or ""
         asset_id = _asset_id(asset.connector, locator, git_ref)
         if asset_id in identity_names:
             other = identity_names[asset_id]
@@ -479,6 +505,7 @@ def resolve_openviking_assets(
                 connector=asset.connector,
                 repo_url=repo_url,
                 branch=branch,
+                commit=commit,
                 auth_ref=asset.auth_ref or default_auth_ref,
                 watch_interval=(
                     asset.watch_interval if asset.watch_interval is not None else default_watch
