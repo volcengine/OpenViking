@@ -27,6 +27,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   const statePath = path.join(pluginRoot, "openviking-session-state.json")
   const oldSessionMapPath = path.join(pluginRoot, "openviking-session-map.json")
   let saveTimer = null
+  let flushTimer = null
 
   async function init() {
     if (config.autoCapture) await migrateLegacySessionMap()
@@ -37,6 +38,35 @@ export function createMemorySessionManager({ config, pluginRoot }) {
         (endpoint, init = {}, options = {}) => fetchJSON(config, endpoint, init, options),
         (stage, data) => log("DEBUG", "pending", stage, data),
       )
+    }
+    startPeriodicFlush()
+  }
+
+  function startPeriodicFlush() {
+    if (!config.autoCapture) return
+    const intervalMs = Math.max(10000, Number(config.periodicFlushIntervalMs) || 60000)
+    if (flushTimer) clearInterval(flushTimer)
+    flushTimer = setInterval(() => {
+      runPeriodicFlush().catch((error) => {
+        log("ERROR", "session", "Periodic flush failed", { error: error?.message })
+      })
+    }, intervalMs)
+    if (typeof flushTimer.unref === "function") flushTimer.unref()
+    log("INFO", "session", "Periodic flush timer started", { intervalMs })
+  }
+
+  async function runPeriodicFlush() {
+    for (const [opencodeSessionId, state] of sessions.entries()) {
+      let hasPending = false
+      for (const message of state.messages.values()) {
+        if (!message.captured) {
+          hasPending = true
+          break
+        }
+      }
+      if (hasPending) {
+        await flushSession(opencodeSessionId, { commit: false, reason: "periodic" })
+      }
     }
   }
 
@@ -69,7 +99,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       for (const [opencodeSessionId, state] of sessions.entries()) {
         persisted[opencodeSessionId] = serializeSessionState(state)
       }
-      const tempPath = `${statePath}.tmp`
+      const tempPath = `${statePath}.${process.pid}.tmp`
       await fs.promises.writeFile(tempPath, JSON.stringify({ version: 2, sessions: persisted, lastSaved: Date.now() }, null, 2), "utf8")
       await fs.promises.rename(tempPath, statePath)
       log("DEBUG", "persistence", "Session state saved", { count: sessions.size })
@@ -246,6 +276,10 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     if (saveTimer) {
       clearTimeout(saveTimer)
       saveTimer = null
+    }
+    if (flushTimer) {
+      clearInterval(flushTimer)
+      flushTimer = null
     }
     for (const sessionId of sessions.keys()) {
       await flushSession(sessionId, { commit, reason: "flushAll" })
