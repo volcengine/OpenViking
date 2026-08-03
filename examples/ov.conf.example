@@ -113,6 +113,13 @@
         "max_retries": 2,
         "provider": "volcengine",
         "thinking": false,
+        "media": {
+            "enabled": false,
+            "file_processing_timeout": 1800,
+            "file_poll_interval": 3,
+            "max_concurrent": 2,
+            "video_fps": 1.0,
+        },
     },
     "vlm_codex_example": {
         "_comment": "For Codex OAuth via subscription. Complete sign-in from `openviking-server init`. OV stores tokens in ~/.openviking/codex_auth.json and can bootstrap from an existing Codex CLI auth file if needed.",

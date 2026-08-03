@@ -579,7 +579,14 @@ provider，并设置 `storage.vectordb.sparse_weight > 0`。自托管模型的�
     "api_key": "your-api-key",
     "model": "doubao-seed-2-0-lite-260428",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-    "max_retries": 3
+    "max_retries": 3,
+    "media": {
+      "enabled": true,
+      "max_concurrent": 2,
+      "file_processing_timeout": 1800,
+      "file_poll_interval": 3,
+      "video_fps": 1.0
+    }
   }
 }
 ```
@@ -603,6 +610,12 @@ provider，并设置 `storage.vectordb.sparse_weight > 0`。自托管模型的�
 | `extra_headers` | object | 兼容 HTTP provider 的自定义请求头。`kimi` 默认已注入所需订阅请求头，也支持在这里覆盖或扩展 |
 | `extra_request_body` | object | 传给 OpenAI 兼容 completion 请求的额外 JSON body 字段，可用于 Ollama `{"think": false}` 等 provider 专有参数 |
 | `stream` | bool | 启用流式模式（OpenAI 兼容 provider 可用，默认：`false`） |
+| `media` | object | 音视频运行参数；音视频理解复用该 VLM 的 provider、模型、凭据、client、超时、重试、请求头、输出 token 限制、故障切换和 token 统计 |
+| `media.enabled` | bool | 启用音视频理解（默认：`false`） |
+| `media.max_concurrent` | int | 音视频调用最大并发数（默认：`2`） |
+| `media.file_processing_timeout` | float | Provider 侧媒体预处理最长等待秒数（默认：`1800`） |
+| `media.file_poll_interval` | float | Provider 侧媒体预处理轮询间隔秒数（默认：`3`） |
+| `media.video_fps` | float | Provider 支持时使用的视频采样帧率，范围 `0.2` 到 `5.0`（默认：`1.0`） |
 
 `vlm.max_retries` 仅对瞬时错误生效，例如 `429`、`5xx`、超时和连接错误；认证、鉴权、欠费等永久错误不会自动重试。退避策略为指数退避，初始延迟 `0.5s`，上限 `8s`，并带随机抖动。
 
@@ -695,6 +708,52 @@ LiteLLM 的 Bedrock bearer-token API-key 鉴权，请设置 `forward_api_key=tru
 ```
 
 > **注意**: OpenAI SDK 需要 `stream=true` 才能正确解析 SSE 响应。使用强制返回 SSE 格式的 provider 时，必须将此选项设置为 `true`。
+
+**音视频理解**
+
+音频和视频理解是当前 VLM 的可选能力，复用相同的 provider、模型、凭据、client、请求超时、重试、请求头、最大输出 token、故障切换链路和 token 统计。通过嵌套的 `vlm.media` 参数启用，不再单独配置媒体模型。
+
+```json
+{
+  "vlm": {
+    "provider": "volcengine",
+    "api_key": "${VOLCENGINE_API_KEY}",
+    "model": "${VOLCENGINE_MODEL}",
+    "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+    "timeout": 1200,
+    "max_retries": 3,
+    "max_tokens": 4096,
+    "media": {
+      "enabled": true,
+      "file_processing_timeout": 1800,
+      "file_poll_interval": 3,
+      "max_concurrent": 2,
+      "video_fps": 1.0
+    }
+  }
+}
+```
+
+VLM 的 `model` 填写对应的方舟模型 endpoint ID。`video_fps` 仅用于视频，控制发送给方舟的视频采样帧率。
+
+推荐使用 `doubao-seed-2-0-lite-260428` 或 `doubao-seed-2-0-mini-260428` 作为音视频理解模型。它们是可直接采用的推荐示例，并非完整的支持模型列表；方舟会持续更新模型及其输入能力。视频理解的可选模型请参考方舟官方[视频输入能力列表](https://console.volcengine.com/ark/region:cn-beijing/docs/82379/1330310?lang=zh#ff5ef604)，音频理解的可选模型请参考方舟官方[音频输入能力列表](https://console.volcengine.com/ark/region:cn-beijing/docs/82379/1330310?lang=zh#9619c0ba)。如果 `model` 填写的是 `ep-*` 推理接入点 ID，请确认该接入点背后的基础模型支持对应的媒体输入。OpenViking 不会在配置加载时校验模型的音频或视频能力。
+
+**可接入格式与可理解格式**
+
+| 类型 | 现有 Parser 可接入并保存 | 本版本可由方舟理解 |
+|------|--------------------------|--------------------|
+| 音频 | MP3、WAV、OGG、FLAC、AAC、M4A、OPUS、AC3 | MP3、WAV、AAC、M4A |
+| 视频 | MP4、AVI、MOV、MKV、WEBM、FLV、WMV、TS | MP4、AVI、MOV |
+
+不在“可理解”列中的格式继续沿用现有 Parser 和存储行为；OpenViking 不会对这些文件转码，也不会把它们发送给理解模型。当文件被识别为音频或视频叶子节点时，空媒体摘要会使用文件名入库。
+
+对于支持的文件，OpenViking 将媒体上传到方舟 Files API，且不显式指定 `expire_at`，因此文件保留时间遵循方舟的默认策略。文件处理完成后，OpenViking 通过禁用响应存储的 Responses API 请求引用其 `file_id`，最后在较短的清理超时内尝试删除方舟文件。远端删除属于 best-effort；如果删除失败或超时，不会覆盖已经成功的理解结果，文件将继续遵循方舟的默认保留策略。本地临时文件独立清理，即使远端清理失败或请求被取消也会删除。
+
+- 目录中只有一个音频或视频文件且理解成功时，该摘要直接成为目录 L1，并通过现有语义链路派生 L0，不再调用通用 VLM 做第二次总结。
+- 媒体位于混合目录时，其摘要仍参与现有通用 VLM 聚合。
+- 音视频理解未启用、理解格式不支持或模型最终失败时，媒体摘要为空；目录 L0/L1 生成保持原有通用行为，被识别为音频或视频的叶子节点则使用文件名作为 DETAIL 向量和 BM25 内容。Provider 错误和媒体理解状态文字不会写入媒体摘要或叶子索引。
+
+媒体处理会把文件内容发送给所配置的外部 provider。禁用响应存储和 best-effort 删除可以降低非预期留存风险，但不能替代 provider 自身的隐私与留存控制；上传文件未显式指定过期时间，其保留周期由方舟的默认策略决定。方舟 Files 的存储/处理以及 Responses 的模型 token 可能产生费用；启用前请确认 provider 的隐私、留存和计费条款。详见火山方舟官方[音频理解文档](https://docs.volcengine.com/docs/82379/2377589?lang=zh)和[视频理解文档](https://docs.volcengine.com/docs/82379/1895586?lang=zh)。
 
 ### query_planner
 

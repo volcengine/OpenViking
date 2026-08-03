@@ -363,7 +363,7 @@ async def read(uris: str | list[str]) -> str:
     async def _read_one(uri: str) -> str:
         async with semaphore:
             try:
-                body = await service.fs.read(uri, ctx=ctx)
+                body = await service.fs.read_visible(uri, ctx=ctx)
                 if isinstance(body, str) and body.strip():
                     return body
             except Exception:

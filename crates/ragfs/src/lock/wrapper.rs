@@ -9,6 +9,7 @@
 
 use std::sync::Arc;
 use async_trait::async_trait;
+use tracing::debug;
 
 use crate::core::filesystem::FileSystem;
 use crate::core::internal_names::is_hidden_runtime_lock_name;
@@ -57,8 +58,9 @@ impl PathLockWrappedFS {
         requests: &[PathLockRequest],
     ) -> crate::core::Result<bool> {
         match self.manager.resolve_auto_pathlock_action(requests).await {
-            Ok(AutoPathLockAction::Disabled | AutoPathLockAction::Covered(_)) => Ok(true),
-            Ok(AutoPathLockAction::Acquire) => Ok(false),
+            Ok(AutoPathLockAction::Disabled) => { debug!(requests = ?requests, "pathlock wrapper skipped auto-lock because context disabled it"); Ok(true) }
+            Ok(AutoPathLockAction::Covered(lease)) => { debug!(lease_ref = %lease.lease.lease_ref, requests = ?requests, "pathlock wrapper skipped auto-lock because active lease already covers request"); Ok(true) }
+            Ok(AutoPathLockAction::Acquire) => { debug!(requests = ?requests, "pathlock wrapper will auto-acquire lease for request"); Ok(false) }
             Err(error) => Err(crate::core::Error::internal(format!(
                 "lock lease error: {error}"
             ))),

@@ -200,3 +200,27 @@ class EmbeddingTaskTracker:
         if record_to_finalize is not None:
             await self._run_on_complete(semantic_msg_id, record_to_finalize)
         return remaining
+
+    async def abort(self, semantic_msg_id: str) -> bool:
+        """Retire one tracking attempt without running its completion callback.
+
+        Late decrements for an aborted attempt are ignored because its record no
+        longer exists. Callers that may retry a logical semantic message must
+        register each attempt under a unique tracking ID.
+
+        Returns:
+            True when an active record was removed, otherwise False.
+        """
+        with self._lock:
+            record = self._tasks.pop(semantic_msg_id, None)
+
+        if record is None:
+            return False
+
+        logger.warning(
+            "Aborted embedding tracker for SemanticMsg %s with %s/%s tasks remaining",
+            semantic_msg_id,
+            record.remaining,
+            record.total,
+        )
+        return True

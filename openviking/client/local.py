@@ -633,7 +633,12 @@ class LocalClient(BaseClient):
             offset: Starting line number (0-indexed). Default 0.
             limit: Number of lines to read. -1 means read to end. Default -1.
         """
-        return await self._service.fs.read(uri, ctx=self._ctx, offset=offset, limit=limit)
+        return await self._service.fs.read_visible(
+            uri,
+            ctx=self._ctx,
+            offset=offset,
+            limit=limit,
+        )
 
     async def read_raw(self, uri: str, offset: int = 0, limit: int = -1) -> str:
         """Read raw file content, including hidden MEMORY_FIELDS metadata."""

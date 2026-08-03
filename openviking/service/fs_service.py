@@ -8,7 +8,7 @@ Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, 
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from openviking.core.namespace import context_type_for_uri
+from openviking.core.namespace import classify_uri, context_type_for_uri
 from openviking.core.uri_validation import validate_optional_viking_uri, validate_viking_uri
 from openviking.privacy import (
     UserPrivacyConfigService,
@@ -18,6 +18,7 @@ from openviking.privacy import (
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
 from openviking.session.memory.memory_updater import MemoryUpdater
+from openviking.session.memory.utils.content_visibility import visible_content
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
@@ -30,6 +31,21 @@ from openviking_cli.exceptions import DeadlineExceededError, NotInitializedError
 from openviking_cli.utils import VikingURI, get_logger
 
 logger = get_logger(__name__)
+
+
+def _may_include_memory_content(uri: str) -> bool:
+    """Return whether a public subtree read can contain memory files."""
+    classification = classify_uri(uri)
+    if classification.is_memory:
+        return True
+    if classification.content_index is not None:
+        return False
+    return not classification.parts or classification.scope in {"user", "agent"}
+
+
+def _visible_grep_content(content: str, uri: str) -> str:
+    return visible_content(content, uri=uri)
+
 
 if TYPE_CHECKING:
     from openviking.resource.watch_manager import WatchManager
@@ -413,9 +429,7 @@ class FSService:
             rollback_resource=lambda: viking_fs.mv(to_uri, from_uri, ctx=ctx),
         )
 
-    async def _sync_watch_after_rm(
-        self, uri: str, *, account_id: str, context_type: str
-    ) -> None:
+    async def _sync_watch_after_rm(self, uri: str, *, account_id: str, context_type: str) -> None:
         if context_type != "resource":
             return
         if is_watch_task_control_uri(uri):
@@ -493,6 +507,20 @@ class FSService:
         sliced = lines[offset:] if limit == -1 else lines[offset : offset + limit]
         return "".join(sliced)
 
+    async def read_visible(
+        self,
+        uri: str,
+        ctx: RequestContext,
+        offset: int = 0,
+        limit: int = -1,
+    ) -> str:
+        """Read public content, hiding reserved metadata from memory files."""
+        uri = validate_viking_uri(uri)
+        if not classify_uri(uri).is_memory:
+            return await self.read(uri, ctx=ctx, offset=offset, limit=limit)
+        content = await self.read(uri, ctx=ctx)
+        return visible_content(content, uri=uri, offset=offset, limit=limit)
+
     async def abstract(self, uri: str, ctx: RequestContext) -> str:
         """Read L0 abstract (.abstract.md)."""
         viking_fs = self._ensure_initialized()
@@ -519,15 +547,16 @@ class FSService:
         viking_fs = self._ensure_initialized()
         uri = validate_viking_uri(uri)
         exclude_uri = validate_optional_viking_uri(exclude_uri, field_name="exclude_uri") or None
-        return await viking_fs.grep(
-            uri,
-            pattern,
-            exclude_uri=exclude_uri,
-            case_insensitive=case_insensitive,
-            node_limit=node_limit,
-            level_limit=level_limit,
-            ctx=ctx,
-        )
+        kwargs = {
+            "exclude_uri": exclude_uri,
+            "case_insensitive": case_insensitive,
+            "node_limit": node_limit,
+            "level_limit": level_limit,
+            "ctx": ctx,
+        }
+        if _may_include_memory_content(uri):
+            kwargs["content_transform"] = _visible_grep_content
+        return await viking_fs.grep(uri, pattern, **kwargs)
 
     async def glob(
         self,
@@ -622,9 +651,7 @@ class FSService:
     ) -> Dict[str, Any]:
         """Forward to VikingFS.commit. See viking_fs.commit for semantics."""
         viking_fs = self._ensure_initialized()
-        validated = (
-            [validate_viking_uri(p) for p in paths] if paths is not None else None
-        )
+        validated = [validate_viking_uri(p) for p in paths] if paths is not None else None
         return await viking_fs.commit(
             message=message,
             paths=validated,
@@ -721,9 +748,7 @@ class FSService:
         viking_fs = self._ensure_initialized()
         return await viking_fs.get_gitignore(ctx=ctx)
 
-    async def set_gitignore(
-        self, *, content: str, ctx: RequestContext
-    ) -> None:
+    async def set_gitignore(self, *, content: str, ctx: RequestContext) -> None:
         """Forward to VikingFS.set_gitignore. Writes the account .ovgitignore
         control file (validates the size limit)."""
         viking_fs = self._ensure_initialized()

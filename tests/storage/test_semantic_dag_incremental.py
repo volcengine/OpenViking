@@ -11,11 +11,20 @@ from openviking.storage.queuefs.semantic_dag import SemanticDagExecutor
 from openviking_cli.session.user_id import UserIdentifier
 
 
+class _FakeAgfs:
+    async def pathlock_acquire_exact_batch(self, _paths):
+        return {"lease_ref": "test"}
+
+    async def pathlock_release(self, _lease):
+        return None
+
+
 class _FakeVikingFS:
     def __init__(self, tree, file_contents):
         self._tree = {self._norm(k): v for k, v in tree.items()}
         self._file_contents = {self._norm(k): v for k, v in file_contents.items()}
         self.writes = []
+        self._async_agfs = _FakeAgfs()
 
     def _norm(self, path):
         if "://" not in path:
@@ -34,7 +43,7 @@ class _FakeVikingFS:
     async def read_file(self, path, ctx=None):
         return self._file_contents.get(self._norm(path), "")
 
-    async def write_file(self, path, content, ctx=None):
+    async def write_file(self, path, content, ctx=None, lease_ref=None):
         norm_path = self._norm(path)
         self._file_contents[norm_path] = content
         self.writes.append((norm_path, content))

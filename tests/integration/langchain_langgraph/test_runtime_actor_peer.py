@@ -8,20 +8,14 @@ import pytest
 pytest.importorskip("langchain")
 pytest.importorskip("langchain_core")
 pytest.importorskip("langgraph")
+pytest.importorskip("langchain_openviking")
 
 from langchain.agents import create_agent
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, HumanMessage
+from openviking_sdk import get_actor_peer_id, use_actor_peer
 
-from openviking_cli._sdk_import import import_openviking_sdk
-
-# Load the workspace SDK before the integration package so this cross-package
-# feature is tested even when an older released SDK is installed.
-_openviking_sdk = import_openviking_sdk()
-get_actor_peer_id = _openviking_sdk.get_actor_peer_id
-use_actor_peer = _openviking_sdk.use_actor_peer
-
-_langchain_integration = import_module("openviking.integrations.langchain")
+_langchain_integration = import_module("langchain_openviking")
 InMemoryOpenVikingClient = _langchain_integration.InMemoryOpenVikingClient
 OpenVikingContextMiddleware = _langchain_integration.OpenVikingContextMiddleware
 

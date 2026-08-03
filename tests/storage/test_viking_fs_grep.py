@@ -274,6 +274,45 @@ async def test_grep_preserves_dfs_order_and_node_limit(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_grep_applies_content_transform_before_matching(monkeypatch):
+    fs = VikingFS(agfs=_DummyAgfs())
+
+    async def fake_stat(uri, ctx=None, skip_count=False):
+        return {"isDir": True}
+
+    async def fake_ls(uri, ctx=None, **kwargs):
+        if uri == "viking://resources":
+            return [{"name": "memory.md", "isDir": False}]
+        return []
+
+    def fake_agfs_read(path, offset=0, size=-1):
+        return b'visible\n<!-- MEMORY_FIELDS {"secret":"hidden"} -->'
+
+    monkeypatch.setattr(fs, "stat", fake_stat)
+    monkeypatch.setattr(fs, "ls", fake_ls)
+    monkeypatch.setattr(
+        fs,
+        "_uri_to_path",
+        lambda uri, ctx=None: uri.replace("viking://", "/"),
+    )
+    monkeypatch.setattr(fs.agfs, "read", fake_agfs_read, raising=False)
+
+    result = await fs.grep(
+        "viking://resources",
+        pattern="visible|secret",
+        content_transform=lambda content, _uri: content.split("<!--", 1)[0].rstrip(),
+    )
+
+    assert result["matches"] == [
+        {
+            "line": 1,
+            "uri": "viking://resources/memory.md",
+            "content": "visible",
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_grep_parallel_reads_respect_concurrency_limit(monkeypatch):
     fs = VikingFS(agfs=_DummyAgfs())
 

@@ -8,6 +8,7 @@ Common logic for creating Context objects and enqueuing them to EmbeddingQueue.
 
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from charset_normalizer import from_bytes
@@ -17,6 +18,10 @@ from openviking.core.namespace import (
     context_type_for_uri,
     is_session_uri,
     owner_space_for_uri,
+)
+from openviking.parse.parsers.media.utils import (
+    MPEG_TS_PROBE_BYTES,
+    is_mpeg_ts,
 )
 from openviking.server.identity import RequestContext
 from openviking.service.task_work_index import TaskWorkRejected
@@ -257,6 +262,29 @@ async def _build_image_data_uri(
         return None
 
 
+async def _resolve_resource_content_type(
+    file_path: str,
+    file_name: str,
+    viking_fs: Any,
+    ctx: Optional[RequestContext],
+) -> Optional[ResourceContentType]:
+    content_type = get_resource_content_type(file_name)
+    if Path(file_name).suffix.lower() != ".ts":
+        return content_type
+    try:
+        prefix = await viking_fs.read(
+            file_path,
+            offset=0,
+            size=MPEG_TS_PROBE_BYTES,
+            ctx=ctx,
+        )
+    except Exception:
+        return content_type
+    if is_mpeg_ts(prefix):
+        return ResourceContentType.VIDEO
+    return content_type
+
+
 def _coerce_text_file_content(raw: Any) -> str:
     """Coerce known text-file content returned by VikingFS into str."""
     if isinstance(raw, bytes):
@@ -346,7 +374,8 @@ async def vectorize_directory_meta(
     for session-commit overviews where only ``.overview.md`` was written.
     """
     enqueued = 0
-    expected = (1 if include_abstract else 0) + (1 if include_overview else 0)
+    expected = 2 if include_abstract else 1
+    first_enqueue_error: Optional[Exception] = None
     try:
         if not ctx:
             logger.warning("No context provided for vectorization")
@@ -367,76 +396,81 @@ async def vectorize_directory_meta(
 
         # Vectorize L0: .abstract.md (abstract)
         if include_abstract:
-            context_abstract = Context(
-                uri=uri,
-                parent_uri=parent_uri,
-                is_leaf=False,
-                abstract=abstract,
-                context_type=context_type,
-                level=ContextLevel.ABSTRACT,
-                created_at=created_at,
-                updated_at=updated_at,
-                user=ctx.user,
-                account_id=ctx.account_id,
-                owner_space=owner_space,
-            )
-            context_abstract.set_vectorize(Vectorize(text=abstract, full_text=abstract))
-            msg_abstract = EmbeddingMsgConverter.from_context(context_abstract)
-            _apply_scalar_overrides(
-                msg_abstract,
-                (scalar_overrides or {}).get(int(ContextLevel.ABSTRACT.value)),
-            )
-            _apply_ingest_options(msg_abstract, ingest_options)
-            if msg_abstract:
-                msg_abstract.semantic_msg_id = semantic_msg_id
-                try:
-                    await embedding_queue.enqueue(msg_abstract)
-                    enqueued += 1
-                    logger.debug(f"Enqueued directory L0 (abstract) for vectorization: {uri}")
-                except TaskWorkRejected:
-                    logger.debug("Skipped directory vectorization for cancelling task: %s", uri)
-                    return
-                except Exception as e:
-                    logger.error(
-                        f"Failed to enqueue directory L0 (abstract) for vectorization: {uri}: {e}",
-                        exc_info=True,
-                    )
-        if include_overview:
-            # Vectorize L1: .overview.md (overview)
-            context_overview = Context(
-                uri=uri,
-                parent_uri=parent_uri,
-                is_leaf=False,
-                abstract=abstract,
-                context_type=context_type,
-                level=ContextLevel.OVERVIEW,
-                created_at=created_at,
-                updated_at=updated_at,
-                user=ctx.user,
-                account_id=ctx.account_id,
-                owner_space=owner_space,
-            )
-            context_overview.set_vectorize(Vectorize(text=overview, full_text=overview))
-            msg_overview = EmbeddingMsgConverter.from_context(context_overview)
-            _apply_scalar_overrides(
-                msg_overview,
-                (scalar_overrides or {}).get(int(ContextLevel.OVERVIEW.value)),
-            )
-            _apply_ingest_options(msg_overview, ingest_options)
-            if msg_overview:
-                msg_overview.semantic_msg_id = semantic_msg_id
-                try:
-                    await embedding_queue.enqueue(msg_overview)
-                    enqueued += 1
-                    logger.debug(f"Enqueued directory L1 (overview) for vectorization: {uri}")
-                except TaskWorkRejected:
-                    logger.debug("Skipped directory vectorization for cancelling task: %s", uri)
-                    return
-                except Exception as e:
-                    logger.error(
-                        f"Failed to enqueue directory L1 (overview) for vectorization: {uri}: {e}",
-                        exc_info=True,
-                    )
+          context_abstract = Context(
+              uri=uri,
+              parent_uri=parent_uri,
+              is_leaf=False,
+              abstract=abstract,
+              context_type=context_type,
+              level=ContextLevel.ABSTRACT,
+              created_at=created_at,
+              updated_at=updated_at,
+              user=ctx.user,
+              account_id=ctx.account_id,
+              owner_space=owner_space,
+          )
+          context_abstract.set_vectorize(Vectorize(text=abstract, full_text=abstract))
+          msg_abstract = EmbeddingMsgConverter.from_context(context_abstract)
+          _apply_scalar_overrides(
+              msg_abstract,
+              (scalar_overrides or {}).get(int(ContextLevel.ABSTRACT.value)),
+          )
+          _apply_ingest_options(msg_abstract, ingest_options)
+          if msg_abstract:
+              msg_abstract.semantic_msg_id = semantic_msg_id
+              try:
+                  await embedding_queue.enqueue(msg_abstract)
+                  enqueued += 1
+                  logger.debug(f"Enqueued directory L0 (abstract) for vectorization: {uri}")
+              except TaskWorkRejected:
+                  logger.debug("Skipped directory vectorization for cancelling task: %s", uri)
+                  return
+              except Exception as e:
+                  logger.error(
+                      f"Failed to enqueue directory L0 (abstract) for vectorization: {uri}: {e}",
+                      exc_info=True,
+                  )
+                  first_enqueue_error = e
+
+          # Vectorize L1: .overview.md (overview)
+          context_overview = Context(
+              uri=uri,
+              parent_uri=parent_uri,
+              is_leaf=False,
+              abstract=abstract,
+              context_type=context_type,
+              level=ContextLevel.OVERVIEW,
+              created_at=created_at,
+              updated_at=updated_at,
+              user=ctx.user,
+              account_id=ctx.account_id,
+              owner_space=owner_space,
+          )
+          context_overview.set_vectorize(Vectorize(text=overview, full_text=overview))
+          msg_overview = EmbeddingMsgConverter.from_context(context_overview)
+          _apply_scalar_overrides(
+              msg_overview,
+              (scalar_overrides or {}).get(int(ContextLevel.OVERVIEW.value)),
+          )
+          _apply_ingest_options(msg_overview, ingest_options)
+          if msg_overview:
+              msg_overview.semantic_msg_id = semantic_msg_id
+              try:
+                  await embedding_queue.enqueue(msg_overview)
+                  enqueued += 1
+                  logger.debug(f"Enqueued directory L1 (overview) for vectorization: {uri}")
+              except TaskWorkRejected:
+                  logger.debug("Skipped directory vectorization for cancelling task: %s", uri)
+                  return
+              except Exception as e:
+                  logger.error(
+                      f"Failed to enqueue directory L1 (overview) for vectorization: {uri}: {e}",
+                      exc_info=True,
+                  )
+                  if first_enqueue_error is None:
+                      first_enqueue_error = e
+        if first_enqueue_error is not None:
+            raise first_enqueue_error
     except Exception as e:
         logger.error(
             f"Failed to vectorize directory metadata for {uri}: {e}",
@@ -506,12 +540,18 @@ async def vectorize_file(
             owner_space=owner_space_for_uri(file_path, ctx),
         )
 
-        content_type = get_resource_content_type(file_name)
+        content_type = await _resolve_resource_content_type(
+            file_path, file_name, viking_fs, ctx
+        )
         embedding_cfg = get_openviking_config().embedding
         configured_text_source = getattr(embedding_cfg, "text_source", "content_only")
         effective_text_source = "summary_only" if use_summary else configured_text_source
 
-        if content_type is None:
+        if content_type in (ResourceContentType.AUDIO, ResourceContentType.VIDEO):
+            effective_text = summary or file_name
+            context.abstract = effective_text
+            context.set_vectorize(Vectorize(text=effective_text, full_text=effective_text))
+        elif content_type is None:
             # Unsupported file type: fall back to summary if available
             if summary:
                 logger.warning(
@@ -612,6 +652,7 @@ async def vectorize_file(
                 registered_wait_root[1],
                 f"Failed to enqueue file vector for {file_path}: {e}",
             )
+        raise
     finally:
         if not enqueued:
             await _decrement_embedding_tracker(semantic_msg_id, 1)
@@ -693,3 +734,4 @@ async def index_resource(
 
     except Exception as e:
         logger.error(f"Failed to scan directory {uri} for indexing: {e}")
+        raise

@@ -22,7 +22,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, TypeVar, Union
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
@@ -1031,6 +1031,7 @@ class VikingFS:
         node_limit: Optional[int] = None,
         level_limit: int = 10,
         ctx: Optional[RequestContext] = None,
+        content_transform: Optional[Callable[[str, str], str]] = None,
     ) -> Dict:
         """Content search by pattern or keywords.
 
@@ -1049,6 +1050,7 @@ class VikingFS:
             node_limit: Maximum number of results to return
             level_limit: Maximum depth level to traverse (default: 10)
             ctx: Request context
+            content_transform: Optional projection applied before regex matching.
             Internal bm25 recall limit is auto-adapted from node_limit as
             min(node_limit * 5, 100000); when node_limit is unset, use 100000.
 
@@ -1070,8 +1072,12 @@ class VikingFS:
             self.grep_config.switch_to_remote_threshold if self.grep_config else 10000
         )
 
-        resolved_engine = await self._resolve_grep_engine(
-            engine, uri, ctx, switch_to_remote_threshold
+        # A projection must run before matching. The remote BM25 index contains
+        # persisted raw content, so it cannot safely recall projected results.
+        resolved_engine = (
+            "fs"
+            if content_transform is not None
+            else await self._resolve_grep_engine(engine, uri, ctx, switch_to_remote_threshold)
         )
 
         if resolved_engine == "fs":
@@ -1083,6 +1089,7 @@ class VikingFS:
                 node_limit=node_limit,
                 level_limit=level_limit,
                 ctx=ctx,
+                content_transform=content_transform,
             )
         else:  # "vikingdb_then_fs"
             return await self._grep_vikingdb_then_fs(
@@ -1188,21 +1195,30 @@ class VikingFS:
         return count
 
     async def _grep_fs(
-        self, uri, pattern, exclude_uri, case_insensitive, node_limit, level_limit, ctx
+        self,
+        uri,
+        pattern,
+        exclude_uri,
+        case_insensitive,
+        node_limit,
+        level_limit,
+        ctx,
+        content_transform=None,
     ):
         """Filesystem grep path: prefer native agfs grep and fall back if unavailable."""
-        try:
-            return await self._grep_with_agfs(
-                uri=uri,
-                pattern=pattern,
-                exclude_uri=exclude_uri,
-                case_insensitive=case_insensitive,
-                node_limit=node_limit,
-                level_limit=level_limit,
-                ctx=ctx,
-            )
-        except (AttributeError, AGFSNotSupportedError, NotImplementedError) as e:
-            logger.debug(f"agfs grep unavailable, falling back to VikingFS implementation: {e}")
+        if content_transform is None:
+            try:
+                return await self._grep_with_agfs(
+                    uri=uri,
+                    pattern=pattern,
+                    exclude_uri=exclude_uri,
+                    case_insensitive=case_insensitive,
+                    node_limit=node_limit,
+                    level_limit=level_limit,
+                    ctx=ctx,
+                )
+            except (AttributeError, AGFSNotSupportedError, NotImplementedError) as e:
+                logger.debug(f"agfs grep unavailable, falling back to VikingFS implementation: {e}")
 
         return await self._grep_encrypted(
             uri=uri,
@@ -1212,6 +1228,7 @@ class VikingFS:
             node_limit=node_limit,
             level_limit=level_limit,
             ctx=ctx,
+            content_transform=content_transform,
         )
 
     async def _grep_vikingdb_then_fs(
@@ -1449,6 +1466,7 @@ class VikingFS:
         node_limit: Optional[int] = None,
         level_limit: int = 10,
         ctx: Optional[RequestContext] = None,
+        content_transform: Optional[Callable[[str, str], str]] = None,
     ) -> Dict:
         """Grep implementation for encrypted files.
 
@@ -1484,6 +1502,7 @@ class VikingFS:
             compiled_pattern=compiled_pattern,
             node_limit=node_limit,
             ctx=ctx,
+            content_transform=content_transform,
         )
 
         return {
@@ -1555,13 +1574,20 @@ class VikingFS:
         compiled_pattern: re.Pattern,
         node_limit: Optional[int],
         ctx: Optional[RequestContext] = None,
+        content_transform: Optional[Callable[[str, str], str]] = None,
     ) -> tuple[List[Dict[str, Any]], int]:
         results: List[Dict[str, Any]] = []
         files_scanned = 0
         for start in range(0, len(file_uris), _DEFAULT_GREP_FILE_CONCURRENCY):
             batch_uris = file_uris[start : start + _DEFAULT_GREP_FILE_CONCURRENCY]
             batch_jobs = [
-                self._grep_single_file(entry_uri, compiled_pattern, ctx) for entry_uri in batch_uris
+                self._grep_single_file(
+                    entry_uri,
+                    compiled_pattern,
+                    ctx,
+                    content_transform=content_transform,
+                )
+                for entry_uri in batch_uris
             ]
             batch_results = await asyncio.gather(*batch_jobs)
             for matches, scanned_count in batch_results:
@@ -1578,11 +1604,14 @@ class VikingFS:
         entry_uri: str,
         compiled_pattern: re.Pattern,
         ctx: Optional[RequestContext] = None,
+        content_transform: Optional[Callable[[str, str], str]] = None,
     ) -> tuple[List[Dict[str, Any]], int]:
         try:
             content = await self.read(entry_uri, ctx=ctx)
             if isinstance(content, bytes):
                 content = content.decode("utf-8", errors="replace")
+            if content_transform is not None:
+                content = content_transform(content, entry_uri)
 
             matches: List[Dict[str, Any]] = []
             lines = content.split("\n")
