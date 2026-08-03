@@ -29,6 +29,8 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   let saveTimer = null
   let flushTimer = null
   let periodicFlushRunning = false
+  let savePromise = Promise.resolve()
+  let saveCounter = 0
 
   async function init() {
     if (config.autoCapture) await migrateLegacySessionMap()
@@ -101,17 +103,31 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   }
 
   async function saveState() {
+    // Serialize saves within this process. The debounced saveTimer, flushSession
+    // and runPeriodicFlush can all call saveState concurrently; without chaining,
+    // two writes to the same temp path could interleave and corrupt the file that
+    // then gets renamed onto the real state path.
+    const run = savePromise.then(runSaveState, runSaveState)
+    savePromise = run.catch(() => {})
+    return run
+  }
+
+  async function runSaveState() {
+    const tempPath = `${statePath}.${process.pid}.${saveCounter++}.tmp`
     try {
       const persisted = {}
       for (const [opencodeSessionId, state] of sessions.entries()) {
         persisted[opencodeSessionId] = serializeSessionState(state)
       }
-      const tempPath = `${statePath}.${process.pid}.tmp`
       await fs.promises.writeFile(tempPath, JSON.stringify({ version: 2, sessions: persisted, lastSaved: Date.now() }, null, 2), "utf8")
       await fs.promises.rename(tempPath, statePath)
       log("DEBUG", "persistence", "Session state saved", { count: sessions.size })
     } catch (error) {
       log("ERROR", "persistence", "Failed to save session state", { error: error?.message })
+      // Best-effort cleanup so a failed rename does not leave an orphan temp file.
+      try {
+        await fs.promises.unlink(tempPath)
+      } catch {}
     }
   }
 
