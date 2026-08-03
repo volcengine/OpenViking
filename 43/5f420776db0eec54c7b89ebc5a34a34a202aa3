@@ -1,0 +1,23 @@
+openviking/storage/content_write.py
+  s_4e07b41773de45::t_9d16f2e29dfb39 34-39,254-255,257,263-265,304-305,331-332
+tests/server/test_content_batch_write.py
+  s_4e07b41773de45::t_0ffb8ff755c54b 9-10,159-196,231-266
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "435f420776db0eec54c7b89ebc5a34a34a202aa3",
+  "prompts": {},
+  "sessions": {
+    "s_4e07b41773de45": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fc657-4729-7892-af0f-0cf88377f364",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
