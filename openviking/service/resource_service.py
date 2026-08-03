@@ -587,6 +587,7 @@ class ResourceService:
         build_index: bool = True,
         summarize: bool = False,
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
+        parse_mode: ParseMode | str | None = None,
         watch_interval: float = 0,
         manage_watch: bool = True,
         tags: Optional[List[str]] = None,
@@ -599,9 +600,13 @@ class ResourceService:
         """Start background ingestion for Git repositories while reserving the target URI."""
         self._ensure_initialized()
         processing_mode = normalize_processing_mode(processing_mode)
-        mode = normalize_parse_mode(parse_mode)
         self._validate_add_resource_tag_policy(tags=tags, tag_mode=tag_mode)
         normalized_args = self._normalize_add_resource_args(args, watch_interval=watch_interval)
+        mode = (
+            normalize_parse_mode(parse_mode)
+            if parse_mode is not None
+            else normalized_args.parse_mode
+        )
         kwargs.update(normalized_args.processor_kwargs)
         from openviking.connector.routing import credential_arg_names
 

@@ -11,6 +11,7 @@ import pytest
 from openviking.server.identity import RequestContext, Role
 from openviking.service import resource_service as resource_service_module
 from openviking.service.resource_service import ResourceService
+from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -185,3 +186,31 @@ async def test_no_split_bypasses_understanding_shortcut(
 
     direct_probe.assert_not_called()
     api_probe.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_native_git_enqueue_persists_internal_no_split_mode(
+    service: ResourceService,
+    ctx: RequestContext,
+):
+    service._preflight_git_source = AsyncMock(
+        return_value=SimpleNamespace(source_name="repo", source_path=None)
+    )
+    service._plan_resource_target = AsyncMock(
+        return_value=("viking://resources/repo", None)
+    )
+    service._enqueue_add_resource_job = AsyncMock(
+        return_value=SimpleNamespace(task_id="task-git")
+    )
+
+    result = await service.enqueue_git_add_resource(
+        path="https://github.com/volcengine/OpenViking.git",
+        ctx=ctx,
+        to="viking://resources/repo",
+        parse_mode="no_split",
+    )
+
+    assert result["task_id"] == "task-git"
+    message = service._enqueue_add_resource_job.await_args.args[0]
+    assert isinstance(message, AddResourceMsg)
+    assert message.parse_mode == "no_split"

@@ -3495,8 +3495,8 @@ async fn main() {
 mod tests {
     use super::{
         Cli, CliContext, Commands, ConfigAddTarget, ConfigCommands, LanguageGateAction,
-        ObserverCommands, PrivacyCommands, SkillCommands, SnapshotCmd,
-        UploadCliOptions, find_command_index, first_command_token, is_language_command_request,
+        ObserverCommands, PrivacyCommands, SkillCommands, SnapshotCmd, UploadCliOptions,
+        find_command_index, first_command_token, is_language_command_request,
         language_command_can_run_picker, language_gate_action, language_required_message,
         legacy_upload_option_error, plain_help_misuse, pre_parse_output_options,
         pre_parse_requires_cli_config_file, preprocess_cli_args, preprocess_privacy_args,

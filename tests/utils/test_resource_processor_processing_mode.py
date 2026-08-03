@@ -124,6 +124,75 @@ async def test_flat_file_skips_all_post_processing_when_build_index_false(
 
 
 @pytest.mark.asyncio
+async def test_vectors_only_replaces_preexisting_flat_file_without_directory_sync(
+    monkeypatch,
+    ctx,
+):
+    viking_fs = SimpleNamespace(
+        _async_agfs=SimpleNamespace(pathlock_release=AsyncMock()),
+        exists=AsyncMock(return_value=True),
+        ls=AsyncMock(
+            side_effect=NotADirectoryError("flat resource roots cannot be listed")
+        ),
+        persist_temp_tree=AsyncMock(),
+        delete_temp=AsyncMock(),
+    )
+    vectorize_file = AsyncMock()
+    rewrite_image_uris = AsyncMock()
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.get_viking_fs",
+        lambda: viking_fs,
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: viking_fs,
+    )
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.rewrite_image_uris",
+        rewrite_image_uris,
+    )
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.vectorize_file",
+        vectorize_file,
+    )
+    processor = ResourceProcessor(_FakeVikingDB())
+    processor._get_summarizer = Mock(
+        side_effect=AssertionError("flat files have no directory semantics")
+    )
+    lock = {"lease_ref": "flat-file"}
+
+    result = await processor.finish_prepared_resource(
+        {
+            "root_uri": "viking://resources/神雕_副本.md",
+            "temp_uri": "viking://temp/神雕_副本.md",
+            "temp_dir_path": "viking://temp/job-1",
+            "source_committed": False,
+            "target_preexisting": True,
+            "root_is_file": True,
+        },
+        ctx=ctx,
+        resource_lock=lock,
+        build_index=True,
+        processing_mode="vectors_only",
+    )
+
+    assert result == {
+        "status": "success",
+        "root_uri": "viking://resources/神雕_副本.md",
+    }
+    viking_fs.persist_temp_tree.assert_awaited_once_with(
+        "viking://temp/神雕_副本.md",
+        "viking://resources/神雕_副本.md",
+        ctx=ctx,
+        lease_ref=lock,
+    )
+    viking_fs.delete_temp.assert_awaited_once_with("viking://temp/job-1", ctx=ctx)
+    rewrite_image_uris.assert_not_awaited()
+    vectorize_file.assert_awaited_once()
+    viking_fs._async_agfs.pathlock_release.assert_awaited_once_with(lock)
+
+
+@pytest.mark.asyncio
 async def test_vectors_only_persists_tree_and_vectorizes_files_only(monkeypatch, ctx):
     viking_fs = SimpleNamespace(
         _async_agfs=SimpleNamespace(pathlock_release=AsyncMock()),

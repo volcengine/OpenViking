@@ -299,6 +299,9 @@ class ResourceProcessor:
                     if context_tree and context_tree.root:
                         result["root_uri"] = context_tree.root.uri
                         result["temp_uri"] = context_tree.root.temp_uri
+                    root_is_file = bool(
+                        getattr(context_tree, "_root_is_file", False)
+                    )
                 telemetry.set(
                     "resource.finalize.duration_ms",
                     round((time.perf_counter() - finalize_start) * 1000, 3),
@@ -388,7 +391,12 @@ class ResourceProcessor:
                             ctx=ctx,
                             lease_ref=resource_lock,
                         )
-                        await rewrite_image_uris(root_uri, ctx=ctx, lease_ref=resource_lock)
+                        if not root_is_file:
+                            await rewrite_image_uris(
+                                root_uri,
+                                ctx=ctx,
+                                lease_ref=resource_lock,
+                            )
                         await viking_fs.delete_temp(
                             parse_result.temp_dir_path,
                             ctx=ctx,
@@ -425,9 +433,7 @@ class ResourceProcessor:
                 "source_committed": source_committed,
                 "target_preexisting": target_preexisting,
                 "is_code_repo": parse_result.source_format == "repository",
-                "root_is_file": bool(
-                    getattr(context_tree, "_root_is_file", False)
-                ),
+                "root_is_file": root_is_file,
             }
             if defer_post_processing:
                 result["_post_process"] = prepared
@@ -520,7 +526,7 @@ class ResourceProcessor:
                 sync_deleted_dirs: list[str] = []
                 if not should_summarize and temp_uri and not source_committed:
                     viking_fs = get_viking_fs()
-                    if vectors_only and target_preexisting:
+                    if vectors_only and target_preexisting and not root_is_file:
                         diff = await SemanticProcessor()._sync_topdown_recursive(
                             temp_uri,
                             root_uri,
@@ -536,11 +542,12 @@ class ResourceProcessor:
                             ctx=ctx,
                             lease_ref=resource_lock,
                         )
-                    await rewrite_image_uris(
-                        root_uri,
-                        ctx=ctx,
-                        lease_ref=resource_lock,
-                    )
+                    if not root_is_file:
+                        await rewrite_image_uris(
+                            root_uri,
+                            ctx=ctx,
+                            lease_ref=resource_lock,
+                        )
                     if temp_dir_path:
                         await viking_fs.delete_temp(temp_dir_path, ctx=ctx)
                 if vectors_only:

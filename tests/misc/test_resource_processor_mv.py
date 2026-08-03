@@ -163,6 +163,9 @@ async def test_resource_processor_allows_flat_root_only_for_single_no_split_sour
     from openviking.utils.resource_processor import ResourceProcessor
 
     fake_fs = _FakeVikingFS()
+    fake_fs.glob = AsyncMock(
+        side_effect=NotADirectoryError("flat resource roots cannot be globbed")
+    )
     monkeypatch.setattr(
         "openviking.utils.resource_processor.get_current_telemetry",
         lambda: _DummyTelemetry(),
@@ -193,13 +196,15 @@ async def test_resource_processor_allows_flat_root_only_for_single_no_split_sour
         summarize=AsyncMock(return_value={"status": "success"})
     )
 
-    await rp.process_resource(
+    result = await rp.process_resource(
         path="神雕_副本.md",
         ctx=object(),
         build_index=True,
         parse_mode="no_split",
     )
 
+    assert result["status"] == "success"
+    assert result["root_uri"] == "viking://resources/神雕_副本.md"
     assert rp.tree_builder.finalize_from_temp.await_args.kwargs[
         "flatten_single_file"
     ] is True
