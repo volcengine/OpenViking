@@ -79,6 +79,7 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "path",
         "ctx",
         "to",
+        "to_is_directory",
         "parent",
         "reason",
         "instruction",
@@ -1147,6 +1148,7 @@ class ResourceService:
                 parent=parent,
                 create_parent=bool(kwargs.get("create_parent", False)),
             )
+            to_is_directory = bool(target.to)
             if enforce_public_remote_targets and is_remote_resource_source(path):
                 path = require_remote_resource_source(path)
                 kwargs.setdefault("request_validator", ensure_public_remote_target)
@@ -1363,6 +1365,7 @@ class ResourceService:
                 scope="resources",
                 to=target.to,
                 parent=target.parent,
+                to_is_directory=to_is_directory,
                 build_index=build_index,
                 summarize=summarize,
                 processing_mode=processing_mode,

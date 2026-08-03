@@ -48,11 +48,9 @@ def ctx() -> RequestContext:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("processing_mode", ["semantic_and_vectors", "vectors_only"])
-async def test_flat_file_skips_directory_semantics_and_vectorizes_detail(
+async def test_flat_file_refreshes_parent_semantics_and_vectorizes_via_summary(
     monkeypatch,
     ctx,
-    processing_mode,
 ):
     viking_fs = SimpleNamespace(
         _async_agfs=SimpleNamespace(pathlock_release=AsyncMock()),
@@ -62,12 +60,11 @@ async def test_flat_file_skips_directory_semantics_and_vectorizes_detail(
         "openviking.utils.resource_processor.get_viking_fs",
         lambda: viking_fs,
     )
-    vectorize_file = AsyncMock()
-    monkeypatch.setattr("openviking.utils.resource_processor.vectorize_file", vectorize_file)
     processor = ResourceProcessor(_FakeVikingDB())
-    processor._get_summarizer = Mock(
-        side_effect=AssertionError("flat files have no directory semantics")
+    summarizer = SimpleNamespace(
+        refresh_file_parent=AsyncMock(return_value={"status": "success"})
     )
+    processor._get_summarizer = Mock(return_value=summarizer)
 
     result = await processor.finish_prepared_resource(
         {
@@ -79,21 +76,18 @@ async def test_flat_file_skips_directory_semantics_and_vectorizes_detail(
         ctx=ctx,
         resource_lock={"lease_ref": "flat-file"},
         build_index=True,
-        processing_mode=processing_mode,
+        processing_mode="semantic_and_vectors",
     )
 
     assert result == {
         "status": "success",
         "root_uri": "viking://resources/神雕_副本.md",
     }
-    vectorize_file.assert_awaited_once_with(
-        file_path="viking://resources/神雕_副本.md",
-        summary_dict={"name": "神雕_副本.md", "summary": ""},
-        parent_uri="viking://resources",
-        context_type="resource",
+    summarizer.refresh_file_parent.assert_awaited_once_with(
+        file_uri="viking://resources/神雕_副本.md",
         ctx=ctx,
+        skip_vectorization=False,
         ingest_options=IngestOptions(),
-        register_request_wait=True,
     )
 
 

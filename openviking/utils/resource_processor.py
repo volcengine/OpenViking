@@ -185,6 +185,7 @@ class ResourceProcessor:
         defer_post_processing = bool(kwargs.pop("defer_post_processing", False))
         preacquired_lock = kwargs.pop("resource_lock", None)
         ingest_options = IngestOptions.from_value(kwargs.pop("ingest_options", None))
+        to_is_directory = bool(kwargs.pop("to_is_directory", False))
         telemetry = get_current_telemetry()
 
         async def _set_stage(stage: str) -> None:
@@ -294,6 +295,7 @@ class ResourceProcessor:
                             )
                             is ParseMode.NO_SPLIT
                             and parse_result.source_format not in {"directory", "repository"}
+                            and not to_is_directory
                         ),
                     )
                     if context_tree and context_tree.root:
@@ -352,6 +354,7 @@ class ResourceProcessor:
                             root_uri, resource_lock = await self.reserve_unique_candidate(
                                 candidate_uri=candidate_uri,
                                 ctx=ctx,
+                                root_is_file=root_is_file,
                             )
                             result["root_uri"] = root_uri
                             if root_uri != candidate_uri:
@@ -383,7 +386,11 @@ class ResourceProcessor:
                                 pass
                         if resource_lock is None:
                             dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
-                            resource_lock = await self.acquire_resource_lock(dst_path, uri=root_uri)
+                            resource_lock = await self.acquire_resource_lock(
+                                dst_path,
+                                uri=root_uri,
+                                root_is_file=root_is_file,
+                            )
                     if not target_preexisting:
                         await viking_fs.persist_temp_tree(
                             temp_uri,
@@ -480,6 +487,9 @@ class ResourceProcessor:
         root_is_file = bool(prepared.get("root_is_file"))
         ingest_options = IngestOptions.from_value(kwargs.pop("ingest_options", None))
         should_summarize = not root_is_file and not vectors_only and (summarize or build_index)
+        should_refresh_file_parent = (
+            root_is_file and not vectors_only and (summarize or build_index)
+        )
         result: Dict[str, Any] = {"status": "success", "root_uri": root_uri}
 
         if should_summarize:
@@ -557,7 +567,14 @@ class ResourceProcessor:
                             dirs=sync_deleted_dirs,
                             ctx=ctx,
                         )
-                if build_index:
+                if should_refresh_file_parent:
+                    await self._get_summarizer().refresh_file_parent(
+                        file_uri=root_uri,
+                        ctx=ctx,
+                        skip_vectorization=not build_index,
+                        ingest_options=ingest_options,
+                    )
+                elif build_index:
                     if root_is_file:
                         await self._vectorize_resource_file(
                             root_uri, ctx=ctx, ingest_options=ingest_options
@@ -568,6 +585,13 @@ class ResourceProcessor:
                         )
             finally:
                 await get_viking_fs()._async_agfs.pathlock_release(resource_lock)
+        elif should_refresh_file_parent:
+            await self._get_summarizer().refresh_file_parent(
+                file_uri=root_uri,
+                ctx=ctx,
+                skip_vectorization=not build_index,
+                ingest_options=ingest_options,
+            )
         elif vectors_only or root_is_file:
             if not build_index:
                 return result
@@ -675,8 +699,9 @@ class ResourceProcessor:
         candidate_uri: str,
         ctx: RequestContext,
         max_attempts: int = 100,
+        root_is_file: bool = False,
     ) -> tuple[str, Dict[str, Any]]:
-        """Pick the first free candidate URI and reserve it with a resource TreeLock."""
+        """Pick the first free candidate URI and reserve it with a type-aware lock."""
         from openviking.storage.errors import ResourceBusyError
 
         viking_fs = get_viking_fs()
@@ -690,7 +715,10 @@ class ResourceProcessor:
             dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
             try:
                 resource_lock = await self.acquire_resource_lock(
-                    dst_path, uri=root_uri, timeout=0.0
+                    dst_path,
+                    uri=root_uri,
+                    timeout=0.0,
+                    root_is_file=root_is_file,
                 )
                 return root_uri, resource_lock
             except ResourceBusyError as exc:
@@ -716,14 +744,19 @@ class ResourceProcessor:
         *,
         uri: str = "",
         timeout: float = 0.0,
+        root_is_file: bool = False,
     ) -> Dict[str, Any]:
-        """Acquire the per-resource TreeLock or raise a structured conflict."""
+        """Acquire a file-exact or directory-tree resource lock."""
         from openviking.storage.errors import ResourceBusyError
 
         try:
-            return await get_viking_fs()._async_agfs.pathlock_acquire_tree(
-                path, timeout_secs=timeout
+            pathlock = get_viking_fs()._async_agfs
+            acquire = (
+                pathlock.pathlock_acquire_exact
+                if root_is_file
+                else pathlock.pathlock_acquire_tree
             )
+            return await acquire(path, timeout_secs=timeout)
         except LockAcquisitionError as exc:
             logger.warning(f"[ResourceProcessor] Failed to acquire resource lock on {path}")
             raise ResourceBusyError(

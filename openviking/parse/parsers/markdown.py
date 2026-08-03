@@ -263,12 +263,29 @@ class MarkdownParser(BaseParser):
         start_time = time.time()
 
         try:
+            split_content = bool(kwargs.get("split_content", True))
+            adaptive_flatten_requested = bool(
+                kwargs.get("flatten_single_output", False) and not split_content
+            )
+            flatten_single_output = adaptive_flatten_requested
+            if flatten_single_output:
+                flatten_single_output = not await self._has_ingestable_local_image(
+                    content,
+                    base_dir=base_dir,
+                    allowed_media_dirs=allowed_media_dirs,
+                )
             # Phase 1 — parse only: turn the markdown into an ordered VikingFS write
             # plan, touching nothing. The temp URI is allocated here (the one
             # FS-scoped step) and threaded in so layout planning stays side-effect free.
             temp_uri = self._create_temp_uri()
+            layout_kwargs = dict(kwargs)
+            layout_kwargs["flatten_single_output"] = flatten_single_output
             layout = await self._compute_layout(
-                content, temp_uri, source_path=source_path, instruction=instruction, **kwargs
+                content,
+                temp_uri,
+                source_path=source_path,
+                instruction=instruction,
+                **layout_kwargs,
             )
 
             # Set up relative-link rewrite context consumed by _write_section during
@@ -284,7 +301,9 @@ class MarkdownParser(BaseParser):
                 "import_root": kwargs.get("link_rewrite_root"),
                 "base_dir": base_dir,
                 "allowed_media_dirs": allowed_media_dirs,
-                "split_content": kwargs.get("split_content", True),
+                "split_content": split_content,
+                "adaptive_flatten_requested": adaptive_flatten_requested,
+                "flatten_single_output": flatten_single_output,
             }
 
             # Phase 2 — write only: replay the plan against the real VikingFS,
@@ -368,7 +387,11 @@ class MarkdownParser(BaseParser):
         root_name = (
             source_name if source_name and supports_code_skeleton(source_name) else doc_name
         )
-        root_dir = f"{temp_uri}/{self._sanitize_for_path(root_name)}"
+        root_dir = (
+            temp_uri
+            if kwargs.get("flatten_single_output", False)
+            else f"{temp_uri}/{self._sanitize_for_path(root_name)}"
+        )
 
         # Find all headings
         headings = self._find_headings(content)
@@ -477,6 +500,34 @@ class MarkdownParser(BaseParser):
                 for match in HTML_IMG_PATTERN.finditer(content):
                     if not self._is_remote_uri(match.group(2)):
                         return True
+        return False
+
+    async def _has_ingestable_local_image(
+        self,
+        content: str,
+        *,
+        base_dir: Optional[Path],
+        allowed_media_dirs: Optional[List[Path]],
+    ) -> bool:
+        """Return whether parsing will materialize at least one local image."""
+        from openviking.parse.image_rewrite import HTML_IMG_PATTERN
+
+        image_refs = [match.group(2) for match in self._image_pattern.finditer(content)]
+        image_refs.extend(match.group(2) for match in HTML_IMG_PATTERN.finditer(content))
+        seen: set[Path] = set()
+        for image_ref in image_refs:
+            if self._is_remote_uri(image_ref):
+                continue
+            resolved = self._resolve_image_path(image_ref, base_dir, allowed_media_dirs)
+            if resolved is None or resolved in seen:
+                continue
+            seen.add(resolved)
+            try:
+                image_bytes = await asyncio.to_thread(resolved.read_bytes)
+                if await asyncio.to_thread(self._is_valid_image, image_bytes, resolved):
+                    return True
+            except Exception:
+                continue
         return False
 
     def _extract_frontmatter(self, content: str) -> Tuple[str, Optional[Dict[str, Any]]]:
@@ -1069,7 +1120,10 @@ class MarkdownParser(BaseParser):
 
         src_dir = os.path.dirname(os.path.abspath(source_path))
         import_root_abs = os.path.abspath(import_root)
-        source_new_dir = os.path.join(src_dir, doc_name, section_subpath)
+        if (self._rewrite_ctx or {}).get("flatten_single_output", False):
+            source_new_dir = os.path.join(src_dir, section_subpath)
+        else:
+            source_new_dir = os.path.join(src_dir, doc_name, section_subpath)
 
         out: List[str] = []
         last = 0
@@ -1110,11 +1164,13 @@ class MarkdownParser(BaseParser):
         ctx = self._rewrite_ctx or {}
         cache = ctx.setdefault("_split_cache", {})
         split_content = bool(ctx.get("split_content", True))
-        key = (os.path.abspath(target_path), split_content)
+        flatten_single_output = bool(ctx.get("adaptive_flatten_requested", False))
+        key = (os.path.abspath(target_path), split_content, flatten_single_output)
         if key not in cache:
             cache[key] = await self._probe_split_layout(
                 target_path,
                 split_content=split_content,
+                flatten_single_output=flatten_single_output,
             )
         return cache[key]
 
@@ -1123,6 +1179,7 @@ class MarkdownParser(BaseParser):
         target_path: str,
         *,
         split_content: bool,
+        flatten_single_output: bool = False,
     ) -> Optional[Dict[str, str]]:
         """Plan the target's layout WITHOUT writing anything, returning
         {"<doc_dir>/<section...>": text} keyed by path relative to the temp root, i.e.
@@ -1131,11 +1188,19 @@ class MarkdownParser(BaseParser):
         with a throwaway temp URI, so no fake FS and no side effects are involved."""
         try:
             probe_root = "viking://temp/_probe"
+            content = self._read_file(target_path)
+            if flatten_single_output:
+                flatten_single_output = not await self._has_ingestable_local_image(
+                    content,
+                    base_dir=Path(target_path).parent,
+                    allowed_media_dirs=(self._rewrite_ctx or {}).get("allowed_media_dirs"),
+                )
             layout = await self._compute_layout(
-                self._read_file(target_path),
+                content,
                 probe_root,
                 source_path=str(target_path),
                 split_content=split_content,
+                flatten_single_output=flatten_single_output,
             )
             root = layout.temp_uri.rstrip("/")
             out: Dict[str, str] = {}

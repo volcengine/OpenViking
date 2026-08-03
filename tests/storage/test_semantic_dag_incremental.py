@@ -134,7 +134,8 @@ async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypa
         target_uri=root_uri,
         changes={"modified": [f"{root_uri}/a.txt"]},
     )
-    monkeypatch.setattr(executor, "_add_vectorize_task", AsyncMock())
+    add_vectorize_task = AsyncMock()
+    monkeypatch.setattr(executor, "_add_vectorize_task", add_vectorize_task)
 
     await executor.run(root_uri)
 
@@ -143,6 +144,17 @@ async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypa
     overview = fake_fs._file_contents[f"{root_uri}/.overview.md"]
     assert "- a.txt: summary" in overview
     assert "- b.txt: old-b" in overview
+    changed_file_tasks = [
+        call.args[0]
+        for call in add_vectorize_task.await_args_list
+        if call.args[0].task_type == "file"
+    ]
+    assert len(changed_file_tasks) == 1
+    assert changed_file_tasks[0].file_path == f"{root_uri}/a.txt"
+    assert changed_file_tasks[0].summary_dict == {
+        "name": "a.txt",
+        "summary": "summary",
+    }
 
 
 if __name__ == "__main__":
