@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
@@ -572,6 +573,18 @@ def _loaded_experience_uris(analysis: RolloutAnalysis) -> list[str]:
                 )
                 loaded_uris.extend(_exact_case_search_loaded_experience_uris(tool_output))
                 continue
+            if tool_name == "load_relevant_experience":
+                # Selector-mode retrieval names the experiences it loaded only in its
+                # output; its input is a task description. Without this the estimator can
+                # never target an existing experience for update, so selector rollouts
+                # could only ever create new ones.
+                tool_output = (
+                    part.get("tool_output", "")
+                    if isinstance(part, dict)
+                    else getattr(part, "tool_output", "")
+                )
+                loaded_uris.extend(_loaded_experience_block_uris(tool_output))
+                continue
             if tool_name != "read_experience":
                 continue
             tool_input = tool_input or {}
@@ -581,6 +594,17 @@ def _loaded_experience_uris(analysis: RolloutAnalysis) -> list[str]:
             if uri:
                 loaded_uris.append(uri)
     return list(dict.fromkeys(loaded_uris))
+
+
+def _loaded_experience_block_uris(tool_output: Any) -> list[str]:
+    """Pull experience URIs out of rendered ``# Loaded Experience`` blocks."""
+    if not isinstance(tool_output, str):
+        return []
+    return [
+        uri
+        for uri in re.findall(r"^Experience URI: `([^`]+)`", tool_output, re.MULTILINE)
+        if uri.strip()
+    ]
 
 
 def _exact_case_search_loaded_experience_uris(tool_output: Any) -> list[str]:

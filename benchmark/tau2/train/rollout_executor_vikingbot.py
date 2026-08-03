@@ -40,7 +40,7 @@ from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
-Tau2ExperienceLoaderMode = Literal["skill", "constraint", "direct_experience"]
+Tau2ExperienceLoaderMode = Literal["skill", "selector", "constraint", "direct_experience"]
 Tau2ExperienceRecallMode = Literal["case_ann", "exp_ann", "hybrid_ann"]
 VikingBotSystemPromptProfile = Literal["full", "minimal"]
 DEFAULT_TAU2_EXPERIENCE_LOADER_MODE: Tau2ExperienceLoaderMode = "skill"
@@ -49,6 +49,15 @@ DEFAULT_SYSTEM_PROMPT_PROFILE: VikingBotSystemPromptProfile = "minimal"
 _EXPERIENCE_RECALL_RRF_K = 60
 _SEMANTIC_CASE_PRIOR_WEIGHT = 0.25
 _EXACT_CASE_BOOST = 1.0
+_SELECTOR_CANDIDATE_CASE_LIMIT = 3
+_SELECTOR_CANDIDATE_LIMIT = 6
+_SELECTOR_CANDIDATE_CHARS = 6000
+_SELECTOR_MAX_SELECTED = 2
+# The judge only has to emit `{"selected": [...]}`, but this budget is also spent on
+# reasoning tokens, so it is sized for reasoning models rather than for the answer.
+# It is a ceiling, not an allocation: a model that answers in 10 tokens still costs 10.
+# Only honoured on the LiteLLMProvider path — VLMProviderAdapter drops it (see _selector_judge).
+_SELECTOR_JUDGE_MAX_TOKENS = 2048
 DEFAULT_FIRST_USER_CACHE_DIR = (
     Path(__file__).resolve().parents[3]
     / "result"
@@ -68,8 +77,10 @@ def normalize_system_prompt_profile(value: Any) -> VikingBotSystemPromptProfile:
 
 def normalize_tau2_experience_loader_mode(value: Any) -> Tau2ExperienceLoaderMode:
     mode = str(value or DEFAULT_TAU2_EXPERIENCE_LOADER_MODE).strip().lower()
-    if mode not in {"skill", "constraint", "direct_experience"}:
-        raise ValueError("loader_mode must be 'skill', 'constraint', or 'direct_experience'")
+    if mode not in {"skill", "selector", "constraint", "direct_experience"}:
+        raise ValueError(
+            "loader_mode must be 'skill', 'selector', 'constraint', or 'direct_experience'"
+        )
     return mode  # type: ignore[return-value]
 
 
@@ -620,6 +631,23 @@ def _trace_experience_recall(
     tracer.info(json.dumps(payload, ensure_ascii=False))
 
 
+def _format_loaded_experience(uri: str, content: str) -> str:
+    """Render one experience as the `# Loaded Experience` block the agent sees.
+
+    Shared by `read_experience` (skill mode) and the selector, so both modes present
+    experiences identically no matter which path loaded them.
+    """
+    return "\n".join(
+        [
+            "# Loaded Experience",
+            "",
+            f"Experience URI: `{uri}`",
+            "",
+            content.rstrip(),
+        ]
+    ).rstrip()
+
+
 def _make_read_experience_tool():
     Tool = _vikingbot_imports()["Tool"]
 
@@ -657,20 +685,10 @@ def _make_read_experience_tool():
                     return f"Error: URI is not an experience memory: {experience_uri}"
                 content = await client.read_content(experience_uri, level="read")
                 if not content:
-                    return (
-                        "# Loaded Experience\n\n"
-                        f"Experience URI: `{experience_uri}`\n\n"
-                        "Error: experience content not found."
+                    return _format_loaded_experience(
+                        experience_uri, "Error: experience content not found."
                     )
-                return "\n".join(
-                    [
-                        "# Loaded Experience",
-                        "",
-                        f"Experience URI: `{experience_uri}`",
-                        "",
-                        content.rstrip(),
-                    ]
-                ).rstrip()
+                return _format_loaded_experience(experience_uri, content)
             except Exception as exc:
                 logger.warning("read_experience failed: %s", exc)
                 return f"Error reading experience memory: {exc}"
@@ -679,6 +697,294 @@ def _make_read_experience_tool():
                     await client.close()
 
     return ReadExperienceTool()
+
+
+_SELECTOR_NO_EXPERIENCE = (
+    "No stored experience is applicable to this task. "
+    "Proceed from the current policy, tool results, and user requests."
+)
+
+_SELECTOR_SYSTEM_PROMPT = """\
+You are a memory-retrieval filter for an autonomous agent. You receive the agent's \
+current task description and a numbered list of candidate experience memories written \
+after past tasks. Decide which candidates are genuinely applicable to the current task.
+
+Selection rules:
+- A candidate is applicable only if its `## Situation` matches the current task AND none \
+of its exclusions match it. Exclusions are written as "Does not apply when" (or the \
+equivalent in the run's language, e.g. "不适用于").
+- The candidates describe how PAST tasks were handled. That a past task ended in refusal, \
+denial, or escalation is not evidence the current task ends that way — judge only whether \
+the described situation matches, not whether the outcome sounds plausible.
+- When unsure, do not select. A partially matching experience misleads the agent more than \
+no experience at all.
+- Select at most 2 candidates.
+
+Respond with strict JSON only, no prose: {"selected": [<candidate numbers>]} \
+Use {"selected": []} if none apply."""
+
+
+async def _selector_collect_candidates(client: Any, query: str) -> list[tuple[str, str]]:
+    """Search cases, resolve linked experiences, read their full content.
+
+    Selector recall is deliberately independent of ``experience_recall_mode``: it always
+    goes Case ANN -> ``## Linked Experiences`` -> full experience text, because the judge
+    needs whole experiences (Situation plus exclusions) rather than the snippet-shaped
+    candidates the ``search_experience`` recall modes produce.
+
+    Known gap: unlike ``skill`` mode this does not consult ``_find_exact_case_item``, so a
+    task_signature-exact case only contributes candidates when it also ranks in the
+    semantic top-``_SELECTOR_CANDIDATE_CASE_LIMIT``. Feeding exact-case links in first is
+    a plausible improvement, but it changes which candidates the judge sees and so needs
+    its own A/B run rather than being folded in silently.
+    """
+    target_uri = _current_cases_uri(client)
+    result = await client.search(query, target_uri=target_uri, limit=_SELECTOR_CANDIDATE_CASE_LIMIT)
+    memories = result.get("memories", []) if isinstance(result, dict) else []
+    case_uris = [uri for uri in (_case_uri(item) for item in memories) if uri]
+    case_contents = await asyncio.gather(
+        *(_selector_read(client, uri) for uri in case_uris),
+    )
+
+    # Case rank drives candidate order, so keep the search order while de-duplicating:
+    # the same experience is routinely linked from several cases.
+    exp_uris: list[str] = []
+    for case_uri, case_content in zip(case_uris, case_contents, strict=True):
+        if not case_content:
+            continue
+        for uri in _linked_experience_uris(case_content, source_uri=case_uri):
+            if uri not in exp_uris:
+                exp_uris.append(uri)
+
+    exp_uris = exp_uris[:_SELECTOR_CANDIDATE_LIMIT]
+    exp_contents = await asyncio.gather(
+        *(_selector_read(client, uri) for uri in exp_uris),
+    )
+    return [
+        (uri, _truncate_candidate(content.strip()))
+        for uri, content in zip(exp_uris, exp_contents, strict=True)
+        if content and content.strip()
+    ]
+
+
+def _truncate_candidate(content: str) -> str:
+    """Bound one candidate's contribution to the judge prompt.
+
+    The selected text is handed to the agent verbatim, so a silent cut would make selector
+    mode deliver a different (shorter) experience than `read_experience` does for the same
+    URI. Mark the cut instead of hiding it.
+    """
+    if len(content) <= _SELECTOR_CANDIDATE_CHARS:
+        return content
+    return content[:_SELECTOR_CANDIDATE_CHARS].rstrip() + "\n\n[... experience truncated ...]"
+
+
+async def _selector_read(client: Any, uri: str) -> str | None:
+    """Read one memory, treating an unreadable entry as absent rather than fatal."""
+    try:
+        return await client.read_content(uri, level="read")
+    except Exception as exc:
+        logger.warning("selector could not read %s: %s", uri, exc)
+        return None
+
+
+async def _selector_judge(
+    provider: Any,
+    model: str | None,
+    task_description: str,
+    candidates: list[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    """One isolated LLM call deciding which candidates genuinely apply (at most 2).
+
+    The call carries only the task description and the candidate texts — never the
+    rollout conversation — so rejected candidates leave no trace in the main context.
+    """
+    parts = [f"## Current task\n{task_description.strip()}", "## Candidates"]
+    for idx, (_uri, content) in enumerate(candidates, start=1):
+        parts.append(f"### Candidate {idx}\n{content}")
+    response = await provider.chat(
+        messages=[
+            {"role": "system", "content": _SELECTOR_SYSTEM_PROMPT},
+            {"role": "user", "content": "\n\n".join(parts)},
+        ],
+        model=model,
+        # NOTE: `VLMProviderAdapter.chat` accepts these two and then drops them — it calls
+        # `get_completion_async`, whose signature has neither. They only take effect on the
+        # `LiteLLMProvider` path. So the judge runs at the VLM's own temperature and token
+        # ceiling whenever `bot.agents.provider` is configured; do not rely on them for
+        # determinism, and do not tell operators to tune them.
+        max_tokens=_SELECTOR_JUDGE_MAX_TOKENS,
+        temperature=0.0,
+    )
+    finish_reason = str(getattr(response, "finish_reason", "") or "")
+    raw = str(getattr(response, "content", "") or "")
+
+    # `VLMProviderAdapter.chat` never raises: it returns finish_reason="error" with the
+    # exception text as content. Without this branch a rate-limited or timed-out judge is
+    # indistinguishable from a judge that carefully decided nothing applies — the whole
+    # mode would degrade to the no-memory baseline while the report claims it ran.
+    if finish_reason == "error":
+        logger.error("experience selector judge call failed: %s", raw[:300])
+        return []
+    if finish_reason == "length":
+        logger.warning(
+            "experience selector reply was truncated before it emitted JSON: %r", raw[:200]
+        )
+        return []
+
+    parsed = _parse_selector_reply(raw)
+    if parsed is None:
+        logger.warning("experience selector returned no usable JSON object: %r", raw[:200])
+        return []
+
+    selected = parsed.get("selected")
+    if not isinstance(selected, list):
+        # A bare `{"selected": 1}` would otherwise raise TypeError and surface as a
+        # retrieval failure, hiding the fact that the judge answered in the wrong shape.
+        if selected is not None:
+            logger.warning("experience selector 'selected' is not a list: %r", selected)
+        return []
+
+    picked: list[tuple[str, str]] = []
+    seen: set[int] = set()
+    for value in selected:
+        # bool is an int subclass; `[true]` must not silently mean candidate 1.
+        if isinstance(value, bool) or not isinstance(value, int | str):
+            continue
+        try:
+            idx = int(value)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= idx <= len(candidates) and idx not in seen:
+            seen.add(idx)
+            picked.append(candidates[idx - 1])
+    return picked[:_SELECTOR_MAX_SELECTED]
+
+
+def _parse_selector_reply(raw: str) -> dict[str, Any] | None:
+    """Extract the judge's JSON object from a reply that may carry prose around it.
+
+    A greedy ``\\{.*\\}`` scan breaks on any stray brace in that prose — and because an
+    empty selection is indistinguishable from "nothing applies", such a miss silently
+    discards a correct answer. Try the whole reply first, then each balanced ``{...}``
+    span, preferring one that actually carries ``selected``.
+    """
+    raw = raw.strip()
+    if not raw:
+        return None
+
+    def _as_obj(text: str) -> dict[str, Any] | None:
+        try:
+            value = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            return None
+        return value if isinstance(value, dict) else None
+
+    direct = _as_obj(raw)
+    if direct is not None:
+        return direct
+
+    fallback: dict[str, Any] | None = None
+    for start, char in enumerate(raw):
+        if char != "{":
+            continue
+        depth = 0
+        for end in range(start, len(raw)):
+            if raw[end] == "{":
+                depth += 1
+            elif raw[end] == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = _as_obj(raw[start : end + 1])
+                    if candidate is not None:
+                        if "selected" in candidate:
+                            return candidate
+                        fallback = fallback if fallback is not None else candidate
+                    break
+    return fallback
+
+
+def _format_selected_experiences(selected: list[tuple[str, str]]) -> str:
+    return "\n\n---\n\n".join(_format_loaded_experience(uri, content) for uri, content in selected)
+
+
+def _make_load_relevant_experience_tool(judge_provider: Any, judge_model: str | None = None):
+    """Selector-mode experience retrieval: search, read, and applicability filtering all
+    happen outside the main context; only the selected experiences (or nothing) return.
+
+    This removes the priming channel that ``skill`` mode exposes, where unread candidate
+    names and Situation snippets in ``search_experience`` output bias the agent toward
+    past outcomes — most damagingly toward refusing or escalating by analogy.
+
+    The judge runs on ``judge_provider``/``judge_model``, which today is the rollout
+    agent's own provider and model. They are passed explicitly so the filter can later
+    be pointed at a cheaper model without reaching into the agent.
+    """
+    Tool = _vikingbot_imports()["Tool"]
+
+    class LoadRelevantExperienceTool(Tool):
+        @property
+        def name(self) -> str:
+            return "load_relevant_experience"
+
+        @property
+        def description(self) -> str:
+            return (
+                "Retrieve past experience memories relevant to the current task. "
+                "Searches the memory store and filters candidates for applicability in an "
+                "isolated context; returns at most 2 applicable experiences, or a message "
+                "that none apply. Call once with a full description of the task."
+            )
+
+        @property
+        def parameters(self) -> dict[str, Any]:
+            return {
+                "type": "object",
+                "properties": {
+                    "task_description": {
+                        "type": "string",
+                        "description": (
+                            "Natural-language description of the current task: user "
+                            "intents, target objects, requested operations, policy keywords."
+                        ),
+                    },
+                },
+                "required": ["task_description"],
+            }
+
+        async def execute(self, tool_context: Any, task_description: str, **kwargs: Any) -> str:
+            del tool_context, kwargs
+            client = None
+            try:
+                from vikingbot.openviking_mount.ov_server import VikingClient
+
+                client = await VikingClient.create()
+                try:
+                    candidates = await _selector_collect_candidates(client, task_description)
+                finally:
+                    # Release the OV connection pool before the judge call: rollouts run at
+                    # concurrency ~200 and the provider retries rate limits without bound,
+                    # so holding it across the LLM call would pin ~200 idle pools for as
+                    # long as that takes.
+                    await client.close()
+                    client = None
+                if not candidates:
+                    return _SELECTOR_NO_EXPERIENCE
+                selected = await _selector_judge(
+                    judge_provider, judge_model, task_description, candidates
+                )
+                if not selected:
+                    return _SELECTOR_NO_EXPERIENCE
+                return _format_selected_experiences(selected)
+            except Exception as exc:
+                # Memory is best-effort: a retrieval failure must never fail the rollout.
+                logger.warning("load_relevant_experience failed: %s", exc)
+                return _SELECTOR_NO_EXPERIENCE
+            finally:
+                if client is not None:
+                    await client.close()
+
+    return LoadRelevantExperienceTool()
 
 
 def _current_cases_uri(client: Any) -> str:
@@ -1459,6 +1765,11 @@ def _configure_tools(
             )
         )
         agent.tools.register(_make_read_experience_tool())
+    elif loader_mode == "selector":
+        # Single tool: recall and applicability filtering run outside the main context.
+        # agent.model, not a None fallback: falling back would silently judge with the
+        # provider's default model rather than the rollout's own.
+        agent.tools.register(_make_load_relevant_experience_tool(agent.provider, agent.model))
     tool_lock = _AsyncRWLock()
     write_tool_names = _classify_write_tools(provider)
     for schema in provider.list_openai_tools():
@@ -1551,6 +1862,14 @@ def _classify_write_tools(provider: Any) -> set[str]:
     return write_names
 
 
+_EXPERIENCE_PRECEDENCE_CAVEAT = (
+    "Loaded experiences are guidance from prior training runs. "
+    "Use them only when their situation and applicability boundaries match the current "
+    "task; current policy, current tool results, and current user facts override prior "
+    "experience."
+)
+
+
 def _build_system_prompt(
     policy: str,
     *,
@@ -1564,20 +1883,23 @@ def _build_system_prompt(
     if policy:
         instructions.append(policy)
     instructions.append("Use the provided tools to interact with the environment.")
-    if loader_mode == "skill":
-        instructions.append(
-            "Before taking task actions, you MUST use the required `experience_loader` skill. "
-            "It explains how to search OpenViking case memories with the `search_experience` "
-            "tool, use exact-case experiences that are auto-loaded inline, and use Situation "
-            "snippets only as filters before reading semantic-search candidates with the "
-            "`read_experience` tool."
-        )
-        instructions.append(
-            "Loaded experiences are guidance from prior training runs. "
-            "Use them only when their situation and applicability boundaries match the current "
-            "task; current policy, current tool results, and current user facts override prior "
-            "experience."
-        )
+    if loader_mode in {"skill", "selector"}:
+        if loader_mode == "skill":
+            instructions.append(
+                "Before taking task actions, you MUST use the required `experience_loader` "
+                "skill. It explains how to search OpenViking case memories with the "
+                "`search_experience` tool, use exact-case experiences that are auto-loaded "
+                "inline, and use Situation snippets only as filters before reading "
+                "semantic-search candidates with the `read_experience` tool."
+            )
+        else:
+            instructions.append(
+                "Before taking task actions, you MUST use the required `experience_loader` "
+                "skill. It explains how to retrieve applicable past experiences with the "
+                "`load_relevant_experience` tool, which searches and filters candidates in an "
+                "isolated context and returns only experiences judged applicable."
+            )
+        instructions.append(_EXPERIENCE_PRECEDENCE_CAVEAT)
     elif loader_mode == "direct_experience":
         instructions.append(
             "A direct experimental experience will be injected as an Experience Reminder before "
@@ -1622,11 +1944,16 @@ async def _prepare_experience_loader_skill(
     agent: Any,
     session_key: Any,
     system_prompt_profile: VikingBotSystemPromptProfile = DEFAULT_SYSTEM_PROMPT_PROFILE,
+    template_filename: str = "SKILL.md",
 ) -> Any:
     """Install the generic experience_loader skill into the rollout sandbox.
 
-    The loader does not contain per-task memory. It instructs the LLM to use the
-    tau2-only `search_experience` and `read_experience` tools to search case-linked experiences and load selected experience memories.
+    The loader does not contain per-task memory. ``SKILL.md`` (loader_mode='skill')
+    instructs the LLM to use the tau2-only `search_experience` and `read_experience`
+    tools to search case-linked experiences and load selected experience memories.
+    ``SKILL_SELECTOR.md`` (loader_mode='selector') instead points at the single
+    `load_relevant_experience` tool. Either way the skill is installed at the same
+    sandbox path, so the required-read step is identical.
     """
 
     imports = _vikingbot_imports()
@@ -1636,7 +1963,7 @@ async def _prepare_experience_loader_skill(
         if sandbox_manager
         else agent.context.workspace
     )
-    skill_content = _read_experience_loader_template_file("SKILL.md")
+    skill_content = _read_experience_loader_template_file(template_filename)
     await asyncio.to_thread(_EXPERIENCE_LOADER_SKILL_LOCK.acquire)
     try:
         await _install_experience_loader_skill(
@@ -1819,12 +2146,15 @@ async def _run_agent(
     system_prompt_profile = normalize_system_prompt_profile(system_prompt_profile)
     message_context = agent.context
     experience_loader_skill = None
-    if loader_mode == "skill":
-        system_prompt = _append_runtime_case_context(system_prompt, case_lookup)
+    if loader_mode in {"skill", "selector"}:
+        if loader_mode == "skill":
+            # Selector mode has no `search_experience` tool to pass a task_signature to.
+            system_prompt = _append_runtime_case_context(system_prompt, case_lookup)
         message_context = await _prepare_experience_loader_skill(
             agent=agent,
             session_key=session_key,
             system_prompt_profile=system_prompt_profile,
+            template_filename="SKILL_SELECTOR.md" if loader_mode == "selector" else "SKILL.md",
         )
         experience_loader_skill = getattr(
             message_context,
@@ -2150,10 +2480,16 @@ def _case_memory_context_from_tools(tools_used: list[dict] | None) -> str:
         if tool.get("tool_name") == "search_experience":
             blocks.extend(_exact_case_experience_blocks(tool.get("result")))
             continue
-        if tool.get("tool_name") != "read_experience":
+        tool_name = tool.get("tool_name")
+        if tool_name not in {"read_experience", "load_relevant_experience"}:
             continue
         result = str(tool.get("result") or "").strip()
         if not result:
+            continue
+        # Selector mode reports "nothing applied" through a sentinel rather than an empty
+        # result; recording it as loaded memory would tell failure analysis the rollout had
+        # experience context when it had none.
+        if tool_name == "load_relevant_experience" and result == _SELECTOR_NO_EXPERIENCE:
             continue
         args = tool.get("args")
         blocks.append(
@@ -2161,7 +2497,7 @@ def _case_memory_context_from_tools(tools_used: list[dict] | None) -> str:
                 [
                     "## Loaded Experience",
                     "",
-                    "Tool: `read_experience`",
+                    f"Tool: `{tool_name}`",
                     "",
                     "Args:",
                     "```json",

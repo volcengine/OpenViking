@@ -249,11 +249,51 @@ Service options:
 | `--config` | `~/.openviking/ov.conf` | ov.conf for VikingBot / OpenViking access |
 | `--rollout-language` | `default` | Rollout response language. Use `zh` for Chinese user-facing replies. |
 | `--rollout-backend` | `vikingbot` | Rollout implementation backend. `native` for fast Python executor, `vikingbot` for full VikingBot AgentLoop. |
-| `--experience-recall-mode` | `case_ann` | Experience recall strategy: `case_ann`, `exp_ann`, or `hybrid_ann`. |
+| `--loader-mode` | `skill` | How experiences reach the agent: `skill`, `selector`, `constraint`, or `direct_experience`. See below. |
+| `--experience-recall-mode` | `case_ann` | Experience recall strategy: `case_ann`, `exp_ann`, or `hybrid_ann`. Applies to `--loader-mode skill` only. |
 | `--native-thread-workers` | `128` | Thread pool size for native rollout executor. |
 | `--rollout-thread-workers` | `200` | Worker threads used to host rollout executions off the uvicorn event loop. Use `0` to disable threaded hosting. |
 | `--max-rollout-concurrency` | `200` | Maximum concurrent rollout executions accepted by the service. |
 | `--no-kill-existing` | off | Don't kill existing process on the same port. |
+
+### Experience loader modes
+
+`--loader-mode` (or `TAU2_EXPERIENCE_LOADER_MODE`) selects how stored experiences
+reach the rollout agent:
+
+| Mode | Tools exposed to the agent | Recall and filtering |
+|------|----------------------------|----------------------|
+| `skill` | `search_experience`, `read_experience` | The agent drives recall itself: it searches, reads candidate names and Situation snippets, then decides what to read in full. Honours `--experience-recall-mode`. |
+| `selector` | `load_relevant_experience` | Recall, full reads, and applicability filtering all run **outside** the main context. One isolated LLM call judges the candidates and at most 2 applicable experiences come back — rejected candidates never enter the rollout context. |
+| `constraint` | none | Experience constraints are injected automatically as reminder messages before tool calls. |
+| `direct_experience` | none | A fixed experience supplied via `direct_experience_content` is injected as an Experience Reminder before the task. Used for A/B testing one specific experience. |
+
+`selector` exists because `skill` mode has a priming channel: candidate names and
+Situation snippets the agent never reads still bias it toward past outcomes —
+most damagingly toward refusing or escalating by analogy with a past case. Moving
+the filter into an isolated call closes that channel, at the cost of one extra
+LLM call per retrieval.
+
+Both `skill` and `selector` install an `experience_loader` skill into the rollout
+sandbox at `skills/experience_loader/SKILL.md` and force-read it before task
+actions; the content differs (`experience_loader_template/SKILL.md` vs
+`SKILL_SELECTOR.md`). Selector recall is intentionally fixed at Case ANN ->
+`## Linked Experiences` -> full experience text, since the judge needs whole
+experiences rather than snippets — so `--experience-recall-mode` does not apply.
+
+Two caveats when comparing `selector` against `skill`:
+
+- Selector does not use the exact-case (`task_signature`) lookup that `case_ann`
+  applies in skill mode, so an exactly-matching experience only becomes a
+  candidate when it also ranks in the semantic top 3. A selector-vs-skill A/B
+  therefore varies recall as well as filtering.
+- The judge is one extra LLM call per retrieval, on the rollout's own model. Its
+  tokens are not currently added to the rollout's `token_usage`, so reports
+  understate selector's cost.
+
+```bash
+bash benchmark/tau2/train/run_service.sh --loader-mode selector
+```
 
 Then run the lower-level Tau2 wrapper:
 

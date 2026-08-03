@@ -27,6 +27,7 @@ AUTO_COMMIT=false
 TAU2_ROLLOUT_SEED="${TAU2_ROLLOUT_SEED:-300}"
 TAU2_FIRST_USER_CACHE="${TAU2_FIRST_USER_CACHE:-on}"
 EXPERIENCE_RECALL_MODE="case_ann"
+LOADER_MODE_ARG="skill"
 declare -a TRAIN_CLI_ARGS=()
 
 usage() {
@@ -51,6 +52,11 @@ Launcher options:
             Cache and replay each task/trial's first user message. Default: on.
   --experience-recall-mode case_ann|exp_ann|hybrid_ann
             Experience recall strategy. Default: case_ann.
+            Applies to --loader-mode skill only.
+  --loader-mode skill|selector|constraint|direct_experience
+            How experiences reach the agent. Default: skill.
+            selector filters candidates in an isolated context and returns
+            at most 2 applicable experiences.
 
 All remaining args are passed to benchmark/tau2/train/run_batch_train_eval.sh.
 USAGE
@@ -111,6 +117,18 @@ parse_launcher_args() {
         EXPERIENCE_RECALL_MODE="${1#--experience-recall-mode=}"
         shift 1
         ;;
+      --loader-mode)
+        if [[ $# -lt 2 ]]; then
+          echo "[restart-vikingbot-train] ERROR: --loader-mode requires a value" >&2
+          exit 1
+        fi
+        LOADER_MODE_ARG="$2"
+        shift 2
+        ;;
+      --loader-mode=*)
+        LOADER_MODE_ARG="${1#--loader-mode=}"
+        shift 1
+        ;;
       -h|--help)
         usage
         exit 0
@@ -156,11 +174,22 @@ validate_experience_recall_mode() {
   fi
 }
 
+validate_loader_mode() {
+  case "${LOADER_MODE_ARG}" in
+    skill|selector|constraint|direct_experience) ;;
+    *)
+      echo "[restart-vikingbot-train] ERROR: --loader-mode must be skill, selector, constraint, or direct_experience, got: ${LOADER_MODE_ARG}" >&2
+      exit 1
+      ;;
+  esac
+}
+
 parse_launcher_args "$@"
 validate_slot
 validate_seed
 validate_first_user_cache
 validate_experience_recall_mode
+validate_loader_mode
 
 if [[ "${SLOT}" == "0" ]]; then
   DEFAULT_OPENVIKING_PORT="1933"
@@ -189,7 +218,7 @@ OPENVIKING_BOT_PORT="${DEFAULT_OPENVIKING_BOT_PORT}"
 TAU2_SERVICE_HOST="127.0.0.1"
 TAU2_SERVICE_PORT="${DEFAULT_TAU2_SERVICE_PORT}"
 TAU2_ROLLOUT_BACKEND="vikingbot"
-TAU2_EXPERIENCE_LOADER_MODE="skill"
+TAU2_EXPERIENCE_LOADER_MODE="${LOADER_MODE_ARG}"
 TAU2_MAX_ROLLOUT_CONCURRENCY="150"
 TAU2_ROLLOUT_THREAD_WORKERS="${TAU2_MAX_ROLLOUT_CONCURRENCY}"
 WAIT_TIMEOUT_SECONDS="180"

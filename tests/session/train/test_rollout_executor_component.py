@@ -2650,3 +2650,567 @@ def test_tau2_rollout_messages_preserve_runtime_user_constraint_reminder():
     ]
     assert tool_parts[0].tool_name == "get_reservation_details"
     assert tool_parts[0].tool_input == {"reservation_id": "XEHM4B"}
+
+
+def _selector_client_factory(*, cases, contents, observed=None):
+    """Build a FakeClient class serving one case search plus memory reads."""
+
+    class FakeClient:
+        @classmethod
+        async def create(cls):
+            return cls()
+
+        def _memory_target_uri(self, uri):
+            assert uri is None
+            return "viking://user/u/memories"
+
+        async def search(self, query, *, target_uri, limit):
+            if observed is not None:
+                observed.update(query=query, target_uri=target_uri, limit=limit)
+            return {"memories": cases}
+
+        async def read_content(self, uri, *, level=None):
+            if uri not in contents:
+                raise FileNotFoundError(uri)
+            return contents[uri]
+
+        async def close(self):
+            if observed is not None:
+                observed["closed"] = True
+
+    return FakeClient
+
+
+def _selector_provider(reply, *, observed=None, finish_reason="stop"):
+    class FakeProvider:
+        async def chat(self, messages, *, model=None, max_tokens=None, temperature=None, **kwargs):
+            if observed is not None:
+                observed["judge_messages"] = messages
+                observed["judge_model"] = model
+                observed["judge_max_tokens"] = max_tokens
+                observed["judge_temperature"] = temperature
+            return SimpleNamespace(content=reply, finish_reason=finish_reason)
+
+    return FakeProvider()
+
+
+def test_tau2_experience_loader_mode_accepts_selector():
+    from benchmark.tau2.train.rollout_executor_vikingbot import (
+        DEFAULT_TAU2_EXPERIENCE_LOADER_MODE,
+        VikingBotTau2RolloutExecutor,
+        normalize_tau2_experience_loader_mode,
+    )
+
+    assert DEFAULT_TAU2_EXPERIENCE_LOADER_MODE == "skill"
+    assert VikingBotTau2RolloutExecutor(loader_mode="selector").loader_mode == "selector"
+    assert normalize_tau2_experience_loader_mode(" SELECTOR ") == "selector"
+    with pytest.raises(ValueError, match="loader_mode"):
+        normalize_tau2_experience_loader_mode("selecter")
+
+
+def test_tau2_selector_mode_registers_only_the_isolated_retrieval_tool():
+    """Selector mode must not expose search_experience: its snippets are the priming
+    channel selector exists to remove."""
+    import benchmark.tau2.train.rollout_executor_vikingbot as module
+
+    registered = []
+
+    class FakeTools:
+        tool_names = []
+
+        def unregister(self, name):
+            raise AssertionError(f"unexpected unregister: {name}")
+
+        def register(self, tool):
+            registered.append(tool.name)
+
+    class FakeProvider:
+        def list_openai_tools(self):
+            return []
+
+    agent = SimpleNamespace(tools=FakeTools(), provider=FakeProvider(), model="m")
+    module._configure_tools(agent, agent.provider, keep_default_tools=True, loader_mode="selector")
+
+    assert registered == ["load_relevant_experience"]
+
+
+@pytest.mark.asyncio
+async def test_tau2_selector_returns_only_judge_selected_experiences(monkeypatch):
+    """The tool output carries the selected experience only — rejected candidates and
+    the candidate list itself never reach the rollout context."""
+    import vikingbot.openviking_mount.ov_server as ov_server
+
+    from benchmark.tau2.train.rollout_executor_vikingbot import (
+        _make_load_relevant_experience_tool,
+    )
+
+    observed = {}
+    monkeypatch.setattr(
+        ov_server,
+        "VikingClient",
+        _selector_client_factory(
+            cases=[{"uri": "viking://user/u/memories/cases/case1.md", "score": 0.9}],
+            contents={
+                "viking://user/u/memories/cases/case1.md": (
+                    "## Linked Experiences\n\n"
+                    "- [refund](../experiences/refund.md)\n"
+                    "- [upgrade](../experiences/upgrade.md)\n"
+                ),
+                "viking://user/u/memories/experiences/refund.md": "## Situation\nRefund request.",
+                "viking://user/u/memories/experiences/upgrade.md": "## Situation\nCabin upgrade.",
+            },
+            observed=observed,
+        ),
+    )
+
+    tool = _make_load_relevant_experience_tool(
+        _selector_provider('{"selected": [2]}', observed=observed), "judge-model"
+    )
+    result = await tool.execute(None, task_description="user wants a cabin upgrade")
+
+    assert observed["target_uri"] == "viking://user/u/memories/cases"
+    assert observed["closed"] is True
+    assert observed["judge_model"] == "judge-model"
+
+    # The judge call is isolated: system prompt plus one user turn, no rollout history.
+    assert [m["role"] for m in observed["judge_messages"]] == ["system", "user"]
+
+    assert "Experience URI: `viking://user/u/memories/experiences/upgrade.md`" in result
+    assert "Cabin upgrade." in result
+    assert "refund.md" not in result
+    assert "Refund request." not in result
+
+
+@pytest.mark.asyncio
+async def test_tau2_selector_reports_no_experience_when_judge_selects_nothing(monkeypatch):
+    import vikingbot.openviking_mount.ov_server as ov_server
+
+    from benchmark.tau2.train.rollout_executor_vikingbot import (
+        _SELECTOR_NO_EXPERIENCE,
+        _make_load_relevant_experience_tool,
+    )
+
+    monkeypatch.setattr(
+        ov_server,
+        "VikingClient",
+        _selector_client_factory(
+            cases=[{"uri": "viking://user/u/memories/cases/case1.md", "score": 0.9}],
+            contents={
+                "viking://user/u/memories/cases/case1.md": (
+                    "## Linked Experiences\n\n- [refund](../experiences/refund.md)\n"
+                ),
+                "viking://user/u/memories/experiences/refund.md": "## Situation\nRefund request.",
+            },
+        ),
+    )
+
+    tool = _make_load_relevant_experience_tool(_selector_provider('{"selected": []}'))
+    assert await tool.execute(None, task_description="unrelated") == _SELECTOR_NO_EXPERIENCE
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reply",
+    ["no json here", "{not valid json}", '{"selected": [99]}', '{"selected": ["x"]}', "[]"],
+)
+async def test_tau2_selector_degrades_to_no_experience_on_bad_judge_output(monkeypatch, reply):
+    """Memory is best-effort: a malformed judge reply must never fail the rollout."""
+    import vikingbot.openviking_mount.ov_server as ov_server
+
+    from benchmark.tau2.train.rollout_executor_vikingbot import (
+        _SELECTOR_NO_EXPERIENCE,
+        _make_load_relevant_experience_tool,
+    )
+
+    monkeypatch.setattr(
+        ov_server,
+        "VikingClient",
+        _selector_client_factory(
+            cases=[{"uri": "viking://user/u/memories/cases/case1.md", "score": 0.9}],
+            contents={
+                "viking://user/u/memories/cases/case1.md": (
+                    "## Linked Experiences\n\n- [refund](../experiences/refund.md)\n"
+                ),
+                "viking://user/u/memories/experiences/refund.md": "## Situation\nRefund request.",
+            },
+        ),
+    )
+
+    tool = _make_load_relevant_experience_tool(_selector_provider(reply))
+    assert await tool.execute(None, task_description="anything") == _SELECTOR_NO_EXPERIENCE
+
+
+@pytest.mark.asyncio
+async def test_tau2_selector_caps_selection_and_keeps_case_rank_order(monkeypatch):
+    import vikingbot.openviking_mount.ov_server as ov_server
+
+    from benchmark.tau2.train.rollout_executor_vikingbot import _selector_collect_candidates
+    from benchmark.tau2.train.rollout_executor_vikingbot import (
+        _selector_judge as judge,
+    )
+
+    contents = {
+        "viking://user/u/memories/cases/case1.md": (
+            "## Linked Experiences\n\n- [a](../experiences/a.md)\n- [b](../experiences/b.md)\n"
+        ),
+        # case2 re-links a.md: de-duplication must keep the first (higher-ranked) position.
+        "viking://user/u/memories/cases/case2.md": (
+            "## Linked Experiences\n\n- [a](../experiences/a.md)\n- [c](../experiences/c.md)\n"
+        ),
+    }
+    for name in "abc":
+        contents[f"viking://user/u/memories/experiences/{name}.md"] = f"## Situation\n{name}"
+
+    monkeypatch.setattr(
+        ov_server,
+        "VikingClient",
+        _selector_client_factory(
+            cases=[
+                {"uri": "viking://user/u/memories/cases/case1.md", "score": 0.9},
+                {"uri": "viking://user/u/memories/cases/case2.md", "score": 0.5},
+            ],
+            contents=contents,
+        ),
+    )
+    client = await ov_server.VikingClient.create()
+
+    candidates = await _selector_collect_candidates(client, "q")
+    assert [uri.rsplit("/", 1)[-1] for uri, _ in candidates] == ["a.md", "b.md", "c.md"]
+
+    picked = await judge(_selector_provider('{"selected": [1, 2, 3]}'), None, "q", candidates)
+    assert len(picked) == 2
+
+
+@pytest.mark.asyncio
+async def test_tau2_selector_skips_unreadable_memories(monkeypatch):
+    """An unreadable case or experience drops that entry instead of failing recall."""
+    import vikingbot.openviking_mount.ov_server as ov_server
+
+    from benchmark.tau2.train.rollout_executor_vikingbot import _selector_collect_candidates
+
+    monkeypatch.setattr(
+        ov_server,
+        "VikingClient",
+        _selector_client_factory(
+            cases=[
+                {"uri": "viking://user/u/memories/cases/missing.md", "score": 0.9},
+                {"uri": "viking://user/u/memories/cases/case2.md", "score": 0.5},
+            ],
+            contents={
+                "viking://user/u/memories/cases/case2.md": (
+                    "## Linked Experiences\n\n"
+                    "- [gone](../experiences/gone.md)\n"
+                    "- [ok](../experiences/ok.md)\n"
+                ),
+                "viking://user/u/memories/experiences/ok.md": "## Situation\nfine",
+            },
+        ),
+    )
+    client = await ov_server.VikingClient.create()
+
+    candidates = await _selector_collect_candidates(client, "q")
+    assert [uri.rsplit("/", 1)[-1] for uri, _ in candidates] == ["ok.md"]
+
+
+@pytest.mark.asyncio
+async def test_tau2_selector_tool_survives_unavailable_memory_service(monkeypatch):
+    import vikingbot.openviking_mount.ov_server as ov_server
+
+    from benchmark.tau2.train.rollout_executor_vikingbot import (
+        _SELECTOR_NO_EXPERIENCE,
+        _make_load_relevant_experience_tool,
+    )
+
+    class UnavailableClient:
+        @classmethod
+        async def create(cls):
+            raise ConnectionError("memory service down")
+
+    monkeypatch.setattr(ov_server, "VikingClient", UnavailableClient)
+
+    tool = _make_load_relevant_experience_tool(_selector_provider('{"selected": [1]}'))
+    assert await tool.execute(None, task_description="anything") == _SELECTOR_NO_EXPERIENCE
+
+
+def test_tau2_selector_system_prompt_directs_agent_to_isolated_tool():
+    from benchmark.tau2.train.rollout_executor_vikingbot import _build_system_prompt
+
+    prompt = _build_system_prompt(
+        "POLICY", keep_default_tools=True, rollout_language="default", loader_mode="selector"
+    )
+    assert "load_relevant_experience" in prompt
+    assert "search_experience" not in prompt
+    assert "read_experience" not in prompt
+
+
+def test_tau2_loaded_experience_format_is_shared_by_both_load_paths():
+    from benchmark.tau2.train.rollout_executor_vikingbot import (
+        _format_loaded_experience,
+        _format_selected_experiences,
+    )
+
+    one = _format_loaded_experience("viking://u/memories/experiences/a.md", "## Situation\nbody\n")
+    assert one.startswith("# Loaded Experience")
+    assert "Experience URI: `viking://u/memories/experiences/a.md`" in one
+    assert one.endswith("body")
+
+    both = _format_selected_experiences(
+        [
+            ("viking://u/memories/experiences/a.md", "## Situation\nfirst"),
+            ("viking://u/memories/experiences/b.md", "## Situation\nsecond"),
+        ]
+    )
+    assert both.count("# Loaded Experience") == 2
+    assert "\n\n---\n\n" in both
+
+
+@pytest.mark.asyncio
+async def test_tau2_selector_judge_call_failure_is_logged_as_an_error(monkeypatch):
+    """VLMProviderAdapter.chat never raises — it returns finish_reason='error' with the
+    exception text as content. Without this branch a rate-limited judge is
+    indistinguishable from one that decided nothing applies, and a whole run silently
+    degrades to the no-memory baseline."""
+    import benchmark.tau2.train.rollout_executor_vikingbot as module
+
+    errors: list[str] = []
+    monkeypatch.setattr(
+        module.logger, "error", lambda msg, *args: errors.append(str(msg) % args if args else msg)
+    )
+    candidates = [("viking://u/memories/experiences/a.md", "## Situation\na")]
+
+    # An adapter error whose text embeds JSON would otherwise parse as a valid reply.
+    picked = await module._selector_judge(
+        _selector_provider(
+            'Error calling LLM in VLM Adapter: {"error": {"code": "RateLimit"}}',
+            finish_reason="error",
+        ),
+        "m",
+        "task",
+        candidates,
+    )
+    assert picked == []
+    assert errors and "RateLimit" in errors[0]
+
+
+@pytest.mark.asyncio
+async def test_tau2_selector_distinguishes_truncation_from_a_disobedient_reply(monkeypatch):
+    """Both degrade to 'select nothing', so the logs are the only way to tell a broken
+    judge from an empty verdict."""
+    import benchmark.tau2.train.rollout_executor_vikingbot as module
+
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        module.logger,
+        "warning",
+        lambda msg, *args: warnings.append(str(msg) % args if args else msg),
+    )
+    candidates = [("viking://u/memories/experiences/a.md", "## Situation\na")]
+
+    picked = await module._selector_judge(
+        _selector_provider("I need to consider whether", finish_reason="length"),
+        "m",
+        "task",
+        candidates,
+    )
+    assert picked == []
+    assert any("truncated" in w for w in warnings), warnings
+
+    warnings.clear()
+    picked = await module._selector_judge(
+        _selector_provider("nope, no json", finish_reason="stop"), "m", "task", candidates
+    )
+    assert picked == []
+    assert warnings and not any("truncated" in w for w in warnings), warnings
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reply",
+    [
+        '{"selected": [1]}',
+        '```json\n{"selected": [1]}\n```',
+        # Prose containing braces used to defeat a greedy {.*} scan, silently discarding
+        # a correct selection.
+        '{"selected": [1]}\n\nCandidate 1 matches the {situation} described.',
+        'Thinking: the {task} is a refund.\n{"selected": [1]}',
+        '{"reasoning": "candidate {1} fits"}\n{"selected": [1]}',
+    ],
+)
+async def test_tau2_selector_finds_the_verdict_despite_surrounding_prose(reply):
+    from benchmark.tau2.train.rollout_executor_vikingbot import _selector_judge
+
+    candidates = [
+        ("viking://u/memories/experiences/a.md", "## Situation\na"),
+        ("viking://u/memories/experiences/b.md", "## Situation\nb"),
+    ]
+    picked = await _selector_judge(_selector_provider(reply), "m", "task", candidates)
+    assert [uri.rsplit("/", 1)[-1] for uri, _ in picked] == ["a.md"], reply
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reply", "expected"),
+    [
+        # Wrong shape must not raise: a TypeError here surfaces as "retrieval failed",
+        # hiding that the judge answered badly.
+        ('{"selected": 1}', []),
+        ('{"selected": null}', []),
+        ('{"selected": "1"}', []),
+        # Duplicates would emit the same experience twice and burn the 2-slot budget.
+        ('{"selected": [1, 1, 2]}', ["a.md", "b.md"]),
+        # bool is an int subclass; `true` must not mean candidate 1.
+        ('{"selected": [true]}', []),
+        ('{"selected": [2, 1]}', ["b.md", "a.md"]),
+    ],
+)
+async def test_tau2_selector_handles_malformed_selection_values(reply, expected):
+    from benchmark.tau2.train.rollout_executor_vikingbot import _selector_judge
+
+    candidates = [
+        ("viking://u/memories/experiences/a.md", "## Situation\na"),
+        ("viking://u/memories/experiences/b.md", "## Situation\nb"),
+    ]
+    picked = await _selector_judge(_selector_provider(reply), "m", "task", candidates)
+    assert [uri.rsplit("/", 1)[-1] for uri, _ in picked] == expected, reply
+
+
+def test_tau2_skill_and_selector_share_one_experience_precedence_caveat():
+    """Both modes end with the same precedence caveat; it is defined once so the two
+    cannot drift apart."""
+    from benchmark.tau2.train.rollout_executor_vikingbot import (
+        _EXPERIENCE_PRECEDENCE_CAVEAT,
+        _build_system_prompt,
+    )
+
+    prompts = {
+        mode: _build_system_prompt(
+            "POLICY", keep_default_tools=True, rollout_language="default", loader_mode=mode
+        )
+        for mode in ("skill", "selector")
+    }
+    for mode, prompt in prompts.items():
+        assert prompt.count(_EXPERIENCE_PRECEDENCE_CAVEAT) == 1, mode
+
+    # Only the tool-specific sentence differs between the two modes.
+    assert "search_experience" in prompts["skill"]
+    assert "load_relevant_experience" in prompts["selector"]
+
+
+@pytest.mark.asyncio
+async def test_tau2_selector_installs_the_selector_skill_template(tmp_path, monkeypatch):
+    """This one line decides whether the agent is told to call a tool that exists. Getting
+    it wrong instructs the agent to use search_experience, which selector never registers
+    — a degraded rollout with no crash."""
+    import benchmark.tau2.train.rollout_executor_vikingbot as module
+
+    class StubContextBuilder:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    real_imports = module._vikingbot_imports
+    monkeypatch.setattr(
+        module,
+        "_vikingbot_imports",
+        lambda: {**real_imports(), "ContextBuilder": StubContextBuilder},
+    )
+    agent = SimpleNamespace(context=SimpleNamespace(workspace=tmp_path), sandbox_manager=None)
+
+    installed = {}
+    for mode, template in (("skill", "SKILL.md"), ("selector", "SKILL_SELECTOR.md")):
+        builder = await module._prepare_experience_loader_skill(
+            agent=agent, session_key=None, template_filename=template
+        )
+        written = (tmp_path / module.EXPERIENCE_LOADER_SKILL_PATH).read_text(encoding="utf-8")
+        assert written == module._read_experience_loader_template_file(template)
+        assert builder.latest_experience_loader_skill_content == written
+        installed[mode] = written
+
+    # Both land at the same path; only the tool they name differs.
+    assert "load_relevant_experience" in installed["selector"]
+    assert "search_experience" not in installed["selector"]
+    assert "search_experience" in installed["skill"]
+
+
+def test_tau2_selector_output_reaches_the_train_loop_memory_context():
+    """metadata['memory'] feeds failure analysis and the memory_context ratio in reports.
+    Keying only on search_experience/read_experience would report every selector rollout
+    as having had no memory at all."""
+    from benchmark.tau2.train.rollout_executor_vikingbot import (
+        _SELECTOR_NO_EXPERIENCE,
+        _case_memory_context_from_tools,
+    )
+
+    loaded = _case_memory_context_from_tools(
+        [
+            {
+                "tool_name": "load_relevant_experience",
+                "args": '{"task_description": "refund"}',
+                "result": (
+                    "# Loaded Experience\n\n"
+                    "Experience URI: `viking://u/memories/experiences/refund.md`\n\n"
+                    "## Situation\nRefund request."
+                ),
+            }
+        ]
+    )
+    assert "load_relevant_experience" in loaded
+    assert "Refund request." in loaded
+
+    # The "nothing applied" sentinel is not memory context.
+    assert (
+        _case_memory_context_from_tools(
+            [{"tool_name": "load_relevant_experience", "result": _SELECTOR_NO_EXPERIENCE}]
+        )
+        == ""
+    )
+
+
+def test_tau2_selector_loaded_uris_are_visible_to_the_gradient_estimator():
+    """Without this the estimator can never target the experience that caused a failure,
+    so selector rollouts could only ever create new experiences, never patch one."""
+    from openviking.session.train.components.gradient_estimator import _loaded_experience_uris
+
+    analysis = SimpleNamespace(
+        metadata={
+            "rollout_messages": [
+                {
+                    "parts": [
+                        {
+                            "tool_name": "load_relevant_experience",
+                            "tool_status": "completed",
+                            "tool_input": {"task_description": "refund"},
+                            "tool_output": (
+                                "# Loaded Experience\n\n"
+                                "Experience URI: `viking://u/memories/experiences/a.md`\n\n"
+                                "## Situation\na\n\n---\n\n"
+                                "# Loaded Experience\n\n"
+                                "Experience URI: `viking://u/memories/experiences/b.md`\n\n"
+                                "## Situation\nb"
+                            ),
+                        }
+                    ]
+                }
+            ]
+        }
+    )
+    assert _loaded_experience_uris(analysis) == [
+        "viking://u/memories/experiences/a.md",
+        "viking://u/memories/experiences/b.md",
+    ]
+
+
+def test_tau2_selector_marks_truncated_candidates():
+    """Selected text goes to the agent verbatim, so an unmarked cut would silently deliver
+    a shorter experience than read_experience returns for the same URI."""
+    from benchmark.tau2.train.rollout_executor_vikingbot import (
+        _SELECTOR_CANDIDATE_CHARS,
+        _truncate_candidate,
+    )
+
+    short = "## Situation\nfits"
+    assert _truncate_candidate(short) == short
+
+    long_content = "x" * (_SELECTOR_CANDIDATE_CHARS + 500)
+    truncated = _truncate_candidate(long_content)
+    assert truncated.endswith("[... experience truncated ...]")
+    assert len(truncated) < len(long_content)
