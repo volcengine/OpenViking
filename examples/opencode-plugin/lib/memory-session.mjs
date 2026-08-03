@@ -95,29 +95,42 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     // renames it onto statePath. A crash between writeFile and rename leaves an
     // orphan temp behind; sweep them on startup so they don't accumulate forever.
     // We parse the PID from the filename and skip files whose PID is still alive
-    // to avoid removing a concurrent process's in-flight temp.
+    // to avoid removing a concurrent process's in-flight temp — but only if the
+    // file is recent, so a recycled PID can't shield an orphan temp forever.
+    const RECENT_TEMP_MS = 10 * 60 * 1000
     try {
       const dir = path.dirname(statePath)
       const base = path.basename(statePath)
       const entries = await fs.promises.readdir(dir)
       for (const name of entries) {
         if (name.startsWith(`${base}.`) && name.endsWith(".tmp")) {
+          const fullPath = path.join(dir, name)
           const match = name.match(/\.(\d+)\.\d+\.tmp$/)
           if (match) {
+            let alive = false
             try {
               process.kill(Number(match[1]), 0) // probe: process is alive
-              continue // skip — this temp file may be in active use
+              alive = true
             } catch (err) {
-              if (err?.code !== "ESRCH") {
-                // EPERM or other error — process may be alive (possibly a
-                // different OS user); skip to be safe.
-                continue
+              // EPERM (or other non-ESRCH) — process may be alive (possibly a
+              // different OS user); treat as alive to be safe. ESRCH — dead.
+              alive = err?.code !== "ESRCH"
+            }
+            if (alive) {
+              // A live PID may still be writing this temp. Only skip it while it
+              // is recent; a stale temp under a recycled PID is reclaimed below.
+              let recent = true
+              try {
+                const stat = await fs.promises.stat(fullPath)
+                recent = Date.now() - stat.mtimeMs < RECENT_TEMP_MS
+              } catch {
+                recent = false // vanished/unreadable — fall through to unlink
               }
-              // ESRCH — process not found, safe to clean up
+              if (recent) continue
             }
           }
           try {
-            await fs.promises.unlink(path.join(dir, name))
+            await fs.promises.unlink(fullPath)
           } catch {
             // best effort; ignore files removed by a concurrent process
           }
