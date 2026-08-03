@@ -471,8 +471,9 @@ class ResourceProcessor:
         build_index = bool(kwargs.get("build_index", True))
         processing_mode = normalize_processing_mode(processing_mode)
         vectors_only = processing_mode == VECTORS_ONLY
+        root_is_file = bool(prepared.get("root_is_file"))
         ingest_options = IngestOptions.from_value(kwargs.pop("ingest_options", None))
-        should_summarize = not vectors_only and (summarize or build_index)
+        should_summarize = not root_is_file and not vectors_only and (summarize or build_index)
         result: Dict[str, Any] = {"status": "success", "root_uri": root_uri}
 
         if should_summarize:
@@ -549,22 +550,28 @@ class ResourceProcessor:
                             dirs=sync_deleted_dirs,
                             ctx=ctx,
                         )
-                if vectors_only and build_index:
-                    await self._vectorize_resource_files(
-                        root_uri,
-                        ctx=ctx,
-                        ingest_options=ingest_options,
-                    )
+                if build_index:
+                    if root_is_file:
+                        await self._vectorize_resource_file(
+                            root_uri, ctx=ctx, ingest_options=ingest_options
+                        )
+                    elif vectors_only:
+                        await self._vectorize_resource_files(
+                            root_uri, ctx=ctx, ingest_options=ingest_options
+                        )
             finally:
                 await get_viking_fs()._async_agfs.pathlock_release(resource_lock)
-        elif vectors_only:
+        elif vectors_only or root_is_file:
             if not build_index:
                 return result
-            await self._vectorize_resource_files(
-                root_uri,
-                ctx=ctx,
-                ingest_options=ingest_options,
-            )
+            if root_is_file:
+                await self._vectorize_resource_file(
+                    root_uri, ctx=ctx, ingest_options=ingest_options
+                )
+            else:
+                await self._vectorize_resource_files(
+                    root_uri, ctx=ctx, ingest_options=ingest_options
+                )
         return result
 
     async def _delete_removed_resource_vectors(
@@ -633,6 +640,27 @@ class ResourceProcessor:
                 ingest_options=ingest_options,
                 register_request_wait=True,
             )
+
+    async def _vectorize_resource_file(
+        self,
+        file_uri: str,
+        *,
+        ctx: RequestContext,
+        ingest_options: IngestOptions | None = None,
+    ) -> None:
+        parent = VikingURI(file_uri).parent
+        if parent is None:
+            return
+        name = file_uri.rsplit("/", 1)[-1]
+        await vectorize_file(
+            file_path=file_uri,
+            summary_dict={"name": name, "summary": ""},
+            parent_uri=parent.uri,
+            context_type=context_type_for_uri(file_uri),
+            ctx=ctx,
+            ingest_options=IngestOptions.from_value(ingest_options),
+            register_request_wait=True,
+        )
 
     async def reserve_unique_candidate(
         self,
