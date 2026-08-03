@@ -1,0 +1,25 @@
+benchmark/locomo/compile/import_via_compile.py
+  s_20eb66a3e0cbe0::t_06e16a0b892fe1 1-441
+benchmark/locomo/vikingbot/import_to_ov.py
+  s_20eb66a3e0cbe0::t_9b2db0c20feb4f 45,359,405,575-578,580-584
+tests/unit/test_locomo_peer_wiring.py
+  s_20eb66a3e0cbe0::t_0f50f5da204405 1,28-35,82-244,305-355
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "0a9589a6766837fee1d68bfe3518a365717aeab3",
+  "prompts": {},
+  "sessions": {
+    "s_20eb66a3e0cbe0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb70d-2409-71e1-8f56-310643985289",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
