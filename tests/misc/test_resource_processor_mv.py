@@ -157,6 +157,55 @@ async def test_resource_processor_first_add_summarizes_from_committed_uri(monkey
 
 
 @pytest.mark.asyncio
+async def test_resource_processor_allows_flat_root_only_for_single_no_split_source(
+    monkeypatch,
+):
+    from openviking.utils.resource_processor import ResourceProcessor
+
+    fake_fs = _FakeVikingFS()
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.get_current_telemetry",
+        lambda: _DummyTelemetry(),
+    )
+    _patch_viking_fs(monkeypatch, fake_fs)
+
+    rp = ResourceProcessor(vikingdb=_DummyVikingDB(), media_storage=None)
+    rp._get_media_processor = MagicMock()
+    rp._get_media_processor.return_value.process = AsyncMock(
+        return_value=SimpleNamespace(
+            temp_dir_path="viking://temp/tmpdir",
+            source_path="神雕_副本.md",
+            source_format="markdown",
+            meta={},
+            warnings=[],
+        )
+    )
+    rp.tree_builder.finalize_from_temp = AsyncMock(
+        return_value=SimpleNamespace(
+            root=SimpleNamespace(
+                uri="viking://resources/神雕_副本.md",
+                temp_uri="viking://temp/tmpdir/神雕_副本/神雕_副本.md",
+            ),
+            _root_is_file=True,
+        )
+    )
+    rp._summarizer = SimpleNamespace(
+        summarize=AsyncMock(return_value={"status": "success"})
+    )
+
+    await rp.process_resource(
+        path="神雕_副本.md",
+        ctx=object(),
+        build_index=True,
+        parse_mode="no_split",
+    )
+
+    assert rp.tree_builder.finalize_from_temp.await_args.kwargs[
+        "flatten_single_file"
+    ] is True
+
+
+@pytest.mark.asyncio
 async def test_resource_processor_second_add_preserves_temp_uri_for_incremental(monkeypatch):
     from openviking.utils.resource_processor import ResourceProcessor
 

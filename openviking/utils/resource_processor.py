@@ -16,6 +16,7 @@ from openviking.core.context import ContextLevel
 from openviking.utils.ingest_options import IngestOptions
 from openviking.core.namespace import context_type_for_uri
 from openviking.parse.image_rewrite import rewrite_image_uris
+from openviking.parse.mode import ParseMode, normalize_parse_mode
 from openviking.parse.tree_builder import TreeBuilder
 from openviking.resource.processing_mode import (
     DEFAULT_PROCESSING_MODE,
@@ -287,6 +288,13 @@ class ResourceProcessor:
                         source_path=parse_result.source_path,
                         source_format=parse_result.source_format,
                         create_parent=kwargs.get("create_parent", False),
+                        flatten_single_file=(
+                            normalize_parse_mode(
+                                kwargs.get("parse_mode", ParseMode.DEFAULT)
+                            )
+                            is ParseMode.NO_SPLIT
+                            and parse_result.source_format not in {"directory", "repository"}
+                        ),
                     )
                     if context_tree and context_tree.root:
                         result["root_uri"] = context_tree.root.uri
@@ -417,6 +425,9 @@ class ResourceProcessor:
                 "source_committed": source_committed,
                 "target_preexisting": target_preexisting,
                 "is_code_repo": parse_result.source_format == "repository",
+                "root_is_file": bool(
+                    getattr(context_tree, "_root_is_file", False)
+                ),
             }
             if defer_post_processing:
                 result["_post_process"] = prepared
