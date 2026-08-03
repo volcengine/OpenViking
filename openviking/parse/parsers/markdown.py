@@ -284,6 +284,7 @@ class MarkdownParser(BaseParser):
                 "import_root": kwargs.get("link_rewrite_root"),
                 "base_dir": base_dir,
                 "allowed_media_dirs": allowed_media_dirs,
+                "split_content": kwargs.get("split_content", True),
             }
 
             # Phase 2 — write only: replay the plan against the real VikingFS,
@@ -1108,12 +1109,21 @@ class MarkdownParser(BaseParser):
         side-effect-free parse, cached per parse_content() call. None on parse failure."""
         ctx = self._rewrite_ctx or {}
         cache = ctx.setdefault("_split_cache", {})
-        key = os.path.abspath(target_path)
+        split_content = bool(ctx.get("split_content", True))
+        key = (os.path.abspath(target_path), split_content)
         if key not in cache:
-            cache[key] = await self._probe_split_layout(target_path)
+            cache[key] = await self._probe_split_layout(
+                target_path,
+                split_content=split_content,
+            )
         return cache[key]
 
-    async def _probe_split_layout(self, target_path: str) -> Optional[Dict[str, str]]:
+    async def _probe_split_layout(
+        self,
+        target_path: str,
+        *,
+        split_content: bool,
+    ) -> Optional[Dict[str, str]]:
         """Plan the target's layout WITHOUT writing anything, returning
         {"<doc_dir>/<section...>": text} keyed by path relative to the temp root, i.e.
         INCLUDING the doc-root dir segment so callers can map each key straight onto
@@ -1122,7 +1132,10 @@ class MarkdownParser(BaseParser):
         try:
             probe_root = "viking://temp/_probe"
             layout = await self._compute_layout(
-                self._read_file(target_path), probe_root, source_path=str(target_path)
+                self._read_file(target_path),
+                probe_root,
+                source_path=str(target_path),
+                split_content=split_content,
             )
             root = layout.temp_uri.rstrip("/")
             out: Dict[str, str] = {}

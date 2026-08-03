@@ -335,6 +335,32 @@ class TestComputeLayoutPurity:
 
 
 class TestParseContentRewiring:
+    async def test_no_split_probe_rewrites_anchor_to_actual_single_file(
+        self,
+        tmp_path: Path,
+    ):
+        kb = tmp_path / "knowledge"
+        kb.mkdir()
+        manual = kb / "manual.md"
+        manual.write_text(
+            "# 安装\n\n" + ("这是一段足够长的安装说明。" * 1200),
+            encoding="utf-8",
+        )
+        index = kb / "index.md"
+        index.write_text("[安装说明](manual.md#安装)", encoding="utf-8")
+
+        fake = FakeVikingFS()
+        with patch.object(BaseParser, "_get_viking_fs", return_value=fake):
+            await MarkdownParser().parse(
+                str(index),
+                enable_link_rewrite=True,
+                link_rewrite_root=str(kb),
+                split_content=False,
+            )
+
+        written = [_decode(value) for uri, value in fake.files.items() if uri.endswith(".md")]
+        assert written == ["[安装说明](../manual/manual.md#安装)"]
+
     async def test_parse_content_rewrites_link_when_enabled(self, tmp_path: Path):
         kb = tmp_path / "knowledge"
         tgt = kb / "目录甲" / "目录乙" / "目录丙"
