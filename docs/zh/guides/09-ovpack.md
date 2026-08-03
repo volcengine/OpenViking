@@ -141,11 +141,11 @@ ov restore ./backups/openviking.ovpack --on-conflict overwrite
 ## Python SDK
 
 ```python
-from openviking import AsyncOpenViking
+from openviking_sdk import AsyncHTTPClient
 
 
 async def migrate_project():
-    client = AsyncOpenViking()
+    client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
     await client.initialize()
     try:
         await client.export_ovpack(

@@ -1486,7 +1486,7 @@ OpenViking 使用两个配置文件：
 
 | 配置文件 | 用途 | 默认路径 |
 |---------|------|---------|
-| `ov.conf` | SDK 嵌入模式 + 服务端配置 | `~/.openviking/ov.conf` |
+| `ov.conf` | OpenViking Server 配置 | `~/.openviking/ov.conf` |
 | `ovcli.conf` | HTTP 客户端和 CLI 连接远程服务端 | `~/.openviking/ovcli.conf` |
 
 配置文件放在默认路径时，OpenViking 自动加载，无需额外设置。
@@ -1520,7 +1520,7 @@ openviking-server --config /path/to/ov.conf
 
 ### ov.conf
 
-本文档上方各配置段（embedding、vlm、rerank、storage）均属于 `ov.conf`。SDK 嵌入模式和服务端共用此文件。
+本文档上方各配置段（embedding、vlm、rerank、storage）均属于服务端的 `ov.conf`。
 
 如需配置 memory 相关行为，可在 `ov.conf` 中添加 `memory` 段：
 

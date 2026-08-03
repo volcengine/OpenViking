@@ -19,7 +19,7 @@ ParseModeInput: TypeAlias = ParseMode | Literal["default", "no_split"]
 
 
 def normalize_parse_mode(value: str | ParseMode) -> ParseMode:
-    """Return a validated parse mode for HTTP and embedded callers."""
+    """Return a validated resource parsing mode."""
     try:
         return ParseMode(value)
     except (TypeError, ValueError) as exc:

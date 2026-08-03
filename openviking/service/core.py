@@ -473,14 +473,6 @@ class OpenVikingService:
             self._queue_manager.start()
             logger.info("QueueManager workers started")
 
-        # Register as the process-wide service so flows that resolve the
-        # service via the dependency global (e.g. background reindex tasks
-        # triggered by git restore) work in embedded mode, not just under the
-        # HTTP server which calls set_service() during bootstrap.
-        from openviking.server.dependencies import set_service
-
-        set_service(self)
-
         self._initialized = True
         logger.info("OpenVikingService initialized")
 

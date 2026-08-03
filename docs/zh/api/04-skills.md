@@ -157,7 +157,7 @@ This tool wraps the MCP tool `search-web`. Call this when the user needs functio
 5. 如指定 `wait=True`，等待向量化完成
 
 **代码入口**：
-- `openviking/client/local.py:LocalClient.add_skill` - SDK 入口（嵌入式）
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.add_skill` - Python SDK 入口
 - `openviking_cli/client/http.py:AsyncHTTPClient.add_skill` - SDK 入口（HTTP）
 - `openviking/server/routers/resources.py:add_skill` - HTTP 路由
 - `openviking/service/resource_service.py:ResourceService.add_skill` - 核心服务实现

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -454,32 +453,6 @@ def test_ensure_client_defaults_to_http_client(monkeypatch):
     assert created["api_key"] == "test-key"
     assert created["user_id"] == "test-user"
     assert created["url"] is None
-
-
-def test_ensure_client_keeps_local_path_clients_direct(monkeypatch, tmp_path):
-    created = {}
-
-    class FakeLocalClient:
-        def __init__(self, path, actor_peer_id=None):
-            created["path"] = path
-            created["actor_peer_id"] = actor_peer_id
-            self._initialized = False
-
-        def initialize(self):
-            self._initialized = True
-
-    monkeypatch.setattr(
-        client_helpers,
-        "import_module",
-        lambda name: SimpleNamespace(SyncOpenViking=FakeLocalClient),
-    )
-
-    client = ensure_client(OpenVikingConnection(path=str(tmp_path)))
-
-    assert isinstance(client, FakeLocalClient)
-    assert client._initialized is True
-    assert created["path"] == str(tmp_path)
-    assert created["actor_peer_id"] is None
 
 
 def test_openviking_client_retries_recoverable_read_with_fresh_client(monkeypatch):

@@ -129,9 +129,9 @@ Once enabled, all three surfaces expose snapshot commands. The examples below sh
 Snapshot methods live under the `client.snapshot.*` namespace.
 
 ```python
-import openviking as ov
+from openviking_sdk import SyncHTTPClient
 
-client = ov.OpenViking()
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 root = "viking://resources/my_project"

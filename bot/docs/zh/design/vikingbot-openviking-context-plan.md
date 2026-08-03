@@ -347,22 +347,15 @@ OpenViking 的 `get_session_context()` 返回的不是纯摘要，而是：
 - `commit_token_threshold`：触发 commit 的阈值
 - `commit_keep_recent_count`：commit 后保留的 recent live messages 数量
 
-## OpenViking Python Client 需要补的能力
+## OpenViking Python HTTP SDK 需要补的能力
 
-虽然 OpenViking 服务端已支持 `keep_recent_count`，但当前 Python client wrapper 还没有把这个参数完整透出给 VikingBot。
-
-需要修改：
-
-- `openviking/async_client.py`
-- `openviking/client/session.py`
-
-建议补齐以下调用能力：
+OpenViking 服务端和 Python HTTP SDK 需要完整透出以下调用能力：
 
 - `commit_session(session_id, keep_recent_count=0, telemetry=False)`
 - `Session.commit(keep_recent_count=0, telemetry=False)`
 - `Session.commit_async(keep_recent_count=0, telemetry=False)`
 
-否则 VikingBot 在 `AgentsConfig` 配置了 `commit_keep_recent_count` 也无法真正生效。
+对应实现位于 `sdk/python/openviking_sdk/client.py`，VikingBot 通过 HTTP 服务调用这些接口。
 
 ## 与旧链路的共存策略
 

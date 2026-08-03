@@ -2,7 +2,8 @@
 
 from pathlib import Path
 
-from openviking.async_client import logger
+from loguru import logger
+
 from vikingbot.config.schema import Config, SessionKey
 from vikingbot.sandbox.backends import get_backend
 from vikingbot.sandbox.base import SandboxBackend, UnsupportedBackendError

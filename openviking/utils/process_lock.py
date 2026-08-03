@@ -17,7 +17,7 @@ logger = get_logger(__name__)
 
 LOCK_FILENAME = ".openviking.pid"
 
-# A PID file protects the whole process, while multiple embedded services may
+# A PID file protects the whole process, while multiple service instances may
 # legitimately share that process and workspace.  Keep process-local ownership
 # counts so closing one service cannot expose another live service to a second
 # process.  The file remains the cross-process source of truth.
@@ -136,8 +136,8 @@ def acquire_data_dir_lock(data_dir: str) -> str:
                 f"instances on the same data directory causes silent storage "
                 f"contention and data corruption.\n\n"
                 f"To fix this, use one of these approaches:\n"
-                f"  1. Use HTTP mode: start a single openviking-server and connect "
-                f"via --transport http (recommended for multi-session hosts)\n"
+                f"  1. Start a single OpenViking server and connect clients over HTTP "
+                f"(recommended for multi-session hosts)\n"
                 f"  2. Use separate data directories for each instance\n"
                 f"  3. Stop the other process (PID {existing_pid}) first"
             )

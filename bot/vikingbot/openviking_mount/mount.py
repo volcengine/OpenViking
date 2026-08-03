@@ -31,7 +31,7 @@ class MountConfig:
     """挂载配置"""
 
     mount_point: Path  # 挂载点路径
-    openviking_data_path: Path  # OpenViking数据存储路径
+    openviking_data_path: Path  # FUSE 本地缓存路径
     session_id: Optional[str] = None  # 会话ID（如果是session作用域）
     scope: MountScope = MountScope.RESOURCES  # 挂载作用域
     auto_init: bool = True  # 是否自动初始化
@@ -67,7 +67,7 @@ class OpenVikingMount:
             config: 挂载配置
         """
         self.config = config
-        self._client: Optional[ov.SyncOpenViking] = None
+        self._client: Optional[ov.SyncHTTPClient] = None
         self._initialized = False
         self._mount_point_created = False
 
@@ -89,10 +89,9 @@ class OpenVikingMount:
         if ov is None:
             raise ImportError("openviking module is not available")
 
-        logger.info(f"Initializing OpenViking at: {self.config.openviking_data_path}")
+        logger.info("Connecting to the configured OpenViking Server")
 
-        # 初始化OpenViking客户端
-        self._client = ov.SyncOpenViking(path=str(self.config.openviking_data_path))
+        self._client = ov.SyncHTTPClient()
         self._client.initialize()
 
         self._initialized = True
@@ -107,7 +106,7 @@ class OpenVikingMount:
                 raise RuntimeError("OpenViking client not initialized. Call initialize() first.")
 
     @property
-    def client(self) -> Optional[ov.SyncOpenViking]:
+    def client(self) -> Optional[ov.SyncHTTPClient]:
         """获取底层OpenViking客户端"""
         return self._client
 
@@ -321,14 +320,16 @@ class OpenVikingMount:
             results = self._client.find(query, target_uri=target_uri)
 
             file_infos = []
-            for r in results.resources:
+            for r in results.get("resources", []):
+                uri = r.get("uri", "") if isinstance(r, dict) else r.uri
                 file_info = FileInfo(
-                    uri=r.uri,
-                    name=Path(r.uri).name,
+                    uri=uri,
+                    name=Path(uri).name,
                     is_dir=False,  # 需要根据实际结果判断
                 )
-                if hasattr(r, "score"):
-                    file_info.score = r.score
+                score = r.get("score") if isinstance(r, dict) else getattr(r, "score", None)
+                if score is not None:
+                    file_info.score = score
                 file_infos.append(file_info)
 
             return file_infos
@@ -365,7 +366,7 @@ class OpenVikingMount:
         logger.debug(f"Adding resource: {source_path} -> {target_uri} (wait={wait})")
 
         try:
-            result = self._client.add_resource(path=str(source_path), target=target_uri, wait=wait)
+            result = self._client.add_resource(path=str(source_path), to=target_uri, wait=wait)
             return result.get("root_uri", "")
         except Exception as e:
             logger.error(f"Failed to add resource: {e}")

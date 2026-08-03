@@ -54,8 +54,7 @@ def test_standalone_package_has_no_server_imports_at_module_scope():
             module = node.args[0].value
             is_full_package = module == "openviking" or module.startswith("openviking.")
             is_cli_package = module == "openviking_cli" or module.startswith("openviking_cli.")
-            is_embedded_client_import = source_file.name == "client.py" and module == "openviking"
-            if (is_full_package or is_cli_package) and not is_embedded_client_import:
+            if is_full_package or is_cli_package:
                 violations.append(f"{source_file.name}:{node.lineno}: import_module({module!r})")
 
     assert violations == []

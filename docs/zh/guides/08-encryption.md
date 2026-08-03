@@ -56,13 +56,13 @@ ov system crypto init-key --output-file ~/.openviking/master.key
 ### 3. 验证
 
 ```python
-import openviking as ov
 import asyncio
 from pathlib import Path
+from openviking_sdk import AsyncHTTPClient
 
 
 async def test():
-    client = ov.AsyncOpenViking(path="./data")
+    client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
     await client.initialize()
 
     # add_resource 接收文件路径或 URL

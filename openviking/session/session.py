@@ -1249,15 +1249,7 @@ class Session:
             self._apply_appended_messages_to_state(messages)
             return
 
-        uri_to_path = getattr(self._viking_fs, "_uri_to_path", None)
-        if not callable(uri_to_path):
-            # Minimal/embedded VikingFS implementations predate transaction
-            # locks. Preserve their existing append contract; production
-            # VikingFS always takes the authoritative path-lock branch below.
-            await self._append_messages_without_path_lock(messages)
-            return
-
-        session_path = uri_to_path(self._session_uri, ctx=self.ctx)
+        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
         lease = await self._viking_fs._async_agfs.pathlock_acquire_tree(
             session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
         )
@@ -1301,38 +1293,6 @@ class Session:
             await self._save_meta(lease_ref=lease)
         finally:
             await self._viking_fs._async_agfs.pathlock_release(lease)
-
-    async def _append_messages_without_path_lock(self, messages: List[Message]) -> None:
-        """Compatibility append for storage adapters without path locking."""
-        from openviking_cli.exceptions import NotFoundError
-
-        try:
-            self._messages = await self._read_live_messages_strict()
-        except (FileNotFoundError, NotFoundError):
-            # A fresh lightweight adapter may not materialize messages.jsonl
-            # until its first append.
-            pass
-
-        in_memory_meta = self._meta
-        try:
-            meta_content = await self._viking_fs.read_file(
-                f"{self._session_uri}/.meta.json",
-                ctx=self.ctx,
-            )
-            self._meta = SessionMeta.from_dict(json.loads(meta_content))
-        except Exception:
-            # Keep the in-memory legacy metadata if the lightweight adapter
-            # has no metadata file or cannot decode an older one.
-            self._meta = in_memory_meta
-
-        self._apply_appended_messages_to_state(messages)
-        batch_content = "".join(message.to_jsonl() + "\n" for message in messages)
-        await self._viking_fs.append_file(
-            f"{self._session_uri}/messages.jsonl",
-            batch_content,
-            ctx=self.ctx,
-        )
-        await self._save_meta()
 
     def _apply_appended_messages_to_state(self, messages: List[Message]) -> None:
         """Update in-memory counters after an authoritative root reload."""

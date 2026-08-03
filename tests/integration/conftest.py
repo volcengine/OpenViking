@@ -21,9 +21,9 @@ import pytest
 import pytest_asyncio
 import uvicorn
 
-from openviking import AsyncOpenViking
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
+from openviking.server.identity import RequestContext, Role
 from openviking.service.core import OpenVikingService
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
@@ -93,7 +93,7 @@ def gemini_config_dict(
     query_param: str | None = None,
     doc_param: str | None = None,
 ) -> dict:
-    """Build a minimal embedded-mode config for Gemini-backed integration tests."""
+    """Build a minimal service config for Gemini-backed integration tests."""
     return {
         "storage": {
             "workspace": str(TEST_TMP_DIR / "gemini"),
@@ -113,14 +113,16 @@ def gemini_config_dict(
     }
 
 
-async def teardown_ov_client() -> None:
-    """Reset singleton client/config state used by embedded integration tests."""
-    await AsyncOpenViking.reset()
+async def teardown_ov_service(service: OpenVikingService | None = None) -> None:
+    if service is not None:
+        await service.close()
     OpenVikingConfigSingleton.reset_instance()
 
 
-async def make_ov_client(config_dict: dict, data_path: str) -> AsyncOpenViking:
-    """Create an AsyncOpenViking client from an explicit config dict."""
+async def make_ov_service(
+    config_dict: dict,
+    data_path: str,
+) -> tuple[OpenVikingService, RequestContext]:
     if not GOOGLE_API_KEY:
         pytest.skip("GOOGLE_API_KEY not set")
     try:
@@ -128,8 +130,7 @@ async def make_ov_client(config_dict: dict, data_path: str) -> AsyncOpenViking:
     except (ImportError, ModuleNotFoundError, AttributeError):
         pytest.skip("google-genai not installed")
 
-    await teardown_ov_client()
-
+    OpenVikingConfigSingleton.reset_instance()
     workspace = Path(data_path)
     shutil.rmtree(workspace, ignore_errors=True)
     workspace.mkdir(parents=True, exist_ok=True)
@@ -139,31 +140,32 @@ async def make_ov_client(config_dict: dict, data_path: str) -> AsyncOpenViking:
     storage["workspace"] = str(workspace)
     storage.setdefault("agfs", {"backend": "local"})
     storage.setdefault("vectordb", {"name": "test", "backend": "local", "project": "default"})
-
     OpenVikingConfigSingleton.initialize(config_dict=effective_config)
 
-    client = AsyncOpenViking(path=str(workspace))
-    await client.initialize()
-    return client
+    user = UserIdentifier.the_default_user("gemini_test")
+    service = OpenVikingService(path=str(workspace), user=user)
+    await service.initialize()
+    return service, RequestContext(user=user, role=Role.USER)
 
 
 def sample_markdown(base_dir: Path, slug: str, content: str) -> Path:
-    """Write a markdown file for an integration test case."""
     path = base_dir / f"{slug}.md"
     path.write_text(content, encoding="utf-8")
     return path
 
 
 @pytest_asyncio.fixture(scope="function")
-async def gemini_ov_client(tmp_path):
-    """Provide a Gemini-backed OpenViking client and its model metadata."""
+async def gemini_ov_service(tmp_path):
     model = "gemini-embedding-2-preview"
     dim = 768
-    client = await make_ov_client(gemini_config_dict(model, dim), str(tmp_path / "ov_gemini"))
+    service, ctx = await make_ov_service(
+        gemini_config_dict(model, dim),
+        str(tmp_path / "ov_gemini"),
+    )
     try:
-        yield client, model, dim
+        yield service, ctx, model, dim
     finally:
-        await teardown_ov_client()
+        await teardown_ov_service(service)
 
 
 @pytest.fixture(scope="session")

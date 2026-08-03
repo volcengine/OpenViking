@@ -148,7 +148,7 @@ Example tabs are generated from bold labels. Put each invocation label in its ow
 paragraph and use one of these fixed base forms: `**Python SDK**`, `**TypeScript SDK**`,
 `**Go SDK**`, `**HTTP API**`, or `**CLI**`. When a transport qualifier is useful,
 put it inside the same bold label with ASCII parentheses, for example
-`**Python SDK (Embedded / HTTP)**`. Do not put the qualifier after the bold label
+`**Python HTTP SDK**`. Do not put the qualifier after the bold label
 or use full-width parentheses. Show only surfaces that are actually
 implemented. If an SDK or CLI does not expose the capability, omit that tab and
 briefly identify the available alternative. Do not wrap a handwritten HTTP request
@@ -180,8 +180,8 @@ Add resources to the knowledge base, supporting various sources such as local fi
 5. Build vector index
 
 **Code Entry**:
-- `openviking/async_client.py:AsyncOpenViking.add_resource()` - Async SDK entry
-- `openviking/sync_client.py:SyncOpenViking.add_resource()` - Sync SDK entry
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.add_resource()` - Async SDK entry
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.add_resource()` - Sync SDK entry
 - `openviking/service/resource_service.py:ResourceService.add_resource()` - Core implementation
 - `openviking/server/routers/resources.py:add_resource()` - HTTP router
 - `crates/ov_cli/src/handlers.rs:handle_add_resource()` - CLI handler
@@ -224,10 +224,9 @@ curl -X POST http://localhost:1933/api/v1/resources \
 **Python SDK**
 
 ```python
-import openviking as ov
+from openviking_sdk import SyncHTTPClient
 
-client = ov.OpenViking(path="./data")
-client.initialize()
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 
 result = client.add_resource(
     "./documents/guide.md",

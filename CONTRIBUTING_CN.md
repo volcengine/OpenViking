@@ -98,17 +98,8 @@ export OPENVIKING_CONFIG_FILE=~/.openviking/ov.conf
 
 ### 4. 验证安装
 
-```python
-import asyncio
-import openviking as ov
-
-async def main():
-    client = ov.AsyncOpenViking(path="./test_data")
-    await client.initialize()
-    print("OpenViking initialized successfully!")
-    await client.close()
-
-asyncio.run(main())
+```bash
+python -c "import openviking; print(openviking.__version__)"
 ```
 
 ### 5. 构建 Rust CLI（可选）
@@ -138,10 +129,8 @@ openviking/
 ├── third_party/          # 第三方依赖
 │   └── agfs/             # AGFS 文件系统
 │
-├── openviking/           # Python SDK
-│   ├── async_client.py   # AsyncOpenViking 客户端
-│   ├── sync_client.py    # SyncOpenViking 客户端
-│   ├── client/           # 本地与 HTTP 客户端实现
+├── openviking/           # Python 服务端与核心实现
+│   ├── client/           # HTTP 客户端兼容导出
 │   ├── console/          # 独立 console UI 与代理服务
 │   ├── core/             # 核心数据模型与目录抽象
 │   ├── message/          # 会话消息与 part 模型
@@ -233,10 +222,10 @@ pytest tests/server/ -v
 pytest tests/parse/ -v
 
 # 运行特定测试文件
-pytest tests/client/test_lifecycle.py
+pytest tests/client/test_http_client_config.py
 
 # 运行特定测试
-pytest tests/client/test_lifecycle.py::TestClientInitialization::test_initialize_success
+pytest tests/client/test_http_client_config.py
 
 # 按关键字运行
 pytest -k "search" -v
@@ -250,26 +239,19 @@ pytest --cov=openviking --cov-report=term-missing
 测试按模块组织在 `tests/` 的子目录中。项目使用 `asyncio_mode = "auto"`，异步测试**不需要** `@pytest.mark.asyncio` 装饰器：
 
 ```python
-# tests/client/test_example.py
-from openviking import AsyncOpenViking
-
-
-class TestAsyncOpenViking:
-    async def test_initialize(self, uninitialized_client: AsyncOpenViking):
-        await uninitialized_client.initialize()
-        assert uninitialized_client._service is not None
-        await uninitialized_client.close()
-
-    async def test_add_resource(self, client: AsyncOpenViking, sample_markdown_file):
-        result = await client.add_resource(
+# tests/service/test_example.py
+class TestResourceService:
+    async def test_add_resource(self, service, request_context, sample_markdown_file):
+        result = await service.resources.add_resource(
             path=str(sample_markdown_file),
-            reason="test document"
+            ctx=request_context,
+            reason="test document",
         )
         assert "root_uri" in result
         assert result["root_uri"].startswith("viking://")
 ```
 
-常用 fixture 定义在 `tests/conftest.py` 中，包括 `client`（已初始化的 `AsyncOpenViking`）、`uninitialized_client`、`temp_dir`、`sample_markdown_file` 等。
+常用 fixture 定义在 `tests/conftest.py` 中，包括已初始化的 `service`、`request_context`、`temp_dir` 和示例文件等。
 
 ---
 
