@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tokio::sync::RwLock;
-use tracing::error;
+use tracing::{debug, error, info};
 use uuid::Uuid;
 
 use crate::core::internal_names::{EXACT_LOCK_FILE_PREFIX, PATH_LOCK_FILE};
@@ -343,6 +343,7 @@ impl PathLockManager {
                     }
                 }
                 let active_count = refresh_registry.read().await.entries.len();
+                if removed > 0 { info!(removed_count = removed, active_count = active_count, expire_secs = refresh_config.lock_expire_secs, "released stale pathlock leases in background refresh"); }
                 let mut m = refresh_metrics.write().await;
                 m.active_lock_count = active_count;
                 m.stale_leases_released += removed;
@@ -430,6 +431,14 @@ impl PathLockManager {
     fn is_stale(&self, token: &LockToken, now_ns: u128) -> bool {
         let expire_ns = (self.config.lock_expire_secs * 1_000_000_000.0) as u128;
         now_ns.saturating_sub(token.time_ns) > expire_ns
+    }
+
+    /// Return whether an acquire-loop error should be retried within the wait budget.
+    fn is_retryable_error(error: &PathLockError) -> bool {
+        matches!(
+            error,
+            PathLockError::Conflict { .. } | PathLockError::Busy { .. }
+        )
     }
 
     /// Resolve a trusted reentrant owner from an active local lease capability.
@@ -559,6 +568,7 @@ impl PathLockManager {
         let sorted = Self::normalize_requests(requests);
 
         let owner_id = self.resolve_owner_id(owner_capability).await?;
+        debug!(owner_id = %owner_id, requests = ?requests, normalized_requests = ?sorted, timeout_ms = timeout.as_millis() as u64, "pathlock acquire batch start");
 
         let start = Instant::now();
         let mut acquired_lock_paths: Vec<(String, AcquisitionChange)> = Vec::new();
@@ -658,7 +668,7 @@ impl PathLockManager {
                     .await?;
                 acquired_lock_paths.clear();
 
-                if !matches!(err, PathLockError::Conflict { .. }) {
+                if !Self::is_retryable_error(&err) {
                     if is_waiting {
                         let mut metrics = self.metrics.write().await;
                         metrics.waiting_lock_count = metrics.waiting_lock_count.saturating_sub(1);
@@ -670,6 +680,7 @@ impl PathLockManager {
                 {
                     let mut metrics = self.metrics.write().await;
                     if !is_waiting {
+                        info!(owner_id = %owner_id, requests = ?sorted, timeout_ms = timeout.as_millis() as u64, error = %err, "pathlock acquire batch entered wait state");
                         is_waiting = true;
                         metrics.waiting_lock_count += 1;
                     }
@@ -708,6 +719,7 @@ impl PathLockManager {
                                 .remove_token(lock_path, &token.owner_id)
                                 .await?
                             {
+                                info!(lock_path = %lock_path, stale_owner = %token.owner_id, token_kind = ?token.lock_type, age_ms = ((now_ns.saturating_sub(token.time_ns)) / 1_000_000) as u64, "removed stale pathlock token during acquire retry");
                                 self.metrics.write().await.stale_tokens_removed += 1;
                             }
                         }
@@ -778,7 +790,7 @@ impl PathLockManager {
                     .await?;
                 acquired_lock_paths.clear();
 
-                if !matches!(err, PathLockError::Conflict { .. }) {
+                if !Self::is_retryable_error(&err) {
                     if is_waiting {
                         let mut metrics = self.metrics.write().await;
                         metrics.waiting_lock_count = metrics.waiting_lock_count.saturating_sub(1);
@@ -843,6 +855,7 @@ impl PathLockManager {
             if is_waiting {
                 metrics.waiting_lock_count = metrics.waiting_lock_count.saturating_sub(1);
             }
+            if is_waiting { info!(lease_ref = %lease.lease_ref, owner_id = %lease.owner_id, lock_paths = ?lease.lock_paths, covered_paths = ?lease.covered_paths, wait_ms = start.elapsed().as_millis() as u64, "pathlock acquire batch succeeded after waiting"); }
 
             return Ok(OwnedPathLockLease {
                 lease,
@@ -905,6 +918,7 @@ impl PathLockManager {
                         .compare_and_write_token(lock_path, &existing, &token)
                         .await?
                     {
+                        debug!(lock_path = %lock_path, owner_id = %owner_id, from = ?existing.lock_type, to = ?kind, "upgraded pathlock token for existing owner");
                         return Ok(AcquisitionChange::Upgraded {
                             previous: existing,
                             replacement: token,
@@ -916,6 +930,7 @@ impl PathLockManager {
                         kind: existing.lock_type,
                     });
                 }
+                debug!(lock_path = %lock_path, owner_id = %owner_id, kind = ?existing.lock_type, "reused existing pathlock token for same owner");
                 return Ok(AcquisitionChange::Reentrant);
             }
             if !self.is_stale(&existing, now_ns) {
@@ -925,11 +940,12 @@ impl PathLockManager {
                     kind: existing.lock_type,
                 });
             }
-            // Stale — remove it.
-            let _ = self.provider.remove_token(lock_path, &existing.owner_id).await;
+            // Stale — remove it before attempting to create our own token.
+            self.provider.remove_token(lock_path, &existing.owner_id).await?;
         }
 
         self.provider.try_create_token(lock_path, &token).await?;
+        debug!(lock_path = %lock_path, owner_id = %owner_id, kind = ?kind, "created new pathlock token");
         Ok(AcquisitionChange::Created)
     }
 
@@ -1009,6 +1025,7 @@ impl PathLockManager {
         metrics.descendant_scan_count += 1;
         metrics.descendant_scan_duration_ms += scan_start.elapsed().as_millis() as u64;
         drop(metrics);
+        debug!(path = %path, descendant_count = descendants.len(), scan_ms = scan_start.elapsed().as_millis() as u64, "scanned descendant pathlock tokens");
 
         for lp in descendants {
             if let Some(token) = self.provider.read_token(&lp).await? {
@@ -1046,6 +1063,7 @@ impl PathLockManager {
                     }
                 }
             }
+            let mut created_dirs = Vec::new();
             for dir in missing.into_iter().rev() {
                 if let Err(mkdir_error) = self.resolver.fs.mkdir(&dir, 0o755).await {
                     match self.resolver.fs.stat(&dir).await {
@@ -1057,7 +1075,9 @@ impl PathLockManager {
                         }
                     }
                 }
+                created_dirs.push(dir);
             }
+            if !created_dirs.is_empty() { debug!(lock_path = %lock_path, created_dirs = ?created_dirs, "ensured pathlock parent directories"); }
         }
         Ok(())
     }
@@ -1087,13 +1107,9 @@ impl PathLockManager {
                 .touch(&lease.lease.lease_ref);
         }
 
-        if all_ok && any_ok {
-            Ok("refreshed".to_string())
-        } else if any_ok {
-            Ok("lost".to_string())
-        } else {
-            Ok("failed".to_string())
-        }
+        let result = if all_ok && any_ok { "refreshed" } else if any_ok { "lost" } else { "failed" };
+        debug!(lease_ref = %lease.lease.lease_ref, owner_id = %lease.lease.owner_id, lock_paths = ?lease.lease.lock_paths, result = %result, "pathlock refresh completed");
+        Ok(result.to_string())
     }
 
     /// Release an owned lease.
@@ -1156,6 +1172,7 @@ impl PathLockManager {
         let active_count = self.lease_registry.read().await.entries.len();
         let mut metrics = self.metrics.write().await;
         metrics.active_lock_count = active_count;
+        debug!(lease_ref = %lease.lease.lease_ref, owner_id = %lease.lease.owner_id, lock_paths = ?lease.lease.lock_paths, active_count = active_count, "released pathlock lease");
         Ok(())
     }
 
@@ -1215,6 +1232,7 @@ impl PathLockManager {
         }
         let active_count = self.lease_registry.read().await.entries.len();
         self.metrics.write().await.active_lock_count = active_count;
+        debug!(lease_ref = %lease.lease.lease_ref, owner_id = %lease.lease.owner_id, requested_lock_paths = ?lock_paths, active_count = active_count, "released selected pathlock lease paths");
         Ok(())
     }
 
@@ -1277,6 +1295,7 @@ impl PathLockManager {
             .remove(&lease.lease.lease_ref);
         let active_count = self.lease_registry.read().await.entries.len();
         self.metrics.write().await.active_lock_count = active_count;
+        info!(lease_ref = %lease.lease.lease_ref, owner_id = %lease.lease.owner_id, lock_paths = ?lease.lease.lock_paths, active_count = active_count, "handed off pathlock lease");
         Ok(())
     }
 
@@ -1374,6 +1393,7 @@ impl PathLockManager {
 
         let active_count = self.lease_registry.read().await.entries.len();
         self.metrics.write().await.active_lock_count = active_count;
+        info!(lease_ref = %lease.lease_ref, owner_id = %lease.owner_id, lock_paths = ?lease.lock_paths, legacy_handoff = legacy_handoff, active_count = active_count, "adopted pathlock lease");
 
         Ok(OwnedPathLockLease {
             lease,
@@ -1501,9 +1521,11 @@ impl PathLockManager {
     ) -> PathLockResult<AutoPathLockAction> {
         let view = FsContextView::current();
         if view.disable_auto_pathlock() {
+            debug!(requests = ?requests, "pathlock auto action resolved to disabled");
             return Ok(AutoPathLockAction::Disabled);
         }
         let Some(lease_ref) = view.pathlock_lease_ref() else {
+            debug!(requests = ?requests, "pathlock auto action resolved to acquire");
             return Ok(AutoPathLockAction::Acquire);
         };
         let lease = self
@@ -1515,6 +1537,7 @@ impl PathLockManager {
                 ))
             })?;
         if requests.iter().all(|request| lease.lease.covers(request)) {
+            debug!(lease_ref = %lease.lease.lease_ref, requests = ?requests, "pathlock auto action resolved to covered");
             Ok(AutoPathLockAction::Covered(lease))
         } else {
             Err(PathLockError::InvalidRequest(format!(
@@ -1622,6 +1645,8 @@ mod tests {
         fail_next_read: AtomicBool,
         fail_next_remove: AtomicBool,
         return_false_next_remove: AtomicBool,
+        busy_next_remove: AtomicBool,
+        busy_remove_count: AtomicUsize,
     }
 
     impl FailNextRemoveProvider {
@@ -1632,9 +1657,22 @@ mod tests {
                 fail_next_read: AtomicBool::new(true),
                 fail_next_remove: AtomicBool::new(false),
                 return_false_next_remove: AtomicBool::new(false),
+                busy_next_remove: AtomicBool::new(false),
+                busy_remove_count: AtomicUsize::new(0),
             }
         }
 
+        /// Build a memory provider whose next remove reports a retryable busy error.
+        fn with_busy_remove() -> Self {
+            Self {
+                inner: crate::lock::provider::MemoryPathLockProvider::new(),
+                fail_next_read: AtomicBool::new(false),
+                fail_next_remove: AtomicBool::new(false),
+                return_false_next_remove: AtomicBool::new(false),
+                busy_next_remove: AtomicBool::new(true),
+                busy_remove_count: AtomicUsize::new(0),
+            }
+        }
     }
 
     #[async_trait]
@@ -1685,6 +1723,13 @@ mod tests {
             lock_path: &str,
             owner_id: &str,
         ) -> PathLockResult<bool> {
+            if self.busy_next_remove.swap(false, Ordering::SeqCst) {
+                self.busy_remove_count.fetch_add(1, Ordering::SeqCst);
+                return Err(PathLockError::Busy {
+                    lock_path: lock_path.to_string(),
+                    operation: "remove".to_string(),
+                });
+            }
             if self.return_false_next_remove.swap(false, Ordering::SeqCst) {
                 return Ok(false);
             }
@@ -2032,5 +2077,40 @@ mod tests {
                 .await,
             Err(PathLockError::Io(message)) if message == "injected read failure"
         ));
+    }
+
+    #[tokio::test]
+    async fn busy_cleanup_is_retried() {
+        let fs = Arc::new(MemFileSystem::new());
+        fs.mkdir("/data", 0o755).await.unwrap();
+        let provider = Arc::new(FailNextRemoveProvider::with_busy_remove());
+        provider
+            .inner
+            .try_create_token(
+                "/data/file.txt/.path.ovlock",
+                &LockToken {
+                    owner_id: "stale-owner".to_string(),
+                    time_ns: 1,
+                    lock_type: PathLockKind::Tree,
+                },
+            )
+            .await
+            .unwrap();
+        let mgr = PathLockManager::new(
+            fs,
+            provider.clone(),
+            PathLockConfig {
+                lock_expire_secs: 1.0,
+                ..PathLockConfig::default()
+            },
+        );
+
+        let lease = mgr
+            .acquire_tree("/data/file.txt", Duration::from_millis(200), None)
+            .await
+            .unwrap();
+
+        assert_eq!(provider.busy_remove_count.load(Ordering::SeqCst), 1);
+        mgr.release(&lease).await.unwrap();
     }
 }

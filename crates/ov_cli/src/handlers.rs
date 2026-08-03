@@ -37,6 +37,7 @@ pub async fn handle_add_resource(
 ) -> Result<()> {
     let is_url =
         path.starts_with("http://") || path.starts_with("https://") || path.starts_with("git@");
+    validate_watch_source(is_url, watch_interval)?;
 
     // A declared Connector add_type sends the path verbatim to the server;
     // it is never a local file, so skip local-path existence validation.
@@ -128,6 +129,16 @@ pub async fn handle_add_resource(
         ctx.is_verbose(),
     )
     .await
+}
+
+fn validate_watch_source(is_remote: bool, watch_interval: f64) -> Result<()> {
+    if !is_remote && watch_interval > 0.0 {
+        return Err(Error::Client(
+            "A local path cannot be watched. Use a URL, sitemap, or RSS source, or re-import the local content when it changes."
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// Single-resource `--args` go to the server as parser options; a manifest-run
@@ -1814,5 +1825,19 @@ mod config_switch_prompt_tests {
             }
         }
         output
+    }
+}
+
+#[cfg(test)]
+mod add_resource_validation_tests {
+    #[test]
+    fn local_watch_is_rejected_before_upload() {
+        let error =
+            super::validate_watch_source(false, 1.0).expect_err("local watch should be rejected");
+
+        assert!(error.to_string().contains("local path cannot be watched"));
+        assert!(super::validate_watch_source(false, 0.0).is_ok());
+        assert!(super::validate_watch_source(false, -1.0).is_ok());
+        assert!(super::validate_watch_source(true, 1.0).is_ok());
     }
 }

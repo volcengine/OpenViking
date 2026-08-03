@@ -48,6 +48,24 @@ fn s3_is_excluded_path(path: &str, exclude_path: &str) -> bool {
             .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
+async fn finalize_remove_all(
+    dir_cache: &S3ListDirCache,
+    stat_cache: &S3StatCache,
+    path: &str,
+    result: Result<()>,
+) -> Result<()> {
+    if path == "/" {
+        dir_cache.invalidate_prefix("/").await;
+        stat_cache.invalidate_prefix("/").await;
+    } else {
+        dir_cache.invalidate_parent(path).await;
+        dir_cache.invalidate_prefix(path).await;
+        stat_cache.invalidate_prefix(path).await;
+    }
+
+    result
+}
+
 /// Abstract trait for reading chunks from a file during grep.
 /// Extracted to allow unit testing chunk-boundary logic with mock providers.
 #[async_trait]
@@ -532,24 +550,25 @@ impl FileSystem for S3FileSystem {
 
         if normalized == "/" {
             // Delete everything under prefix
-            self.client.delete_directory("").await?;
-            self.dir_cache.invalidate_prefix("/").await;
-            self.stat_cache.invalidate_prefix("/").await;
-            return Ok(());
+            let result = self.client.delete_directory("").await;
+            return finalize_remove_all(&self.dir_cache, &self.stat_cache, &normalized, result)
+                .await;
         }
 
-        // Delete the file itself (if it exists as a file)
-        let key = self.client.build_key(&normalized);
-        let _ = self.client.delete_object(&key).await;
+        let result = async {
+            // Delete the file itself (if it exists as a file)
+            let key = self.client.build_key(&normalized);
+            self.client.delete_object(&key).await?;
 
-        // Delete directory and all children
-        self.client.delete_directory(&normalized).await?;
+            // Delete directory and all children
+            self.client.delete_directory(&normalized).await
+        }
+        .await;
 
-        self.dir_cache.invalidate_parent(&normalized).await;
-        self.dir_cache.invalidate_prefix(&normalized).await;
-        self.stat_cache.invalidate_prefix(&normalized).await;
-
-        Ok(())
+        // DeleteObjects may succeed for only part of a batch. Always evict the
+        // affected cache scope before returning its error so deleted objects do
+        // not remain visible until cache expiry.
+        finalize_remove_all(&self.dir_cache, &self.stat_cache, &normalized, result).await
     }
 
     async fn read(&self, path: &str, offset: u64, size: u64) -> Result<Vec<u8>> {
@@ -1537,6 +1556,50 @@ mod tests {
             ..PluginConfig::default()
         };
         assert!(plugin.validate(&config).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_partial_remove_all_error_invalidates_deleted_prefix_caches() {
+        let dir_cache = S3ListDirCache::new(10, 60, true);
+        let stat_cache = S3StatCache::new(10, 60, true);
+
+        let info = FileInfo {
+            name: "file.txt".to_string(),
+            size: 1,
+            mode: 0o644,
+            mod_time: SystemTime::now(),
+            is_dir: false,
+        };
+        dir_cache
+            .put("/parent".to_string(), vec![info.clone()])
+            .await;
+        dir_cache
+            .put("/parent/child".to_string(), vec![info.clone()])
+            .await;
+        dir_cache
+            .put("/unrelated".to_string(), vec![info.clone()])
+            .await;
+        stat_cache
+            .put("/parent/child/file.txt".to_string(), Some(info.clone()))
+            .await;
+        stat_cache
+            .put("/unrelated/file.txt".to_string(), Some(info))
+            .await;
+
+        let result = finalize_remove_all(
+            &dir_cache,
+            &stat_cache,
+            "/parent/child",
+            Err(Error::internal("S3 DeleteObjects partial failure")),
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(dir_cache.get("/parent").await.is_none());
+        assert!(dir_cache.get("/parent/child").await.is_none());
+        assert!(stat_cache.get("/parent/child/file.txt").await.is_none());
+        assert!(dir_cache.get("/unrelated").await.is_some());
+        assert!(stat_cache.get("/unrelated/file.txt").await.is_some());
     }
 
     #[test]

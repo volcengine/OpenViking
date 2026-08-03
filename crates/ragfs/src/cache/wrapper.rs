@@ -999,11 +999,14 @@ impl FileSystem for CachedFileSystem {
 
     async fn remove_all(&self, path: &str) -> Result<()> {
         let _guard = self.operation_lock.write().await;
-        self.backend.remove_all(path).await?;
+        let result = self.backend.remove_all(path).await;
+        // Recursive deletion is not transactional: a backend can remove part of
+        // the subtree before reporting an error. Invalidate conservatively so
+        // provider-backed caches cannot continue serving deleted objects.
         self.bump_generation(path).await;
         self.invalidate_path_objects(path).await;
         self.invalidate_parent_directory(path).await;
-        Ok(())
+        result
     }
 
     async fn read(&self, path: &str, offset: u64, size: u64) -> Result<Vec<u8>> {

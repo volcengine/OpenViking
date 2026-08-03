@@ -409,6 +409,19 @@ async def test_read_batch(service):
     assert "nothing found" in result.lower()
 
 
+async def test_read_uses_public_content_projection(monkeypatch):
+    read_visible = AsyncMock(return_value="visible memory")
+    monkeypatch.setattr(
+        mcp_endpoint,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(read_visible=read_visible)),
+    )
+    uri = "viking://user/default/memories/private.md"
+
+    assert await read(uri) == "visible memory"
+    read_visible.assert_awaited_once_with(uri, ctx=DEFAULT_CTX)
+
+
 # ---------------------------------------------------------------------------
 # list tool
 # ---------------------------------------------------------------------------

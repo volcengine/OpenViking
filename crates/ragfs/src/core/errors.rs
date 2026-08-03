@@ -88,6 +88,10 @@ pub enum Error {
     #[error("operation timed out: {0}")]
     Timeout(String),
 
+    /// Non-blocking operation would block and should be retried by the caller
+    #[error("operation would block: {0}")]
+    WouldBlock(String),
+
     /// Multi-write synchronous fanout failed to reach the required acknowledgement quorum
     #[error(
         "sync write quorum failed: {succeeded}/{attempted} backups succeeded (required {required}); failures: {failures:?}"
@@ -164,6 +168,11 @@ impl Error {
         Self::Timeout(msg.into())
     }
 
+    /// Create a WouldBlock error
+    pub fn would_block(msg: impl Into<String>) -> Self {
+        Self::WouldBlock(msg.into())
+    }
+
     /// Return a stable error kind name for structured reporting.
     pub fn kind_name(&self) -> &'static str {
         match self {
@@ -183,6 +192,7 @@ impl Error {
             Self::Serialization(_) => "serialization",
             Self::Network(_) => "network",
             Self::Timeout(_) => "timeout",
+            Self::WouldBlock(_) => "would_block",
             Self::SyncWriteQuorum { .. } => "sync_write_quorum",
             Self::ContextMissing(_) => "context_missing",
             Self::Internal(_) => "internal",

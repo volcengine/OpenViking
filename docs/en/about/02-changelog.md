@@ -3,6 +3,18 @@
 All notable changes to OpenViking will be documented in this file.
 This changelog is automatically generated from [GitHub Releases](https://github.com/volcengine/OpenViking/releases).
 
+## Unreleased
+
+- **Session policy compatibility**: String `"false"` memory-policy switches now disable
+  extraction correctly. Existing boolean-like values remain temporarily compatible and
+  emit deprecation warnings; use JSON booleans for new configurations.
+- **External peer identity migration**: Mixed-script log-ingestion identities now use
+  lossless `ext-<base64>` ids. The `ext-` namespace is reserved, so ASCII identities that
+  would otherwise enter it are encoded as well. Older lossy peer directories are not read
+  automatically because multiple identities may have collided with each other or with a
+  real ASCII peer; migrating that ambiguous history requires an operator-controlled
+  ownership decision.
+
 ## v0.4.9 (2026-07-10)
 
 ### Highlights

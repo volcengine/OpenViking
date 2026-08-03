@@ -17,16 +17,33 @@ from openviking.storage.queuefs.semantic_dag import (
 from openviking_cli.session.user_id import UserIdentifier
 
 
+class _FakeAgfs:
+    async def pathlock_acquire_exact_batch(self, _paths):
+        return {"lease_ref": "test"}
+
+    async def pathlock_release(self, _lease):
+        return None
+
+
 class _FakeVikingFS:
     def __init__(self, tree):
         self._tree = tree
         self.writes = []
+        self._async_agfs = _FakeAgfs()
 
     async def ls(self, uri, node_limit=None, ctx=None):
         del node_limit
         return self._tree.get(uri, [])
 
-    async def write_file(self, path, content, ctx=None, lock_handle=None):
+    async def write_file(
+        self,
+        path,
+        content,
+        ctx=None,
+        lease_ref=None,
+        lock_handle=None,
+    ):
+        del ctx, lease_ref, lock_handle
         self.writes.append((path, content))
 
     def _uri_to_path(self, uri, ctx=None):
@@ -48,7 +65,14 @@ class _FakeProcessor:
         return overview, "abstract"
 
     async def _vectorize_directory(
-        self, uri, context_type, abstract, overview, ctx=None, semantic_msg_id=None
+        self,
+        uri,
+        context_type,
+        abstract,
+        overview,
+        ctx=None,
+        semantic_msg_id=None,
+        ingest_options=None,
     ):
         self.vectorized_dirs.append(uri)
 
@@ -61,6 +85,7 @@ class _FakeProcessor:
         ctx=None,
         semantic_msg_id=None,
         use_summary=False,
+        ingest_options=None,
     ):
         self.vectorized_files.append(file_path)
 
@@ -91,6 +116,159 @@ class _DummyTracker:
     async def register(self, **_kwargs):
         self.register_calls.append(_kwargs)
         return None
+
+
+class _CompletingTracker:
+    def __init__(self):
+        self.remaining = 0
+        self.total = 0
+        self.on_complete = None
+        self.completed = False
+        self.active_id = None
+        self.aborted_ids = []
+
+    async def register(self, *, semantic_msg_id, total_count, on_complete, **_kwargs):
+        self.active_id = semantic_msg_id
+        self.remaining = total_count
+        self.total = total_count
+        self.on_complete = on_complete
+
+    async def decrement(self, semantic_msg_id):
+        if semantic_msg_id != self.active_id:
+            return None
+        self.remaining -= 1
+        if self.remaining == 0:
+            self.completed = True
+            self.active_id = None
+            await self.on_complete()
+        return self.remaining
+
+    async def abort(self, semantic_msg_id):
+        if semantic_msg_id != self.active_id:
+            return False
+        self.aborted_ids.append(semantic_msg_id)
+        self.active_id = None
+        return True
+
+
+class _FailingVectorizeProcessor(_FakeProcessor):
+    def __init__(self, tracker):
+        super().__init__()
+        self._tracker = tracker
+
+    async def _vectorize_single_file(
+        self,
+        parent_uri,
+        context_type,
+        file_path,
+        summary_dict,
+        ctx=None,
+        semantic_msg_id=None,
+        use_summary=False,
+        ingest_options=None,
+    ):
+        self.vectorized_files.append(file_path)
+        try:
+            raise RuntimeError("embedding enqueue unavailable")
+        finally:
+            await self._tracker.decrement(semantic_msg_id)
+
+    async def _vectorize_directory(
+        self,
+        uri,
+        context_type,
+        abstract,
+        overview,
+        ctx=None,
+        semantic_msg_id=None,
+        ingest_options=None,
+    ):
+        self.vectorized_dirs.append(uri)
+        await self._tracker.decrement(semantic_msg_id)
+        await self._tracker.decrement(semantic_msg_id)
+
+
+class _StalledEmbeddingProcessor(_FailingVectorizeProcessor):
+    async def _vectorize_directory(
+        self,
+        uri,
+        context_type,
+        abstract,
+        overview,
+        ctx=None,
+        semantic_msg_id=None,
+        ingest_options=None,
+    ):
+        self.vectorized_dirs.append(uri)
+        # Both directory messages were accepted, but the embedding worker is
+        # unavailable and therefore never decrements their tracker slots.
+
+
+@pytest.mark.asyncio
+async def test_semantic_dag_propagates_vectorization_failure_after_tracker_drains(monkeypatch):
+    root_uri = "viking://resources/root"
+    tree = {root_uri: [{"name": "a.txt", "isDir": False}]}
+    fake_fs = _FakeVikingFS(tree)
+    tracker = _CompletingTracker()
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
+        lambda: tracker,
+    )
+
+    processor = _FailingVectorizeProcessor(tracker)
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=ctx,
+        semantic_msg_id="semantic-root",
+    )
+
+    with pytest.raises(RuntimeError, match="embedding enqueue unavailable"):
+        await executor.run(root_uri)
+
+    assert processor.vectorized_files == [f"{root_uri}/a.txt"]
+    assert processor.vectorized_dirs == [root_uri]
+    assert tracker.total == 3
+    assert tracker.remaining == 0
+    assert tracker.completed is True
+
+
+@pytest.mark.asyncio
+async def test_semantic_dag_aborts_stalled_embedding_attempt_after_dispatch_failure(monkeypatch):
+    root_uri = "viking://resources/root"
+    tree = {root_uri: [{"name": "a.txt", "isDir": False}]}
+    fake_fs = _FakeVikingFS(tree)
+    tracker = _CompletingTracker()
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
+        lambda: tracker,
+    )
+
+    processor = _StalledEmbeddingProcessor(tracker)
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=ctx,
+        semantic_msg_id="semantic-root",
+    )
+
+    with pytest.raises(RuntimeError, match="embedding enqueue unavailable"):
+        await asyncio.wait_for(executor.run(root_uri), timeout=0.5)
+
+    assert processor.vectorized_files == [f"{root_uri}/a.txt"]
+    assert processor.vectorized_dirs == [root_uri]
+    assert tracker.remaining == 2
+    assert tracker.completed is False
+    assert len(tracker.aborted_ids) == 1
+    aborted_id = tracker.aborted_ids[0]
+    assert aborted_id.startswith("semantic-root:")
+    assert await tracker.decrement(aborted_id) is None
 
 
 class _ScheduledExecutor:

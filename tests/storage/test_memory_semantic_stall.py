@@ -198,6 +198,10 @@ async def test_memory_write_error_reports_error():
     fake_fs.ls = AsyncMock(return_value=[{"name": "file1.md", "isDir": False}])
     fake_fs.read_file = AsyncMock(return_value="some content")
     fake_fs.write_file = AsyncMock(side_effect=PermissionError("Permission denied"))
+    fake_fs._async_agfs.pathlock_acquire_exact_batch = AsyncMock(
+        return_value={"lease_ref": "test"}
+    )
+    fake_fs._async_agfs.pathlock_release = AsyncMock()
     fake_fs._uri_to_path = MagicMock(
         side_effect=lambda uri, ctx=None: f"/local/acc1/{uri.removeprefix('viking://')}"
     )

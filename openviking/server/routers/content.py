@@ -150,7 +150,10 @@ async def read(
     service = get_service()
     uri = resolve_path_variables(uri)
     try:
-        result = await service.fs.read(uri, ctx=_ctx, offset=offset, limit=limit)
+        if raw:
+            result = await service.fs.read(uri, ctx=_ctx, offset=offset, limit=limit)
+        else:
+            result = await service.fs.read_visible(uri, ctx=_ctx, offset=offset, limit=limit)
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:
@@ -158,21 +161,6 @@ async def read(
         if mapped is not None:
             raise mapped from e
         raise
-
-    if not raw:
-        # 清理MEMORY_FIELDS隐藏注释（v2记忆加工过程中的临时内部数据，不暴露给外部用户）
-        if isinstance(result, bytes):
-            text = result.decode("utf-8")
-        elif isinstance(result, str):
-            text = result
-        else:
-            text = None
-
-        if text:
-            from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
-
-            mf = MemoryFileUtils.read(text)
-            result = mf.content
 
     return Response(status="ok", result=result)
 

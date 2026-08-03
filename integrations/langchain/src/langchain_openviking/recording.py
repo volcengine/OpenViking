@@ -1,0 +1,697 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+"""Reusable OpenViking session recording for LangChain messages."""
+
+from __future__ import annotations
+
+import asyncio
+import threading
+from collections.abc import Iterable, Sequence
+from copy import deepcopy
+from dataclasses import dataclass
+from typing import Any, Literal
+
+try:
+    from langchain_core.messages import BaseMessage
+except ImportError as exc:  # pragma: no cover - exercised by optional import path
+    from langchain_openviking.client import missing_dependency
+
+    raise missing_dependency("langchain", "langchain-core") from exc
+
+from langchain_openviking._async_client_cache import LoopScopedAsyncClientCache
+from langchain_openviking.client import (
+    OpenVikingCommitPolicy,
+    OpenVikingConnection,
+    aapply_commit_policy,
+    acall_openviking,
+    aclose_openviking_clients,
+    apply_commit_policy,
+    call_openviking,
+    ensure_async_client,
+    ensure_client,
+    item_value,
+)
+from langchain_openviking.messages import (
+    is_context_carrier_langchain_message,
+    is_recordable_langchain_message,
+    langchain_message_to_openviking,
+)
+
+MAX_RECORDING_BATCH_SIZE = 100
+
+
+@dataclass(frozen=True, slots=True)
+class OpenVikingRecordResult:
+    """Confirmed progress from a recorder call."""
+
+    messages_written: int = 0
+    input_messages_consumed: int = 0
+    context_attached: bool = False
+
+
+class OpenVikingPartialWriteError(RuntimeError):
+    """Report confirmed progress when recording cannot finish."""
+
+    def __init__(
+        self,
+        *,
+        session_id: str,
+        result: OpenVikingRecordResult,
+        cause: Exception,
+        stage: Literal["batch", "commit"] = "batch",
+    ):
+        if stage == "batch":
+            detail = "before a later batch failed"
+        else:
+            detail = "before the commit policy failed"
+        super().__init__(
+            f"OpenViking recorded {result.messages_written} messages for session "
+            f"{session_id!r} {detail}: {cause}"
+        )
+        self.session_id = session_id
+        self.result = result
+        self.stage = stage
+
+    @property
+    def messages_written(self) -> int:
+        """Return the number of payloads confirmed written before failure."""
+
+        return self.result.messages_written
+
+    @property
+    def input_messages_consumed(self) -> int:
+        """Return the caller-message prefix that is safe to skip on retry."""
+
+        return self.result.input_messages_consumed
+
+    @property
+    def context_attached(self) -> bool:
+        """Return whether recalled context was confirmed persisted."""
+
+        return self.result.context_attached
+
+    @property
+    def commit_pending(self) -> bool:
+        """Return whether only the post-write commit remains incomplete."""
+
+        return self.stage == "commit"
+
+
+@dataclass(frozen=True, slots=True)
+class OpenVikingCancellationProgress:
+    """Confirmed recording progress attached to an original cancellation."""
+
+    session_id: str
+    result: OpenVikingRecordResult
+    stage: Literal["batch", "commit"] = "batch"
+
+    @property
+    def messages_written(self) -> int:
+        """Return the number of payloads confirmed written before cancellation."""
+
+        return self.result.messages_written
+
+    @property
+    def input_messages_consumed(self) -> int:
+        """Return the caller-message prefix that is safe to skip on retry."""
+
+        return self.result.input_messages_consumed
+
+    @property
+    def context_attached(self) -> bool:
+        """Return whether recalled context was confirmed persisted."""
+
+        return self.result.context_attached
+
+    @property
+    def commit_pending(self) -> bool:
+        """Return whether only the post-write commit remains incomplete."""
+
+        return self.stage == "commit"
+
+
+_CANCELLATION_PROGRESS_ATTRIBUTE = "_openviking_recording_progress"
+
+
+def get_openviking_cancellation_progress(
+    error: BaseException,
+) -> OpenVikingCancellationProgress | None:
+    """Return recording progress from a cancellation or a timeout wrapping it."""
+
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        progress = getattr(current, _CANCELLATION_PROGRESS_ATTRIBUTE, None)
+        if isinstance(progress, OpenVikingCancellationProgress):
+            return progress
+        current = current.__cause__ or current.__context__
+    return None
+
+
+def _attach_cancellation_progress(
+    error: asyncio.CancelledError,
+    *,
+    session_id: str,
+    result: OpenVikingRecordResult,
+    stage: Literal["batch", "commit"] = "batch",
+) -> None:
+    """Annotate the original cancellation without changing its identity."""
+
+    setattr(
+        error,
+        _CANCELLATION_PROGRESS_ATTRIBUTE,
+        OpenVikingCancellationProgress(
+            session_id=session_id,
+            result=result,
+            stage=stage,
+        ),
+    )
+
+
+@dataclass(slots=True)
+class _PreparedMessage:
+    input_end: int
+    payloads: list[dict[str, Any]]
+    context_attached: bool = False
+
+
+@dataclass(slots=True)
+class _PreparedBatch:
+    input_end: int
+    payloads: list[dict[str, Any]]
+    context_attached: bool = False
+
+
+class OpenVikingSessionRecorder:
+    """Persist caller-selected LangChain messages to OpenViking sessions.
+
+    The recorder intentionally does not decide which messages form a turn or
+    deduplicate transcript snapshots. Callers own that policy and pass only the
+    messages they want persisted.
+    """
+
+    def __init__(
+        self,
+        *,
+        client: Any = None,
+        async_client: Any = None,
+        url: str | None = None,
+        api_key: str | None = None,
+        account: str | None = None,
+        user: str | None = None,
+        user_id: str | None = None,
+        actor_peer_id: str | None = None,
+        path: str | None = None,
+        timeout: float = 60.0,
+        extra_headers: dict[str, str] | None = None,
+        auto_initialize: bool = True,
+        commit_policy: OpenVikingCommitPolicy | None = None,
+        batch_size: int = MAX_RECORDING_BATCH_SIZE,
+    ):
+        if batch_size <= 0 or batch_size > MAX_RECORDING_BATCH_SIZE:
+            raise ValueError(f"batch_size must be between 1 and {MAX_RECORDING_BATCH_SIZE}")
+        self._connection = OpenVikingConnection(
+            client=client,
+            async_client=async_client,
+            url=url,
+            api_key=api_key,
+            account=account,
+            user=user,
+            user_id=user_id,
+            actor_peer_id=actor_peer_id,
+            path=path,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            auto_initialize=auto_initialize,
+        )
+        self._owns_client = client is None
+        self._client_cache: Any = None
+        self._client_cache_lock = threading.Lock()
+        self._async_clients = LoopScopedAsyncClientCache()
+        self._pending_commit_sessions: set[str] = set()
+        self._pending_commit_lock = threading.Lock()
+        self._closed = False
+        self.commit_policy = commit_policy
+        self.batch_size = batch_size
+
+    def __deepcopy__(
+        self,
+        memo: dict[int, Any] | None = None,
+    ) -> OpenVikingSessionRecorder:
+        """Copy configuration and logical state with fresh runtime resources."""
+
+        memo = {} if memo is None else memo
+        for client in (self._connection.client, self._connection.async_client):
+            if client is not None:
+                memo[id(client)] = client
+        with self._pending_commit_lock:
+            pending_commit_sessions = set(self._pending_commit_sessions)
+
+        copied = type(self).__new__(type(self))
+        memo[id(self)] = copied
+        copied.__dict__ = {
+            name: (
+                None
+                if name == "_client_cache"
+                else threading.Lock()
+                if name in {"_client_cache_lock", "_pending_commit_lock"}
+                else LoopScopedAsyncClientCache()
+                if name == "_async_clients"
+                else pending_commit_sessions
+                if name == "_pending_commit_sessions"
+                else deepcopy(value, memo)
+            )
+            for name, value in self.__dict__.items()
+        }
+        return copied
+
+    @property
+    def client(self) -> Any:
+        """Return the lazily initialized OpenViking client used by this recorder."""
+
+        self._raise_if_closed()
+        if self._client_cache is None:
+            with self._client_cache_lock:
+                self._raise_if_closed()
+                if self._client_cache is None:
+                    self._client_cache = ensure_client(self._connection)
+        client = self._client_cache
+        self._raise_if_closed()
+        return client
+
+    def record(
+        self,
+        session_id: str,
+        messages: Iterable[BaseMessage],
+        peer_id: str | None = None,
+        context_parts: Sequence[dict[str, Any]] = (),
+    ) -> OpenVikingRecordResult:
+        """Persist a caller-selected batch and apply the configured commit policy."""
+
+        self._raise_if_closed()
+        self._retry_pending_commit(session_id)
+        input_messages = list(messages)
+        prepared_messages = _prepare_messages(
+            input_messages,
+            peer_id=peer_id,
+            context_parts=context_parts,
+        )
+        if not prepared_messages:
+            return OpenVikingRecordResult(input_messages_consumed=len(input_messages))
+
+        batches = _prepare_batches(prepared_messages, batch_size=self.batch_size)
+        client = self.client
+        messages_written = 0
+        input_messages_consumed = 0
+        context_attached = False
+        persisted_pending_tokens: Any = None
+        for batch in batches:
+            try:
+                write_result = call_openviking(
+                    client,
+                    "batch_add_messages",
+                    session_id=session_id,
+                    messages=batch.payloads,
+                )
+            except Exception as exc:
+                if messages_written == 0:
+                    raise
+                result = OpenVikingRecordResult(
+                    messages_written=messages_written,
+                    input_messages_consumed=input_messages_consumed,
+                    context_attached=context_attached,
+                )
+                raise OpenVikingPartialWriteError(
+                    session_id=session_id,
+                    result=result,
+                    cause=exc,
+                ) from exc
+            messages_written += len(batch.payloads)
+            input_messages_consumed = batch.input_end
+            context_attached = context_attached or batch.context_attached
+            if isinstance(write_result, dict) and "pending_tokens" in write_result:
+                persisted_pending_tokens = write_result.get("pending_tokens")
+            else:
+                hint = item_value(write_result, "pending_tokens")
+                if hint is not None:
+                    persisted_pending_tokens = hint
+        result = OpenVikingRecordResult(
+            messages_written=messages_written,
+            input_messages_consumed=len(input_messages),
+            context_attached=context_attached,
+        )
+        try:
+            apply_commit_policy(
+                client,
+                session_id,
+                self.commit_policy,
+                persisted_pending_tokens=persisted_pending_tokens,
+            )
+        except Exception as exc:
+            self._mark_commit_pending(session_id)
+            raise OpenVikingPartialWriteError(
+                session_id=session_id,
+                result=result,
+                cause=exc,
+                stage="commit",
+            ) from exc
+        return result
+
+    async def arecord(
+        self,
+        session_id: str,
+        messages: Iterable[BaseMessage],
+        peer_id: str | None = None,
+        context_parts: Sequence[dict[str, Any]] = (),
+    ) -> OpenVikingRecordResult:
+        """Asynchronously persist messages and apply the configured commit policy."""
+
+        self._raise_if_closed()
+        await self._aretry_pending_commit(session_id)
+        input_messages = list(messages)
+        prepared_messages = _prepare_messages(
+            input_messages,
+            peer_id=peer_id,
+            context_parts=context_parts,
+        )
+        if not prepared_messages:
+            return OpenVikingRecordResult(input_messages_consumed=len(input_messages))
+
+        batches = _prepare_batches(prepared_messages, batch_size=self.batch_size)
+        client = await self.get_async_client()
+        messages_written = 0
+        input_messages_consumed = 0
+        context_attached = False
+        persisted_pending_tokens: Any = None
+        for batch in batches:
+            try:
+                write_result = await acall_openviking(
+                    client,
+                    "batch_add_messages",
+                    session_id=session_id,
+                    messages=batch.payloads,
+                )
+            except asyncio.CancelledError as exc:
+                if messages_written == 0:
+                    raise
+                result = OpenVikingRecordResult(
+                    messages_written=messages_written,
+                    input_messages_consumed=input_messages_consumed,
+                    context_attached=context_attached,
+                )
+                _attach_cancellation_progress(
+                    exc,
+                    session_id=session_id,
+                    result=result,
+                )
+                raise
+            except Exception as exc:
+                if messages_written == 0:
+                    raise
+                result = OpenVikingRecordResult(
+                    messages_written=messages_written,
+                    input_messages_consumed=input_messages_consumed,
+                    context_attached=context_attached,
+                )
+                raise OpenVikingPartialWriteError(
+                    session_id=session_id,
+                    result=result,
+                    cause=exc,
+                ) from exc
+            messages_written += len(batch.payloads)
+            input_messages_consumed = batch.input_end
+            context_attached = context_attached or batch.context_attached
+            if isinstance(write_result, dict) and "pending_tokens" in write_result:
+                persisted_pending_tokens = write_result.get("pending_tokens")
+            else:
+                hint = item_value(write_result, "pending_tokens")
+                if hint is not None:
+                    persisted_pending_tokens = hint
+        result = OpenVikingRecordResult(
+            messages_written=messages_written,
+            input_messages_consumed=len(input_messages),
+            context_attached=context_attached,
+        )
+        try:
+            await aapply_commit_policy(
+                client,
+                session_id,
+                self.commit_policy,
+                persisted_pending_tokens=persisted_pending_tokens,
+            )
+        except asyncio.CancelledError as exc:
+            self._mark_commit_pending(session_id)
+            _attach_cancellation_progress(
+                exc,
+                session_id=session_id,
+                result=result,
+                stage="commit",
+            )
+            raise
+        except Exception as exc:
+            self._mark_commit_pending(session_id)
+            raise OpenVikingPartialWriteError(
+                session_id=session_id,
+                result=result,
+                cause=exc,
+                stage="commit",
+            ) from exc
+        return result
+
+    def flush(self, session_id: str) -> dict[str, Any] | None:
+        """Commit a session only when it contains pending, uncommitted content."""
+
+        result = self._flush_pending_content(session_id)
+        self._discard_pending_commit(session_id)
+        return result
+
+    async def aflush(self, session_id: str) -> dict[str, Any] | None:
+        """Asynchronously commit pending, uncommitted session content."""
+
+        result = await self._aflush_pending_content(session_id)
+        self._discard_pending_commit(session_id)
+        return result
+
+    def _flush_pending_content(self, session_id: str) -> dict[str, Any] | None:
+        client = self.client
+        try:
+            session = call_openviking(
+                client,
+                "get_session",
+                session_id=session_id,
+                auto_create=False,
+            )
+        except Exception as exc:
+            error_code = str(getattr(exc, "code", "")).upper()
+            if isinstance(exc, FileNotFoundError) or error_code == "NOT_FOUND":
+                return None
+            raise
+        if int(item_value(session, "pending_tokens", 0) or 0) <= 0:
+            return None
+        return call_openviking(client, "commit_session", session_id=session_id)
+
+    async def _aflush_pending_content(self, session_id: str) -> dict[str, Any] | None:
+        client = await self.get_async_client()
+        try:
+            session = await acall_openviking(
+                client,
+                "get_session",
+                session_id=session_id,
+                auto_create=False,
+            )
+        except Exception as exc:
+            error_code = str(getattr(exc, "code", "")).upper()
+            if isinstance(exc, FileNotFoundError) or error_code == "NOT_FOUND":
+                return None
+            raise
+        if int(item_value(session, "pending_tokens", 0) or 0) <= 0:
+            return None
+        return await acall_openviking(client, "commit_session", session_id=session_id)
+
+    def _retry_pending_commit(self, session_id: str) -> None:
+        if not self._is_commit_pending(session_id):
+            return
+        self._flush_pending_content(session_id)
+        self._discard_pending_commit(session_id)
+
+    async def _aretry_pending_commit(self, session_id: str) -> None:
+        if not self._is_commit_pending(session_id):
+            return
+        await self._aflush_pending_content(session_id)
+        self._discard_pending_commit(session_id)
+
+    def _is_commit_pending(self, session_id: str) -> bool:
+        with self._pending_commit_lock:
+            return session_id in self._pending_commit_sessions
+
+    def _mark_commit_pending(self, session_id: str) -> None:
+        with self._pending_commit_lock:
+            self._pending_commit_sessions.add(session_id)
+
+    def _discard_pending_commit(self, session_id: str) -> None:
+        with self._pending_commit_lock:
+            self._pending_commit_sessions.discard(session_id)
+
+    def _clear_pending_commits(self) -> None:
+        with self._pending_commit_lock:
+            self._pending_commit_sessions.clear()
+
+    async def get_async_client(self) -> Any:
+        """Return the async client interface used by this recorder.
+
+        Injected clients are returned unchanged and remain caller-owned.
+        HTTP-backed connections return an internally managed, loop-local handle
+        whose method calls support recovery. Direct attributes on that handle
+        are best-effort during recovery; use ``await handle.get()`` only to read
+        raw properties immediately because recovery may replace that snapshot.
+        Embedded ``path=`` connections return an adapter-owned synchronous
+        client whose calls are dispatched through a worker thread.
+        """
+
+        self._raise_if_closed()
+        client = await ensure_async_client(
+            self._connection,
+            client_cache=self._async_clients,
+            embedded_client_factory=lambda: self.client,
+        )
+        self._raise_if_closed()
+        return client
+
+    async def _get_async_client(self) -> Any:
+        return await self.get_async_client()
+
+    def close(self) -> None:
+        """Release resources after exclusively synchronous use.
+
+        Injected clients remain owned by their caller and are never closed here.
+        After any async operation has initialized an owned client, callers must
+        use :meth:`aclose`; this method leaves the recorder open so that async
+        cleanup can still complete.
+        """
+
+        if self._closed:
+            return
+        uses_http_client = bool(self._connection.url) or self._connection.path is None
+        if uses_http_client and self._async_clients.has_clients():
+            raise RuntimeError(
+                "OpenVikingSessionRecorder has an active async client; "
+                "use `await recorder.aclose()`"
+            )
+        if not uses_http_client:
+            self._async_clients.pop_all()
+        self._closed = True
+        self._clear_pending_commits()
+        with self._client_cache_lock:
+            client = self._client_cache
+            self._client_cache = None
+        if client is None or not self._owns_client:
+            return
+        close = getattr(client, "close", None)
+        if callable(close):
+            close()
+
+    async def aclose(self) -> None:
+        """Release internally created sync and async clients."""
+
+        if self._closed:
+            return
+        self._closed = True
+        self._clear_pending_commits()
+        with self._client_cache_lock:
+            sync_client = self._client_cache
+            self._client_cache = None
+        async_clients = await asyncio.to_thread(self._async_clients.pop_all)
+
+        await aclose_openviking_clients(
+            sync_client if self._owns_client else None,
+            *async_clients,
+        )
+
+    def _raise_if_closed(self) -> None:
+        if self._closed:
+            raise RuntimeError("OpenVikingSessionRecorder is closed")
+
+
+def _prepare_messages(
+    messages: Sequence[BaseMessage],
+    *,
+    peer_id: str | None,
+    context_parts: Sequence[dict[str, Any]],
+) -> list[_PreparedMessage]:
+    normalized_peer_id = _normalize_peer_id(peer_id)
+    pending_context = deepcopy(list(context_parts))
+    prepared_messages: list[_PreparedMessage] = []
+
+    for index, message in enumerate(messages):
+        context_carrier = is_context_carrier_langchain_message(message)
+        recordable = is_recordable_langchain_message(message)
+        if not recordable and not (pending_context and context_carrier):
+            continue
+        payloads = langchain_message_to_openviking(message)
+        message_context_attached = False
+        for payload in payloads:
+            if pending_context and context_carrier and payload["role"] == "assistant":
+                payload["parts"].extend(pending_context)
+                pending_context = []
+                message_context_attached = True
+            if normalized_peer_id is not None:
+                payload["peer_id"] = normalized_peer_id
+        if payloads:
+            prepared_messages.append(
+                _PreparedMessage(
+                    input_end=index + 1,
+                    payloads=payloads,
+                    context_attached=message_context_attached,
+                )
+            )
+    return prepared_messages
+
+
+def _prepare_batches(
+    messages: Sequence[_PreparedMessage],
+    *,
+    batch_size: int,
+) -> list[_PreparedBatch]:
+    batches: list[_PreparedBatch] = []
+    payloads: list[dict[str, Any]] = []
+    input_end = 0
+    context_attached = False
+
+    for message in messages:
+        payload_count = len(message.payloads)
+        if payload_count > batch_size:
+            raise ValueError(
+                "one LangChain message produced more OpenViking payloads "
+                f"({payload_count}) than batch_size ({batch_size})"
+            )
+        if payloads and len(payloads) + payload_count > batch_size:
+            batches.append(
+                _PreparedBatch(
+                    input_end=input_end,
+                    payloads=payloads,
+                    context_attached=context_attached,
+                )
+            )
+            payloads = []
+            context_attached = False
+        payloads.extend(message.payloads)
+        input_end = message.input_end
+        context_attached = context_attached or message.context_attached
+
+    if payloads:
+        batches.append(
+            _PreparedBatch(
+                input_end=input_end,
+                payloads=payloads,
+                context_attached=context_attached,
+            )
+        )
+    return batches
+
+
+def _normalize_peer_id(peer_id: str | None) -> str | None:
+    if peer_id is None:
+        return None
+    text = str(peer_id).strip()
+    return text or None

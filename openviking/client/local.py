@@ -104,7 +104,6 @@ class LocalClient(BaseClient):
             user=self._user,
             role=Role.USER,
             actor_peer_id=normalize_peer_id(effective_actor_peer_id),
-            legacy_agent_id=normalize_peer_id(agent_id),
         )
 
     @property
@@ -634,7 +633,12 @@ class LocalClient(BaseClient):
             offset: Starting line number (0-indexed). Default 0.
             limit: Number of lines to read. -1 means read to end. Default -1.
         """
-        return await self._service.fs.read(uri, ctx=self._ctx, offset=offset, limit=limit)
+        return await self._service.fs.read_visible(
+            uri,
+            ctx=self._ctx,
+            offset=offset,
+            limit=limit,
+        )
 
     async def read_raw(self, uri: str, offset: int = 0, limit: int = -1) -> str:
         """Read raw file content, including hidden MEMORY_FIELDS metadata."""
@@ -1051,7 +1055,7 @@ class LocalClient(BaseClient):
         }
         add_async = getattr(session, "add_message_async", None)
         add_kwargs = {
-            "peer_id": self._resolve_message_peer_id(role, peer_id),
+            "peer_id": normalize_peer_id(peer_id),
             "created_at": created_at,
             **semantic_kwargs,
         }
@@ -1111,7 +1115,7 @@ class LocalClient(BaseClient):
                 {
                     "role": role,
                     "parts": message_parts,
-                    "peer_id": self._resolve_message_peer_id(role, message.get("peer_id")),
+                    "peer_id": normalize_peer_id(message.get("peer_id")),
                     "created_at": message.get("created_at"),
                     "turn_id": message.get("turn_id"),
                     "message_kind": message.get("message_kind"),
@@ -1145,19 +1149,6 @@ class LocalClient(BaseClient):
             return max(0, int(getattr(meta, "pending_tokens", 0) or 0))
         except (TypeError, ValueError):
             return 0
-
-    def _resolve_message_peer_id(
-        self,
-        role: str,
-        peer_id: Optional[str],
-    ) -> Optional[str]:
-        normalized_peer_id = normalize_peer_id(peer_id)
-        if normalized_peer_id is not None:
-            return normalized_peer_id
-        legacy_agent_id = getattr(self._ctx, "legacy_agent_id", None)
-        if legacy_agent_id is not None and role == "assistant":
-            return legacy_agent_id
-        return None
 
     # ============= Pack =============
 

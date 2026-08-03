@@ -1,16 +1,13 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""LangChain and LangGraph integrations for OpenViking.
-
-The objects in this package depend on optional framework packages. Importing
-``openviking`` itself does not install or import LangChain/LangGraph.
-"""
+"""Compatibility imports for the standalone ``langchain-openviking`` package."""
 
 from __future__ import annotations
 
+from importlib import import_module
 from typing import Any
 
-__all__ = [
+_LEGACY_EXPORTS = [
     "InMemoryOpenVikingClient",
     "OpenVikingChatMessageHistory",
     "OpenVikingCancellationProgress",
@@ -25,73 +22,54 @@ __all__ = [
     "OpenVikingStore",
     "create_openviking_tools",
     "get_openviking_cancellation_progress",
+    "has_request_actor_peer_support",
     "with_openviking_context",
 ]
 
 
-def __getattr__(name: str) -> Any:
-    if name == "OpenVikingRetriever":
-        from openviking.integrations.langchain.retrievers import OpenVikingRetriever
+def _missing_standalone_error() -> ImportError:
+    return ImportError(
+        "The legacy OpenViking LangChain integration requires the standalone "
+        "langchain-openviking package. Install it with "
+        '`pip install "openviking[langchain]"` or `pip install langchain-openviking` '
+        '(use the corresponding "langgraph" extra for LangGraph support).'
+    )
 
-        return OpenVikingRetriever
-    if name == "create_openviking_tools":
-        from openviking.integrations.langchain.tools import create_openviking_tools
 
-        return create_openviking_tools
-    if name == "OpenVikingStore":
-        from openviking.integrations.langchain.store import OpenVikingStore
+def _forward_legacy_module(module_name: str, namespace: dict[str, Any]) -> None:
+    """Populate a legacy submodule with the canonical package's public names."""
 
-        return OpenVikingStore
-    if name == "OpenVikingChatMessageHistory":
-        from openviking.integrations.langchain.history import OpenVikingChatMessageHistory
+    try:
+        canonical = import_module(f"langchain_openviking.{module_name}")
+    except ModuleNotFoundError as exc:
+        if exc.name != "langchain_openviking":
+            raise
+        raise _missing_standalone_error() from exc
 
-        return OpenVikingChatMessageHistory
-    if name == "OpenVikingSessionContextAssembler":
-        from openviking.integrations.langchain.context import OpenVikingSessionContextAssembler
+    public_names = getattr(canonical, "__all__", None)
+    if public_names is None:
+        public_names = (name for name in vars(canonical) if not name.startswith("_"))
+    namespace.update({name: getattr(canonical, name) for name in public_names})
 
-        return OpenVikingSessionContextAssembler
-    if name == "OpenVikingContextRunnable":
-        from openviking.integrations.langchain.context import OpenVikingContextRunnable
 
-        return OpenVikingContextRunnable
-    if name == "OpenVikingSessionRecorder":
-        from openviking.integrations.langchain.recording import OpenVikingSessionRecorder
+try:
+    from langchain_openviking import __all__, __getattr__, has_request_actor_peer_support
+except ModuleNotFoundError as exc:
+    if exc.name != "langchain_openviking":
+        raise
 
-        return OpenVikingSessionRecorder
-    if name == "OpenVikingPartialWriteError":
-        from openviking.integrations.langchain.recording import OpenVikingPartialWriteError
+    __all__ = _LEGACY_EXPORTS
 
-        return OpenVikingPartialWriteError
-    if name == "OpenVikingRecordResult":
-        from openviking.integrations.langchain.recording import OpenVikingRecordResult
+    def has_request_actor_peer_support() -> bool:
+        """Return whether the installed SDK supports request-scoped actor peers."""
 
-        return OpenVikingRecordResult
-    if name == "OpenVikingCancellationProgress":
-        from openviking.integrations.langchain.recording import (
-            OpenVikingCancellationProgress,
+        openviking_sdk = import_module("openviking_sdk")
+        return (
+            getattr(openviking_sdk, "get_actor_peer_id", None) is not None
+            and getattr(openviking_sdk, "use_actor_peer", None) is not None
         )
 
-        return OpenVikingCancellationProgress
-    if name == "get_openviking_cancellation_progress":
-        from openviking.integrations.langchain.recording import (
-            get_openviking_cancellation_progress,
-        )
-
-        return get_openviking_cancellation_progress
-    if name == "OpenVikingCommitPolicy":
-        from openviking.integrations.langchain.client import OpenVikingCommitPolicy
-
-        return OpenVikingCommitPolicy
-    if name == "with_openviking_context":
-        from openviking.integrations.langchain.context import with_openviking_context
-
-        return with_openviking_context
-    if name == "OpenVikingContextMiddleware":
-        from openviking.integrations.langchain.middleware import OpenVikingContextMiddleware
-
-        return OpenVikingContextMiddleware
-    if name == "InMemoryOpenVikingClient":
-        from openviking.integrations.langchain.testing import InMemoryOpenVikingClient
-
-        return InMemoryOpenVikingClient
-    raise AttributeError(name)
+    def __getattr__(name: str) -> Any:
+        if name in __all__:
+            raise _missing_standalone_error()
+        raise AttributeError(name)

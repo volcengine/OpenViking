@@ -213,11 +213,11 @@ fn handle_show(
         SnapshotShowResult::Blob { oid, bytes, size } => {
             if matches!(output_format, OutputFormat::Json) {
                 let envelope = serde_json::json!({"oid": oid, "size": size});
-                output_success(&envelope, output_format, compact);
                 if let Some(path) = out_path {
                     let mut f = std::fs::File::create(&path)?;
                     f.write_all(&bytes)?;
                 }
+                output_success(&envelope, output_format, compact);
                 return Ok(());
             }
             match out_path {
@@ -271,4 +271,52 @@ fn print_log(value: &Value, output_format: OutputFormat, compact: bool) {
         })
         .collect();
     output_success(&rows, OutputFormat::Table, compact);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::handle_show;
+    use crate::client::SnapshotShowResult;
+    use crate::output::OutputFormat;
+
+    #[test]
+    fn json_blob_show_writes_requested_output_file() {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let path = dir.path().join("blob.bin");
+
+        handle_show(
+            SnapshotShowResult::Blob {
+                oid: "abc123".to_string(),
+                bytes: b"snapshot-bytes".to_vec(),
+                size: 14,
+            },
+            Some(path.clone()),
+            OutputFormat::Json,
+            true,
+        )
+        .expect("blob output should be written");
+
+        assert_eq!(
+            std::fs::read(path).expect("blob output should be readable"),
+            b"snapshot-bytes"
+        );
+    }
+
+    #[test]
+    fn json_blob_show_propagates_output_file_errors() {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+
+        let result = handle_show(
+            SnapshotShowResult::Blob {
+                oid: "abc123".to_string(),
+                bytes: b"snapshot-bytes".to_vec(),
+                size: 14,
+            },
+            Some(dir.path().to_path_buf()),
+            OutputFormat::Json,
+            true,
+        );
+
+        assert!(result.is_err());
+    }
 }

@@ -191,7 +191,7 @@ client.initialize()
 #### HTTP Call Examples
 
 - CLI, `SyncHTTPClient`, and `AsyncHTTPClient` automatically upload local files or directories before calling the server API.
-- Python HTTP client and CLI can also opt into shared temporary uploads via client config (`ovcli.conf` -> `upload.mode = "shared"`).
+- Python HTTP clients can opt into shared temporary uploads through `ovcli.conf` (`upload.mode = "shared"`). The Rust `ov` CLI does not read that field; set `OPENVIKING_UPLOAD_MODE=shared` for `ov` instead.
 - Raw HTTP calls don't get this convenience layer. When using `curl` or other HTTP clients, you need to first call `POST /api/v1/resources/temp_upload`, then pass the returned `temp_file_id` to the target API.
 - `temp_upload` defaults to `upload_mode=local`. Use `upload_mode=shared` only when you explicitly want distributed shared temporary uploads.
 - For raw HTTP imports of local directories, you need to first zip them into a `.zip` file and upload using the above method; the server does not accept direct host directory paths.

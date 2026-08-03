@@ -1,6 +1,10 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import json
+import warnings
+from pathlib import Path
+
 import pytest
 
 from openviking.session.memory.dataclass import MemoryField, MemoryTypeSchema
@@ -64,6 +68,25 @@ def test_memory_policy_rejects_invalid_working_memory_shape():
 
     with pytest.raises(InvalidArgumentError, match="working_memory supports only: enabled"):
         MemoryPolicy.from_dict({"working_memory": {"enabled": True, "mode": "summary"}})
+
+
+def test_memory_policy_legacy_enabled_compatibility_fixture():
+    fixture_path = Path(__file__).parent / "fixtures" / "memory_policy_compat.json"
+    cases = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+    for case in cases:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            policy = MemoryPolicy.from_dict({"peer": {"enabled": case["value"]}})
+
+        assert policy.peer_enabled is case["expected"]
+        deprecations = [item for item in caught if item.category is FutureWarning]
+        assert bool(deprecations) is case["deprecated"]
+
+
+def test_memory_policy_legacy_enabled_warning_is_user_visible():
+    with pytest.warns(FutureWarning, match="legacy coercion is deprecated"):
+        MemoryPolicy.from_dict({"peer": {"enabled": "false"}})
 
 
 def test_memory_policy_rejects_invalid_memory_types():

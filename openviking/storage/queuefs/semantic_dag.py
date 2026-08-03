@@ -7,6 +7,7 @@ import re
 import threading
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Dict, List, Optional, Set
+from uuid import uuid4
 from weakref import WeakKeyDictionary
 
 from openviking.parse.parsers.media import get_media_type
@@ -219,6 +220,15 @@ class SemanticDagExecutor:
         self._pending_vectorize_tasks: List[VectorizeTask] = []
         self._pending_vectorize_work = 0
         self._vectorize_done: Optional[asyncio.Event] = None
+        self._vectorize_failure: Optional[Exception] = None
+        self._vectorize_dispatch_complete = False
+        self._embedding_tracker_done: Optional[asyncio.Event] = None
+        self._embedding_tracker = None
+        # Retries preserve the logical SemanticMsg ID, so each execution needs
+        # a distinct tracker key to quarantine late decrements from old attempts.
+        self._embedding_tracker_id = f"{self._semantic_msg_id or 'semantic'}:{uuid4()}"
+        self._vectorize_finalized = False
+        self._vectorize_finalize_lock = asyncio.Lock()
         self._vectorize_lock = asyncio.Lock()
         self._file_change_status: Dict[str, bool] = {}
         self._dir_change_status: Dict[str, bool] = {}
@@ -239,12 +249,6 @@ class SemanticDagExecutor:
                 raise self._failure
 
             # Mark semantic done after downstream vectorization finishes.
-            async def wrapped_on_complete() -> None:
-                if self._telemetry_id and self._semantic_msg_id:
-                    get_request_wait_tracker().mark_semantic_done(
-                        self._telemetry_id, self._semantic_msg_id
-                    )
-
             async with self._vectorize_lock:
                 task_count = self._vectorize_task_count
                 tasks = list(self._pending_vectorize_tasks)
@@ -252,24 +256,47 @@ class SemanticDagExecutor:
             if task_count > 0:
                 from .embedding_tracker import EmbeddingTaskTracker
 
+                embedding_tracker_done = asyncio.Event()
+                self._embedding_tracker_done = embedding_tracker_done
                 tracker = EmbeddingTaskTracker.get_instance()
+                self._embedding_tracker = tracker
                 await tracker.register(
-                    semantic_msg_id=self._semantic_msg_id,
+                    semantic_msg_id=self._embedding_tracker_id,
                     total_count=task_count,
-                    on_complete=wrapped_on_complete,
-                    metadata={"uri": root_uri},
+                    on_complete=self._on_embedding_tasks_complete,
+                    metadata={
+                        "uri": root_uri,
+                        "semantic_msg_id": self._semantic_msg_id,
+                    },
                 )
 
                 await self._dispatch_vectorize_tasks(tasks)
+                self._vectorize_dispatch_complete = True
+
+                if embedding_tracker_done.is_set():
+                    await self._finalize_vectorization()
+                if self._vectorize_failure is not None:
+                    raise self._vectorize_failure
             else:
-                # No vectorize tasks — release lock immediately (via wrapped callback)
+                # No vectorize tasks — mark semantic work done immediately.
                 try:
-                    await wrapped_on_complete()
+                    await self._finalize_vectorization()
                 except Exception as e:
                     logger.error(f"Error in on_complete callback: {e}", exc_info=True)
         except BaseException:
             self._closed = True
             await self._active_work_idle.wait()
+            if self._embedding_tracker is not None:
+                try:
+                    # Pending embedding messages may still finish, but their
+                    # attempt-specific decrements become harmless after abort.
+                    await self._embedding_tracker.abort(self._embedding_tracker_id)
+                except Exception:
+                    logger.warning(
+                        "Failed to abort embedding tracker %s",
+                        self._embedding_tracker_id,
+                        exc_info=True,
+                    )
             raise
         finally:
             self._closed = True
@@ -418,10 +445,28 @@ class SemanticDagExecutor:
                 await self._run_vectorize_task(task)
         except Exception as exc:
             logger.error("Vectorization dispatch task failed: %s", exc, exc_info=True)
+            if self._vectorize_failure is None:
+                self._vectorize_failure = exc
         finally:
             self._pending_vectorize_work = max(0, self._pending_vectorize_work - 1)
             if self._pending_vectorize_work == 0 and self._vectorize_done:
                 self._vectorize_done.set()
+
+    async def _on_embedding_tasks_complete(self) -> None:
+        if self._embedding_tracker_done is not None:
+            self._embedding_tracker_done.set()
+        if self._vectorize_dispatch_complete:
+            await self._finalize_vectorization()
+
+    async def _finalize_vectorization(self) -> None:
+        async with self._vectorize_finalize_lock:
+            if self._vectorize_finalized:
+                return
+            if self._vectorize_failure is None and self._telemetry_id and self._semantic_msg_id:
+                get_request_wait_tracker().mark_semantic_done(
+                    self._telemetry_id, self._semantic_msg_id
+                )
+            self._vectorize_finalized = True
 
     async def _run_vectorize_task(self, task: VectorizeTask) -> None:
         if task.task_type == "file":
@@ -717,7 +762,7 @@ class SemanticDagExecutor:
                     uri=file_path,
                     context_type=self._context_type,
                     ctx=self._ctx,
-                    semantic_msg_id=self._semantic_msg_id,
+                    semantic_msg_id=self._embedding_tracker_id,
                     file_path=file_path,
                     summary_dict=summary_dict,
                     parent_uri=parent_uri,
@@ -899,7 +944,7 @@ class SemanticDagExecutor:
                         uri=dir_uri,
                         context_type=self._context_type,
                         ctx=self._ctx,
-                        semantic_msg_id=self._semantic_msg_id,
+                        semantic_msg_id=self._embedding_tracker_id,
                         abstract=abstract,
                         overview=overview,
                         ingest_options=self._ingest_options,

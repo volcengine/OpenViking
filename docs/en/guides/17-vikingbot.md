@@ -127,7 +127,8 @@ If `ov.conf` already contains a root-level `vlm`, VikingBot inherits it. You can
     "agents": {
       "provider": "openai",
       "model": "gpt-4o-mini",
-      "api_key": "<your-model-api-key>"
+      "api_key": "<your-model-api-key>",
+      "max_tokens": 8192
     }
   }
 }
@@ -140,12 +141,14 @@ credential defines `model`, the outer `bot.agents.model` may be omitted:
 {
   "bot": {
     "agents": {
+      "max_tokens": 8192,
       "credentials": [
         {
           "id": "bot-primary",
           "provider": "volcengine",
           "model": "bot-primary-model",
-          "api_key": "${BOT_PRIMARY_API_KEY}"
+          "api_key": "${BOT_PRIMARY_API_KEY}",
+          "max_tokens": 4096
         },
         {
           "id": "bot-backup",
@@ -165,7 +168,10 @@ The precedence is deterministic: a non-empty `bot.agents.model` or
 `bot.agents.credentials` uses the Bot's own model/credentials. When both are omitted,
 VikingBot inherits the complete root `vlm` model, credentials, and failover/failback
 settings. If Bot credentials are configured without an outer model, every credential
-must define its own `model`. The two credential chains are never mixed.
+must define its own `model`. The two credential chains are never mixed. `max_tokens`
+is optional: a credential-specific value overrides `bot.agents.max_tokens`; a
+credential without one inherits the Agent value. When neither is configured,
+VikingBot omits the request field and lets the model provider choose its default.
 
 ### 2. Start a Chat
 

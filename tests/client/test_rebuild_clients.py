@@ -204,6 +204,78 @@ async def test_local_client_reindex_forwards_to_service():
     )
 
 
+async def test_local_client_read_uses_public_content_projection():
+    client = object.__new__(LocalClient)
+    client._ctx = object()
+    client._service = SimpleNamespace(
+        fs=SimpleNamespace(read_visible=AsyncMock(return_value="line one\nline two"))
+    )
+
+    uri = "viking://user/memories/notes/demo.md"
+    assert await client.read(uri, offset=1, limit=1) == "line one\nline two"
+    client._service.fs.read_visible.assert_awaited_once_with(
+        uri,
+        ctx=client._ctx,
+        offset=1,
+        limit=1,
+    )
+
+
+async def test_local_client_read_does_not_strip_resource_comments():
+    client = object.__new__(LocalClient)
+    client._ctx = object()
+    raw = 'visible\n\n<!-- MEMORY_FIELDS\n{"looks_like":"user content"}\n-->'
+    client._service = SimpleNamespace(fs=SimpleNamespace(read_visible=AsyncMock(return_value=raw)))
+
+    assert await client.read("viking://resources/demo.md") == raw
+
+
+async def test_local_client_read_raw_preserves_service_slicing():
+    client = object.__new__(LocalClient)
+    client._ctx = object()
+    client._service = SimpleNamespace(fs=SimpleNamespace(read=AsyncMock(return_value="raw")))
+
+    uri = "viking://user/memories/notes/demo.md"
+    assert await client.read_raw(uri, offset=4, limit=1) == "raw"
+    client._service.fs.read.assert_awaited_once_with(
+        uri,
+        ctx=client._ctx,
+        offset=4,
+        limit=1,
+    )
+
+
+def test_sync_client_forwards_missing_async_surface():
+    client = object.__new__(SyncOpenViking)
+    client._async_client = SimpleNamespace(
+        build_index=Mock(return_value="index"),
+        summarize=Mock(return_value="summary"),
+        read_raw=Mock(return_value="raw"),
+    )
+    with patch("openviking.sync_client.run_async", side_effect=lambda result: result):
+        assert client.build_index(["uri"], wait=True) == "index"
+        assert client.summarize("uri", mode="fast") == "summary"
+        assert client.read_raw("uri", offset=1, limit=2) == "raw"
+
+    client._async_client.build_index.assert_called_once_with(["uri"], wait=True)
+    client._async_client.summarize.assert_called_once_with("uri", mode="fast")
+    client._async_client.read_raw.assert_called_once_with("uri", offset=1, limit=2)
+
+
+def test_sync_import_ovpack_accepts_parent_and_legacy_target():
+    client = object.__new__(SyncOpenViking)
+    import_ovpack = Mock(return_value="imported")
+    client._async_client = SimpleNamespace(import_ovpack=import_ovpack)
+    with patch("openviking.sync_client.run_async", side_effect=lambda result: result):
+        assert client.import_ovpack("pack", parent="parent") == "imported"
+        assert client.import_ovpack("pack", target="legacy") == "imported"
+        with pytest.raises(ValueError):
+            client.import_ovpack("pack", parent="parent", target="legacy")
+
+    assert import_ovpack.call_args_list[0].args == ("pack", "parent")
+    assert import_ovpack.call_args_list[1].args == ("pack", "legacy")
+
+
 async def test_local_client_batch_add_messages_forwards_to_session():
     class FakeSession:
         def __init__(self):
@@ -225,7 +297,6 @@ async def test_local_client_batch_add_messages_forwards_to_session():
     client = LocalClient.__new__(LocalClient)
     client._service = SimpleNamespace(sessions=FakeSessions())
     client._ctx = SimpleNamespace(user=SimpleNamespace(user_id="user-1"))
-    client._legacy_agent_id = None
 
     result = await LocalClient.batch_add_messages(
         client,
@@ -285,7 +356,6 @@ async def test_local_client_add_message_accepts_image_parts():
     client = LocalClient.__new__(LocalClient)
     client._service = SimpleNamespace(sessions=FakeSessions())
     client._ctx = SimpleNamespace(user=SimpleNamespace(user_id="user-1"))
-    client._legacy_agent_id = None
 
     result = await LocalClient.add_message(
         client,

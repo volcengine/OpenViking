@@ -1,4 +1,5 @@
 import types
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -237,18 +238,65 @@ async def test_vectorize_file_marks_registered_wait_root_failed_when_enqueue_rai
         ),
     )
 
-    await embedding_utils.vectorize_file(
-        file_path="viking://user/default/resources/test.md",
-        summary_dict={"name": "test.md", "summary": ""},
-        parent_uri="viking://user/default/resources",
-        ctx=DummyReq(),
-        register_request_wait=True,
-    )
+    with pytest.raises(RuntimeError, match="queue unavailable"):
+        await embedding_utils.vectorize_file(
+            file_path="viking://user/default/resources/test.md",
+            summary_dict={"name": "test.md", "summary": ""},
+            parent_uri="viking://user/default/resources",
+            ctx=DummyReq(),
+            register_request_wait=True,
+        )
 
     assert len(queue.items) == 1
     assert registered == [(queue.items[0].telemetry_id, queue.items[0].id)]
     assert failed
     assert failed[0][0:2] == registered[0]
+
+
+@pytest.mark.asyncio
+async def test_vectorize_file_propagates_enqueue_failure(monkeypatch):
+    monkeypatch.setattr(
+        embedding_utils, "get_queue_manager", lambda: DummyQueueManager(FailingQueue())
+    )
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("content"))
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="summary_first", max_input_tokens=1000)
+        ),
+    )
+    monkeypatch.setattr(
+        embedding_utils.EmbeddingMsgConverter, "from_context", lambda context: context
+    )
+
+    with pytest.raises(RuntimeError, match="queue unavailable"):
+        await embedding_utils.vectorize_file(
+            "viking://user/default/resources/test.md",
+            {"name": "test.md", "summary": "summary"},
+            "viking://user/default/resources",
+            ctx=DummyReq(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_vectorize_directory_propagates_enqueue_failures_and_drains_tracker(monkeypatch):
+    decrement = AsyncMock()
+    monkeypatch.setattr(
+        embedding_utils, "get_queue_manager", lambda: DummyQueueManager(FailingQueue())
+    )
+    monkeypatch.setattr(embedding_utils, "_decrement_embedding_tracker", decrement)
+
+    with pytest.raises(RuntimeError, match="queue unavailable"):
+        await embedding_utils.vectorize_directory_meta(
+            "viking://user/default/resources",
+            abstract="abstract",
+            overview="overview",
+            ctx=DummyReq(),
+            semantic_msg_id="semantic-root",
+        )
+
+    decrement.assert_awaited_once_with("semantic-root", 2)
 
 
 @pytest.mark.asyncio

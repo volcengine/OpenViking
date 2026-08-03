@@ -26,6 +26,7 @@ class RagfsBindingConfig:
     agfs: Any
     root_key: bytes | None = None
     provider_type: int | None = None
+    log: Dict[str, Any] | None = None
 
     def encryption_enabled(self) -> bool:
         """Return whether the binding stack should include the encryption layer."""
@@ -37,6 +38,9 @@ class RagfsBindingConfig:
             "cache": self.agfs.cache.model_dump(mode="json"),
             "pathlock": self.agfs.pathlock.model_dump(mode="json"),
         }
+
+        if self.log is not None:
+            binding_config["log"] = self.log
 
         if self.root_key is not None:
             if len(self.root_key) != 32:
@@ -99,9 +103,23 @@ def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig,
     if agfs_config is None:
         raise ValueError("OpenViking config storage.agfs is required")
 
+    log_config = _get_config_value(config, "log")
+    log_level = _get_config_value(log_config, "level", "INFO")
+    log_level = log_level.upper() if isinstance(log_level, str) else "INFO"
+    log_output = _get_config_value(log_config, "output", "stdout")
+    if log_output == "file":
+        workspace = _get_config_value(storage, "workspace")
+        log_dir = Path(workspace).resolve() / "log"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_output = str(log_dir / "openviking.log")
+    binding_log = {
+        "level": log_level,
+        "output": log_output,
+    }
+
     encryptor = _run_coro_blocking(bootstrap_encryption(_dump_openviking_config(config)))
     if encryptor is None:
-        return RagfsBindingConfig(agfs=agfs_config), None
+        return RagfsBindingConfig(agfs=agfs_config, log=binding_log), None
 
     root_key = _run_coro_blocking(encryptor.provider.get_root_key())
     if not isinstance(root_key, (bytes, bytearray)) or len(root_key) != 32:
@@ -112,6 +130,7 @@ def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig,
             agfs=agfs_config,
             root_key=bytes(root_key),
             provider_type=encryptor.provider_type,
+            log=binding_log,
         ),
         encryptor,
     )

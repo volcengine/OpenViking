@@ -203,9 +203,9 @@ def test_session_commit_message_ignores_unknown_fields():
             "session_uri": "viking://user/sessions/session-1",
             "archive_uri": "viking://user/sessions/session-1/history/archive_001",
             "user": {"account_id": "default", "user_id": "default"},
-            "future_field": "ignored",
+            "actor_peer_id": "visitor-a",
         }
     )
 
     assert message.task_id == "task-1"
-    assert "future_field" not in message.to_dict()
+    assert "actor_peer_id" not in message.to_dict()
