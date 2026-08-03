@@ -37,6 +37,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   async function init() {
     if (config.autoCapture) await migrateLegacySessionMap()
     await loadState()
+    sweepStaleTempFiles()
     const health = await fetchJSON(config, "/health", {}, { timeoutMs: 5000 })
     if (health.ok) {
       await replayPending(
@@ -87,6 +88,27 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     })()
     periodicFlushPromise = done
     return done
+  }
+
+  function sweepStaleTempFiles() {
+    // saveState writes to a unique temp file (`${statePath}.${pid}.${n}.tmp`) then
+    // renames it onto statePath. A crash between writeFile and rename leaves an
+    // orphan temp behind; sweep them on startup so they don't accumulate forever.
+    try {
+      const dir = path.dirname(statePath)
+      const base = path.basename(statePath)
+      for (const name of fs.readdirSync(dir)) {
+        if (name.startsWith(`${base}.`) && name.endsWith(".tmp")) {
+          try {
+            fs.unlinkSync(path.join(dir, name))
+          } catch {
+            // best effort; ignore files removed by a concurrent process
+          }
+        }
+      }
+    } catch (error) {
+      log("DEBUG", "persistence", "Temp sweep skipped", { error: error?.message })
+    }
   }
 
   async function loadState() {
