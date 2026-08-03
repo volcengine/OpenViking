@@ -730,6 +730,57 @@ class TestPDFConversion:
         assert not any(uri.startswith(f"{root}/report/") for uri in fake_fs.files)
 
     @pytest.mark.asyncio
+    async def test_no_split_flattens_nested_pdf_when_parent_does_not_exist(
+        self,
+        tmp_path: Path,
+        parser,
+        fake_fs,
+    ) -> None:
+        nested = tmp_path / "novel"
+        nested.mkdir()
+        pdf_file = nested / "report.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4 fake pdf")
+        mock_temp = fake_fs.create_temp_uri()
+        doc_dir = f"{mock_temp}/report"
+        await fake_fs.mkdir(mock_temp)
+        await fake_fs.mkdir(doc_dir)
+        await fake_fs.write_file(f"{doc_dir}/report.md", "# Converted PDF")
+        fake_result = create_parse_result(
+            root=ResourceNode(type=NodeType.ROOT),
+            source_path=str(pdf_file),
+            source_format="pdf",
+            parser_name="PDFParser",
+            parse_time=0.1,
+        )
+        fake_result.temp_dir_path = mock_temp
+
+        original_ls = fake_fs.ls
+
+        async def strict_ls(uri: str, **kwargs: Any) -> List[Dict[str, Any]]:
+            if uri not in fake_fs.dirs:
+                raise FileNotFoundError(uri)
+            return await original_ls(uri, **kwargs)
+
+        fake_fs.ls = strict_ls
+
+        with patch(
+            "openviking.parse.parsers.directory.DirectoryParser._assign_parser",
+        ) as mock_assign:
+            from openviking.parse.parsers.pdf import PDFParser as _PDF
+
+            mock_pdf = AsyncMock(spec=_PDF)
+            mock_pdf.parse = AsyncMock(return_value=fake_result)
+            mock_assign.side_effect = lambda cf, _registry: (
+                mock_pdf if cf.path.suffix == ".pdf" else None
+            )
+            result = await parser.parse(str(tmp_path), split_content=False)
+
+        root = f"{result.temp_dir_path}/{tmp_path.name}"
+        assert result.meta["failed_files"] == []
+        assert fake_fs.files[f"{root}/novel/report.md"] == b"# Converted PDF"
+        assert not any(uri.startswith(f"{root}/novel/report/") for uri in fake_fs.files)
+
+    @pytest.mark.asyncio
     async def test_no_split_keeps_pdf_wrapper_for_markdown_and_image_outputs(
         self,
         tmp_path: Path,

@@ -517,6 +517,7 @@ class DirectoryParser(BaseParser):
                 ]
                 if len(payloads) == 1 and not DirectoryParser._is_dir_entry(payloads[0]):
                     payload = payloads[0]
+                    await viking_fs.mkdir(dest_uri, exist_ok=True)
                     destination_entries = await viking_fs.ls(
                         dest_uri,
                         show_all_hidden=True,
