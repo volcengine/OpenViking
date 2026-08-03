@@ -7,7 +7,7 @@ import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Union
 
 from openviking.utils.exceptions import AllCredentialsFailedError
 from openviking.utils.model_retry import (
@@ -479,6 +479,45 @@ class FailoverVLM(VLMBase):
             self._logger.error(f"Backup VLM also failed with error: {e}")
             raise last_error
 
+    async def stream_with_failover(
+        self,
+        stream_factory: Callable[[VLMBase], AsyncIterator[Any]],
+    ) -> AsyncIterator[Any]:
+        """Stream from the active backend and fail over before output starts.
+
+        Once an item has been yielded, replaying the request through another
+        backend would duplicate visible output.  Errors after that point are
+        therefore propagated to the caller instead of triggering failover.
+        """
+        last_error = None
+
+        if self._switcher.should_try_primary():
+            emitted = False
+            try:
+                async for item in stream_factory(self.primary):
+                    emitted = True
+                    yield item
+                self._switcher.record_primary_success()
+                return
+            except Exception as exc:
+                _annotate_vlm_error(exc, self.primary)
+                last_error = exc
+                if emitted or not self._switcher.record_primary_failure(exc):
+                    raise
+
+        emitted = False
+        try:
+            self._switcher.record_backup_request()
+            async for item in stream_factory(self.backup):
+                emitted = True
+                yield item
+            return
+        except Exception as exc:
+            _annotate_vlm_error(exc, self.backup)
+            last_error = exc
+            self._logger.error(f"Backup VLM also failed with error: {exc}")
+            raise last_error
+
     def get_completion(
         self,
         prompt: str = "",
@@ -735,6 +774,48 @@ class MultiCredentialVLM(VLMBase):
                 if self._switcher.is_fail_fast(error_class):
                     # Request-level failure: re-raise the original exception;
                     # trying other credentials is useless.
+                    raise
+
+                self._logger.warning(
+                    f"Credential {credential_id} failed with {error_class}, trying next credential"
+                )
+
+        raise AllCredentialsFailedError(aggregated_errors)
+
+    async def stream_with_failover(
+        self,
+        stream_factory: Callable[[VLMBase], AsyncIterator[Any]],
+    ) -> AsyncIterator[Any]:
+        """Stream with ordered credential failover before output starts.
+
+        A credential may be replaced while opening or awaiting the first
+        visible stream item.  After an item is emitted, switching would replay
+        already delivered output, so subsequent errors fail the request.
+        """
+        aggregated_errors = []
+        start = self._switcher.maybe_failback()
+        n = self._switcher.n
+
+        for offset in range(n):
+            idx = (start + offset) % n
+            credential_id = self._credential_ids[idx]
+            vlm_instance = self._vlm_instances[idx]
+            emitted = False
+
+            try:
+                async for item in stream_factory(vlm_instance):
+                    emitted = True
+                    yield item
+                self._switcher.commit_success(idx)
+                return
+            except Exception as exc:
+                _annotate_vlm_error(exc, vlm_instance)
+                if emitted:
+                    raise
+
+                error_class = classify_api_error(exc)
+                aggregated_errors.append((credential_id, error_class, exc, idx))
+                if self._switcher.is_fail_fast(error_class):
                     raise
 
                 self._logger.warning(
