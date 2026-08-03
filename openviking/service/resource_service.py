@@ -1038,6 +1038,8 @@ class ResourceService:
         get_current_telemetry().set("resource.flags.wait", wait)
         if not wait:
             return result
+        if result.get("status") == "error":
+            return result
         from openviking.service.task_tracker import TaskStatus, get_task_tracker
 
         task_id = result["task_id"]
