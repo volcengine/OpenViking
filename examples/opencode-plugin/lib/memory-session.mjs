@@ -387,7 +387,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     if (!shutdown) startPeriodicFlush()
   }
 
-  async function flushSession(opencodeSessionId, { commit = false, reason = "manual" } = {}) {
+  async function flushSession(opencodeSessionId, { commit = false, reason = "manual", skipThreshold = false } = {}) {
     if (!opencodeSessionId) return false
     const state = sessions.get(opencodeSessionId)
     if (!state) return false
@@ -402,7 +402,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       const added = await flushPendingMessages(opencodeSessionId, state)
       if (commit && config.autoCapture) {
         await commitOvSession(state.ovSessionId, { force: true, reason })
-      } else if (added > 0) {
+      } else if (added > 0 && !skipThreshold) {
         await maybeCommitByThreshold(state)
       }
       await saveState()
@@ -426,8 +426,9 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       // Route through flushSession so the send goes through the same
       // per-session serialization gate. Calling flushPendingMessages directly
       // would bypass state.flushing and could double-send a batch that a
-      // concurrent periodic/idle flush is already sending.
-      await flushSession(opencodeSessionId, { commit: false, reason: "tool" })
+      // concurrent periodic/idle flush is already sending. skipThreshold avoids
+      // a redundant threshold commit here since we force-commit right below.
+      await flushSession(opencodeSessionId, { commit: false, reason: "tool", skipThreshold: true })
     }
     return commitOvSession(sessionId, { force: true, abortSignal, reason: "tool" })
   }
