@@ -5,6 +5,7 @@
 
 import asyncio
 import json
+import threading
 from unittest.mock import patch
 
 import httpx
@@ -883,6 +884,110 @@ async def test_commit_updates_archive_metadata_before_background_task(client: ht
     assert after_result["message_count"] == 1
     assert after_result["total_message_count"] == 4
     assert after_result["commit_count"] == 1
+
+
+async def test_used_then_separate_commit_updates_active_count_and_relation(
+    client,
+    service,
+    monkeypatch,
+):
+    lock = threading.Lock()
+    mock_agfs = service.viking_fs._async_agfs._client
+
+    def acquire_tree(_ctx, _path, _timeout_secs, _owner_lease_ref):
+        lock.acquire()
+        return {"lease_ref": "session-usage-test-lock"}
+
+    def release_tree(_ctx, _lease):
+        lock.release()
+
+    monkeypatch.setattr(mock_agfs, "pathlock_acquire_tree", acquire_tree, raising=False)
+    monkeypatch.setattr(mock_agfs, "pathlock_release", release_tree, raising=False)
+
+    async def no_memories(*args, **kwargs):
+        del args, kwargs
+        return []
+
+    async def fake_summary(*args, **kwargs):
+        del args, kwargs
+        return "# Durable Usage\n\nTest summary."
+
+    service.sessions._session_compressor.extract_long_term_memories = no_memories
+    service.sessions._session_compressor.extract_execution_memories = no_memories
+    monkeypatch.setattr(
+        "openviking.session.session.Session._generate_archive_summary_async",
+        fake_summary,
+    )
+
+    resource_uri = "viking://resources/http-used-durability.md"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    vector = service.vikingdb_manager.get_embedder().embed("durable usage").dense_vector
+    await service.vikingdb_manager.upsert(
+        {
+            "uri": resource_uri,
+            "parent_uri": "viking://resources",
+            "is_leaf": True,
+            "abstract": "Durable usage test resource",
+            "context_type": "resource",
+            "category": "",
+            "active_count": 0,
+            "vector": vector,
+            "meta": {},
+            "related_uri": [],
+            "account_id": "default",
+            "owner_space": "",
+            "level": 2,
+        },
+        ctx=ctx,
+    )
+
+    create_resp = await client.post(
+        "/api/v1/sessions",
+        json={"session_id": "http-used-durability"},
+    )
+    assert create_resp.status_code == 200
+    session_id = create_resp.json()["result"]["session_id"]
+
+    add_resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json=_message_request("user", content="use the resource"),
+    )
+    assert add_resp.status_code == 200
+
+    used_resp = await client.post(
+        f"/api/v1/sessions/{session_id}/used",
+        json={"contexts": [resource_uri]},
+    )
+    assert used_resp.status_code == 200
+    assert used_resp.json()["result"]["contexts_used"] == 1
+
+    commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
+    assert commit_resp.status_code == 200
+    task = await _wait_for_task(client, commit_resp.json()["result"]["task_id"])
+
+    assert task["status"] == "completed"
+    assert task["result"]["active_count_updated"] == 1
+
+    records = await service.vikingdb_manager.get_context_by_uri(
+        uri=resource_uri,
+        limit=1,
+        ctx=ctx,
+    )
+    assert records
+    assert records[0]["active_count"] == 1
+
+    session_uri = create_resp.json()["result"]["uri"]
+    relations_resp = await client.get(
+        "/api/v1/relations",
+        params={"uri": session_uri},
+    )
+    assert relations_resp.status_code == 200
+    relation_uris = {
+        relation["uri"]
+        for relation in relations_resp.json()["result"]
+        if isinstance(relation, dict) and "uri" in relation
+    }
+    assert resource_uri in relation_uris
 
 
 async def test_extract_session_jsonable_regression(client: httpx.AsyncClient, service, monkeypatch):

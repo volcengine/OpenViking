@@ -76,6 +76,7 @@ _AGENT_TRAINING_REQUIRED_MEMORY_TYPES = frozenset({"cases", "trajectories"})
 _SESSION_PHASE1_LOCK_TIMEOUT_SECONDS = 30.0
 _MEMORY_STEP_NAMES = ("long_term", "execution")
 _CUMULATIVE_CHECKPOINT_VERSION = 2
+_USAGE_EVENT_LOG_NAME = ".usage.jsonl"
 
 
 class _ArchiveMessagesCorruptError(ValueError):
@@ -543,6 +544,47 @@ class Usage:
     success: bool = True
     timestamp: str = field(default_factory=get_current_timestamp)
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "uri": self.uri,
+            "type": self.type,
+            "contribution": self.contribution,
+            "input": self.input,
+            "output": self.output,
+            "success": self.success,
+            "timestamp": self.timestamp,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Usage":
+        return cls(
+            uri=data.get("uri", ""),
+            type=data.get("type", ""),
+            contribution=data.get("contribution", 0.0),
+            input=data.get("input", ""),
+            output=data.get("output", ""),
+            success=data.get("success", True),
+            timestamp=data.get("timestamp", get_current_timestamp()),
+        )
+
+
+@dataclass(frozen=True)
+class _UsageEvent:
+    """One durable usage event pending consumption by Session Phase 1."""
+
+    event_id: str
+    usage: Usage
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"event_id": self.event_id, **self.usage.to_dict()}
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "_UsageEvent":
+        event_id = data.get("event_id")
+        if not isinstance(event_id, str) or not event_id:
+            raise ValueError("usage event is missing event_id")
+        return cls(event_id=event_id, usage=Usage.from_dict(data))
+
 
 class Session:
     """Session management class - Message = role + parts."""
@@ -576,6 +618,7 @@ class Session:
 
         self._messages: List[Message] = []
         self._usage_records: List[Usage] = []
+        self._pending_usage_records: List[Usage] = []
         self._archive_meta_merge_lock = asyncio.Lock()
         self._compression: SessionCompression = SessionCompression()
         self._stats: SessionStats = SessionStats()
@@ -650,6 +693,7 @@ class Session:
             self._meta.created_by_account_id = self.ctx.account_id
         if not self._meta.created_by_user_id:
             self._meta.created_by_user_id = self.ctx.user.user_id
+        await self._reload_usage_records()
         # WM v2: always rebuild pending_tokens from current messages so the
         # counter stays consistent across restarts and is also backfilled for
         # legacy sessions whose .meta.json predates these fields. O(n) once,
@@ -743,39 +787,172 @@ class Session:
         contexts: Optional[List[str]] = None,
         skill: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Record actually used contexts and skills."""
-        if contexts:
-            for uri in contexts:
-                usage = Usage(uri=uri, type="context")
-                self._usage_records.append(usage)
-                self._stats.contexts_used += 1
-                logger.debug(f"Tracked context usage: {uri}")
-            try:
-                from openviking.metrics.datasources.session import SessionLifecycleDataSource
+        """Record usage in memory for direct in-process compatibility."""
+        records = self._build_usage_records(contexts=contexts, skill=skill)
+        self._pending_usage_records.extend(records)
+        self._usage_records.extend(records)
+        self._update_usage_stats()
+        self._record_usage_metrics(records)
 
-                SessionLifecycleDataSource.record_contexts_used(
-                    action="context", delta=len(contexts)
-                )
-            except Exception:
-                pass
+    async def used_async(
+        self,
+        contexts: Optional[List[str]] = None,
+        skill: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Durably append usage records under the Session Phase 1 lock."""
+        records = self._build_usage_records(contexts=contexts, skill=skill)
+        if not records:
+            return
+        if not self._viking_fs:
+            self.used(contexts=contexts, skill=skill)
+            return
 
-        if skill:
-            usage = Usage(
-                uri=skill.get("uri", ""),
-                type="skill",
-                input=skill.get("input", ""),
-                output=skill.get("output", ""),
-                success=skill.get("success", True),
+        uri_to_path = getattr(self._viking_fs, "_uri_to_path", None)
+        if not callable(uri_to_path):
+            events = await self._read_usage_events()
+            events.extend(self._new_usage_events(records))
+            await self._write_usage_events(events)
+            self._replace_usage_records(
+                [event.usage for event in events] + list(self._pending_usage_records)
             )
-            self._usage_records.append(usage)
-            self._stats.skills_used += 1
-            logger.debug(f"Tracked skill usage: {skill.get('uri')}")
-            try:
-                from openviking.metrics.datasources.session import SessionLifecycleDataSource
+            self._record_usage_metrics(records)
+            return
 
-                SessionLifecycleDataSource.record_contexts_used(action="skill", delta=1)
-            except Exception:
-                pass
+        session_path = uri_to_path(self._session_uri, ctx=self.ctx)
+        lease = await self._viking_fs._async_agfs.pathlock_acquire_tree(
+            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
+        )
+        try:
+            events = await self._read_usage_events()
+            events.extend(self._new_usage_events(records))
+            await self._write_usage_events(events, lease_ref=lease)
+            self._replace_usage_records(
+                [event.usage for event in events] + list(self._pending_usage_records)
+            )
+        finally:
+            await self._viking_fs._async_agfs.pathlock_release(lease)
+        self._record_usage_metrics(records)
+
+    def _build_usage_records(
+        self,
+        *,
+        contexts: Optional[List[str]],
+        skill: Optional[Dict[str, Any]],
+    ) -> List[Usage]:
+        records = [Usage(uri=uri, type="context") for uri in contexts or []]
+        if skill:
+            records.append(
+                Usage(
+                    uri=skill.get("uri", ""),
+                    type="skill",
+                    contribution=skill.get("contribution", 0.0),
+                    input=skill.get("input", ""),
+                    output=skill.get("output", ""),
+                    success=skill.get("success", True),
+                    timestamp=skill.get("timestamp", get_current_timestamp()),
+                )
+            )
+        return records
+
+    @staticmethod
+    def _new_usage_events(records: List[Usage]) -> List[_UsageEvent]:
+        return [_UsageEvent(event_id=str(uuid4()), usage=record) for record in records]
+
+    def _usage_event_log_uri(self) -> str:
+        return f"{self._session_uri}/{_USAGE_EVENT_LOG_NAME}"
+
+    async def _read_usage_events(self) -> List[_UsageEvent]:
+        try:
+            content = await self._viking_fs.read_file(
+                self._usage_event_log_uri(),
+                ctx=self.ctx,
+            )
+        except Exception as exc:
+            if _is_storage_not_found(exc):
+                return []
+            raise
+        return [
+            _UsageEvent.from_dict(json.loads(line)) for line in content.splitlines() if line.strip()
+        ]
+
+    async def _write_usage_events(
+        self,
+        events: List[_UsageEvent],
+        *,
+        lease_ref: Optional[Any] = None,
+    ) -> None:
+        content = "".join(
+            json.dumps(event.to_dict(), ensure_ascii=False) + "\n" for event in events
+        )
+        write_kwargs: Dict[str, Any] = {"ctx": self.ctx}
+        if lease_ref is not None:
+            write_kwargs["lease_ref"] = lease_ref
+        await self._viking_fs.write_file(
+            self._usage_event_log_uri(),
+            content,
+            **write_kwargs,
+        )
+
+    async def _reload_usage_records(self) -> None:
+        events = await self._read_usage_events()
+        self._pending_usage_records = []
+        self._replace_usage_records([event.usage for event in events])
+
+    def _replace_usage_records(self, records: List[Usage]) -> None:
+        self._usage_records = list(records)
+        self._update_usage_stats()
+
+    def _update_usage_stats(self) -> None:
+        self._stats.contexts_used = sum(
+            1 for usage in self._usage_records if usage.type == "context"
+        )
+        self._stats.skills_used = sum(1 for usage in self._usage_records if usage.type == "skill")
+
+    @staticmethod
+    def _record_usage_metrics(records: List[Usage]) -> None:
+        try:
+            from openviking.metrics.datasources.session import SessionLifecycleDataSource
+
+            context_count = sum(1 for usage in records if usage.type == "context")
+            skill_count = sum(1 for usage in records if usage.type == "skill")
+            if context_count:
+                SessionLifecycleDataSource.record_contexts_used(
+                    action="context", delta=context_count
+                )
+            if skill_count:
+                SessionLifecycleDataSource.record_contexts_used(action="skill", delta=skill_count)
+        except Exception:
+            pass
+
+    async def _consume_usage_events(
+        self,
+        event_ids: List[str],
+        *,
+        lease_ref: Optional[Any] = None,
+    ) -> List[_UsageEvent]:
+        consumed_ids = set(event_ids)
+        remaining = [
+            event for event in await self._read_usage_events() if event.event_id not in consumed_ids
+        ]
+        await self._write_usage_events(remaining, lease_ref=lease_ref)
+        self._replace_usage_records(
+            [event.usage for event in remaining] + list(self._pending_usage_records)
+        )
+        return remaining
+
+    async def _restore_usage_events(
+        self,
+        snapshot: List[_UsageEvent],
+        *,
+        lease_ref: Optional[Any] = None,
+    ) -> None:
+        current = await self._read_usage_events()
+        current_ids = {event.event_id for event in current}
+        restored = [event for event in snapshot if event.event_id not in current_ids] + current
+        await self._write_usage_events(restored, lease_ref=lease_ref)
+        self._replace_usage_records(
+            [event.usage for event in restored] + list(self._pending_usage_records)
+        )
 
     def _tool_result_store(self) -> Optional[ToolResultStore]:
         if not self._viking_fs:
@@ -1501,6 +1678,7 @@ class Session:
         min_raw_tail_steps: int,
         agent_evolution_enabled: bool = True,
         agent_memory_skip_reason: Optional[str] = None,
+        usage_event_ids: Optional[List[str]] = None,
         lease_ref: Optional[Any] = None,
     ) -> None:
         """Persist the Phase 1 intent before any destructive root rewrite."""
@@ -1517,6 +1695,7 @@ class Session:
             "keep_recent_turn_count": keep_recent_turn_count,
             "retained_message_token_budget": retained_message_token_budget,
             "min_raw_tail_steps": min_raw_tail_steps,
+            "usage_event_ids": list(usage_event_ids or []),
         }
         await self._merge_archive_meta(
             archive_uri,
@@ -1644,6 +1823,12 @@ class Session:
             )
             self._meta.last_commit_at = get_current_timestamp()
             self._rebuild_pending_tokens()
+            usage_event_ids = marker.get("usage_event_ids")
+            if isinstance(usage_event_ids, list):
+                await self._consume_usage_events(
+                    [event_id for event_id in usage_event_ids if isinstance(event_id, str)],
+                    lease_ref=lease,
+                )
             await self._save_meta(lease_ref=lease)
             await self._write_phase1_ready_marker(archive_uri, lease_ref=lease)
             logger.warning("Recovered interrupted Session Phase 1: %s", archive_uri)
@@ -1888,12 +2073,24 @@ class Session:
                     "budget_exceeded": retention_plan.budget_exceeded if retention_plan else False,
                 }
 
+            original_messages = list(self._messages)
+            usage_events_snapshot = await self._read_usage_events()
+            pending_usage_snapshot = list(self._pending_usage_records)
+            if pending_usage_snapshot:
+                usage_events_snapshot.extend(self._new_usage_events(pending_usage_snapshot))
+                await self._write_usage_events(usage_events_snapshot, lease_ref=lease)
+                snapshot_object_ids = {id(record) for record in pending_usage_snapshot}
+                self._pending_usage_records = [
+                    record
+                    for record in self._pending_usage_records
+                    if id(record) not in snapshot_object_ids
+                ]
+            usage_snapshot = [event.usage for event in usage_events_snapshot]
+            self._replace_usage_records(usage_snapshot + list(self._pending_usage_records))
             self._compression.compression_index += 1
             archive_uri = (
                 f"{self._session_uri}/history/archive_{self._compression.compression_index:03d}"
             )
-            original_messages = list(self._messages)
-            usage_snapshot = self._usage_records.copy()
             task_id = str(uuid4())
             queue_msg = SessionCommitMsg(
                 task_id=task_id,
@@ -1903,6 +2100,7 @@ class Session:
                 user=self.ctx.user.to_dict(),
                 memory_policy=effective_memory_policy,
                 usage_uris=list(dict.fromkeys(u.uri for u in usage_snapshot if u.uri)),
+                usage_records=[usage.to_dict() for usage in usage_snapshot],
             )
             phase1_stage = "phase1_persist"
             try:
@@ -1922,6 +2120,7 @@ class Session:
                     min_raw_tail_steps=effective_min_tail,
                     agent_evolution_enabled=agent_evolution_enabled,
                     agent_memory_skip_reason=agent_memory_skip_reason,
+                    usage_event_ids=[event.event_id for event in usage_events_snapshot],
                     lease_ref=lease,
                 )
 
@@ -1986,6 +2185,10 @@ class Session:
                     self._compression.compression_index,
                 )
                 self._meta.last_commit_at = get_current_timestamp()
+                await self._consume_usage_events(
+                    [event.event_id for event in usage_events_snapshot],
+                    lease_ref=lease,
+                )
                 await self._save_meta(lease_ref=lease)
                 await self._write_phase1_ready_marker(archive_uri, lease_ref=lease)
             except Exception as e:
@@ -2006,6 +2209,7 @@ class Session:
                         archive_uri,
                     )
                 self._messages = original_messages
+                await self._restore_usage_events(usage_events_snapshot, lease_ref=lease)
                 self._compression.compression_index -= 1
                 raise
         finally:
@@ -2161,7 +2365,11 @@ class Session:
             task_id=msg.task_id,
             archive_uri=msg.archive_uri,
             messages=archive_messages,
-            usage_records=[Usage(uri=uri, type="context") for uri in msg.usage_uris],
+            usage_records=(
+                [Usage.from_dict(record) for record in msg.usage_records]
+                if msg.usage_records
+                else [Usage(uri=uri, type="context") for uri in msg.usage_uris]
+            ),
             first_message_id=archive_messages[0].id,
             last_message_id=archive_messages[-1].id,
             memory_policy=msg.memory_policy,
@@ -2571,6 +2779,8 @@ class Session:
                     # Write relations (using snapshot, not self._usage_records)
                     if self._viking_fs:
                         for usage in usage_records:
+                            if not usage.uri:
+                                continue
                             try:
                                 await self._viking_fs.link(
                                     self._session_uri, usage.uri, ctx=self.ctx
@@ -2580,7 +2790,7 @@ class Session:
 
                     # Update active_count (using snapshot, not self._usage_records)
                     if self._vikingdb_manager:
-                        uris = [u.uri for u in usage_records if u.uri]
+                        uris = list(dict.fromkeys(u.uri for u in usage_records if u.uri))
                         try:
                             active_count_updated = (
                                 await self._vikingdb_manager.increment_active_count(self.ctx, uris)
