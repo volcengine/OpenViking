@@ -7,7 +7,6 @@ from typing import Any, Dict, Literal, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from openviking.parse.mode import ParseMode
 from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.server.auth import get_request_context, get_upload_request_context
 from openviking.server.dependencies import get_service
@@ -57,9 +56,6 @@ class AddResourceRequest(BaseModel):
         exclude: Glob pattern for files to exclude during parsing.
         directly_upload_media: Whether to directly upload media files. Default is True.
         preserve_structure: Whether to preserve directory structure when adding directories.
-        parse_mode: Parsing layout. ``default`` keeps the current parser behavior;
-            ``no_split`` still parses and converts documents to Markdown but keeps
-            each document body in one Markdown file.
         args: Parser-specific import options. For Feishu one-time user-token imports,
             pass {"feishu_access_token": "..."}. For Feishu user-token watches,
             pass {"feishu_access_token": "...", "feishu_refresh_token": "..."}.
@@ -95,7 +91,6 @@ class AddResourceRequest(BaseModel):
     exclude: Optional[str] = None
     directly_upload_media: bool = True
     preserve_structure: Optional[bool] = None
-    parse_mode: ParseMode = ParseMode.DEFAULT
     args: Dict[str, Any] = Field(default_factory=dict)
     telemetry: TelemetryRequest = False
     watch_interval: float = 0
@@ -283,7 +278,6 @@ async def add_resource(
                 allow_local_path_resolution=allow_local_path_resolution,
                 enforce_public_remote_targets=True,
                 args=request.args,
-                parse_mode=request.parse_mode,
                 **kwargs,
             )
         except Exception:

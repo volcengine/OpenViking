@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from openviking.parse.mode import ParseMode
 from openviking.server import mcp_endpoint
 from openviking.server.identity import RequestContext, Role
 from openviking.server.upload_token_store import upload_token_store
@@ -37,15 +36,12 @@ def mcp_context(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.asyncio
-async def test_mcp_add_resource_schema_exposes_parse_mode_enum(mcp_context):
+async def test_mcp_add_resource_schema_exposes_parse_mode_only_through_args(mcp_context):
     tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
     schema = tools["add_resource"].inputSchema
-    parse_mode_schema = schema["properties"]["parse_mode"]
-    if "$ref" in parse_mode_schema:
-        parse_mode_schema = schema["$defs"][parse_mode_schema["$ref"].rsplit("/", 1)[-1]]
 
-    assert parse_mode_schema["enum"] == ["default", "no_split"]
-    assert schema["properties"]["parse_mode"]["default"] == "default"
+    assert "parse_mode" not in schema["properties"]
+    assert "args" in schema["properties"]
 
 
 @pytest.mark.asyncio
@@ -57,13 +53,13 @@ async def test_mcp_remote_add_forwards_no_split(
 
     result = await mcp_endpoint.add_resource(
         path="https://example.com/manual.pdf",
-        parse_mode=ParseMode.NO_SPLIT,
+        args={"parse_mode": "no_split"},
     )
 
     assert "Resource added" in result
-    assert mcp_context.resources.add_resource.await_args.kwargs["parse_mode"] is (
-        ParseMode.NO_SPLIT
-    )
+    assert mcp_context.resources.add_resource.await_args.kwargs["args"] == {
+        "parse_mode": "no_split"
+    }
 
 
 @pytest.mark.asyncio
@@ -81,11 +77,11 @@ async def test_mcp_temp_file_id_forwards_no_split(
 
     result = await mcp_endpoint.add_resource(
         temp_file_id="upload_abcdef123.md",
-        parse_mode=ParseMode.NO_SPLIT,
+        args={"parse_mode": "no_split"},
     )
 
     assert "Resource added" in result
-    assert ingest.await_args.kwargs["parse_mode"] is ParseMode.NO_SPLIT
+    assert ingest.await_args.kwargs["args"] == {"parse_mode": "no_split"}
 
 
 @pytest.mark.asyncio
@@ -101,7 +97,7 @@ async def test_mcp_local_upload_token_binds_no_split(
 
     await mcp_endpoint.add_resource(
         path="/tmp/manual.pdf",
-        parse_mode=ParseMode.NO_SPLIT,
+        args={"parse_mode": "no_split"},
     )
 
     assert len(upload_token_store._store) == 1
@@ -113,7 +109,7 @@ async def test_mcp_local_upload_token_binds_no_split(
 async def test_mcp_rejects_invalid_parse_mode(mcp_context):
     result = await mcp_endpoint.add_resource(
         path="https://example.com/manual.pdf",
-        parse_mode="unsupported",
+        args={"parse_mode": "unsupported"},
     )
 
     assert "Error" in result

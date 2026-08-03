@@ -91,7 +91,7 @@ async def test_no_split_is_forwarded_and_persisted_for_watch_replay(
         ctx=ctx,
         to="viking://resources/no_split_watch",
         watch_interval=30.0,
-        parse_mode="no_split",
+        args={"parse_mode": "no_split"},
     )
 
     processor = service._resource_processor
@@ -102,14 +102,23 @@ async def test_no_split_is_forwarded_and_persisted_for_watch_replay(
 
 
 @pytest.mark.asyncio
-async def test_rejects_parse_mode_inside_args(service: ResourceService, ctx: RequestContext):
-    with pytest.raises(InvalidArgumentError, match="parse_mode"):
-        await service.add_resource(
-            path="/test/path",
-            ctx=ctx,
-            to="viking://resources/test",
-            args={"parse_mode": "no_split"},
-        )
+async def test_accepts_parse_mode_inside_args_without_mutating_input(
+    service: ResourceService,
+    ctx: RequestContext,
+):
+    args = {"parse_mode": "no_split", "site": False}
+
+    await service.add_resource(
+        path="/test/path",
+        ctx=ctx,
+        to="viking://resources/test",
+        args=args,
+    )
+
+    assert args == {"parse_mode": "no_split", "site": False}
+    processor = service._resource_processor
+    assert processor.calls[-1]["parse_mode"] == "no_split"
+    assert processor.calls[-1]["site"] is False
 
 
 @pytest.mark.asyncio
@@ -119,7 +128,7 @@ async def test_rejects_invalid_parse_mode(service: ResourceService, ctx: Request
             path="/test/path",
             ctx=ctx,
             to="viking://resources/test",
-            parse_mode="unsupported",
+            args={"parse_mode": "unsupported"},
         )
 
 
@@ -132,7 +141,7 @@ async def test_no_split_allows_directory_flattening(
         path="/test/path",
         ctx=ctx,
         to="viking://resources/test",
-        parse_mode="no_split",
+        args={"parse_mode": "no_split"},
         preserve_structure=False,
     )
 
@@ -170,7 +179,7 @@ async def test_no_split_bypasses_understanding_shortcut(
         path="https://example.com/manual.pdf",
         ctx=ctx,
         to="viking://resources/manual",
-        parse_mode="no_split",
+        args={"parse_mode": "no_split"},
         allow_local_path_resolution=False,
     )
 

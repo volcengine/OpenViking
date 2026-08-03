@@ -545,7 +545,6 @@ async def add_resource(
     tags: Optional[list[str]] = None,
     tag_mode: str = "replace",
     args: Optional[dict[str, Any]] = None,
-    parse_mode: ParseMode = ParseMode.DEFAULT,
 ) -> str:
     """Add a resource to OpenViking. Asynchronous — processing happens in the background.
 
@@ -580,9 +579,8 @@ async def add_resource(
         tags: Optional explicit k=v retrieval tags to apply after ingestion.
         tag_mode: Tag update mode, "replace" or "append". Defaults to "replace".
         args: Parser-specific options, e.g. {"feishu_access_token": "..."} for Feishu imports,
-            or {"site": true} for whole-site ingestion.
-        parse_mode: ``default`` keeps current parser behavior; ``no_split`` still parses
-            and converts documents to Markdown while keeping each document body in one file.
+            {"site": true} for whole-site ingestion, or {"parse_mode": "no_split"}
+            to keep each parsed document body in one file.
     """
     from openviking.server.local_input_guard import require_remote_resource_source
 
@@ -590,7 +588,7 @@ async def add_resource(
     ctx = _get_ctx()
 
     try:
-        mode = normalize_parse_mode(parse_mode)
+        mode = normalize_parse_mode((args or {}).get("parse_mode", ParseMode.DEFAULT))
     except InvalidArgumentError as exc:
         return f"Error: {exc}"
 
@@ -628,7 +626,6 @@ async def add_resource(
                 processing_mode=processing_mode,
                 tags=tags,
                 tag_mode=tag_mode,
-                parse_mode=mode,
             )
         except (PermissionDeniedError, InvalidArgumentError) as exc:
             return f"Error: {exc}"
@@ -683,7 +680,6 @@ async def add_resource(
                 args=args,
                 tags=tags,
                 tag_mode=tag_mode,
-                parse_mode=mode,
             )
         except Exception as exc:
             return f"Error adding resource: {exc}"

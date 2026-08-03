@@ -7,9 +7,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from pydantic import ValidationError
-
-from openviking.parse.mode import ParseMode
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import resources as resources_router
 from openviking.server.routers.resources import AddResourceRequest
@@ -17,27 +14,15 @@ from openviking.server.upload_token_store import ConsumedUploadToken
 from openviking_cli.session.user_id import UserIdentifier
 
 
-def test_add_resource_request_defaults_to_current_parse_behavior():
-    request = AddResourceRequest(path="https://example.com/demo.md")
-
-    assert request.parse_mode is ParseMode.DEFAULT
-
-
-def test_add_resource_request_rejects_invalid_parse_mode():
-    with pytest.raises(ValidationError, match="default.*no_split"):
-        AddResourceRequest(
-            path="https://example.com/demo.md",
-            parse_mode="unsupported",
-        )
-
-
-def test_add_resource_request_no_split_allows_flattening():
+def test_add_resource_request_exposes_parse_mode_only_inside_args():
     request = AddResourceRequest(
         path="https://example.com/demo.md",
-        parse_mode="no_split",
+        args={"parse_mode": "no_split"},
         preserve_structure=False,
     )
-    assert request.parse_mode is ParseMode.NO_SPLIT
+
+    assert "parse_mode" not in AddResourceRequest.model_json_schema()["properties"]
+    assert request.args == {"parse_mode": "no_split"}
 
 
 @pytest.mark.asyncio
@@ -56,12 +41,12 @@ async def test_add_resource_route_forwards_no_split_mode(monkeypatch: pytest.Mon
         SimpleNamespace(),
         AddResourceRequest(
             path="https://example.com/demo.md",
-            parse_mode="no_split",
+            args={"parse_mode": "no_split"},
         ),
         ctx,
     )
 
-    assert add_resource.await_args.kwargs["parse_mode"] is ParseMode.NO_SPLIT
+    assert add_resource.await_args.kwargs["args"] == {"parse_mode": "no_split"}
 
 
 @pytest.mark.asyncio

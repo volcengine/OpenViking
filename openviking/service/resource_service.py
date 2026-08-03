@@ -101,7 +101,6 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "exclude",
         "directly_upload_media",
         "preserve_structure",
-        "parse_mode",
         "create_parent",
         "telemetry",
         "request_validator",
@@ -142,6 +141,7 @@ class _ResourceSourceInfo:
 class _NormalizedAddResourceArgs:
     processor_kwargs: Dict[str, Any]
     watch_auth_state: Optional[Dict[str, Any]] = None
+    parse_mode: ParseMode = ParseMode.DEFAULT
 
 
 class ResourceService:
@@ -334,6 +334,13 @@ class ResourceService:
             )
 
         normalized = dict(args)
+        raw_parse_mode = normalized.pop("parse_mode", ParseMode.DEFAULT)
+        try:
+            parse_mode = normalize_parse_mode(raw_parse_mode)
+        except InvalidArgumentError as exc:
+            raise InvalidArgumentError(
+                str(exc).replace("parse_mode", "args.parse_mode")
+            ) from exc
         token = normalized.get(FEISHU_ACCESS_TOKEN_ARG)
         refresh_token = normalized.pop(FEISHU_REFRESH_TOKEN_ARG, None)
         watch_auth_state = None
@@ -360,7 +367,7 @@ class ResourceService:
                 "args.feishu_refresh_token requires args.feishu_access_token."
             )
 
-        return _NormalizedAddResourceArgs(normalized, watch_auth_state)
+        return _NormalizedAddResourceArgs(normalized, watch_auth_state, parse_mode)
 
     def _ensure_feishu_credentials_for_watch(self) -> None:
         try:
@@ -584,7 +591,6 @@ class ResourceService:
         manage_watch: bool = True,
         tags: Optional[List[str]] = None,
         tag_mode: str = "replace",
-        parse_mode: ParseMode | str = ParseMode.DEFAULT,
         allow_local_path_resolution: bool = True,
         enforce_public_remote_targets: bool = False,
         args: Optional[Dict[str, Any]] = None,
@@ -800,7 +806,6 @@ class ResourceService:
         watch_interval: float = 0,
         tags: Optional[List[str]] = None,
         tag_mode: str = "replace",
-        parse_mode: ParseMode | str = ParseMode.DEFAULT,
         allow_local_path_resolution: bool = True,
         enforce_public_remote_targets: bool = False,
         add_type: Optional[str] = None,
@@ -829,7 +834,6 @@ class ResourceService:
             build_index=build_index,
             summarize=summarize,
             processing_mode=processing_mode,
-            parse_mode=parse_mode,
             watch_interval=watch_interval,
             manage_watch=True,
             tags=tags,
@@ -896,7 +900,7 @@ class ResourceService:
         manage_watch: bool = True,
         tags: Optional[List[str]] = None,
         tag_mode: str = "replace",
-        parse_mode: ParseMode | str = ParseMode.DEFAULT,
+        parse_mode: ParseMode | str | None = None,
         allow_local_path_resolution: bool = True,
         enforce_public_remote_targets: bool = False,
         args: Optional[Dict[str, Any]] = None,
@@ -947,9 +951,13 @@ class ResourceService:
         """
         self._ensure_initialized()
         processing_mode = normalize_processing_mode(processing_mode)
-        mode = normalize_parse_mode(parse_mode)
         self._validate_add_resource_tag_policy(tags=tags, tag_mode=tag_mode)
         normalized_args = self._normalize_add_resource_args(args, watch_interval=watch_interval)
+        mode = (
+            normalize_parse_mode(parse_mode)
+            if parse_mode is not None
+            else normalized_args.parse_mode
+        )
         kwargs.update(normalized_args.processor_kwargs)
         if watch_interval > 0 and kwargs.get("temp_file_id"):
             # Fail fast, before any ingestion: an uploaded source is a one-time
@@ -988,7 +996,7 @@ class ResourceService:
             processing_mode=processing_mode,
             parse_mode=mode,
             watch_interval=watch_interval,
-            connector_args=args or {},
+            connector_args=normalized_args.processor_kwargs,
             kwargs=kwargs,
         ):
             return await self._connector.submit(
@@ -997,7 +1005,7 @@ class ResourceService:
                 declared_add_type=add_type,
                 to=to,
                 reason=reason,
-                connector_args=args or {},
+                connector_args=normalized_args.processor_kwargs,
                 tags=tags,
                 tag_mode=tag_mode,
                 **kwargs,
