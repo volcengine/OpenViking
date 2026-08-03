@@ -80,6 +80,8 @@ class _FakeVikingFS:
     def __init__(self):
         self.agfs = _FakeAGFS()
         self.files = {}
+        self.account_cleanup_contexts = []
+        self.account_cleanup_error = None
 
     async def read_file(self, uri, **_kwargs):
         if uri not in self.files:
@@ -91,6 +93,12 @@ class _FakeVikingFS:
 
     async def rm(self, uri, **_kwargs):
         self.files.pop(uri, None)
+
+    async def delete_account_data(self, *, ctx):
+        if self.account_cleanup_error is not None:
+            raise self.account_cleanup_error
+        self.account_cleanup_contexts.append(ctx)
+        return {"deleted_filesystem": True, "deleted_vector_records": 0}
 
 
 class _FakeService:
@@ -376,8 +384,11 @@ async def test_list_accounts(admin_client: httpx.AsyncClient):
     assert acct in account_ids
 
 
-async def test_delete_account(admin_client: httpx.AsyncClient):
-    """ROOT can delete an account."""
+async def test_delete_account(
+    admin_client: httpx.AsyncClient,
+    admin_service: OpenVikingService,
+):
+    """ROOT can delete an account together with all account-owned filesystem data."""
     acct = _uid()
     resp = await admin_client.post(
         "/api/v1/admin/accounts",
@@ -385,10 +396,18 @@ async def test_delete_account(admin_client: httpx.AsyncClient):
         headers=root_headers(),
     )
     user_key = resp.json()["result"]["user_key"]
+    account_root = f"/local/{acct}"
+    await _agfs_write(
+        admin_service,
+        f"{account_root}/resources/private.txt",
+        "account-owned data",
+    )
+    assert await _agfs_exists(admin_service, account_root)
 
     resp = await admin_client.delete(f"/api/v1/admin/accounts/{acct}", headers=root_headers())
     assert resp.status_code == 200
     assert resp.json()["result"]["deleted"] is True
+    assert not await _agfs_exists(admin_service, account_root)
 
     # User key should now be invalid
     resp = await admin_client.get(
@@ -396,6 +415,56 @@ async def test_delete_account(admin_client: httpx.AsyncClient):
         headers={"X-API-Key": user_key},
     )
     assert resp.status_code == 401
+
+
+async def test_delete_account_delegates_complete_storage_cleanup(
+    lightweight_admin_client: httpx.AsyncClient,
+    lightweight_admin_app: FastAPI,
+):
+    """The router passes one account-scoped ROOT context to the storage boundary."""
+    acct = _uid()
+    await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+
+    response = await lightweight_admin_client.delete(
+        f"/api/v1/admin/accounts/{acct}", headers=root_headers()
+    )
+
+    assert response.status_code == 200
+    cleanup_contexts = lightweight_admin_app.state.fake_service.viking_fs.account_cleanup_contexts
+    assert len(cleanup_contexts) == 1
+    cleanup_ctx = cleanup_contexts[0]
+    assert cleanup_ctx.account_id == acct
+    assert cleanup_ctx.role == Role.ROOT
+
+
+async def test_delete_account_keeps_metadata_when_storage_cleanup_fails(
+    lightweight_admin_client: httpx.AsyncClient,
+    lightweight_admin_app: FastAPI,
+):
+    """A cleanup failure must not be reported as successful account deletion."""
+    acct = _uid()
+    await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    lightweight_admin_app.state.fake_service.viking_fs.account_cleanup_error = RuntimeError(
+        "storage cleanup failed"
+    )
+
+    with pytest.raises(RuntimeError, match="storage cleanup failed"):
+        await lightweight_admin_client.delete(
+            f"/api/v1/admin/accounts/{acct}", headers=root_headers()
+        )
+
+    accounts_response = await lightweight_admin_client.get(
+        "/api/v1/admin/accounts", headers=root_headers()
+    )
+    assert acct in {account["account_id"] for account in accounts_response.json()["result"]}
 
 
 async def test_create_duplicate_account_fails(admin_client: httpx.AsyncClient):
