@@ -20,7 +20,7 @@ mod theme;
 mod tui;
 mod utils;
 
-use clap::{ArgAction, Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, Args, CommandFactory, Parser, Subcommand};
 use colored::Colorize;
 use config::Config;
 use error::{Error, Result};
@@ -29,22 +29,6 @@ use std::{
     ffi::OsString,
     io::{self, IsTerminal},
 };
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub(crate) enum ParseMode {
-    Default,
-    #[value(name = "no_split", alias = "no-split")]
-    NoSplit,
-}
-
-impl ParseMode {
-    pub(crate) fn api_value(self) -> Option<&'static str> {
-        match self {
-            Self::Default => None,
-            Self::NoSplit => Some("no_split"),
-        }
-    }
-}
 
 /// CLI context shared across commands
 #[derive(Debug, Clone)]
@@ -405,15 +389,6 @@ enum Commands {
             help_heading = "Advanced options"
         )]
         processing_mode: String,
-        /// Parsing layout: default behavior or one Markdown body per source document
-        #[arg(
-            long,
-            value_enum,
-            default_value = "default",
-            value_name = "mode",
-            help_heading = "Advanced options"
-        )]
-        parse_mode: ParseMode,
         /// Extra options as key:value pairs or a JSON object. With a path/URL:
         /// parser-specific import options sent to the server, e.g.
         /// --args feishu_access_token:u-xxx. With --manifest: run options consumed
@@ -2953,7 +2928,6 @@ async fn main() {
             no_directly_upload_media,
             watch_interval,
             processing_mode,
-            parse_mode,
             resource_args,
             tags,
             tag_mode,
@@ -3002,7 +2976,6 @@ async fn main() {
                     no_directly_upload_media,
                     watch_interval.unwrap_or(0.0),
                     processing_mode,
-                    parse_mode,
                     resource_args,
                     tags,
                     tag_mode,
@@ -3522,7 +3495,7 @@ async fn main() {
 mod tests {
     use super::{
         Cli, CliContext, Commands, ConfigAddTarget, ConfigCommands, LanguageGateAction,
-        ObserverCommands, ParseMode, PrivacyCommands, SkillCommands, SnapshotCmd,
+        ObserverCommands, PrivacyCommands, SkillCommands, SnapshotCmd,
         UploadCliOptions, find_command_index, first_command_token, is_language_command_request,
         language_command_can_run_picker, language_gate_action, language_required_message,
         legacy_upload_option_error, plain_help_misuse, pre_parse_output_options,
@@ -4145,51 +4118,19 @@ mod tests {
         assert!(help.contains("--progress"));
         assert!(help.contains("--no-progress"));
         assert!(help.contains("--verbose"));
-        assert!(help.contains("--parse-mode"));
+        assert!(!help.contains("--parse-mode"));
+        assert!(help.contains("--args"));
     }
 
     #[test]
-    fn cli_add_resource_parses_no_split_mode() {
-        let cli = Cli::try_parse_from([
-            "ov",
-            "add-resource",
-            "./README.md",
-            "--parse-mode",
-            "no_split",
-        ])
-        .expect("no_split should be accepted");
-
-        match cli.command {
-            Commands::AddResource { parse_mode, .. } => {
-                assert_eq!(parse_mode, ParseMode::NoSplit);
-            }
-            _ => panic!("expected add-resource command"),
-        }
-    }
-
-    #[test]
-    fn cli_add_resource_rejects_removed_no_parse_mode() {
+    fn cli_add_resource_rejects_top_level_parse_mode() {
         assert!(
             Cli::try_parse_from([
                 "ov",
                 "add-resource",
                 "./README.md",
                 "--parse-mode",
-                "no_parse",
-            ])
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn cli_add_resource_rejects_unknown_parse_mode() {
-        assert!(
-            Cli::try_parse_from([
-                "ov",
-                "add-resource",
-                "./README.md",
-                "--parse-mode",
-                "unsupported",
+                "no_split",
             ])
             .is_err()
         );

@@ -5,14 +5,6 @@ import (
 	"time"
 )
 
-// ParseMode controls whether parsed document bodies are split into multiple files.
-type ParseMode string
-
-const (
-	ParseModeDefault ParseMode = "default"
-	ParseModeNoSplit ParseMode = "no_split"
-)
-
 // Config configures an HTTP OpenViking client.
 type Config struct {
 	BaseURL     string
@@ -42,7 +34,6 @@ type AddResourceOptions struct {
 	Exclude             string
 	DirectlyUploadMedia *bool
 	PreserveStructure   *bool
-	ParseMode           ParseMode
 	WatchInterval       float64
 	Args                map[string]any
 	Tags                []string

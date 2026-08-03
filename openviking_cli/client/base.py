@@ -8,7 +8,6 @@ Defines the abstract base class that both LocalClient and AsyncHTTPClient implem
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Union
 
-from openviking.parse.mode import ParseMode, ParseModeInput
 from openviking.telemetry import TelemetryRequest
 from openviking.utils.search_filters import SearchContextTypeInput
 
@@ -50,7 +49,6 @@ class BaseClient(ABC):
         add_type: Optional[str] = None,
         tags: Optional[List[str]] = None,
         tag_mode: str = "replace",
-        parse_mode: ParseModeInput = ParseMode.DEFAULT,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking.
 

@@ -668,7 +668,6 @@ impl Submitter for HttpSubmitter {
                 true,
                 watch_interval,
                 self.processing_mode.clone(),
-                None,
                 args,
                 Vec::new(),
                 "replace".to_string(),

@@ -9,7 +9,6 @@ from typing import Any, Dict, List, Optional, Union
 
 from openviking.core.peer_id import normalize_peer_id
 from openviking.core.skill_loader import validate_skill_format
-from openviking.parse.mode import ParseMode, ParseModeInput
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers.skills import (
     _list_skill_files,
@@ -142,7 +141,6 @@ class LocalClient(BaseClient):
         add_type: Optional[str] = None,
         tags: Optional[List[str]] = None,
         tag_mode: str = "replace",
-        parse_mode: ParseModeInput = ParseMode.DEFAULT,
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking.
@@ -179,7 +177,6 @@ class LocalClient(BaseClient):
                 args=args,
                 tags=tags,
                 tag_mode=tag_mode,
-                parse_mode=parse_mode,
                 **kwargs,
             ),
         )

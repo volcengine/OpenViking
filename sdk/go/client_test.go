@@ -11,9 +11,16 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestAddResourceOptionsHasNoTopLevelParseMode(t *testing.T) {
+	if _, ok := reflect.TypeOf(AddResourceOptions{}).FieldByName("ParseMode"); ok {
+		t.Fatal("AddResourceOptions must configure parse_mode through Args")
+	}
+}
 
 func testClient(t *testing.T, handler http.Handler) (*Client, func()) {
 	t.Helper()
@@ -596,9 +603,11 @@ func TestAddResourceUploadsLocalFile(t *testing.T) {
 func TestAddResourceSendsNoSplitMode(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body := readJSONBody(t, r)
-		if body["parse_mode"] != "no_split" {
-			t.Fatalf("parse_mode = %#v", body["parse_mode"])
+		args, ok := body["args"].(map[string]any)
+		if !ok || args["parse_mode"] != "no_split" {
+			t.Fatalf("args = %#v", body["args"])
 		}
+		requireBodyKeysAbsent(t, body, "parse_mode")
 		writeOK(t, w, map[string]any{"uri": "viking://resources/manual"})
 	}))
 	defer closeServer()
@@ -606,7 +615,7 @@ func TestAddResourceSendsNoSplitMode(t *testing.T) {
 	if _, err := client.AddResource(
 		context.Background(),
 		"https://example.com/manual.pdf",
-		&AddResourceOptions{ParseMode: ParseModeNoSplit},
+		&AddResourceOptions{Args: map[string]any{"parse_mode": "no_split"}},
 	); err != nil {
 		t.Fatal(err)
 	}

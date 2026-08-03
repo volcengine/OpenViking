@@ -1,5 +1,4 @@
 use crate::CliContext;
-use crate::ParseMode;
 use crate::PrivacyCommands;
 use crate::client;
 use crate::commands;
@@ -31,7 +30,6 @@ pub async fn handle_add_resource(
     no_directly_upload_media: bool,
     watch_interval: f64,
     processing_mode: String,
-    parse_mode: ParseMode,
     resource_args: Option<String>,
     tags: Vec<String>,
     tag_mode: String,
@@ -122,7 +120,6 @@ pub async fn handle_add_resource(
         directly_upload_media,
         watch_interval,
         processing_mode,
-        parse_mode.api_value().map(str::to_string),
         add_resource_args,
         tags,
         tag_mode,

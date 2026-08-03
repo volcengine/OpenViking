@@ -1,5 +1,5 @@
 from .actor_peer import get_actor_peer_id, use_actor_peer
-from .client import AsyncHTTPClient, ParseMode, SyncHTTPClient
+from .client import AsyncHTTPClient, SyncHTTPClient
 from .errors import (
     AbortedError,
     ConflictError,
@@ -14,7 +14,6 @@ __all__ = [
     "ConflictError",
     "get_actor_peer_id",
     "OpenVikingError",
-    "ParseMode",
     "ResourceExhaustedError",
     "SyncHTTPClient",
     "UnimplementedError",

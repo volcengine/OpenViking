@@ -707,7 +707,6 @@ impl HttpClient {
         directly_upload_media: bool,
         watch_interval: f64,
         processing_mode: String,
-        parse_mode: Option<String>,
         resource_args: Option<Map<String, Value>>,
         tags: Vec<String>,
         tag_mode: String,
@@ -776,7 +775,6 @@ impl HttpClient {
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
                     "processing_mode": processing_mode.as_str(),
-                    "parse_mode": parse_mode.as_deref(),
                     "args": args.clone(),
                 }));
 
@@ -813,7 +811,6 @@ impl HttpClient {
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
                     "processing_mode": processing_mode.as_str(),
-                    "parse_mode": parse_mode.as_deref(),
                     "args": args.clone(),
                 }));
 
@@ -838,7 +835,6 @@ impl HttpClient {
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
                     "processing_mode": processing_mode.as_str(),
-                    "parse_mode": parse_mode.as_deref(),
                     "args": args.clone(),
                 }));
 
@@ -861,7 +857,6 @@ impl HttpClient {
                 "directly_upload_media": directly_upload_media,
                 "watch_interval": watch_interval,
                 "processing_mode": processing_mode.as_str(),
-                "parse_mode": parse_mode.as_deref(),
                 "args": args,
             }));
 
@@ -1826,7 +1821,7 @@ mod tests {
     use super::{BaseClient, HttpClient, TimeoutConfig};
     use crate::base_client::api_error_from_envelope;
     use reqwest::StatusCode;
-    use serde_json::json;
+    use serde_json::{Map, json};
     use std::collections::HashMap;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
@@ -1864,7 +1859,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn add_resource_only_sends_non_default_parse_mode() {
+    async fn add_resource_sends_parse_mode_through_args() {
         let (default_url, default_request_rx) = spawn_request_capture_server().await;
         let default_client = HttpClient::new(default_url, None, None, None, None, 5.0, false, None);
         default_client
@@ -1886,7 +1881,6 @@ mod tests {
                 0.0,
                 "semantic_and_vectors".to_string(),
                 None,
-                None,
                 Vec::new(),
                 "replace".to_string(),
                 false,
@@ -1902,6 +1896,8 @@ mod tests {
         let (no_split_url, no_split_request_rx) = spawn_request_capture_server().await;
         let no_split_client =
             HttpClient::new(no_split_url, None, None, None, None, 5.0, false, None);
+        let mut no_split_args = Map::new();
+        no_split_args.insert("parse_mode".to_string(), json!("no_split"));
         no_split_client
             .add_resource(
                 "https://example.com/manual.pdf",
@@ -1920,8 +1916,7 @@ mod tests {
                 true,
                 0.0,
                 "semantic_and_vectors".to_string(),
-                Some("no_split".to_string()),
-                None,
+                Some(no_split_args),
                 Vec::new(),
                 "replace".to_string(),
                 false,
@@ -1932,7 +1927,7 @@ mod tests {
         let no_split_request = no_split_request_rx
             .await
             .expect("request should be captured");
-        assert!(no_split_request.contains(r#""parse_mode":"no_split""#));
+        assert!(no_split_request.contains(r#""args":{"parse_mode":"no_split"}"#));
     }
 
     #[test]
