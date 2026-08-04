@@ -977,7 +977,7 @@ class VikingFS:
         """Recursively copy a directory through VikingFS read/write hooks."""
         await self.mkdir(new_uri, exist_ok=True, ctx=ctx, lease_ref=lease_ref)
 
-        entries = await self.ls(old_uri, show_all_hidden=True, ctx=ctx)
+        entries = await self.ls(old_uri, show_all_hidden=True, node_limit=LS_ALL_NODES, ctx=ctx)
         for entry in entries:
             name = entry.get("name", "")
             if not name or name in (".", ".."):
