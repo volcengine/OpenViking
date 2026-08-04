@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -400,6 +402,30 @@ class _ReadFailureRecordingTransport(_RecordingTransport):
         raise httpx.ReadError("response interrupted", request=request)
 
 
+class _TimeoutBudgetRecordingTransport(_RecordingTransport):
+    def __init__(
+        self,
+        *,
+        failures_before_success: int,
+        failure_delay: float | None = None,
+    ) -> None:
+        super().__init__()
+        self.failures_before_success = failures_before_success
+        self.failure_delay = failure_delay
+        self.connect_timeouts: list[float] = []
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        response = await super().handle_async_request(request)
+        connect_timeout = request.extensions["timeout"]["connect"]
+        assert isinstance(connect_timeout, float)
+        self.connect_timeouts.append(connect_timeout)
+        if len(self.connect_timeouts) <= self.failures_before_success:
+            delay = connect_timeout if self.failure_delay is None else self.failure_delay
+            await asyncio.sleep(min(delay, connect_timeout))
+            raise httpx.ConnectTimeout("address unavailable", request=request)
+        return response
+
+
 class TestValidatedAsyncHTTPTransport:
     def test_builder_returns_none_without_validator(self) -> None:
         assert build_httpx_secure_transport(None) is None
@@ -474,6 +500,51 @@ class TestValidatedAsyncHTTPTransport:
             await transport.handle_async_request(request)
 
         assert [recorded["url"] for recorded in inner.requests] == ["https://192.0.2.1/resource"]
+        assert str(request.url) == "https://dual-stack.example/resource"
+
+    @pytest.mark.asyncio
+    async def test_address_fallback_shares_one_connect_timeout_deadline(self) -> None:
+        inner = _TimeoutBudgetRecordingTransport(failures_before_success=3)
+        transport = ValidatedAsyncHTTPTransport(
+            lambda _url: ("192.0.2.1", "192.0.2.2", "192.0.2.3"),
+            transport=inner,
+        )
+        request = httpx.Request(
+            "GET",
+            "https://multi-address.example/resource",
+            extensions={"timeout": {"connect": 0.05}},
+        )
+
+        started_at = time.monotonic()
+        with pytest.raises(httpx.ConnectTimeout):
+            await transport.handle_async_request(request)
+        elapsed = time.monotonic() - started_at
+
+        assert elapsed < 0.12
+        assert sum(inner.connect_timeouts) <= 0.06
+        assert str(request.url) == "https://multi-address.example/resource"
+
+    @pytest.mark.asyncio
+    async def test_fallback_receives_only_the_remaining_connect_budget(self) -> None:
+        inner = _TimeoutBudgetRecordingTransport(
+            failures_before_success=1,
+            failure_delay=0.01,
+        )
+        transport = ValidatedAsyncHTTPTransport(
+            lambda _url: ("192.0.2.1", "192.0.2.2"),
+            transport=inner,
+        )
+        request = httpx.Request(
+            "GET",
+            "https://dual-stack.example/resource",
+            extensions={"timeout": {"connect": 0.05}},
+        )
+
+        response = await transport.handle_async_request(request)
+
+        assert response.status_code == 200
+        assert len(inner.connect_timeouts) == 2
+        assert inner.connect_timeouts[1] < inner.connect_timeouts[0] - 0.005
         assert str(request.url) == "https://dual-stack.example/resource"
 
     @pytest.mark.asyncio
