@@ -5,12 +5,16 @@
 from __future__ import annotations
 
 import asyncio
+import ssl
 import time
+from collections.abc import Iterable
 from unittest.mock import AsyncMock, patch
 
+import httpcore
 import httpx
 import pytest
 
+from openviking.utils.httpx_transport import PinnedAddressHTTPTransport
 from openviking.utils.network_guard import (
     ValidatedAsyncHTTPTransport,
     _is_public_ip,
@@ -388,64 +392,109 @@ class _RecordingTransport(httpx.AsyncBaseTransport):
         self.closed = True
 
 
-class _FallbackRecordingTransport(_RecordingTransport):
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        response = await super().handle_async_request(request)
-        if request.url.host == "192.0.2.1":
-            raise httpx.ConnectError("first address unavailable", request=request)
-        return response
-
-
 class _ReadFailureRecordingTransport(_RecordingTransport):
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         await super().handle_async_request(request)
         raise httpx.ReadError("response interrupted", request=request)
 
 
-class _TimeoutBudgetRecordingTransport(_RecordingTransport):
+class _RecordingHTTPStream(httpcore.AsyncMockStream):
+    def __init__(self) -> None:
+        super().__init__([b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"])
+        self.writes: list[bytes] = []
+        self.server_hostname: str | None = None
+
+    async def write(self, buffer: bytes, timeout: float | None = None) -> None:
+        self.writes.append(buffer)
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    async def start_tls(
+        self,
+        ssl_context: ssl.SSLContext,
+        server_hostname: str | None = None,
+        timeout: float | None = None,
+    ) -> httpcore.AsyncNetworkStream:
+        self.server_hostname = server_hostname
+        return self
+
+
+class _ScriptedNetworkBackend(httpcore.AsyncNetworkBackend):
     def __init__(
         self,
+        reachable_addresses: set[str],
         *,
-        failures_before_success: int,
-        failure_delay: float | None = None,
+        immediate_failures: set[str] | None = None,
     ) -> None:
-        super().__init__()
-        self.failures_before_success = failures_before_success
-        self.failure_delay = failure_delay
-        self.connect_timeouts: list[float] = []
+        self.reachable_addresses = reachable_addresses
+        self.immediate_failures = immediate_failures or set()
+        self.attempts: list[str] = []
+        self.cancelled: list[str] = []
+        self.streams: list[_RecordingHTTPStream] = []
 
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        response = await super().handle_async_request(request)
-        connect_timeout = request.extensions["timeout"]["connect"]
-        assert isinstance(connect_timeout, float)
-        self.connect_timeouts.append(connect_timeout)
-        if len(self.connect_timeouts) <= self.failures_before_success:
-            delay = connect_timeout if self.failure_delay is None else self.failure_delay
-            await asyncio.sleep(min(delay, connect_timeout))
-            raise httpx.ConnectTimeout("address unavailable", request=request)
-        return response
+    async def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: Iterable[httpcore.SOCKET_OPTION] | None = None,
+    ) -> httpcore.AsyncNetworkStream:
+        self.attempts.append(host)
+        if host in self.immediate_failures:
+            raise httpcore.ConnectError("address refused connection")
+        if host in self.reachable_addresses:
+            await asyncio.sleep(0)
+            stream = _RecordingHTTPStream()
+            self.streams.append(stream)
+            return stream
+        try:
+            await asyncio.sleep(timeout if timeout is not None else 60.0)
+        except asyncio.CancelledError:
+            self.cancelled.append(host)
+            raise
+        raise httpcore.ConnectTimeout("address unavailable")
+
+    async def connect_unix_socket(
+        self,
+        path: str,
+        timeout: float | None = None,
+        socket_options: Iterable[httpcore.SOCKET_OPTION] | None = None,
+    ) -> httpcore.AsyncNetworkStream:
+        raise AssertionError("Unix sockets are not used by this transport")
+
+    async def sleep(self, seconds: float) -> None:
+        await asyncio.sleep(seconds)
 
 
 class TestValidatedAsyncHTTPTransport:
     def test_builder_returns_none_without_validator(self) -> None:
         assert build_httpx_secure_transport(None) is None
 
+    def test_pinned_transport_rejects_a_hostname_address(self) -> None:
+        with pytest.raises(ValueError, match="not an IP literal"):
+            PinnedAddressHTTPTransport(("example.com",))
+
     @pytest.mark.asyncio
-    async def test_connects_to_the_exact_address_returned_by_validation(self) -> None:
+    async def test_validates_before_delegating_the_original_request_once(self) -> None:
         inner = _RecordingTransport()
+        validated: list[str] = []
         transport = ValidatedAsyncHTTPTransport(
-            lambda _url: "8.8.8.8",
+            lambda url: validated.append(url) or "8.8.8.8",
             transport=inner,
         )
         request = httpx.Request("GET", "https://example.com/private")
 
         await transport.handle_async_request(request)
 
+        assert validated == ["https://example.com/private"]
         assert inner.requests == [
             {
-                "url": "https://8.8.8.8/private",
+                "url": "https://example.com/private",
                 "host": "example.com",
-                "sni_hostname": "example.com",
+                "sni_hostname": None,
             }
         ]
         assert str(request.url) == "https://example.com/private"
@@ -465,27 +514,121 @@ class TestValidatedAsyncHTTPTransport:
 
         assert validated == ["https://first.example/", "https://second.example/next"]
         assert [request["url"] for request in inner.requests] == [
-            "https://8.8.8.8/",
-            "https://1.1.1.1/next",
+            "https://first.example/",
+            "https://second.example/next",
         ]
 
     @pytest.mark.asyncio
-    async def test_falls_back_to_another_verified_address_on_connection_failure(self) -> None:
-        inner = _FallbackRecordingTransport()
-        transport = ValidatedAsyncHTTPTransport(
-            lambda _url: ("192.0.2.1", "2001:4860:4860::8888"),
-            transport=inner,
+    async def test_blackholed_first_address_does_not_block_reachable_second_address(self) -> None:
+        backend = _ScriptedNetworkBackend({"2001:4860:4860::8888"})
+        transport = PinnedAddressHTTPTransport(
+            ("192.0.2.1", "2001:4860:4860::8888"),
+            network_backend=backend,
         )
-        request = httpx.Request("GET", "https://dual-stack.example/resource")
 
-        response = await transport.handle_async_request(request)
+        started_at = time.monotonic()
+        async with httpx.AsyncClient(
+            transport=transport,
+            timeout=httpx.Timeout(1.0, connect=0.1),
+        ) as client:
+            response = await client.get("https://dual-stack.example/resource")
+        elapsed = time.monotonic() - started_at
 
         assert response.status_code == 200
-        assert [recorded["url"] for recorded in inner.requests] == [
-            "https://192.0.2.1/resource",
-            "https://[2001:4860:4860::8888]/resource",
-        ]
-        assert str(request.url) == "https://dual-stack.example/resource"
+        assert response.text == "ok"
+        assert elapsed < 0.1
+        assert backend.attempts == ["192.0.2.1", "2001:4860:4860::8888"]
+        assert backend.cancelled == ["192.0.2.1"]
+        assert len(backend.streams) == 1
+        assert backend.streams[0].server_hostname == "dual-stack.example"
+        request_bytes = b"".join(backend.streams[0].writes)
+        assert request_bytes.count(b"GET /resource HTTP/1.1") == 1
+        assert b"host: dual-stack.example" in request_bytes.lower()
+
+    @pytest.mark.asyncio
+    async def test_all_blackholed_addresses_share_one_connect_deadline(self) -> None:
+        backend = _ScriptedNetworkBackend(set())
+        transport = PinnedAddressHTTPTransport(
+            ("192.0.2.1", "192.0.2.2", "192.0.2.3"),
+            network_backend=backend,
+        )
+
+        started_at = time.monotonic()
+        async with httpx.AsyncClient(
+            transport=transport,
+            timeout=httpx.Timeout(1.0, connect=0.05),
+        ) as client:
+            with pytest.raises(httpx.ConnectTimeout):
+                await client.get("https://multi-address.example/resource")
+        elapsed = time.monotonic() - started_at
+
+        assert elapsed < 0.12
+        assert backend.attempts == ["192.0.2.1", "192.0.2.2", "192.0.2.3"]
+
+    @pytest.mark.asyncio
+    async def test_immediate_failure_starts_next_address_without_stagger_delay(self) -> None:
+        backend = _ScriptedNetworkBackend(
+            {"2001:4860:4860::8888"},
+            immediate_failures={"192.0.2.1"},
+        )
+        transport = PinnedAddressHTTPTransport(
+            ("192.0.2.1", "2001:4860:4860::8888"),
+            network_backend=backend,
+        )
+
+        started_at = time.monotonic()
+        async with httpx.AsyncClient(transport=transport) as client:
+            response = await client.get("https://dual-stack.example/resource")
+        elapsed = time.monotonic() - started_at
+
+        assert response.status_code == 200
+        assert elapsed < 0.1
+        assert backend.attempts == ["192.0.2.1", "2001:4860:4860::8888"]
+
+    @pytest.mark.asyncio
+    async def test_racing_connections_sends_a_post_request_only_once(self) -> None:
+        backend = _ScriptedNetworkBackend({"192.0.2.1", "2001:4860:4860::8888"})
+        transport = PinnedAddressHTTPTransport(
+            ("192.0.2.1", "2001:4860:4860::8888"),
+            network_backend=backend,
+            stagger_delay=0.0,
+        )
+
+        async with httpx.AsyncClient(transport=transport) as client:
+            response = await client.post(
+                "https://dual-stack.example/resource",
+                content=b"payload",
+            )
+
+            assert response.status_code == 200
+            assert len(backend.streams) == 2
+            written_streams = [stream for stream in backend.streams if stream.writes]
+            assert len(written_streams) == 1
+            request_bytes = b"".join(written_streams[0].writes)
+            assert request_bytes.count(b"POST /resource HTTP/1.1") == 1
+            assert request_bytes.count(b"payload") == 1
+            loser_streams = [stream for stream in backend.streams if not stream.writes]
+            assert len(loser_streams) == 1
+            assert loser_streams[0].closed is True
+
+    @pytest.mark.asyncio
+    async def test_cancelling_request_cancels_all_connection_attempts(self) -> None:
+        backend = _ScriptedNetworkBackend(set())
+        transport = PinnedAddressHTTPTransport(
+            ("192.0.2.1", "2001:4860:4860::8888"),
+            network_backend=backend,
+            stagger_delay=0.0,
+        )
+        async with httpx.AsyncClient(transport=transport, timeout=None) as client:
+            request_task = asyncio.create_task(client.get("https://dual-stack.example/resource"))
+            while len(backend.attempts) < 2:
+                await asyncio.sleep(0)
+
+            request_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await request_task
+
+        assert sorted(backend.cancelled) == ["192.0.2.1", "2001:4860:4860::8888"]
 
     @pytest.mark.asyncio
     async def test_does_not_retry_after_a_non_connection_failure(self) -> None:
@@ -499,52 +642,9 @@ class TestValidatedAsyncHTTPTransport:
         with pytest.raises(httpx.ReadError, match="response interrupted"):
             await transport.handle_async_request(request)
 
-        assert [recorded["url"] for recorded in inner.requests] == ["https://192.0.2.1/resource"]
-        assert str(request.url) == "https://dual-stack.example/resource"
-
-    @pytest.mark.asyncio
-    async def test_address_fallback_shares_one_connect_timeout_deadline(self) -> None:
-        inner = _TimeoutBudgetRecordingTransport(failures_before_success=3)
-        transport = ValidatedAsyncHTTPTransport(
-            lambda _url: ("192.0.2.1", "192.0.2.2", "192.0.2.3"),
-            transport=inner,
-        )
-        request = httpx.Request(
-            "GET",
-            "https://multi-address.example/resource",
-            extensions={"timeout": {"connect": 0.05}},
-        )
-
-        started_at = time.monotonic()
-        with pytest.raises(httpx.ConnectTimeout):
-            await transport.handle_async_request(request)
-        elapsed = time.monotonic() - started_at
-
-        assert elapsed < 0.12
-        assert sum(inner.connect_timeouts) <= 0.06
-        assert str(request.url) == "https://multi-address.example/resource"
-
-    @pytest.mark.asyncio
-    async def test_fallback_receives_only_the_remaining_connect_budget(self) -> None:
-        inner = _TimeoutBudgetRecordingTransport(
-            failures_before_success=1,
-            failure_delay=0.01,
-        )
-        transport = ValidatedAsyncHTTPTransport(
-            lambda _url: ("192.0.2.1", "192.0.2.2"),
-            transport=inner,
-        )
-        request = httpx.Request(
-            "GET",
-            "https://dual-stack.example/resource",
-            extensions={"timeout": {"connect": 0.05}},
-        )
-
-        response = await transport.handle_async_request(request)
-
-        assert response.status_code == 200
-        assert len(inner.connect_timeouts) == 2
-        assert inner.connect_timeouts[1] < inner.connect_timeouts[0] - 0.005
+        assert [recorded["url"] for recorded in inner.requests] == [
+            "https://dual-stack.example/resource"
+        ]
         assert str(request.url) == "https://dual-stack.example/resource"
 
     @pytest.mark.asyncio
@@ -553,7 +653,7 @@ class TestValidatedAsyncHTTPTransport:
 
         async def handler(request: httpx.Request) -> httpx.Response:
             connected_urls.append(str(request.url))
-            if request.url.host == "8.8.8.8":
+            if request.url.host == "first.example":
                 return httpx.Response(
                     302,
                     headers={"location": "https://second.example/final"},
@@ -574,8 +674,8 @@ class TestValidatedAsyncHTTPTransport:
             response = await client.get("https://first.example/start")
 
         assert connected_urls == [
-            "https://8.8.8.8/start",
-            "https://1.1.1.1/final",
+            "https://first.example/start",
+            "https://second.example/final",
         ]
         assert str(response.url) == "https://second.example/final"
 

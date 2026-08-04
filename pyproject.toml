@@ -34,6 +34,7 @@ dependencies = [
     "pydantic>=2.0.0",
     "typing-extensions>=4.5.0",
     "pyyaml>=6.0",
+    "httpcore>=1.0.0,<2.0.0",
     "httpx>=0.25.0",
     "pdfplumber>=0.10.0",
     "scrapy>=2.11.0",

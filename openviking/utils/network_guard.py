@@ -6,13 +6,13 @@ from __future__ import annotations
 
 import ipaddress
 import socket
-import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from typing import Optional
 from urllib.parse import urlparse
 
 import httpx
 
+from openviking.utils.httpx_transport import PinnedAddressHTTPTransport
 from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.utils.config import get_openviking_config
 
@@ -120,16 +120,6 @@ def normalize_verified_addresses(
     return tuple(normalized)
 
 
-def _get_connect_timeout(extensions: Mapping[str, object]) -> Optional[float]:
-    timeout = extensions.get("timeout")
-    if not isinstance(timeout, Mapping):
-        return None
-    connect_timeout = timeout.get("connect")
-    if isinstance(connect_timeout, bool) or not isinstance(connect_timeout, (int, float)):
-        return None
-    return max(0.0, float(connect_timeout))
-
-
 def ensure_public_remote_target(source: str) -> Optional[tuple[str, ...]]:
     """Reject loopback, link-local, private, and other non-public targets.
 
@@ -184,20 +174,25 @@ class ValidatedAsyncHTTPTransport(httpx.AsyncBaseTransport):
         self._request_validator = request_validator
         self._transport = transport
         self._origin_transports: dict[
-            tuple[str, str, Optional[int], Optional[str]], httpx.AsyncBaseTransport
+            tuple[str, str, Optional[int], Optional[tuple[str, ...]]],
+            httpx.AsyncBaseTransport,
         ] = {}
 
     def _transport_for(
         self,
         url: httpx.URL,
-        verified_ip: Optional[str],
+        verified_addresses: Optional[tuple[str, ...]],
     ) -> httpx.AsyncBaseTransport:
         if self._transport is not None:
             return self._transport
-        key = (url.scheme, url.host, url.port, verified_ip)
+        key = (url.scheme, url.host, url.port, verified_addresses)
         transport = self._origin_transports.get(key)
         if transport is None:
-            transport = httpx.AsyncHTTPTransport()
+            transport = (
+                httpx.AsyncHTTPTransport()
+                if verified_addresses is None
+                else PinnedAddressHTTPTransport(verified_addresses)
+            )
             self._origin_transports[key] = transport
         return transport
 
@@ -209,46 +204,8 @@ class ValidatedAsyncHTTPTransport(httpx.AsyncBaseTransport):
         if verified_addresses is None:
             transport = self._transport_for(original_url, None)
             return await transport.handle_async_request(request)
-
-        original_extensions = request.extensions
-        connect_timeout = _get_connect_timeout(original_extensions)
-        connect_deadline = (
-            time.monotonic() + connect_timeout if connect_timeout is not None else None
-        )
-        last_connection_error: httpx.ConnectError | httpx.ConnectTimeout | None = None
-        for verified_ip in verified_addresses:
-            remaining_connect_timeout: Optional[float] = None
-            if connect_deadline is not None:
-                remaining_connect_timeout = connect_deadline - time.monotonic()
-                if remaining_connect_timeout <= 0:
-                    raise httpx.ConnectTimeout(
-                        "Timed out while connecting to the validated addresses.",
-                        request=request,
-                    ) from last_connection_error
-
-            transport = self._transport_for(original_url, verified_ip)
-            request.url = original_url.copy_with(host=verified_ip)
-            request.extensions = dict(original_extensions)
-            if remaining_connect_timeout is not None:
-                timeout_extension = request.extensions.get("timeout")
-                if isinstance(timeout_extension, Mapping):
-                    request.extensions["timeout"] = {
-                        **timeout_extension,
-                        "connect": remaining_connect_timeout,
-                    }
-            if original_url.scheme == "https":
-                request.extensions["sni_hostname"] = original_url.host
-            try:
-                return await transport.handle_async_request(request)
-            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-                last_connection_error = exc
-            finally:
-                request.url = original_url
-                request.extensions = original_extensions
-
-        if last_connection_error is not None:
-            raise last_connection_error
-        raise RuntimeError("The request validator returned no usable addresses.")
+        transport = self._transport_for(original_url, verified_addresses)
+        return await transport.handle_async_request(request)
 
     async def aclose(self) -> None:
         if self._transport is not None:
