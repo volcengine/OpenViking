@@ -188,6 +188,7 @@ async def test_close_releases_data_dir_lock_after_successful_cleanup(monkeypatch
     service = OpenVikingService.__new__(OpenVikingService)
     service._resource_service = _ResourceService()
     service._watch_scheduler = None
+    service._session_auto_commit_scheduler = None
     service._queue_manager = None
     service._lock_manager = None
     service._vikingdb_manager = None
