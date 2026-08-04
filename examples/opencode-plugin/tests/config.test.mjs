@@ -142,6 +142,28 @@ test("loadConfig can disable workspace peer", async () => {
   })
 })
 
+test("loadConfig supports hook-only mode without registering the bundled MCP server", async () => {
+  const snapshot = { ...process.env }
+  await withTempDir("ov-oc-hook-only-", async (dir) => {
+    try {
+      for (const key of Object.keys(process.env)) {
+        if (key.startsWith("OPENVIKING_")) delete process.env[key]
+      }
+      const project = join(dir, "project")
+      await mkdir(join(project, ".opencode"), { recursive: true })
+      await writeFile(join(project, ".opencode", "openviking-config.json"), JSON.stringify({
+        mcp: { enabled: false },
+      }))
+
+      const cfg = loadConfig(dir, project)
+      assert.equal(cfg.enabled, true)
+      assert.equal(cfg.mcp.enabled, false)
+    } finally {
+      restoreOpenVikingEnv(snapshot)
+    }
+  })
+})
+
 test("loadConfig preserves an explicit zero commit keep recent count", async () => {
   const snapshot = { ...process.env }
   await withTempDir("ov-oc-keep-recent-zero-", async (dir) => {
