@@ -65,17 +65,3 @@ class TestTempUploadDeep:
             assert add_resp.status_code == 200, (
                 f"upload empty file should return 200, got {add_resp.status_code}"
             )
-
-    def test_upload_result_has_queue_status(self, api_client):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            test_file = os.path.join(temp_dir, f"queue_{uuid.uuid4().hex[:8]}.md")
-            with open(test_file, "w") as f:
-                f.write("# Queue status test\n\nContent for queue status check.")
-            add_resp = api_client.add_resource(path=test_file, wait=True)
-            assert add_resp.status_code == 200
-            result = add_resp.json().get("result", {})
-            assert "queue_status" in result, (
-                f"result should contain queue_status, got keys: {list(result.keys())}"
-            )
-            qs = result["queue_status"]
-            assert isinstance(qs, dict), f"queue_status should be dict, got {type(qs).__name__}"

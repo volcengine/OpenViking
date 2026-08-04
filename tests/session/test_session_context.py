@@ -445,10 +445,10 @@ class TestGetSessionContext:
         assert context["stats"]["activeTokens"] == session.messages[0].estimated_tokens
         assert context["stats"]["activeTokens"] > _estimate_tokens("Executing tool...")
 
-    async def test_get_session_context_validates_overviews_and_keeps_public_abstracts_empty(
+    async def test_get_session_context_stops_at_newest_terminal_without_abstracts(
         self, client: AsyncOpenViking, monkeypatch
     ):
-        """Completed archives are validated, while the public abstracts field stays empty."""
+        """Newest completed supplies overview; abstracts are never read for context."""
         session = client.session(session_id="assemble_lazy_read_test")
         summaries = [
             "# Summary\n\n" + ("A" * 80),
@@ -471,13 +471,8 @@ class TestGetSessionContext:
         session.add_message("user", [TextPart("active tail")])
 
         newest_summary = "# Summary\n\n" + ("C" * 80)
-        previous_abstract = "# Summary"
         active_tokens = sum(m.estimated_tokens for m in session.messages)
-        token_budget = (
-            active_tokens
-            + _estimate_tokens(newest_summary)
-            + (_estimate_tokens(previous_abstract) * 2)
-        )
+        token_budget = active_tokens + _estimate_tokens(newest_summary)
 
         original_read_file = session._viking_fs.read_file
         read_uris: list[str] = []
@@ -492,23 +487,71 @@ class TestGetSessionContext:
         context = await session.get_session_context(token_budget=token_budget)
 
         assert context["latest_archive_overview"] == newest_summary
-        # The public field is retained for compatibility but intentionally
-        # remains empty; only the latest overview participates in context.
         assert context["pre_archive_abstracts"] == []
         assert context["stats"]["includedArchives"] == 0
-        assert context["stats"]["droppedArchives"] == 3
+        assert context["stats"]["totalArchives"] == 3
 
-        overview_reads = [u for u in read_uris if u.endswith(".overview.md")]
         abstract_reads = [u for u in read_uris if u.endswith(".abstract.md")]
-        assert all(
-            any(f"archive_{index:03d}" in uri for uri in overview_reads)
-            for index in (1, 2, 3)
-        ), f"Every completed archive overview should be validated, got: {overview_reads}"
-        assert all(
-            "archive_003" in u or "archive_002" in u or "archive_001" in u for u in abstract_reads
-        ), f"Archive abstracts should be read for every returned archive, got: {abstract_reads}"
+        assert abstract_reads == [], f"Old abstracts must not be read, got: {abstract_reads}"
+        overview_reads = [u for u in read_uris if u.endswith(".overview.md")]
+        assert overview_reads, f"Newest terminal overview should be available, got: {overview_reads}"
+        assert any("archive_003" in u for u in overview_reads), (
+            f"Newest completed overview should be read, got: {overview_reads}"
+        )
 
-    async def test_get_session_context_drops_oldest_pre_archive_abstracts_first(
+    async def test_get_session_context_does_not_touch_archives_older_than_terminal(
+        self, client: AsyncOpenViking, monkeypatch
+    ):
+        """Scan cost must not grow with history length.
+
+        Archive history grows without bound, so the read path stops at the newest
+        terminal marker: no marker, overview, meta or messages read may reference
+        an older archive.
+        """
+        session = client.session(session_id="assemble_terminal_stop_cost_test")
+        summaries = [f"# Summary\n\narchive {index}" for index in range(1, 5)]
+
+        async def fake_generate(self, _messages, latest_archive_overview="", **kwargs):
+            del self, latest_archive_overview, kwargs
+            return summaries.pop(0)
+
+        monkeypatch.setattr(Session, "_generate_archive_summary_async", fake_generate)
+
+        for word in ("first", "second", "third", "fourth"):
+            session.add_message("user", [TextPart(f"{word} turn")])
+            session.add_message("assistant", [TextPart(f"{word} reply")])
+            result = await session.commit_async()
+            await _wait_for_task(result["task_id"])
+
+        session.add_message("user", [TextPart("active tail")])
+
+        touched: list[str] = []
+        original_read_file = session._viking_fs.read_file
+        original_exists = session._viking_fs.exists
+
+        async def tracking_read_file(*args, **kwargs):
+            touched.append(args[0] if args else kwargs.get("uri"))
+            return await original_read_file(*args, **kwargs)
+
+        async def tracking_exists(*args, **kwargs):
+            touched.append(args[0] if args else kwargs.get("uri"))
+            return await original_exists(*args, **kwargs)
+
+        monkeypatch.setattr(session._viking_fs, "read_file", tracking_read_file)
+        monkeypatch.setattr(session._viking_fs, "exists", tracking_exists)
+
+        context = await session.get_session_context()
+
+        assert context["latest_archive_overview"].endswith("archive 4")
+        stale = [
+            uri
+            for uri in touched
+            if isinstance(uri, str)
+            and any(f"archive_{index:03d}" in uri for index in (1, 2, 3))
+        ]
+        assert stale == [], f"Archives older than the terminal must not be read: {stale}"
+
+    async def test_get_session_context_pre_archive_abstracts_always_empty(
         self, client: AsyncOpenViking, monkeypatch
     ):
         session = client.session(session_id="assemble_trim_oldest_abstracts_test")
@@ -533,11 +576,8 @@ class TestGetSessionContext:
         session.add_message("user", [TextPart("active tail")])
 
         newest_summary = "# Summary\n\n" + ("C" * 80)
-        previous_abstract = "# Summary"
         active_tokens = sum(m.estimated_tokens for m in session.messages)
-        token_budget = (
-            active_tokens + _estimate_tokens(newest_summary) + _estimate_tokens(previous_abstract)
-        )
+        token_budget = active_tokens + _estimate_tokens(newest_summary)
 
         context = await session.get_session_context(token_budget=token_budget)
 
@@ -550,7 +590,7 @@ class TestGetSessionContext:
         assert context["stats"]["includedArchives"] == 0
         assert context["stats"]["droppedArchives"] == 3
 
-    async def test_get_session_context_falls_back_to_older_completed_archive(
+    async def test_get_session_context_newest_done_unreadable_overview_does_not_fallback(
         self, client: AsyncOpenViking, monkeypatch
     ):
         session = client.session(session_id="assemble_failed_archive_test")
@@ -585,11 +625,53 @@ class TestGetSessionContext:
 
         context = await session.get_session_context(token_budget=128_000)
 
-        assert context["latest_archive_overview"] == "# Session Summary\n\narchive one"
+        # Newest terminal becomes failed/unusable for overview; no older fallback.
+        assert context["latest_archive_overview"] == ""
         assert context["pre_archive_abstracts"] == []
         assert context["stats"]["totalArchives"] == 2
         assert context["stats"]["includedArchives"] == 0
-        assert context["stats"]["droppedArchives"] == 1
+        assert context["stats"]["failedArchives"] == 1
+
+    async def test_get_session_context_newest_failed_skips_overview(
+        self, client: AsyncOpenViking, monkeypatch
+    ):
+        session = client.session(session_id="assemble_newest_failed_test")
+
+        async def fake_generate(self, _messages, latest_archive_overview="", **kwargs):
+            del self, latest_archive_overview, kwargs
+            return "# Session Summary\n\narchive one"
+
+        monkeypatch.setattr(Session, "_generate_archive_summary_async", fake_generate)
+
+        session.add_message("user", [TextPart("turn one")])
+        result = await session.commit_async()
+        await _wait_for_task(result["task_id"])
+
+        await session._viking_fs.write_file(
+            uri=f"{session.uri}/history/archive_002/.failed.json",
+            content='{"stage":"summary","error":"boom"}',
+            ctx=session.ctx,
+        )
+        pending = Message(
+            id="pending-after-fail",
+            role="user",
+            parts=[TextPart("after failed archive")],
+        )
+        await session._viking_fs.write_file(
+            uri=f"{session.uri}/history/archive_003/messages.jsonl",
+            content=pending.to_jsonl() + "\n",
+            ctx=session.ctx,
+        )
+        session.add_message("user", [TextPart("live tail")])
+
+        context = await session.get_session_context(token_budget=128_000)
+
+        assert context["latest_archive_overview"] == ""
+        assert context["pre_archive_abstracts"] == []
+        assert [m["parts"][0]["text"] for m in context["messages"]] == [
+            "after failed archive",
+            "live tail",
+        ]
         assert context["stats"]["failedArchives"] == 1
 
     async def test_get_session_context_budget_trim_drops_latest_archive_abstract(

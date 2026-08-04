@@ -1,5 +1,7 @@
 //! Provider-independent cache eligibility rules.
 
+use crate::core::internal_names::is_hidden_runtime_lock_name;
+
 const DEFAULT_MAX_CACHED_DIR_ENTRIES: usize = 4096;
 
 /// Cache admission decision for a filesystem object.
@@ -135,7 +137,7 @@ impl CachePolicy {
         }
 
         let name = normalized.rsplit('/').next().unwrap_or("");
-        if name == ".path.ovlock"
+        if is_hidden_runtime_lock_name(name)
             || name.ends_with(".lock")
             || name.ends_with(".lck")
             || matches!(
@@ -178,4 +180,21 @@ fn is_same_or_descendant(path: &str, prefix: &str) -> bool {
         || path
             .strip_prefix(prefix)
             .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_lock_files_bypass_cache() {
+        let policy = CachePolicy::default();
+
+        for path in [
+            "/data/.path.ovlock",
+            "/data/.exact.ovlock.file.txt.0123456789abcdef",
+        ] {
+            assert_eq!(policy.file_decision(path, 32), CacheDecision::Bypass);
+        }
+    }
 }

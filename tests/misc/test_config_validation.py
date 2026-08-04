@@ -584,7 +584,31 @@ def test_ragfs_binding_config_builds_single_binding_dict_for_local_backend(tmp_p
             "provider_type": 7,
         },
         "cache": agfs_config.cache.model_dump(mode="json"),
+        "pathlock": {
+            "provider": "filesystem",
+            "lock_expire_secs": 1800.0,
+            "lock_timeout_secs": 0.0,
+        },
     }
+
+
+def test_agfs_pathlock_config_validates_provider_and_expiry(tmp_path):
+    """PathLock config accepts built-ins and rejects unsafe expiry values."""
+    config = AGFSConfig(
+        path=str(tmp_path),
+        backend="local",
+        pathlock={"provider": "memory", "lock_expire_secs": 60.0},
+    )
+
+    assert config.pathlock.provider == "memory"
+    assert config.pathlock.lock_expire_secs == 60.0
+
+    with pytest.raises(ValueError, match="pathlock provider"):
+        AGFSConfig(path=str(tmp_path), pathlock={"provider": "redis"})
+    with pytest.raises(ValueError, match="lock_expire_secs"):
+        AGFSConfig(path=str(tmp_path), pathlock={"lock_expire_secs": 0.0})
+    with pytest.raises(ValueError, match="lock_timeout_secs"):
+        AGFSConfig(path=str(tmp_path), pathlock={"lock_timeout_secs": -1.0})
 
 
 def test_create_agfs_client_uses_single_binding_config_object(monkeypatch, tmp_path):

@@ -25,10 +25,6 @@ def _make_processor(monkeypatch, *, existing=()):
     processor = ResourceProcessor.__new__(ResourceProcessor)
     viking_fs = _FakeVikingFS(existing)
     monkeypatch.setattr(resource_processor_module, "get_viking_fs", lambda: viking_fs)
-    monkeypatch.setattr(
-        "openviking.storage.transaction.get_lock_manager",
-        lambda: object(),
-    )
     return processor
 
 

@@ -6,7 +6,7 @@ use ragfs::cache::{
 };
 use ragfs::core::{FsContextInner, GrepResult, MultiWriteWrappedFS, TreeEntry, FS_CTX};
 use ragfs::plugins::MemFileSystem;
-use ragfs::{FileInfo, FileSystem, Result, WriteFlag};
+use ragfs::{Error, FileInfo, FileSystem, Result, WriteFlag};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -20,6 +20,7 @@ struct CountingFileSystem {
     greps: Arc<AtomicU64>,
     trees: Arc<AtomicU64>,
     read_delay: Duration,
+    partial_remove_path: Option<String>,
 }
 
 struct DeleteFailingProvider {
@@ -211,11 +212,17 @@ impl CountingFileSystem {
             greps: Arc::new(AtomicU64::new(0)),
             trees: Arc::new(AtomicU64::new(0)),
             read_delay: Duration::ZERO,
+            partial_remove_path: None,
         }
     }
 
     fn with_read_delay(mut self, delay: Duration) -> Self {
         self.read_delay = delay;
+        self
+    }
+
+    fn with_partial_remove_failure(mut self, path: &str) -> Self {
+        self.partial_remove_path = Some(path.to_string());
         self
     }
 
@@ -255,6 +262,12 @@ impl FileSystem for CountingFileSystem {
     }
 
     async fn remove_all(&self, path: &str) -> Result<()> {
+        if let Some(partial_remove_path) = &self.partial_remove_path {
+            self.inner.remove(partial_remove_path).await?;
+            return Err(Error::internal(format!(
+                "remove_all partially removed {partial_remove_path} under {path}"
+            )));
+        }
         self.inner.remove_all(path).await
     }
 
@@ -1189,6 +1202,52 @@ async fn remove_all_generation_rejects_residual_descendant_cache_entries() {
 
     assert_eq!(fs.read("/tree/leaf.txt", 0, 0).await.unwrap(), b"new");
     assert_eq!(probe.read_count(), 2);
+}
+
+#[tokio::test]
+async fn remove_all_error_invalidates_cached_state_after_partial_mutation() {
+    let backend = CountingFileSystem::new().with_partial_remove_failure("/tree/deleted.txt");
+    backend.mkdir("/tree", 0o755).await.unwrap();
+    backend
+        .write("/tree/deleted.txt", b"deleted", 0, WriteFlag::Create)
+        .await
+        .unwrap();
+    backend
+        .write("/tree/survivor.txt", b"survivor", 0, WriteFlag::Create)
+        .await
+        .unwrap();
+    backend
+        .write("/unrelated.txt", b"unrelated", 0, WriteFlag::Create)
+        .await
+        .unwrap();
+    let probe = backend.clone();
+    let (fs, _) = cached_fs(backend);
+
+    assert_eq!(
+        fs.read("/tree/deleted.txt", 0, 0).await.unwrap(),
+        b"deleted"
+    );
+    assert_eq!(
+        fs.read("/tree/survivor.txt", 0, 0).await.unwrap(),
+        b"survivor"
+    );
+    assert_eq!(fs.read("/unrelated.txt", 0, 0).await.unwrap(), b"unrelated");
+    assert_eq!(fs.read_dir("/tree").await.unwrap().len(), 2);
+
+    let error = fs.remove_all("/tree").await.unwrap_err();
+    assert!(error.to_string().contains("partially removed"));
+
+    assert!(fs.read("/tree/deleted.txt", 0, 0).await.is_err());
+    assert_eq!(
+        fs.read("/tree/survivor.txt", 0, 0).await.unwrap(),
+        b"survivor"
+    );
+    assert_eq!(fs.read("/unrelated.txt", 0, 0).await.unwrap(), b"unrelated");
+    let entries = fs.read_dir("/tree").await.unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].name, "survivor.txt");
+    assert_eq!(probe.read_count(), 5);
+    assert_eq!(probe.read_dir_count(), 2);
 }
 
 #[tokio::test]

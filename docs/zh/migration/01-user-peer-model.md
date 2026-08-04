@@ -13,10 +13,9 @@
 
 如果升级到 0.4.0，可以先不迁移数据。0.4.0 提供运行期兼容，旧数据不会因为升级立即不可读：
 
-- `agent_id` 仍可临时配置。当前 HTTP SDK client 会把它映射成请求级 `actor_peer_id`；只有仍发送 `X-OpenViking-Agent` 的请求才进入真正的 legacy agent 模式。
+- `agent_id` 仍可临时配置。当前 HTTP SDK client 会把它映射成请求级 `actor_peer_id`。
 - `viking://agent/...` 仍可读旧 agent 数据，但只读。
 - `viking://session/...` 仍可读旧 session 数据，并会合并新 session 视图。
-- 只有真正发送 `X-OpenViking-Agent` 的 legacy 请求会让 `find` / `search` 同时查未迁移的旧 agent 数据；HTTP SDK `agent_id` 现在只选择 actor peer 视图。
 
 推荐顺序：
 
@@ -81,10 +80,10 @@ ov session list
 | `ov ls viking://session` | 支持读，会合并新 session 和旧 session。 |
 | 读 `viking://session/<session_id>/...` | 支持读，按新路径优先、旧路径兜底。 |
 | 写 `viking://session/...` | 不支持。新 session 写入 `viking://user/<user_id>/sessions/...`。 |
-| HTTP SDK `find` / `search` 传 `agent_id` | 支持，只查选中的 actor peer 视图；只有发送 `X-OpenViking-Agent` 的真正 legacy 请求才会查旧 agent 数据。 |
+| HTTP SDK `find` / `search` 传 `agent_id` | 支持，只查选中的 actor peer 视图，不会自动查未迁移的旧 agent 数据。 |
 | `find` / `search` body 传旧 `peer_id` | 不支持。新 peer 视图使用 `actor_peer_id` 或 `X-OpenViking-Actor-Peer`。 |
 | 同时配置 `actor_peer_id` 和 `agent_id` | 不支持，会报错。 |
-| HTTP SDK `agent_id` client 下显式传 message `peer_id` | 支持。该 message 使用显式 `peer_id`；只有没有 message `peer_id` 时才走 legacy fallback。 |
+| HTTP SDK `agent_id` client 下显式传 message `peer_id` | 支持。该 message 使用显式 `peer_id`；未提供时不会从 `agent_id` 推导。 |
 | `role_id` 记忆隔离 | 不再支持，升级后忽略。 |
 
 ## 执行数据迁移
@@ -277,20 +276,13 @@ viking://user/alice/sessions/sess-001/messages.jsonl
 
 ### find / search
 
-迁移窗口内，如果还需要读取未迁移的旧 agent 数据，需要使用仍发送 `X-OpenViking-Agent` 的真正 legacy 请求路径。当前 HTTP SDK `agent_id` 是 actor-peer alias，不再让 `find` / `search` 包含旧 agent 数据：
-
-```json
-{
-  "query": "deployment notes",
-  "agent_id": "legacy-agent"
-}
-```
+`find` / `search` 不再接受 legacy agent 身份字段，也不会自动包含未迁移的旧 agent 数据。旧 `viking://agent/...` 路径仍可通过内容和文件系统接口只读访问，但应先完成迁移再使用新检索路径。
 
 迁移完成并确认不再需要旧 agent 数据后，所有 client 都改为 client/request 级 `actor_peer_id`。
 
 ### 会话消息
 
-没有显式 assistant message `peer_id` 的 legacy 请求仍可 fallback 到 legacy agent id。当前 HTTP SDK client 不应再依赖 `agent_id` 做消息归属；需要表达说话人时使用 message `peer_id`。
+Session 不再从 legacy agent id 推导消息归属；需要表达说话人时必须显式使用 message `peer_id`。
 
 ## 暂不迁移数据
 
@@ -298,7 +290,7 @@ viking://user/alice/sessions/sess-001/messages.jsonl
 
 - 旧 agent/session 数据可读，但旧 namespace 不可写。
 - 新 session 和新资源会写入新 namespace，数据会在新旧路径并存一段时间。
-- 发送 `X-OpenViking-Agent` 的真正 legacy 检索会同时查新旧数据；HTTP SDK `agent_id` 和纯 `actor_peer_id` 不会默认查旧 `viking://agent`。
+- `find` / `search` 不会默认查旧 `viking://agent` 数据。
 - 多用户 account 下 owner 不明确的旧 session，运行期可能可读，但正式迁移会被 preflight 拦截。
 - cleanup 之前旧目录和旧向量记录仍会保留。
 

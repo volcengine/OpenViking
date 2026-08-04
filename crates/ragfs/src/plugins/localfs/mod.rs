@@ -93,6 +93,187 @@ impl LocalFileSystem {
         }
     }
 
+    #[cfg(windows)]
+    fn windows_file_identity(file: &fs::File) -> Result<(u32, u64)> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        };
+
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        // SAFETY: `file` owns a live OS handle and `info` points to valid,
+        // writable storage for the duration of this call.
+        let succeeded =
+            unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info as *mut _) };
+        if succeeded == 0 {
+            return Err(Error::plugin(format!(
+                "failed to inspect open CAS file: {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+
+        let file_index = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
+        Ok((info.dwVolumeSerialNumber, file_index))
+    }
+
+    /// Return whether an open file still identifies the file currently stored at `path`.
+    fn open_file_matches_path(file: &fs::File, path: &Path) -> Result<bool> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let open_metadata = file
+                .metadata()
+                .map_err(|e| Error::plugin(format!("failed to stat open CAS file: {}", e)))?;
+            let path_metadata = match fs::metadata(path) {
+                Ok(metadata) => metadata,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                Err(e) => {
+                    return Err(Error::plugin(format!(
+                        "failed to stat CAS path '{}': {}",
+                        path.display(),
+                        e
+                    )));
+                }
+            };
+            Ok(open_metadata.dev() == path_metadata.dev()
+                && open_metadata.ino() == path_metadata.ino())
+        }
+        #[cfg(windows)]
+        {
+            let path_file = match fs::File::open(path) {
+                Ok(path_file) => path_file,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                Err(e) => {
+                    return Err(Error::plugin(format!(
+                        "failed to open CAS path '{}': {}",
+                        path.display(),
+                        e
+                    )));
+                }
+            };
+            Ok(Self::windows_file_identity(file)? == Self::windows_file_identity(&path_file)?)
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = (file, path);
+            Err(Error::invalid_operation(
+                "CAS file identity checks are unsupported on this platform",
+            ))
+        }
+    }
+
+    /// Replace local file content only when the locked file content matches `expected`.
+    fn compare_and_write_locked(
+        local_path: PathBuf,
+        expected: Vec<u8>,
+        new_data: Vec<u8>,
+    ) -> Result<bool> {
+        use std::io::{Read, Seek, SeekFrom, Write};
+
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&local_path)
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    Error::NotFound(local_path.to_string_lossy().to_string())
+                } else {
+                    Error::plugin(format!("failed to open file for compare_and_write: {}", e))
+                }
+            });
+        let file = match file {
+            Ok(file) => file,
+            Err(Error::NotFound(_)) => return Ok(false),
+            Err(e) => return Err(e),
+        };
+        let mut lock = filelocks::LockOptions::new()
+            .backend(filelocks::LockBackend::Fcntl)
+            .lock(
+                file,
+                filelocks::LockKind::Exclusive,
+                filelocks::LockMode::NonBlocking,
+            )
+            .map_err(|e| Self::map_lock_error("compare_and_write", &e.to_string()))?;
+        let file = lock.file_mut();
+        if !Self::open_file_matches_path(&file, &local_path)? {
+            return Ok(false);
+        }
+
+        let mut current = Vec::new();
+        file.seek(SeekFrom::Start(0))
+            .map_err(|e| Error::plugin(format!("failed to seek for compare_and_write: {}", e)))?;
+        file.read_to_end(&mut current)
+            .map_err(|e| Error::plugin(format!("failed to read for compare_and_write: {}", e)))?;
+        if current != expected {
+            return Ok(false);
+        }
+
+        file.set_len(0)
+            .map_err(|e| Error::plugin(format!("failed to truncate for compare_and_write: {}", e)))?;
+        file.seek(SeekFrom::Start(0))
+            .map_err(|e| Error::plugin(format!("failed to rewind for compare_and_write: {}", e)))?;
+        file.write_all(&new_data)
+            .map_err(|e| Error::plugin(format!("failed to write for compare_and_write: {}", e)))?;
+        file.sync_data()
+            .map_err(|e| Error::plugin(format!("failed to sync for compare_and_write: {}", e)))?;
+        Ok(true)
+    }
+
+    /// Remove a local file only when the locked file content matches `expected`.
+    fn compare_and_remove_locked(local_path: PathBuf, expected: Vec<u8>) -> Result<bool> {
+        use std::io::{Read, Seek, SeekFrom};
+
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&local_path)
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    Error::NotFound(local_path.to_string_lossy().to_string())
+                } else {
+                    Error::plugin(format!("failed to open file for compare_and_remove: {}", e))
+                }
+            });
+        let file = match file {
+            Ok(file) => file,
+            Err(Error::NotFound(_)) => return Ok(false),
+            Err(e) => return Err(e),
+        };
+        let mut lock = filelocks::LockOptions::new()
+            .backend(filelocks::LockBackend::Fcntl)
+            .lock(
+                file,
+                filelocks::LockKind::Exclusive,
+                filelocks::LockMode::NonBlocking,
+            )
+            .map_err(|e| Self::map_lock_error("compare_and_remove", &e.to_string()))?;
+        let file = lock.file_mut();
+        if !Self::open_file_matches_path(&file, &local_path)? {
+            return Ok(false);
+        }
+
+        let mut current = Vec::new();
+        file.seek(SeekFrom::Start(0))
+            .map_err(|e| Error::plugin(format!("failed to seek for compare_and_remove: {}", e)))?;
+        file.read_to_end(&mut current)
+            .map_err(|e| Error::plugin(format!("failed to read for compare_and_remove: {}", e)))?;
+        if current != expected {
+            return Ok(false);
+        }
+
+        fs::remove_file(&local_path)
+            .map_err(|e| Error::plugin(format!("failed to remove for compare_and_remove: {}", e)))?;
+        Ok(true)
+    }
+
+    /// Map a non-blocking file-lock acquisition error into a retryable filesystem error.
+    fn map_lock_error(operation: &str, error: &str) -> Error {
+        if error.to_ascii_lowercase().contains("would block") {
+            return Error::would_block(format!("failed to lock for {operation}: {error}"));
+        }
+        Error::plugin(format!("failed to lock for {operation}: {error}"))
+    }
+
     /// Run blocking local filesystem work on a dedicated thread.
     async fn run_blocking_fs<T, F>(job: F) -> Result<T>
     where
@@ -814,6 +995,9 @@ impl FileSystem for LocalFileSystem {
             WriteFlag::Create => {
                 options.write(true).create(true).truncate(true);
             }
+            WriteFlag::CreateNew => {
+                options.write(true).create_new(true);
+            }
             WriteFlag::Append => {
                 options.append(true);
             }
@@ -840,6 +1024,29 @@ impl FileSystem for LocalFileSystem {
         file.write_all(data)
             .map_err(|e| Error::plugin(format!("failed to write: {}", e)))?;
         Ok(data.len() as u64)
+    }
+
+    /// Atomically replace a local file when its current content exactly matches `expected`.
+    async fn compare_and_write(
+        &self,
+        path: &str,
+        expected: &[u8],
+        new_data: &[u8],
+    ) -> Result<bool> {
+        let local_path = self.resolve_path(path)?;
+        let expected = expected.to_vec();
+        let new_data = new_data.to_vec();
+        Self::run_blocking_fs(move || {
+            Self::compare_and_write_locked(local_path, expected, new_data)
+        })
+        .await
+    }
+
+    /// Atomically remove a local file when its current content exactly matches `expected`.
+    async fn compare_and_remove(&self, path: &str, expected: &[u8]) -> Result<bool> {
+        let local_path = self.resolve_path(path)?;
+        let expected = expected.to_vec();
+        Self::run_blocking_fs(move || Self::compare_and_remove_locked(local_path, expected)).await
     }
 
     async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
@@ -1204,6 +1411,28 @@ mod tests {
         std::fs::write(path, content).unwrap();
     }
 
+    #[test]
+    fn test_open_file_identity_matches_only_the_current_path_entry() {
+        let dir = TempDir::new().unwrap();
+        write_file(dir.path(), "first.txt", "same content");
+        write_file(dir.path(), "second.txt", "same content");
+
+        let first_path = dir.path().join("first.txt");
+        let first_file = std::fs::File::open(&first_path).unwrap();
+
+        assert!(LocalFileSystem::open_file_matches_path(&first_file, &first_path).unwrap());
+        assert!(!LocalFileSystem::open_file_matches_path(
+            &first_file,
+            &dir.path().join("second.txt")
+        )
+        .unwrap());
+        assert!(!LocalFileSystem::open_file_matches_path(
+            &first_file,
+            &dir.path().join("missing.txt")
+        )
+        .unwrap());
+    }
+
     #[tokio::test]
     async fn test_localfs_rejects_parent_path_components() {
         let dir = TempDir::new().unwrap();
@@ -1280,6 +1509,15 @@ mod tests {
             let err = fs.write("/missing", b"data", 0, flag).await.unwrap_err();
             assert!(matches!(err, Error::NotFound(_)));
         }
+    }
+
+    #[test]
+    fn test_localfs_maps_would_block_lock_errors() {
+        let err = LocalFileSystem::map_lock_error(
+            "compare_and_remove",
+            "failed to lock for compare_and_remove: lock would block",
+        );
+        assert!(matches!(err, Error::WouldBlock(_)));
     }
 
     /// Install a fake rg executable and prepend it to PATH for the current test.

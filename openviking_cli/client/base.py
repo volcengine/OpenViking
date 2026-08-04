@@ -46,8 +46,15 @@ class BaseClient(ABC):
         processing_mode: str = "semantic_and_vectors",
         args: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
+        add_type: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
     ) -> Dict[str, Any]:
-        """Add resource to OpenViking."""
+        """Add resource to OpenViking.
+
+        ``add_type`` declares a Connector source and requires an exact ``to``
+        target; it cannot be combined with ``parent``.
+        """
         ...
 
     @abstractmethod
@@ -441,6 +448,11 @@ class BaseClient(ABC):
     @abstractmethod
     async def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Query background task status."""
+        ...
+
+    @abstractmethod
+    async def cancel_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Cancel a background task."""
         ...
 
     @abstractmethod

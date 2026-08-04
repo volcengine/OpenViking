@@ -136,7 +136,6 @@ Restart OpenCode after installation. In an OpenCode session, the plugin should e
 - `openviking_recall`, `openviking_search`, `openviking_find`
 - `openviking_read`, `openviking_list`, `openviking_grep`, `openviking_glob`
 - `openviking_remember`, `openviking_add_resource`, `openviking_forget`, `openviking_health`
-- `openviking_code_search`, `openviking_code_outline`, `openviking_code_expand`
 
 Ask OpenCode to search or browse OpenViking memory. Runtime state and errors are written to:
 

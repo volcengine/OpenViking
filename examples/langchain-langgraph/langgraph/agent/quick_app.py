@@ -6,7 +6,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from typing_extensions import Annotated, TypedDict
 
-from openviking.integrations.langchain import (
+from langchain_openviking import (
     InMemoryOpenVikingClient,
     OpenVikingStore,
     create_openviking_tools,

@@ -232,7 +232,15 @@ openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --peer
 - 如果配置中已有 `plugins.allow`，把 `openviking` 追加进去；如果没有，不要仅为本插件新建 allowlist。
 - `contextEngine` 是独占 slot；若已有其他 context engine，只有确认替换后再修改该字段。使用 root API key 时，还需在 `config` 中设置 `accountId` 和 `userId`。
 - 容器连接其他服务时，`baseUrl` 应使用容器内可访问的服务地址，而不是 `127.0.0.1`。
-- `apiKey` 会以明文保存；请限制文件权限或使用受控的 Secret 卷。修改后重启 Gateway、容器或 Pod。
+- 推荐使用 `SecretRef` 对象作为 `apiKey`（而不是明文字符串），避免密钥直接落盘写入 `openclaw.json`。支持的形式与 OpenClaw 核心中 LLM/TTS/MCP 等 provider 配置使用的标准 `SecretRef` 一致：
+
+  | 类型 | 示例 | 说明 |
+  | --- | --- | --- |
+  | `env` | `{ "source": "env", "id": "OPENVIKING_API_KEY" }` | 启动时读取同名环境变量。 |
+  | `file` | `{ "source": "file", "id": "/etc/secrets/openviking.key" }` | 以 UTF-8 读取并去除首尾空白；`~` 可展开，适配 Kubernetes `secretKeyRef` 卷挂载、0600 权限文件。 |
+  | `exec` | `{ "source": "exec", "provider": "op", "id": "op://vault/openviking/credential" }` | 运行 `<provider> <id>`，去除 stdout 首尾空白（1Password `op`、Vault、gopass 等均符合此形态）。 |
+
+  仍可使用纯字符串形式（含 `${ENV_VAR}` 插值）作为向后兼容路径；此时请限制文件权限或通过受控 Secret 卷提供，并在修改后重启 Gateway、容器或 Pod。
 
 ### 3. 重启 OpenClaw Gateway
 

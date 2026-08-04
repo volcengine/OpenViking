@@ -175,7 +175,7 @@ ov grep "openviking" --uri viking://resources
 - `observer vikingdb` - VikingDB 状态。
 - `observer models` - VLM、embedding 和 rerank 模型状态。
 - `observer retrieval` - 检索质量指标。
-- `observer fs` - 文件系统操作指标。
+- `observer filesystem` - 文件系统操作指标。
 - `observer system` - 整体系统状态。
 
 ### 配置
@@ -269,8 +269,8 @@ ov glob "**/*.md" --uri viking://resources
 
 # Session 工作流
 SESSION=$(ov -o json session new | jq -r '.result.session_id')
-ov session add-message --session-id "$SESSION" --role user --content "Hello"
-ov session commit --session-id "$SESSION"
+ov session add-message "$SESSION" --role user --content "Hello"
+ov session commit "$SESSION"
 
 # Watch 任务管理
 ov add-resource https://example.com/docs --to viking://resources/docs --watch-interval 60

@@ -86,6 +86,20 @@ def test_actor_default_memory_targets_actor_peer_memory():
     ]
 
 
+def test_encoded_actor_cannot_read_colliding_ascii_peer():
+    encoded_peer = "ext-5byg5LiJIEFsaWNl"
+
+    assert default_target_directories(_ctx(encoded_peer), context_type=ContextType.MEMORY) == [
+        "viking://user/support_bot/memories",
+        f"viking://user/support_bot/peers/{encoded_peer}/memories",
+    ]
+    with pytest.raises(PermissionDeniedError, match="another peer"):
+        _target_dirs(
+            "viking://user/support_bot/peers/Alice/memories",
+            actor_peer_id=encoded_peer,
+        )
+
+
 def test_actor_skill_defaults_include_user_and_shared_agent_skills():
     assert default_target_directories(
         _ctx("web-visitor-alice"), context_type=ContextType.SKILL

@@ -45,44 +45,13 @@ impl FsContextResolver for DefaultFsContextResolver {
     }
 }
 
-/// Resolver that extracts `account_id` from paths under one concrete mount root.
-pub struct MountRootFsContextResolver {
-    mount_root: String,
-}
+/// Resolver that extracts `account_id` from mount-relative paths such as `/{account_id}/...`.
+pub struct RelativePathFsContextResolver;
 
-impl MountRootFsContextResolver {
-    /// Create a resolver for one normalized mount root such as `/local` or `/s3`.
-    pub fn new(mount_root: &str) -> Self {
-        let mut normalized = mount_root.trim_end_matches('/').to_string();
-        if normalized.is_empty() {
-            normalized = "/".to_string();
-        } else if !normalized.starts_with('/') {
-            normalized = format!("/{normalized}");
-        }
-        Self {
-            mount_root: normalized,
-        }
-    }
-}
-
-impl FsContextResolver for MountRootFsContextResolver {
+impl FsContextResolver for RelativePathFsContextResolver {
     fn resolve(&self, path: &str) -> Result<FsContext> {
-        let normalized = if path.starts_with('/') {
-            path.to_string()
-        } else {
-            format!("/{path}")
-        };
-        let suffix = if self.mount_root == "/" {
-            normalized.trim_start_matches('/')
-        } else {
-            normalized
-                .strip_prefix(&self.mount_root)
-                .and_then(|suffix| suffix.strip_prefix('/'))
-                .ok_or_else(|| {
-                    Error::internal(format!("cannot resolve FsContext from path: {path}"))
-                })?
-        };
-        let account_id = suffix.split('/').next().unwrap_or_default();
+        let normalized = path.trim_start_matches('/');
+        let account_id = normalized.split('/').next().unwrap_or_default();
         if account_id.is_empty() {
             return Err(Error::internal(format!(
                 "cannot resolve FsContext from path: {path}"
@@ -175,12 +144,12 @@ impl MetaStateStore {
         Arc::new(FsContextInner::new("_system".to_string()))
     }
 
-    /// - root directory using `_system` context
+    /// Build the effective context for metadata access.
     fn effective_meta_ctx(dir: &str, ctx: &FsContext) -> FsContext {
         if dir == "/" {
-            Self::system_ctx()
+            Arc::new(Self::system_ctx().with_auto_pathlock_disabled())
         } else {
-            ctx.clone()
+            Arc::new(ctx.with_auto_pathlock_disabled())
         }
     }
 
@@ -563,15 +532,6 @@ mod tests {
         assert!(resolver.resolve("/invalid/path").is_err());
     }
 
-    #[test]
-    fn test_mount_root_resolver_extracts_account_from_non_local_path() {
-        let resolver = MountRootFsContextResolver::new("/s3");
-        let ctx = resolver.resolve("/s3/acct-1/resources/file.txt").unwrap();
-        assert_eq!(ctx.account_id(), "acct-1");
-        assert!(resolver
-            .resolve("/local/acct-1/resources/file.txt")
-            .is_err());
-    }
 
     #[tokio::test]
     async fn test_invalid_sync_log_json_returns_error() {

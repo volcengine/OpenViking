@@ -1,0 +1,98 @@
+[build-system]
+requires = ["setuptools>=61.0", "setuptools-scm>=8.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "langchain-openviking"
+dynamic = ["version"]
+description = "OpenViking integrations for LangChain and LangGraph"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    {name = "ByteDance", email = "noreply@bytedance.com"},
+]
+license = "AGPL-3.0"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+    "langchain-core>=1.0.0,<2.0.0",
+    "openviking-sdk>=0.1.1",
+    "pydantic>=2.0.0",
+]
+
+[project.optional-dependencies]
+langgraph = [
+    "langchain>=1.0.0,<2.0.0",
+    "langgraph>=1.0.0,<2.0.0",
+]
+test = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+]
+dev = [
+    "build>=1.2.0",
+    "mypy>=1.0.0",
+    "ruff>=0.1.0",
+    "twine>=5.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/volcengine/openviking"
+Documentation = "https://openviking.ai"
+Repository = "https://github.com/volcengine/openviking"
+Issues = "https://github.com/volcengine/openviking/issues"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["langchain_openviking*"]
+
+[tool.setuptools.package-data]
+langchain_openviking = ["py.typed"]
+
+[tool.setuptools_scm]
+root = "../.."
+local_scheme = "no-local-version"
+tag_regex = "^langchain-openviking@(?P<version>[0-9]+(?:\\.[0-9]+)*)$"
+git_describe_command = "git describe --dirty --tags --long --match langchain-openviking@*"
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = false
+warn_unused_configs = true
+check_untyped_defs = true
+no_implicit_optional = false
+warn_redundant_casts = true
+warn_unused_ignores = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "C", "B"]
+ignore = ["E501", "B008", "C901", "B006", "B904", "E741", "E722", "B027"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"

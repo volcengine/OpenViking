@@ -186,7 +186,7 @@ client.initialize()
 #### HTTP 调用示例
 
 - CLI、`SyncHTTPClient`、`AsyncHTTPClient` 遇到本地文件或目录时，会先自动上传，再调用服务端 API。
-- Python HTTP client 和 CLI 也可以通过客户端配置启用 shared 临时上传（`ovcli.conf` 中设置 `upload.mode = "shared"`）。
+- Python HTTP client 可以通过 `ovcli.conf` 启用 shared 临时上传（设置 `upload.mode = "shared"`）。Rust `ov` CLI 不读取这个字段；使用 `ov` 时请设置 `OPENVIKING_UPLOAD_MODE=shared`。
 - 裸 HTTP 调用没有这层封装。使用 `curl` 或其他 HTTP 客户端时，需要先调用 `POST /api/v1/resources/temp_upload`，再把返回的 `temp_file_id` 传给目标 API。
 - `temp_upload` 默认使用 `upload_mode=local`。只有在你显式需要分布式共享临时上传时，才应传 `upload_mode=shared`。
 - 裸 HTTP 如果导入本地目录，需要先自行打成 `.zip` 再通过上述方法上传；服务端不接受直接传宿主机目录路径。
@@ -467,7 +467,7 @@ JSON 输出 - 错误：
 | POST | `/api/v1/sessions/{session_id}/used` | 记录实际使用的上下文或技能 |
 | POST | `/api/v1/search/recall` | 召回记忆并返回可直接注入的上下文 |
 
-### [检索](06-retrieval.md)、[代码检索](21-code.md)与[关系](13-relations.md)
+### [检索](06-retrieval.md)与[关系](13-relations.md)
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -475,9 +475,6 @@ JSON 输出 - 错误：
 | POST | `/api/v1/search/search` | 上下文感知搜索 |
 | POST | `/api/v1/search/grep` | 内容模式搜索 |
 | POST | `/api/v1/search/glob` | 文件模式匹配 |
-| POST | `/api/v1/code/outline` | 提取代码结构 |
-| POST | `/api/v1/code/search` | 代码搜索 |
-| POST | `/api/v1/code/expand` | 展开代码上下文 |
 | GET | `/api/v1/relations` | 获取资源关系 |
 | POST | `/api/v1/relations/link` | 创建资源链接 |
 | DELETE | `/api/v1/relations/link` | 删除资源链接 |
@@ -513,6 +510,7 @@ JSON 输出 - 错误：
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/v1/tasks/{task_id}` | 获取后台任务 |
+| POST | `/api/v1/tasks/{task_id}/cancel` | 取消后台任务 |
 | GET | `/api/v1/tasks` | 列出后台任务 |
 | GET | `/api/v1/observer/queue` | 队列状态 |
 | GET | `/api/v1/observer/vikingdb` | VikingDB 状态 |
@@ -527,6 +525,10 @@ JSON 输出 - 错误：
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| GET | `/api/v1/admin/agent-evolution` | 获取调用方 account 的 Agent 进化状态 |
+| PUT | `/api/v1/admin/agent-evolution` | 更新调用方 account 的 Agent 进化状态 |
+| GET | `/api/v1/admin/accounts/{account_id}/settings` | 获取 account 生效配置 |
+| PATCH | `/api/v1/admin/accounts/{account_id}/settings` | 更新白名单内的 account 配置 |
 | POST | `/api/v1/admin/accounts` | 创建账号及首个管理员 |
 | GET | `/api/v1/admin/accounts` | 列出账号 |
 | POST | `/api/v1/admin/migrate` | 迁移旧版身份数据 |
@@ -534,7 +536,7 @@ JSON 输出 - 错误：
 | POST | `/api/v1/admin/accounts/{account_id}/users` | 注册用户 |
 | GET | `/api/v1/admin/accounts/{account_id}/users` | 列出用户 |
 | DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | 移除用户 |
-| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | 修改用户角色 |
+| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | 将用户提升为 ADMIN |
 | POST | `/api/v1/admin/accounts/{account_id}/users/{user_id}/key` | 重新生成用户 Key |
 | GET | `/api/v1/privacy-configs` | 列出隐私配置分类 |
 | GET | `/api/v1/privacy-configs/{category}` | 列出分类目标 |
@@ -544,10 +546,12 @@ JSON 输出 - 错误：
 | POST | `/api/v1/privacy-configs/{category}/{target_key}` | 写入并激活新版本 |
 | POST | `/api/v1/privacy-configs/{category}/{target_key}/activate` | 激活指定版本 |
 
-### [WebDAV](20-webdav.md) 与 [VikingBot API](24-vikingbot.md)
+### [OpenViking Assets](22-openviking-assets.md)、[WebDAV](20-webdav.md) 与 [VikingBot API](24-vikingbot.md)
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| POST | `/api/v1/openviking-assets/resolve` | 解析并校验 Catalog 与 Manifest，返回标准化资产计划 |
+| POST | `/api/v1/openviking-assets/preflight` | 只读校验 Git 仓库和 ref 的访问权限 |
 | OPTIONS | `/webdav/resources`、`/webdav/resources/{resource_path}` | 查询 WebDAV 能力 |
 | PROPFIND | `/webdav/resources`、`/webdav/resources/{resource_path}` | 查询资源属性 |
 | GET / HEAD | `/webdav/resources`、`/webdav/resources/{resource_path}` | 读取文件或目录 |
@@ -575,4 +579,4 @@ JSON 输出 - 错误：
 | 数据生命周期 | Watch、快照、OVPack |
 | 运维与观测 | 系统、任务、Observer、Metrics |
 | 身份与治理 | 管理员、隐私配置 |
-| 协议与扩展 | WebDAV、VikingBot API |
+| 协议与扩展 | OpenViking Assets、WebDAV、VikingBot API |

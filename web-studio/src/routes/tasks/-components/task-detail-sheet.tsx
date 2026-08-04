@@ -65,14 +65,18 @@ export function TaskDetailSheet({
     queryKey: ['task-detail', identityScopeKey, taskId],
     refetchInterval: (query) => {
       const status = normalizeTaskStatus(query.state.data?.status)
-      return status === 'pending' || status === 'running' ? 3_000 : false
+      return status === 'pending' ||
+        status === 'running' ||
+        status === 'cancelling'
+        ? 3_000
+        : false
     },
   })
   const task = detailQuery.data
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="gap-0 sm:max-w-xl">
+      <SheetContent className="gap-0 data-[side=right]:sm:max-w-3xl">
         <SheetHeader className="border-b px-6 py-5">
           <div className="flex items-center gap-3 pr-10">
             <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/15">
@@ -177,7 +181,9 @@ export function TaskDetailSheet({
                       {t(
                         normalizeTaskStatus(task.status) === 'failed'
                           ? 'detail.noResultFailedDescription'
-                          : 'detail.noResultDescription',
+                          : normalizeTaskStatus(task.status) === 'cancelled'
+                            ? 'detail.noResultCancelledDescription'
+                            : 'detail.noResultDescription',
                       )}
                     </p>
                   </div>

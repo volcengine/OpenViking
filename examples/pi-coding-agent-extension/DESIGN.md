@@ -49,7 +49,7 @@ interface OVConfig {
   apiKey: string;                // API key (default: "" — dev mode)
   account: string;               // Multi-tenant account (default: "")
   user: string;                  // Multi-tenant user (default: "")
-  agentId: string;               // Agent identity for X-OpenViking-Agent header (default: "pi")
+  peerId: string;                // Actor peer identity for X-OpenViking-Actor-Peer
   syncTurns: boolean;            // Auto-sync conversation turns (default: true)
   recallBudget: number;          // Max tokens for <relevant-memories> block (default: 2000)
   recallMaxContentChars: number; // Max chars per recall result before truncation (default: 500)
@@ -102,7 +102,7 @@ Wraps these endpoints:
 
 All methods are async. All catch errors internally and return `null`/empty on failure. Timeouts: 5s health, 10s reads, 30s writes.
 
-Headers include `X-OpenViking-Account`, `X-OpenViking-User`, `X-OpenViking-Agent` for multi-tenant routing.
+Headers include `X-OpenViking-Account`, `X-OpenViking-User`, and `X-OpenViking-Actor-Peer` for multi-tenant routing and peer scope.
 
 ```typescript
 class OVClient {
@@ -882,7 +882,7 @@ Default: `~/.pi/agent/extensions/openviking/config.json`
   "apiKey": "",
   "account": "",
   "user": "",
-  "agentId": "pi",
+  "peerId": "",
   "syncTurns": true,
   "recallBudget": 2000,
   "recallMaxContentChars": 500,

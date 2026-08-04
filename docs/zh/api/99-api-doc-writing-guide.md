@@ -30,7 +30,7 @@ API 文档按模块组织，每个模块一个文件，使用两位数字序号�
 **代码入口**：
 - `openviking/<模块>/<文件>.py:<类名>.<方法名>` - 核心实现
 - `openviking/server/routers/<路由文件>.py` - HTTP 路由
-- `openviking_cli/commands/<命令文件>.py` - CLI 命令
+- `crates/ov_cli/src/commands/<命令文件>.rs` - CLI 命令
 
 #### 2. 接口和参数说明
 
@@ -174,10 +174,11 @@ API 文档应按 API 模块和具体接口组织，而不是按客户端语言�
 5. 建立向量索引
 
 **代码入口**：
-- `openviking/core/client.py:OpenViking.add_resource()` - SDK 入口
-- `openviking/resource/importer.py:ResourceImporter.import_resource()` - 核心实现
-- `openviking/server/routers/resources.py` - HTTP 路由
-- `openviking_cli/commands/resources.py` - CLI 命令
+- `openviking/async_client.py:AsyncOpenViking.add_resource()` - 异步 SDK 入口
+- `openviking/sync_client.py:SyncOpenViking.add_resource()` - 同步 SDK 入口
+- `openviking/service/resource_service.py:ResourceService.add_resource()` - 核心实现
+- `openviking/server/routers/resources.py:add_resource()` - HTTP 路由
+- `crates/ov_cli/src/handlers.rs:handle_add_resource()` - CLI 处理函数
 
 #### 2. 接口和参数说明
 

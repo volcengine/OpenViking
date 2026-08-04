@@ -17,12 +17,7 @@ from langchain_core.language_models.chat_models import SimpleChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableLambda
 from langchain_core.runnables.history import RunnableWithMessageHistory
-from langgraph.graph import END, START, StateGraph
-from langgraph.graph.message import add_messages
-from openai import OpenAI
-from typing_extensions import Annotated, TypedDict
-
-from openviking.integrations.langchain import (
+from langchain_openviking import (
     OpenVikingChatMessageHistory,
     OpenVikingContextMiddleware,
     OpenVikingRetriever,
@@ -30,7 +25,11 @@ from openviking.integrations.langchain import (
     create_openviking_tools,
     with_openviking_context,
 )
-from openviking.integrations.langchain.client import extract_message_text
+from langchain_openviking.client import extract_message_text
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
+from openai import OpenAI
+from typing_extensions import Annotated, TypedDict
 
 
 def test_true_live_langchain_context_backend_e2e():
@@ -509,7 +508,7 @@ def _require_openviking_live_env() -> None:
 
 
 def _build_real_client():
-    from openviking.client import SyncHTTPClient
+    from openviking_sdk import SyncHTTPClient
 
     client = SyncHTTPClient(
         url=os.environ.get("OPENVIKING_URL") or None,

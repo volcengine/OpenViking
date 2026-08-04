@@ -5,7 +5,9 @@ from typing import Any
 import pytest
 
 pytest.importorskip("langchain_core")
+pytest.importorskip("langchain_openviking")
 
+import langchain_openviking.recording as recording_module
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
@@ -13,9 +15,7 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
-
-import openviking.integrations.langchain.recording as recording_module
-from openviking.integrations.langchain import (
+from langchain_openviking import (
     InMemoryOpenVikingClient,
     OpenVikingChatMessageHistory,
     OpenVikingCommitPolicy,
@@ -24,7 +24,7 @@ from openviking.integrations.langchain import (
     OpenVikingRecordResult,
     OpenVikingSessionRecorder,
 )
-from openviking.integrations.langchain.messages import OPENVIKING_CONTEXT_MARKER
+from langchain_openviking.messages import OPENVIKING_CONTEXT_MARKER
 
 
 class TrackingOpenVikingClient(InMemoryOpenVikingClient):

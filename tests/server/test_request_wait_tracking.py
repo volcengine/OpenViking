@@ -47,6 +47,10 @@ class _FakeVikingFS:
         self._file_uri = file_uri
         self._root_uri = root_uri
         self.content = {file_uri: "original"}
+        self._async_agfs = SimpleNamespace(
+            pathlock_acquire_exact=lambda lock_path: SimpleNamespace(id="lock-1"),
+            pathlock_release=lambda lease: None,
+        )
 
     async def stat(self, uri: str, ctx=None):
         del ctx
@@ -68,101 +72,13 @@ class _FakeVikingFS:
         del ctx
         return self.content[uri]
 
-    async def write_file(self, uri: str, content: str, ctx=None):
-        del ctx
+    async def write_file(self, uri: str, content: str, ctx=None, lease_ref=None):
+        del ctx, lease_ref
         self.content[uri] = content
 
-    async def rm(self, uri: str, ctx=None, lock_handle=None):
-        del ctx, lock_handle
+    async def rm(self, uri: str, ctx=None, lock_handle=None, lease_ref=None):
+        del ctx, lock_handle, lease_ref
         self.content.pop(uri, None)
-
-
-@pytest.mark.asyncio
-async def test_add_resource_wait_uses_request_tracker(service, monkeypatch):
-    tracker = _FakeRequestWaitTracker(
-        {
-            "Semantic": {"processed": 1, "error_count": 0, "errors": []},
-            "Embedding": {"processed": 2, "error_count": 0, "errors": []},
-        }
-    )
-    ctx = RequestContext(user=service.user, role=Role.ROOT)
-    telemetry = OperationTelemetry(operation="resources.add_resource", enabled=True)
-
-    async def _fake_process_resource(**kwargs):
-        del kwargs
-        return {"status": "success", "root_uri": "viking://resources/demo"}
-
-    monkeypatch.setattr(
-        service.resources._resource_processor, "process_resource", _fake_process_resource
-    )
-    monkeypatch.setattr(
-        "openviking.service.resource_service.get_queue_manager",
-        lambda: _ExplodingQueueManager(),
-    )
-    monkeypatch.setattr(
-        "openviking.service.resource_service.get_request_wait_tracker",
-        lambda: tracker,
-        raising=False,
-    )
-
-    with bind_telemetry(telemetry):
-        result = await service.resources.add_resource(
-            path="/tmp/demo.md",
-            ctx=ctx,
-            reason="request wait test",
-            wait=True,
-            timeout=12.0,
-        )
-
-    assert result["queue_status"] == tracker.queue_status
-    assert tracker.registered_requests == [telemetry.telemetry_id]
-    assert tracker.wait_calls == [(telemetry.telemetry_id, 12.0)]
-    assert tracker.build_calls == [telemetry.telemetry_id]
-    assert tracker.cleaned == [telemetry.telemetry_id]
-
-
-@pytest.mark.asyncio
-async def test_add_resource_wait_uses_request_tracker_when_telemetry_disabled(service, monkeypatch):
-    tracker = _FakeRequestWaitTracker(
-        {
-            "Semantic": {"processed": 1, "error_count": 0, "errors": []},
-            "Embedding": {"processed": 2, "error_count": 0, "errors": []},
-        }
-    )
-    ctx = RequestContext(user=service.user, role=Role.ROOT)
-    telemetry = OperationTelemetry(operation="resources.add_resource", enabled=False)
-
-    async def _fake_process_resource(**kwargs):
-        del kwargs
-        return {"status": "success", "root_uri": "viking://resources/demo"}
-
-    monkeypatch.setattr(
-        service.resources._resource_processor, "process_resource", _fake_process_resource
-    )
-    monkeypatch.setattr(
-        "openviking.service.resource_service.get_queue_manager",
-        lambda: _ExplodingQueueManager(),
-    )
-    monkeypatch.setattr(
-        "openviking.service.resource_service.get_request_wait_tracker",
-        lambda: tracker,
-        raising=False,
-    )
-
-    with bind_telemetry(telemetry):
-        result = await service.resources.add_resource(
-            path="/tmp/demo.md",
-            ctx=ctx,
-            reason="request wait test",
-            wait=True,
-            timeout=12.0,
-        )
-
-    assert result["queue_status"] == tracker.queue_status
-    assert tracker.registered_requests == [telemetry.telemetry_id]
-    assert tracker.wait_calls == [(telemetry.telemetry_id, 12.0)]
-    assert tracker.build_calls == [telemetry.telemetry_id]
-    assert tracker.cleaned == [telemetry.telemetry_id]
 
 
 @pytest.mark.asyncio
@@ -263,16 +179,7 @@ async def test_content_write_wait_uses_request_tracker(monkeypatch):
     coordinator = ContentWriteCoordinator(
         viking_fs=_FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
     )
-    lock_manager = SimpleNamespace(
-        create_handle=lambda: SimpleNamespace(id="lock-1"),
-        acquire_exact_path=lambda handle, path: _return_true(handle, path),
-        release=lambda handle: _return_none(handle),
-    )
 
-    monkeypatch.setattr(
-        "openviking.storage.content_write.get_lock_manager",
-        lambda: lock_manager,
-    )
     monkeypatch.setattr(
         "openviking.storage.content_write.get_request_wait_tracker",
         lambda: tracker,
@@ -323,16 +230,7 @@ async def test_content_write_wait_uses_request_tracker_when_telemetry_disabled(m
     coordinator = ContentWriteCoordinator(
         viking_fs=_FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
     )
-    lock_manager = SimpleNamespace(
-        create_handle=lambda: SimpleNamespace(id="lock-1"),
-        acquire_exact_path=lambda handle, path: _return_true(handle, path),
-        release=lambda handle: _return_none(handle),
-    )
 
-    monkeypatch.setattr(
-        "openviking.storage.content_write.get_lock_manager",
-        lambda: lock_manager,
-    )
     monkeypatch.setattr(
         "openviking.storage.content_write.get_request_wait_tracker",
         lambda: tracker,

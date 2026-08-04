@@ -10,7 +10,8 @@
 
 use std::sync::Arc;
 
-/// Immutable filesystem context snapshot. Currently carries only `account_id` (the tenant).
+/// Immutable filesystem context snapshot. Currently carries `account_id` (the tenant)
+/// and optional `PathLockContext`.
 pub type FsContext = Arc<FsContextInner>;
 
 tokio::task_local! {
@@ -18,10 +19,20 @@ tokio::task_local! {
     pub static FS_CTX: FsContext;
 }
 
+/// PathLock context carried in the FS context.
+#[derive(Clone, Debug, Default)]
+pub struct PathLockContext {
+    /// Lease reference string for an existing owned lease.
+    pub lease_ref: Option<String>,
+    /// When true, automatic PathLock consumers skip lock validation and acquisition.
+    pub disable_auto_pathlock: bool,
+}
+
 /// Context payload (immutable). Fields are filled once at construction, then read-only.
 #[derive(Clone, Debug)]
 pub struct FsContextInner {
     account_id: String,
+    pathlock: Option<PathLockContext>,
 }
 
 impl FsContextInner {
@@ -29,12 +40,39 @@ impl FsContextInner {
     pub fn new(account_id: impl Into<String>) -> Self {
         Self {
             account_id: account_id.into(),
+            pathlock: None,
+        }
+    }
+
+    /// Construct a context with account_id and pathlock context.
+    pub fn with_pathlock(
+        account_id: impl Into<String>,
+        pathlock: PathLockContext,
+    ) -> Self {
+        Self {
+            account_id: account_id.into(),
+            pathlock: Some(pathlock),
         }
     }
 
     /// Tenant identifier (account_id == tenant).
     pub fn account_id(&self) -> &str {
         &self.account_id
+    }
+
+    /// PathLock context, if set.
+    pub fn pathlock(&self) -> Option<&PathLockContext> {
+        self.pathlock.as_ref()
+    }
+
+    /// Return a context copy that preserves identity and lease while disabling automatic PathLock.
+    pub fn with_auto_pathlock_disabled(&self) -> Self {
+        let mut pathlock = self.pathlock.clone().unwrap_or_default();
+        pathlock.disable_auto_pathlock = true;
+        Self {
+            account_id: self.account_id.clone(),
+            pathlock: Some(pathlock),
+        }
     }
 }
 
@@ -61,6 +99,23 @@ impl FsContextView {
             .as_ref()
             .map(|c| c.account_id())
             .filter(|account_id| !account_id.is_empty())
+    }
+
+    /// PathLock lease reference from the current context, or `None` if unset.
+    pub fn pathlock_lease_ref(&self) -> Option<&str> {
+        self.inner
+            .as_ref()
+            .and_then(|c| c.pathlock())
+            .and_then(|p| p.lease_ref.as_deref())
+    }
+
+    /// Whether auto pathlock is disabled in the current context.
+    pub fn disable_auto_pathlock(&self) -> bool {
+        self.inner
+            .as_ref()
+            .and_then(|c| c.pathlock())
+            .map(|p| p.disable_auto_pathlock)
+            .unwrap_or(false)
     }
 }
 

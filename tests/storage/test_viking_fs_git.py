@@ -108,6 +108,26 @@ async def test_diff_reads_blobs_from_resolved_commit_oids():
     assert "+new content" in result["diff_text"]
 
 
+async def test_diff_can_hide_memory_fields():
+    before = b'old content\n\n<!-- MEMORY_FIELDS\n{"version": 1}\n-->'
+    after = b'new content\n\n<!-- MEMORY_FIELDS\n{"version": 2}\n-->'
+    vfs = _DiffVikingFS(before, after)
+
+    result = await VikingFS.diff(
+        vfs,
+        path="viking://user/user/memories/experiences/example.md",
+        from_ref="from",
+        to_ref="to",
+        raw=False,
+        ctx=_request_context(),
+    )
+
+    assert "-old content" in result["diff_text"]
+    assert "+new content" in result["diff_text"]
+    assert "MEMORY_FIELDS" not in result["diff_text"]
+    assert "version" not in result["diff_text"]
+
+
 class _DiffVikingFS:
     def __init__(self, before: bytes, after: bytes):
         self._before = before

@@ -551,7 +551,7 @@ class TestImageLinkSplit:
             import openviking.parse.image_rewrite as image_rewrite_mod
 
             with patch.object(image_rewrite_mod, "get_viking_fs", return_value=fake):
-                stats = await rewrite_image_uris(root, lock_handle=None)
+                stats = await rewrite_image_uris(root, lease_ref=None)
 
         assert stats["references_rewritten"] == 2, stats
         page = _decode(fake.files[f"{root}/guides/page/page.md"])
@@ -601,7 +601,7 @@ class TestRewriteImageUris:
         }
 
         with self._patched(fake):
-            stats = await rewrite_image_uris(root, lock_handle=None)
+            stats = await rewrite_image_uris(root, lease_ref=None)
 
         assert stats == {"files_processed": 1, "references_rewritten": 1}
         assert _decode(fake.files[f"{root}/index/index.md"]) == (f"![p]({root}/index/logo.png)")
@@ -623,7 +623,7 @@ class TestRewriteImageUris:
         }
 
         with self._patched(fake):
-            stats = await rewrite_image_uris(root, lock_handle=None)
+            stats = await rewrite_image_uris(root, lease_ref=None)
 
         assert stats == {"files_processed": 1, "references_rewritten": 1}
         assert _decode(fake.files[f"{root}/big/标题/章一/部分_1.md"]) == (
@@ -647,7 +647,7 @@ class TestRewriteImageUris:
         }
 
         with self._patched(fake):
-            stats = await rewrite_image_uris(root, lock_handle=None)
+            stats = await rewrite_image_uris(root, lease_ref=None)
 
         assert stats == {"files_processed": 1, "references_rewritten": 1}
         assert _decode(fake.files[f"{root}/doc.md"]) == f"![p]({root}/logo.png)"
@@ -736,7 +736,7 @@ class TestRewriteImageUris:
                     fake.files[f"{root}/{u[len(src_prefix) :]}"] = fake.files[u]
 
             with self._patched(fake):
-                stats = await rewrite_image_uris(root, lock_handle=None)
+                stats = await rewrite_image_uris(root, lease_ref=None)
 
         assert stats["files_processed"] == 2, stats
         index_md = _decode(fake.files[f"{root}/index/index.md"])

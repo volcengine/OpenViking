@@ -124,6 +124,8 @@ export class OpenVikingClient {
         options.args && Object.keys(options.args).length
           ? options.args
           : undefined,
+      tags: options.tags,
+      tag_mode: options.tags ? options.tagMode : undefined,
       telemetry: options.telemetry,
     });
     const local = await nodePathToBlob(source);
@@ -751,6 +753,13 @@ export class OpenVikingClient {
       }
       throw error;
     }
+  }
+
+  cancelTask(taskId: string): Promise<JsonObject> {
+    return this.request(
+      "POST",
+      `/api/v1/tasks/${pathPart(taskId)}/cancel`,
+    ) as Promise<JsonObject>;
   }
   /** List background tasks. */
   listTasks(options: TaskListOptions = {}): Promise<unknown[]> {
