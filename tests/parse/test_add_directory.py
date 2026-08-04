@@ -65,7 +65,7 @@ class FakeVikingFS:
     async def read(self, uri: str, offset: int = 0, size: int = -1) -> bytes:
         return self.files.get(uri, b"")
 
-    async def ls(self, uri: str) -> List[Dict[str, Any]]:
+    async def ls(self, uri: str, **kwargs: Any) -> List[Dict[str, Any]]:
         """List direct children of *uri* (mirrors real AGFS entry format)."""
         prefix = uri.rstrip("/") + "/"
         children: Dict[str, bool] = {}  # name → is_dir
@@ -710,6 +710,42 @@ class TestParseResultMetadata:
         assert result.meta["dir_name"] == tmp_code.name
         assert result.meta["total_processable"] == 3
         assert result.meta["file_count"] == 3
+
+    @pytest.mark.asyncio
+    async def test_feishu_accessor_skipped_items_are_reported(
+        self, tmp_path: Path, parser, fake_fs
+    ) -> None:
+        (tmp_path / "ok.py").write_text("print('ok')", encoding="utf-8")
+        blocked_path = tmp_path / "slides.pptx"
+
+        result = await parser.parse(
+            str(tmp_path),
+            _source_meta={
+                "feishu_folder_skipped_items": [
+                    {
+                        "path": str(blocked_path),
+                        "name": "slides.pptx",
+                        "type": "file",
+                        "token": "file-token",
+                        "reason": "HTTP 403",
+                    }
+                ]
+            },
+        )
+
+        assert result.meta["file_count"] == 1
+        assert result.meta["processed_files"] == [{"path": "ok.py", "parser": "direct"}]
+        assert result.meta["failed_files"] == [
+            {
+                "path": "slides.pptx",
+                "parser": "feishu",
+                "status": "failed",
+                "type": "file",
+                "token": "file-token",
+                "reason": "HTTP 403",
+            }
+        ]
+        assert any("Skipped Feishu Drive item slides.pptx: HTTP 403" in w for w in result.warnings)
 
 
 # ---------------------------------------------------------------------------
