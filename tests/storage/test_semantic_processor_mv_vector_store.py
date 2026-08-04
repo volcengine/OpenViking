@@ -1,10 +1,14 @@
-from unittest.mock import AsyncMock, call
+import hashlib
+from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.viking_fs import VikingFS
-from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
+from openviking.storage.viking_vector_index_backend import (
+    URI_REWRITE_RECORD_LIMIT,
+    VikingVectorIndexBackend,
+)
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -137,10 +141,20 @@ async def test_update_vector_store_uris_allows_missing_vector_record():
     )
 
 
+def _attach_strict_backend(backend):
+    strict_backend = Mock()
+    strict_backend.count_strict = AsyncMock()
+    strict_backend.query_strict = AsyncMock()
+    strict_backend.get_strict = AsyncMock()
+    backend._get_backend_for_context = Mock(return_value=strict_backend)
+    return strict_backend
+
+
 @pytest.mark.asyncio
 async def test_vector_backend_distinguishes_missing_record_from_failure():
     backend = VikingVectorIndexBackend.__new__(VikingVectorIndexBackend)
-    backend.filter = AsyncMock(return_value=[])
+    strict_backend = _attach_strict_backend(backend)
+    strict_backend.count_strict.return_value = 0
 
     result = await backend.update_uri_mapping(
         ctx=_ctx(),
@@ -149,6 +163,243 @@ async def test_vector_backend_distinguishes_missing_record_from_failure():
     )
 
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_vector_backend_propagates_record_lookup_failures():
+    backend = VikingVectorIndexBackend.__new__(VikingVectorIndexBackend)
+    strict_backend = _attach_strict_backend(backend)
+    strict_backend.count_strict.side_effect = RuntimeError("vector unavailable")
+
+    with pytest.raises(RuntimeError, match="vector unavailable"):
+        await backend.update_uri_mapping(
+            ctx=_ctx(),
+            uri="viking://resources/source.md",
+            new_uri="viking://resources/target.md",
+        )
+
+    strict_backend.query_strict.assert_not_awaited()
+
+
+def _vector_record(record_id, *, level, vector):
+    return {
+        "id": record_id,
+        "uri": "viking://resources/source.md",
+        "level": level,
+        "vector": vector,
+        "account_id": "acc",
+    }
+
+
+def _destination_record_id(level):
+    suffix = "/.abstract.md" if level == 0 else "/.overview.md" if level == 1 else ""
+    seed = f"acc:viking://resources/target.md{suffix}"
+    return hashlib.md5(seed.encode("utf-8")).hexdigest()
+
+
+@pytest.mark.asyncio
+async def test_vector_backend_rejects_incomplete_record_rewrite():
+    backend = VikingVectorIndexBackend.__new__(VikingVectorIndexBackend)
+    strict_backend = _attach_strict_backend(backend)
+    records = [
+        _vector_record("old-l0", level=0, vector=[0.1]),
+        _vector_record("old-l1", level=1, vector=[]),
+    ]
+    strict_backend.count_strict.return_value = len(records)
+    strict_backend.query_strict.return_value = [
+        {"id": record["id"]} for record in records
+    ]
+    strict_backend.get_strict.return_value = records
+    backend.upsert = AsyncMock(return_value=True)
+    backend.delete = AsyncMock(return_value=1)
+
+    result = await backend.update_uri_mapping(
+        ctx=_ctx(),
+        uri="viking://resources/source.md",
+        new_uri="viking://resources/target.md",
+    )
+
+    assert result is False
+    backend.upsert.assert_not_awaited()
+    backend.delete.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_vector_backend_rolls_back_destination_records_after_upsert_failure():
+    backend = VikingVectorIndexBackend.__new__(VikingVectorIndexBackend)
+    strict_backend = _attach_strict_backend(backend)
+    records = [
+        _vector_record("old-l0", level=0, vector=[0.1]),
+        _vector_record("old-l1", level=1, vector=[0.2]),
+    ]
+    strict_backend.count_strict.return_value = len(records)
+    strict_backend.query_strict.return_value = [
+        {"id": record["id"]} for record in records
+    ]
+    first_new_id = _destination_record_id(0)
+    second_new_id = _destination_record_id(1)
+    strict_backend.get_strict.side_effect = [
+        records,
+        [],
+        [{"id": first_new_id}, {"id": second_new_id}],
+    ]
+    backend.upsert = AsyncMock(
+        side_effect=[first_new_id, RuntimeError("second upsert failed")]
+    )
+    backend.delete = AsyncMock(return_value=2)
+
+    with pytest.raises(RuntimeError, match="second upsert failed"):
+        await backend.update_uri_mapping(
+            ctx=_ctx(),
+            uri="viking://resources/source.md",
+            new_uri="viking://resources/target.md",
+        )
+
+    backend.delete.assert_awaited_once_with(
+        [first_new_id, second_new_id],
+        ctx=_ctx(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_vector_backend_restores_old_records_after_delete_failure():
+    backend = VikingVectorIndexBackend.__new__(VikingVectorIndexBackend)
+    strict_backend = _attach_strict_backend(backend)
+    records = [
+        _vector_record("old-l0", level=0, vector=[0.1]),
+        _vector_record("old-l1", level=1, vector=[0.2]),
+    ]
+    strict_backend.count_strict.return_value = len(records)
+    strict_backend.query_strict.return_value = [
+        {"id": record["id"]} for record in records
+    ]
+    strict_backend.get_strict.side_effect = [
+        records,
+        [],
+        [
+            {"id": _destination_record_id(0)},
+            {"id": _destination_record_id(1)},
+        ],
+    ]
+    backend.upsert = AsyncMock(
+        side_effect=[
+            _destination_record_id(0),
+            _destination_record_id(1),
+            "old-l0",
+            "old-l1",
+        ]
+    )
+    backend.delete = AsyncMock(
+        side_effect=[RuntimeError("old delete failed"), 2]
+    )
+
+    with pytest.raises(RuntimeError, match="old delete failed"):
+        await backend.update_uri_mapping(
+            ctx=_ctx(),
+            uri="viking://resources/source.md",
+            new_uri="viking://resources/target.md",
+        )
+
+    assert backend.upsert.await_count == 4
+    assert [call.args[0]["id"] for call in backend.upsert.await_args_list[-2:]] == [
+        "old-l0",
+        "old-l1",
+    ]
+    assert backend.delete.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_vector_backend_restores_preexisting_destination_after_failure():
+    backend = VikingVectorIndexBackend.__new__(VikingVectorIndexBackend)
+    strict_backend = _attach_strict_backend(backend)
+    records = [
+        _vector_record("old-l0", level=0, vector=[0.1]),
+        _vector_record("old-l1", level=1, vector=[0.2]),
+    ]
+    first_new_id = _destination_record_id(0)
+    previous_destination = {
+        "id": first_new_id,
+        "uri": "viking://resources/target.md",
+        "level": 0,
+        "vector": [9.9],
+        "account_id": "acc",
+    }
+    strict_backend.count_strict.return_value = len(records)
+    strict_backend.query_strict.return_value = [
+        {"id": record["id"]} for record in records
+    ]
+    strict_backend.get_strict.side_effect = [
+        records,
+        [previous_destination],
+        [previous_destination],
+    ]
+    backend.upsert = AsyncMock(
+        side_effect=[
+            first_new_id,
+            RuntimeError("second upsert failed"),
+            first_new_id,
+        ]
+    )
+    backend.delete = AsyncMock()
+
+    with pytest.raises(RuntimeError, match="second upsert failed"):
+        await backend.update_uri_mapping(
+            ctx=_ctx(),
+            uri="viking://resources/source.md",
+            new_uri="viking://resources/target.md",
+        )
+
+    assert backend.upsert.await_args_list[-1].args[0] == previous_destination
+    backend.delete.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_vector_backend_requests_the_complete_uri_record_set():
+    backend = VikingVectorIndexBackend.__new__(VikingVectorIndexBackend)
+    strict_backend = _attach_strict_backend(backend)
+    records = [
+        _vector_record("old-l0", level=0, vector=[0.1]),
+        _vector_record("old-l1", level=1, vector=[0.2]),
+    ]
+    strict_backend.count_strict.return_value = len(records)
+    strict_backend.query_strict.return_value = [
+        {"id": record["id"]} for record in records
+    ]
+    strict_backend.get_strict.side_effect = [records, []]
+    backend.upsert = AsyncMock(
+        side_effect=[_destination_record_id(0), _destination_record_id(1)]
+    )
+    backend.delete = AsyncMock(return_value=2)
+
+    result = await backend.update_uri_mapping(
+        ctx=_ctx(),
+        uri="viking://resources/source.md",
+        new_uri="viking://resources/target.md",
+    )
+
+    assert result is True
+    assert strict_backend.query_strict.await_args.kwargs["limit"] == len(records)
+
+
+@pytest.mark.asyncio
+async def test_vector_backend_rejects_record_sets_above_safe_limit():
+    backend = VikingVectorIndexBackend.__new__(VikingVectorIndexBackend)
+    strict_backend = _attach_strict_backend(backend)
+    strict_backend.count_strict.return_value = URI_REWRITE_RECORD_LIMIT + 1
+    backend.upsert = AsyncMock()
+    backend.delete = AsyncMock()
+
+    result = await backend.update_uri_mapping(
+        ctx=_ctx(),
+        uri="viking://resources/source.md",
+        new_uri="viking://resources/target.md",
+    )
+
+    assert result is False
+    strict_backend.query_strict.assert_not_awaited()
+    strict_backend.get_strict.assert_not_awaited()
+    backend.upsert.assert_not_awaited()
+    backend.delete.assert_not_awaited()
 
 
 @pytest.mark.asyncio
