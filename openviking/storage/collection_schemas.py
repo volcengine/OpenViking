@@ -548,6 +548,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
         report_success = False
         report_error_args: Optional[tuple[str, Optional[Dict[str, Any]]]] = None
         request_failed_message: Optional[str] = None
+        probe_token: int | None = None
         try:
             queue_data = json.loads(data["data"])
             # Parse EmbeddingMsg from data
@@ -576,7 +577,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
 
                 # Circuit breaker: if API is known-broken, re-enqueue and wait
                 try:
-                    self._circuit_breaker.check()
+                    probe_token = self._circuit_breaker.check()
                     self._breaker_open_last_log_at = 0.0
                     self._breaker_open_suppressed_count = 0
                 except CircuitBreakerOpen:
@@ -656,7 +657,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
 
                         if error_class == ERROR_CLASS_PERMANENT:
                             logger.critical(error_msg)
-                            self._circuit_breaker.record_failure(embed_err)
+                            self._circuit_breaker.record_failure(embed_err, probe_token)
                             self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
                             request_failed_message = error_msg
                             report_error_args = (error_msg, data)
@@ -677,7 +678,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
 
                         # Transient or unknown — re-enqueue for retry
                         logger.warning(error_msg)
-                        self._circuit_breaker.record_failure(embed_err)
+                        self._circuit_breaker.record_failure(embed_err, probe_token)
                         if getattr(self._vikingdb, "has_queue_manager", False):
                             try:
                                 await self._vikingdb.enqueue_embedding_msg(embedding_msg)
@@ -816,7 +817,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
                 self._record_request_success(embedding_msg)
                 report_success = True
-                self._circuit_breaker.record_success()
+                self._circuit_breaker.record_success(probe_token)
                 return inserted_data
 
         except Exception as e:
@@ -834,6 +835,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
             report_error_args = (error_msg, data)
             return None
         finally:
+            self._circuit_breaker.record_ignored(probe_token)
             if embedding_msg is not None and request_failed_message is not None:
                 self._record_request_failure(embedding_msg, request_failed_message)
             if embedding_msg and embedding_msg.semantic_msg_id:

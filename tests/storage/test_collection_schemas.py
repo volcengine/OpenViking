@@ -369,7 +369,11 @@ async def test_embedding_auth_error_fails_terminally_without_reenqueue(monkeypat
         "openviking_cli.utils.config.get_openviking_config",
         lambda: _DummyConfig(_AuthErrorEmbedder()),
     )
+    from openviking.utils.circuit_breaker import CircuitBreaker
+
     handler = TextEmbeddingHandler(vikingdb)
+    handler._circuit_breaker = CircuitBreaker(failure_threshold=1, reset_timeout=0)
+    handler._circuit_breaker.record_failure(RuntimeError("500 Internal Server Error"))
     status = {"success": 0, "requeue": 0, "error": 0}
     handler.set_callbacks(
         on_success=lambda: status.__setitem__("success", status["success"] + 1),
@@ -382,7 +386,8 @@ async def test_embedding_auth_error_fails_terminally_without_reenqueue(monkeypat
     assert result is None
     assert vikingdb.enqueued == []  # terminal: not re-enqueued
     assert status == {"success": 0, "requeue": 0, "error": 1}
-    handler._circuit_breaker.check()  # breaker not tripped (would raise if open)
+    assert handler._circuit_breaker._state == "HALF_OPEN"
+    assert handler._circuit_breaker._probe_started_at == 0
 
 
 @pytest.mark.asyncio
@@ -555,7 +560,11 @@ async def test_embedding_handler_drops_input_too_large_without_requeue(monkeypat
         lambda: _DummyConfig(_OversizedInputEmbedder()),
     )
 
+    from openviking.utils.circuit_breaker import CircuitBreaker
+
     handler = TextEmbeddingHandler(vikingdb)
+    handler._circuit_breaker = CircuitBreaker(failure_threshold=1, reset_timeout=0)
+    handler._circuit_breaker.record_failure(RuntimeError("500 Internal Server Error"))
     status = {"success": 0, "requeue": 0, "error": 0}
     handler.set_callbacks(
         on_success=lambda: status.__setitem__("success", status["success"] + 1),
@@ -568,7 +577,9 @@ async def test_embedding_handler_drops_input_too_large_without_requeue(monkeypat
     assert result is None
     assert vikingdb.enqueued == []
     assert status == {"success": 0, "requeue": 0, "error": 1}
-    assert handler._circuit_breaker._failure_count == 0
+    assert handler._circuit_breaker._failure_count == 1
+    assert handler._circuit_breaker._state == "HALF_OPEN"
+    assert handler._circuit_breaker._probe_started_at == 0
 
 
 @pytest.mark.asyncio

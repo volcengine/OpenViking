@@ -187,11 +187,45 @@ def test_half_open_probe_success_closes_for_waiting_callers(circuit_breaker_cloc
     cb.check()
     with pytest.raises(CircuitBreakerOpen):
         cb.check()
-    assert cb.retry_after == 0
+    assert cb.retry_after == 10
+    circuit_breaker_clock.advance(4)
+    assert cb.retry_after == 6
 
     cb.record_success()
 
     assert _run_concurrent_checks(cb, worker_count=4) == ["admitted"] * 4
+
+
+def test_half_open_ignored_probe_allows_one_immediate_replacement(circuit_breaker_clock):
+    from openviking.utils.circuit_breaker import CircuitBreaker
+
+    cb = CircuitBreaker(failure_threshold=1, reset_timeout=10)
+    cb.record_failure(RuntimeError("500"))
+    circuit_breaker_clock.advance(10)
+    cb.check()
+
+    cb.record_ignored()
+
+    outcomes = _run_concurrent_checks(cb, worker_count=8)
+
+    assert outcomes.count("admitted") == 1
+    assert outcomes.count("blocked") == 7
+
+
+def test_half_open_input_error_releases_probe(circuit_breaker_clock):
+    from openviking.utils.circuit_breaker import CircuitBreaker
+
+    cb = CircuitBreaker(failure_threshold=1, reset_timeout=10)
+    cb.record_failure(RuntimeError("500"))
+    circuit_breaker_clock.advance(10)
+    cb.check()
+
+    cb.record_failure(RuntimeError("maximum context length exceeded"))
+
+    outcomes = _run_concurrent_checks(cb, worker_count=8)
+
+    assert outcomes.count("admitted") == 1
+    assert outcomes.count("blocked") == 7
 
 
 def test_half_open_probe_failure_reopens_for_waiting_callers(circuit_breaker_clock):
@@ -254,6 +288,26 @@ def test_half_open_abandoned_probe_allows_one_replacement_after_timeout(
 
     assert outcomes.count("admitted") == 1
     assert outcomes.count("blocked") == 7
+
+
+def test_replaced_probe_cannot_complete_the_current_probe(circuit_breaker_clock):
+    from openviking.utils.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
+
+    cb = CircuitBreaker(failure_threshold=1, reset_timeout=10)
+    cb.record_failure(RuntimeError("500"))
+    circuit_breaker_clock.advance(10)
+    first_probe = cb.check()
+    circuit_breaker_clock.advance(10)
+    replacement_probe = cb.check()
+
+    cb.record_failure(RuntimeError("late failure"), first_probe)
+    cb.record_success(first_probe)
+
+    with pytest.raises(CircuitBreakerOpen):
+        cb.check()
+
+    cb.record_success(replacement_probe)
+    cb.check()
 
 
 def test_permanent_error_trips_immediately():
