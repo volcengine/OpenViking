@@ -267,6 +267,7 @@ class MilvusConfig(BaseModel):
             raise ValueError("Milvus timeout_seconds must be positive")
         return self
 
+
 _OPENGAUSS_MODES = {"standalone", "distributed"}
 
 
