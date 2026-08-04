@@ -607,7 +607,11 @@ async def record_used(
         resolved_skill = dict(resolved_skill)
         resolved_skill["uri"] = resolve_path_variables(resolved_skill["uri"])
 
-    session.used(contexts=resolved_contexts, skill=resolved_skill)
+    used_async = getattr(session, "used_async", None)
+    if callable(used_async):
+        await used_async(contexts=resolved_contexts, skill=resolved_skill)
+    else:
+        session.used(contexts=resolved_contexts, skill=resolved_skill)
     return Response(
         status="ok",
         result={

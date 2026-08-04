@@ -44,7 +44,7 @@ class _MemoryVikingFS:
             raise FileNotFoundError(uri)
         return self.files[uri]
 
-    async def write_file(self, uri, content, ctx=None):
+    async def write_file(self, uri, content, ctx=None, lease_ref=None):
         self.files[uri] = content
 
 
@@ -72,6 +72,17 @@ async def test_resume_queued_commit_continues_phase2(monkeypatch):
         session_uri=session_uri,
         archive_uri=archive_uri,
         user={"account_id": "default", "user_id": "default"},
+        usage_records=[
+            {
+                "uri": "viking://user/skills/search",
+                "type": "skill",
+                "contribution": 0.75,
+                "input": "query",
+                "output": "result",
+                "success": False,
+                "timestamp": "2026-08-04T01:02:03+00:00",
+            }
+        ],
     )
 
     try:
@@ -85,6 +96,8 @@ async def test_resume_queued_commit_continues_phase2(monkeypatch):
     assert [
         item.id for item in session._run_memory_extraction.await_args.kwargs["messages"]
     ] == ["archived"]
+    usage_records = session._run_memory_extraction.await_args.kwargs["usage_records"]
+    assert [usage.to_dict() for usage in usage_records] == message.usage_records
 
 
 @pytest.mark.asyncio
@@ -209,3 +222,19 @@ def test_session_commit_message_ignores_unknown_fields():
 
     assert message.task_id == "task-1"
     assert "actor_peer_id" not in message.to_dict()
+
+
+def test_session_commit_message_accepts_legacy_usage_uris():
+    message = SessionCommitMsg.from_dict(
+        {
+            "task_id": "task-1",
+            "session_id": "session-1",
+            "session_uri": "viking://user/sessions/session-1",
+            "archive_uri": "viking://user/sessions/session-1/history/archive_001",
+            "user": {"account_id": "default", "user_id": "default"},
+            "usage_uris": ["viking://resources/legacy"],
+        }
+    )
+
+    assert message.usage_uris == ["viking://resources/legacy"]
+    assert message.usage_records == []

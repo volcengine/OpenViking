@@ -15,6 +15,7 @@ class SessionCommitMsg:
     user: Dict[str, str]
     memory_policy: Dict[str, Any] = field(default_factory=dict)
     usage_uris: List[str] = field(default_factory=list)
+    usage_records: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
