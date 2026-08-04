@@ -78,6 +78,38 @@ client = SyncHTTPClient(
 )
 ```
 
+## Request-Scoped Actor Peer
+
+Applications can reuse one initialized, credential-bound client while selecting
+the active actor peer for each request:
+
+```python
+from openviking_sdk import (
+    SyncHTTPClient,
+    use_actor_peer,
+)
+
+client = SyncHTTPClient(
+    url="http://127.0.0.1:1933",
+    api_key="your-user-key",
+)
+client.initialize()
+
+with use_actor_peer("assistant-a"):
+    memories = client.find("deployment preference")
+```
+
+The scope is isolated with Python `ContextVar`, so concurrent async tasks and
+sync calls dispatched through the SDK worker loop do not overwrite each
+other. Nested scopes restore the previous actor peer automatically.
+
+This scope does not change authentication or tenant ownership. Account and user
+identity remain bound to the API key or OAuth credential. Use a separate
+credential-bound client for each OpenViking user, and derive actor peer values
+only from authenticated application state. The server applies the actor peer
+only to endpoints that accept an actor-peer view; session APIs remain
+user-scoped.
+
 ## Quick Start: Sync Client
 
 ```python

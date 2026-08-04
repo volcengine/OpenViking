@@ -43,19 +43,6 @@ def _seed_secret(user_id: str, seed: str) -> str:
 ROOT_KEY = "admin-api-test-root-key-abcdef1234567890ab"
 
 
-class _NoopLockContext:
-    """The lightweight fake storage does not exercise transaction locking."""
-
-    def __init__(self, *_args, **_kwargs):
-        pass
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *_args):
-        return False
-
-
 class _FakeAGFS:
     def __init__(self):
         self._files = {}
@@ -81,6 +68,12 @@ class _FakeAGFS:
         for part in [part for part in parent.strip("/").split("/") if part]:
             current = f"{current}/{part}" if current else f"/{part}"
             self._dirs.add(current)
+
+    def pathlock_acquire_exact(self, ctx, path, timeout_secs=0.0, owner_lease_ref=None):
+        return {"lease_ref": f"test:{path}"}
+
+    def pathlock_release(self, ctx, lease):
+        return None
 
 
 class _FakeVikingFS:
@@ -148,12 +141,6 @@ def _build_lightweight_admin_test_app() -> FastAPI:
 
 @pytest_asyncio.fixture(scope="function")
 async def lightweight_admin_app(monkeypatch):
-    monkeypatch.setattr(
-        "openviking.server.api_keys.legacy.get_lock_manager", lambda: None
-    )
-    monkeypatch.setattr(
-        "openviking.server.api_keys.legacy.LockContext", _NoopLockContext
-    )
     app = _build_lightweight_admin_test_app()
     await app.state.api_key_manager.load()
     return app
@@ -486,7 +473,7 @@ async def test_root_can_register_admin_role_user(
 async def test_root_cannot_register_root_role_user(
     lightweight_admin_client: httpx.AsyncClient,
 ):
-    """ROOT must use set_role instead of minting ROOT directly in register_user."""
+    """ROOT is the configured server identity, not an account user role."""
     acct = _uid()
     await lightweight_admin_client.post(
         "/api/v1/admin/accounts",
@@ -673,26 +660,44 @@ async def test_remove_user(admin_client: httpx.AsyncClient):
 # ---- Role management ----
 
 
-async def test_set_role(admin_client: httpx.AsyncClient):
-    """ROOT can change a user's role."""
+async def test_admin_can_set_user_role_in_own_account(
+    lightweight_admin_client: httpx.AsyncClient,
+):
+    """ADMIN can promote a user in its own account to ADMIN."""
     acct = _uid()
-    await admin_client.post(
+    create_account = await lightweight_admin_client.post(
         "/api/v1/admin/accounts",
         json={"account_id": acct, "admin_user_id": "alice"},
         headers=root_headers(),
     )
-    await admin_client.post(
+    alice_key = create_account.json()["result"]["user_key"]
+    create_user = await lightweight_admin_client.post(
         f"/api/v1/admin/accounts/{acct}/users",
         json={"user_id": "bob", "role": "user"},
         headers=root_headers(),
     )
-    resp = await admin_client.put(
+    bob_key = create_user.json()["result"]["user_key"]
+
+    resp = await lightweight_admin_client.put(
         f"/api/v1/admin/accounts/{acct}/users/bob/role",
         json={"role": "admin"},
-        headers=root_headers(),
+        headers={"X-API-Key": alice_key},
     )
     assert resp.status_code == 200
     assert resp.json()["result"]["role"] == "admin"
+
+    list_users = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/users",
+        headers={"X-API-Key": bob_key},
+    )
+    assert list_users.status_code == 200
+
+    invalid_role = await lightweight_admin_client.put(
+        f"/api/v1/admin/accounts/{acct}/users/bob/role",
+        json={"role": "root"},
+        headers={"X-API-Key": alice_key},
+    )
+    assert invalid_role.status_code == 400
 
 
 async def test_regenerate_key(admin_client: httpx.AsyncClient):
@@ -1263,10 +1268,6 @@ async def test_trusted_mode_root_can_create_account(
     trusted_admin_app,
 ):
     """Trusted ROOT requests should be able to create accounts."""
-    # Set gateway-admin to ROOT role
-    manager = trusted_admin_app.state.api_key_manager
-    await manager.set_role("platform", "gateway-admin", "root")
-
     acct = _uid()
     resp = await trusted_admin_client.post(
         "/api/v1/admin/accounts",
@@ -1292,10 +1293,6 @@ async def test_trusted_mode_admin_can_register_user_in_own_account(
     trusted_admin_app,
 ):
     """Trusted ADMIN requests should be able to manage users in their own account."""
-    # Set gateway-admin to ROOT role first
-    manager = trusted_admin_app.state.api_key_manager
-    await manager.set_role("platform", "gateway-admin", "root")
-
     acct = _uid()
     create_resp = await trusted_admin_client.post(
         "/api/v1/admin/accounts",
@@ -1328,10 +1325,6 @@ async def test_trusted_mode_admin_can_list_users_with_account_only_in_url(
     trusted_admin_app,
 ):
     """Trusted ADMIN requests may omit X-OpenViking-Account when the URL already provides it."""
-    # Set gateway-admin to ROOT role first
-    manager = trusted_admin_app.state.api_key_manager
-    await manager.set_role("platform", "gateway-admin", "root")
-
     acct = _uid()
     create_resp = await trusted_admin_client.post(
         "/api/v1/admin/accounts",
@@ -1361,10 +1354,6 @@ async def test_trusted_mode_admin_can_list_users_without_account_or_user_headers
     trusted_admin_app,
 ):
     """Trusted admin routes may omit caller account/user when the route itself identifies the target."""
-    # Set gateway-admin to ROOT role first
-    manager = trusted_admin_app.state.api_key_manager
-    await manager.set_role("platform", "gateway-admin", "root")
-
     acct = _uid()
     create_resp = await trusted_admin_client.post(
         "/api/v1/admin/accounts",
@@ -1390,10 +1379,6 @@ async def test_trusted_mode_admin_cannot_register_user_in_other_account(
     trusted_admin_app,
 ):
     """Trusted ADMIN requests should reject conflicting account identity."""
-    # Set gateway-admin to ROOT role first
-    manager = trusted_admin_app.state.api_key_manager
-    await manager.set_role("platform", "gateway-admin", "root")
-
     acct = _uid()
     other = _uid()
     for account_id, admin_user_id in ((acct, "alice"), (other, "eve")):
@@ -1426,11 +1411,8 @@ async def test_trusted_mode_admin_api_uses_trusted_gateway_identity(
     trusted_admin_app,
 ):
     """Trusted admin routes use the trusted gateway identity instead of tenant user role."""
-    # Set gateway-admin to ROOT role first
-    manager = trusted_admin_app.state.api_key_manager
-    await manager.set_role("platform", "gateway-admin", "root")
-
     acct = _uid()
+    manager = trusted_admin_app.state.api_key_manager
     create_resp = await trusted_admin_client.post(
         "/api/v1/admin/accounts",
         json={"account_id": acct, "admin_user_id": "alice"},
@@ -1465,10 +1447,6 @@ async def test_trusted_mode_requires_matching_api_key_for_admin_api(
     trusted_admin_app,
 ):
     """Trusted admin requests should require the configured server API key when present."""
-    # Set gateway-admin to ROOT role first
-    manager = trusted_admin_app.state.api_key_manager
-    await manager.set_role("platform", "gateway-admin", "root")
-
     resp = await trusted_admin_client.post(
         "/api/v1/admin/accounts",
         json={"account_id": _uid(), "admin_user_id": "alice"},
@@ -1486,10 +1464,6 @@ async def test_trusted_mode_create_account_lists_current_account_metadata(
     trusted_admin_app,
 ):
     """Trusted account creation should list the current account metadata shape."""
-    # Set gateway-admin to ROOT role first
-    manager = trusted_admin_app.state.api_key_manager
-    await manager.set_role("platform", "gateway-admin", "root")
-
     acct = _uid()
     resp = await trusted_admin_client.post(
         "/api/v1/admin/accounts",

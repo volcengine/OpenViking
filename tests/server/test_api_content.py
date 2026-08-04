@@ -3,9 +3,12 @@
 
 """Tests for content endpoints: read, abstract, overview, reindex."""
 
+from types import SimpleNamespace
+
 import pytest
 
 from openviking.server.identity import RequestContext, Role
+from openviking.server.routers import content as content_router
 from openviking.server.routers.content import ReindexRequest, reindex
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -30,6 +33,35 @@ async def test_read_content(client_with_resource):
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"] is not None
+
+
+async def test_read_memory_uses_visible_projection_and_raw_bypasses_it(monkeypatch):
+    ctx = RequestContext(user=UserIdentifier.the_default_user("test_user"), role=Role.USER)
+    uri = "viking://user/test_user/memories/notes/private.md"
+    raw = 'line one\nline two\n\n<!-- MEMORY_FIELDS\n{"secret": "do-not-leak"}\n-->'
+    calls = []
+
+    async def fake_read_visible(_uri, *, ctx, offset, limit):
+        calls.append((offset, limit))
+        return "visible slice"
+
+    async def fake_read(_uri, *, ctx, offset, limit):
+        lines = raw.splitlines(keepends=True)
+        return "".join(lines[offset:] if limit == -1 else lines[offset : offset + limit])
+
+    monkeypatch.setattr(
+        content_router,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(read=fake_read, read_visible=fake_read_visible)),
+    )
+
+    response = await content_router.read(uri=uri, offset=4, limit=1, raw=False, _ctx=ctx)
+    assert response.result == "visible slice"
+    assert calls[-1] == (4, 1)
+
+    raw_response = await content_router.read(uri=uri, offset=4, limit=1, raw=True, _ctx=ctx)
+    assert raw_response.result == '{"secret": "do-not-leak"}\n'
+    assert calls[-1] == (4, 1)
 
 
 async def test_read_directory_uri_returns_invalid_argument(client_with_resource):

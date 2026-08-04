@@ -3,7 +3,7 @@
 """Persistent Session Phase 2 queue message."""
 
 from dataclasses import asdict, dataclass, field, fields
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 
 @dataclass
@@ -13,7 +13,6 @@ class SessionCommitMsg:
     session_uri: str
     archive_uri: str
     user: Dict[str, str]
-    actor_peer_id: Optional[str] = None
     memory_policy: Dict[str, Any] = field(default_factory=dict)
     usage_uris: List[str] = field(default_factory=list)
 

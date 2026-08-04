@@ -193,6 +193,9 @@ impl FileSystem for KVFileSystem {
                     WriteFlag::Create | WriteFlag::Truncate => {
                         entry.value = data.to_vec();
                     }
+                    WriteFlag::CreateNew => {
+                        return Err(Error::AlreadyExists(key));
+                    }
                     WriteFlag::Append => {
                         entry.value.extend_from_slice(data);
                     }
@@ -211,13 +214,45 @@ impl FileSystem for KVFileSystem {
                 Ok(data.len() as u64)
             }
             None => {
-                if matches!(flags, WriteFlag::Create) {
+                if matches!(flags, WriteFlag::Create | WriteFlag::CreateNew) {
                     store.insert(key, KVEntry::new(data.to_vec()));
                     Ok(data.len() as u64)
                 } else {
                     Err(Error::not_found(path))
                 }
             }
+        }
+    }
+
+    async fn compare_and_write(
+        &self,
+        path: &str,
+        expected: &[u8],
+        new_data: &[u8],
+    ) -> Result<bool> {
+        let key = Self::path_to_key(path);
+        let mut store = self.store.write().await;
+
+        match store.get_mut(&key) {
+            Some(entry) if entry.value.as_slice() == expected => {
+                entry.value = new_data.to_vec();
+                entry.touch();
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    async fn compare_and_remove(&self, path: &str, expected: &[u8]) -> Result<bool> {
+        let key = Self::path_to_key(path);
+        let mut store = self.store.write().await;
+
+        match store.get(&key) {
+            Some(entry) if entry.value.as_slice() == expected => {
+                store.remove(&key);
+                Ok(true)
+            }
+            _ => Ok(false),
         }
     }
 

@@ -5,7 +5,6 @@ import pytest
 
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import DiffResult, SemanticProcessor
-from openviking.storage.transaction import NO_LOCK
 
 
 class _FakeVikingFS:
@@ -36,6 +35,7 @@ class _SyncVikingFS:
             ],
         }
         self.deleted_temp = []
+        self.mutation_leases = []
 
     async def exists(self, uri, ctx=None):
         return uri in self.entries
@@ -49,16 +49,20 @@ class _SyncVikingFS:
     async def read_file(self, uri, ctx=None):
         return self.contents.get(uri, "")
 
-    async def rm(self, uri, recursive=False, ctx=None, lock_handle=None):
+    async def rm(self, uri, recursive=False, ctx=None, lease_ref=None):
+        self.mutation_leases.append(("rm", uri, lease_ref))
         self.contents.pop(uri, None)
 
-    async def mv(self, src, dst, ctx=None, lock_handle=None):
+    async def mv(self, src, dst, ctx=None, lease_ref=None):
+        self.mutation_leases.append(("mv", dst, lease_ref))
         self.contents[dst] = self.contents.pop(src)
 
-    async def mkdir(self, uri, exist_ok=False, ctx=None):
+    async def mkdir(self, uri, exist_ok=False, ctx=None, lease_ref=None):
+        self.mutation_leases.append(("mkdir", uri, lease_ref))
         self.entries.setdefault(uri, [])
 
-    async def delete_temp(self, uri, ctx=None):
+    async def delete_temp(self, uri, ctx=None, lease_ref=None):
+        self.mutation_leases.append(("delete_temp", uri, lease_ref))
         self.deleted_temp.append(uri)
 
 
@@ -93,7 +97,7 @@ async def test_target_source_syncs_before_semantic_dag(monkeypatch):
     )
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_processor.SemanticLockScope.resolve",
-        AsyncMock(return_value=SimpleNamespace(lock=NO_LOCK, close=AsyncMock())),
+        AsyncMock(return_value=SimpleNamespace(lock=None, close=AsyncMock())),
     )
 
     _FakeDagExecutor.calls = []
@@ -127,6 +131,11 @@ async def test_target_source_syncs_before_semantic_dag(monkeypatch):
 @pytest.mark.asyncio
 async def test_sync_diff_reports_target_uris_and_preserves_sidecars(monkeypatch):
     fake_fs = _SyncVikingFS()
+    lease = {
+        "lease_ref": "outer-tree-ref",
+        "owner_id": "outer-tree-owner",
+        "owned": False,
+    }
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_processor.get_viking_fs",
         lambda: fake_fs,
@@ -135,7 +144,7 @@ async def test_sync_diff_reports_target_uris_and_preserves_sidecars(monkeypatch)
     diff = await SemanticProcessor()._sync_topdown_recursive(
         "viking://temp/import",
         "viking://resources/root",
-        lock=NO_LOCK,
+        lock=lease,
     )
 
     assert diff.to_changes() == {
@@ -149,6 +158,13 @@ async def test_sync_diff_reports_target_uris_and_preserves_sidecars(monkeypatch)
     )
     assert fake_fs.contents["viking://resources/root/.abstract.md"] == "old abstract"
     assert fake_fs.deleted_temp == ["viking://temp/import"]
+    assert fake_fs.mutation_leases
+    assert all(
+        mutation_lease is lease
+        for operation, _, mutation_lease in fake_fs.mutation_leases
+        if operation != "delete_temp"
+    )
+    assert fake_fs.mutation_leases[-1] == ("delete_temp", "viking://temp/import", None)
 
 
 @pytest.mark.asyncio
@@ -164,7 +180,7 @@ async def test_sync_missing_source_never_touches_target(monkeypatch):
         await SemanticProcessor()._sync_topdown_recursive(
             "viking://temp/missing",
             "viking://resources/root",
-            lock=NO_LOCK,
+            lock=None,
         )
 
     fake_fs.ls.assert_not_awaited()

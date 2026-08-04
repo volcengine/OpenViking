@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from openviking.parse.accessors.mime_types import IANA_MEDIA_TYPE_TO_EXTENSION
 from openviking.parse.base import NodeType, ParseResult, ResourceNode, create_parse_result
 from openviking.parse.parsers.base_parser import BaseParser
-from openviking.parse.parsers.code.ast.extractor import get_extractor
+from openviking.parse.parsers.code.ast.providers import supports_code_skeleton
 from openviking.parse.parsers.constants import (
     CODE_EXTENSIONS,
     DOCUMENTATION_EXTENSIONS,
@@ -84,6 +84,13 @@ def _smart_stem(path_or_name: str | Path) -> str:
 
 
 logger = get_logger(__name__)
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _gh_slug(text: str) -> str:
@@ -256,8 +263,6 @@ class MarkdownParser(BaseParser):
         start_time = time.time()
 
         try:
-            logger.debug(f"[MarkdownParser] Starting parse for: {source_path or 'content string'}")
-
             # Phase 1 — parse only: turn the markdown into an ordered VikingFS write
             # plan, touching nothing. The temp URI is allocated here (the one
             # FS-scoped step) and threaded in so layout planning stays side-effect free.
@@ -288,7 +293,6 @@ class MarkdownParser(BaseParser):
             )
 
             parse_time = time.time() - start_time
-            logger.info(f"[MarkdownParser] Parse completed in {parse_time:.2f}s")
 
             # Create dummy root node for compatibility
             root = ResourceNode(
@@ -334,7 +338,6 @@ class MarkdownParser(BaseParser):
         link-rewrite probe passes a throwaway), keeping this method pure so the probe
         can learn a target's split layout with zero side effects.
         """
-        logger.debug(f"[MarkdownParser] Computing layout for: {source_path or 'content string'}")
         meta: Dict[str, Any] = {}
         warnings: List[str] = []
 
@@ -343,7 +346,6 @@ class MarkdownParser(BaseParser):
             content, frontmatter = self._extract_frontmatter(content)
             if frontmatter:
                 meta["frontmatter"] = frontmatter
-                logger.debug(f"[MarkdownParser] Extracted frontmatter: {list(frontmatter.keys())}")
 
         explicit_name = kwargs.get("resource_name")
         if not explicit_name and kwargs.get("source_name"):
@@ -361,17 +363,14 @@ class MarkdownParser(BaseParser):
         )
         doc_name = self._sanitize_for_path(doc_title)
         # Preserve code source filenames as the temp document directory.
-        # This yields foo.py/foo.md, allowing AST language detection to recover
-        # ".py" from the parent directory while keeping the markdown body name tidy.
         source_name = kwargs.get("source_name")
         root_name = (
-            source_name if source_name and get_extractor().supports(source_name) else doc_name
+            source_name if source_name and supports_code_skeleton(source_name) else doc_name
         )
         root_dir = f"{temp_uri}/{self._sanitize_for_path(root_name)}"
 
         # Find all headings
         headings = self._find_headings(content)
-        logger.info(f"[MarkdownParser] Found {len(headings)} headings")
 
         # The temp dir is the first thing materialized on apply.
         ops: List[_LayoutOp] = [_LayoutOp("mkdir", temp_uri)]
@@ -397,18 +396,79 @@ class MarkdownParser(BaseParser):
         """Phase 2 (write only): replay ``layout.ops`` against the real VikingFS —
         create dirs, write each section (rewriting relative links when enabled), then
         ingest the local images those sections reference."""
+        started = time.perf_counter()
         viking_fs = self._get_viking_fs()
+        mkdir_ops = [op for op in layout.ops if op.kind == "mkdir"]
+        write_ops = [op for op in layout.ops if op.kind == "write"]
+        write_chars = sum(len(op.content or "") for op in write_ops)
+
+        rewrite_enabled = bool(
+            self._rewrite_ctx
+            and self._rewrite_ctx.get("enabled")
+            and self._rewrite_ctx.get("source_path")
+            and self._rewrite_ctx.get("import_root")
+        )
+
+        mkdir_started = time.perf_counter()
+        mkdir_count = 0
         for op in layout.ops:
             if op.kind == "mkdir":
                 await viking_fs.mkdir(op.uri, exist_ok=op.exist_ok)
-            else:
-                await self._write_section(op.uri, op.content)
+                mkdir_count += 1
+        mkdir_s = time.perf_counter() - mkdir_started
+
+        write_started = time.perf_counter()
+        for op in write_ops:
+            await self._write_section(op.uri, op.content)
+        write_s = time.perf_counter() - write_started
 
         # Ingest local image files, placing each image next to the markdown file
-        # that references it.
-        await self._ingest_local_images(layout.root_dir, base_dir, allowed_media_dirs)
+        # that references it. For generated tables with no image references, avoid
+        # glob+read over every chunk file we just wrote.
+        images_started = time.perf_counter()
+        has_image_refs = self._layout_has_local_image_refs(write_ops)
+        if has_image_refs:
+            await self._ingest_local_images(layout.root_dir, base_dir, allowed_media_dirs)
+        images_s = time.perf_counter() - images_started
+
+        total_s = time.perf_counter() - started
+        if _env_bool("OPENVIKING_MARKDOWN_APPLY_PROFILE", False):
+            logger.info(
+                f"[MarkdownApplyProfile] total={total_s:.3f}s mkdir={mkdir_s:.3f}s "
+                f"write={write_s:.3f}s images={images_s:.3f}s ops={len(layout.ops)} "
+                f"mkdir_ops={len(mkdir_ops)} mkdir_count={mkdir_count} "
+                f"write_ops={len(write_ops)} write_chars={write_chars} "
+                f"rewrite_enabled={rewrite_enabled} has_image_refs={has_image_refs} "
+                f"root={layout.root_dir}"
+            )
 
     # ========== Helper Methods ==========
+
+    def _layout_has_local_image_refs(self, write_ops: List[_LayoutOp]) -> bool:
+        """Return True when planned markdown content references local images.
+
+        This mirrors the image patterns consumed by _ingest_local_images, but runs
+        against in-memory layout content so pure-text imports avoid a VFS glob/read
+        pass over every generated markdown chunk.
+        """
+        try:
+            from openviking.parse.image_rewrite import HTML_IMG_PATTERN
+        except ImportError:
+            HTML_IMG_PATTERN = re.compile(
+                r"""(<img\s[^>]*?src=["'])([^"']+)(["'][^>]*>)""", re.IGNORECASE
+            )
+
+        for op in write_ops:
+            content = op.content or ""
+            if "![" in content:
+                for match in self._image_pattern.finditer(content):
+                    if not self._is_remote_uri(match.group(2)):
+                        return True
+            if "<img" in content.lower():
+                for match in HTML_IMG_PATTERN.finditer(content):
+                    if not self._is_remote_uri(match.group(2)):
+                        return True
+        return False
 
     def _extract_frontmatter(self, content: str) -> Tuple[str, Optional[Dict[str, Any]]]:
         """
@@ -649,7 +709,6 @@ class MarkdownParser(BaseParser):
                     # Write next to the markdown file
                     viking_path = f"{md_dir}/{unique_filename}"
                     await viking_fs.write_file_bytes(viking_path, image_bytes)
-                    logger.debug(f"[MarkdownParser] Copied image to VikingFS: {viking_path}")
 
                     # Record mapping for post-commit rewrite
                     file_mappings[origin_link] = unique_filename
@@ -1130,7 +1189,6 @@ class MarkdownParser(BaseParser):
 
         # Estimate document size
         estimated_tokens = self._estimate_token_count(content)
-        logger.info(f"[MarkdownParser] Document size: {estimated_tokens} tokens")
 
         # Create root directory
         ops.append(_LayoutOp("mkdir", root_dir))
@@ -1144,16 +1202,13 @@ class MarkdownParser(BaseParser):
         if estimated_tokens <= max_size and len(content) <= max_chars:
             file_path = f"{root_dir}/{doc_name}.md"
             ops.append(_LayoutOp("write", file_path, content))
-            logger.debug(f"[MarkdownParser] Small document planned as: {file_path}")
             return
 
         # No headings: split by paragraphs
         if not headings:
-            logger.info("[MarkdownParser] No headings, splitting by paragraphs")
             parts = self._smart_split_content(content, max_size)
             for part_idx, part in enumerate(parts, 1):
                 ops.append(_LayoutOp("write", f"{root_dir}/{doc_name}_{part_idx}.md", part))
-            logger.debug(f"[MarkdownParser] Split into {len(parts)} parts")
             return
 
         # Build virtual section list (pre-heading content as first virtual section)
@@ -1340,7 +1395,6 @@ class MarkdownParser(BaseParser):
         # Fits in one file (check both token and char limits)
         if tokens <= max_size and len(content_text) <= self.config.max_section_chars:
             ops.append(_LayoutOp("write", f"{parent_dir}/{name}.md", content_text))
-            logger.debug(f"[MarkdownParser] Planned: {name}.md")
             return
 
         # Create directory and handle children or split
@@ -1388,7 +1442,6 @@ class MarkdownParser(BaseParser):
         self, ops: List[_LayoutOp], section_dir: str, name: str, content: str, max_size: int
     ) -> None:
         """Split content by paragraphs, planning each part as a write into ``ops``."""
-        logger.info(f"[MarkdownParser] Splitting: {name}")
         parts = self._smart_split_content(content, max_size)
         for i, part in enumerate(parts, 1):
             ops.append(_LayoutOp("write", f"{section_dir}/{name}_{i}.md", part))
@@ -1448,12 +1501,8 @@ class MarkdownParser(BaseParser):
             parts = self._smart_split_content(content, max_size)
             for i, part in enumerate(parts, 1):
                 ops.append(_LayoutOp("write", f"{parent_dir}/{name}_{i}.md", part))
-            logger.debug(
-                f"[MarkdownParser] Merged then split: {name} ({len(sections)} sections → {len(parts)} parts)"
-            )
         else:
             ops.append(_LayoutOp("write", f"{parent_dir}/{name}.md", content))
-            logger.debug(f"[MarkdownParser] Merged: {name}.md ({len(sections)} sections)")
 
     def _get_section_info(
         self,

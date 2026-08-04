@@ -207,6 +207,11 @@ def main():
 
     # Load server config from ov.conf
     try:
+        resolved_config_path = resolve_config_path(
+            args.config,
+            OPENVIKING_CONFIG_ENV,
+            DEFAULT_OV_CONF,
+        )
         config = load_server_config(args.config)
         OpenVikingConfigSingleton.initialize(config_path=args.config)
     except (FileNotFoundError, ValueError) as e:
@@ -279,7 +284,12 @@ def main():
             sys.exit(1)
 
     # Create and run server app
-    app = create_app(config)
+    app = create_app(
+        config,
+        config_path=(
+            str(resolved_config_path) if resolved_config_path is not None else args.config
+        ),
+    )
     workers_info = f" (workers: {config.workers})" if config.workers > 1 else ""
     print(f"OpenViking HTTP Server is running on {config.host}:{config.port}{workers_info}")
 

@@ -13,6 +13,17 @@ pub async fn status(
     Ok(())
 }
 
+pub async fn cancel(
+    client: &HttpClient,
+    task_id: &str,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let result = client.cancel_task(task_id).await?;
+    output_success(&result, output_format, compact);
+    Ok(())
+}
+
 pub async fn list(
     client: &HttpClient,
     task_type: Option<&str>,

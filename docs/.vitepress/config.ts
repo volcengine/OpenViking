@@ -30,6 +30,7 @@ const preferenceBootstrapScript = `;(() => {
 
 const sectionNames: Record<string, string> = {
   'getting-started': 'Getting Started',
+  configuration: 'Configuration',
   concepts: 'Concepts',
   guides: 'Guides',
   'agent-integrations': 'Agent Integrations',
@@ -41,7 +42,8 @@ const sectionNames: Record<string, string> = {
 }
 
 const zhSectionNames: Record<string, string> = {
-  'getting-started': '快速开始',
+  'getting-started': '开始使用',
+  configuration: '配置',
   concepts: '核心概念',
   guides: '指南',
   'agent-integrations': 'Agent 集成',
@@ -62,7 +64,7 @@ const navLabels = {
     about: 'About'
   },
   zh: {
-    start: '快速开始',
+    start: '开始使用',
     concepts: '核心概念',
     guide: '指南',
     api: 'API 参考',
@@ -99,6 +101,23 @@ function sidebarSection(dir: string, title: string, collapsed = true): DefaultTh
 
   return { text: title, collapsed, items }
 }
+
+const gettingStartedSidebar = {
+  en: [
+    ['01-introduction.md', 'Introduction'],
+    ['02-quickstart.md', 'Quick Start'],
+    ['03-quickstart-server.md', 'Server Deployment'],
+    ['04-setup-for-agent.md', 'Server Setup for Agent'],
+    ['05-cli-setup.md', 'OpenViking CLI']
+  ],
+  zh: [
+    ['01-introduction.md', '简介'],
+    ['02-quickstart.md', '快速开始'],
+    ['03-quickstart-server.md', '服务端部署'],
+    ['04-setup-for-agent.md', '服务端安装（Agent 版）'],
+    ['05-cli-setup.md', 'OpenViking CLI']
+  ]
+} as const
 
 const agentIntegrationSidebar = {
   en: {
@@ -188,8 +207,7 @@ const apiReferenceSidebar = {
         text: 'Retrieval & Relations',
         items: [
           ['06-retrieval.md', 'Retrieval'],
-          ['13-relations.md', 'Relations'],
-          ['21-code.md', 'Code Navigation']
+          ['13-relations.md', 'Relations']
         ]
       },
       {
@@ -219,6 +237,7 @@ const apiReferenceSidebar = {
       {
         text: 'Protocols & Extensions',
         items: [
+          ['22-openviking-assets.md', 'OpenViking Assets'],
           ['20-webdav.md', 'WebDAV'],
           ['24-vikingbot.md', 'VikingBot API']
         ]
@@ -247,8 +266,7 @@ const apiReferenceSidebar = {
         text: '检索与关系',
         items: [
           ['06-retrieval.md', '检索'],
-          ['13-relations.md', '关系'],
-          ['21-code.md', '代码导航']
+          ['13-relations.md', '关系']
         ]
       },
       {
@@ -278,6 +296,7 @@ const apiReferenceSidebar = {
       {
         text: '协议与扩展',
         items: [
+          ['22-openviking-assets.md', 'OpenViking Assets'],
           ['20-webdav.md', 'WebDAV'],
           ['24-vikingbot.md', 'VikingBot API']
         ]
@@ -387,6 +406,7 @@ const guidesSidebar = {
         items: [
           ['06-mcp-integration.md', 'MCP Integration'],
           ['09-ovpack.md', 'OVPack'],
+          ['18-openviking-assets.md', 'OpenViking Assets'],
           ['10-prompt-guide.md', 'Prompt Customization'],
           ['17-vikingbot.md', 'VikingBot']
         ]
@@ -429,6 +449,7 @@ const guidesSidebar = {
         items: [
           ['06-mcp-integration.md', 'MCP 集成'],
           ['09-ovpack.md', 'OVPack'],
+          ['18-openviking-assets.md', 'OpenViking Assets'],
           ['10-prompt-guide.md', 'Prompt 自定义'],
           ['17-vikingbot.md', 'VikingBot']
         ]
@@ -534,6 +555,20 @@ function agentIntegrationSection(
   )
 }
 
+function gettingStartedSection(
+  locale: 'en' | 'zh',
+  title: string,
+  collapsed = true
+): DefaultTheme.SidebarItem {
+  return {
+    text: title,
+    collapsed,
+    items: gettingStartedSidebar[locale].map((item) =>
+      configuredSidebarItem(locale, 'getting-started', item)
+    )
+  }
+}
+
 function apiReferenceSection(
   locale: 'en' | 'zh',
   title: string,
@@ -584,6 +619,7 @@ function migrationSection(
 
 type LocalizedSidebarSection =
   | 'getting-started'
+  | 'configuration'
   | 'concepts'
   | 'guides'
   | 'agent-integrations'
@@ -599,8 +635,9 @@ const localizedSidebarSectionBuilders: Record<
   LocalizedSidebarSection,
   LocalizedSidebarSectionBuilder
 > = {
-  'getting-started': (locale, title, collapsed = true) =>
-    sidebarSection(`${locale}/getting-started`, title, collapsed),
+  'getting-started': gettingStartedSection,
+  configuration: (locale, title, collapsed = true) =>
+    sidebarSection(`${locale}/configuration`, title, collapsed),
   concepts: conceptsSection,
   guides: guidesSection,
   'agent-integrations': agentIntegrationSection,
@@ -650,7 +687,7 @@ const designSidebar: DefaultTheme.SidebarItem[] = [
 ]
 
 const enNav: DefaultTheme.NavItem[] = [
-  { text: navLabels.en.start, link: '/en/getting-started/01-introduction', activeMatch: '/en/(getting-started|agent-integrations)/' },
+  { text: navLabels.en.start, link: '/en/getting-started/01-introduction', activeMatch: '/en/(getting-started|configuration|agent-integrations)/' },
   { text: navLabels.en.concepts, link: '/en/concepts/01-architecture', activeMatch: '/en/concepts/' },
   { text: navLabels.en.guide, link: '/en/guides/01-configuration', activeMatch: '/en/(guides|migration)/' },
   { text: navLabels.en.api, link: '/en/api/01-overview', activeMatch: '/en/api/' },
@@ -659,7 +696,7 @@ const enNav: DefaultTheme.NavItem[] = [
 ]
 
 const zhNav: DefaultTheme.NavItem[] = [
-  { text: navLabels.zh.start, link: '/zh/getting-started/01-introduction', activeMatch: '/zh/(getting-started|agent-integrations)/' },
+  { text: navLabels.zh.start, link: '/zh/getting-started/01-introduction', activeMatch: '/zh/(getting-started|configuration|agent-integrations)/' },
   { text: navLabels.zh.concepts, link: '/zh/concepts/01-architecture', activeMatch: '/zh/concepts/' },
   { text: navLabels.zh.guide, link: '/zh/guides/01-configuration', activeMatch: '/zh/(guides|migration)/' },
   { text: navLabels.zh.api, link: '/zh/api/01-overview', activeMatch: '/zh/api/' },
@@ -887,10 +924,11 @@ export default defineConfig({
           level: [2, 3]
         },
         sidebar: {
-          '/en/getting-started/': localizedGroupedSidebarItems('en', ['getting-started', 'agent-integrations']),
+          '/en/getting-started/': localizedGroupedSidebarItems('en', ['getting-started', 'configuration', 'agent-integrations']),
+          '/en/configuration/': localizedGroupedSidebarItems('en', ['getting-started', 'configuration', 'agent-integrations']),
           '/en/concepts/': localizedSectionSidebarItems('en', 'concepts'),
           '/en/guides/': localizedGroupedSidebarItems('en', ['guides', 'migration']),
-          '/en/agent-integrations/': localizedGroupedSidebarItems('en', ['getting-started', 'agent-integrations']),
+          '/en/agent-integrations/': localizedGroupedSidebarItems('en', ['getting-started', 'configuration', 'agent-integrations']),
           '/en/migration/': localizedGroupedSidebarItems('en', ['guides', 'migration']),
           '/en/api/': localizedReferenceSidebarItems('en'),
           '/en/about/': localizedAboutSidebarItems('en'),
@@ -907,10 +945,11 @@ export default defineConfig({
       themeConfig: {
         nav: zhNav,
         sidebar: {
-          '/zh/getting-started/': localizedGroupedSidebarItems('zh', ['getting-started', 'agent-integrations']),
+          '/zh/getting-started/': localizedGroupedSidebarItems('zh', ['getting-started', 'configuration', 'agent-integrations']),
+          '/zh/configuration/': localizedGroupedSidebarItems('zh', ['getting-started', 'configuration', 'agent-integrations']),
           '/zh/concepts/': localizedSectionSidebarItems('zh', 'concepts'),
           '/zh/guides/': localizedGroupedSidebarItems('zh', ['guides', 'migration']),
-          '/zh/agent-integrations/': localizedGroupedSidebarItems('zh', ['getting-started', 'agent-integrations']),
+          '/zh/agent-integrations/': localizedGroupedSidebarItems('zh', ['getting-started', 'configuration', 'agent-integrations']),
           '/zh/migration/': localizedGroupedSidebarItems('zh', ['guides', 'migration']),
           '/zh/api/': localizedReferenceSidebarItems('zh'),
           '/zh/about/': localizedAboutSidebarItems('zh')

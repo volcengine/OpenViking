@@ -18,8 +18,10 @@ pub async fn run(
     compact: bool,
 ) -> Result<()> {
     let sources = normalize_sources(from_uris)?;
-    if timeout.is_some_and(|seconds| !seconds.is_finite() || seconds <= 0.0) {
-        return Err(Error::Client("--timeout must be a positive number".into()));
+    if timeout.is_some_and(|seconds| !crate::config::timeout_is_valid(seconds)) {
+        return Err(Error::Client(
+            "--timeout must be a positive finite number of seconds".into(),
+        ));
     }
     let reason = reason
         .as_deref()

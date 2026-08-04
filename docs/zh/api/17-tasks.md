@@ -13,8 +13,10 @@
 **任务状态**：
 - `pending`: 任务等待执行
 - `running`: 任务执行中
+- `cancelling`: 已请求取消，正在等待该任务的持久化队列消息和进程内工作结束
 - `completed`: 任务成功完成
 - `failed`: 任务失败
+- `cancelled`: 任务已取消
 
 **代码入口**：
 - `openviking/server/routers/tasks.py:get_task()` - HTTP 路由
@@ -136,6 +138,102 @@ ov task status uuid-xxx
 
 ---
 
+### cancel_task()
+
+#### 1. API 实现介绍
+
+请求协作式取消后台任务。接口会立即阻止该任务产生新的 QueueFS work，并取消仍在运行的进程内工作；已经完成的写入不会回滚。当任务仍有待处理的持久化消息或进程内工作时，接口先返回 `cancelling`，全部收敛后任务才进入 `cancelled`。
+
+重复取消处于 `cancelling` 或 `cancelled` 状态的任务是幂等的。
+
+**支持的任务类型**：
+- `add_resource`
+- `session_commit`
+- `admin_reindex`
+- `snapshot_restore_reindex`
+
+**代码入口**：
+- `openviking/server/routers/tasks.py:cancel_task()` - HTTP 路由
+- `openviking/service/task_tracker.py:TaskTracker.cancel()` - 任务生命周期
+- `crates/ov_cli/src/commands/task.rs:cancel()` - CLI 命令
+
+#### 2. 接口和参数说明
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| task_id | str | 是 | - | 要取消的后台任务 ID |
+
+只有任务所属的当前用户可以取消任务。ROOT 身份不能执行取消操作。
+
+#### 3. 使用示例
+
+**Python SDK**
+
+```python
+task = await client.cancel_task("uuid-xxx")
+print(task["status"])
+```
+
+**TypeScript SDK**
+
+```typescript
+const task = await client.cancelTask("uuid-xxx");
+console.log(task.status);
+```
+
+**Go SDK**
+
+```go
+task, err := client.CancelTask(ctx, "uuid-xxx")
+if err != nil {
+    return err
+}
+fmt.Println(task["status"])
+```
+
+**HTTP API**
+
+```http
+POST /api/v1/tasks/{task_id}/cancel
+```
+
+```bash
+curl -X POST http://localhost:1933/api/v1/tasks/uuid-xxx/cancel \
+  -H "X-API-Key: your-key"
+```
+
+**CLI**
+
+```bash
+ov task cancel uuid-xxx
+```
+
+**响应示例**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "task_id": "uuid-xxx",
+    "task_type": "add_resource",
+    "status": "cancelling",
+    "resource_id": "viking://resources/guide",
+    "stage": "processing_queue",
+    "result": null,
+    "error": null
+  }
+}
+```
+
+如果任务没有剩余 work，响应中的状态可以直接为 `cancelled`。否则继续通过 `get_task()` 查询，直到状态变为 `cancelled`。
+
+**错误处理**：
+- `NOT_FOUND`（404）：任务不存在、已过期或不属于当前用户
+- `PERMISSION_DENIED`（403）：ROOT 身份请求取消任务
+- `FAILED_PRECONDITION`（412）：任务类型不支持取消，或任务已经 `completed`/`failed`
+
+---
+
 ### list_tasks()
 
 #### 1. API 实现介绍
@@ -153,7 +251,7 @@ ov task status uuid-xxx
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | task_type | str | 否 | None | 按任务类型过滤，例如 `session_commit` |
-| status | str | 否 | None | 按任务状态过滤：`pending`、`running`、`completed`、`failed` |
+| status | str | 否 | None | 按任务状态过滤：`pending`、`running`、`cancelling`、`completed`、`failed`、`cancelled` |
 | resource_id | str | 否 | None | 按资源 ID 过滤，例如会话 ID |
 | limit | int | 否 | 50 | 最多返回的任务条数 |
 

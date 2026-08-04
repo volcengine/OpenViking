@@ -48,6 +48,7 @@ flate2 = "1.0"
 
 # Path handling and filesystem
 path-clean = "1.0"
+filelocks = "0.1.0"
 
 # Data structures
 radix_trie = "0.2"
@@ -86,6 +87,7 @@ globset = "0.4"
 aes-gcm = "0.10"
 hkdf = "0.12"
 sha2 = "0.10"
+sha1 = "0.10"
 rand = "0.8"
 
 # Stream combinators for concurrent I/O
@@ -97,6 +99,9 @@ grep = "0.4.1"
 grep-matcher = "0.1.8"
 grep-regex = "0.1.14"
 grep-searcher = "0.1.16"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
 
 # Development dependencies
 [dev-dependencies]

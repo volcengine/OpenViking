@@ -15,17 +15,17 @@ from unittest.mock import MagicMock
 
 import pytest
 
-ragfs_python = pytest.importorskip("ragfs_python")
-
 from openviking.async_client import AsyncOpenViking
 from openviking.client.local import LocalClient
 from openviking.pyagfs.exceptions import AGFSNotFoundError, AGFSNotSupportedError
 from openviking.server.identity import RequestContext, Role
-from openviking_cli.exceptions import InvalidURIError
 from openviking.service.fs_service import FSService
 from openviking.storage.viking_fs import VikingFS
 from openviking.sync_client import SyncOpenViking
+from openviking_cli.exceptions import InvalidURIError
 from openviking_cli.session.user_id import UserIdentifier
+
+ragfs_python = pytest.importorskip("ragfs_python")
 
 
 OID_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -86,11 +86,8 @@ def _build_binding_client(config_path: Path, fs_root: Path):
 
 
 def _build_harness(config_path: Path, fs_root: Path) -> ClientHarness:
-    from openviking.storage.transaction import init_lock_manager
-
     ctx = _make_ctx()
     binding_client = _build_binding_client(config_path, fs_root)
-    init_lock_manager(binding_client)
     vfs = VikingFS(agfs=binding_client)
 
     fs_service = FSService()
@@ -131,24 +128,20 @@ def workspace():
 
 @pytest.fixture
 def git_harness(workspace) -> ClientHarness:
-    from openviking.storage.transaction import reset_lock_manager
-
     cfg, fs_root = _write_workspace(workspace)
     try:
         yield _build_harness(cfg, fs_root)
     finally:
-        reset_lock_manager()
+        pass
 
 
 @pytest.fixture
 def git_disabled_harness(workspace) -> ClientHarness:
-    from openviking.storage.transaction import reset_lock_manager
-
     cfg, fs_root = _write_disabled_workspace(workspace)
     try:
         yield _build_harness(cfg, fs_root)
     finally:
-        reset_lock_manager()
+        pass
 
 
 async def test_write_commit_show_roundtrip(git_harness):
@@ -165,10 +158,13 @@ async def test_write_commit_show_roundtrip(git_harness):
 
     assert commit["result"] == "created"
     assert OID_RE.match(commit["commit_oid"])
-    assert git_harness.client.snapshot.show(
-        "main",
-        path="viking://resources/a.md",
-    ) == b"hello"
+    assert (
+        git_harness.client.snapshot.show(
+            "main",
+            path="viking://resources/a.md",
+        )
+        == b"hello"
+    )
 
 
 async def test_show_metadata_without_path(git_harness):
@@ -284,10 +280,13 @@ async def test_restore_reverts_file_and_advances_head(git_harness):
     assert restore["source_commit"] == v1["commit_oid"]
     assert restore["parent_commit"] == v2["commit_oid"]
     assert restore["new_commit_oid"] != v2["commit_oid"]
-    assert await git_harness.vfs.read(
-        "viking://resources/proj/a.md",
-        ctx=git_harness.ctx,
-    ) == b"v1"
+    assert (
+        await git_harness.vfs.read(
+            "viking://resources/proj/a.md",
+            ctx=git_harness.ctx,
+        )
+        == b"v1"
+    )
     assert git_harness.client.snapshot.show("main")["parents"] == [v2["commit_oid"]]
 
 
@@ -320,10 +319,13 @@ async def test_restore_dry_run_does_not_mutate(git_harness):
 
     assert dry_run["result"] == "dry_run"
     assert any(item["path"] == "a.md" for item in dry_run["diff"]["to_write"])
-    assert await git_harness.vfs.read(
-        "viking://resources/proj/a.md",
-        ctx=git_harness.ctx,
-    ) == b"v2"
+    assert (
+        await git_harness.vfs.read(
+            "viking://resources/proj/a.md",
+            ctx=git_harness.ctx,
+        )
+        == b"v2"
+    )
     assert len(git_harness.client.snapshot.log()) == len(before_log)
 
 
@@ -398,19 +400,13 @@ async def test_snapshot_namespace_gitignore_roundtrip(git_harness):
     assert await client.snapshot.get_gitignore() == "*.log\n"
 
     # The rule must affect commits: a .log file is skipped, a .md file kept.
-    await git_harness.vfs.write_file(
-        "viking://resources/keep.md", b"keep", ctx=git_harness.ctx
-    )
-    await git_harness.vfs.write_file(
-        "viking://resources/skip.log", b"skip", ctx=git_harness.ctx
-    )
+    await git_harness.vfs.write_file("viking://resources/keep.md", b"keep", ctx=git_harness.ctx)
+    await git_harness.vfs.write_file("viking://resources/skip.log", b"skip", ctx=git_harness.ctx)
 
     commit = await client.snapshot.commit(message="with ignore")
     assert commit["result"] == "created"
     assert commit["ignored"] == 1
-    assert await client.snapshot.show(
-        "main", path="viking://resources/keep.md"
-    ) == b"keep"
+    assert await client.snapshot.show("main", path="viking://resources/keep.md") == b"keep"
     with pytest.raises(AGFSNotFoundError):
         await client.snapshot.show("main", path="viking://resources/skip.log")
 

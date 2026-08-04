@@ -31,7 +31,7 @@ See the [Multi-Write Storage Guide](./13-multi-write-storage.md) for more multi-
 ### 1. Initialize Root Key (Local Mode)
 
 ```bash
-ov system crypto init-key --output ~/.openviking/master.key
+ov system crypto init-key --output-file ~/.openviking/master.key
 ```
 
 ### 2. Configure Encryption
@@ -176,10 +176,10 @@ For maximum API key protection, you can enable Argon2id one-way hashing:
 
 ```bash
 # Generate and save to specified path
-ov system crypto init-key --output ~/.openviking/master.key
+ov system crypto init-key --output-file ~/.openviking/master.key
 
 # Or use short option
-ov system crypto init-key -o ~/.openviking/master.key
+ov system crypto init-key -f ~/.openviking/master.key
 ```
 
 **Output example**:

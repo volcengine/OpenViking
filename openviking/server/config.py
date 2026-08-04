@@ -82,7 +82,7 @@ class AddTargetsConfig(BaseModel):
 
 
 class AgentEvolutionConfig(BaseModel):
-    """Server-wide Agent Evolution production switch."""
+    """Default Agent Evolution setting for accounts without an override."""
 
     enabled: bool = False
 
@@ -196,7 +196,7 @@ class UsageAuditConfig(BaseModel):
 class UsageReporterSinkConfig(BaseModel):
     """Usage reporter sink configuration."""
 
-    type: Literal["custom", "http"] = "custom"
+    type: Literal["custom", "file_log"] = "custom"
     class_path: Optional[str] = None
     config: Dict[str, object] = Field(default_factory=dict)
 

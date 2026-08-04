@@ -10,7 +10,6 @@ import pytest_asyncio
 
 from openviking import AsyncOpenViking
 from openviking.message import TextPart
-from openviking.storage.transaction import release_all_locks
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -176,7 +175,6 @@ class TestImportExportWorkflow:
         assert export_path.exists()
 
         # 4. Delete original resource
-        await release_all_locks()
         await client.rm(original_uri, recursive=True)
 
         # 5. Import

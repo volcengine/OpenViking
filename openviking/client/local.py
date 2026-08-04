@@ -28,7 +28,7 @@ from openviking.utils.image_search import normalize_client_image_input
 from openviking.utils.search_filters import SearchContextTypeInput, merge_search_filter
 from openviking.utils.tags import build_search_tags_filter
 from openviking_cli.client.base import BaseClient
-from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import run_async
 
@@ -104,7 +104,6 @@ class LocalClient(BaseClient):
             user=self._user,
             role=Role.USER,
             actor_peer_id=normalize_peer_id(effective_actor_peer_id),
-            legacy_agent_id=normalize_peer_id(agent_id),
         )
 
     @property
@@ -139,9 +138,22 @@ class LocalClient(BaseClient):
         watch_interval: float = 0,
         args: Optional[Dict[str, Any]] = None,
         processing_mode: str = "semantic_and_vectors",
+        add_type: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
         **kwargs,
     ) -> Dict[str, Any]:
-        """Add resource to OpenViking."""
+        """Add resource to OpenViking.
+
+        ``add_type`` declares a Connector source and requires an exact ``to``
+        target; it cannot be combined with ``parent``.
+        """
+        if add_type is not None:
+            add_type = add_type.strip() or None
+        if add_type and parent:
+            raise ValueError("'add_type' cannot be combined with 'parent'.")
+        if add_type and not to:
+            raise ValueError("'add_type' requires an exact 'to' target.")
         if to and parent:
             raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
 
@@ -151,6 +163,7 @@ class LocalClient(BaseClient):
             fn=lambda: self._service.resources.add_resource(
                 path=path,
                 ctx=self._ctx,
+                add_type=add_type,
                 to=to,
                 parent=parent,
                 reason=reason,
@@ -162,6 +175,8 @@ class LocalClient(BaseClient):
                 processing_mode=processing_mode,
                 watch_interval=watch_interval,
                 args=args,
+                tags=tags,
+                tag_mode=tag_mode,
                 **kwargs,
             ),
         )
@@ -618,7 +633,12 @@ class LocalClient(BaseClient):
             offset: Starting line number (0-indexed). Default 0.
             limit: Number of lines to read. -1 means read to end. Default -1.
         """
-        return await self._service.fs.read(uri, ctx=self._ctx, offset=offset, limit=limit)
+        return await self._service.fs.read_visible(
+            uri,
+            ctx=self._ctx,
+            offset=offset,
+            limit=limit,
+        )
 
     async def read_raw(self, uri: str, offset: int = 0, limit: int = -1) -> str:
         """Read raw file content, including hidden MEMORY_FIELDS metadata."""
@@ -751,7 +771,8 @@ class LocalClient(BaseClient):
 
         async def _search():
             session = None
-            if session_id:
+            # Intent off: skip session.load — SearchService will not scan session either.
+            if session_id and self._service.search.is_intent_enabled():
                 session = self._service.sessions.session(self._ctx, session_id)
                 await session.load()
             return await self._service.search.search(
@@ -925,6 +946,17 @@ class LocalClient(BaseClient):
         """Query background task status."""
         return await self._service.sessions.get_commit_task(task_id, self._ctx)
 
+    async def cancel_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Cancel a background task."""
+        if self._ctx.role == Role.ROOT:
+            raise PermissionDeniedError("ROOT may not cancel tasks")
+        task = await get_task_tracker().cancel(
+            task_id,
+            account_id=self._ctx.account_id,
+            user_id=self._ctx.user.user_id,
+        )
+        return task.to_dict() if task else None
+
     async def list_tasks(
         self,
         task_type: Optional[str] = None,
@@ -1023,7 +1055,7 @@ class LocalClient(BaseClient):
         }
         add_async = getattr(session, "add_message_async", None)
         add_kwargs = {
-            "peer_id": self._resolve_message_peer_id(role, peer_id),
+            "peer_id": normalize_peer_id(peer_id),
             "created_at": created_at,
             **semantic_kwargs,
         }
@@ -1034,6 +1066,9 @@ class LocalClient(BaseClient):
         return {
             "session_id": session_id,
             "message_count": len(session.messages),
+            # Post-write value so a commit policy can decide without a
+            # follow-up get_session round trip.
+            "pending_tokens": self._session_pending_tokens(session),
         }
 
     async def batch_add_messages(
@@ -1080,7 +1115,7 @@ class LocalClient(BaseClient):
                 {
                     "role": role,
                     "parts": message_parts,
-                    "peer_id": self._resolve_message_peer_id(role, message.get("peer_id")),
+                    "peer_id": normalize_peer_id(message.get("peer_id")),
                     "created_at": message.get("created_at"),
                     "turn_id": message.get("turn_id"),
                     "message_kind": message.get("message_kind"),
@@ -1097,20 +1132,23 @@ class LocalClient(BaseClient):
             "session_id": session_id,
             "message_count": len(session.messages),
             "added": len(added),
+            # Post-write value so a commit policy can decide without a
+            # follow-up get_session round trip.
+            "pending_tokens": self._session_pending_tokens(session),
         }
 
-    def _resolve_message_peer_id(
-        self,
-        role: str,
-        peer_id: Optional[str],
-    ) -> Optional[str]:
-        normalized_peer_id = normalize_peer_id(peer_id)
-        if normalized_peer_id is not None:
-            return normalized_peer_id
-        legacy_agent_id = getattr(self._ctx, "legacy_agent_id", None)
-        if legacy_agent_id is not None and role == "assistant":
-            return legacy_agent_id
-        return None
+    @staticmethod
+    def _session_pending_tokens(session: Any) -> int:
+        """Read the post-write pending-token count from a session.
+
+        Returns 0 when the session object does not expose ``meta`` so callers
+        keep working against lightweight or legacy session implementations.
+        """
+        meta = getattr(session, "meta", None)
+        try:
+            return max(0, int(getattr(meta, "pending_tokens", 0) or 0))
+        except (TypeError, ValueError):
+            return 0
 
     # ============= Pack =============
 

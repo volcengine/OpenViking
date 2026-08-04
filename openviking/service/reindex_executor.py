@@ -26,18 +26,12 @@ from openviking.core.namespace import (
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker import get_task_tracker
+from openviking.service.task_work_index import bind_task_context
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage.expr import And, Eq, Or, PathScope
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
-from openviking.storage.transaction import (
-    NO_LOCK,
-    BorrowedLockLease,
-    LockContext,
-    LockLease,
-    get_lock_manager,
-)
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -104,7 +98,7 @@ class _ReindexCounters:
 class _ReindexRunContext:
     ctx: RequestContext
     counters: _ReindexCounters
-    lock: LockLease = NO_LOCK
+    lock: dict | None = None
 
 
 @dataclass
@@ -140,7 +134,6 @@ class ReindexExecutor:
             user=UserIdentifier(ctx.account_id, owner),
             role=ctx.role,
             actor_peer_id=ctx.actor_peer_id,
-            legacy_agent_id=ctx.legacy_agent_id,
             from_oauth=ctx.from_oauth,
         )
 
@@ -442,71 +435,73 @@ class ReindexExecutor:
         if telemetry_id:
             wait_tracker.register_request(telemetry_id)
 
+        lease = await service.viking_fs._async_agfs.pathlock_acquire_tree(path)
         try:
-            async with LockContext(get_lock_manager(), [path], lock_mode="tree") as lock_handle:
-                run = _ReindexRunContext(
-                    ctx=ctx,
+            borrowed = await service.viking_fs._async_agfs.pathlock_as_borrowed(lease)
+            run = _ReindexRunContext(
+                ctx=ctx,
+                counters=counters,
+                lock=borrowed,
+            )
+            if mode == "prune_orphans":
+                await self._prune_orphan_vectors(
+                    uri=uri,
+                    object_type=object_type,
+                    dry_run=dry_run,
                     counters=counters,
-                    lock=BorrowedLockLease.from_handle(get_lock_manager(), lock_handle),
+                    ctx=ctx,
                 )
-                if mode == "prune_orphans":
-                    await self._prune_orphan_vectors(
-                        uri=uri,
-                        object_type=object_type,
-                        dry_run=dry_run,
-                        counters=counters,
-                        ctx=ctx,
-                    )
-                elif object_type == "global_namespace":
-                    await self._reindex_global_namespace(
-                        uri=uri,
-                        mode=mode,
-                        run=run,
-                    )
-                elif object_type == "user_namespace":
-                    await self._reindex_user_namespace(
-                        uri=uri,
-                        mode=mode,
-                        run=run,
-                    )
-                elif object_type == "skill_namespace":
-                    await self._reindex_skill_namespace(
-                        uri=uri,
-                        mode=mode,
-                        run=run,
-                    )
-                elif object_type == "resource":
-                    await self._reindex_resource(
-                        uri=uri,
-                        mode=mode,
-                        run=run,
-                    )
-                elif object_type == "skill":
-                    await self._reindex_skill(
-                        uri=uri,
-                        mode=mode,
-                        run=run,
-                    )
-                elif object_type == "memory":
-                    await self._reindex_memory(
-                        uri=uri,
-                        mode=mode,
-                        run=run,
-                    )
-                else:
-                    raise OpenVikingError(
-                        f"Unsupported reindex type: {object_type}",
-                        code="UNSUPPORTED_URI",
-                        details={"uri": uri},
-                    )
+            elif object_type == "global_namespace":
+                await self._reindex_global_namespace(
+                    uri=uri,
+                    mode=mode,
+                    run=run,
+                )
+            elif object_type == "user_namespace":
+                await self._reindex_user_namespace(
+                    uri=uri,
+                    mode=mode,
+                    run=run,
+                )
+            elif object_type == "skill_namespace":
+                await self._reindex_skill_namespace(
+                    uri=uri,
+                    mode=mode,
+                    run=run,
+                )
+            elif object_type == "resource":
+                await self._reindex_resource(
+                    uri=uri,
+                    mode=mode,
+                    run=run,
+                )
+            elif object_type == "skill":
+                await self._reindex_skill(
+                    uri=uri,
+                    mode=mode,
+                    run=run,
+                )
+            elif object_type == "memory":
+                await self._reindex_memory(
+                    uri=uri,
+                    mode=mode,
+                    run=run,
+                )
+            else:
+                raise OpenVikingError(
+                    f"Unsupported reindex type: {object_type}",
+                    code="UNSUPPORTED_URI",
+                    details={"uri": uri},
+                )
 
-                if telemetry_id and mode != "prune_orphans":
-                    await wait_tracker.wait_for_request(telemetry_id)
-                    self._apply_embedding_wait_status(
-                        counters,
-                        wait_tracker.build_queue_status(telemetry_id),
-                    )
+            if telemetry_id and mode != "prune_orphans":
+                await wait_tracker.wait_for_request(telemetry_id)
+                self._apply_embedding_wait_status(
+                    counters,
+                    wait_tracker.build_queue_status(telemetry_id),
+                )
         finally:
+            await service.viking_fs._async_agfs.pathlock_release(lease)
             if telemetry_id:
                 wait_tracker.cleanup(telemetry_id)
 
@@ -536,21 +531,26 @@ class ReindexExecutor:
         ctx: RequestContext,
     ) -> None:
         tracker = get_task_tracker()
-        await tracker.start(task_id, account_id=ctx.account_id, user_id=ctx.user.user_id)
+        tracker.register_running_task(task_id)
         try:
-            result = await self._run(
-                uri=uri,
-                object_type=object_type,
-                mode=mode,
-                dry_run=dry_run,
-                ctx=ctx,
-            )
+            await tracker.start(task_id, account_id=ctx.account_id, user_id=ctx.user.user_id)
+            with bind_task_context(task_id, ctx.account_id, ctx.user.user_id):
+                result = await self._run(
+                    uri=uri,
+                    object_type=object_type,
+                    mode=mode,
+                    dry_run=dry_run,
+                    ctx=ctx,
+                )
             await tracker.complete(
                 task_id,
                 result,
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
             )
+        except asyncio.CancelledError:
+            # TaskWorkIndex finalizes after this active task and its queue work settle.
+            return
         except Exception as exc:
             await tracker.fail(
                 task_id,
@@ -558,6 +558,8 @@ class ReindexExecutor:
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
             )
+        finally:
+            await tracker.unregister_running_task(task_id)
 
     async def _prune_orphan_vectors(
         self,
@@ -851,7 +853,6 @@ class ReindexExecutor:
             user=UserIdentifier(ctx.account_id, str(owner)),
             role=ctx.role,
             actor_peer_id=ctx.actor_peer_id,
-            legacy_agent_id=ctx.legacy_agent_id,
             from_oauth=ctx.from_oauth,
         )
 
@@ -916,7 +917,7 @@ class ReindexExecutor:
         uri: str,
         context_type: str,
         ctx: RequestContext,
-        lock: LockLease = NO_LOCK,
+        lock: dict | None = None,
     ) -> None:
         processor = SemanticProcessor(
             max_concurrent_llm=get_openviking_config().vlm.max_concurrent,
@@ -932,7 +933,7 @@ class ReindexExecutor:
             role=str(ctx.role),
             skip_vectorization=True,
         )
-        await processor.on_dequeue({"data": msg.to_json()}, lock=lock.as_borrowed())
+        await processor.on_dequeue({"data": msg.to_json()}, lock=lock)
 
     async def _reindex_resource_vectors(
         self,
@@ -1092,7 +1093,8 @@ class ReindexExecutor:
         viking_fs = get_viking_fs()
         marker_name = ".abstract.md" if level == ContextLevel.ABSTRACT else ".overview.md"
         lock_path = viking_fs._uri_to_path(f"{dir_uri}/{marker_name}", ctx=ctx)
-        async with LockContext(get_lock_manager(), [lock_path], lock_mode="exact"):
+        lease = await viking_fs._async_agfs.pathlock_acquire_exact(lock_path)
+        try:
             abstract = await self._read_directory_abstract(dir_uri, ctx=ctx)
             if level == ContextLevel.ABSTRACT:
                 vector_text = abstract
@@ -1114,6 +1116,8 @@ class ReindexExecutor:
                 level=level,
                 ctx=ctx,
             )
+        finally:
+            await viking_fs._async_agfs.pathlock_release(lease)
 
     async def delete_uri_level(self, *, uri: str, level: ContextLevel, ctx: RequestContext) -> int:
         """Delete ONLY the vector record at ``(uri, level)``. Returns count.

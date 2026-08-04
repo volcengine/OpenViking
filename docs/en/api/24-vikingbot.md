@@ -32,11 +32,13 @@ curl http://localhost:1933/bot/v1/health
 
 ### chat()
 
-Send a message and wait for the complete reply. Omit `session_id` to create a new session.
+Send text and/or images and wait for the complete reply. Omit `session_id` to create a new
+session.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `message` | string | Yes | - | Non-empty user message |
+| `message` | string | Conditional | `""` | User text; required when `images` is empty |
+| `images` | array | Conditional | `[]` | Up to four OpenAI-style `image_url` parts; required when `message` is empty |
 | `session_id` | string | No | Generated | Existing session to continue |
 | `context` | array | No | `null` | Additional messages containing `role` and `content` |
 | `need_reply` | boolean | No | `true` | Whether the Bot should reply |
@@ -51,6 +53,30 @@ curl -X POST http://localhost:1933/bot/v1/chat \
   -H "X-API-Key: your-key" \
   -d '{"message":"Summarize my project progress","session_id":"optional-session-id"}'
 ```
+
+Images may use an accessible HTTPS URL or an inline Base64 data URL:
+
+```bash
+curl -X POST http://localhost:1933/bot/v1/chat \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "message": "Describe this image",
+    "images": [{
+      "type": "image_url",
+      "image_url": {
+        "url": "https://example.com/photo.png"
+      }
+    }]
+  }'
+```
+
+Inline Base64 images support JPEG, PNG, GIF, and WebP. Each decoded inline image is limited to
+10 MiB; inline SVG and mismatched MIME signatures are rejected. For HTTPS URLs, the Gateway
+validates the URL structure but does not fetch or inspect the remote resource, so remote format
+support and related errors are provider-specific. Local filesystem paths are rejected. The
+optional `detail` field accepts `auto`, `low`, or `high`; omit it for maximum provider
+compatibility.
 
 **CLI**
 

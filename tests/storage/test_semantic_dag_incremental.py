@@ -11,20 +11,12 @@ from openviking.storage.queuefs.semantic_dag import SemanticDagExecutor
 from openviking_cli.session.user_id import UserIdentifier
 
 
-def _mock_transaction_layer(monkeypatch):
-    mock_handle = MagicMock()
-    monkeypatch.setattr(
-        "openviking.storage.transaction.lock_context.LockContext.__aenter__",
-        AsyncMock(return_value=mock_handle),
-    )
-    monkeypatch.setattr(
-        "openviking.storage.transaction.lock_context.LockContext.__aexit__",
-        AsyncMock(return_value=False),
-    )
-    monkeypatch.setattr(
-        "openviking.storage.transaction.get_lock_manager",
-        lambda: MagicMock(),
-    )
+class _FakeAgfs:
+    async def pathlock_acquire_exact_batch(self, _paths):
+        return {"lease_ref": "test"}
+
+    async def pathlock_release(self, _lease):
+        return None
 
 
 class _FakeVikingFS:
@@ -32,6 +24,7 @@ class _FakeVikingFS:
         self._tree = {self._norm(k): v for k, v in tree.items()}
         self._file_contents = {self._norm(k): v for k, v in file_contents.items()}
         self.writes = []
+        self._async_agfs = _FakeAgfs()
 
     def _norm(self, path):
         if "://" not in path:
@@ -50,7 +43,7 @@ class _FakeVikingFS:
     async def read_file(self, path, ctx=None):
         return self._file_contents.get(self._norm(path), "")
 
-    async def write_file(self, path, content, ctx=None):
+    async def write_file(self, path, content, ctx=None, lease_ref=None):
         norm_path = self._norm(path)
         self._file_contents[norm_path] = content
         self.writes.append((norm_path, content))
@@ -110,7 +103,6 @@ class _FakeProcessor:
 
 @pytest.mark.asyncio
 async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypatch):
-    _mock_transaction_layer(monkeypatch)
 
     root_uri = "viking://resources/root"
     tree = {

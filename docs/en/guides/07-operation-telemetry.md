@@ -120,7 +120,7 @@ curl -X POST http://localhost:1933/api/v1/resources/temp_upload \
 ```
 
 This endpoint currently accepts the boolean form only.
-`upload_mode` is also a form field for this endpoint; it defaults to `local` and should only be set to `shared` when you explicitly need distributed shared temporary uploads. Python HTTP client / CLI users can alternatively drive the same behavior with `ovcli.conf` -> `upload.mode = "shared"`.
+`upload_mode` is also a form field for this endpoint; it defaults to `local` and should only be set to `shared` when you explicitly need distributed shared temporary uploads. Python HTTP clients can alternatively set `upload.mode = "shared"` in `ovcli.conf`; the Rust `ov` CLI uses `OPENVIKING_UPLOAD_MODE=shared` instead.
 
 ## Common summary groups
 

@@ -13,7 +13,8 @@ from urllib.parse import urlsplit
 
 import httpx
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import Response, StreamingResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from loguru import logger
 
 from vikingbot.bus.events import InboundMessage, OutboundEventType, OutboundMessage
@@ -64,6 +65,35 @@ HOP_BY_HOP_HEADERS = {
     "transfer-encoding",
     "upgrade",
 }
+
+
+def _public_validation_error(error: Any) -> dict[str, Any]:
+    """Keep validation diagnostics without reflecting request data."""
+    if not isinstance(error, dict):
+        return {
+            "type": "value_error",
+            "loc": ["request"],
+            "msg": "Invalid request value",
+        }
+
+    location = error.get("loc", ("request",))
+    if not isinstance(location, (list, tuple)):
+        location = (location,)
+    return {
+        "type": str(error.get("type") or "value_error"),
+        "loc": [item if isinstance(item, (str, int)) else str(item) for item in location],
+        "msg": str(error.get("msg") or "Invalid request value"),
+    }
+
+
+async def _request_validation_error_handler(
+    _request: Request,
+    exc: RequestValidationError,
+) -> JSONResponse:
+    # Pydantic validation errors include the original `input` by default. Never
+    # return it here: image inputs may contain large or sensitive Base64 data.
+    errors = [_public_validation_error(error) for error in exc.errors()]
+    return JSONResponse(status_code=422, content={"detail": errors})
 
 
 @dataclass(frozen=True)
@@ -486,6 +516,14 @@ class OpenAPIChannel(BaseChannel):
             if storage_key not in channel._sessions:
                 raise HTTPException(status_code=404, detail="Session not found")
 
+            channel._ensure_no_pending(channel._pending, storage_key)
+            session_key = SessionKey(
+                type="cli",
+                channel_id=channel.config.channel_id(),
+                chat_id=storage_key,
+            )
+            channel._advance_session_generation(scope, session_id)
+            channel._session_manager.delete(session_key)
             del channel._sessions[storage_key]
             return {"deleted": True}
 
@@ -998,9 +1036,7 @@ class OpenAPIChannel(BaseChannel):
                     detail=OPENVIKING_UPSTREAM_NOT_CONFIGURED_DETAIL,
                 )
             await self._assert_runtime_upstream_auth_mode(
-                self._identity_headers_from_connection(
-                    compile_request.openviking_connection
-                )
+                self._identity_headers_from_connection(compile_request.openviking_connection)
             )
             compile_request._principal_scope = self._connection_principal_scope(
                 compile_request.openviking_connection
@@ -1074,9 +1110,43 @@ class OpenAPIChannel(BaseChannel):
             )
         return self._principal_scope(f"openviking:{account_id}:{user_id}")
 
+    def _scoped_session_id(self, principal_scope: str, session_id: str) -> str:
+        """Resolve the durable storage key for one public session ID."""
+        base = f"{principal_scope}:{session_id}"
+        generation_path = self._session_generation_path(base)
+        try:
+            raw_generation = generation_path.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            return base
+        try:
+            generation = uuid.UUID(raw_generation).hex
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Invalid OpenAPI session generation marker: {generation_path}"
+            ) from exc
+        return f"{base}:{generation}"
+
+    def _advance_session_generation(self, principal_scope: str, session_id: str) -> None:
+        """Atomically rotate storage before deleting the current session history."""
+        base = f"{principal_scope}:{session_id}"
+        generation_path = self._session_generation_path(base)
+        generation_path.parent.mkdir(parents=True, exist_ok=True)
+        generation = uuid.uuid4().hex
+        temp_path = generation_path.with_name(f".{generation_path.name}.{generation}.tmp")
+        try:
+            temp_path.write_text(generation, encoding="utf-8")
+            temp_path.replace(generation_path)
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+    def _session_generation_path(self, base: str) -> Path:
+        digest = hashlib.sha256(base.encode("utf-8")).hexdigest()
+        return self._session_manager.sessions_dir / ".openapi-session-generations" / f"{digest}.txt"
+
     @staticmethod
-    def _scoped_session_id(principal_scope: str, session_id: str) -> str:
-        return f"{principal_scope}:{session_id}"
+    def _ensure_no_pending(pending: Dict[str, PendingResponse], storage_key: str) -> None:
+        if storage_key in pending:
+            raise HTTPException(status_code=409, detail="Session already has a request in progress")
 
     async def _gateway_health(self, request: Request) -> dict[str, Any]:
         from vikingbot import __version__
@@ -1200,6 +1270,11 @@ class OpenAPIChannel(BaseChannel):
             logger.warning("No external FastAPI app provided, cannot setup routes")
             return
 
+        self._app.add_exception_handler(
+            RequestValidationError,
+            _request_validation_error_handler,
+        )
+
         # Get the router and include it at root path
         # Note: openviking-server adds its own /bot/v1 prefix when proxying
         router = self.get_router()
@@ -1220,6 +1295,12 @@ class OpenAPIChannel(BaseChannel):
             disabled_tools.append("message")
         return {"disabled_tools": disabled_tools}
 
+    def _request_media(self, request: ChatRequest) -> list[dict[str, Any]]:
+        return [image.model_dump(mode="json", exclude_none=True) for image in request.images]
+
+    def _request_content(self, request: ChatRequest) -> str:
+        return request.message or "[Image]"
+
     def _request_openviking_connection(self, request: ChatRequest) -> dict[str, Any] | None:
         if request.openviking_connection:
             connection = request.openviking_connection.model_dump(exclude_none=True)
@@ -1236,6 +1317,7 @@ class OpenAPIChannel(BaseChannel):
         session_id = request.session_id or str(uuid.uuid4())
         storage_key = self._scoped_session_id(request._principal_scope, session_id)
         user_id = self._request_user_id(request)
+        self._ensure_no_pending(self._pending, storage_key)
 
         # Create session if new
         if storage_key not in self._sessions:
@@ -1265,11 +1347,7 @@ class OpenAPIChannel(BaseChannel):
                 chat_id=storage_key,
             )
 
-            # Build content with context if provided
-            content = request.message
-            if request.context:
-                # Context is handled separately by session manager
-                pass
+            content = self._request_content(request)
 
             # Create and publish inbound message
             msg = InboundMessage(
@@ -1277,6 +1355,7 @@ class OpenAPIChannel(BaseChannel):
                 sender_id=user_id,
                 actor_peer_id=self._request_actor_peer_id(request, user_id),
                 content=content,
+                media=self._request_media(request),
                 metadata=self._request_metadata(request),
                 openviking_connection=self._request_openviking_connection(request),
             )
@@ -1315,6 +1394,7 @@ class OpenAPIChannel(BaseChannel):
         session_id = request.session_id or str(uuid.uuid4())
         storage_key = self._scoped_session_id(request._principal_scope, session_id)
         user_id = self._request_user_id(request)
+        self._ensure_no_pending(self._pending, storage_key)
 
         # Create session if new
         if storage_key not in self._sessions:
@@ -1347,7 +1427,8 @@ class OpenAPIChannel(BaseChannel):
                     session_key=session_key,
                     sender_id=user_id,
                     actor_peer_id=self._request_actor_peer_id(request, user_id),
-                    content=request.message,
+                    content=self._request_content(request),
+                    media=self._request_media(request),
                     metadata=self._request_metadata(request),
                     openviking_connection=self._request_openviking_connection(request),
                 )
@@ -1387,6 +1468,7 @@ class OpenAPIChannel(BaseChannel):
         session_id = request.session_id or str(uuid.uuid4())
         storage_key = self._scoped_session_id(request._principal_scope, session_id)
         user_id = self._request_user_id(request)
+        self._ensure_no_pending(self._bot_pending[channel_id], storage_key)
 
         # Ensure channel has session storage
         if channel_id not in self._bot_sessions:
@@ -1420,11 +1502,7 @@ class OpenAPIChannel(BaseChannel):
                 chat_id=storage_key,
             )
 
-            # Build content with context if provided
-            content = request.message
-            if request.context:
-                # Context is handled separately by session manager
-                pass
+            content = self._request_content(request)
 
             # Create and publish inbound message
             msg = InboundMessage(
@@ -1433,6 +1511,7 @@ class OpenAPIChannel(BaseChannel):
                 actor_peer_id=self._request_actor_peer_id(request, user_id),
                 content=content,
                 need_reply=request.need_reply,
+                media=self._request_media(request),
                 metadata=self._request_metadata(request),
                 openviking_connection=self._request_openviking_connection(request),
             )
@@ -1474,6 +1553,7 @@ class OpenAPIChannel(BaseChannel):
         session_id = request.session_id or str(uuid.uuid4())
         storage_key = self._scoped_session_id(request._principal_scope, session_id)
         user_id = self._request_user_id(request)
+        self._ensure_no_pending(self._bot_pending[channel_id], storage_key)
 
         # Ensure channel has session storage
         if channel_id not in self._bot_sessions:
@@ -1510,7 +1590,8 @@ class OpenAPIChannel(BaseChannel):
                     session_key=session_key,
                     sender_id=user_id,
                     actor_peer_id=self._request_actor_peer_id(request, user_id),
-                    content=request.message,
+                    content=self._request_content(request),
+                    media=self._request_media(request),
                     metadata=self._request_metadata(request),
                     openviking_connection=self._request_openviking_connection(request),
                 )

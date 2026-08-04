@@ -37,7 +37,7 @@ class InboundMessage:
     timestamp: datetime = field(default_factory=datetime.now)
     sender_name: str | None = None
     need_reply: bool = True
-    media: list[str] = field(default_factory=list)  # Media URLs
+    media: list[str | dict[str, Any]] = field(default_factory=list)  # Paths or image_url parts
     metadata: dict[str, Any] = field(default_factory=dict)  # Channel-specific data
     openviking_connection: dict[str, Any] | None = None  # Internal OpenViking identity
 
