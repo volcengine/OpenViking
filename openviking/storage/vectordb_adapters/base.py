@@ -79,6 +79,13 @@ def _normalize_collection_names(raw_collections: Iterable[Any]) -> list[str]:
     return names
 
 
+def _normalize_result_score(value: Any) -> float:
+    """Return a finite numeric score; scalar sort values may be strings or datetimes."""
+    if isinstance(value, (int, float)) and math.isfinite(value):
+        return float(value)
+    return 0.0
+
+
 class CollectionAdapter(ABC):
     """Backend-specific adapter for single-collection operations.
 
@@ -508,10 +515,7 @@ class CollectionAdapter(ABC):
         for item in result.data:
             record = dict(item.fields) if item.fields else {}
             record["id"] = item.id
-            raw_score = item.score if item.score is not None else 0.0
-            if not math.isfinite(raw_score):
-                raw_score = 0.0
-            record["_score"] = raw_score
+            record["_score"] = _normalize_result_score(item.score)
             record = self._normalize_record_for_read(record)
             records.append(record)
         return records

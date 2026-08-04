@@ -19,6 +19,10 @@ from openviking.session.memory.dataclass import (
     ResolvedOperations,
     StoredLink,
 )
+from openviking.session.memory.experience_lineage import (
+    collect_read_experience_uris,
+    experience_source_tags,
+)
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_updater import ExtractContext, MemoryUpdateResult
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
@@ -164,6 +168,7 @@ class TrajectoryRolloutAnalyzer:
             include_trajectories=include_trajectories,
             include_session_skills=include_session_skills,
         )
+        consumed_experience_uris = collect_read_experience_uris(messages, ctx=ctx)
         phase_result = await self._run_trajectory_extract_phase(
             provider=provider,
             messages=messages,
@@ -173,6 +178,7 @@ class TrajectoryRolloutAnalyzer:
             include_session_skills=include_session_skills,
             case_name=case_name,
             source_archive_uri=source_archive_uri,
+            consumed_experience_uris=consumed_experience_uris,
         )
         if phase_result is None:
             return empty_result
@@ -191,6 +197,7 @@ class TrajectoryRolloutAnalyzer:
         include_session_skills: bool = False,
         case_name: str = "",
         source_archive_uri: str = "",
+        consumed_experience_uris: list[str] | None = None,
     ) -> tuple[list[str], list[str], list[Context], list[PatchSemanticGradient]] | None:
         config = get_openviking_config()
         vlm = self.vlm or config.vlm.get_vlm_instance()
@@ -257,6 +264,7 @@ class TrajectoryRolloutAnalyzer:
                     ctx=ctx,
                     extract_context=extract_context,
                     isolation_handler=isolation_handler,
+                    consumed_experience_uris=consumed_experience_uris,
                 )
             tracer.info(
                 "[trajectory] Applied memory ops: "
@@ -286,6 +294,7 @@ class TrajectoryRolloutAnalyzer:
         ctx: RequestContext,
         extract_context: ExtractContext,
         isolation_handler: MemoryIsolationHandler,
+        consumed_experience_uris: list[str] | None = None,
     ) -> MemoryUpdateResult:
         updater = MemoryUpdater(
             registry=provider._get_registry(),
@@ -298,6 +307,10 @@ class TrajectoryRolloutAnalyzer:
             ctx,
             extract_context=extract_context,
             isolation_handler=isolation_handler,
+            search_tags_by_uri=_trajectory_search_tags_by_uri(
+                operations,
+                consumed_experience_uris,
+            ),
         )
 
     @tracer(
@@ -408,6 +421,23 @@ def _apply_trajectory_source_archive_uri(
         if not isinstance(fields, dict):
             continue
         fields["source_archive_uri"] = source_archive_uri
+
+
+def _trajectory_search_tags_by_uri(
+    operations: ResolvedOperations,
+    consumed_experience_uris: list[str] | None,
+) -> dict[str, list[str]]:
+    tags = experience_source_tags(consumed_experience_uris)
+    if not tags:
+        return {}
+    result: dict[str, list[str]] = {}
+    for op in getattr(operations, "upsert_operations", []) or []:
+        if getattr(op, "memory_type", None) != _TRAJECTORY_MEMORY_TYPE:
+            continue
+        for uri in getattr(op, "uris", []) or []:
+            if uri:
+                result[uri] = list(tags)
+    return result
 
 
 def _messages_with_evaluation_feedback(

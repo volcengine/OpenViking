@@ -15,6 +15,7 @@ from openviking.core.namespace import canonicalize_uri
 from openviking.privacy import UserPrivacyConfigService
 from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.server.identity import RequestContext, Role
+from openviking.service.agent_evolution_service import AgentEvolutionService
 from openviking.service.debug_service import DebugService
 from openviking.service.fs_service import FSService
 from openviking.service.pack_service import PackService
@@ -104,6 +105,7 @@ class OpenVikingService:
         self._resource_service = ResourceService()
         self._session_service = SessionService()
         self._debug_service = DebugService()
+        self._agent_evolution_service = AgentEvolutionService()
 
         # State
         self._initialized = False
@@ -280,6 +282,11 @@ class OpenVikingService:
         """Get DebugService instance."""
         return self._debug_service
 
+    @property
+    def agent_evolution(self) -> AgentEvolutionService:
+        """Get Agent Evolution query service."""
+        return self._agent_evolution_service
+
     async def initialize(self) -> None:
         """Initialize OpenViking storage and indexes."""
         if self._initialized:
@@ -408,6 +415,10 @@ class OpenVikingService:
             vikingdb=self._vikingdb_manager,
             config=self._config,
             agfs_client=self._agfs_client,
+        )
+        self._agent_evolution_service.set_dependencies(
+            vikingdb=self._vikingdb_manager,
+            viking_fs=self._viking_fs,
         )
 
         if self._queue_manager:

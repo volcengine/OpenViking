@@ -25,7 +25,6 @@ import {
   deriveAgentSessionId,
   loadAgentHookConfig,
   makeAgentFetchJSON,
-  readHookInput,
   readHookState,
   recallForPrompt,
   replayAgentPending,
@@ -36,6 +35,8 @@ import {
   withAgentHookLock,
   writeHookState,
 } from "./shared/agent-hook-runtime.mjs";
+import { maybeDetach, readHookStdin } from "./shared/async-writer.mjs";
+import { applyZcodeCaptureResult, buildZcodeCapturePlan } from "./zcode-capture.mjs";
 import { buildZcodeTurns, cleanZcodeText } from "./zcode-turns.mjs";
 
 const eventName = process.env.OPENVIKING_HOOK_EVENT || process.argv[2] || "";
@@ -62,17 +63,11 @@ function outputContext(additionalContext, hookEventName) {
   );
 }
 
-const input = await readHookInput();
-
-// ZCode may pass sessionId in camelCase or snake_case. Ensure both are present
-// so resolveNativeSessionId() finds it via the direct lookup path — avoids the
-// cwd fallback that would collide for two windows in the same directory.
-if (!input.session_id && input.sessionId) input.session_id = input.sessionId;
-
-const nativeSessionId = resolveNativeSessionId(input);
-const sessionId = deriveAgentSessionId("zc-", input);
-const cwd = resolveAgentCwd(input);
-const { fetchJSON } = makeAgentFetchJSON(cfg, cwd);
+let input = {};
+let nativeSessionId = "";
+let sessionId = "";
+let cwd = "";
+let fetchJSON;
 
 async function main() {
   if (!cfg.enabled || shouldBypassAgent(cfg, input)) {
@@ -143,51 +138,22 @@ async function main() {
     if (!cfg.autoCapture) return;
     await withAgentHookLock("zcode", nativeSessionId, async () => {
       state = await readHookState("zcode", nativeSessionId);
-      const capturedTurnIds = new Set(Array.isArray(state.capturedTurnIds) ? state.capturedTurnIds : []);
-      const toSend = [];
-      let newLastTurnId = state.lastTurnId || null;
-
-      for (const turn of buildZcodeTurns(input, state)) {
-        // Dedup key: turnId + role ensures user and assistant from the same
-        // rollout entry (which share a turnId) are treated as distinct turns.
-        // For stdin-only turns without turnId, fall back to stableHash.
-        const dedupKey = turn.turnId
-          ? `${turn.turnId}:${turn.role}`
-          : stableHash(turn.role, turn.content);
-        if (capturedTurnIds.has(dedupKey)) continue;
-        toSend.push({ dedupKey, turn });
-        if (turn.turnId) {
-          newLastTurnId = turn.turnId;
-        }
-      }
+      const plan = buildZcodeCapturePlan(buildZcodeTurns(input, state), state);
 
       // Fail-closed: if no turns and no dedup keys, skip silently (not an error —
       // could be a Stop with no new content, or a race with UserPromptSubmit).
-      if (toSend.length === 0) return;
+      if (plan.toSend.length === 0) return;
 
-      const result = await addAgentMessages(
-        fetchJSON,
-        sessionId,
-        toSend.map((item) => item.turn),
-      );
-      const captured = result.sent + result.queued;
-      // Only record dedup keys for successfully sent turns
-      for (const item of toSend.slice(0, captured)) {
-        if (!item.turn.turnId) {
-          capturedTurnIds.add(item.dedupKey);
-        }
-      }
+      const result = await addAgentMessages(fetchJSON, sessionId, plan.payloads);
+      const { captured, ...nextState } = applyZcodeCaptureResult(state, plan, result);
       let nextCount = Number(state.capturedSinceCommit || 0) + captured;
       if (captured > 0) {
         const committed = await commitAgentSession(fetchJSON, sessionId);
         if (committed.ok) nextCount = 0;
       }
       await writeHookState("zcode", nativeSessionId, {
-        ...state,
-        capturedTurnIds: [...capturedTurnIds].slice(-1000),
+        ...nextState,
         capturedSinceCommit: nextCount,
-        pendingPrompt: null,
-        lastTurnId: newLastTurnId,
       });
     });
     // Stop: no output needed (pass-through)
@@ -197,7 +163,31 @@ async function main() {
   // Unknown event: pass-through silently
 }
 
-main().catch((error) => {
+async function run() {
+  if (eventName === "stop" && cfg.enabled && cfg.autoCapture) {
+    const detached = await maybeDetach(cfg, { approve: () => {} });
+    if (detached) return;
+  }
+
+  try {
+    input = JSON.parse(await readHookStdin());
+  } catch {
+    input = {};
+  }
+
+  // ZCode may pass sessionId in camelCase or snake_case. Ensure both are present
+  // so resolveNativeSessionId() finds it via the direct lookup path — avoids the
+  // cwd fallback that would collide for two windows in the same directory.
+  if (!input.session_id && input.sessionId) input.session_id = input.sessionId;
+
+  nativeSessionId = resolveNativeSessionId(input);
+  sessionId = deriveAgentSessionId("zc-", input);
+  cwd = resolveAgentCwd(input);
+  ({ fetchJSON } = makeAgentFetchJSON(cfg, cwd));
+  await main();
+}
+
+run().catch((error) => {
   logError("uncaught", error);
   // Pass-through on error — never block the session
 });

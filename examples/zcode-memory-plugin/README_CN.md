@@ -7,9 +7,9 @@
 - **SessionStart** — 注入用户画像和偏好/实体到上下文。
 - **UserPromptSubmit** — 搜索 OpenViking 相关记忆并注入。
 - **PreToolUse**（`Read|Glob|Grep`）— 拦截 `viking://` 虚拟路径的直接访问，引导使用 MCP 工具。
-- **Stop** — 捕获增量用户/助手对话并提交 OpenViking 会话。
+- **Stop** — 立即返回，并在 detached worker 中捕获增量用户/助手对话、提交 OpenViking 会话。
 
-ZCode 不支持 `PreCompact`/`SessionEnd`/`SubagentStart`/`SubagentStop`，因此采用 commit-on-`Stop` 策略（同 TRAE 和 Codex），补偿缺少 compact/会话结束信号的不足。
+ZCode 不支持 `PreCompact`/`SessionEnd`/`SubagentStart`/`SubagentStop`，因此通过 Stop 时 commit 补足 compact/会话结束信号。Rollout 文件是权威增量对话源：稳定的 host `turnId` 用于去重，也让后续 Stop 能恢复漏掉的回合；只有 rollout 文件不可用时才回退到 Hook stdin。
 
 ## 安装
 
@@ -23,12 +23,12 @@ bash examples/memory-plugin-shared/install.sh --harness zcode
 
 ## 架构
 
-插件通过 `sync.mjs` 将共享运行时 vendor 到 `scripts/shared/`。调度器（`zcode-hook.mjs`）按事件名分支；四个薄 shim 脚本设置环境变量后导入调度器。所有记忆逻辑（召回、捕获、提交、去重、待处理队列、凭据解析、MCP 代理）由共享运行时提供。
+插件通过 `sync.mjs` 将共享运行时 vendor 到 `scripts/shared/`。调度器（`zcode-hook.mjs`）按事件名分支；三个轻量 shim 设置环境变量并导入调度器，URI guard 使用独立入口。共享运行时提供召回、批量写入、待处理队列、凭据解析和 MCP 代理；`zcode-capture.mjs` 负责 ZCode 特有的确认与游标状态转换。
 
 详见 [DESIGN.md](./DESIGN.md) 了解已验证的 ZCode 扩展面事实和设计决策来源。
 
 ## 测试
 
 ```bash
-node --test scripts/zcode-turns.test.mjs scripts/zcode-hooks.test.mjs
+node --test scripts/*.test.mjs
 ```

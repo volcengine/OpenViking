@@ -72,6 +72,35 @@ test("buildZcodeTurns falls back to state.pendingPrompt", () => {
   assert.equal(turns[0].content, "cached question");
 });
 
+test("buildZcodeTurns prefers rollout and recovers missed turns even with pendingPrompt", () => {
+  const { fakeHome, sessionId } = createFakeRolloutHome([
+    { turnId: "turn-001", request: { messages: [{ role: "user", content: "missed q" }] }, response: { text: "missed a" } },
+    { turnId: "turn-002", request: { messages: [{ role: "user", content: "current q" }] }, response: { text: "current a" } },
+  ]);
+  const originalHome = process.env.HOME;
+  process.env.HOME = fakeHome;
+  const turns = buildZcodeTurns(
+    {
+      session_id: sessionId,
+      responseText: "stdin current a",
+    },
+    {
+      pendingPrompt: { prompt: "current q" },
+    },
+  );
+  process.env.HOME = originalHome;
+
+  assert.deepEqual(
+    turns.map(({ role, content, turnId }) => ({ role, content, turnId })),
+    [
+      { role: "user", content: "missed q", turnId: "turn-001" },
+      { role: "assistant", content: "missed a", turnId: "turn-001" },
+      { role: "user", content: "current q", turnId: "turn-002" },
+      { role: "assistant", content: "current a", turnId: "turn-002" },
+    ],
+  );
+});
+
 test("buildZcodeTurns strips injected blocks from content", () => {
   const turns = buildZcodeTurns({
     prompt: "real question <openviking-context>injected</openviking-context>",

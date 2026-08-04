@@ -31,6 +31,7 @@ from openviking.server.profile_middleware import create_profile_http_middleware
 from openviking.server.request_id import REQUEST_ID_HEADER, RequestIdMiddleware
 from openviking.server.routers import (
     admin_router,
+    agent_evolution_router,
     bot_router,
     console_router,
     content_router,
@@ -88,6 +89,7 @@ def create_worker_app() -> FastAPI:
     if bot_api_url is not None:
         config.bot_api_url = bot_api_url
     return create_app(config, config_path=config_path)
+
 
 async def _initialize_auth_plugin(
     app: FastAPI,
@@ -572,6 +574,7 @@ def create_app(
     # Register routers
     app.include_router(system_router)
     app.include_router(admin_router)
+    app.include_router(agent_evolution_router)
     app.include_router(resources_router)
     app.include_router(filesystem_router)
     app.include_router(content_router)

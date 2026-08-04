@@ -7,9 +7,9 @@ This package provides a ZCode lifecycle adapter for OpenViking long-term memory.
 - **SessionStart** — injects user profile and preferences/entities into context.
 - **UserPromptSubmit** — searches OpenViking for relevant memories and injects them.
 - **PreToolUse** (`Read|Glob|Grep`) — denies direct access to `viking://` URIs, redirects to MCP tools.
-- **Stop** — captures incremental user/assistant turns and commits the OpenViking session.
+- **Stop** — returns immediately, then captures incremental user/assistant turns and commits the OpenViking session in a detached worker.
 
-ZCode does not support `PreCompact`/`SessionEnd`/`SubagentStart`/`SubagentStop`, so the commit-on-`Stop` strategy (mirroring TRAE and Codex) compensates for the absence of compact/end-of-session signals.
+ZCode does not support `PreCompact`/`SessionEnd`/`SubagentStart`/`SubagentStop`, so the commit-on-`Stop` strategy compensates for the absence of compact/end-of-session signals. The rollout file is the authoritative incremental transcript: stable host `turnId` values drive deduplication and allow a later Stop to recover missed turns. Hook stdin is only a fallback when the rollout file is unavailable.
 
 ## Install
 
@@ -23,12 +23,12 @@ The installer detects ZCode via `~/.zcode/` or a `zcode` binary, merges hooks an
 
 ## Architecture
 
-The plugin vendors the shared runtime into `scripts/shared/` via `sync.mjs`. The dispatcher (`zcode-hook.mjs`) branches on event name; four thin shim scripts set an environment variable and import the dispatcher. All memory logic (recall, capture, commit, dedup, pending queue, credential resolution, MCP proxy) is provided by the shared runtime.
+The plugin vendors the shared runtime into `scripts/shared/` via `sync.mjs`. The dispatcher (`zcode-hook.mjs`) branches on event name; three thin shim scripts set an environment variable and import the dispatcher, while the URI guard has its own entry point. Shared runtime modules provide recall, batching, pending queue, credential resolution, and MCP proxying; `zcode-capture.mjs` owns the ZCode-specific acknowledgement and cursor state transition.
 
 See [DESIGN.md](./DESIGN.md) for verified ZCode extension-surface facts and decision provenance.
 
 ## Tests
 
 ```bash
-node --test scripts/zcode-turns.test.mjs scripts/zcode-hooks.test.mjs
+node --test scripts/*.test.mjs
 ```

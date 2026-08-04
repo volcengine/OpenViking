@@ -62,6 +62,7 @@ export function loadAgentHookConfig(clientId) {
     timeoutMs: envNumber("OPENVIKING_TIMEOUT_MS", 15000, 1000),
     profileTokenBudget: envNumber("OPENVIKING_PROFILE_TOKEN_BUDGET", 6000, 500),
     commitTurnThreshold: envNumber("OPENVIKING_COMMIT_TURN_THRESHOLD", 8, 1),
+    writePathAsync: envBool("OPENVIKING_WRITE_PATH_ASYNC", true),
     debug: envBool("OPENVIKING_DEBUG", false),
     debugLogPath,
   };

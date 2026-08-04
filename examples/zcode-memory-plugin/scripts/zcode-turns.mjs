@@ -17,9 +17,9 @@
  *     response: { text, toolCalls, finishReason } }
  *
  * Strategy:
- * 1. Try stdin payload fields for per-turn user/assistant content
- * 2. If stdin lacks user content, read the rollout file for the session
- *    and extract ALL unseen turns since the last known turnId
+ * 1. Use the rollout file as the authoritative incremental transcript and
+ *    extract ALL unseen turns since the last acknowledged turnId.
+ * 2. Use stdin + pendingPrompt only when the rollout file is unavailable.
  */
 
 import { readFileSync } from "node:fs";
@@ -84,16 +84,20 @@ function extractUserFromMessages(messages) {
  * @returns {Array<{role: string, content: string, turnId: string}>} Unseen turns.
  */
 export function extractUnseenRolloutTurns(rolloutPath, lastKnownTurnId = null) {
-  if (!rolloutPath) return [];
+  return readUnseenRolloutTurns(rolloutPath, lastKnownTurnId).turns;
+}
+
+function readUnseenRolloutTurns(rolloutPath, lastKnownTurnId = null) {
+  if (!rolloutPath) return { available: false, turns: [] };
   let raw;
   try {
     raw = readFileSync(rolloutPath, "utf8");
   } catch {
-    return [];
+    return { available: false, turns: [] };
   }
 
   const lines = raw.trim().split("\n").filter(Boolean);
-  if (lines.length === 0) return [];
+  if (lines.length === 0) return { available: true, turns: [] };
 
   // If we have a lastKnownTurnId, find its position and return everything after.
   // If not, return only the last entry (first-time capture).
@@ -130,20 +134,25 @@ export function extractUnseenRolloutTurns(rolloutPath, lastKnownTurnId = null) {
     }
   }
 
-  return turns;
+  return { available: true, turns };
 }
 
 /**
  * Extract user/assistant turns from a ZCode Stop-event payload.
  *
- * Tries stdin payload fields first. Falls back to rollout file for complete
- * conversation when stdin lacks user content.
+ * Uses the rollout file first so every normal Stop observes stable host turn
+ * IDs and can recover missed Stop events. Stdin is only a compatibility
+ * fallback for environments where no rollout file can be read.
  *
  * @param {object} input - Raw hook stdin JSON.
  * @param {object} state - Persistent hook state (may contain pendingPrompt, lastTurnId).
  * @returns {Array<{role: string, content: string, turnId?: string}>} Non-empty turns.
  */
 export function buildZcodeTurns(input = {}, state = {}) {
+  const rolloutPath = resolveRolloutPath(input);
+  const rollout = readUnseenRolloutTurns(rolloutPath, state.lastTurnId || null);
+  if (rollout.available) return rollout.turns;
+
   // Assistant content: try documented and reverse-engineered field names
   const assistantContent =
     input.responseText ||
@@ -166,21 +175,8 @@ export function buildZcodeTurns(input = {}, state = {}) {
     state.pendingPrompt?.prompt ||
     "";
 
-  // Build turns from stdin payload
-  let turns = [
+  return [
     { role: "user", content: cleanZcodeText(userContent) },
     { role: "assistant", content: cleanZcodeText(assistantContent) },
   ].filter((turn) => turn.content);
-
-  // If user content is missing from stdin (the known ZCode limitation),
-  // use rollout file to extract ALL unseen turns with turnId.
-  if (turns.length < 2 || turns[0]?.role !== "user") {
-    const rolloutPath = resolveRolloutPath(input);
-    const rolloutTurns = extractUnseenRolloutTurns(rolloutPath, state.lastTurnId || null);
-    if (rolloutTurns.length > 0) {
-      turns = rolloutTurns;
-    }
-  }
-
-  return turns;
 }
