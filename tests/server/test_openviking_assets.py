@@ -8,6 +8,7 @@ import httpx
 import pytest
 import pytest_asyncio
 
+from openviking.server.identity import RequestContext, Role
 from openviking.server.openviking_assets import (
     normalize_repo_url,
     preflight_git_repository,
@@ -18,6 +19,7 @@ from openviking_cli.exceptions import (
     NotFoundError,
     PermissionDeniedError,
 )
+from openviking_cli.session.user_id import UserIdentifier
 
 FULL_COMMIT_SHA = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
 
@@ -32,6 +34,7 @@ catalog:
   - name: alpha
     connector: git
     description: alpha repo
+    to: viking://resources/repos/alpha
     params:
       repo_url: https://github.com/org/alpha
       branch: main
@@ -60,6 +63,7 @@ catalog:
   - name: alpha
     connector: git
     description: alpha repo
+    to: viking://resources/repos/alpha
     params:
       repo_url: https://github.com/org/alpha
       branch: main
@@ -93,7 +97,10 @@ async def assets_client():
     from openviking.server.config import ServerConfig
 
     app = create_app(config=ServerConfig(), service=SimpleNamespace(sessions=None))
-    app.dependency_overrides[get_request_context] = object
+    app.dependency_overrides[get_request_context] = lambda: RequestContext(
+        user=UserIdentifier(account_id="acct", user_id="alice"),
+        role=Role.USER,
+    )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         yield client
@@ -108,6 +115,8 @@ def test_resolver_normalizes_and_resolves_defaults():
     )
 
     assert [asset.name for asset in result.assets] == ["alpha", "beta"]
+    assert result.assets[0].to == "viking://resources/repos/alpha"
+    assert result.assets[1].to is None
     assert result.assets[0].watch_interval == 30
     assert result.assets[1].watch_interval == 0
     assert result.assets[1].locator == "github.com/org/beta"
@@ -181,6 +190,49 @@ def test_single_file_manifest_selects_subset():
     )
 
     assert [asset.name for asset in result.assets] == ["beta"]
+
+
+@pytest.mark.parametrize(
+    ("to", "message"),
+    [
+        ("'   '", "must be a non-empty string"),
+        ("viking://user/skills/repo", "must target resource content"),
+        ("https://example.com/repo", "unsupported URI scheme"),
+    ],
+)
+def test_resolver_rejects_invalid_asset_target(to: str, message: str):
+    manifest = f"""\
+protocol: openviking-assets/1
+catalog:
+  - name: targeted
+    connector: git
+    to: {to}
+    params:
+      repo_url: https://github.com/org/targeted
+"""
+
+    with pytest.raises(InvalidArgumentError, match=message):
+        resolve_openviking_assets(manifest_yaml=manifest)
+
+
+def test_resolver_rejects_duplicate_selected_targets():
+    manifest = """\
+protocol: openviking-assets/1
+catalog:
+  - name: alpha
+    connector: git
+    to: viking://resources/repos/shared
+    params:
+      repo_url: https://github.com/org/alpha
+  - name: beta
+    connector: git
+    to: viking://resources/repos/shared/
+    params:
+      repo_url: https://github.com/org/beta
+"""
+
+    with pytest.raises(InvalidArgumentError, match="same target URI"):
+        resolve_openviking_assets(manifest_yaml=manifest)
 
 
 @pytest.mark.parametrize(
@@ -371,6 +423,30 @@ async def test_resolve_endpoint_accepts_single_file_manifest(assets_client: http
     assert body["status"] == "ok"
     assert [asset["name"] for asset in body["result"]["assets"]] == ["alpha", "beta"]
     assert body["result"]["catalog"] == "single-file.yaml"
+
+
+async def test_resolve_endpoint_canonicalizes_current_user_target(
+    assets_client: httpx.AsyncClient,
+):
+    manifest = """\
+protocol: openviking-assets/1
+catalog:
+  - name: private
+    connector: git
+    to: viking://user/resources/repos/private
+    params:
+      repo_url: https://github.com/org/private
+"""
+
+    response = await assets_client.post(
+        "/api/v1/openviking-assets/resolve",
+        json={"manifest_yaml": manifest},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["result"]["assets"][0]["to"] == (
+        "viking://user/alice/resources/repos/private"
+    )
 
 
 async def test_resolve_endpoint_maps_configuration_errors(assets_client: httpx.AsyncClient):
