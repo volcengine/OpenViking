@@ -14,7 +14,7 @@ from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
 
-def test_service_passes_parser_api_concurrency_to_storage(monkeypatch) -> None:
+def test_service_passes_queue_worker_concurrency_to_storage(monkeypatch) -> None:
     storage_calls = []
     embedder = SimpleNamespace(is_sparse=False)
     config = SimpleNamespace(
@@ -27,7 +27,10 @@ def test_service_passes_parser_api_concurrency_to_storage(monkeypatch) -> None:
             get_embedder=lambda: embedder,
         ),
         vlm=SimpleNamespace(max_concurrent=64),
-        parser_api=SimpleNamespace(max_concurrent=9),
+        parser_api=SimpleNamespace(),
+        queue_workers=SimpleNamespace(
+            external_parse=SimpleNamespace(max_concurrent=9),
+        ),
         git=object(),
     )
 

@@ -51,6 +51,7 @@ Optional sections use their defaults when omitted. Unknown fields are rejected.
 | `retrieval` | object | see below | Ranking and intent-analysis behavior |
 | `grep` | object | built-in defaults | Text search engine |
 | `storage` | object | local | Workspace, file system, and vector database |
+| `queue_workers` | object | see below | Runtime concurrency for QueueFS consumer workers |
 | `server` | object | local development | HTTP, authentication, uploads, and observability |
 | `memory` | object | see below | Memory and skill extraction on session commit |
 | `parsers` | object | parser defaults | PDF, code, image, audio, video, and text parsing |
@@ -196,6 +197,16 @@ Search and Find requests default to `limit: 10`; override the limit on each API 
 | `skip_process_lock` | boolean | `false` | Skip the workspace process lock; use only when accepting concurrent-write risk |
 
 Remote backends also require endpoint, bucket/collection, credentials, and timeout fields. See [Configuration](../guides/01-configuration.md#storage) for complete examples.
+
+## Queue Worker Settings
+
+### `queue_workers.external_parse`
+
+| Field | Type | Default | Description |
+|---|---|---:|---|
+| `max_concurrent` | integer | `4` | Number of complete ExternalParse jobs consumed concurrently; must be greater than `0`; requires a server restart after changes |
+
+This setting controls queue-job concurrency. It is separate from `vlm.media.max_concurrent`, which limits audio/video VLM calls, and does not limit individual Understanding API HTTP requests.
 
 ## HTTP Server Settings
 

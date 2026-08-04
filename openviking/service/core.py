@@ -122,7 +122,7 @@ class OpenVikingService:
             config.storage,
             max_concurrent_embedding=config.embedding.max_concurrent,
             max_concurrent_semantic=config.vlm.max_concurrent,
-            max_concurrent_external_parse=config.parser_api.max_concurrent,
+            max_concurrent_external_parse=config.queue_workers.external_parse.max_concurrent,
             binding_config=binding_config,
             git_config=config.git,
         )
@@ -293,7 +293,9 @@ class OpenVikingService:
                 self._config.storage,
                 max_concurrent_embedding=self._config.embedding.max_concurrent,
                 max_concurrent_semantic=self._config.vlm.max_concurrent,
-                max_concurrent_external_parse=self._config.parser_api.max_concurrent,
+                max_concurrent_external_parse=(
+                    self._config.queue_workers.external_parse.max_concurrent
+                ),
                 binding_config=self._build_ragfs_binding_config(),
                 git_config=self._config.git,
             )
