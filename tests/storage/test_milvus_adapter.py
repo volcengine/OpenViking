@@ -104,7 +104,7 @@ def test_augments_path_fields_on_write_and_hides_them_on_read():
     assert normalized["uri_depth"] == 4
     assert source_record["uri"] == "viking://resources/acme/docs/a.md"
 
-    public_record = adapter.normalize_record_for_read(normalized)
+    public_record = adapter._normalize_record_for_read(normalized)
     assert public_record["uri"] == "viking://resources/acme/docs/a.md"
     assert "parent_uri" not in public_record
     assert "scope_roots" not in public_record

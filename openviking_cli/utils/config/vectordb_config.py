@@ -241,7 +241,6 @@ class MilvusConfig(BaseModel):
             raise ValueError("Milvus timeout_seconds must be positive")
         return self
 
-
 class VectorDBBackendConfig(BaseModel):
     """
     Configuration for VectorDB backend.
