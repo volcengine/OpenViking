@@ -226,6 +226,18 @@ type SearchOptions struct {
 	Tags           []string
 }
 
+// RecallOptions controls Recall. Zero-valued fields fall back to server-side
+// defaults for that field.
+type RecallOptions struct {
+	Quotas           map[string]int
+	MaxChars         *int
+	MinScore         *float64
+	PeerScope        string
+	OtherPeerPenalty any
+	Render           *bool
+	Telemetry        any
+}
+
 // GrepOptions controls Grep.
 type GrepOptions struct {
 	CaseInsensitive bool
@@ -314,26 +326,16 @@ type FindResult struct {
 	Total        int              `json:"total,omitempty"`
 }
 
-// MatchedContext is one retrieval hit.
+// MatchedContext is one retrieval hit. Only the fields the retrieval pipeline
+// actually populates are exposed; search_tags is surfaced under the "tags" key
+// to match the tags filter parameter accepted by Find and Search.
 type MatchedContext struct {
-	URI         string           `json:"uri,omitempty"`
-	ContextType string           `json:"context_type,omitempty"`
-	Level       int              `json:"level,omitempty"`
-	Abstract    string           `json:"abstract,omitempty"`
-	Overview    string           `json:"overview,omitempty"`
-	Category    string           `json:"category,omitempty"`
-	Score       float64          `json:"score,omitempty"`
-	MatchReason string           `json:"match_reason,omitempty"`
-	Relations   []RelatedContext `json:"relations,omitempty"`
-}
-
-// RelatedContext is a related context reference attached to a retrieval hit.
-type RelatedContext struct {
-	URI        string  `json:"uri,omitempty"`
-	Reason     string  `json:"reason,omitempty"`
-	Score      float64 `json:"score,omitempty"`
-	Relation   string  `json:"relation,omitempty"`
-	RelationID string  `json:"relation_id,omitempty"`
+	URI         string   `json:"uri,omitempty"`
+	ContextType string   `json:"context_type,omitempty"`
+	Level       int      `json:"level,omitempty"`
+	Abstract    string   `json:"abstract,omitempty"`
+	Score       float64  `json:"score,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
 }
 
 // QueryPlan describes search query expansion details when the server returns them.
