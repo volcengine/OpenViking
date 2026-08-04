@@ -61,7 +61,9 @@ async def test_patch_merge_context_provider_prefetch_reads_originals_and_renders
     assert provider.get_tools() == []
     assert provider.read_file.await_count == 1
     read_message = json.loads(messages[0]["content"])
-    assert read_message["tool_call_name"] == "read"
+    assert read_message["message_type"] == "tool_result"
+    assert read_message["tool_name"] == "read"
+    assert "tool_call_name" not in read_message
     assert read_message["args"] == {"uri": "viking://user/u/memories/experiences/booking.md"}
     assert read_message["result"]["experience_name"] == "booking"
     assert messages[1]["role"] == "user"

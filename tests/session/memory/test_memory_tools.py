@@ -4,6 +4,8 @@
 Tests for memory tools.
 """
 
+import json
+
 import pytest
 
 from openviking.server.identity import RequestContext, Role, ToolContext
@@ -13,6 +15,7 @@ from openviking.session.memory.tools import (
     MemoryLsTool,
     MemoryReadTool,
     MemorySearchTool,
+    add_tool_call_pair_to_messages,
     get_tool,
 )
 from openviking_cli.session.user_id import UserIdentifier
@@ -20,6 +23,23 @@ from openviking_cli.session.user_id import UserIdentifier
 
 class TestMemoryTools:
     """Tests for memory tools."""
+
+    def test_prefetched_tool_result_is_not_serialized_as_a_tool_call(self):
+        messages = []
+
+        add_tool_call_pair_to_messages(
+            messages,
+            call_id="prefetch-1",
+            tool_name="search",
+            params={"query": "Melanie pottery"},
+            result=["viking://user/default/memories/events/pottery.md"],
+        )
+
+        payload = json.loads(messages[0]["content"])
+        assert messages[0]["role"] == "user"
+        assert payload["message_type"] == "tool_result"
+        assert payload["tool_name"] == "search"
+        assert "tool_call_name" not in payload
 
     def test_read_tool_properties(self):
         """Test MemoryReadTool properties."""

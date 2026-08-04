@@ -207,17 +207,43 @@ class SessionExtractContextProvider(ExtractContextProvider):
             if contains_resource_uri
             else ""
         )
+        if self._eager_prefetch:
+            resource_deletion_prefetch_rule = (
+                "\n- For URIs listed under the system-generated `## Resource Deletion` block's "
+                "`Affected memory URIs`, only edit files whose complete content is already in the "
+                "pre-fetched context"
+                if contains_resource_uri
+                else ""
+            )
+            context_workflow = (
+                "2. Use only the pre-fetched context; no tools are available\n"
+                "3. Output ONLY a JSON object (no extra text before or after)"
+            )
+            tool_rules = (
+                "- No tools are available. Do not output read, search, write, or other tool requests\n"
+                "- Only edit an existing memory file when its complete content is already included "
+                f"in the pre-fetched context{resource_deletion_prefetch_rule}"
+            )
+        else:
+            context_workflow = (
+                "2. If you need the complete content of a listed memory URI, use the read tool\n"
+                "3. When you have enough information, output ONLY a JSON object "
+                "(no extra text before or after)"
+            )
+            tool_rules = (
+                "- ONLY the read tool is available - search and write are not available\n"
+                "- Before editing ANY existing memory file, you MUST first read its complete content\n"
+                "- ONLY read URIs that are explicitly listed in pre-fetched search results, "
+                f"returned by previous tool calls{resource_deletion_read_source}"
+            )
         goal = f"""You are a memory extraction agent. Your task is to analyze conversations and update memories.
 
 ## Workflow
 1. Analyze the conversation and pre-fetched context
-2. If you need more information, use the available tools (read/search)
-3. When you have enough information, output ONLY a JSON object (no extra text before or after)
+{context_workflow}
 
 ## Critical
-- ONLY read and search tools are available - DO NOT use write tool
-- Before editing ANY existing memory file, you MUST first read its complete content
-- ONLY read URIs that are explicitly listed in ls/search tool results, returned by previous tool calls{resource_deletion_read_source}
+{tool_rules}
 
 ## Target Output Language
 All memory content MUST be written in {output_language}.

@@ -75,12 +75,18 @@ def add_tool_call_pair_to_messages(
     params: Dict[str, Any],
     result: Any,
 ) -> None:
-    """Add a tool call pair with optimized format to save tokens."""
+    """Add a compact tool result message without imitating a callable request."""
     messages.append(
         {
             "role": "user",
             "content": json.dumps(
-                {"tool_call_name": tool_name, "args": params, "result": result}, ensure_ascii=False
+                {
+                    "message_type": "tool_result",
+                    "tool_name": tool_name,
+                    "args": params,
+                    "result": result,
+                },
+                ensure_ascii=False,
             ),
         }
     )
