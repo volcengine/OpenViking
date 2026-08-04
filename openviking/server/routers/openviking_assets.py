@@ -54,7 +54,7 @@ class PreflightOpenVikingAssetRequest(BaseModel):
 @router.post("/resolve")
 async def resolve_assets(
     request: ResolveOpenVikingAssetsRequest,
-    _ctx: RequestContext = Depends(get_request_context),
+    ctx: RequestContext = Depends(get_request_context),
 ):
     """Parse and validate configuration without submitting resources."""
 
@@ -63,6 +63,7 @@ async def resolve_assets(
         catalog_yaml=request.catalog_yaml,
         manifest_label=request.manifest_label,
         catalog_label=request.catalog_label,
+        ctx=ctx,
     )
     return response_from_result(result.model_dump())
 

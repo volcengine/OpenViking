@@ -64,7 +64,6 @@ Manifest 按名称选择资产时，把 Catalog YAML 放入 `catalog_yaml`，来
         "connector": "git",
         "repo_url": "https://github.com/volcengine/OpenViking",
         "branch": "main",
-        "commit": null,
         "auth_ref": null,
         "watch_interval": 1440.0,
         "locator": "github.com/volcengine/OpenViking",
@@ -79,7 +78,7 @@ Manifest 按名称选择资产时，把 Catalog YAML 放入 `catalog_yaml`，来
 其中：
 
 - `locator` 是规范化后的仓库定位符。
-- `git_ref` 是最终解析出的分支、tag 或完整 commit SHA。
+- `git_ref` 是最终解析出的 Git 引用。
 - `asset_id` 是由连接器、规范化定位符与 Git 引用生成的 12 位稳定标识；示例值仅作格式说明。
 - `watch_interval` 的单位是分钟。
 - `catalog` 回显 `catalog_label`；单文件 Manifest 时与 Manifest 标签相同。
@@ -95,7 +94,6 @@ Manifest 按名称选择资产时，把 Catalog YAML 放入 `catalog_yaml`，来
 - Manifest 按名称选择资产，请求却没有提供 `catalog_yaml`；
 - Manifest 引用了 Catalog 中不存在的资产；
 - 连接器、仓库 URL、Git 引用或资产身份不合法；
-- commit 不是完整 40 位十六进制 SHA，或资产同时设置了 `branch` 和 `commit`；
 - 同一份 Manifest 中出现重复资产身份。
 
 请求字段为空、类型错误或超过长度限制时，由请求模型返回 HTTP `422`。
@@ -117,8 +115,7 @@ POST /api/v1/openviking-assets/preflight
 | `name` | string | 是 | 资产名称 |
 | `connector` | string | 是 | 当前必须是 `git` |
 | `repo_url` | string | 是 | Git clone URL |
-| `branch` | string | 否 | 要验证的 branch 或 tag；与 `commit` 互斥 |
-| `commit` | string | 否 | 完整 40 位 commit SHA；与 `branch` 互斥，preflight 通过远端 `HEAD` 检查仓库权限 |
+| `branch` | string | 否 | 要验证的 branch 或 tag；省略时验证远端 `HEAD` |
 | `auth_config.username` | string | 否 | HTTP Basic 用户名，默认 `oauth2` |
 | `auth_config.token` | string | 否 | 一次性 Git token，不持久化 |
 
@@ -141,10 +138,6 @@ curl -X POST "${OPENVIKING_BASE_URL}/api/v1/openviking-assets/preflight" \
 显式传入 token 时，preflight 不会回退到服务端 Git credential helper。token 通过子进程
 环境传递，不出现在 Git 命令参数和响应中。
 
-`git ls-remote` 无法在不拉取仓库数据的前提下证明任意历史 commit 是否可达。因此指定
-`commit` 时，preflight 校验 SHA 格式和仓库权限，导入流水线在 fetch 并 checkout 固定快照时
-验证精确 commit。
-
 ### 成功响应
 
 ```json
@@ -164,7 +157,6 @@ curl -X POST "${OPENVIKING_BASE_URL}/api/v1/openviking-assets/preflight" \
 
 | HTTP 状态 | 错误码 | 说明 |
 | --- | --- | --- |
-| `400` | `INVALID_ARGUMENT` | commit SHA 不合法，或同时传入了 branch 和 commit |
 | `403` | `PERMISSION_DENIED` | 仓库不存在、凭据无效或当前身份没有读取权限 |
 | `404` | `NOT_FOUND` | 仓库可访问，但指定 branch/tag 不存在 |
 | `503` | `UNAVAILABLE` | DNS、连接或 Git 可执行文件不可用 |

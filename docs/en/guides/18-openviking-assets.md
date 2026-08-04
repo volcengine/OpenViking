@@ -29,9 +29,9 @@ OpenViking Assets has three primary objects:
 
 - **Manifest**: the file you apply. It defines the assets to ingest directly under `catalog:`, or
   selects assets by name from a separate Catalog file.
-- **Catalog**: the inventory of sources a team can ingest, including source locations, branches or
-  pinned commits, default refresh intervals, and credential aliases. It is a separate file only
-  when several Manifests share it; otherwise it lives inside the Manifest.
+- **Catalog**: the inventory of sources a team can ingest, including source locations, branches,
+  default refresh intervals, and credential aliases. It is a separate file only when several
+  Manifests share it; otherwise it lives inside the Manifest.
 - **State**: the result of the last Manifest application and the mapping from assets to
   `viking://` resources.
 
@@ -118,21 +118,9 @@ Git assets support:
 | `connector` | Yes | v1 supports only `git`. |
 | `description` | No | Human-readable purpose of the asset. |
 | `params.repo_url` | Yes | Git clone URL. |
-| `params.branch` | No | Branch or tag to ingest; it cannot be empty when set. Mutually exclusive with `params.commit`. |
-| `params.commit` | No | Exact commit to ingest, as a full 40-character hexadecimal SHA. Mutually exclusive with `params.branch`. |
+| `params.branch` | No | Branch to ingest; it cannot be empty when set. |
 | `auth_ref` | No | Overrides `defaults.git.auth_ref`. |
 | `watch_interval` | No | Overrides `defaults.git.watch_interval`. |
-
-For a reproducible, pinned import, select a commit instead of a branch:
-
-```yaml
-params:
-  repo_url: https://github.com/example/repository
-  commit: 0123456789abcdef0123456789abcdef01234567
-```
-
-Commit SHAs are normalized to lowercase. Abbreviated SHAs are rejected so the same Manifest works
-with both the standard ingestion pipeline and the external Git Connector.
 
 Validation is strict. Unknown fields, duplicate names, and unsupported connectors fail the whole
 resolution, even for assets the current run does not select. `params` contents and clone URL
@@ -200,11 +188,11 @@ connector + normalized locator + ref
 
 Git URL normalization removes the protocol, user prefix, host port, trailing `.git`, and trailing
 slashes, and lowercases the host. HTTPS, SSH, and SCP-style URLs for the same repository therefore
-normally produce the same locator, while different branches or commits produce different assets.
+normally produce the same locator, while different branches produce different assets.
 
 The asset name is not part of the identity. Renaming an asset without changing its source and
-Git ref keeps it associated with the existing resource. Changing the source, branch, or commit
-produces a new asset and leaves the previous one as an orphan.
+branch keeps it associated with the existing resource. Changing the source or branch produces a
+new asset and leaves the previous one as an orphan.
 
 For safety, clone URLs cannot:
 
@@ -302,11 +290,8 @@ export OPENVIKING_ASSETS_CREDENTIALS_FILE=/secure/path/assets-credentials.yaml
 ```
 
 Before submitting any resource, the CLI resolves every selected `auth_ref`, then the server runs
-`git ls-remote` in the execution environment to verify read access to every repository. For a
-pinned commit, this preflight validates the full SHA syntax and repository access; because
-`ls-remote` cannot prove that an arbitrary historical commit is reachable, the exact commit is
-validated when the ingestion pipeline fetches it. A missing alias or unreadable repository fails
-the whole operation before the first submission; dry-run
+`git ls-remote` in the execution environment to verify read access to every repository. A missing
+alias or unreadable repository fails the whole operation before the first submission; dry-run
 performs the same preflight. Resolved Git arguments are sent to the preflight and resource
 endpoints over the configured OpenViking service connection. Use TLS for remote deployments and
 restrict local access to the credentials file.
@@ -341,7 +326,7 @@ Application rules:
 | State has no resource URI for the `asset_id` | Create a new resource. |
 | State has an existing resource URI | Sync by passing the URI as `to` to `add_resource`. |
 | An asset is no longer selected | Report it as an orphan; keep its resource and State entry. |
-| The source, branch, or commit changes the `asset_id` | Create a new asset and report the old one as an orphan. |
+| The source or branch changes the `asset_id` | Create a new asset and report the old one as an orphan. |
 
 State belongs to one execution environment and is not part of the Catalog or Manifest protocol.
 A repository that shares Manifests should normally add this to its `.gitignore`:
@@ -363,9 +348,6 @@ managed by OpenViking Watches and connectors.
 2. per-asset `watch_interval`;
 3. `defaults.git.watch_interval`;
 4. `0`, which disables automatic refresh.
-
-A commit-pinned asset is immutable. A positive interval is allowed, but every Watch run imports the
-same snapshot; use `watch_interval: 0` unless periodic reprocessing is intentional.
 
 Temporarily apply a 60-minute interval to every selected asset:
 
@@ -439,8 +421,7 @@ arguments; an unknown key is an error.
 - Manifests are flat and cannot recursively `include` other Manifests;
 - the server resolver returns a plan and does not perform batch submission;
 - the server preflight uses read-only `git ls-remote` to check repository access and does not
-  download repository contents; for commit-pinned assets, exact commit availability is checked
-  during ingestion;
+  download repository contents;
 - the CLI executes assets sequentially;
 - orphans are never deleted automatically;
 - `ov share` pointer codes and exporting a Manifest from an existing knowledge base are not

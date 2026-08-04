@@ -15,6 +15,9 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from openviking.core.namespace import classify_uri, uri_parts
+from openviking.core.uri_validation import validate_content_target_uri, validate_viking_uri
+from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import require_remote_resource_source
 from openviking_cli.exceptions import (
     DeadlineExceededError,
@@ -57,6 +60,7 @@ class _CatalogAsset(_StrictModel):
     name: str
     connector: str
     description: str = ""
+    to: str | None = None
     params: dict[str, Any]
     auth_ref: str | None = None
     watch_interval: float | None = None
@@ -94,6 +98,7 @@ class ResolvedAsset(_StrictModel):
 
     name: str
     connector: str
+    to: str | None = None
     repo_url: str
     branch: str | None = None
     commit: str | None = None
@@ -136,6 +141,38 @@ def _check_watch_interval(value: float | None, where: str) -> float | None:
     if value is not None and (not math.isfinite(value) or value < 0):
         raise InvalidArgumentError(f"{where}: 'watch_interval' must be >= 0")
     return value
+
+
+def _normalize_asset_target_uri(
+    value: str | None,
+    where: str,
+    ctx: RequestContext | None,
+) -> str | None:
+    """Validate one optional exact resource target and return its normalized URI."""
+
+    if value is None:
+        return None
+    target = value.strip()
+    if not target:
+        raise InvalidArgumentError(f"{where}: 'to' must be a non-empty string when set")
+
+    if ctx is not None:
+        # Use the same canonicalization, namespace-shape and access checks as
+        # add_resource itself. In particular, this expands current-user
+        # shorthand before the plan reaches the CLI and its local State file.
+        return validate_content_target_uri(target, ctx, kind="resource", field_name="to")
+
+    # Direct resolver callers do not always have a request identity. Preserve
+    # that API while still enforcing the public URI grammar and resource shape;
+    # HTTP callers take the context-aware path above.
+    normalized = validate_viking_uri(target, field_name="to").rstrip("/")
+    parts = uri_parts(normalized)
+    classification = classify_uri(normalized)
+    if parts[:1] == ["resources"] or (
+        classification.context_type == "resource" and classification.content_index is not None
+    ):
+        return normalized
+    raise InvalidArgumentError(f"{where}: 'to' must target resource content")
 
 
 def _strip_port(host: str) -> str:
@@ -343,6 +380,7 @@ def resolve_openviking_assets(
     catalog_yaml: str | None = None,
     manifest_label: str = "manifest.yaml",
     catalog_label: str = "catalog.yaml",
+    ctx: RequestContext | None = None,
 ) -> ResolveResult:
     """Parse and resolve one flat manifest, optionally against a separate catalog.
 
@@ -469,9 +507,19 @@ def resolve_openviking_assets(
 
     resolved: list[ResolvedAsset] = []
     identity_names: dict[str, str] = {}
+    target_names: dict[str, str] = {}
     for name in names:
         asset = catalog_by_name[name]
         where = f"catalog '{catalog_label}' asset '{name}'"
+        target = _normalize_asset_target_uri(asset.to, where, ctx)
+        if target is not None:
+            if target in target_names:
+                other = target_names[target]
+                raise InvalidArgumentError(
+                    f"assets '{other}' and '{name}' declare the same target URI '{target}'; "
+                    "each selected asset must use a unique 'to'"
+                )
+            target_names[target] = name
         try:
             params = _GitParams.model_validate(asset.params)
         except ValidationError as exc:
@@ -503,6 +551,7 @@ def resolve_openviking_assets(
             ResolvedAsset(
                 name=name,
                 connector=asset.connector,
+                to=target,
                 repo_url=repo_url,
                 branch=branch,
                 commit=commit,
