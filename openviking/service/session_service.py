@@ -464,15 +464,11 @@ class SessionService:
         return memories
 
     @staticmethod
-    def effective_session_config(session: Session) -> Dict[str, Any]:
-        """Return the resolved session config (defaults filled) for GET responses."""
-        return {
-            "auto_commit_policy": (
-                AutoCommitPolicy.from_dict(session.meta.auto_commit_policy).to_dict()
-                if session.meta.auto_commit_policy is not None
-                else None
-            ),
-        }
+    def effective_auto_commit_policy(session: Session) -> Optional[Dict[str, Any]]:
+        """Return the resolved auto-commit policy (defaults filled), or None when disabled."""
+        if session.meta.auto_commit_policy is None:
+            return None
+        return AutoCommitPolicy.from_dict(session.meta.auto_commit_policy).to_dict()
 
     async def maybe_schedule_auto_commit(
         self,

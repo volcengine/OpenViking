@@ -44,9 +44,9 @@ Session API 按认证用户作用域访问会话，并返回 canonical user sess
 |------|------|------|--------|------|
 | session_id | str | 否 | None | 会话 ID。如果为 None，则创建一个自动生成 ID 的新会话 |
 | memory_policy | object | 否 | None | 会话默认的记忆抽取策略。可选的 `self` 和 `peer` 开关控制写入目标；可选的 `working_memory.enabled=false` 跳过 archive summary；可选的顶层 `memory_types` 将抽取限制为指定的 enabled memory schema。所有 `enabled` 值都应使用 JSON 布尔值。旧版 boolean-like 值暂时仍兼容（字符串 `"false"` 会正确解析为 false），但会产生弃用警告。未传或为 `null` 时允许所有 enabled memory schema。非法结构或未知 memory type 会以 `InvalidArgumentError` 拒绝。 |
-| config | object | 否 | None | 可选的创建期 session 配置。目前支持 `auto_commit_policy` 对象（见下表）。传入的字段会被校验并 clamp 到取值范围，然后合并到默认值之上；最终生效的策略会在响应的 `result.config` 中返回，并持久化到 session meta。未传 policy 时 auto commit 关闭，除非 `memory.session_auto_commit.default_enabled=true`。Session 配置创建后不可变。 |
+| auto_commit_policy | object | 否 | None | 可选的自动 commit 策略（见下表）。传入的字段会被校验并 clamp 到取值范围，然后合并到默认值之上；最终生效的策略会在响应的 `result.auto_commit_policy` 中返回，并持久化到 session meta。未传 policy 时 auto commit 关闭，除非 `memory.session_auto_commit.default_enabled=true`。该策略创建后不可变。 |
 
-`config.auto_commit_policy` 字段（均为可选；存在 policy 时，未传字段回退到默认值）：
+`auto_commit_policy` 字段（均为可选；存在 policy 时，未传字段回退到默认值）：
 
 | 字段 | 类型 | 默认值 | 上限 | 说明 |
 |------|------|--------|------|------|
@@ -83,14 +83,12 @@ curl -X POST http://localhost:1933/api/v1/sessions \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
   -d '{
-    "config": {
-      "auto_commit_policy": {
-        "pending_token_threshold": 8000,
-        "message_count_threshold": 40,
-        "idle_timeout_seconds": 600,
-        "keep_recent_count": 10,
-        "min_commit_interval_seconds": 0
-      }
+    "auto_commit_policy": {
+      "pending_token_threshold": 8000,
+      "message_count_threshold": 40,
+      "idle_timeout_seconds": 600,
+      "keep_recent_count": 10,
+      "min_commit_interval_seconds": 0
     }
   }'
 ```
@@ -113,17 +111,15 @@ print(f"Session ID: {result['session_id']}")
 
 # 创建带自定义自动 commit 策略的新会话
 result = await client.create_session(
-    config={
-        "auto_commit_policy": {
-            "pending_token_threshold": 8000,
-            "message_count_threshold": 40,
-            "idle_timeout_seconds": 600,
-            "keep_recent_count": 10,
-            "min_commit_interval_seconds": 0,
-        }
+    auto_commit_policy={
+        "pending_token_threshold": 8000,
+        "message_count_threshold": 40,
+        "idle_timeout_seconds": 600,
+        "keep_recent_count": 10,
+        "min_commit_interval_seconds": 0,
     }
 )
-print(result["config"]["auto_commit_policy"])
+print(result["auto_commit_policy"])
 ```
 
 **TypeScript SDK**
@@ -163,9 +159,7 @@ ov session new
       "account_id": "default",
       "user_id": "alice"
     },
-    "config": {
-      "auto_commit_policy": null
-    }
+    "auto_commit_policy": null
   },
   "time": 0.1
 }
@@ -274,7 +268,7 @@ ov session list
 - `commit_count`: 成功提交的次数
 - `memories_extracted`: 各类记忆的提取数量统计
 - `last_commit_at`: 最后一次提交的时间
-- `config`: 填充默认值后的生效 session 配置，包含 `auto_commit_policy` 对象
+- `auto_commit_policy`: 填充默认值后的生效自动 commit 策略；未启用时为 `null`
 
 **代码入口**：
 - `openviking/session/session.py:Session.load()` - 会话加载
@@ -392,14 +386,12 @@ ov session get a1b2c3d4
       "user_id": "alice"
     },
     "pending_tokens": 450,
-    "config": {
-      "auto_commit_policy": {
-        "pending_token_threshold": 10000,
-        "message_count_threshold": 50,
-        "idle_timeout_seconds": 86400,
-        "keep_recent_count": 2,
-        "min_commit_interval_seconds": 0
-      }
+    "auto_commit_policy": {
+      "pending_token_threshold": 10000,
+      "message_count_threshold": 50,
+      "idle_timeout_seconds": 86400,
+      "keep_recent_count": 2,
+      "min_commit_interval_seconds": 0
     }
   }
 }
@@ -409,8 +401,8 @@ ov session get a1b2c3d4
 
 ### 更新 Session 配置
 
-Session 配置创建后不可变。请在创建 session 时设置
-`config.auto_commit_policy`，之后通过 `GET /api/v1/sessions/{session_id}` 查看生效配置。
+自动 commit 策略创建后不可变。请在创建 session 时设置
+`auto_commit_policy`，之后通过 `GET /api/v1/sessions/{session_id}` 查看生效配置。
 Sessions API 不提供运行期 session 配置更新接口。
 
 ---

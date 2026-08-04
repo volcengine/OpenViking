@@ -527,8 +527,7 @@ async def test_create_session_defaults_auto_commit_policy_to_disabled(
 ):
     resp = await client.post("/api/v1/sessions", json={})
     assert resp.status_code == 200
-    config = resp.json()["result"]["config"]
-    assert config["auto_commit_policy"] is None
+    assert resp.json()["result"]["auto_commit_policy"] is None
 
 
 async def test_create_session_uses_default_policy_when_server_default_enabled(
@@ -541,8 +540,7 @@ async def test_create_session_uses_default_policy_when_server_default_enabled(
 
     resp = await client.post("/api/v1/sessions", json={})
     assert resp.status_code == 200
-    config = resp.json()["result"]["config"]
-    assert config["auto_commit_policy"] == {
+    assert resp.json()["result"]["auto_commit_policy"] == {
         "pending_token_threshold": 10000,
         "message_count_threshold": 50,
         "idle_timeout_seconds": 86400,
@@ -568,7 +566,7 @@ async def test_auto_created_session_uses_default_policy_when_server_default_enab
 
     session_resp = await client.get(f"/api/v1/sessions/{session_id}")
     assert session_resp.status_code == 200
-    assert session_resp.json()["result"]["config"]["auto_commit_policy"] == {
+    assert session_resp.json()["result"]["auto_commit_policy"] == {
         "pending_token_threshold": 10000,
         "message_count_threshold": 50,
         "idle_timeout_seconds": 86400,
@@ -581,17 +579,15 @@ async def test_create_session_applies_config_and_fills_defaults(client: httpx.As
     resp = await client.post(
         "/api/v1/sessions",
         json={
-            "config": {
-                "auto_commit_policy": {
-                    "pending_token_threshold": 8000,
-                    "keep_recent_count": 10,
-                }
+            "auto_commit_policy": {
+                "pending_token_threshold": 8000,
+                "keep_recent_count": 10,
             }
         },
     )
     assert resp.status_code == 200
     result = resp.json()["result"]
-    assert result["config"]["auto_commit_policy"] == {
+    assert result["auto_commit_policy"] == {
         "pending_token_threshold": 8000,
         "message_count_threshold": 50,
         "idle_timeout_seconds": 86400,
@@ -601,17 +597,17 @@ async def test_create_session_applies_config_and_fills_defaults(client: httpx.As
 
     session_resp = await client.get(f"/api/v1/sessions/{result['session_id']}")
     session_result = session_resp.json()["result"]
-    assert session_result["config"]["auto_commit_policy"]["pending_token_threshold"] == 8000
-    assert session_result["config"]["auto_commit_policy"]["keep_recent_count"] == 10
+    assert session_result["auto_commit_policy"]["pending_token_threshold"] == 8000
+    assert session_result["auto_commit_policy"]["keep_recent_count"] == 10
 
 
 async def test_create_session_clamps_config_above_bounds(client: httpx.AsyncClient):
     resp = await client.post(
         "/api/v1/sessions",
-        json={"config": {"auto_commit_policy": {"pending_token_threshold": 10_000_000}}},
+        json={"auto_commit_policy": {"pending_token_threshold": 10_000_000}},
     )
     assert resp.status_code == 200
-    policy = resp.json()["result"]["config"]["auto_commit_policy"]
+    policy = resp.json()["result"]["auto_commit_policy"]
     assert policy["pending_token_threshold"] == 50000
 
 
@@ -621,20 +617,17 @@ async def test_get_session_returns_effective_config(client: httpx.AsyncClient):
 
     resp = await client.get(f"/api/v1/sessions/{session_id}")
     assert resp.status_code == 200
-    config = resp.json()["result"]["config"]
-    assert config["auto_commit_policy"] is None
+    assert resp.json()["result"]["auto_commit_policy"] is None
 
 
 async def test_patch_session_config_is_not_supported(client: httpx.AsyncClient):
     create_resp = await client.post(
         "/api/v1/sessions",
         json={
-            "config": {
-                "auto_commit_policy": {
-                    "pending_token_threshold": 8000,
-                    "message_count_threshold": 40,
-                    "keep_recent_count": 10,
-                }
+            "auto_commit_policy": {
+                "pending_token_threshold": 8000,
+                "message_count_threshold": 40,
+                "keep_recent_count": 10,
             }
         },
     )
@@ -642,12 +635,12 @@ async def test_patch_session_config_is_not_supported(client: httpx.AsyncClient):
 
     patch_resp = await client.patch(
         f"/api/v1/sessions/{session_id}",
-        json={"config": {"auto_commit_policy": {"message_count_threshold": 25}}},
+        json={"auto_commit_policy": {"message_count_threshold": 25}},
     )
     assert patch_resp.status_code == 405
 
     session_resp = await client.get(f"/api/v1/sessions/{session_id}")
-    session_config = session_resp.json()["result"]["config"]["auto_commit_policy"]
+    session_config = session_resp.json()["result"]["auto_commit_policy"]
     assert session_config["message_count_threshold"] == 40
     assert session_config["pending_token_threshold"] == 8000
 

@@ -140,7 +140,7 @@ class AsyncOpenViking:
         session_id: Optional[str] = None,
         telemetry: TelemetryRequest = False,
         memory_policy: Optional[Dict[str, Any]] = None,
-        config: Optional[Dict[str, Any]] = None,
+        auto_commit_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create a new session.
 
@@ -148,15 +148,14 @@ class AsyncOpenViking:
             session_id: Optional session ID. If provided, creates a session with the given ID.
                        If None, creates a new session with auto-generated ID.
             memory_policy: Optional default extraction policy for future commits.
-            config: Optional create-time session config, e.g.
-                ``{"auto_commit_policy": {...}}``.
+            auto_commit_policy: Optional automatic-commit policy overrides.
         """
         await self._ensure_initialized()
         return await self._client.create_session(
             session_id,
             telemetry=telemetry,
             memory_policy=memory_policy,
-            config=config,
+            auto_commit_policy=auto_commit_policy,
         )
 
     async def list_sessions(self) -> List[Any]:

@@ -44,9 +44,9 @@ Create a new session. Sessions are containers for conversations, storing message
 |-----------|------|----------|---------|-------------|
 | session_id | str | No | None | Session ID. Creates new session with auto-generated ID if None |
 | memory_policy | object | No | None | Default memory extraction policy for the session. Optional `self` and `peer` switches control write targets, optional `working_memory.enabled=false` skips archive summaries, and optional top-level `memory_types` limits extraction to specific enabled memory schemas. Use JSON booleans for every `enabled` value. Legacy boolean-like values remain accepted temporarily (including string `"false"`, which is parsed as false) but emit a deprecation warning. When `memory_types` is omitted or `null`, all enabled memory schemas are allowed. Invalid shapes or unknown memory types are rejected with `InvalidArgumentError`. |
-| config | object | No | None | Optional create-time session config. Currently supports an `auto_commit_policy` object (see table below). Any provided fields are validated, clamped to their bounds, and merged over the defaults; the effective policy is returned in the response `result.config` and persisted into session metadata. If no policy is provided, auto commit is disabled unless `memory.session_auto_commit.default_enabled=true`. Session config is immutable after creation. |
+| auto_commit_policy | object | No | None | Optional auto-commit policy (see table below). Any provided fields are validated, clamped to their bounds, and merged over the defaults; the effective policy is returned in the response `result.auto_commit_policy` and persisted into session metadata. If no policy is provided, auto commit is disabled unless `memory.session_auto_commit.default_enabled=true`. The policy is immutable after creation. |
 
-`config.auto_commit_policy` fields (all optional; omitted fields fall back to the defaults when a policy is present):
+`auto_commit_policy` fields (all optional; omitted fields fall back to the defaults when a policy is present):
 
 | Field | Type | Default | Max | Description |
 |-------|------|---------|-----|-------------|
@@ -83,14 +83,12 @@ curl -X POST http://localhost:1933/api/v1/sessions \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
   -d '{
-    "config": {
-      "auto_commit_policy": {
-        "pending_token_threshold": 8000,
-        "message_count_threshold": 40,
-        "idle_timeout_seconds": 600,
-        "keep_recent_count": 10,
-        "min_commit_interval_seconds": 0
-      }
+    "auto_commit_policy": {
+      "pending_token_threshold": 8000,
+      "message_count_threshold": 40,
+      "idle_timeout_seconds": 600,
+      "keep_recent_count": 10,
+      "min_commit_interval_seconds": 0
     }
   }'
 ```
@@ -113,17 +111,15 @@ print(f"Session ID: {result['session_id']}")
 
 # Create new session with a custom auto-commit policy
 result = await client.create_session(
-    config={
-        "auto_commit_policy": {
-            "pending_token_threshold": 8000,
-            "message_count_threshold": 40,
-            "idle_timeout_seconds": 600,
-            "keep_recent_count": 10,
-            "min_commit_interval_seconds": 0,
-        }
+    auto_commit_policy={
+        "pending_token_threshold": 8000,
+        "message_count_threshold": 40,
+        "idle_timeout_seconds": 600,
+        "keep_recent_count": 10,
+        "min_commit_interval_seconds": 0,
     }
 )
-print(result["config"]["auto_commit_policy"])
+print(result["auto_commit_policy"])
 ```
 
 **TypeScript SDK**
@@ -163,9 +159,7 @@ ov session new
       "account_id": "default",
       "user_id": "alice"
     },
-    "config": {
-      "auto_commit_policy": null
-    }
+    "auto_commit_policy": null
   },
   "time": 0.1
 }
@@ -274,7 +268,7 @@ Get session details including metadata, message statistics, commit history, etc.
 - `commit_count`: Number of successful commits
 - `memories_extracted`: Count statistics of extracted memories by category
 - `last_commit_at`: Time of last commit
-- `config`: Effective session config with defaults filled in, including the `auto_commit_policy` object
+- `auto_commit_policy`: Effective auto-commit policy with defaults filled in; `null` when not enabled
 
 **Code Entries:**
 - `openviking/session/session.py:Session.load()` - Session loading
@@ -392,14 +386,12 @@ ov session get a1b2c3d4
       "user_id": "alice"
     },
     "pending_tokens": 450,
-    "config": {
-      "auto_commit_policy": {
-        "pending_token_threshold": 10000,
-        "message_count_threshold": 50,
-        "idle_timeout_seconds": 86400,
-        "keep_recent_count": 2,
-        "min_commit_interval_seconds": 0
-      }
+    "auto_commit_policy": {
+      "pending_token_threshold": 10000,
+      "message_count_threshold": 50,
+      "idle_timeout_seconds": 86400,
+      "keep_recent_count": 2,
+      "min_commit_interval_seconds": 0
     }
   }
 }
@@ -409,7 +401,7 @@ ov session get a1b2c3d4
 
 ### Updating Session Config
 
-Session config is immutable after creation. Set `config.auto_commit_policy` when
+The auto-commit policy is immutable after creation. Set `auto_commit_policy` when
 creating the session, then use `GET /api/v1/sessions/{session_id}` to inspect the
 effective config. Runtime session-config updates are not exposed by the Sessions
 API.

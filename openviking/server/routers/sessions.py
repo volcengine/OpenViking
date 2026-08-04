@@ -90,14 +90,6 @@ class AutoCommitPolicyRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-class SessionConfigRequest(BaseModel):
-    """Session config container."""
-
-    auto_commit_policy: Optional[AutoCommitPolicyRequest] = None
-
-    model_config = {"extra": "forbid"}
-
-
 class AddMessageRequest(BaseModel):
     """Request model for adding a message.
 
@@ -151,7 +143,7 @@ class CreateSessionRequest(BaseModel):
 
     session_id: Optional[str] = None
     memory_policy: Optional[Dict[str, Any]] = None
-    config: Optional[SessionConfigRequest] = None
+    auto_commit_policy: Optional[AutoCommitPolicyRequest] = None
     telemetry: TelemetryRequest = False
 
 
@@ -227,10 +219,8 @@ async def create_session(
     service = get_service()
 
     auto_commit_policy_payload: Optional[Dict[str, Any]] = None
-    if request.config is not None and request.config.auto_commit_policy is not None:
-        auto_commit_policy_payload = request.config.auto_commit_policy.model_dump(
-            exclude_none=True
-        )
+    if request.auto_commit_policy is not None:
+        auto_commit_policy_payload = request.auto_commit_policy.model_dump(exclude_none=True)
 
     async def _create() -> dict[str, Any]:
         await service.initialize_user_directories(_ctx)
@@ -244,7 +234,7 @@ async def create_session(
             "session_id": session.session_id,
             "uri": session.uri,
             "user": session.user.to_dict(),
-            "config": service.sessions.effective_session_config(session),
+            "auto_commit_policy": service.sessions.effective_auto_commit_policy(session),
         }
 
     execution = await run_operation(
@@ -283,7 +273,7 @@ async def get_session(
     result["uri"] = session.uri
     result["user"] = session.user.to_dict()
     result["pending_tokens"] = int(session.meta.pending_tokens or 0)
-    result["config"] = service.sessions.effective_session_config(session)
+    result["auto_commit_policy"] = service.sessions.effective_auto_commit_policy(session)
     return Response(status="ok", result=result)
 
 
