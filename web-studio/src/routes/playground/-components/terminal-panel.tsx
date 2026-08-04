@@ -8,6 +8,7 @@ import {
   Loader2Icon,
   SendIcon,
   SparklesIcon,
+  TerminalIcon,
   TrashIcon,
   XCircleIcon,
 } from 'lucide-react'
