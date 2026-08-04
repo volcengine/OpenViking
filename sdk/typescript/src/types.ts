@@ -112,6 +112,16 @@ export interface SearchOptions {
   level?: number[];
   tags?: string[];
 }
+/** Type-quota memory recall options. Omit a field to use the server default. */
+export interface RecallOptions {
+  quotas?: Record<string, number>;
+  maxChars?: number;
+  minScore?: number;
+  peerScope?: "actor" | "all";
+  otherPeerPenalty?: number | Record<string, number>;
+  render?: boolean;
+  telemetry?: unknown;
+}
 /** Content grep options. */
 export interface GrepOptions {
   caseInsensitive?: boolean;
@@ -189,11 +199,22 @@ export interface UpdateWatchOptions {
   reason?: string;
   instruction?: string;
 }
+/** One retrieval hit. Only fields the retrieval pipeline populates are typed;
+ * `search_tags` is surfaced under `tags` to match the tags filter parameter. */
+export interface MatchedContext {
+  uri?: string;
+  context_type?: string;
+  level?: number;
+  abstract?: string;
+  score?: number;
+  tags?: string[];
+  [key: string]: unknown;
+}
 /** Grouped semantic retrieval results. */
 export interface FindResult {
-  memories?: unknown[];
-  resources?: unknown[];
-  skills?: unknown[];
+  memories?: MatchedContext[];
+  resources?: MatchedContext[];
+  skills?: MatchedContext[];
   [key: string]: unknown;
 }
 /** Error payload returned by OpenViking. */

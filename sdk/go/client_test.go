@@ -137,7 +137,7 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 		requireBodyKeysAbsent(t, body, "agent_id", "agent_uri")
 		writeOK(t, w, map[string]any{
 			"resources": []map[string]any{
-				{"uri": "viking://resources/docs/api.md", "context_type": "resource", "score": 0.9},
+				{"uri": "viking://resources/docs/api.md", "context_type": "resource", "score": 0.9, "tags": []string{"topic=docs", "kind=api"}},
 			},
 		})
 	}))
@@ -158,6 +158,9 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 	}
 	if len(result.Resources) != 1 || result.Resources[0].URI != "viking://resources/docs/api.md" {
 		t.Fatalf("unexpected result: %#v", result)
+	}
+	if got := result.Resources[0].Tags; len(got) != 2 || got[0] != "topic=docs" || got[1] != "kind=api" {
+		t.Fatalf("result tags = %#v", got)
 	}
 }
 

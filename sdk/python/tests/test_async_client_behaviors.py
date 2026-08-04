@@ -507,6 +507,83 @@ async def test_write_omits_removed_semantic_flags_from_http_payload():
 
 
 @pytest.mark.asyncio
+async def test_find_forwards_level_and_time_filters_when_provided():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._request = AsyncMock(return_value=object())
+    client._handle_response_data = lambda _response: {"result": {}}
+
+    await client.find(
+        "hello",
+        level=[0, 1],
+        since="2026-01-01",
+        until="2026-02-01",
+        time_field="updated_at",
+    )
+
+    payload = client._request.await_args.kwargs["json"]
+    assert payload["level"] == [0, 1]
+    assert payload["since"] == "2026-01-01"
+    assert payload["until"] == "2026-02-01"
+    assert payload["time_field"] == "updated_at"
+
+
+@pytest.mark.asyncio
+async def test_find_omits_level_and_time_filters_when_absent():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._request = AsyncMock(return_value=object())
+    client._handle_response_data = lambda _response: {"result": {}}
+
+    await client.find("hello")
+
+    payload = client._request.await_args.kwargs["json"]
+    for key in ("level", "since", "until", "time_field"):
+        assert key not in payload
+
+
+@pytest.mark.asyncio
+async def test_search_forwards_level_zero_and_omits_unset_time_filters():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._request = AsyncMock(return_value=object())
+    client._handle_response_data = lambda _response: {"result": {}}
+
+    # level=0 is a valid level and must survive compaction (is-None check, not falsy).
+    await client.search("hello", session_id="s1", level=0)
+
+    payload = client._request.await_args.kwargs["json"]
+    assert payload["level"] == 0
+    assert payload["session_id"] == "s1"
+    for key in ("since", "until", "time_field"):
+        assert key not in payload
+
+
+@pytest.mark.asyncio
+async def test_find_extra_forwards_unknown_fields_to_payload():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._request = AsyncMock(return_value=object())
+    client._handle_response_data = lambda _response: {"result": {}}
+
+    # The escape hatch lets callers reach server fields the SDK does not yet
+    # model, without waiting for an SDK release.
+    await client.find("hello", extra={"include_provenance": True})
+
+    payload = client._request.await_args.kwargs["json"]
+    assert payload["include_provenance"] is True
+
+
+@pytest.mark.asyncio
+async def test_write_extra_forwards_unknown_fields_to_payload():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {"result": {}}
+
+    await client.write("viking://resources/demo.md", "body", extra={"future_flag": 1})
+
+    payload = fake_http.post.await_args.kwargs["json"]
+    assert payload["future_flag"] == 1
+
+
+@pytest.mark.asyncio
 async def test_add_skill_uploads_local_file_even_when_url_is_localhost(tmp_path):
     skill_file = tmp_path / "SKILL.md"
     skill_file.write_text("---\nname: demo\ndescription: demo\n---\n\n# Demo\n")

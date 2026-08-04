@@ -20,6 +20,7 @@ import type {
   GrepOptions,
   ImportPackOptions,
   Message,
+  RecallOptions,
   RequestOptions,
   SearchOptions,
   TaskListOptions,
@@ -326,6 +327,24 @@ export class OpenVikingClient {
     options: SearchOptions = {},
   ): Promise<FindResult> {
     return this.searchRequest("search", query, options);
+  }
+  /** Recall type-quota memory as injection-ready context. */
+  async recall(
+    query: string,
+    options: RecallOptions = {},
+  ): Promise<JsonObject> {
+    return this.request("POST", "/api/v1/search/recall", {
+      body: compact({
+        query,
+        quotas: options.quotas,
+        max_chars: options.maxChars,
+        min_score: options.minScore,
+        peer_scope: options.peerScope,
+        other_peer_penalty: options.otherPeerPenalty,
+        render: options.render,
+        telemetry: options.telemetry,
+      }),
+    });
   }
   private async searchRequest(
     kind: "find" | "search",
@@ -1001,5 +1020,33 @@ export class OpenVikingClient {
     return this.request("POST", "/api/v1/admin/migrate", {
       body: { action: cleanup ? "cleanup" : "migrate" },
     });
+  }
+  /** Return the effective Agent Evolution switch for the caller's account. */
+  adminGetAgentEvolution(): Promise<JsonObject> {
+    return this.request("GET", "/api/v1/admin/agent-evolution");
+  }
+  /** Persist and hot-reload Agent Evolution for the caller's account. */
+  adminSetAgentEvolution(enabled: boolean): Promise<JsonObject> {
+    return this.request("PUT", "/api/v1/admin/agent-evolution", {
+      body: { enabled },
+    });
+  }
+  /** Return effective and explicitly overridden settings for one account. */
+  adminGetAccountSettings(accountId: string): Promise<JsonObject> {
+    return this.request(
+      "GET",
+      `/api/v1/admin/accounts/${pathPart(accountId)}/settings`,
+    );
+  }
+  /** Update the allowlisted Agent Evolution setting for one account. */
+  adminSetAccountAgentEvolution(
+    accountId: string,
+    enabled: boolean,
+  ): Promise<JsonObject> {
+    return this.request(
+      "PATCH",
+      `/api/v1/admin/accounts/${pathPart(accountId)}/settings`,
+      { body: { agent_evolution: { enabled } } },
+    );
   }
 }
