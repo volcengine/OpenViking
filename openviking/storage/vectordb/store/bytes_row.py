@@ -36,6 +36,7 @@ class _PyFieldType(Enum):
     list_int64 = 6
     list_string = 7
     list_float32 = 8
+    text = 9
 
 
 class _PySchema:
@@ -67,6 +68,7 @@ class _PySchema:
             _PyFieldType.list_int64: (UINT32_SIZE, [0]),
             _PyFieldType.list_string: (UINT32_SIZE, ["default"]),
             _PyFieldType.list_float32: (UINT32_SIZE, [0.0]),
+            _PyFieldType.text: (UINT32_SIZE, ""),
         }
 
         for field in fields:
@@ -167,6 +169,18 @@ class _PyBytesRow:
                 var_fmt_list.append(f"{len(value)}s")
                 var_val_list.append(value)
                 variable_region_offset += len(value)
+            elif field_meta.data_type == _PyFieldType.text:
+                fix_fmt_list.append("I")
+                fix_val_list.append(variable_region_offset)
+                fix_region_offset += UINT32_SIZE
+                bytes_item = value.encode("utf-8")
+                bytes_item_len = len(bytes_item)
+                var_fmt_list.append("I")
+                var_val_list.append(bytes_item_len)
+                variable_region_offset += UINT32_SIZE
+                var_fmt_list.append(f"{bytes_item_len}s")
+                var_val_list.append(bytes_item)
+                variable_region_offset += bytes_item_len
             elif field_meta.data_type == _PyFieldType.list_int64:
                 fix_fmt_list.append("I")
                 fix_val_list.append(variable_region_offset)
@@ -240,6 +254,11 @@ class _PyBytesRow:
             binary_len = struct.unpack_from("<I", serialized_data, binary_offset)[0]
             binary_offset += UINT32_SIZE
             return serialized_data[binary_offset : binary_offset + binary_len]
+        elif field_meta.data_type == _PyFieldType.text:
+            text_offset = struct.unpack_from("<I", serialized_data, field_meta.offset)[0]
+            text_len = struct.unpack_from("<I", serialized_data, text_offset)[0]
+            text_offset += UINT32_SIZE
+            return serialized_data[text_offset : text_offset + text_len].decode("utf-8")
         elif field_meta.data_type == _PyFieldType.list_string:
             list_offset = struct.unpack_from("<I", serialized_data, field_meta.offset)[0]
             list_len = struct.unpack_from("<H", serialized_data, list_offset)[0]

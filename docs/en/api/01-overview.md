@@ -530,7 +530,10 @@ This catalog follows the routes actually mounted by the server. Each group headi
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/admin/agent-evolution` | Get the live instance-wide Agent Evolution status |
+| GET | `/api/v1/admin/agent-evolution` | Get the caller account's Agent Evolution status |
+| PUT | `/api/v1/admin/agent-evolution` | Update the caller account's Agent Evolution status |
+| GET | `/api/v1/admin/accounts/{account_id}/settings` | Get effective account settings |
+| PATCH | `/api/v1/admin/accounts/{account_id}/settings` | Update allowlisted account settings |
 | POST | `/api/v1/admin/accounts` | Create an account and its first administrator |
 | GET | `/api/v1/admin/accounts` | List accounts |
 | POST | `/api/v1/admin/migrate` | Migrate legacy identity data |

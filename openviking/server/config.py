@@ -82,7 +82,7 @@ class AddTargetsConfig(BaseModel):
 
 
 class AgentEvolutionConfig(BaseModel):
-    """Server-wide Agent Evolution production switch."""
+    """Default Agent Evolution setting for accounts without an override."""
 
     enabled: bool = False
 

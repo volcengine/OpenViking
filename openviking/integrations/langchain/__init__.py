@@ -31,8 +31,8 @@ def _missing_standalone_error() -> ImportError:
     return ImportError(
         "The legacy OpenViking LangChain integration requires the standalone "
         "langchain-openviking package. Install it with "
-        '`pip install "openviking[langchain]"` or `pip install langchain-openviking` '
-        '(use the corresponding "langgraph" extra for LangGraph support).'
+        "`pip install langchain-openviking` (or "
+        '`pip install "langchain-openviking[langgraph]"` for LangGraph support).'
     )
 
 

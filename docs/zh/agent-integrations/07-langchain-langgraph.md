@@ -11,8 +11,8 @@ pip install langchain-openviking                 # LangChain 适配器
 pip install "langchain-openviking[langgraph]"    # LangGraph middleware
 ```
 
-现有应用仍可使用 `openviking[langchain]` 或 `openviking[langgraph]`。完整包会把旧导入路径
-转发到 `langchain-openviking`。
+该集成独立于 OpenViking server 发布。为兼容现有应用，完整包仍会把旧的
+`openviking.integrations.langchain` 导入路径转发到 `langchain-openviking`。
 
 ## 连接
 

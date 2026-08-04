@@ -15,6 +15,14 @@ SOURCE_ROOT = PACKAGE_ROOT / "src"
 SDK_ROOT = PROJECT_ROOT / "sdk" / "python"
 
 
+def test_server_distribution_does_not_depend_on_standalone_integration():
+    root_pyproject = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    root_lock = (PROJECT_ROOT / "uv.lock").read_text(encoding="utf-8")
+
+    assert "langchain-openviking" not in root_pyproject
+    assert 'name = "langchain-openviking"' not in root_lock
+
+
 def test_standalone_package_has_no_server_imports_at_module_scope():
     violations: list[str] = []
     for source_file in sorted((SOURCE_ROOT / "langchain_openviking").glob("*.py")):
@@ -137,7 +145,7 @@ try:
 except ImportError as exc:
     message = str(exc)
     assert "langchain-openviking" in message
-    assert "openviking[langchain]" in message
+    assert "openviking[langchain]" not in message
 else:
     raise AssertionError("missing standalone package should produce an installation error")
 
@@ -160,7 +168,7 @@ for submodule in (
         assert not isinstance(exc, ModuleNotFoundError)
         message = str(exc)
         assert "langchain-openviking" in message
-        assert "openviking[langchain]" in message
+        assert "openviking[langchain]" not in message
     else:
         raise AssertionError(f"legacy {submodule} import should produce an installation error")
 """

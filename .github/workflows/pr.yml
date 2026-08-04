@@ -43,10 +43,15 @@ jobs:
             examples/claude-code-memory-plugin/scripts/lib/pending-queue.test.mjs \
             examples/cursor-memory-plugin/scripts/cursor-plugin.test.mjs \
             examples/trae-memory-hooks/scripts/trae-hooks.test.mjs \
+            examples/zcode-memory-plugin/scripts/zcode-async.test.mjs \
+            examples/zcode-memory-plugin/scripts/zcode-capture.test.mjs \
+            examples/zcode-memory-plugin/scripts/zcode-hooks.test.mjs \
+            examples/zcode-memory-plugin/scripts/zcode-turns.test.mjs \
             examples/memory-plugin-shared/batch-send.test.mjs \
             examples/memory-plugin-shared/install-agent-hooks.test.mjs \
             examples/memory-plugin-shared/install-opencode-jsonc.test.mjs \
             examples/memory-plugin-shared/install-tui.test.mjs \
+            examples/memory-plugin-shared/release-marketplace.test.mjs \
             examples/memory-plugin-shared/sync.test.mjs \
             examples/memory-plugin-shared/recall-core.test.mjs \
             examples/memory-plugin-shared/workspace-peer.test.mjs \
@@ -57,6 +62,7 @@ jobs:
 
       - name: Check installer scripts parse
         run: |
+          bash -n .github/scripts/stage-memory-plugin-marketplace.sh
           bash -n examples/memory-plugin-shared/install.sh
           bash -n examples/claude-code-memory-plugin/setup-helper/install.sh
           bash -n examples/claude-code-memory-plugin/setup-helper/tos-install.sh

@@ -2315,37 +2315,6 @@ wheels = [
 ]
 
 [[package]]
-name = "langchain-openviking"
-source = { directory = "integrations/langchain" }
-dependencies = [
-    { name = "langchain-core" },
-    { name = "openviking-sdk" },
-    { name = "pydantic" },
-]
-
-[package.optional-dependencies]
-langgraph = [
-    { name = "langchain" },
-    { name = "langgraph" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "build", marker = "extra == 'dev'", specifier = ">=1.2.0" },
-    { name = "langchain", marker = "extra == 'langgraph'", specifier = ">=1.0.0,<2.0.0" },
-    { name = "langchain-core", specifier = ">=1.0.0,<2.0.0" },
-    { name = "langgraph", marker = "extra == 'langgraph'", specifier = ">=1.0.0,<2.0.0" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
-    { name = "openviking-sdk", specifier = ">=0.1.1" },
-    { name = "pydantic", specifier = ">=2.0.0" },
-    { name = "pytest", marker = "extra == 'test'", specifier = ">=7.0.0" },
-    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.21.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
-    { name = "twine", marker = "extra == 'dev'", specifier = ">=5.0.0" },
-]
-provides-extras = ["langgraph", "test", "dev"]
-
-[[package]]
 name = "langchain-text-splitters"
 version = "1.1.1"
 source = { registry = "https://pypi.org/simple" }
@@ -3791,12 +3760,6 @@ gemini-async = [
     { name = "anyio" },
     { name = "google-genai" },
 ]
-langchain = [
-    { name = "langchain-openviking" },
-]
-langgraph = [
-    { name = "langchain-openviking", extra = ["langgraph"] },
-]
 local-embed = [
     { name = "llama-cpp-python" },
 ]
@@ -3862,8 +3825,6 @@ requires-dist = [
     { name = "langchain", marker = "extra == 'benchmark'", specifier = ">=1.0.0" },
     { name = "langchain-core", marker = "extra == 'benchmark'", specifier = ">=1.0.0" },
     { name = "langchain-openai", marker = "extra == 'benchmark'", specifier = ">=1.0.0" },
-    { name = "langchain-openviking", marker = "extra == 'langchain'", directory = "integrations/langchain" },
-    { name = "langchain-openviking", extras = ["langgraph"], marker = "extra == 'langgraph'", directory = "integrations/langchain" },
     { name = "langfuse", marker = "extra == 'bot'", specifier = ">=3.0.0" },
     { name = "lark-oapi", specifier = ">=1.5.3" },
     { name = "lark-oapi", marker = "extra == 'bot'", specifier = ">=1.0.0" },
@@ -3956,7 +3917,7 @@ requires-dist = [
     { name = "xlrd", specifier = ">=2.0.1" },
     { name = "xxhash", specifier = ">=3.0.0" },
 ]
-provides-extras = ["test", "opengauss", "dev", "doc", "eval", "gemini", "gemini-async", "ocr", "build", "bot", "benchmark", "langchain", "langgraph", "local-embed"]
+provides-extras = ["test", "opengauss", "dev", "doc", "eval", "gemini", "gemini-async", "ocr", "build", "bot", "benchmark", "local-embed"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=9.0.2" }]

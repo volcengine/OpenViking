@@ -25,6 +25,7 @@ class FieldType(IntEnum):
     list_int64 = 6
     list_string = 7
     list_float32 = 8
+    text = 9
 
 
 class StorageOpType(IntEnum):
@@ -52,6 +53,7 @@ def _default_value_for_type(data_type: FieldType) -> Any:
         FieldType.list_int64: [],
         FieldType.list_string: [],
         FieldType.list_float32: [],
+        FieldType.text: "",
     }[data_type]
 
 
@@ -66,6 +68,7 @@ def _field_type_size(data_type: FieldType) -> int:
         FieldType.list_int64: UINT32_SIZE,
         FieldType.list_string: UINT32_SIZE,
         FieldType.list_float32: UINT32_SIZE,
+        FieldType.text: UINT32_SIZE,
     }[data_type]
 
 
@@ -243,6 +246,11 @@ class BytesRow:
             blob_len = struct.unpack_from("<I", serialized_data, blob_offset)[0]
             blob_offset += UINT32_SIZE
             return serialized_data[blob_offset : blob_offset + blob_len]
+        if field_meta.data_type == FieldType.text:
+            text_offset = struct.unpack_from("<I", serialized_data, field_meta.offset)[0]
+            text_len = struct.unpack_from("<I", serialized_data, text_offset)[0]
+            text_offset += UINT32_SIZE
+            return serialized_data[text_offset : text_offset + text_len].decode("utf-8")
         if field_meta.data_type == FieldType.list_int64:
             list_offset = struct.unpack_from("<I", serialized_data, field_meta.offset)[0]
             list_len = struct.unpack_from("<H", serialized_data, list_offset)[0]

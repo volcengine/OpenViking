@@ -79,7 +79,10 @@ class TestCommit:
     async def test_commit_default_disables_agent_memory_but_keeps_archive(
         self, session_with_messages: Session
     ):
-        session_with_messages._agent_evolution_enabled_provider = lambda: False
+        async def account_setting_provider() -> bool:
+            return False
+
+        session_with_messages._agent_evolution_enabled_provider = account_setting_provider
         session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
             return_value=[]
         )

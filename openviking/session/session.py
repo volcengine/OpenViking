@@ -6,6 +6,7 @@ Session as Context: Sessions integrated into L0/L1/L2 system.
 """
 
 import asyncio
+import inspect
 import json
 import re
 from dataclasses import dataclass, field
@@ -559,7 +560,7 @@ class Session:
         tool_output_externalization_config: Optional[ToolOutputExternalizationConfig] = None,
         agent_evolution_enabled: bool = True,
         usage_reporter: Optional["UsageReporter"] = None,
-        agent_evolution_enabled_provider: Optional[Callable[[], bool]] = None,
+        agent_evolution_enabled_provider: Optional[Callable[[], bool | Awaitable[bool]]] = None,
     ):
         self._viking_fs = viking_fs
         self._vikingdb_manager = vikingdb_manager
@@ -1736,11 +1737,14 @@ class Session:
             memory_policy if memory_policy is not None else self._meta.memory_policy
         )
         _validate_memory_policy_types(effective_policy)
-        agent_evolution_enabled = (
-            self._agent_evolution_enabled_provider()
-            if self._agent_evolution_enabled_provider is not None
-            else self._agent_evolution_enabled
-        )
+        agent_evolution_enabled = self._agent_evolution_enabled
+        if self._agent_evolution_enabled_provider is not None:
+            provided_enabled = self._agent_evolution_enabled_provider()
+            agent_evolution_enabled = (
+                await provided_enabled
+                if inspect.isawaitable(provided_enabled)
+                else provided_enabled
+            )
         effective_policy = _apply_agent_evolution_setting(
             effective_policy,
             agent_evolution_enabled=agent_evolution_enabled,

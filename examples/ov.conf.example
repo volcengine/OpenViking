@@ -82,6 +82,7 @@
             },
         },
     },
+    "queue_workers": {"external_parse": {"max_concurrent": 4}},
     "embedding": {
         "dense": {
             "model": "doubao-embedding-vision-251215",

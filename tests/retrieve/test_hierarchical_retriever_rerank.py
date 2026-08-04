@@ -637,3 +637,42 @@ async def test_convert_to_matched_contexts_returns_empty_relations():
     )
 
     assert result[0].relations == []
+
+
+@pytest.mark.asyncio
+async def test_convert_to_matched_contexts_propagates_search_tags():
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=None,
+        rerank_config=None,
+    )
+
+    result = await retriever._convert_to_matched_contexts(
+        [
+            _result(
+                "viking://resources/file-a",
+                1.0,
+                abstract="child A",
+                search_tags=["team=infra", "project=viking"],
+            )
+        ],
+        ctx=_ctx(),
+    )
+
+    assert result[0].search_tags == ["team=infra", "project=viking"]
+
+
+@pytest.mark.asyncio
+async def test_convert_to_matched_contexts_defaults_empty_search_tags():
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=None,
+        rerank_config=None,
+    )
+
+    result = await retriever._convert_to_matched_contexts(
+        [_result("viking://resources/file-a", 1.0, abstract="child A")],
+        ctx=_ctx(),
+    )
+
+    assert result[0].search_tags == []

@@ -51,6 +51,7 @@ openviking-server --config /path/to/ov.conf
 | `retrieval` | object | 见下表 | 检索排序和意图分析策略 |
 | `grep` | object | 内置默认值 | 文本搜索引擎配置 |
 | `storage` | object | 本地存储 | 工作目录、文件系统和向量数据库 |
+| `queue_workers` | object | 见下表 | QueueFS 消费 worker 的运行时并发配置 |
 | `server` | object | 本地开发模式 | HTTP 服务、鉴权、上传和可观测性 |
 | `memory` | object | 见下表 | 会话提交后的记忆与技能抽取 |
 | `parsers` | object | 各解析器默认值 | PDF、代码、图片、音视频等解析行为 |
@@ -196,6 +197,16 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 | `skip_process_lock` | boolean | `false` | 是否跳过 workspace 进程锁；仅在明确接受并发写风险时启用 |
 
 远程存储后端还需要配置 endpoint、bucket/collection、鉴权和超时等字段。完整后端示例见[配置指南](../guides/01-configuration.md#storage)。
+
+## 队列 Worker 配置
+
+### `queue_workers.external_parse`
+
+| 字段 | 类型 | 默认值 | 说明 |
+|---|---|---:|---|
+| `max_concurrent` | integer | `4` | 同时消费的完整 ExternalParse 作业数，必须大于 `0`；修改后需重启服务 |
+
+该配置控制队列作业并发，不等同于 `vlm.media.max_concurrent` 的音视频 VLM 调用并发，也不限制 Understanding API 的单独 HTTP 请求数。
 
 ## HTTP 服务配置
 

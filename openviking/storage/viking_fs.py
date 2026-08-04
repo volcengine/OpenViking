@@ -4224,6 +4224,7 @@ class VikingFS:
         path: str,
         from_ref: Optional[str],
         to_ref: str,
+        raw: bool = True,
         ctx: Optional[RequestContext] = None,
     ) -> Dict[str, Any]:
         """Return a unified text diff for one path between two snapshots."""
@@ -4276,6 +4277,21 @@ class VikingFS:
                     f"snapshot diff file size limit exceeded ({SNAPSHOT_DIFF_MAX_FILE_BYTES} bytes)",
                     details={"limit_bytes": SNAPSHOT_DIFF_MAX_FILE_BYTES, "path": path},
                 )
+
+        if not raw:
+            from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+
+            def visible_content(value: Optional[bytes]) -> Optional[bytes]:
+                if value is None:
+                    return None
+                try:
+                    text = value.decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    raise InvalidArgumentError("raw=false requires UTF-8 snapshot content") from exc
+                return MemoryFileUtils.read(text, uri=path).content.encode("utf-8")
+
+            before_bytes = visible_content(before_bytes)
+            after_bytes = visible_content(after_bytes)
 
         change_type, before, after = await asyncio.to_thread(
             _prepare_snapshot_diff,
