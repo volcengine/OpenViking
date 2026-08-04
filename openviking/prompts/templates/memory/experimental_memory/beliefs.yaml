@@ -1,0 +1,71 @@
+memory_type: beliefs
+description: |
+  Belief memory - captures revisable agent working guidance derived from facts,
+  observations, preferences, and interaction outcomes.
+
+  Beliefs are action-oriented and should help the agent decide how to respond or
+  operate later. They are not raw facts and must include evidence. Keep them
+  neutral, concrete, and easy to revise.
+directory: "viking://user/{{ user_space }}/memories/beliefs"
+filename_template: "{{ subject }}/{{ belief_name }}.md"
+enabled: true
+operation_mode: "upsert"
+content_template: |
+  # {{ belief_name }}
+  Subject: {{ subject }}
+  Confidence: {{ confidence }}
+
+  ## Working Belief
+  {{ content }}
+
+  ## Evidence
+  {{ evidence }}
+embedding_template: |-
+  Subject: {{ subject }}
+  Belief: {{ belief_name }}
+  Guidance: {{ content }}
+  Evidence: {{ evidence }}
+overview_template: |-
+  # Beliefs Overview
+  {% if items %}**Subject:** {{ items[0].file_content.subject|default(directory_name, true) }}{% endif %}
+  {% for item in items %}
+  - [{{ item.file_content.belief_name|default(item.file_name, true) }}](./{{ item.file_name }})
+  {% endfor %}
+
+fields:
+  - name: subject
+    type: string
+    description: |
+      The user, project, workflow, entity, or topic this working belief is about.
+      {% if language == 'en' %}Use lowercase with underscores, max 4 words.{% else %}Keep it concise and natural in {{ language }}.{% endif %}
+    merge_op: immutable
+
+  - name: belief_name
+    type: string
+    description: |
+      Concise name for this agent working belief.
+      {% if language == 'en' %}Use lowercase with underscores, max 4 words.{% else %}Keep it concise and natural in {{ language }}.{% endif %}
+    merge_op: immutable
+
+  - name: confidence
+    type: float32
+    description: |
+      Confidence from 0.0 to 1.0. Use moderate confidence unless the guidance is
+      repeatedly supported by evidence.
+    merge_op: replace
+
+  - name: evidence
+    type: string
+    description: |
+      Markdown bullet list of evidence supporting this working belief. Prefer
+      fact/event/observation URIs when available; otherwise cite message ranges.
+      Preserve old evidence unless it is contradicted or duplicated.
+    merge_op: patch
+
+  - name: content
+    type: string
+    description: |
+      Markdown action guidance for the agent in {{ language }}. Explain how the
+      agent should behave or decide in future interactions. Do not treat this as
+      a hard rule when confidence is low or evidence changes.
+    merge_op: patch

@@ -291,13 +291,63 @@ async def test_recall_tool_returns_type_quota_memory_groups(service, monkeypatch
 
     result = await recall(
         query="what happened",
-        quotas={"events": 1, "entities": 0, "preferences": 0, "experiences": 0},
+        quotas={
+            "events": 1,
+            "facts": 0,
+            "entities": 0,
+            "observations": 0,
+            "beliefs": 0,
+            "preferences": 0,
+            "experiences": 0,
+        },
         max_chars=200,
         min_score=0.1,
     )
 
     assert '<memory_group type="events"' in result
     assert "MCP recall event." in result
+
+
+async def test_mcp_recall_tool_returns_structured_memory_groups(service, monkeypatch):
+    from openviking.server.mcp_endpoint import recall
+
+    async def fake_find(**kwargs):
+        if kwargs["target_uri"].endswith("/facts"):
+            return SimpleNamespace(
+                memories=[
+                    SimpleNamespace(
+                        uri="viking://user/test_user/memories/facts/project/f.md",
+                        score=0.9,
+                        abstract="fact abstract",
+                    )
+                ]
+            )
+        return SimpleNamespace(memories=[])
+
+    async def fake_read(uri, **kwargs):
+        del uri, kwargs
+        return "Fact: structured memory is enabled."
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+    monkeypatch.setattr(service.fs, "read", fake_read)
+
+    result = await recall(
+        query="structured",
+        quotas={
+            "events": 0,
+            "facts": 1,
+            "entities": 0,
+            "observations": 0,
+            "beliefs": 0,
+            "preferences": 0,
+            "experiences": 0,
+        },
+        max_chars=500,
+        min_score=0.1,
+    )
+
+    assert '<memory_group type="facts"' in result
+    assert "structured memory is enabled" in result
 
 
 async def test_mcp_middleware_sets_actor_peer_context():

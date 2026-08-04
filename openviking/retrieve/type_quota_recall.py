@@ -18,11 +18,30 @@ from openviking.core.namespace import canonical_user_root
 from openviking.server.identity import RequestContext
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 
-TYPE_ORDER = ("events", "entities", "preferences", "experiences")
-DEFAULT_QUOTAS = {"events": 10, "entities": 10, "preferences": 3, "experiences": 0}
+TYPE_ORDER = (
+    "events",
+    "facts",
+    "entities",
+    "observations",
+    "beliefs",
+    "preferences",
+    "experiences",
+)
+DEFAULT_QUOTAS = {
+    "events": 10,
+    "facts": 5,
+    "entities": 10,
+    "observations": 3,
+    "beliefs": 2,
+    "preferences": 3,
+    "experiences": 0,
+}
 DEFAULT_OTHER_PEER_PENALTIES = {
     "events": 0.1,
+    "facts": 0.1,
     "entities": 0.1,
+    "observations": 0.05,
+    "beliefs": 0.05,
     "preferences": 0.02,
     "experiences": 0.02,
 }
@@ -233,7 +252,10 @@ def type_char_budgets(max_chars: int) -> dict[str, int]:
     max_chars = max(1, int(max_chars))
     return {
         "events": int(max_chars * EVENTS_BUDGET_RATIO),
+        "facts": max_chars,
         "entities": max_chars,
+        "observations": max_chars,
+        "beliefs": max_chars,
         "preferences": max_chars,
         "experiences": max_chars,
     }

@@ -270,11 +270,14 @@ def test_memory_type_registry_loads_experimental_templates_when_switch_enabled(m
 
     registry = MemoryTypeRegistry(load_schemas=True)
 
-    # entities and profile should be loaded (overridden by experimental versions)
+    # Existing entities/profile are overridden, and structured memory schemas are added.
     entities = registry.get("entities")
     profile = registry.get("profile")
     assert entities is not None
     assert profile is not None
+    assert registry.get("facts") is not None
+    assert registry.get("observations") is not None
+    assert registry.get("beliefs") is not None
     # Experimental entities has specific description mentioning Zettelkasten
     assert "Zettelkasten" in entities.description
 
@@ -294,3 +297,6 @@ def test_memory_type_registry_does_not_load_experimental_templates_when_switch_d
 
     entities = registry.get("entities")
     assert entities is not None
+    assert registry.get("facts") is None
+    assert registry.get("observations") is None
+    assert registry.get("beliefs") is None

@@ -36,19 +36,28 @@ def _self_memory_target(target_uri: str, memory_type: str) -> bool:
 def test_normalize_penalties_defaults_scalar_dict_and_clamp():
     assert normalize_penalties() == {
         "events": 0.1,
+        "facts": 0.1,
         "entities": 0.1,
+        "observations": 0.05,
+        "beliefs": 0.05,
         "preferences": 0.02,
         "experiences": 0.02,
     }
     assert normalize_penalties(0.2) == {
         "events": 0.2,
+        "facts": 0.2,
         "entities": 0.2,
+        "observations": 0.2,
+        "beliefs": 0.2,
         "preferences": 0.2,
         "experiences": 0.2,
     }
     assert normalize_penalties({"events": 2, "preferences": -1, "unknown": 0.5}) == {
         "events": 1.0,
+        "facts": 0.1,
         "entities": 0.1,
+        "observations": 0.05,
+        "beliefs": 0.05,
         "preferences": 0.0,
         "experiences": 0.02,
     }
@@ -111,7 +120,15 @@ async def test_recall_default_all_searches_other_peers_and_reads_with_open_ctx(
         headers={"X-OpenViking-Actor-Peer": "current"},
         json={
             "query": "peer memory",
-            "quotas": {"events": 3, "entities": 0, "preferences": 0, "experiences": 0},
+            "quotas": {
+                "events": 3,
+                "facts": 0,
+                "entities": 0,
+                "observations": 0,
+                "beliefs": 0,
+                "preferences": 0,
+                "experiences": 0,
+            },
             "max_chars": 5000,
         },
     )
@@ -163,7 +180,15 @@ async def test_recall_actor_scope_keeps_legacy_rendering(
         json={
             "query": "peer memory",
             "peer_scope": "actor",
-            "quotas": {"events": 1, "entities": 0, "preferences": 0, "experiences": 0},
+            "quotas": {
+                "events": 1,
+                "facts": 0,
+                "entities": 0,
+                "observations": 0,
+                "beliefs": 0,
+                "preferences": 0,
+                "experiences": 0,
+            },
             "max_chars": 300,
         },
     )
@@ -220,7 +245,15 @@ async def test_recall_other_peer_penalty_is_type_aware(
         headers={"X-OpenViking-Actor-Peer": "current"},
         json={
             "query": "ranking",
-            "quotas": {"events": 1, "entities": 0, "preferences": 0, "experiences": 1},
+            "quotas": {
+                "events": 1,
+                "facts": 0,
+                "entities": 0,
+                "observations": 0,
+                "beliefs": 0,
+                "preferences": 0,
+                "experiences": 1,
+            },
             "max_chars": 5000,
         },
     )
@@ -259,7 +292,15 @@ async def test_recall_accepts_scalar_penalty_override(
         headers={"X-OpenViking-Actor-Peer": "current"},
         json={
             "query": "ranking",
-            "quotas": {"events": 1, "entities": 0, "preferences": 0, "experiences": 0},
+            "quotas": {
+                "events": 1,
+                "facts": 0,
+                "entities": 0,
+                "observations": 0,
+                "beliefs": 0,
+                "preferences": 0,
+                "experiences": 0,
+            },
             "other_peer_penalty": 0.0,
         },
     )

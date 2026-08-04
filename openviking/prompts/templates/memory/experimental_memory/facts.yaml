@@ -1,0 +1,91 @@
+memory_type: facts
+description: |
+  Atomic fact memory - captures durable facts explicitly stated or confirmed by
+  the user. A fact is evidence, not interpretation.
+
+  Extract facts only when the conversation directly supports the claim. Do not
+  infer motives, preferences, personality, or strategy here. Use observations
+  for inferred patterns and beliefs for agent working guidance.
+
+  Each fact must be small, sourceable, and useful on its own. Split independent
+  claims into separate fact records.
+directory: "viking://user/{{ user_space }}/memories/facts"
+filename_template: "{{ subject }}/{{ extract_context.get_timestamp_from_ranges(ranges) }}_{{ fact_name }}.md"
+enabled: true
+operation_mode: "add_only"
+content_template: |
+  # {{ fact_name }}
+  Claim: {{ claim }}
+  Source: {{ source }}
+  Confidence: {{ confidence }}
+
+  {{ content }}
+
+  # Evidence
+  {{ extract_context.get_event_content(ranges, claim, 0) }}
+embedding_template: |-
+  Subject: {{ subject }}
+  Fact: {{ fact_name }}
+  Claim: {{ claim }}
+  {{ content }}
+overview_template: |-
+  # Facts Overview
+  {% if items %}**Subject:** {{ items[0].file_content.subject|default(directory_name, true) }}{% endif %}
+  {% for item in items %}
+  - [{{ item.file_content.claim|default(item.file_name, true) }}](./{{ item.file_name }})
+  {% endfor %}
+
+fields:
+  - name: subject
+    type: string
+    description: |
+      The entity, user, project, object, or topic the fact is about.
+      {% if language == 'en' %}Use lowercase with underscores, max 4 words.{% else %}Keep it concise and natural in {{ language }}.{% endif %}
+    merge_op: immutable
+
+  - name: fact_name
+    type: string
+    description: |
+      Concise name for this atomic fact.
+      {% if language == 'en' %}Use lowercase with underscores, max 4 words.{% else %}Keep it concise and natural in {{ language }}.{% endif %}
+      Do not include dates or timestamps.
+    merge_op: immutable
+
+  - name: claim
+    type: string
+    description: |
+      A single objective claim directly stated or confirmed in the conversation.
+      Write it as a complete sentence in {{ language }}. Do not include guesses,
+      inferred preferences, or recommendations.
+    merge_op: immutable
+
+  - name: source
+    type: string
+    description: |
+      Short source label describing where the claim came from, such as
+      "user_statement", "user_confirmation", "tool_result_shared_by_user", or
+      "quoted_requirement". Use lowercase snake_case.
+    merge_op: immutable
+
+  - name: ranges
+    type: string
+    description: |
+      Conversation message index ranges that directly support the claim. Supports:
+      - Range: "start-end" (e.g., "0-3")
+      - Single index: "N" (e.g., "7")
+      - Mixed: "0-3,7,15-20"
+    merge_op: immutable
+
+  - name: confidence
+    type: float32
+    description: |
+      Confidence from 0.0 to 1.0 based only on how directly the conversation
+      supports the claim. Use high confidence for explicit user statements.
+    merge_op: immutable
+
+  - name: content
+    type: string
+    description: |
+      Compact Markdown note explaining why this fact is worth remembering.
+      Include only source-backed context. Do not add inferred conclusions.
+    merge_op: immutable
