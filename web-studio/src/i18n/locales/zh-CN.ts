@@ -376,6 +376,12 @@ const zhCN = {
       },
       rootHint: '用于列出 account / user，以及生成或轮换 key。',
       title: '连接设置',
+      unsupportedAuthMode: {
+        description:
+          'Web Studio 不支持 {{mode}} 认证模式。请使用 {{ov}} CLI 或 Python SDK 连接此服务器。',
+        primary: '该服务器配置了 {{mode}} 认证。',
+        title: '不支持的认证模式',
+      },
       userHint: '供 Playground 和租户数据 API 使用。',
     },
     connectionPage: {
@@ -491,7 +497,9 @@ const zhCN = {
       api_key: 'API key 模式',
       checking: '检查中...',
       dev: '开发模式',
+      ldap: 'LDAP 模式',
       offline: '离线',
+      oidc: 'OIDC 模式',
       trusted: 'Trusted 模式',
     },
     stats: {

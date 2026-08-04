@@ -506,26 +506,12 @@ OpenViking CLI (`ov`) 支持通过 LDAP 进行认证。配置完成后，所有 
 | `url` | 是 | OpenViking 服务器地址 |
 | `auth_mode` | 是 | 认证模式，设置为 `"ldap"` 启用 LDAP |
 | `ldap_username` | 是 | LDAP 用户名（UID） |
-| `ldap_password` | 否 | LDAP 密码（如不提供可通过环境变量或交互式输入） |
+| `ldap_password` | 否 | LDAP 密码（不提供时 CLI 不发送密码） |
 | `account` | 否 | OpenViking 账户 ID（默认为 `"default"`） |
 
-#### 2. 环境变量方式
+#### 2. 混合配置
 
-也可以通过环境变量配置 LDAP 认证：
-
-```bash
-export OPENVIKING_URL="http://localhost:1933"
-export OPENVIKING_AUTH_MODE="ldap"
-export OPENVIKING_USERNAME="alice"
-export OPENVIKING_PASSWORD="password123"
-export OPENVIKING_ACCOUNT="default"
-```
-
-**环境变量优先级**：环境变量 > 配置文件 > 默认值。
-
-#### 3. 混合配置
-
-可以部分配置在文件中，部分通过环境变量覆盖。
+可以部分配置在文件中，部分通过环境变量（如 `OPENVIKING_URL`、`OPENVIKING_ACCOUNT`）覆盖。
 
 ### 使用 CLI
 
@@ -554,19 +540,7 @@ make build-cli
 
 ### 切换认证模式
 
-可以在 LDAP 和 API Key 认证之间切换：
-
-**临时切换（环境变量）：**
-```bash
-# 使用 API Key
-OPENVIKING_AUTH_MODE=api_key OPENVIKING_API_KEY="sk-..." ov ls viking://
-
-# 使用 LDAP
-OPENVIKING_AUTH_MODE="ldap" OPENVIKING_USERNAME="bob" OPENVIKING_PASSWORD="..." ov ls viking://
-```
-
-**永久切换：**
-编辑 `~/.openviking/ovcli.conf`，修改 `auth_mode` 为 `"api_key"` 或删除该字段。
+编辑 `~/.openviking/ovcli.conf`，修改 `auth_mode` 为 `"api_key"` 或删除该字段即可切换认证模式。
 
 ### 安全建议
 
@@ -580,7 +554,6 @@ OPENVIKING_AUTH_MODE="ldap" OPENVIKING_USERNAME="bob" OPENVIKING_PASSWORD="..." 
 **"Missing LDAP credentials" 错误：**
 - 检查 `auth_mode` 是否设置为 `"ldap"`
 - 确认 `username` 和 `password` 配置正确
-- 验证环境变量是否正确设置
 
 **"LDAP authentication failed" 错误：**
 - 验证 LDAP 用户名和密码是否正确

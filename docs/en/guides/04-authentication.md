@@ -729,26 +729,12 @@ Edit `~/.openviking/ovcli.conf` to add LDAP authentication settings:
 | `url` | Yes | OpenViking server URL |
 | `auth_mode` | Yes | Authentication mode, set to `"ldap"` to enable LDAP |
 | `ldap_username` | Yes | LDAP username (UID) |
-| `ldap_password` | No | LDAP password (can be provided via env var or interactively) |
+| `ldap_password` | No | LDAP password (omit to skip password in CLI) |
 | `account` | No | OpenViking account ID (defaults to `"default"`) |
 
-#### 2. Environment Variables
+#### 2. Mixed Configuration
 
-LDAP authentication can also be configured via environment variables:
-
-```bash
-export OPENVIKING_URL="http://localhost:1933"
-export OPENVIKING_AUTH_MODE="ldap"
-export OPENVIKING_USERNAME="alice"
-export OPENVIKING_PASSWORD="password123"
-export OPENVIKING_ACCOUNT="default"
-```
-
-**Priority order**: Environment variables > config file > defaults.
-
-#### 3. Mixed Configuration
-
-You can configure some settings in the file and override others with environment variables.
+You can configure some settings in the file and override others with environment variables (e.g. `OPENVIKING_URL`, `OPENVIKING_ACCOUNT`).
 
 ### Using the CLI
 
@@ -777,19 +763,7 @@ The built binary is located at `openviking/bin/ov`.
 
 ### Switching Authentication Modes
 
-You can switch between LDAP and API Key authentication:
-
-**Temporary switch (environment variables):**
-```bash
-# Use API Key
-OPENVIKING_AUTH_MODE=api_key OPENVIKING_API_KEY="sk-..." ov ls viking://
-
-# Use LDAP
-OPENVIKING_AUTH_MODE="ldap" OPENVIKING_USERNAME="bob" OPENVIKING_PASSWORD="..." ov ls viking://
-```
-
-**Permanent switch:**
-Edit `~/.openviking/ovcli.conf` and change `auth_mode` to `"api_key"` or remove the field.
+You can switch between LDAP and API Key authentication by editing `~/.openviking/ovcli.conf` and changing `auth_mode` to `"api_key"` or removing the field.
 
 ### Security Recommendations
 
@@ -803,7 +777,6 @@ Edit `~/.openviking/ovcli.conf` and change `auth_mode` to `"api_key"` or remove 
 **"Missing LDAP credentials" error:**
 - Check that `auth_mode` is set to `"ldap"`
 - Verify `username` and `password` are configured correctly
-- Ensure environment variables are set properly
 
 **"LDAP authentication failed" error:**
 - Verify LDAP username and password are correct
