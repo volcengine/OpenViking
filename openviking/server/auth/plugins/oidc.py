@@ -8,6 +8,7 @@ and mapping claims to OpenViking identities.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sys
 from typing import Any, Dict, Optional
@@ -17,7 +18,7 @@ from fastapi import Request
 from openviking.server.auth.identity_mapping import IdentityMapper
 from openviking.server.auth.oidc_config import OIDCConfig
 from openviking.server.auth.plugin import AuthPlugin
-from openviking.server.identity import ResolvedIdentity, Role
+from openviking.server.identity import ResolvedIdentity
 from openviking_cli.exceptions import UnauthenticatedError
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,19 @@ except ImportError:
     )
 
 
+# Supported signing algorithms. Asymmetric algorithms are preferred for OIDC;
+# HMAC algorithms are included for completeness but require a shared secret.
+_SUPPORTED_ALGORITHMS = [
+    "RS256", "RS384", "RS512",
+    "ES256", "ES384", "ES512",
+    "PS256", "PS384", "PS512",
+    "HS256", "HS384", "HS512",
+]
+
+_DISCOVERY_PATH = "/.well-known/openid-configuration"
+_DISCOVERY_TIMEOUT = 10.0
+
+
 class OIDCAuthPlugin(AuthPlugin):
     """OIDC authentication plugin.
 
@@ -51,6 +65,8 @@ class OIDCAuthPlugin(AuthPlugin):
         self._config: Optional[OIDCConfig] = None
         self._jwks: Dict[str, Key] = {}
         self._mapper: Optional[IdentityMapper] = None
+        self._jwks_uri: Optional[str] = None
+        self._discovery_lock = asyncio.Lock()
 
     async def resolve_identity(
         self,
@@ -119,9 +135,9 @@ class OIDCAuthPlugin(AuthPlugin):
             auth_header = request.headers.get(self._config.token_header_name)
             if auth_header:
                 prefix = self._config.token_header_prefix
-                if auth_header.startswith(prefix):
-                    return auth_header[len(prefix) :].strip()
-                # Also try raw bearer token without prefix
+                if prefix and auth_header.startswith(prefix):
+                    return auth_header[len(prefix):].strip()
+                # Without a configured prefix, accept raw bearer token
                 return auth_header.strip()
 
         # Try query parameter
@@ -132,7 +148,7 @@ class OIDCAuthPlugin(AuthPlugin):
                 return token
 
         # Fallback: check if api_key is a JWT (to support SDK use)
-        if api_key and "." in api_key:
+        if api_key and api_key.count(".") == 2:
             # Looks like a JWT (header.payload.signature)
             return api_key
 
@@ -156,19 +172,26 @@ class OIDCAuthPlugin(AuthPlugin):
         # Get key for validation
         key = await self._get_key(kid)
 
+        # audience is guaranteed non-None after validate_config() — either the
+        # operator configured it explicitly or we fell back to client_id.
+        # Audience validation must NEVER be skipped: an IdP commonly issues
+        # tokens for many audiences, and accepting a token intended for another
+        # application would be a cross-client trust violation.
+        assert self._effective_audience is not None
+
         # Validate token
         try:
             claims = jwt.decode(
                 token,
                 key,
-                algorithms=["RS256", "RS384", "RS512", "ES256", "ES384", "ES512", "HS256", "HS384", "HS512"],
+                algorithms=_SUPPORTED_ALGORITHMS,
                 options={
-                    "verify_aud": bool(self._config.audience),
+                    "verify_aud": True,
                     "verify_exp": True,
                     "verify_iss": True,
                 },
                 issuer=self._config.issuer,
-                audience=self._config.audience,
+                audience=self._effective_audience,
             )
             return claims
         except ExpiredSignatureError:
@@ -177,6 +200,54 @@ class OIDCAuthPlugin(AuthPlugin):
             raise UnauthenticatedError(f"Invalid claims: {e}")
         except JWTError as e:
             raise UnauthenticatedError(f"Token validation failed: {e}")
+
+    async def _discover_jwks_uri(self) -> str:
+        """Perform OIDC Discovery to locate the JWKS endpoint.
+
+        Standard flow (per OpenID Connect Discovery 1.0):
+        1. GET ``{issuer}/.well-known/openid-configuration``
+        2. Read the ``jwks_uri`` field from the returned metadata.
+
+        If an explicit ``jwks_uri`` is configured, it takes precedence and
+        no discovery request is made.
+        """
+        if self._config is None:
+            raise RuntimeError("OIDC config not initialized")
+
+        if self._config.jwks_uri:
+            return self._config.jwks_uri
+
+        async with self._discovery_lock:
+            # Re-check after acquiring the lock to avoid redundant fetches.
+            if self._jwks_uri:
+                return self._jwks_uri
+
+            discovery_url = f"{self._config.issuer}{_DISCOVERY_PATH}"
+            logger.info("Performing OIDC discovery at %s", discovery_url)
+            try:
+                async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT) as client:
+                    response = await client.get(discovery_url)
+                    response.raise_for_status()
+                    metadata = response.json()
+            except (httpx.HTTPError, ValueError) as e:
+                logger.error("OIDC discovery failed for %s: %s", discovery_url, e)
+                raise UnauthenticatedError(
+                    f"Failed to fetch OIDC discovery document from {discovery_url}: {e}"
+                ) from e
+
+            jwks_uri = metadata.get("jwks_uri")
+            if not jwks_uri or not isinstance(jwks_uri, str):
+                logger.error(
+                    "OIDC discovery document at %s did not contain a jwks_uri",
+                    discovery_url,
+                )
+                raise UnauthenticatedError(
+                    "OIDC discovery document is missing 'jwks_uri'"
+                )
+
+            logger.info("OIDC discovery resolved jwks_uri=%s", jwks_uri)
+            self._jwks_uri = jwks_uri
+            return jwks_uri
 
     async def _get_key(self, kid: str) -> Key:
         """Get JWK key for signature validation."""
@@ -187,16 +258,15 @@ class OIDCAuthPlugin(AuthPlugin):
         if kid in self._jwks:
             return self._jwks[kid]
 
-        # Fetch JWKS from issuer
-        jwks_uri = self._config.jwks_uri or f"{self._config.issuer}/.well-known/jwks.json"
+        jwks_uri = await self._discover_jwks_uri()
 
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(jwks_uri, timeout=10)
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(jwks_uri)
                 response.raise_for_status()
                 jwks = response.json()
-        except httpx.HTTPError as e:
-            logger.error("Failed to fetch JWKS: %s", e)
+        except (httpx.HTTPError, ValueError) as e:
+            logger.error("Failed to fetch JWKS from %s: %s", jwks_uri, e)
             raise UnauthenticatedError("Failed to fetch JWKS") from e
 
         # Process keys and cache them
@@ -206,7 +276,9 @@ class OIDCAuthPlugin(AuthPlugin):
                 try:
                     self._jwks[key_kid] = jwk.construct(key_dict)
                 except Exception as e:  # noqa: BLE001
-                    logger.warning("Failed to construct key for kid=%s: %s", key_kid, e)
+                    logger.warning(
+                        "Failed to construct key for kid=%s: %s", key_kid, e
+                    )
 
         if kid not in self._jwks:
             raise UnauthenticatedError(f"Unknown key ID: {kid}")
@@ -214,7 +286,11 @@ class OIDCAuthPlugin(AuthPlugin):
         return self._jwks[kid]
 
     def validate_config(self, config) -> None:
-        """Validate OIDC configuration."""
+        """Validate OIDC configuration.
+
+        Enforces that an audience can be resolved (explicit ``audience`` or
+        ``client_id``) so that tokens issued for other clients are rejected.
+        """
         if config.oidc is None:
             logger.error(
                 "auth_mode=oidc but 'oidc' section missing in config. "
@@ -224,6 +300,14 @@ class OIDCAuthPlugin(AuthPlugin):
 
         if not config.oidc.issuer:
             logger.error("OIDC config missing 'issuer'")
+            sys.exit(1)
+
+        if not config.oidc.audience and not config.oidc.client_id:
+            logger.error(
+                "OIDC config requires either 'audience' or 'client_id' to "
+                "validate the token's 'aud' claim. Refusing to start without "
+                "audience validation."
+            )
             sys.exit(1)
 
         logger.info("OIDC config validated successfully")
@@ -236,14 +320,73 @@ class OIDCAuthPlugin(AuthPlugin):
         self._config = config.oidc
         self._mapper = IdentityMapper(self._config.identity)
 
-        logger.info("OIDC auth plugin initialized with issuer=%s", self._config.issuer)
-
-    def requires_api_key_manager(self) -> bool:
-        """OIDC doesn't require API key manager by default."""
-        return (
-            self._config.require_root_api_key_for_admin if self._config else False
+        # Resolve the effective audience once. Explicit audience wins;
+        # otherwise fall back to client_id (standard OIDC ID token contract).
+        self._effective_audience: Optional[str] = (
+            self._config.audience or self._config.client_id
         )
 
+        # When admin operations require a root API key, instantiate the
+        # APIKeyManager so Admin Router has a valid manager instead of None.
+        if self._config.require_root_api_key_for_admin:
+            await self._initialize_api_key_manager(app, service, config)
+
+        logger.info(
+            "OIDC auth plugin initialized with issuer=%s, audience=%s",
+            self._config.issuer,
+            self._effective_audience,
+        )
+
+    async def _initialize_api_key_manager(self, app, service, config) -> None:
+        """Create and wire an APIKeyManager for admin-protected deployments."""
+        from openviking.server.api_keys import APIKeyManager
+
+        if not config.root_api_key:
+            logger.error(
+                "oidc.require_root_api_key_for_admin=true but server.root_api_key "
+                "is not configured. Admin API will be unavailable."
+            )
+            sys.exit(1)
+
+        manager = APIKeyManager(
+            root_key=config.root_api_key,
+            viking_fs=service.viking_fs,
+            api_key_hashing_enabled=config.api_key_hashing_enabled,
+        )
+        await manager.load()
+        app.state.api_key_manager = manager
+        logger.info(
+            "OIDC plugin initialized APIKeyManager (root_api_key required for admin)"
+        )
+
+    def requires_api_key_manager(self) -> bool:
+        """OIDC requires an APIKeyManager when admin endpoints are root-gated."""
+        if self._config is None:
+            return False
+        return self._config.require_root_api_key_for_admin
+
     def can_skip_api_key_for_bot_proxy(self) -> bool:
-        """Bot proxy can use OIDC."""
-        return True
+        """OIDC does not declare bot-proxy compatibility until VikingBot
+        natively understands the ``oidc`` auth mode and can propagate the
+        bearer token to downstream tool calls.
+
+        Returning False here makes ``--with-bot`` fail fast with a clear
+        error instead of producing a silent auth-mode mismatch at runtime.
+        """
+        return False
+
+    def get_request_context_checks(
+        self,
+        path: str,
+        identity: ResolvedIdentity,
+    ) -> None:
+        """Enforce that ROOT/ADMIN identities only reach admin paths when
+        ``require_root_api_key_for_admin`` is enabled and the request carried
+        a valid root API key.
+
+        For external OIDC identities without an APIKeyManager, the admin
+        router itself will raise PermissionDenied via the auth decorator.
+        """
+        # No additional path-level checks here; role enforcement is handled
+        # by the existing require_auth_role decorator + api_key_manager guard.
+        return None

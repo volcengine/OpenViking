@@ -105,7 +105,7 @@ impl CliContext {
             self.config.effective_extra_headers(),
         )
         .with_gateway_token(self.config.effective_gateway_token());
-        
+
         // Add LDAP or OIDC authentication if configured
         if let Some(auth_mode) = &self.config.auth_mode {
             match auth_mode.as_str() {
@@ -130,7 +130,7 @@ impl CliContext {
                 _ => {}
             }
         }
-        
+
         client
     }
 }

@@ -28,6 +28,8 @@ class ClientConfig:
     auth_mode: Optional[str]
     ldap_username: Optional[str]
     ldap_password: Optional[str]
+    # OIDC authentication (None when auth mode is not OIDC)
+    oidc_token: Optional[str]
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,8 @@ class OVCLIConfig:
     auth_mode: Optional[str]
     ldap_username: Optional[str]
     ldap_password: Optional[str]
+    # OIDC authentication
+    oidc_token: Optional[str]
 
 
 def _resolve_ovcli_config_path() -> Optional[Path]:
@@ -165,7 +169,7 @@ def load_ovcli_config(config_path: Optional[str] = None) -> Optional[OVCLIConfig
 
         timeout = _optional_float(data.get("timeout"), path="ovcli.timeout")
         profile = _optional_bool(data.get("profile"), path="ovcli.profile")
-        
+
         # Parse LDAP config
         auth_mode = _optional_string(data.get("auth_mode"), path="ovcli.auth_mode")
         ldap_username = _optional_string(
@@ -174,7 +178,10 @@ def load_ovcli_config(config_path: Optional[str] = None) -> Optional[OVCLIConfig
         ldap_password = _optional_string(
             data.get("ldap_password"), path="ovcli.ldap_password"
         )
-        
+        oidc_token = _optional_string(
+            data.get("oidc_token"), path="ovcli.oidc_token"
+        )
+
         return OVCLIConfig(
             url=_optional_string(data.get("url"), path="ovcli.url"),
             api_key=_optional_string(data.get("api_key"), path="ovcli.api_key"),
@@ -191,6 +198,7 @@ def load_ovcli_config(config_path: Optional[str] = None) -> Optional[OVCLIConfig
             auth_mode=auth_mode,
             ldap_username=ldap_username,
             ldap_password=ldap_password,
+            oidc_token=oidc_token,
         )
     except ValueError as exc:
         raise ValueError(f"Invalid CLI config in {path}: {exc}") from exc
@@ -221,6 +229,8 @@ def resolve_client_config(
     auth_mode: Optional[str] = None,
     ldap_username: Optional[str] = None,
     ldap_password: Optional[str] = None,
+    # OIDC parameters
+    oidc_token: Optional[str] = None,
 ) -> ClientConfig:
     cli_config = load_ovcli_config()
 
@@ -236,6 +246,13 @@ def resolve_client_config(
     resolved_ldap_password = _resolve_env_or_config(
         "OPENVIKING_PASSWORD", ldap_password,
         cli_config.ldap_password if cli_config else None
+    )
+    # OIDC token: explicit arg > env var > config file.
+    # When auth_mode is oidc and no token is resolvable, leave it None so
+    # callers can choose to fall back to an api_key that looks like a JWT.
+    resolved_oidc_token = _resolve_env_or_config(
+        "OPENVIKING_OIDC_TOKEN", oidc_token,
+        cli_config.oidc_token if cli_config else None
     )
 
     resolved_url = url or os.getenv("OPENVIKING_URL") or (cli_config.url if cli_config else None)
@@ -306,6 +323,7 @@ def resolve_client_config(
         auth_mode=resolved_auth_mode,
         ldap_username=resolved_ldap_username,
         ldap_password=resolved_ldap_password,
+        oidc_token=resolved_oidc_token,
     )
 
 

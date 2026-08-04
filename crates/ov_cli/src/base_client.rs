@@ -305,15 +305,17 @@ impl BaseClient {
         }
 
         // LDAP Basic Auth support
-        if let (Some(auth_mode), Some(username), Some(password)) = 
+        if let (Some(auth_mode), Some(username), Some(password)) =
             (&self.auth_mode, &self.ldap_username, &self.ldap_password)
         {
             if auth_mode == "ldap" {
                 let credentials = format!("{}:{}", username, password);
-                use base64::engine::general_purpose;
                 use base64::engine::Engine;
+                use base64::engine::general_purpose;
                 let encoded = general_purpose::STANDARD.encode(credentials);
-                if let Ok(value) = reqwest::header::HeaderValue::from_str(&format!("Basic {}", encoded)) {
+                if let Ok(value) =
+                    reqwest::header::HeaderValue::from_str(&format!("Basic {}", encoded))
+                {
                     headers.insert(reqwest::header::AUTHORIZATION, value);
                 }
             }
@@ -322,16 +324,24 @@ impl BaseClient {
         // OIDC Bearer Token support
         if let (Some(auth_mode), Some(token)) = (&self.auth_mode, &self.oidc_token) {
             if auth_mode == "oidc" {
-                if let Ok(value) = reqwest::header::HeaderValue::from_str(&format!("Bearer {}", token)) {
+                if let Ok(value) =
+                    reqwest::header::HeaderValue::from_str(&format!("Bearer {}", token))
+                {
                     headers.insert(reqwest::header::AUTHORIZATION, value);
                 }
             }
         }
 
         // Also support OIDC token when api_key looks like a JWT (for backwards compatibility)
-        if self.api_key.as_ref().map_or(false, |k| k.contains('.') && k.matches('.').count() >= 2) {
+        if self
+            .api_key
+            .as_ref()
+            .map_or(false, |k| k.contains('.') && k.matches('.').count() >= 2)
+        {
             if let Some(token) = &self.api_key {
-                if let Ok(value) = reqwest::header::HeaderValue::from_str(&format!("Bearer {}", token)) {
+                if let Ok(value) =
+                    reqwest::header::HeaderValue::from_str(&format!("Bearer {}", token))
+                {
                     // Only insert if not already set by explicit OIDC
                     if !headers.contains_key(reqwest::header::AUTHORIZATION) {
                         headers.insert(reqwest::header::AUTHORIZATION, value);

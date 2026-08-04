@@ -13,7 +13,7 @@ import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from openviking.server.config import ServerConfig
 
@@ -112,11 +112,31 @@ class OIDCAuthChecker(AuthHealthChecker):
                 duration_seconds=time() - start_time,
             ))
 
-        # Check 2: JWKS endpoint is accessible
+        # Check 2: JWKS endpoint is accessible via OIDC Discovery.
+        # Per OpenID Connect Discovery 1.0 we must fetch
+        # {issuer}/.well-known/openid-configuration and use the returned
+        # jwks_uri, not assume a hardcoded /.well-known/jwks.json path.
         start_time = time()
         try:
             import httpx
-            jwks_uri = config.oidc.jwks_uri or f"{config.oidc.issuer.rstrip('/')}/.well-known/jwks.json"
+
+            if config.oidc.jwks_uri:
+                jwks_uri = config.oidc.jwks_uri
+            else:
+                discovery_url = (
+                    f"{config.oidc.issuer.rstrip('/')}/.well-known/openid-configuration"
+                )
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    disc_response = await client.get(discovery_url)
+                    disc_response.raise_for_status()
+                    metadata = disc_response.json()
+                jwks_uri = metadata.get("jwks_uri")
+                if not jwks_uri:
+                    raise RuntimeError(
+                        f"OIDC discovery document at {discovery_url} "
+                        "did not contain a jwks_uri"
+                    )
+
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.get(jwks_uri)
                 response.raise_for_status()
@@ -133,7 +153,10 @@ class OIDCAuthChecker(AuthHealthChecker):
                     results.append(HealthCheckResult(
                         name="OIDC provider connection",
                         status=HealthStatus.PASS,
-                        message=f"Successfully connected to OIDC provider, found {len(keys)} signing keys",
+                        message=(
+                            f"Successfully connected to OIDC provider via {jwks_uri}, "
+                            f"found {len(keys)} signing keys"
+                        ),
                         duration_seconds=time() - start_time,
                     ))
         except Exception as e:
@@ -165,7 +188,6 @@ class OIDCAuthChecker(AuthHealthChecker):
                 duration_seconds=time() - start_time,
             ))
 
-        return results
         return results
 
 

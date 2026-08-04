@@ -4,11 +4,43 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Literal, Optional
+from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-from openviking.server.auth.identity_mapping import IdentityMappingConfig
+from openviking.server.auth.identity_mapping import (
+    IdentityMappingConfig,
+    RoleMappingConfig,
+    UserMappingConfig,
+)
+from openviking.server.identity import Role
+
+
+def _ldap_default_identity() -> IdentityMappingConfig:
+    """LDAP-specific default identity mapping.
+
+    LDAP entries carry directory attributes rather than JWT claims, so the
+    generic ``IdentityMappingConfig`` defaults (``user_id <- claim:sub``)
+    cannot work. The documented out-of-the-box contract is:
+
+    * ``account_id`` -> fixed "default"
+    * ``user_id``    -> LDAP attribute ``uid``
+    * ``role``       -> fixed ``user``
+
+    Operators can override any field via the ``identity`` config block.
+    """
+    return IdentityMappingConfig(
+        user_id=UserMappingConfig(
+            source="attribute",
+            claim=None,
+            attribute="uid",
+        ),
+        role=RoleMappingConfig(
+            source="fixed",
+            value=Role.USER,
+            default=Role.USER,
+        ),
+    )
 
 
 class LDAPConfig(BaseModel):
@@ -33,8 +65,10 @@ class LDAPConfig(BaseModel):
     memberof_attribute: str = "memberOf"
     # Direct bind pattern (alternative to search+bind)
     user_dn_pattern: Optional[str] = None
-    # Identity mapping
-    identity: IdentityMappingConfig = Field(default_factory=IdentityMappingConfig)
+    # Identity mapping (LDAP-specific defaults: user_id <- uid, role=user)
+    identity: IdentityMappingConfig = Field(
+        default_factory=_ldap_default_identity
+    )
     # Optional: require root API key for admin operations
     require_root_api_key_for_admin: bool = False
 
