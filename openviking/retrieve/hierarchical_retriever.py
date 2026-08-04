@@ -215,6 +215,9 @@ class HierarchicalRetriever:
             rerank_used = False
         else:
             # Step 2: Global vector search to supplement starting points
+            # When no explicit level filter is requested, search all levels
+            # (including L2 document-level hits) to restore pre-0.4.6 behavior.
+            search_level = level if level is not None else [0, 1, 2]
             with telemetry.measure("search.vector_retrieval"):
                 global_results = await vector_proxy.search_in_tenant(
                     query_vector=query_vector,
@@ -222,7 +225,7 @@ class HierarchicalRetriever:
                     context_type=context_type,
                     target_directories=target_dirs,
                     extra_filter=scope_dsl,
-                    level=[0, 1],
+                    level=search_level,
                     limit=max(limit, self.GLOBAL_SEARCH_TOPK),
                 )
             telemetry.count("vector.searches", 1)
@@ -269,15 +272,21 @@ class HierarchicalRetriever:
                     starting_points.append((uri, 0.0))
                     seen_starting_uris.add(uri)
 
-            # Add directory hits to the result pool only when explicitly requested.
+            # Collect initial candidates from global search results.
+            # When an explicit level filter is requested, only hits at those levels
+            # are added. When level=None (the default), document-level (L2) hits
+            # from the global search are included so they are not lost before the
+            # recursive search phase — restoring pre-0.4.6 behavior.
             initial_candidates = []
-            if level is not None:
-                for result, score in zip(global_results, directory_scores, strict=True):
-                    if result.get("level", 2) not in level:
-                        continue
-                    candidate = dict(result)
-                    candidate["_score"] = score
-                    initial_candidates.append(candidate)
+            for result, score in zip(global_results, directory_scores, strict=True):
+                result_level = result.get("level", 2)
+                if level is not None and result_level not in level:
+                    continue
+                if level is None and result_level != 2:
+                    continue
+                candidate = dict(result)
+                candidate["_score"] = score
+                initial_candidates.append(candidate)
 
             # Step 4: Recursive search
             with telemetry.measure("search.vector_retrieval"):

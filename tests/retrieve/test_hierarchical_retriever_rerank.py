@@ -268,7 +268,9 @@ async def test_retrieve_uses_rerank_scores_in_thinking_mode(monkeypatch):
     ]
     assert fake_client.calls[0] == ("hello", ["root A", "root B"])
     assert fake_client.calls[1] == ("hello", ["child A", "child B"])
-    assert storage.search_calls[0]["level"] == [0, 1]
+    # With no explicit level filter, the global search now includes L0/L1/L2
+    # so that document-level (L2) hits are not lost before recursive search.
+    assert storage.search_calls[0]["level"] == [0, 1, 2]
 
 
 @pytest.mark.asyncio
@@ -637,3 +639,150 @@ async def test_convert_to_matched_contexts_returns_empty_relations():
     )
 
     assert result[0].relations == []
+
+
+@pytest.mark.asyncio
+async def test_thinking_mode_includes_l2_hits_when_level_is_none(monkeypatch):
+    """Regression test for #3134.
+
+    When ``level=None`` (the default for ``/search/find``), the global search
+    must include L2 document-level hits and surface them as initial candidates
+    so they are not lost before the recursive search phase.
+    """
+
+    # Build a storage that returns a mixture of L1 and L2 hits so we can
+    # tell whether L2 results survived the initial-candidates filter.
+    class MixedLevelStorage(DummyStorage):
+        async def search_in_tenant(
+            self,
+            ctx,
+            query_vector=None,
+            sparse_query_vector=None,
+            context_type=None,
+            target_directories=None,
+            extra_filter=None,
+            level=None,
+            limit: int = 10,
+            offset: int = 0,
+        ):
+            self.search_calls.append(
+                {
+                    "ctx": ctx,
+                    "level": level,
+                    "limit": limit,
+                }
+            )
+            return [
+                _result("viking://resources/dir-l1", 0.95, level=1, abstract="dir L1"),
+                _result("viking://resources/doc-l2", 0.9, level=2, abstract="doc L2"),
+            ]
+
+        async def search_children_in_tenant(
+            self,
+            ctx,
+            parent_uri: str,
+            query_vector=None,
+            sparse_query_vector=None,
+            context_type=None,
+            target_directories=None,
+            extra_filter=None,
+            limit: int = 10,
+        ):
+            self.child_search_calls.append({"parent_uri": parent_uri})
+            return [
+                _result(
+                    "viking://resources/dir-l2-child",
+                    0.5,
+                    level=2,
+                    abstract="dir child L2",
+                ),
+            ]
+
+    fake_client = FakeRerankClient([0.95, 0.9, 0.5])
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
+        lambda config: fake_client,
+    )
+
+    storage = MixedLevelStorage()
+    retriever = HierarchicalRetriever(
+        storage=storage,
+        embedder=DummyEmbedder(),
+        rerank_config=_config(),
+    )
+
+    result = await retriever.retrieve(
+        _query(),
+        ctx=_ctx(),
+        limit=5,
+        mode=RetrieverMode.THINKING,
+        # level intentionally omitted (default None)
+    )
+
+    # Global search was invoked with L0/L1/L2 when level is None.
+    assert storage.search_calls[0]["level"] == [0, 1, 2]
+
+    # Both the L2 document-level hit from the global search and the child L2
+    # hit from the recursive search must appear in the final results.
+    returned_uris = {ctx.uri for ctx in result.matched_contexts}
+    assert "viking://resources/doc-l2" in returned_uris
+    assert "viking://resources/dir-l2-child" in returned_uris
+
+
+@pytest.mark.asyncio
+async def test_thinking_mode_respects_explicit_level_filter():
+    """When an explicit level filter is provided, only hits at those levels
+    should be returned."""
+
+    class MultiLevelStorage(DummyStorage):
+        async def search_in_tenant(
+            self,
+            ctx,
+            query_vector=None,
+            sparse_query_vector=None,
+            context_type=None,
+            target_directories=None,
+            extra_filter=None,
+            level=None,
+            limit: int = 10,
+            offset: int = 0,
+        ):
+            self.search_calls.append({"level": level})
+            return [
+                _result("viking://resources/l1", 0.95, level=1, abstract="L1"),
+                _result("viking://resources/l2", 0.9, level=2, abstract="L2"),
+            ]
+
+        async def search_children_in_tenant(
+            self,
+            ctx,
+            parent_uri: str,
+            query_vector=None,
+            sparse_query_vector=None,
+            context_type=None,
+            target_directories=None,
+            extra_filter=None,
+            limit: int = 10,
+        ):
+            self.child_search_calls.append({"parent_uri": parent_uri})
+            return []
+
+    storage = MultiLevelStorage()
+    retriever = HierarchicalRetriever(
+        storage=storage,
+        embedder=DummyEmbedder(),
+        rerank_config=None,
+    )
+
+    # Explicit level filter should be passed through unchanged.
+    result = await retriever.retrieve(
+        _query(),
+        ctx=_ctx(),
+        limit=5,
+        mode=RetrieverMode.THINKING,
+        level=[1],
+    )
+
+    assert storage.search_calls[0]["level"] == [1]
+    returned_levels = {ctx.level for ctx in result.matched_contexts}
+    assert returned_levels == {1}
