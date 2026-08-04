@@ -13,7 +13,6 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from openviking.core.context import ContextLevel
-from openviking.utils.ingest_options import IngestOptions
 from openviking.core.namespace import context_type_for_uri
 from openviking.parse.image_rewrite import rewrite_image_uris
 from openviking.parse.tree_builder import TreeBuilder
@@ -32,8 +31,9 @@ from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.embedding_utils import index_resource, vectorize_file
+from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.summarizer import Summarizer
-from openviking_cli.exceptions import OpenVikingError
+from openviking_cli.exceptions import NotFoundError, OpenVikingError
 from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.storage import StoragePath
 
@@ -287,6 +287,7 @@ class ResourceProcessor:
                         source_path=parse_result.source_path,
                         source_format=parse_result.source_format,
                         create_parent=kwargs.get("create_parent", False),
+                        allow_file_root=True,
                     )
                     if context_tree and context_tree.root:
                         result["root_uri"] = context_tree.root.uri
@@ -374,17 +375,22 @@ class ResourceProcessor:
                             dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
                             resource_lock = await self.acquire_resource_lock(dst_path, uri=root_uri)
                     if not target_preexisting:
+                        temp_is_dir = bool((await viking_fs.stat(temp_uri, ctx=ctx)).get("isDir"))
                         await viking_fs.persist_temp_tree(
                             temp_uri,
                             root_uri,
                             ctx=ctx,
                             lease_ref=resource_lock,
                         )
-                        await rewrite_image_uris(root_uri, ctx=ctx, lease_ref=resource_lock)
-                        await viking_fs.delete_temp(
-                            parse_result.temp_dir_path,
-                            ctx=ctx,
-                        )
+                        if temp_is_dir:
+                            # Flattened file roots carry no image sidecars; the
+                            # rewrite pass only applies to directory roots.
+                            await rewrite_image_uris(
+                                root_uri,
+                                ctx=ctx,
+                                lease_ref=resource_lock,
+                            )
+                        await viking_fs.delete_temp(parse_result.temp_dir_path, ctx=ctx)
                         temp_uri = root_uri
                         source_committed = True
                 except Exception:
@@ -508,7 +514,8 @@ class ResourceProcessor:
                 sync_deleted_dirs: list[str] = []
                 if not should_summarize and temp_uri and not source_committed:
                     viking_fs = get_viking_fs()
-                    if vectors_only and target_preexisting:
+                    temp_is_dir = bool((await viking_fs.stat(temp_uri, ctx=ctx)).get("isDir"))
+                    if vectors_only and target_preexisting and temp_is_dir:
                         diff = await SemanticProcessor()._sync_topdown_recursive(
                             temp_uri,
                             root_uri,
@@ -518,17 +525,37 @@ class ResourceProcessor:
                         sync_deleted_files = list(getattr(diff, "deleted_files", []))
                         sync_deleted_dirs = list(getattr(diff, "deleted_dirs", []))
                     else:
+                        if not temp_is_dir and target_preexisting:
+                            # Re-import of a resource that previously landed in
+                            # the wrapper-directory form: replace the directory
+                            # with the flattened file and drop its old vectors.
+                            target_stat = None
+                            try:
+                                target_stat = await viking_fs.stat(root_uri, ctx=ctx)
+                            except (FileNotFoundError, NotFoundError):
+                                pass
+                            if target_stat and target_stat.get("isDir"):
+                                await viking_fs.rm(
+                                    root_uri,
+                                    recursive=True,
+                                    ctx=ctx,
+                                    lease_ref=resource_lock,
+                                )
+                                sync_deleted_dirs = [root_uri]
                         await viking_fs.persist_temp_tree(
                             temp_uri,
                             root_uri,
                             ctx=ctx,
                             lease_ref=resource_lock,
                         )
-                    await rewrite_image_uris(
-                        root_uri,
-                        ctx=ctx,
-                        lease_ref=resource_lock,
-                    )
+                    if temp_is_dir:
+                        # Flattened file roots carry no image sidecars; the
+                        # rewrite pass only applies to directory roots.
+                        await rewrite_image_uris(
+                            root_uri,
+                            ctx=ctx,
+                            lease_ref=resource_lock,
+                        )
                     if temp_dir_path:
                         await viking_fs.delete_temp(temp_dir_path, ctx=ctx)
                 if vectors_only:
@@ -575,11 +602,13 @@ class ResourceProcessor:
                 await self.vikingdb.delete(ids, ctx=ctx)
         for uri in dict.fromkeys(dirs):
             records = await self.vikingdb.filter(
-                filter=And([
-                    PathScope("uri", uri, depth=-1),
-                    Eq("level", int(ContextLevel.DETAIL)),
-                    Eq("account_id", ctx.account_id),
-                ]),
+                filter=And(
+                    [
+                        PathScope("uri", uri, depth=-1),
+                        Eq("level", int(ContextLevel.DETAIL)),
+                        Eq("account_id", ctx.account_id),
+                    ]
+                ),
                 limit=VECTORDB_MAX_QUERY_LIMIT,
                 output_fields=["id"],
                 ctx=ctx,
@@ -597,6 +626,22 @@ class ResourceProcessor:
     ) -> None:
         ingest_options = IngestOptions.from_value(ingest_options)
         viking_fs = get_viking_fs()
+        root_stat = await viking_fs.stat(root_uri, ctx=ctx)
+        if not root_stat.get("isDir"):
+            # Flattened single-file resource root: vectorize the file itself.
+            name = root_stat.get("name") or root_uri.rsplit("/", 1)[-1]
+            parent = VikingURI(root_uri).parent
+            if not str(name).startswith(".") and parent is not None:
+                await vectorize_file(
+                    file_path=root_uri,
+                    summary_dict={"name": name, "summary": ""},
+                    parent_uri=parent.uri,
+                    context_type=context_type_for_uri(root_uri),
+                    ctx=ctx,
+                    ingest_options=ingest_options,
+                    register_request_wait=True,
+                )
+            return
         entries = await viking_fs.tree(
             root_uri,
             node_limit=None,

@@ -21,11 +21,13 @@ IMPORTANT (v5.0 Architecture):
 - Content splitting is handled by Parser, not TreeBuilder
 """
 
+import os
 from typing import Optional
 
 from openviking.core.building_tree import BuildingTree
 from openviking.core.context import Context
 from openviking.core.namespace import is_content_root_uri
+from openviking.parse.parsers.constants import CODE_EXTENSIONS
 from openviking.parse.parsers.media.utils import get_media_base_uri, get_media_type
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import get_viking_fs
@@ -153,6 +155,7 @@ class TreeBuilder:
         source_path: Optional[str] = None,
         source_format: Optional[str] = None,
         create_parent: bool = False,
+        allow_file_root: bool = False,
     ) -> "BuildingTree":
         """
         Finalize URI metadata for a temp parse result.
@@ -161,6 +164,9 @@ class TreeBuilder:
             to_uri: Exact target URI, or resources root to import under
             parent_uri: Target parent URI (must exist unless create_parent is True)
             create_parent: Whether to automatically create parent directory if it doesn't exist
+            allow_file_root: Whether a single-code-file parse may resolve to a file
+                root instead of a wrapper directory. Only enable when the
+                downstream pipeline can handle file-shaped resource roots.
         """
 
         viking_fs = get_viking_fs()
@@ -183,6 +189,28 @@ class TreeBuilder:
         temp_doc_uri = f"{temp_uri}/{original_name}"  # use original name to find temp dir
         if original_name != doc_name:
             logger.debug(f"[TreeBuilder] Sanitized doc name: {original_name!r} -> {doc_name!r}")
+
+        # Single code files land as file nodes: MarkdownParser preserves a code
+        # source filename as the temp document directory (foo.py holding
+        # foo.md), so a code-suffixed doc dir with exactly one regular file and
+        # no other artifacts marks a single-file code import, and the resource
+        # root becomes that inner file instead of the wrapper directory.
+        # Directory-shaped parses (repository/directory/zip — where the dir
+        # name comes from the source, not from a code filename), non-code
+        # documents, and documents with extra artifacts (media, sidecars) keep
+        # the directory form.
+        if (
+            allow_file_root
+            and source_format not in ("repository", "directory", "zip")
+            and os.path.splitext(original_name)[1].lower() in CODE_EXTENSIONS
+        ):
+            doc_children = [
+                e
+                for e in await viking_fs.ls(temp_doc_uri, ctx=ctx)
+                if e.get("name") not in (".", "..")
+            ]
+            if len(doc_children) == 1 and not doc_children[0].get("isDir"):
+                temp_doc_uri = f"{temp_doc_uri}/{doc_children[0]['name']}"
 
         planned_uri, unique_candidate_uri = await self.resolve_target_uri(
             ctx=ctx,

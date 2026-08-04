@@ -51,6 +51,7 @@ from openviking.utils.circuit_breaker import (
 )
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.model_retry import ERROR_CLASS_INPUT_TOO_LARGE, ERROR_CLASS_PERMANENT
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.config import get_openviking_config
@@ -269,7 +270,9 @@ class SemanticProcessor(DequeueHandlerBase):
             return
         self.report_success()
 
-    async def _enqueue_parent_refresh(self, msg: SemanticMsg, uri: str) -> None:
+    async def _enqueue_parent_refresh(
+        self, msg: SemanticMsg, uri: str, *, propagate_telemetry: bool = False
+    ) -> None:
         if msg.context_type not in {"resource", "skill"}:
             return
         parent = VikingURI(uri).parent
@@ -299,6 +302,10 @@ class SemanticProcessor(DequeueHandlerBase):
             role=msg.role,
             skip_vectorization=msg.skip_vectorization,
             changes={"modified": [uri]},
+            telemetry_id=msg.telemetry_id if propagate_telemetry else "",
+            # File-root callers delegate the file's vectorization to this
+            # refresh, so the import's ingest options must ride along.
+            ingest_options=msg.ingest_options if propagate_telemetry else None,
             coalesce_key=build_semantic_coalesce_key(
                 context_type=msg.context_type,
                 uri=parent_uri,
@@ -307,8 +314,84 @@ class SemanticProcessor(DequeueHandlerBase):
                 peer_id=msg.peer_id,
             ),
         )
-        await semantic_queue.enqueue(parent_msg)
+        tracked = bool(propagate_telemetry and parent_msg.telemetry_id and parent_msg.id)
+        if tracked:
+            # Register before enqueue so the request wait already sees this
+            # root when the caller marks its own message done.
+            get_request_wait_tracker().register_semantic_root(
+                parent_msg.telemetry_id, parent_msg.id
+            )
+        try:
+            enqueue_id = await semantic_queue.enqueue(parent_msg)
+        except Exception as e:
+            if tracked:
+                get_request_wait_tracker().mark_semantic_failed(
+                    parent_msg.telemetry_id, parent_msg.id, str(e)
+                )
+            raise
+        if tracked and enqueue_id == "deduplicated":
+            get_request_wait_tracker().mark_semantic_done(parent_msg.telemetry_id, parent_msg.id)
         logger.info("Enqueued parent semantic refresh: %s", parent_uri)
+
+    async def _process_file_root(
+        self,
+        msg: SemanticMsg,
+        *,
+        ctx: RequestContext,
+        lock: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Process a file-shaped resource root (flattened single code file).
+
+        There is no directory to walk and no .abstract/.overview to generate:
+        sync the file into its target when needed, vectorize it, and refresh
+        the parent directory so its semantics pick up the new leaf.
+
+        The file's summary and DETAIL vector are produced solely by the
+        parent's incremental refresh (which treats the file as modified),
+        never written directly here: two embeddings for the same URI share a
+        deterministic ID, so a direct empty-summary write could race with and
+        overwrite the summary-bearing one. The refresh is registered under
+        this request's telemetry before this message is marked done, so
+        wait=true covers both the embedding write and the parent semantics.
+        """
+        viking_fs = get_viking_fs()
+        final_uri = msg.uri
+        if msg.target_uri and msg.uri != msg.target_uri:
+            target_stat = None
+            try:
+                target_stat = await viking_fs.stat(msg.target_uri, ctx=ctx)
+            except (FileNotFoundError, NotFoundError):
+                target_stat = None
+            if target_stat and target_stat.get("isDir"):
+                # Previously imported in the wrapper-directory form: replace
+                # the directory with the flattened file.
+                await viking_fs.rm(
+                    msg.target_uri,
+                    recursive=True,
+                    ctx=ctx,
+                    lease_ref=lock,
+                )
+            await viking_fs.persist_temp_tree(
+                msg.uri,
+                msg.target_uri,
+                ctx=ctx,
+                lease_ref=lock,
+            )
+            final_uri = msg.target_uri
+            # persist_temp_tree copies rather than moves; drop the parse temp
+            # subtree like _sync_topdown_recursive does for directory sources.
+            temp_parent = VikingURI(msg.uri).parent
+            if temp_parent is not None and temp_parent.uri.startswith("viking://temp"):
+                try:
+                    await viking_fs.delete_temp(temp_parent.uri, ctx=ctx)
+                except Exception as e:
+                    logger.error(f"Failed to delete temp tree {temp_parent.uri}: {e}")
+
+        # Register the parent refresh before the semantic-done mark so the
+        # request wait cannot complete while the parent work is still pending.
+        await self._enqueue_parent_refresh(msg, final_uri, propagate_telemetry=True)
+        if msg.telemetry_id and msg.id:
+            get_request_wait_tracker().mark_semantic_done(msg.telemetry_id, msg.id)
 
     async def on_dequeue(
         self,
@@ -387,76 +470,112 @@ class SemanticProcessor(DequeueHandlerBase):
                                 lock=semantic_lock.lock,
                             )
                         else:
-                            is_incremental = False
-                            target_uri = msg.target_uri
-                            run_uri = msg.uri
-                            changes = msg.changes
                             viking_fs = get_viking_fs()
-                            if msg.target_uri:
-                                target_exists = await viking_fs.exists(
-                                    msg.target_uri, ctx=current_ctx
+                            try:
+                                source_stat = await viking_fs.stat(msg.uri, ctx=current_ctx)
+                            except (FileNotFoundError, NotFoundError) as exc:
+                                if msg.target_uri and msg.uri != msg.target_uri:
+                                    # A pending temp source vanished before the
+                                    # sync: the target still holds old content,
+                                    # so this is a failure, not a completion
+                                    # (same contract as _sync_topdown_recursive).
+                                    raise FileNotFoundError(
+                                        "Semantic source no longer exists; refusing "
+                                        f"to sync into {msg.target_uri}: {msg.uri}"
+                                    ) from exc
+                                # The final resource itself was deleted after
+                                # enqueue: nothing left to process — complete
+                                # the message instead of retrying forever.
+                                logger.warning(
+                                    "Semantic source no longer exists, skipping: %s", msg.uri
                                 )
-                                if msg.uri != msg.target_uri:
-                                    logger.info(
-                                        "Syncing semantic source into target before processing: "
-                                        f"{msg.uri} -> {msg.target_uri}"
+                                source_stat = None
+                            if source_stat is None:
+                                if msg.telemetry_id and msg.id:
+                                    get_request_wait_tracker().mark_semantic_done(
+                                        msg.telemetry_id, msg.id
                                     )
-                                    diff = await self._sync_topdown_recursive(
-                                        msg.uri,
-                                        msg.target_uri,
-                                        ctx=current_ctx,
-                                        lock=semantic_lock.lock,
+                            elif not source_stat.get("isDir", False):
+                                # Flattened single-file resource root: no
+                                # directory DAG to run; the semantic lock is
+                                # closed by the enclosing finally.
+                                await self._process_file_root(
+                                    msg,
+                                    ctx=current_ctx,
+                                    lock=semantic_lock.lock,
+                                )
+                            else:
+                                is_incremental = False
+                                target_uri = msg.target_uri
+                                run_uri = msg.uri
+                                changes = msg.changes
+                                if msg.target_uri:
+                                    target_exists = await viking_fs.exists(
+                                        msg.target_uri, ctx=current_ctx
                                     )
-                                    logger.info(
-                                        "[SyncDiff] Diff computed: "
-                                        f"added_files={len(diff.added_files)}, "
-                                        f"deleted_files={len(diff.deleted_files)}, "
-                                        f"updated_files={len(diff.updated_files)}, "
-                                        f"added_dirs={len(diff.added_dirs)}, "
-                                        f"deleted_dirs={len(diff.deleted_dirs)}"
-                                    )
-                                    changes = diff.to_changes()
+                                    if msg.uri != msg.target_uri:
+                                        logger.info(
+                                            "Syncing semantic source into target before processing: "
+                                            f"{msg.uri} -> {msg.target_uri}"
+                                        )
+                                        diff = await self._sync_topdown_recursive(
+                                            msg.uri,
+                                            msg.target_uri,
+                                            ctx=current_ctx,
+                                            lock=semantic_lock.lock,
+                                        )
+                                        logger.info(
+                                            "[SyncDiff] Diff computed: "
+                                            f"added_files={len(diff.added_files)}, "
+                                            f"deleted_files={len(diff.deleted_files)}, "
+                                            f"updated_files={len(diff.updated_files)}, "
+                                            f"added_dirs={len(diff.added_dirs)}, "
+                                            f"deleted_dirs={len(diff.deleted_dirs)}"
+                                        )
+                                        changes = diff.to_changes()
+                                        is_incremental = True
+                                        target_uri = msg.target_uri
+                                        run_uri = msg.target_uri
+                                    elif (
+                                        target_exists and msg.changes and msg.uri == msg.target_uri
+                                    ):
+                                        is_incremental = True
+                                        logger.info(
+                                            f"Using direct incremental semantic update for: {msg.uri}"
+                                        )
+                                elif msg.changes:
                                     is_incremental = True
-                                    target_uri = msg.target_uri
-                                    run_uri = msg.target_uri
-                                elif target_exists and msg.changes and msg.uri == msg.target_uri:
-                                    is_incremental = True
+                                    target_uri = msg.uri
                                     logger.info(
                                         f"Using direct incremental semantic update for: {msg.uri}"
                                     )
-                            elif msg.changes:
-                                is_incremental = True
-                                target_uri = msg.uri
-                                logger.info(
-                                    f"Using direct incremental semantic update for: {msg.uri}"
-                                )
 
-                            executor = SemanticDagExecutor(
-                                processor=self,
-                                context_type=msg.context_type,
-                                max_concurrent_llm=self.max_concurrent_llm,
-                                ctx=current_ctx,
-                                incremental_update=is_incremental,
-                                target_uri=target_uri,
-                                semantic_msg_id=msg.id,
-                                telemetry_id=msg.telemetry_id,
-                                recursive=msg.recursive,
-                                lock=semantic_lock.lock,
-                                is_code_repo=msg.is_code_repo,
-                                changes=changes,
-                                skip_vectorization=msg.skip_vectorization,
-                                ingest_options=msg.ingest_options,
-                                coalesce_key=msg.coalesce_key,
-                                coalesce_version=msg.coalesce_version,
-                            )
-                            await executor.run(run_uri)
-                            self._cache_dag_stats(
-                                msg.telemetry_id,
-                                run_uri,
-                                executor.get_stats(),
-                            )
-                            if not executor.stale:
-                                await self._enqueue_parent_refresh(msg, target_uri or msg.uri)
+                                executor = SemanticDagExecutor(
+                                    processor=self,
+                                    context_type=msg.context_type,
+                                    max_concurrent_llm=self.max_concurrent_llm,
+                                    ctx=current_ctx,
+                                    incremental_update=is_incremental,
+                                    target_uri=target_uri,
+                                    semantic_msg_id=msg.id,
+                                    telemetry_id=msg.telemetry_id,
+                                    recursive=msg.recursive,
+                                    lock=semantic_lock.lock,
+                                    is_code_repo=msg.is_code_repo,
+                                    changes=changes,
+                                    skip_vectorization=msg.skip_vectorization,
+                                    ingest_options=msg.ingest_options,
+                                    coalesce_key=msg.coalesce_key,
+                                    coalesce_version=msg.coalesce_version,
+                                )
+                                await executor.run(run_uri)
+                                self._cache_dag_stats(
+                                    msg.telemetry_id,
+                                    run_uri,
+                                    executor.get_stats(),
+                                )
+                                if not executor.stale:
+                                    await self._enqueue_parent_refresh(msg, target_uri or msg.uri)
                     finally:
                         await semantic_lock.close()
                     self._merge_request_stats(msg.telemetry_id, processed=1)

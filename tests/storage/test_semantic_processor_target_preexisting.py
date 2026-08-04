@@ -11,6 +11,9 @@ class _FakeVikingFS:
     async def exists(self, uri, ctx=None):
         return True
 
+    async def stat(self, uri, ctx=None):
+        return {"isDir": True}
+
 
 class _SyncVikingFS:
     def __init__(self):
@@ -44,7 +47,7 @@ class _SyncVikingFS:
         return self.entries.get(uri, [])
 
     async def stat(self, uri, ctx=None):
-        return {"size": len(self.contents.get(uri, ""))}
+        return {"size": len(self.contents.get(uri, "")), "isDir": uri in self.entries}
 
     async def read_file(self, uri, ctx=None):
         return self.contents.get(uri, "")
@@ -185,3 +188,67 @@ async def test_sync_missing_source_never_touches_target(monkeypatch):
 
     fake_fs.ls.assert_not_awaited()
     fake_fs.rm.assert_not_awaited()
+
+
+class _FileRootFS:
+    def __init__(self):
+        self.persist_calls = []
+        self.deleted_temp = []
+
+    async def stat(self, uri, ctx=None):
+        return {"isDir": False}
+
+    async def exists(self, uri, ctx=None):
+        return False
+
+    async def persist_temp_tree(self, temp_uri, target_uri, ctx=None, lease_ref=None):
+        self.persist_calls.append((temp_uri, target_uri))
+
+    async def delete_temp(self, uri, ctx=None):
+        self.deleted_temp.append(uri)
+
+
+@pytest.mark.asyncio
+async def test_file_root_source_skips_dag_and_vectorizes(monkeypatch):
+    fake_fs = _FileRootFS()
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: fake_fs,
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticDagExecutor",
+        _FakeDagExecutor,
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticLockScope.resolve",
+        AsyncMock(return_value=SimpleNamespace(lock=None, close=AsyncMock())),
+    )
+
+    _FakeDagExecutor.calls = []
+    _FakeDagExecutor.runs = []
+    processor = SemanticProcessor()
+    processor._enqueue_parent_refresh = AsyncMock()
+    processor._vectorize_single_file = AsyncMock()
+    msg = SemanticMsg(
+        uri="viking://temp/import/foo.py/foo.md",
+        target_uri="viking://resources/foo.py",
+        context_type="resource",
+    )
+
+    await processor.on_dequeue(msg.to_dict())
+
+    # File-shaped source: synced straight into the target, no directory DAG,
+    # and the parse temp subtree is cleaned up after the copy.
+    assert fake_fs.persist_calls == [
+        ("viking://temp/import/foo.py/foo.md", "viking://resources/foo.py")
+    ]
+    assert fake_fs.deleted_temp == ["viking://temp/import/foo.py"]
+    assert _FakeDagExecutor.calls == []
+    assert _FakeDagExecutor.runs == []
+    # The file's summary + vector come solely from the parent refresh; a
+    # direct write here would race the refresh on the same embedding ID.
+    processor._vectorize_single_file.assert_not_awaited()
+    processor._enqueue_parent_refresh.assert_awaited_once()
+    refresh_args = processor._enqueue_parent_refresh.await_args
+    assert refresh_args.args[1] == "viking://resources/foo.py"
+    assert refresh_args.kwargs.get("propagate_telemetry") is True

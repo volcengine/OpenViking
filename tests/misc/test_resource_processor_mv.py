@@ -84,6 +84,9 @@ class _FakeVikingFS:
             return uri in self._existing_uris
         return self._exists_result
 
+    async def stat(self, uri, ctx=None):
+        return {"name": uri.rstrip("/").rsplit("/", 1)[-1], "isDir": True}
+
     async def mkdir(self, uri, exist_ok=False, ctx=None):
         return None
 

@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from openviking.utils.ingest_options import IngestOptions
 from openviking.server.identity import RequestContext, Role
+from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -53,6 +53,7 @@ async def test_vectors_only_persists_tree_and_vectorizes_files_only(monkeypatch,
         _async_agfs=SimpleNamespace(pathlock_release=AsyncMock()),
         persist_temp_tree=AsyncMock(),
         delete_temp=AsyncMock(),
+        stat=AsyncMock(return_value={"isDir": True}),
         tree=AsyncMock(
             return_value=[
                 {"uri": "viking://resources/demo/section", "isDir": True},
@@ -72,7 +73,9 @@ async def test_vectors_only_persists_tree_and_vectorizes_files_only(monkeypatch,
     vectorize_file = AsyncMock()
     rewrite_image_uris = AsyncMock()
     monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: viking_fs)
-    monkeypatch.setattr("openviking.utils.resource_processor.rewrite_image_uris", rewrite_image_uris)
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.rewrite_image_uris", rewrite_image_uris
+    )
     monkeypatch.setattr("openviking.utils.resource_processor.vectorize_file", vectorize_file)
     processor = ResourceProcessor(_FakeVikingDB())
     processor._get_summarizer = Mock(side_effect=AssertionError("summarizer should not run"))
@@ -133,6 +136,7 @@ async def test_vectors_only_skips_vectorization_when_build_index_false(monkeypat
         _async_agfs=SimpleNamespace(pathlock_release=AsyncMock()),
         persist_temp_tree=AsyncMock(),
         delete_temp=AsyncMock(),
+        stat=AsyncMock(return_value={"isDir": True}),
         tree=AsyncMock(return_value=[]),
     )
     vectorize_file = AsyncMock()
@@ -167,6 +171,7 @@ async def test_vectors_only_syncs_preexisting_target_instead_of_merging(monkeypa
         _async_agfs=SimpleNamespace(pathlock_release=AsyncMock()),
         persist_temp_tree=AsyncMock(),
         delete_temp=AsyncMock(),
+        stat=AsyncMock(return_value={"isDir": True}),
         tree=AsyncMock(return_value=[]),
     )
     sync = AsyncMock()
@@ -211,6 +216,7 @@ async def test_vectors_only_leaves_existing_semantic_vectors_untouched(monkeypat
         _async_agfs=SimpleNamespace(pathlock_release=AsyncMock()),
         persist_temp_tree=AsyncMock(),
         delete_temp=AsyncMock(),
+        stat=AsyncMock(return_value={"isDir": True}),
         tree=AsyncMock(return_value=[]),
     )
     monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: viking_fs)
@@ -242,6 +248,7 @@ async def test_vectors_only_deletes_sync_removed_detail_vectors(monkeypatch, ctx
         _async_agfs=SimpleNamespace(pathlock_release=AsyncMock()),
         persist_temp_tree=AsyncMock(),
         delete_temp=AsyncMock(),
+        stat=AsyncMock(return_value={"isDir": True}),
         tree=AsyncMock(return_value=[]),
     )
     diff = SimpleNamespace(
