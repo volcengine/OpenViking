@@ -222,6 +222,7 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 | `host` | IP / hostname | `"127.0.0.1"` | HTTP 监听地址 |
 | `port` | integer | `1933` | HTTP 监听端口 |
 | `workers` | integer | `1` | 服务进程数量 |
+| `timeout_keep_alive` | integer（秒） | `5` | 空闲 HTTP keep-alive 超时；应调大到超过上游空闲连接寿命 |
 | `auth_mode` | `dev`、`api_key`、`trusted` / `null` | `null` | 鉴权模式；空值根据 `root_api_key` 自动判断 |
 | `root_api_key` | string / `null` | `null` | Root API Key；配置后默认启用 `api_key` 模式 |
 | `cors_origins` | string[] | `["*"]` | 允许的跨域来源 |

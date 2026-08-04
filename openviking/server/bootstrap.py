@@ -308,10 +308,17 @@ def main():
                 host=config.host,
                 port=config.port,
                 workers=workers,
+                timeout_keep_alive=config.timeout_keep_alive,
                 log_config=None,
             )
         else:
-            uvicorn.run(app, host=config.host, port=config.port, log_config=None)
+            uvicorn.run(
+                app,
+                host=config.host,
+                port=config.port,
+                timeout_keep_alive=config.timeout_keep_alive,
+                log_config=None,
+            )
     finally:
         # Cleanup vikingbot process on shutdown
         if bot_process is not None:

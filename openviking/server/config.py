@@ -268,6 +268,15 @@ class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 1933
     workers: int = 1
+    # Seconds an idle HTTP keep-alive connection is kept open before the server
+    # closes it. Defaults to 5 to match uvicorn's built-in default and preserve
+    # the existing service behavior. Raise it above the idle-connection lifetime
+    # of any upstream client or load balancer that reuses connections (e.g. the
+    # serverless VKE forwarder keeps idle connections for up to 60s via
+    # WithMaxIdleConnDuration(1*time.Minute)); otherwise the server may close
+    # connections the client still believes are reusable, causing sporadic
+    # connection-reset / EOF errors.
+    timeout_keep_alive: int = 5
     auth_mode: Optional[str] = None  # If None, auto-detect based on root_api_key
     root_api_key: Optional[str] = None
     profile_enabled: bool = False
