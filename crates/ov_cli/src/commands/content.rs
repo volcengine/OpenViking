@@ -3,7 +3,6 @@ use crate::error::Result;
 use crate::output::OutputFormat;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
-use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 
@@ -100,12 +99,26 @@ pub async fn get(client: &HttpClient, uri: &str, local_path: &str) -> Result<()>
     let bytes = client.get_bytes(uri).await?;
 
     // Write to local file
-    let mut file = File::create(path)?;
+    let mut file = create_download_target(path, local_path)?;
     file.write_all(&bytes)?;
     file.flush()?;
 
     println!("Downloaded {} bytes to {}", bytes.len(), local_path);
     Ok(())
+}
+
+fn create_download_target(path: &Path, local_path: &str) -> Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                crate::error::Error::Client(format!("File already exists: {local_path}"))
+            } else {
+                crate::error::Error::Io(error)
+            }
+        })
 }
 
 fn output_content_result(result: Value, output_format: OutputFormat, compact: bool) -> Result<()> {
@@ -193,6 +206,7 @@ fn render_set_tags_result_for_table(result: &Value) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use crate::error::Error;
     use serde_json::json;
 
     fn strip_ansi(input: &str) -> String {
@@ -270,6 +284,22 @@ mod tests {
                 .join("\n")
                     + "\n"
             )
+        );
+    }
+
+    #[test]
+    fn download_target_creation_does_not_truncate_an_existing_file() {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let path = dir.path().join("result.bin");
+        std::fs::write(&path, b"existing").expect("fixture should be written");
+
+        let error = super::create_download_target(&path, &path.to_string_lossy())
+            .expect_err("existing targets must be rejected atomically");
+
+        assert!(matches!(error, Error::Client(_)));
+        assert_eq!(
+            std::fs::read(&path).expect("existing file should remain readable"),
+            b"existing"
         );
     }
 }

@@ -15,6 +15,7 @@ from urllib.parse import quote
 import httpx
 
 from ._utils import run_async
+from .actor_peer import _request_actor_peer_headers
 from .config import resolve_client_config
 from .errors import (
     AbortedError,
@@ -334,6 +335,8 @@ class _HTTPObserver:
 
 
 class AsyncHTTPClient:
+    supports_request_actor_peer = True
+
     def __init__(
         self,
         url: Optional[str] = None,
@@ -446,7 +449,8 @@ class AsyncHTTPClient:
             raise RuntimeError("Client is not initialized")
 
         request_kwargs = dict(kwargs)
-        headers = dict(request_kwargs.pop("headers", {}) or {})
+        headers = _request_actor_peer_headers()
+        headers.update(dict(request_kwargs.pop("headers", {}) or {}))
         has_explicit_gateway_header = self._has_explicit_gateway_header(headers)
 
         # Multipart streams cannot be replayed safely after the first request. Probe the
@@ -642,11 +646,21 @@ class AsyncHTTPClient:
         args: Optional[Dict[str, Any]] = None,
         telemetry: Any = False,
         processing_mode: Optional[str] = None,
+        add_type: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
     ) -> Dict[str, Any]:
+        if add_type is not None:
+            add_type = add_type.strip() or None
+        if add_type and parent:
+            raise ValueError("'add_type' cannot be combined with 'parent'.")
+        if add_type and not to:
+            raise ValueError("'add_type' requires an exact 'to' target.")
         if to and parent:
             raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
 
         request_data = {
+            "add_type": add_type,
             "to": to,
             "parent": parent,
             "reason": reason,
@@ -664,11 +678,14 @@ class AsyncHTTPClient:
         }
         if processing_mode is not None:
             request_data["processing_mode"] = processing_mode
+        if tags is not None:
+            request_data["tags"] = tags
+            request_data["tag_mode"] = tag_mode
         if preserve_structure is not None:
             request_data["preserve_structure"] = preserve_structure
 
         path_obj = Path(path)
-        if path_obj.exists():
+        if not add_type and path_obj.exists():
             if path_obj.is_dir():
                 request_data["source_name"] = path_obj.name
                 zip_path = self._zip_directory(path)
@@ -1355,6 +1372,10 @@ class AsyncHTTPClient:
             return None
         return self._handle_response(response)
 
+    async def cancel_task(self, task_id: str) -> Dict[str, Any]:
+        response = await self._request("POST", f"/api/v1/tasks/{task_id}/cancel")
+        return self._handle_response(response)
+
     async def list_tasks(
         self,
         task_type: Optional[str] = None,
@@ -1802,6 +1823,8 @@ class AsyncHTTPClient:
 
 
 class SyncHTTPClient:
+    supports_request_actor_peer = True
+
     def __init__(self, *args, **kwargs):
         self._async_client = AsyncHTTPClient(*args, **kwargs)
         self._initialized = False
@@ -1842,10 +1865,14 @@ class SyncHTTPClient:
         args: Optional[Dict[str, Any]] = None,
         telemetry: Any = False,
         processing_mode: Optional[str] = None,
+        add_type: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.add_resource(
                 path=path,
+                add_type=add_type,
                 to=to,
                 parent=parent,
                 reason=reason,
@@ -1861,6 +1888,8 @@ class SyncHTTPClient:
                 watch_interval=watch_interval,
                 processing_mode=processing_mode,
                 args=args,
+                tags=tags,
+                tag_mode=tag_mode,
                 telemetry=telemetry,
             )
         )
@@ -2307,6 +2336,9 @@ class SyncHTTPClient:
 
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         return run_async(self._async_client.get_task(task_id))
+
+    def cancel_task(self, task_id: str) -> Dict[str, Any]:
+        return run_async(self._async_client.cancel_task(task_id))
 
     def list_tasks(
         self,

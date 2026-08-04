@@ -13,6 +13,7 @@ to the MarkdownParser after conversion.
 """
 
 import asyncio
+import hashlib
 import io
 import re
 import time
@@ -244,6 +245,7 @@ class PDFParser(BaseParser):
             "library": "pdfplumber",
             "pages_processed": 0,
             "images_extracted": 0,
+            "images_deduplicated": 0,
             "tables_extracted": 0,
             "bookmarks_found": 0,
             "bookmarks_resolved": 0,
@@ -329,13 +331,44 @@ class PDFParser(BaseParser):
                                     )
                                     meta["tables_extracted"] += 1
 
-                        # Extract images
+                        # Extract images.
+                        #
+                        # A page can stack several image XObjects on the exact same
+                        # spot — print-to-PDF producers routinely emit a background
+                        # layer plus a content layer. Since extraction rasterises the
+                        # page *region* rather than the XObject itself, every one of
+                        # them renders to identical bytes. Skip the repeats: bbox
+                        # first, which avoids the (expensive) render entirely, then a
+                        # content hash as a backstop. Both sets are per-page, so a
+                        # header logo repeated across pages is still kept once per
+                        # page.
                         images = page.images
+                        seen_boxes = set()
+                        seen_digests = set()
                         for img_idx, img in enumerate(images or []):
                             try:
+                                bbox_key = (
+                                    round(img["x0"], 1),
+                                    round(img["top"], 1),
+                                    round(img["x1"], 1),
+                                    round(img["bottom"], 1),
+                                )
+                                if bbox_key in seen_boxes:
+                                    meta["images_deduplicated"] += 1
+                                    continue
+                                seen_boxes.add(bbox_key)
+
                                 # Extract image using underlying PDF object
                                 image_obj = self._extract_image_from_page(page, img)
                                 if image_obj:
+                                    # Dedup only — md5 keeps this cheap, and the
+                                    # flag keeps it working on FIPS-locked hosts.
+                                    digest = hashlib.md5(image_obj, usedforsecurity=False).digest()
+                                    if digest in seen_digests:
+                                        meta["images_deduplicated"] += 1
+                                        continue
+                                    seen_digests.add(digest)
+
                                     # Save image
                                     filename = f"page{page_num}_img{img_idx + 1}"
                                     image_path = storage.save_image(
@@ -366,7 +399,9 @@ class PDFParser(BaseParser):
                 f"{meta['headings_found']} headings ({meta['heading_source']}, "
                 f"bookmarks={meta['bookmarks_found']}, "
                 f"resolved={meta['bookmarks_resolved']}), "
-                f"{meta['images_extracted']} images, {meta['tables_extracted']} tables → "
+                f"{meta['images_extracted']} images "
+                f"({meta['images_deduplicated']} duplicates skipped), "
+                f"{meta['tables_extracted']} tables → "
                 f"{len(markdown_content)} chars"
             )
 

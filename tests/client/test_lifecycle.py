@@ -5,8 +5,6 @@
 
 from pathlib import Path
 
-import pytest
-
 from openviking import AsyncOpenViking
 
 
@@ -35,7 +33,6 @@ class TestClientInitialization:
         client = AsyncOpenViking(path=str(test_data_dir), agent_id="legacy-agent")
 
         assert client._client._ctx.actor_peer_id == "legacy-agent"
-        assert client._client._ctx.legacy_agent_id == "legacy-agent"
 
         await AsyncOpenViking.reset()
 
@@ -55,35 +52,6 @@ class TestClientInitialization:
                 raise AssertionError("mismatched agent_id should fail")
         finally:
             await AsyncOpenViking.reset()
-
-    async def test_agent_id_alias_tags_assistant_messages_only(self, test_data_dir: Path):
-        await AsyncOpenViking.reset()
-
-        client = AsyncOpenViking(path=str(test_data_dir), agent_id="legacy-agent")
-        try:
-            await client.add_message("legacy-session", "user", content="hi")
-            await client.add_message("legacy-session", "assistant", content="hello")
-
-            session = await client._client._service.sessions.get(
-                "legacy-session",
-                client._client._ctx,
-                auto_create=False,
-            )
-            assert [message.peer_id for message in session.messages] == [
-                None,
-                "legacy-agent",
-            ]
-
-            await client.add_message(
-                "legacy-session",
-                "assistant",
-                content="again",
-                peer_id="explicit-peer",
-            )
-            assert session.messages[-1].peer_id == "explicit-peer"
-        finally:
-            await AsyncOpenViking.reset()
-
 
 class TestClientClose:
     """Test Client close"""

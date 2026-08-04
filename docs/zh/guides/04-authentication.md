@@ -101,7 +101,7 @@ Role.register("operator", rank=1)  # 权限介于 USER (0) 与 ADMIN (1) 之间
 
 ## 管理账户和用户
 
-普通读写、检索、会话等数据请求在 `api_key` 和 `trusted` 两种模式下都不依赖 Admin API 预注册。Admin API 仍然负责创建 account、注册用户、修改角色以及签发或重新生成 user key。
+普通读写、检索、会话等数据请求在 `api_key` 和 `trusted` 两种模式下都不依赖 Admin API 预注册。Admin API 仍然负责创建 account、注册用户、将用户提升为 admin，以及签发或重新生成 user key。
 
 使用 root key 通过 Admin API 创建工作区和用户：
 
@@ -135,13 +135,7 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
   -H "Content-Type: application/json" \
   -d '{"account_id": "platform", "admin_user_id": "gateway-admin"}'
 
-# 如果它需要跨 account 的管理权限，再提升为 root
-curl -X PUT http://localhost:1933/api/v1/admin/accounts/platform/users/gateway-admin/role \
-  -H "X-API-Key: your-secret-root-key" \
-  -H "Content-Type: application/json" \
-  -d '{"role": "root"}'
-
-# 然后，在 trusted 模式下使用该身份调用 Admin API
+# 然后，在 trusted 模式下使用该身份调用 Admin API；管理权限来自 root_api_key
 curl -X POST http://localhost:1933/api/v1/admin/accounts \
   -H "X-API-Key: your-secret-root-key" \
   -H "X-OpenViking-Account: platform" \
@@ -283,7 +277,7 @@ Trusted 模式规则：
 - `trusted` 下的普通读写、检索、会话访问不需要先走 Admin API 注册流程
 - `trusted` 模式下，携带已配置 `root_api_key` 的受信上游可以调用 Admin API
 - `trusted` 模式下，创建 account 或注册用户的 Admin API 响应不会返回 `user_key`
-- `root` 可以创建/删除 account 并修改角色；`admin` 可以管理自己 account 下的用户；`user` 不能调用 Admin API
+- `root` 可以创建/删除 account 并提升用户为 admin；`admin` 可以管理自己 account 下的用户并将其提升为 admin；`user` 不能调用 Admin API
 - 非 localhost 部署要在 trusted 模式下使用 Admin API，需要配置 `root_api_key`，并在每个管理请求中携带它
 
 **curl**
@@ -361,7 +355,7 @@ curl http://localhost:1933/health
 | POST | `/api/v1/admin/accounts/{id}/users` | ROOT, ADMIN | 注册用户 |
 | GET | `/api/v1/admin/accounts/{id}/users` | ROOT, ADMIN | 列出用户 |
 | DELETE | `/api/v1/admin/accounts/{id}/users/{uid}` | ROOT, ADMIN | 移除用户 |
-| PUT | `/api/v1/admin/accounts/{id}/users/{uid}/role` | ROOT | 修改用户角色 |
+| PUT | `/api/v1/admin/accounts/{id}/users/{uid}/role` | ROOT, ADMIN | 将用户提升为 ADMIN；ADMIN 仅限本账户 |
 | POST | `/api/v1/admin/accounts/{id}/users/{uid}/key` | ROOT, ADMIN | 重新生成 user key |
 
 ## 相关文档

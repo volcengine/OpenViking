@@ -15,11 +15,11 @@ from openviking.server.api_keys import APIKeyManager
 from openviking.server.api_keys.legacy import ACCOUNTS_PATH
 from openviking.server.identity import Role
 from openviking.service.core import OpenVikingService
-from openviking.storage.transaction import LockContext, get_lock_manager
 from openviking_cli.exceptions import (
     AlreadyExistsError,
     InvalidArgumentError,
     NotFoundError,
+    PermissionDeniedError,
     UnauthenticatedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
@@ -171,31 +171,53 @@ async def test_register_user(manager: APIKeyManager):
 async def test_concurrent_registry_writes_wait_for_locks(manager: APIKeyManager):
     first_account = _uid()
     second_account = _uid()
+    accounts_block = asyncio.Event()
+    original_acquire = manager._legacy._async_agfs.pathlock_acquire_exact
 
-    async with LockContext(get_lock_manager(), [ACCOUNTS_PATH], lock_mode="exact"):
-        account_tasks = [
-            asyncio.create_task(manager.create_account(first_account, "alice")),
-            asyncio.create_task(manager.create_account(second_account, "bob")),
-        ]
-        await asyncio.sleep(0.05)
-        assert all(not task.done() for task in account_tasks)
+    async def blocked_acquire(path, timeout_secs=10.0, owner_lease_ref=None, *, fs_ctx=None):
+        del owner_lease_ref, fs_ctx
+        if path == ACCOUNTS_PATH:
+            await accounts_block.wait()
+        return await original_acquire(path, timeout_secs=timeout_secs)
 
+    manager._legacy._async_agfs.pathlock_acquire_exact = blocked_acquire
+
+    account_tasks = [
+        asyncio.create_task(manager.create_account(first_account, "alice")),
+        asyncio.create_task(manager.create_account(second_account, "bob")),
+    ]
+    await asyncio.sleep(0.05)
+    assert all(not task.done() for task in account_tasks)
+
+    accounts_block.set()
     await asyncio.gather(*account_tasks)
     accounts = await manager._read_json(ACCOUNTS_PATH)
     assert {first_account, second_account} <= set(accounts["accounts"])
 
     users_path = f"/local/{first_account}/_system/users.json"
-    async with LockContext(get_lock_manager(), [users_path], lock_mode="exact"):
-        user_tasks = [
-            asyncio.create_task(manager.register_user(first_account, "bob")),
-            asyncio.create_task(manager.register_user(first_account, "carol")),
-        ]
-        await asyncio.sleep(0.05)
-        assert all(not task.done() for task in user_tasks)
+    users_block = asyncio.Event()
 
+    async def blocked_users_acquire(path, timeout_secs=10.0, owner_lease_ref=None, *, fs_ctx=None):
+        del owner_lease_ref, fs_ctx
+        if path == users_path:
+            await users_block.wait()
+        return await original_acquire(path, timeout_secs=timeout_secs)
+
+    manager._legacy._async_agfs.pathlock_acquire_exact = blocked_users_acquire
+
+    user_tasks = [
+        asyncio.create_task(manager.register_user(first_account, "bob")),
+        asyncio.create_task(manager.register_user(first_account, "carol")),
+    ]
+    await asyncio.sleep(0.05)
+    assert all(not task.done() for task in user_tasks)
+
+    users_block.set()
     await asyncio.gather(*user_tasks)
     users = await manager._read_json(users_path)
     assert set(users["users"]) == {"alice", "bob", "carol"}
+
+    manager._legacy._async_agfs.pathlock_acquire_exact = original_acquire
 
 
 async def test_register_duplicate_user_raises(manager: APIKeyManager):
@@ -282,6 +304,10 @@ async def test_set_role(manager: APIKeyManager):
     assert manager.resolve(bob_key).role == Role.USER
 
     await manager.set_role(acct, "bob", "admin")
+    assert manager.resolve(bob_key).role == Role.ADMIN
+
+    with pytest.raises(PermissionDeniedError, match="server.root_api_key"):
+        await manager.set_role(acct, "bob", Role.ROOT)
     assert manager.resolve(bob_key).role == Role.ADMIN
 
 

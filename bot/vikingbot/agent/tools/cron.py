@@ -113,15 +113,18 @@ class CronTool(Tool):
         else:
             return "Error: either every_seconds, cron_expr, or at is required"
 
-        job = self._cron.add_job(
-            name=name,
-            schedule=schedule,
-            message=message,
-            deliver=True,
-            session_key=session_key,
-            channel_metadata=channel_metadata,
-            delete_after_run=delete_after,
-        )
+        try:
+            job = self._cron.add_job(
+                name=name,
+                schedule=schedule,
+                message=message,
+                deliver=True,
+                session_key=session_key,
+                channel_metadata=channel_metadata,
+                delete_after_run=delete_after,
+            )
+        except ValueError as e:
+            return f"Error: {e}"
         return f"Created job '{job.name}' (id: {job.id})"
 
     def _delivery_metadata(self, metadata: dict[str, Any] | None) -> dict[str, Any]:

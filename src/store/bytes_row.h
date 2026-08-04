@@ -22,7 +22,8 @@ enum class FieldType {
   BOOLEAN = 5,
   LIST_INT64 = 6,
   LIST_STRING = 7,
-  LIST_FLOAT32 = 8
+  LIST_FLOAT32 = 8,
+  TEXT = 9
 };
 
 // Use std::monostate for None/Null
@@ -212,6 +213,17 @@ class BytesRow {
           variable_region_offset += 4 + len;  // UINT32_SIZE
           break;
         }
+        case FieldType::TEXT: {
+          int len = 0;
+          if (accessor.has_value(row, i)) {
+            len = accessor.get_binary_len(row, i);
+          } else if (const auto* def = get_default_string(meta.default_value)) {
+            len = static_cast<int>(def->length());
+          }
+          var_infos[i] = {variable_region_offset, len};
+          variable_region_offset += 4 + len;  // UINT32_SIZE
+          break;
+        }
         case FieldType::LIST_INT64: {
           int len = 0;
           if (accessor.has_value(row, i)) {
@@ -321,6 +333,7 @@ class BytesRow {
         }
         case FieldType::STRING:
         case FieldType::BINARY:
+        case FieldType::TEXT:
         case FieldType::LIST_INT64:
         case FieldType::LIST_FLOAT32:
         case FieldType::LIST_STRING: {
@@ -342,7 +355,8 @@ class BytesRow {
               uint16_t len = 0;
               std::memcpy(var_ptr, &len, 2);
             }
-          } else if (meta.data_type == FieldType::BINARY) {
+          } else if (meta.data_type == FieldType::BINARY ||
+                     meta.data_type == FieldType::TEXT) {
             if (has_val) {
               accessor.write_binary(row, i, var_ptr);
             } else if (const auto* def =

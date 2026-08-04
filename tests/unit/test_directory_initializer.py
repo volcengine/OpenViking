@@ -69,7 +69,6 @@ async def test_initialize_user_directories_ignores_actor_peer_view_for_preset_st
         user=UserIdentifier("acme", "support-bot"),
         role=Role.USER,
         actor_peer_id="customer-a",
-        legacy_agent_id="customer-a",
     )
 
     count = await initializer.initialize_user_directories(ctx)

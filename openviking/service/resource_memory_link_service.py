@@ -33,8 +33,8 @@ from openviking.session.memory.utils.resource_refs import (
     resource_ref_matches,
     unlink_resource_references_from_memory,
 )
-from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
+from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
 
@@ -336,29 +336,22 @@ class ResourceMemoryLinkService:
         ctx: RequestContext,
         timeout: Optional[float],
     ) -> Dict[str, Any]:
-        from openviking.service.task_tracker import get_task_tracker
+        from openviking.service.task_tracker import TaskStatus, get_task_tracker
 
-        async def _poll() -> Dict[str, Any]:
-            tracker = get_task_tracker()
-            while True:
-                task = await tracker.get(
-                    task_id,
-                    account_id=ctx.account_id,
-                    user_id=ctx.user.user_id,
-                )
-                if task is None:
-                    raise RuntimeError(f"session commit task not found: {task_id}")
-                status = task.status.value if hasattr(task.status, "value") else str(task.status)
-                if status == "completed":
-                    return task.to_dict()
-                if status == "failed":
-                    raise RuntimeError(task.error or f"session commit task failed: {task_id}")
-                await asyncio.sleep(0.1)
-
-        return await asyncio.wait_for(
-            _poll(),
-            timeout=timeout or _RESOURCE_REASON_COMMIT_TIMEOUT_SECONDS,
+        task = await get_task_tracker().wait(
+            task_id,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+            timeout=(
+                _RESOURCE_REASON_COMMIT_TIMEOUT_SECONDS if timeout is None else timeout
+            ),
+            poll_interval=0.1,
         )
+        if task.status == TaskStatus.COMPLETED:
+            return task.to_dict()
+        if task.status == TaskStatus.FAILED:
+            raise RuntimeError(task.error)
+        raise RuntimeError(f"session commit task cancelled: {task_id}")
 
     async def before_resource_delete(
         self,

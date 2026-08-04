@@ -117,6 +117,8 @@ def _load_rust_binding():
         so_path = _find_ragfs_so()
         if so_path:
             spec = importlib.util.spec_from_file_location("ragfs_python", so_path)
+            if spec is None or spec.loader is None:
+                raise ImportError(f"Unable to load Rust binding spec from {so_path}")
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
             return mod.RAGFSBindingClient, None
@@ -138,6 +140,25 @@ def get_binding_client():
         return client, fh
     except ImportError as exc:
         raise ImportError("ragfs_python native library is not available: " + str(exc)) from exc
+
+
+def reopen_rust_tracing_file() -> None:
+    """Reopen the Rust tracing log file after Python rotates the active file."""
+    try:
+        import ragfs_python as rust_module
+    except ImportError:
+        so_path = _find_ragfs_so()
+        if not so_path:
+            return
+        spec = importlib.util.spec_from_file_location("ragfs_python", so_path)
+        if spec is None or spec.loader is None:
+            return
+        rust_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(rust_module)
+
+    reopen_hook = getattr(rust_module, "reopen_tracing_file", None)
+    if callable(reopen_hook):
+        reopen_hook()
 
 
 # Module-level defaults

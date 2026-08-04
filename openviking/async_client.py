@@ -109,11 +109,6 @@ class AsyncOpenViking:
                 await cls._instance.close()
                 cls._instance = None
 
-        # Also reset lock manager singleton
-        from openviking.storage.transaction import reset_lock_manager
-
-        reset_lock_manager()
-
     # ============= Session methods =============
 
     def session(self, session_id: Optional[str] = None, must_exist: bool = False) -> Session:
@@ -281,6 +276,11 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         return await self._client.get_task(task_id)
 
+    async def cancel_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Cancel a background task."""
+        await self._ensure_initialized()
+        return await self._client.cancel_task(task_id)
+
     async def list_tasks(
         self,
         task_type: Optional[str] = None,
@@ -330,6 +330,9 @@ class AsyncOpenViking:
         args: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
         processing_mode: str = "semantic_and_vectors",
+        add_type: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -339,6 +342,9 @@ class AsyncOpenViking:
             path: Local file path or URL. A sitemap / RSS / Atom URL ingests the
                 whole site as one resource tree; pass ``args={"site": True}`` to
                 force whole-site ingestion from a bare domain.
+            add_type: Explicit Connector source type. Requires an exact ``to``
+                target and cannot be combined with ``parent``. The source
+                ``path`` is forwarded verbatim.
             reason: Context/reason for adding this resource.
             instruction: Specific instruction for processing.
             wait: If True, wait for processing to complete.
@@ -355,11 +361,18 @@ class AsyncOpenViking:
         """
         await self._ensure_initialized()
 
+        if add_type is not None:
+            add_type = add_type.strip() or None
+        if add_type and parent:
+            raise ValueError("'add_type' cannot be combined with 'parent'.")
+        if add_type and not to:
+            raise ValueError("'add_type' requires an exact 'to' target.")
         if to and parent:
             raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
 
         return await self._client.add_resource(
             path=path,
+            add_type=add_type,
             to=to,
             parent=parent,
             reason=reason,
@@ -372,6 +385,8 @@ class AsyncOpenViking:
             telemetry=telemetry,
             watch_interval=watch_interval,
             args=args,
+            tags=tags,
+            tag_mode=tag_mode,
             **kwargs,
         )
 
@@ -714,7 +729,7 @@ class AsyncOpenViking:
         simple = kwargs.get("simple", False)
         output = kwargs.get("output", "original")
         abs_limit = kwargs.get("abs_limit", 256)
-        show_all_hidden = kwargs.get("show_all_hidden", True)
+        show_all_hidden = kwargs.get("show_all_hidden", False)
         node_limit = kwargs.get("node_limit", 1000)
         sort_by = kwargs.get("sort_by")
         sort_order = kwargs.get("sort_order", "asc")
@@ -776,7 +791,7 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         output = kwargs.get("output", "original")
         abs_limit = kwargs.get("abs_limit", 128)
-        show_all_hidden = kwargs.get("show_all_hidden", True)
+        show_all_hidden = kwargs.get("show_all_hidden", False)
         node_limit = kwargs.get("node_limit", 1000)
         return await self._client.tree(
             uri,

@@ -63,6 +63,44 @@ class StorageConfig(BaseModel):
 
     @model_validator(mode="after")
     def resolve_paths(self):
+        """Normalize storage paths and map legacy transaction settings into native pathlock config."""
+        if (
+            "lock_timeout" in self.transaction.model_fields_set
+            and "lock_timeout_secs" not in self.agfs.pathlock.model_fields_set
+        ):
+            self.agfs.pathlock.lock_timeout_secs = self.transaction.lock_timeout
+            logger.warning(
+                "StorageConfig: 'transaction.lock_timeout' is deprecated. "
+                "Mapped to 'storage.agfs.pathlock.lock_timeout_secs'."
+            )
+        elif "lock_timeout" in self.transaction.model_fields_set:
+            logger.warning(
+                "StorageConfig: 'transaction.lock_timeout' is deprecated and ignored because "
+                "'storage.agfs.pathlock.lock_timeout_secs' is set."
+            )
+
+        if (
+            "lock_expire" in self.transaction.model_fields_set
+            and "lock_expire_secs" not in self.agfs.pathlock.model_fields_set
+        ):
+            self.agfs.pathlock.lock_expire_secs = self.transaction.lock_expire
+            logger.warning(
+                "StorageConfig: 'transaction.lock_expire' is deprecated. "
+                "Mapped to 'storage.agfs.pathlock.lock_expire_secs'."
+            )
+        elif "lock_expire" in self.transaction.model_fields_set:
+            logger.warning(
+                "StorageConfig: 'transaction.lock_expire' is deprecated and ignored because "
+                "'storage.agfs.pathlock.lock_expire_secs' is set."
+            )
+
+        if "redo_recovery_enabled" in self.transaction.model_fields_set:
+            logger.warning(
+                "StorageConfig: 'transaction.redo_recovery_enabled' is deprecated and ignored. "
+                "Session commit phase-2 recovery now resumes from the persistent "
+                "'session_commit' queue."
+            )
+
         if self.agfs.path is not None:
             logger.warning(
                 f"StorageConfig: 'agfs.path' is deprecated and will be ignored. "

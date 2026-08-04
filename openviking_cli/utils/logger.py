@@ -79,6 +79,28 @@ _request_id_context: contextvars.ContextVar[str] = contextvars.ContextVar(
 )
 
 
+def _reopen_rust_tracing_file() -> None:
+    """Ask the embedded Rust tracing writer to reopen the active log file."""
+    try:
+        from openviking.pyagfs import reopen_rust_tracing_file
+    except ImportError:
+        return
+
+    try:
+        reopen_rust_tracing_file()
+    except Exception as exc:
+        sys.stderr.write(f"Warning: Failed to reopen Rust tracing log file: {exc}\n")
+
+
+class _RustAwareTimedRotatingFileHandler(TimedRotatingFileHandler):
+    """Timed rotating file handler that refreshes the Rust tracing file handle."""
+
+    def doRollover(self) -> None:
+        """Rotate the active Python log file and then refresh the Rust writer."""
+        super().doRollover()
+        _reopen_rust_tracing_file()
+
+
 @contextmanager
 def bind_log_request_id(request_id: str) -> Iterator[None]:
     """Bind a request ID to logs emitted in the current execution context."""
@@ -746,7 +768,7 @@ def _create_log_handler(log_output: str, config: Optional[Any]) -> logging.Handl
                         when = log_rotation_interval
                         interval = 1
 
-                    return TimedRotatingFileHandler(
+                    return _RustAwareTimedRotatingFileHandler(
                         log_output,
                         when=when,
                         interval=interval,

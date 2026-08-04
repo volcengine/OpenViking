@@ -87,6 +87,8 @@ dependencies = [
     "lark-oapi>=1.5.3",
     "mcp>=1.27,<2",
     "pathspec>=1.1.1",
+    "grep-ast>=0.9.0",
+    "tree-sitter-language-pack>=1.12,<2.0",
 ]
 
 
@@ -182,14 +184,6 @@ benchmark = [
     "datasets>=2.0.0",
     "pandas>=2.0.0",
 ]
-langchain = [
-    "langchain-core>=1.0.0,<2.0.0",
-]
-langgraph = [
-    "langchain>=1.0.0,<2.0.0",
-    "langchain-core>=1.0.0,<2.0.0",
-    "langgraph>=1.0.0,<2.0.0",
-]
 local-embed = [
     "llama-cpp-python>=0.3.0",
 ]
@@ -233,6 +227,7 @@ vikingbot = [
     "**/*.mjs",
     "skills/**/*.md",
     "skills/**/*.sh",
+    "workspace/**/*",
     "bridge/**/*",
 ]
 

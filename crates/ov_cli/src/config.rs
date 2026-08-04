@@ -105,6 +105,23 @@ fn default_timeout() -> f64 {
     60.0
 }
 
+pub(crate) fn timeout_is_valid(timeout: f64) -> bool {
+    timeout > 0.0 && std::time::Duration::try_from_secs_f64(timeout).is_ok()
+}
+
+pub(crate) fn parse_positive_timeout(value: &str) -> std::result::Result<f64, String> {
+    let timeout = value
+        .parse::<f64>()
+        .map_err(|_| format!("invalid timeout {value:?}: expected a positive number of seconds"))?;
+    if timeout_is_valid(timeout) {
+        Ok(timeout)
+    } else {
+        Err(format!(
+            "invalid timeout {value:?}: expected a positive finite number of seconds"
+        ))
+    }
+}
+
 fn default_output_format() -> String {
     "table".to_string()
 }
@@ -308,6 +325,22 @@ impl Config {
         Ok(())
     }
 
+    pub(crate) fn validate_runtime_values(&self) -> Result<()> {
+        if !timeout_is_valid(self.timeout) {
+            return Err(Error::Config(format!(
+                "Invalid timeout value {}: timeout must be a positive finite number of seconds",
+                self.timeout
+            )));
+        }
+        if !matches!(self.output.as_str(), "table" | "json") {
+            return Err(Error::Config(format!(
+                "Invalid output value {:?}: expected table or json",
+                self.output
+            )));
+        }
+        Ok(())
+    }
+
     pub(crate) fn effective_auth_with_overrides(
         &self,
         api_key_override: Option<String>,
@@ -456,6 +489,49 @@ mod tests {
             .expect_err("mixed identity mode should fail");
 
         assert!(error.to_string().contains("actor_peer_id cannot be used"));
+    }
+
+    #[test]
+    fn runtime_validation_rejects_invalid_timeout_values() {
+        for timeout in [-1.0, 0.0, f64::INFINITY, f64::NAN, 1e300] {
+            let config = Config {
+                timeout,
+                ..Config::default()
+            };
+            let error = config
+                .validate_runtime_values()
+                .expect_err("invalid timeout should fail runtime validation");
+            assert!(error.to_string().contains("Invalid timeout value"));
+        }
+    }
+
+    #[test]
+    fn config_file_with_invalid_timeout_still_loads_for_repair() {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let path = dir.path().join("ovcli.conf");
+        std::fs::write(&path, r#"{"timeout": -1}"#).expect("config file should be written");
+
+        let config =
+            Config::from_file(&path.to_string_lossy()).expect("repair commands must load the file");
+
+        assert_eq!(config.timeout, -1.0);
+        assert!(config.validate_runtime_values().is_err());
+    }
+
+    #[test]
+    fn config_file_with_invalid_output_still_loads_for_repair() {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let path = dir.path().join("ovcli.conf");
+        std::fs::write(&path, r#"{"output": "yaml"}"#).expect("config file should be written");
+
+        let config =
+            Config::from_file(&path.to_string_lossy()).expect("repair commands must load the file");
+
+        assert_eq!(config.output, "yaml");
+        let error = config
+            .validate_runtime_values()
+            .expect_err("normal commands must reject an invalid output format");
+        assert!(error.to_string().contains("Invalid output value \"yaml\""));
     }
 
     #[test]

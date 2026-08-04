@@ -304,7 +304,7 @@ async def search_type_quota_recall(
     peer_scope = "actor" if peer_scope == "actor" else "all"
     user_root = canonical_user_root(ctx)
     roots = memory_target_roots(ctx)
-    open_ctx = replace(ctx, actor_peer_id=None, legacy_agent_id=None)
+    open_ctx = replace(ctx, actor_peer_id=None)
     raw_by_type: dict[str, list[Any]] = {memory_type: [] for memory_type in TYPE_ORDER}
     selected: list[tuple[str, Any, int, str, RequestContext]] = []
 

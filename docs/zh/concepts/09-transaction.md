@@ -1,6 +1,6 @@
 # 路径锁与崩溃恢复
 
-OpenViking 通过**路径锁**和**Redo Log** 两个简单原语保护核心写操作（`rm`、`mv`、`add_resource`、`session.commit`）的一致性，确保 VikingFS、VectorDB、QueueManager 三个子系统在故障时不会出现数据不一致。
+OpenViking 通过**路径锁**和**持久化队列恢复**两个简单原语保护核心写操作（`rm`、`mv`、`add_resource`、`session.commit`）的一致性，确保 VikingFS、VectorDB、QueueManager 三个子系统在故障时不会出现数据不一致。
 
 ## 设计哲学
 
@@ -13,7 +13,7 @@ OpenViking 是上下文数据库，FS 是源数据，VectorDB 是派生索引。
 1. **写互斥**：通过路径锁保证同一路径同一时间只有一个写操作
 2. **默认生效**：所有数据操作命令自动加锁，用户无需额外配置
 3. **锁即保护**：进入 LockContext 时加锁，退出时释放，没有 undo/journal/commit 语义
-4. **仅 session_memory 需要崩溃恢复**：通过 RedoLog 在进程崩溃后重做记忆提取
+4. **仅 session_memory 需要崩溃恢复**：通过持久化 `session_commit` 队列在进程崩溃后恢复 Phase 2
 5. **Queue 操作在锁外执行**：SemanticQueue/EmbeddingQueue 的 enqueue 是幂等的，失败可重试
 
 ## 架构
@@ -56,28 +56,25 @@ class LockHandle:
 **LockManager** 是全局单例，管理锁生命周期：
 - 创建/释放 LockHandle
 - 后台清理泄漏的锁（进程内安全网）
-- 启动时执行 RedoLog 恢复
+- 启动后由 QueueManager 恢复持久化的 `session_commit` Phase 2 任务
 
 **LockContext** 是异步上下文管理器，封装加锁/解锁生命周期：
 
 ```python
-from openviking.storage.transaction import LockContext, get_lock_manager
-
-async with LockContext(get_lock_manager(), [path], lock_mode="exact") as handle:
+# Conceptual example: production path locks are acquired inside the Rust ragfs layer.
+async with LockContext(lock_manager, [path], lock_mode="exact") as handle:
     # 在锁保护下执行操作
     ...
 # 退出时自动释放锁（包括异常情况）
 ```
 
-### 组件 2：RedoLog（崩溃恢复）
+### 组件 2：持久化 `session_commit` 队列（崩溃恢复）
 
-仅用于 `session.commit` 的记忆提取阶段。操作前写标记，成功后删标记，启动时扫描遗留标记并重做。
+`session.commit` 的 Phase 2 不再使用独立 RedoLog。Phase 1 会先把 archive 元数据持久化，再把
+`SessionCommitMsg` 写入持久化队列；进程重启后，QueueManager 会继续消费遗留的 `session_commit`
+任务并恢复 Phase 2。
 
-```
-/local/_system/redo/{task_id}/redo.json
-```
-
-Memory 提取是幂等的 — 从同一个 archive 重新提取会得到相同结果。
+Memory 提取是幂等的，从同一个 archive 重新提取会得到相同结果。
 
 ## 一致性问题与解决方案
 
@@ -201,7 +198,7 @@ viking://user/default/memories/preferences/editor.md
 
 | 问题 | 方案 |
 |------|------|
-| 消息已清空但 archive 未写入 -> 对话数据丢失 | Phase 1 无锁（archive 不完整无副作用）+ Phase 2 RedoLog |
+| 消息已清空但 archive 未写入 -> 对话数据丢失 | Phase 1 无锁（archive 不完整无副作用）+ Phase 2 持久化 `session_commit` 队列 |
 
 LLM 调用耗时不可控（5s~60s+），不能放在持锁操作内。设计拆为两个阶段：
 
@@ -212,32 +209,29 @@ Phase 1 — 归档（无锁）：
   3. 清空 messages.jsonl
   4. 清空内存中的消息列表
 
-Phase 2 — 记忆提取 + 写入（RedoLog）：
-  1. 写 redo 标记（archive_uri、session_uri、用户身份信息）
+Phase 2 — 记忆提取 + 写入（持久化 `session_commit` 队列）：
+  1. 持久化 archive 元数据并 enqueue `SessionCommitMsg`
   2. 从归档消息提取 memories（LLM）
   3. 写当前消息状态
   4. 写 relations
   5. 直接 enqueue SemanticQueue
-  6. 删除 redo 标记
 ```
 
 **崩溃恢复分析**：
 
 | 崩溃时间点 | 状态 | 恢复动作 |
 |-----------|------|---------|
-| Phase 1 写 archive 中途 | 无标记 | archive 不完整，下次 commit 从 history/ 扫描 index，不受影响 |
-| Phase 1 archive 完成但 messages 未清空 | 无标记 | archive 完整 + messages 仍在 = 数据冗余但安全 |
-| Phase 2 记忆提取/写入中途 | redo 标记存在 | 启动恢复：从 archive 重做提取+写入+入队 |
-| Phase 2 完成 | redo 标记已删 | 无需恢复 |
+| Phase 1 写 archive 中途 | 队列未发布 | archive 不完整，下次 commit 从 history/ 扫描 index，不受影响 |
+| Phase 1 archive 完成但 messages 未清空 | 队列未发布 | archive 完整 + messages 仍在 = 数据冗余但安全 |
+| Phase 2 记忆提取/写入中途 | `session_commit` 任务仍在持久化队列中 | 重启后继续消费该任务，从 archive 恢复 Phase 2 |
+| Phase 2 完成 | archive 标记为完成 | 无需恢复 |
 
 ## LockContext
 
 `LockContext` 是**异步**上下文管理器，封装锁的获取和释放：
 
 ```python
-from openviking.storage.transaction import LockContext, get_lock_manager
-
-lock_manager = get_lock_manager()
+# Conceptual example: production path locks are acquired inside the Rust ragfs layer.
 
 # Exact 锁（写操作、语义处理）
 async with LockContext(lock_manager, [path], lock_mode="exact"):
@@ -380,11 +374,11 @@ fencing token 校验通过的一方成功持有 `TreeLock(java-guide)`；失败�
 
 ## 崩溃恢复
 
-`LockManager.start()` 启动时自动扫描 `/local/_system/redo/` 目录中的遗留标记：
+服务启动后，QueueManager 会继续消费持久化的 `session_commit` 任务：
 
 | 场景 | 恢复方式 |
 |------|---------|
-| session_memory 提取中途崩溃 | 从 archive 重做记忆提取 + 写入 + enqueue |
+| session_memory 提取中途崩溃 | 从 archive 恢复 Phase 2 并继续消费 `session_commit` 任务 |
 | 锁持有期间崩溃 | 锁文件留在 AGFS，下次获取时 stale 检测自动清理（默认 1800s / 30 分钟过期）|
 | enqueue 后 worker 处理前崩溃 | QueueFS SQLite 持久化，worker 重启后自动拉取 |
 | 孤儿索引 | L2 按需加载时清理 |
@@ -395,13 +389,30 @@ fencing token 校验通过的一方成功持有 `TreeLock(java-guide)`；失败�
 |---------|------|---------|
 | 操作中途崩溃 | 锁自动过期 + stale 检测 | 下次获取同路径锁时 |
 | add_resource 语义处理中途崩溃 | 生命周期锁过期 + SemanticProcessor 重启时重新获取 | worker 重启后 |
-| session.commit Phase 2 崩溃 | RedoLog 标记 + 重做 | 重启时 |
+| session.commit Phase 2 崩溃 | 持久化 `session_commit` 队列 + 重试消费 | 重启时 |
 | enqueue 后 worker 处理前崩溃 | QueueFS SQLite 持久化 | worker 重启后 |
 | 孤儿索引 | L2 按需加载时清理 | 用户访问时 |
 
 ## 配置
 
-路径锁默认启用，无需额外配置。**默认不等待**：若路径被锁定则立即抛出 `LockAcquisitionError`。如需允许等待重试，可通过 `storage.transaction` 段配置：
+路径锁默认启用，无需额外配置。推荐通过 `storage.agfs.pathlock` 配置默认等待时间和过期时间。`storage.transaction` 仅保留为兼容旧配置：`lock_timeout` 和 `lock_expire` 会在未显式配置新字段时自动映射，`redo_recovery_enabled` 已废弃且会被忽略。
+
+推荐写法：
+
+```json
+{
+  "storage": {
+    "agfs": {
+      "pathlock": {
+        "lock_timeout_secs": 5.0,
+        "lock_expire_secs": 1800.0
+      }
+    }
+  }
+}
+```
+
+兼容旧写法：
 
 ```json
 {
@@ -416,8 +427,8 @@ fencing token 校验通过的一方成功持有 `TreeLock(java-guide)`；失败�
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `lock_timeout` | float | 获取锁的等待超时（秒）。`0` = 立即失败（默认）；`> 0` = 最多等待此时间 | `0.0` |
-| `lock_expire` | float | 锁失活阈值（秒），超过此时间未被 refresh 的锁会被视为陈旧锁并回收 | `1800.0` |
+| `lock_timeout` | float | 已废弃。改用 `storage.agfs.pathlock.lock_timeout_secs`。 | `0.0` |
+| `lock_expire` | float | 已废弃。改用 `storage.agfs.pathlock.lock_expire_secs`。 | `1800.0` |
 
 ### QueueFS 持久化
 

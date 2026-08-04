@@ -574,6 +574,8 @@ pub(crate) async fn validate_candidate_config_with_role(
     config: &Config,
     require_api_key: bool,
 ) -> Result<Option<ApiKeyRole>> {
+    config.validate_runtime_values()?;
+
     let api_key = non_empty_option(config.api_key.as_deref());
     if require_api_key && api_key.is_none() {
         return Err(Error::Config("API key is required".to_string()));

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -11,6 +12,8 @@ from openviking_cli.exceptions import InvalidArgumentError
 
 _POLICY_KEYS = {"self", "peer", "memory_types", "working_memory"}
 _TARGET_KEYS = {"enabled"}
+_TRUE_STRINGS = {"1", "true", "yes", "on"}
+_FALSE_STRINGS = {"", "0", "false", "no", "off"}
 
 
 def _memory_policy_shape_error(key: str) -> str:
@@ -25,6 +28,28 @@ def _memory_policy_keys_error(key: str) -> str:
     return "memory_policy target supports only: enabled"
 
 
+def _parse_enabled(value: Any, *, key: str) -> bool:
+    if isinstance(value, bool):
+        return value
+
+    warnings.warn(
+        f"memory_policy.{key}.enabled should be a boolean; legacy coercion is deprecated",
+        FutureWarning,
+        stacklevel=3,
+    )
+    if isinstance(value, str):
+        normalized = value.strip().casefold()
+        if normalized in _TRUE_STRINGS:
+            return True
+        if normalized in _FALSE_STRINGS:
+            return False
+
+    # Preserve the permissive pre-v0.5 behavior for uncommon legacy values.
+    # This avoids breaking persisted policy dictionaries while callers migrate
+    # to genuine JSON booleans.
+    return bool(value)
+
+
 def _target_enabled(data: Any, *, default_enabled: bool, key: str = "target") -> bool:
     if data is None:
         return default_enabled
@@ -33,7 +58,9 @@ def _target_enabled(data: Any, *, default_enabled: bool, key: str = "target") ->
     extra_keys = set(data) - _TARGET_KEYS
     if extra_keys:
         raise InvalidArgumentError(_memory_policy_keys_error(key))
-    return bool(data.get("enabled", default_enabled))
+    if "enabled" not in data:
+        return default_enabled
+    return _parse_enabled(data["enabled"], key=key)
 
 
 def _parse_memory_types(data: Any) -> Optional[set[str]]:

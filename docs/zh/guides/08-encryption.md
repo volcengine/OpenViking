@@ -31,7 +31,7 @@ OpenViking 提供透明的静态数据加密，确保多租户环境下的数据
 ### 1. 初始化根密钥（Local 模式）
 
 ```bash
-ov system crypto init-key --output ~/.openviking/master.key
+ov system crypto init-key --output-file ~/.openviking/master.key
 ```
 
 ### 2. 配置加密
@@ -176,10 +176,10 @@ OpenViking 提供两层加密保护：
 
 ```bash
 # 生成并保存到指定路径
-ov system  crypto init-key --output ~/.openviking/master.key
+ov system crypto init-key --output-file ~/.openviking/master.key
 
 # 或者使用简短命令
-ov system crypto init-key -o ~/.openviking/master.key
+ov system crypto init-key -f ~/.openviking/master.key
 ```
 
 **输出示例**：

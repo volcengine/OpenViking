@@ -110,6 +110,11 @@
   display: none !important;
 }
 
+.VPSidebar .VPSidebarItem > .item {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 .ov-docs-search {
   display: flex;
   align-items: center;

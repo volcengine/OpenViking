@@ -14,6 +14,8 @@
 | **邮件** | 中等（IMAP/SMTP 凭证） |
 | **QQ** | 简单（应用凭证） |
 
+渠道配置位于 `~/.openviking/ov.conf` 的 `bot.channels`。下面的 Telegram 示例展示完整外层结构；后续片段中的 `channels` 字段都应合并到同一个 `bot` 对象中。
+
 <details>
 <summary><b>Telegram</b>（推荐）</summary>
 
@@ -26,14 +28,16 @@
 
 ```json
 {
-  "channels": [
-    {
-      "type": "telegram",
-      "enabled": true,
-      "token": "YOUR_BOT_TOKEN",
-      "allowFrom": ["YOUR_USER_ID"]
-    }
-  ]
+  "bot": {
+    "channels": [
+      {
+        "type": "telegram",
+        "enabled": true,
+        "token": "YOUR_BOT_TOKEN",
+        "allowFrom": ["YOUR_USER_ID"]
+      }
+    ]
+  }
 }
 ```
 
@@ -62,7 +66,7 @@ vikingbot gateway
 Read https://raw.githubusercontent.com/HKUDS/MoChat/refs/heads/main/skills/vikingbot/skill.md and register on MoChat. My Email account is xxx@xxx Bind me as your owner and DM me on MoChat.
 ```
 
-vikingbot 将自动注册、配置 `~/.vikingbot/config.json` 并连接到 Mochat。
+注册后，请将返回的渠道设置添加到 `~/.openviking/ov.conf` 的 `bot.channels`，然后连接 Mochat。
 
 **2. 重启网关**
 
@@ -77,7 +81,7 @@ vikingbot gateway
 <details>
 <summary>手动配置（高级）</summary>
 
-如果您更喜欢手动配置，请将以下内容添加到 `~/.vikingbot/config.json`：
+如果您更喜欢手动配置，请将下面的 `channels` 字段合并到 `~/.openviking/ov.conf` 的 `bot` 对象：
 
 > 请保密 `claw_token`。它只应在 `X-Claw-Token` 头中发送到您的 Mochat API 端点。
 
