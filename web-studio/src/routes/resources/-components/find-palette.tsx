@@ -538,6 +538,10 @@ export function FindPalette({
                   <LazyFilePreview
                     file={previewEntry}
                     onClose={() => setIndex(-1)}
+                    onNavigate={(uri) => {
+                      onNavigate(uri)
+                      onClose()
+                    }}
                     showCloseButton={false}
                   />
                 </div>

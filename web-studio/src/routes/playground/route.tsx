@@ -596,6 +596,7 @@ function PlaygroundWorkbench() {
               file={selectedFile}
               hideDirectoryHeader
               onClose={() => setSelectedFile(null)}
+              onNavigate={(uri) => void revealResource(uri)}
               showCloseButton={false}
             />
           </div>
