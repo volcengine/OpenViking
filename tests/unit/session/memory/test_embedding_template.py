@@ -195,6 +195,8 @@ class TestEmbeddingTextConstruction:
 
         vector_text = mock_from_context.call_args[0][0].get_vectorization_text()
         assert vector_text == "person -> alice -> Plain body"
+        memory_context = mock_from_context.call_args[0][0]
+        assert memory_context.to_dict()["embedding_text"] == vector_text
 
     @pytest.mark.asyncio
     async def test_plain_content_fallback_still_works(self):

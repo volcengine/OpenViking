@@ -195,6 +195,51 @@ class DirectChildProxy:
         ]
 
 
+class MemoryChildProxy:
+    async def search_children_in_tenant(
+        self,
+        parent_uri: str,
+        query_vector=None,
+        sparse_query_vector=None,
+        context_type=None,
+        target_directories=None,
+        extra_filter=None,
+        limit: int = 10,
+    ):
+        del (
+            parent_uri,
+            query_vector,
+            sparse_query_vector,
+            context_type,
+            target_directories,
+            extra_filter,
+            limit,
+        )
+        return [
+            _result(
+                "viking://user/user1/memories/events/a.md",
+                0.8,
+                abstract="plain A",
+                embedding_text="templated A",
+                context_type="memory",
+            ),
+            _result(
+                "viking://user/user1/memories/events/b.md",
+                0.7,
+                abstract="plain B",
+                meta={"embedding_text": "templated B"},
+                context_type="memory",
+            ),
+            _result(
+                "viking://resources/file-c",
+                0.6,
+                abstract="plain C",
+                embedding_text="templated C",
+                context_type="resource",
+            ),
+        ]
+
+
 class FakeRerankClient:
     def __init__(self, scores):
         self.scores = list(scores)
@@ -243,6 +288,31 @@ def test_rerank_max_input_tokens_accepts_zero_or_at_least_128():
     assert RerankConfig(max_input_tokens=0).max_input_tokens == 0
     with pytest.raises(ValueError, match="max_input_tokens"):
         RerankConfig(max_input_tokens=127)
+
+
+@pytest.mark.asyncio
+async def test_recursive_rerank_uses_embedding_text_only_for_memory_candidates():
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=None,
+        rerank_config=None,
+    )
+    fake_client = FakeRerankClient([0.9, 0.8, 0.7])
+    retriever._rerank_client = fake_client
+
+    await retriever._recursive_search(
+        vector_proxy=MemoryChildProxy(),
+        query="hello",
+        query_vector=None,
+        sparse_query_vector=None,
+        starting_points=[("viking://user/user1/memories/events", 0.0)],
+        limit=3,
+        mode=RetrieverMode.THINKING,
+    )
+
+    assert fake_client.calls == [
+        ("hello", ["templated A", "templated B", "plain C"])
+    ]
 
 
 @pytest.mark.asyncio
@@ -637,3 +707,37 @@ async def test_convert_to_matched_contexts_returns_empty_relations():
     )
 
     assert result[0].relations == []
+
+
+@pytest.mark.asyncio
+async def test_convert_memory_context_uses_embedding_text_for_agent_context():
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=None,
+        rerank_config=None,
+    )
+
+    result = await retriever._convert_to_matched_contexts(
+        [
+            _result(
+                "viking://user/user1/memories/events/a.md",
+                1.0,
+                abstract="plain memory",
+                meta={"embedding_text": "templated memory"},
+                context_type="memory",
+            ),
+            _result(
+                "viking://resources/file-b",
+                0.9,
+                abstract="plain resource",
+                embedding_text="templated resource",
+                context_type="resource",
+            ),
+        ],
+        ctx=_ctx(),
+    )
+
+    assert [context.abstract for context in result] == [
+        "templated memory",
+        "plain resource",
+    ]

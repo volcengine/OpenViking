@@ -22,6 +22,21 @@ type OpenVikingArchiveMatch = {
   content: string;
 };
 
+type ArchiveSearchSource =
+  | "messages.jsonl"
+  | "memory_diff.json"
+  | ".overview.md"
+  | ".abstract.md"
+  | "other";
+
+type ClassifiedArchiveSearchMatch = OpenVikingArchiveMatch & {
+  archiveTag: string;
+  field?: string;
+  hidden: boolean;
+  index: number;
+  source: ArchiveSearchSource;
+};
+
 export type OpenVikingArchiveClient = {
   grepSessionArchives: (
     sessionId: string,
@@ -70,6 +85,107 @@ function previewText(value: unknown, maxChars: number): string | undefined {
   return text.length <= maxChars ? text : `${text.slice(0, Math.max(0, maxChars - 1))}…`;
 }
 
+function archiveTagFromUri(uri: string): string {
+  return uri.match(/archive_\d+/)?.[0] ?? "unknown";
+}
+
+function classifyArchiveSearchSource(uri: string): ArchiveSearchSource {
+  const path = uri.split(/[?#]/, 1)[0] ?? "";
+  const basename = path.split("/").filter(Boolean).at(-1) ?? "";
+  if (
+    basename === "messages.jsonl" ||
+    basename === "memory_diff.json" ||
+    basename === ".overview.md" ||
+    basename === ".abstract.md"
+  ) {
+    return basename;
+  }
+  return "other";
+}
+
+function classifyArchiveSearchMatch(
+  match: OpenVikingArchiveMatch,
+  index: number,
+): ClassifiedArchiveSearchMatch {
+  const source = classifyArchiveSearchSource(match.uri);
+  const field = source === "memory_diff.json"
+    ? match.content.match(/^\s*"([^"]+)"\s*:/)?.[1]
+    : undefined;
+  return {
+    ...match,
+    archiveTag: archiveTagFromUri(match.uri),
+    field,
+    hidden: (source === "memory_diff.json" && field !== "after") || source === "other",
+    index,
+    source,
+  };
+}
+
+function archiveSearchSourceRank(match: ClassifiedArchiveSearchMatch): number {
+  switch (match.source) {
+    case "messages.jsonl":
+      return 0;
+    case "memory_diff.json":
+      return 1;
+    case ".overview.md":
+      return 2;
+    case ".abstract.md":
+      return 3;
+    default:
+      return 4;
+  }
+}
+
+function selectArchiveSearchMatches(
+  matches: ClassifiedArchiveSearchMatch[],
+  maxMatches: number,
+): ClassifiedArchiveSearchMatch[] {
+  const sorted = [...matches].sort((a, b) => {
+    const bySource = archiveSearchSourceRank(a) - archiveSearchSourceRank(b);
+    return bySource || a.index - b.index;
+  });
+  const distinctArchives = new Set(sorted.map((match) => match.archiveTag)).size;
+  const perArchiveLimit = distinctArchives > 1 ? 3 : maxMatches;
+  const selected: ClassifiedArchiveSearchMatch[] = [];
+  const selectedIndexes = new Set<number>();
+  const perArchiveCounts = new Map<string, number>();
+
+  for (const match of sorted) {
+    if (selected.length >= maxMatches) {
+      break;
+    }
+    const count = perArchiveCounts.get(match.archiveTag) ?? 0;
+    if (count >= perArchiveLimit) {
+      continue;
+    }
+    selected.push(match);
+    selectedIndexes.add(match.index);
+    perArchiveCounts.set(match.archiveTag, count + 1);
+  }
+
+  for (const match of sorted) {
+    if (selected.length >= maxMatches) {
+      break;
+    }
+    if (!selectedIndexes.has(match.index)) {
+      selected.push(match);
+    }
+  }
+  return selected;
+}
+
+function formatArchiveSearchMatch(
+  match: ClassifiedArchiveSearchMatch,
+  index: number,
+  maxLineLength: number,
+): string {
+  const fieldLine = match.field ? `\nfield: ${match.field}` : "";
+  const body = match.content.length > maxLineLength
+    ? `${match.content.slice(0, maxLineLength)}...(truncated)`
+    : match.content;
+  return `## Match ${index + 1}: ${match.archiveTag}\nsource: ${match.source}${fieldLine}\nline: ${match.line}\n${body}`;
+}
+
 export function registerOpenVikingArchiveTools(deps: OpenVikingArchiveToolsDeps): void {
   deps.registerTool(
     (ctx: OpenVikingArchiveToolContext) => ({
@@ -77,10 +193,11 @@ export function registerOpenVikingArchiveTools(deps: OpenVikingArchiveToolsDeps)
       label: "Archive Search (OpenViking)",
       description:
         "Keyword-grep across all archived original conversation messages of the current session. " +
+        "Results are source-labeled; stale memory-diff fields such as before/uri are hidden. " +
         "Use this whenever the [Session History Summary] does not contain the specific detail " +
-        "the user is asking about. Extract 2-3 concrete entity words from the question " +
-        "(names, places, objects, dates) and search each separately. " +
-        "Only conclude information is unavailable after trying at least 2 different keyword variations.",
+        "the user is asking about. Start with one high-signal query using concrete names, " +
+        "places, objects, dates, or distinctive phrases. Run one follow-up search only when " +
+        "the first result is empty or inconclusive and another concrete query is available.",
       parameters: Type.Object({
         query: Type.String({
           description:
@@ -128,14 +245,19 @@ export function registerOpenVikingArchiveTools(deps: OpenVikingArchiveToolsDeps)
             archiveId,
             caseInsensitive: true,
           });
-          const traceResults: RecallTraceResult[] = (result.matches ?? []).slice(0, deps.traceRecallMaxResultsPerSearch).map((match) => ({
+          const rawMatches = result.matches ?? [];
+          const rawMatchCount = result.count ?? rawMatches.length;
+          const classifiedMatches = rawMatches.map(classifyArchiveSearchMatch);
+          const usableMatches = classifiedMatches.filter((match) => !match.hidden);
+          const hiddenMatchCount = classifiedMatches.length - usableMatches.length;
+          const traceResults: RecallTraceResult[] = usableMatches.slice(0, deps.traceRecallMaxResultsPerSearch).map((match) => ({
             uri: match.uri,
             resourceType: "archive",
             abstractPreview: previewText(match.content, deps.traceRecallPreviewChars),
             resultType: "archive_match",
           }));
 
-          const recordArchiveTrace = async (displayed: OpenVikingArchiveMatch[]) => {
+          const recordArchiveTrace = async (displayed: ClassifiedArchiveSearchMatch[]) => {
             await deps.traceRecorder?.recordAndFlush({
               schemaVersion: "1.0",
               traceId: deps.createTraceId("ov_archive_search"),
@@ -153,7 +275,7 @@ export function registerOpenVikingArchiveTools(deps: OpenVikingArchiveToolsDeps)
                 targetUriResolved: archiveId ? `viking://session/${ovSessionId}/history/${archiveId}` : `viking://session/${ovSessionId}/history`,
                 limit: deps.traceRecallMaxResultsPerSearch,
                 durationMs: Date.now() - started,
-                total: result.matches?.length ?? result.count ?? 0,
+                total: rawMatchCount,
                 results: traceResults,
                 archiveId,
                 caseInsensitive: true,
@@ -166,44 +288,64 @@ export function registerOpenVikingArchiveTools(deps: OpenVikingArchiveToolsDeps)
                 displayed: true,
               })),
               stats: {
-                candidateCount: result.matches?.length ?? result.count ?? 0,
+                candidateCount: rawMatchCount,
                 selectedCount: displayed.length,
                 injectedCount: 0,
               },
             });
           };
 
-          if (!result.matches || result.matches.length === 0) {
+          if (usableMatches.length === 0) {
             await recordArchiveTrace([]);
+            const hiddenHint = hiddenMatchCount > 0
+              ? ` ${hiddenMatchCount} stale or metadata match(es) were hidden.`
+              : "";
             return {
               content: [{
                 type: "text",
-                text: `No matches found for "${query}". Try a different keyword — ` +
-                  "the original conversation may use different wording than the question. " +
-                  "Try synonyms, related terms, or shorter fragments.",
+                text: `No relevant matches found for "${query}".${hiddenHint} ` +
+                  "Try one more search only if another concrete name, date, place, object, " +
+                  "or distinctive phrase is available.",
               }],
-              details: { query, matchCount: 0 },
+              details: {
+                query,
+                matchCount: 0,
+                rawMatchCount,
+                hiddenMatchCount,
+                shownMatchCount: 0,
+              },
             };
           }
 
-          const MAX_MATCHES = 12;
-          const MAX_LINE_LEN = 1500;
-          const shown = result.matches.slice(0, MAX_MATCHES);
+          const MAX_MATCHES = 5;
+          const MAX_LINE_LEN = 700;
+          const shown = selectArchiveSearchMatches(usableMatches, MAX_MATCHES);
           await recordArchiveTrace(shown);
-          const blocks = shown.map((m, i) => {
-            const archiveTag = m.uri.match(/archive_\d+/)?.[0] ?? "unknown";
-            const truncated = m.content.length > MAX_LINE_LEN
-              ? m.content.slice(0, MAX_LINE_LEN) + "…(truncated)"
-              : m.content;
-            return `## Match ${i + 1}: ${archiveTag} (line ${m.line})\n${truncated}`;
-          });
+          const blocks = shown.map((match, index) =>
+            formatArchiveSearchMatch(match, index, MAX_LINE_LEN),
+          );
 
-          const header = `Found ${result.matches.length} match(es) for "${query}"` +
-            (result.matches.length > MAX_MATCHES ? ` (showing first ${MAX_MATCHES})` : "") + ":";
+          const hiddenSuffix = hiddenMatchCount > 0
+            ? `; ${hiddenMatchCount} stale/metadata raw match(es) hidden`
+            : "";
+          const header = `Found ${usableMatches.length} relevant match(es) for "${query}"` +
+            ` (${rawMatchCount} raw${hiddenSuffix})` +
+            (usableMatches.length > MAX_MATCHES ? ` (showing first ${MAX_MATCHES})` : "") + ":";
 
           return {
             content: [{ type: "text", text: header + "\n\n" + blocks.join("\n\n") }],
-            details: { query, matchCount: result.matches.length },
+            details: {
+              query,
+              matchCount: usableMatches.length,
+              rawMatchCount,
+              hiddenMatchCount,
+              shownMatchCount: shown.length,
+              sourceCounts: usableMatches.reduce<Record<string, number>>((counts, match) => {
+                const key = match.field ? `${match.source}:${match.field}` : match.source;
+                counts[key] = (counts[key] ?? 0) + 1;
+                return counts;
+              }, {}),
+            },
           };
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -225,11 +367,10 @@ export function registerOpenVikingArchiveTools(deps: OpenVikingArchiveToolsDeps)
       "Retrieve original messages from a compressed session archive. " +
       "Use when a session summary lacks specific details " +
       "such as exact commands, file paths, code snippets, or config values. " +
-      "Check [Archive Index] to find the right archive ID.",
+      "Use an archive ID returned by ov_archive_search.",
     parameters: Type.Object({
       archiveId: Type.String({
-        description:
-          'Archive ID from [Archive Index] (e.g. "archive_002")',
+        description: 'Archive ID returned by ov_archive_search (e.g. "archive_002")',
       }),
     }),
     async execute(_toolCallId: string, params: Record<string, unknown>) {

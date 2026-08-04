@@ -253,10 +253,13 @@ function buildSystemPromptAddition(): string {
     "  The answer may be expressed with different wording than the question.",
     "  Look for synonyms, related facts, and indirect references.**",
     "- If the Summary mentions a topic but lacks the specific detail asked,",
-    "  use the `ov_archive_search` tool to grep the original archived messages",
-    "  for the exact detail. Try 2-3 different keywords extracted from the question.",
-    "- Only conclude information is unavailable AFTER both checking the Summary",
-    "  thoroughly AND searching the archives with at least 2 keyword variations.",
+    "  use the `ov_archive_search` tool once with one high-signal query made from",
+    "  concrete names, dates, places, objects, or distinctive phrases. Avoid broad",
+    "  category words alone.",
+    "- Run at most one follow-up archive search only when the first result is empty",
+    "  or inconclusive and another concrete entity, date, place, or object is available.",
+    "- Conclude information is unavailable after carefully checking the Summary and",
+    "  those bounded archive searches. Do not loop through generic synonyms.",
   ].join("\n");
 }
 
@@ -314,8 +317,8 @@ function buildAssembledContext(
   const instruction = hasArchives ? buildInstructionPrompt() : { text: "", tokens: 0 };
 
   // 4-layer context partitioning:
-  //   Instruction — system prompt guide (Archive Index / Session History usage)
-  //   Archive     — session history summary + per-archive one-line abstracts
+  //   Instruction — system prompt guide for summary and archive search usage
+  //   Archive     — latest session history summary
   //   Session     — active OV messages converted to AgentMessage format
   //   Reserved    — headroom for model output (not consumed here)
   const budgets = allocateContextBudget(tokenBudget, instruction.tokens);
