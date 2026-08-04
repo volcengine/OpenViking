@@ -226,3 +226,48 @@ async def test_apikey_temp_upload_returns_temp_file_id(
     assert resp.status_code == 200, resp.text
     tfid = resp.json()["result"]["temp_file_id"]
     assert (upload_temp_dir / tfid).is_file()
+
+
+async def test_apikey_temp_upload_rejects_legacy_agent_header(
+    client: httpx.AsyncClient,
+):
+    resp = await client.post(
+        "/api/v1/resources/temp_upload",
+        files={"file": ("legacy.md", b"legacy", "text/plain")},
+        headers={
+            "X-API-Key": "dev-api-key",
+            "X-OpenViking-Agent": "legacy-agent",
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "X-OpenViking-Actor-Peer" in resp.text
+
+
+async def test_signed_token_upload_rejects_legacy_agent_header_before_consuming_token(
+    client: httpx.AsyncClient,
+    service,
+    upload_temp_dir: Path,
+    monkeypatch,
+):
+    _stub_ingest(service, monkeypatch)
+    token = _issue(actor_peer_id="token-peer")
+
+    rejected = await client.post(
+        "/api/v1/resources/temp_upload",
+        params={"token": token},
+        files={"file": ("legacy.md", b"legacy", "text/plain")},
+        headers=[
+            ("X-OpenViking-Agent", ""),
+            ("X-OpenViking-Agent", "legacy-agent"),
+        ],
+    )
+    assert rejected.status_code == 400
+    assert "X-OpenViking-Actor-Peer" in rejected.text
+
+    accepted = await client.post(
+        "/api/v1/resources/temp_upload",
+        params={"token": token},
+        files={"file": ("clean.md", b"clean", "text/plain")},
+    )
+    assert accepted.status_code == 200, accepted.text

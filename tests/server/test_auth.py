@@ -781,6 +781,78 @@ async def test_actor_peer_header_rejects_path_separators():
         await get_request_context(request, identity, "bad/peer")
 
 
+async def test_legacy_agent_header_is_rejected():
+    request = _make_request("/api/v1/search/find", auth_enabled=True)
+    request.app.state.auth_plugin = None
+
+    with pytest.raises(InvalidArgumentError, match="X-OpenViking-Actor-Peer"):
+        await resolve_identity(request, x_openviking_agent="legacy-agent")
+
+
+async def test_blank_legacy_agent_header_is_treated_as_absent():
+    request = _make_request("/api/v1/search/find", auth_enabled=False)
+
+    identity = await resolve_identity(request, x_openviking_agent="   ")
+
+    assert identity is not None
+
+
+async def test_direct_resolve_identity_defaults_legacy_header_to_none():
+    request = _make_request("/api/v1/search/find", auth_enabled=False)
+
+    identity = await resolve_identity(request)
+
+    assert identity is not None
+
+
+async def test_legacy_agent_header_returns_400_via_rest_dependency():
+    app = _build_auth_http_test_app(identity=None, auth_enabled=False)
+    app.state.auth_plugin = None
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get(
+            "/api/v1/fs/ls",
+            headers={"X-OpenViking-Agent": "legacy-agent"},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
+    assert "X-OpenViking-Actor-Peer" in response.json()["error"]["message"]
+
+
+async def test_duplicate_legacy_agent_headers_reject_any_nonempty_value():
+    app = _build_auth_http_test_app(identity=None, auth_enabled=False)
+    app.state.auth_plugin = None
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get(
+            "/api/v1/fs/ls",
+            headers=[
+                ("X-OpenViking-Agent", ""),
+                ("X-OpenViking-Agent", "legacy-agent"),
+            ],
+        )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
+
+
+def test_legacy_agent_header_is_hidden_from_openapi():
+    app = FastAPI()
+
+    @app.get("/probe")
+    async def probe(_ctx=Depends(get_request_context)):
+        return {}
+
+    parameters = app.openapi()["paths"]["/probe"]["get"].get("parameters", [])
+    header_names = {parameter["name"] for parameter in parameters}
+
+    assert "X-OpenViking-Agent" not in header_names
+    assert "X-OpenViking-Actor-Peer" in header_names
+
+
 async def test_root_monitoring_requests_allow_implicit_default_identity():
     """Observer/debug endpoints keep the existing ROOT monitoring flow."""
     observer_request = _make_request("/api/v1/observer/system", auth_enabled=True)

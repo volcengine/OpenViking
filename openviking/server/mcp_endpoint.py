@@ -36,7 +36,11 @@ from openviking.retrieve.type_quota_recall import (
     DEFAULT_QUOTAS,
     search_type_quota_recall,
 )
-from openviking.server.auth import _extract_api_key, normalize_actor_peer_header, resolve_identity
+from openviking.server.auth import (
+    _extract_api_key,
+    normalize_actor_peer_header,
+    resolve_identity,
+)
 from openviking.server.dependencies import get_server_config, get_service
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import (
@@ -149,6 +153,7 @@ class _IdentityASGIMiddleware:
                 authorization=authorization,
                 x_openviking_account=request.headers.get("x-openviking-account"),
                 x_openviking_user=request.headers.get("x-openviking-user"),
+                x_openviking_agent=request.headers.getlist("x-openviking-agent"),
             )
             actor_peer_id = normalize_actor_peer_header(
                 request.headers.get("x-openviking-actor-peer")

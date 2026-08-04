@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Authentication and authorization middleware for OpenViking multi-tenant HTTP Server."""
 
-from typing import Optional
+from typing import Annotated, Optional
 
 from fastapi import Depends, Header, HTTPException, Query, Request
 
@@ -74,6 +74,15 @@ def normalize_actor_peer_header(value: Optional[str]) -> Optional[str]:
         raise InvalidArgumentError(str(exc)) from exc
 
 
+def reject_legacy_agent_header(value: str | list[str] | None) -> None:
+    values = value if isinstance(value, list) else [value]
+    if any(_normalize_header_value(item) is not None for item in values):
+        raise InvalidArgumentError(
+            "X-OpenViking-Agent is no longer supported; "
+            "use X-OpenViking-Actor-Peer instead."
+        )
+
+
 def _explicit_identity_from_request(request: Request) -> tuple[Optional[str], Optional[str]]:
     path_params = getattr(request, "path_params", {}) or {}
     query_params = request.query_params
@@ -130,8 +139,13 @@ async def resolve_identity(
     authorization: Optional[str] = Header(None),
     x_openviking_account: Optional[str] = Header(None, alias="X-OpenViking-Account"),
     x_openviking_user: Optional[str] = Header(None, alias="X-OpenViking-User"),
+    x_openviking_agent: Annotated[
+        Optional[list[str]],
+        Header(alias="X-OpenViking-Agent", include_in_schema=False),
+    ] = None,
 ) -> ResolvedIdentity:
     """Resolve API key to identity via the active auth plugin."""
+    reject_legacy_agent_header(x_openviking_agent)
     x_openviking_account = _normalize_header_value(x_openviking_account)
     x_openviking_user = _normalize_header_value(x_openviking_user)
     api_key = _extract_api_key(x_api_key, authorization)
@@ -183,6 +197,10 @@ async def get_upload_request_context(
     x_openviking_account: Optional[str] = Header(None, alias="X-OpenViking-Account"),
     x_openviking_user: Optional[str] = Header(None, alias="X-OpenViking-User"),
     x_openviking_actor_peer: Optional[str] = Header(None, alias="X-OpenViking-Actor-Peer"),
+    x_openviking_agent: Annotated[
+        Optional[list[str]],
+        Header(alias="X-OpenViking-Agent", include_in_schema=False),
+    ] = None,
 ) -> RequestContext:
     """Two-layer auth for the ``temp_upload`` route: API key first, else a signed token.
 
@@ -193,6 +211,7 @@ async def get_upload_request_context(
     any spoofed ``X-OpenViking-Account/User`` headers are ignored. The consumed token is
     stashed on ``request.state.signed_upload`` so the handler can finish ingestion.
     """
+    reject_legacy_agent_header(x_openviking_agent)
     api_key = _extract_api_key(x_api_key, authorization)
     if token and not api_key:
         try:

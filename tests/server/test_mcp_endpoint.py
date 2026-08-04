@@ -388,6 +388,51 @@ async def test_mcp_middleware_rejects_invalid_actor_peer_header():
     assert "path separators" in response.text
 
 
+async def test_mcp_middleware_rejects_legacy_agent_header():
+    async def downstream(scope, receive, send):
+        raise AssertionError("legacy agent header should not reach downstream app")
+
+    app = FastAPI()
+    app.state.config = SimpleNamespace(get_effective_auth_mode=lambda: AuthMode.DEV)
+    app.state.auth_plugin = DevAuthPlugin()
+    app.routes.append(Route("/mcp", endpoint=_IdentityASGIMiddleware(downstream), methods=["POST"]))
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://ov.test") as client:
+        response = await client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
+            headers={"X-OpenViking-Agent": "legacy-agent"},
+        )
+
+    assert response.status_code == 400
+    assert "X-OpenViking-Actor-Peer" in response.text
+
+
+async def test_mcp_middleware_rejects_nonempty_duplicate_legacy_agent_header():
+    async def downstream(scope, receive, send):
+        raise AssertionError("duplicate legacy agent header should not reach downstream app")
+
+    app = FastAPI()
+    app.state.config = SimpleNamespace(get_effective_auth_mode=lambda: AuthMode.DEV)
+    app.state.auth_plugin = DevAuthPlugin()
+    app.routes.append(Route("/mcp", endpoint=_IdentityASGIMiddleware(downstream), methods=["POST"]))
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://ov.test") as client:
+        response = await client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
+            headers=[
+                ("X-OpenViking-Agent", ""),
+                ("X-OpenViking-Agent", "legacy-agent"),
+            ],
+        )
+
+    assert response.status_code == 400
+    assert "X-OpenViking-Actor-Peer" in response.text
+
+
 # ---------------------------------------------------------------------------
 # read tool
 # ---------------------------------------------------------------------------
