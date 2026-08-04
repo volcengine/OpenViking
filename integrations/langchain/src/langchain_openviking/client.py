@@ -714,11 +714,14 @@ def _filter_client_kwargs(method: Any, kwargs: dict[str, Any]) -> dict[str, Any]
     )
     if accepts_kwargs:
         return {key: value for key, value in kwargs.items() if value is not None}
-    return {
-        key: value
-        for key, value in kwargs.items()
-        if value is not None and key in signature.parameters
-    }
+    values = {key: value for key, value in kwargs.items() if value is not None}
+    filtered = {key: value for key, value in values.items() if key in signature.parameters}
+    extra = {key: value for key, value in values.items() if key not in signature.parameters}
+    if "message" in signature.parameters and "message" not in filtered and extra:
+        filtered["message"] = extra
+    elif "options" in signature.parameters and "options" not in filtered and extra:
+        filtered["options"] = extra
+    return filtered
 
 
 def _should_retry_method(method_name: str) -> bool:

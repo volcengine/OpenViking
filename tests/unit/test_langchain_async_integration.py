@@ -206,6 +206,37 @@ async def test_injected_async_client_is_initialized_only_once_across_adapters():
 
 
 @pytest.mark.asyncio
+async def test_acall_openviking_adapts_flat_kwargs_to_sdk_options():
+    calls = []
+
+    class OptionsClient:
+        async def search(self, query, options=None):
+            calls.append((query, options))
+            return {"query": query}
+
+    result = await acall_openviking(
+        OptionsClient(),
+        "search",
+        query="recover",
+        session_id="session-1",
+        limit=5,
+        include_provenance=False,
+    )
+
+    assert result == {"query": "recover"}
+    assert calls == [
+        (
+            "recover",
+            {
+                "session_id": "session-1",
+                "limit": 5,
+                "include_provenance": False,
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
 async def test_shared_injected_async_client_initializes_once_across_real_adapters():
     class SharedAsyncClient:
         def __init__(self):

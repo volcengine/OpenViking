@@ -177,8 +177,8 @@ This routing applies to short and long code files alike.
 ```python
 # Add resource
 await client.add_resource(
-    "/path/to/doc.pdf",
-    reason="API documentation"
+    path="/path/to/doc.pdf",
+    options={"reason": "API documentation"},
 )
 
 # Flow: Parser → TreeBuilder(scope=resources) → SemanticQueue

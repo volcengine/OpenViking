@@ -51,8 +51,11 @@ await client.updateSessionConfig("s1", {
   },
 });
 await client.updateSessionConfig("s1", { autoCommitPolicy: null });
-await client.commitSession("s1", 0, undefined, ["team=search", "channel=web"]);
-await client.commitSession("s1", 0, undefined, []);
+await client.commitSession("s1", {
+  keepRecentCount: 0,
+  eventTags: ["team=search", "channel=web"],
+});
+await client.commitSession("s1", { keepRecentCount: 0, eventTags: [] });
 ```
 
 Deployments using shared temporary storage can set `uploadMode: "shared"`; the server also accepts `"local"` (the default).

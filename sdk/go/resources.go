@@ -24,6 +24,8 @@ func (c *Client) AddResource(ctx context.Context, path string, opts *AddResource
 	}
 	setString(payload, "to", opts.To)
 	setString(payload, "parent", opts.Parent)
+	setAny(payload, "create_parent", opts.CreateParent)
+	setString(payload, "add_type", opts.AddType)
 	setString(payload, "ignore_dirs", opts.IgnoreDirs)
 	setString(payload, "include", opts.Include)
 	setString(payload, "exclude", opts.Exclude)
@@ -31,6 +33,7 @@ func (c *Client) AddResource(ctx context.Context, path string, opts *AddResource
 	if opts.PreserveStructure != nil {
 		payload["preserve_structure"] = *opts.PreserveStructure
 	}
+	setString(payload, "processing_mode", opts.ProcessingMode)
 	setAny(payload, "telemetry", opts.Telemetry)
 	// Only attach args when arguments were actually provided. Instances that
 	// predate #2549 (which added the args field to the resources route under
@@ -47,6 +50,9 @@ func (c *Client) AddResource(ctx context.Context, path string, opts *AddResource
 		}
 	}
 	if err := c.addLocalUpload(ctx, payload, path, true); err != nil {
+		return nil, err
+	}
+	if err := mergeExtra(payload, opts.Extra); err != nil {
 		return nil, err
 	}
 	var result map[string]any

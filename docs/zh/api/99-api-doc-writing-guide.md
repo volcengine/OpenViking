@@ -49,7 +49,7 @@ API 文档按模块组织，每个模块一个文件，使用两位数字序号�
 
 **Python SDK**
 
-```python
+```text
 <SDK 调用示例>
 ```
 
@@ -223,8 +223,8 @@ from openviking_sdk import SyncHTTPClient
 client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 
 result = client.add_resource(
-    "./documents/guide.md",
-    reason="User guide documentation"
+    path="./documents/guide.md",
+    options={"reason": "User guide documentation"},
 )
 print(f"Added: {result['root_uri']}")
 

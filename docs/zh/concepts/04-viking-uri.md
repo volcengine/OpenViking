@@ -301,25 +301,25 @@ parent = VikingURI(uri).parent.uri  # viking://resources/docs
 ```python
 # 仅在资源中搜索
 results = client.find(
-    "认证",
-    target_uri="viking://resources/"
+    query="认证",
+    target_uri="viking://resources/",
 )
 
 # 仅在自己的资源中搜索
 results = client.find(
-    "私有项目笔记",
+    query="私有项目笔记",
     target_uri="viking://~/resources/"
 )
 
 # 仅在自己的记忆中搜索
 results = client.find(
-    "编码偏好",
+    query="编码偏好",
     target_uri="viking://~/memories/"
 )
 
 # 仅在自己的技能中搜索
 results = client.find(
-    "网络搜索",
+    query="网络搜索",
     target_uri="viking://~/skills/"
 )
 ```

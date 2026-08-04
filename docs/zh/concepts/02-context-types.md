@@ -31,14 +31,14 @@
 ```python
 # 添加资源
 client.add_resource(
-    "https://docs.example.com/api.pdf",
-    reason="API 文档"
+    path="https://docs.example.com/api.pdf",
+    options={"reason": "API 文档"},
 )
 
 # 搜索资源
 results = client.find(
-    "认证方法",
-    target_uri="viking://resources/"
+    query="认证方法",
+    target_uri="viking://resources/",
 )
 ```
 
@@ -73,9 +73,15 @@ Schema 定义的 `memories/tools/` 和 `memories/skills/` 类型已禁用。它�
 ### 使用
 
 ```python
+from openviking_sdk import TextPart
+
 # 记忆从会话中自动提取
-session = client.session()
-await session.add_message("user", [{"type": "text", "text": "我喜欢深色模式"}])
+session_info = await client.create_session()
+session = client.session(session_id=session_info["session_id"])
+await session.add_message(
+    role="user",
+    parts=[TextPart(text="我喜欢深色模式")],
+)
 commit = await session.commit()  # 启动后台记忆提取
 task = await client.get_task(commit["task_id"])  # 轮询直到 task["status"] == "completed"
 
@@ -144,8 +150,8 @@ results = await client.find(
 
 # 搜索全局 agent 技能
 results = await client.find(
-    "网络搜索",
-    target_uri="viking://agent/skills/"
+    query="网络搜索",
+    target_uri="viking://agent/skills/",
 )
 ```
 
@@ -155,14 +161,14 @@ results = await client.find(
 
 ```python
 # 跨所有上下文类型搜索
-results = await client.find("用户认证")
+results = await client.find(query="用户认证")
 
-for ctx in results.memories:
-    print(f"记忆: {ctx.uri}")
-for ctx in results.resources:
-    print(f"资源: {ctx.uri}")
-for ctx in results.skills:
-    print(f"技能: {ctx.uri}")
+for context in results.get("memories", []):
+    print(f"记忆: {context['uri']}")
+for context in results.get("resources", []):
+    print(f"资源: {context['uri']}")
+for context in results.get("skills", []):
+    print(f"技能: {context['uri']}")
 ```
 
 ## 相关文档

@@ -77,7 +77,7 @@ def main():
         print(f"   Root URI: {root_uri}")
 
         # Get the file count
-        files = client.ls(root_uri)
+        files = client.ls(uri=root_uri)
         print(f"   Files indexed: {len(files)}")
 
     except Exception as e:
@@ -96,13 +96,13 @@ def main():
         try:
             # List directory contents
             print("   Directory listing:")
-            files = client.ls(root_uri, simple=True)
+            files = client.ls(uri=root_uri, simple=True)
             for f in files[:5]:  # Show first 5 files
                 print(f"   - {f}")
 
             # Show tree structure
             print("\n   Tree view:")
-            tree = client.tree(root_uri, level_limit=2)
+            tree = client.tree(uri=root_uri, level_limit=2)
             print_tree(tree, indent="   ")
 
         except Exception as e:
@@ -136,7 +136,7 @@ def main():
         try:
             # L0: Abstract (quick summary ~100 tokens)
             print("   L0 (Abstract):")
-            abstract = client.abstract(root_uri)
+            abstract = client.abstract(uri=root_uri)
             if abstract:
                 # Show first 200 characters
                 preview = abstract[:200] + "..." if len(abstract) > 200 else abstract
@@ -148,7 +148,7 @@ def main():
 
             # L1: Overview (key points ~2k tokens)
             print("   L1 (Overview):")
-            overview = client.overview(root_uri)
+            overview = client.overview(uri=root_uri)
             if overview:
                 preview = overview[:300] + "..." if len(overview) > 300 else overview
                 print(f"   {preview}")
@@ -162,7 +162,7 @@ def main():
             glob_result = client.glob(pattern="**/*.md", uri=root_uri)
             matches = glob_result.get("matches", []) if isinstance(glob_result, dict) else []
             if matches:
-                content = client.read(matches[0])
+                content = client.read(uri=matches[0])
                 preview = content[:500] + "..." if len(content) > 500 else content
                 print(f"   File: {matches[0]}")
                 print(f"   {preview}")
@@ -186,7 +186,11 @@ def main():
             print(f"   Query: '{query}'")
             print("   Results:")
 
-            results = client.find(query=query, target_uri=root_uri, limit=5)
+            results = client.find(
+                query=query,
+                target_uri=root_uri,
+                limit=5,
+            )
 
             resources = results.get("resources", [])
             if resources:
@@ -212,7 +216,7 @@ def main():
             pattern = "Agent"
             print(f"   Pattern: '{pattern}'")
 
-            result = client.grep(root_uri, pattern, case_insensitive=True)
+            result = client.grep(uri=root_uri, pattern=pattern, case_insensitive=True)
 
             matches = result.get("matches", [])
             print(f"   Found {len(matches)} matches")
@@ -239,9 +243,15 @@ def main():
         print(f"   Created session: {session_id}")
 
         # Add a conversation turn
-        client.add_message(session_id, "user", "I prefer Python for data science projects")
         client.add_message(
-            session_id, "assistant", "Understood! I'll use Python for your data science work."
+            session_id=session_id,
+            role="user",
+            content="I prefer Python for data science projects",
+        )
+        client.add_message(
+            session_id=session_id,
+            role="assistant",
+            content="Understood! I'll use Python for your data science work.",
         )
 
         print("   Added conversation turn")

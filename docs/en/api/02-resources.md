@@ -333,49 +333,55 @@ client.initialize()
 
 # Add local file
 result = client.add_resource(
-    "./documents/guide.md",
-    reason="User guide documentation"
+    path="./documents/guide.md",
+    options={"reason": "User guide documentation"},
 )
 print(f"Added: {result['root_uri']}")
 
 # Parse each document to Markdown without splitting its body
 result = client.add_resource(
-    "./documents",
-    args={"parse_mode": "no_split"},
+    path="./documents",
+    options={"args": {"parse_mode": "no_split"}},
 )
 
 # Add from URL to specific location
 result = client.add_resource(
-    "https://example.com/api-docs.md",
+    path="https://example.com/api-docs.md",
     to="viking://resources/external/api-docs.md",
-    reason="External API documentation"
+    options={"reason": "External API documentation"},
 )
 
 # Recursively crawl a site (same-host BFS; depth levels, max_pages cap)
 result = client.add_resource(
-    "https://docs.openviking.ai/getting-started/01-introduction",
+    path="https://docs.openviking.ai/getting-started/01-introduction",
     wait=True,
     timeout=180,
-    args={"depth": 1, "max_pages": 10},
+    options={
+        "args": {"depth": 1, "max_pages": 10},
+    },
 )
 
 # Recursive crawl with path-prefix filters, also downloading file links
 result = client.add_resource(
-    "https://docs.openviking.ai/",
-    args={
-        "depth": 2,
-        "max_pages": 50,
-        "include_paths": ["/docs/"],
-        "exclude_paths": ["/changelog"],
-        "skip_download_links": False,
+    path="https://docs.openviking.ai/",
+    options={
+        "args": {
+            "depth": 2,
+            "max_pages": 50,
+            "include_paths": ["/docs/"],
+            "exclude_paths": ["/changelog"],
+            "skip_download_links": False,
+        },
     },
 )
 
 # Add to the current user's private resource root
 result = client.add_resource(
-    "./documents/guide.md",
+    path="./documents/guide.md",
     parent="viking://~/resources/docs",
-    create_parent=True,
+    options={
+        "create_parent": True,
+    },
 )
 
 # Wait for processing to complete
@@ -383,25 +389,29 @@ client.wait_processed()
 
 # Enable scheduled updates
 client.add_resource(
-    "./documents/guide.md",
+    path="./documents/guide.md",
     to="viking://resources/guide.md",
-    watch_interval=60  # Update every 60 minutes
+    options={
+        "watch_interval": 60,  # Update every 60 minutes
+    },
 )
 
 # Add a Feishu document with a one-time user access token
 client.add_resource(
-    "https://example.feishu.cn/docx/doc_token",
-    args={"feishu_access_token": "u-..."},
+    path="https://example.feishu.cn/docx/doc_token",
+    options={"args": {"feishu_access_token": "u-..."}},
 )
 
 # Add a Feishu document with scheduled user-token refresh
 client.add_resource(
-    "https://example.feishu.cn/docx/doc_token",
+    path="https://example.feishu.cn/docx/doc_token",
     to="viking://resources/feishu/doc",
-    watch_interval=1440,
-    args={
-        "feishu_access_token": "u-...",
-        "feishu_refresh_token": "r-...",
+    options={
+        "watch_interval": 1440,
+        "args": {
+            "feishu_access_token": "u-...",
+            "feishu_refresh_token": "r-...",
+        },
     },
 )
 ```

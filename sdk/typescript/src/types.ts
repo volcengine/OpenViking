@@ -76,6 +76,7 @@ export interface WaitOptions {
 export interface AddResourceOptions extends WaitOptions {
   to?: string;
   parent?: string;
+  createParent?: boolean;
   reason?: string;
   instruction?: string;
   strict?: boolean;
@@ -89,17 +90,51 @@ export interface AddResourceOptions extends WaitOptions {
   args?: JsonObject;
   tags?: string[];
   tagMode?: "replace" | "append";
+  extra?: JsonObject;
 }
 /** Content write options. */
 export interface WriteOptions extends WaitOptions {
   mode?: string;
   processingMode?: ProcessingMode;
+  extra?: JsonObject;
 }
-/** Semantic retrieval options. */
-export interface SearchOptions {
+/** One batch-write precondition. */
+export interface BatchWritePrecondition {
+  kind: "create_if_absent" | "replace_if_hash";
+  baseHash?: string;
+}
+/** One preconditioned batch-write operation. */
+export interface BatchWriteOperation {
+  uri: string;
+  content?: string;
+  contentBase64?: string;
+  precondition: BatchWritePrecondition;
+}
+/** Batch-write request options. */
+export interface BatchWriteOptions extends WaitOptions {
+  extra?: JsonObject;
+}
+/** Retrieval tag update options. */
+export interface SetTagsOptions {
+  mode?: "replace" | "append";
+  recursive?: boolean;
+  telemetry?: unknown;
+  extra?: JsonObject;
+}
+/** Reindex request options. */
+export interface ReindexOptions {
+  mode?: string;
+  wait?: boolean;
+  dryRun?: boolean;
+  recursive?: boolean;
+  tags?: string[];
+  tagMode?: "replace" | "append";
+  extra?: JsonObject;
+}
+/** Semantic retrieval options shared by find and search. */
+export interface FindOptions {
   targetUri?: TargetURI;
   image?: string;
-  sessionId?: string;
   limit?: number;
   nodeLimit?: number;
   scoreThreshold?: number;
@@ -111,6 +146,40 @@ export interface SearchOptions {
   timeField?: string;
   level?: number[];
   tags?: string[];
+  includeProvenance?: boolean;
+  extra?: JsonObject;
+}
+/** Session-aware semantic retrieval options. */
+export interface SearchOptions extends FindOptions {
+  sessionId?: string;
+}
+/** Server-side context assembly options. */
+export interface SearchContextOptions {
+  image?: string;
+  sessionId?: string;
+  limit?: number;
+  nodeLimit?: number;
+  scoreThreshold?: number;
+  filter?: JsonObject;
+  contextType?: unknown;
+  includeProvenance?: boolean;
+  tags?: string[];
+  since?: string;
+  until?: string;
+  timeField?: string;
+  queryExpansion?: "off" | "auto";
+  maxTokens?: number;
+  quotas?: Record<string, number>;
+  purpose?: "chat" | "coding";
+  detail?: string | Record<string, string>;
+  dedupTurns?: number;
+  excludeUris?: string[];
+  peerScope?: "actor" | "all";
+  otherPeerPenalty?: number | Record<string, number>;
+  rewrite?: boolean | "auto";
+  rewriteMaxBullets?: number;
+  telemetry?: unknown;
+  extra?: JsonObject;
 }
 /** Content grep options. */
 export interface GrepOptions {
@@ -145,6 +214,10 @@ export interface Message {
   parts?: JsonObject[];
   createdAt?: string;
   peerId?: string;
+  turnId?: string;
+  messageKind?:
+    "user_query" | "assistant_step" | "tool_transport" | "checkpoint";
+  sourceMessageIds?: string[];
   telemetry?: unknown;
 }
 /** Session creation options. */
@@ -154,6 +227,7 @@ export interface CreateSessionOptions {
   autoCommitPolicy?: JsonObject | null;
   memoryExtractionConfig?: MemoryExtractionConfig;
   telemetry?: unknown;
+  extra?: JsonObject;
 }
 /** Event-memory extraction settings shared by session create and update. */
 export interface MemoryExtractionConfig {
@@ -166,6 +240,54 @@ export interface UpdateSessionConfigOptions {
   memoryExtractionConfig?: MemoryExtractionConfig;
   autoCommitPolicy?: JsonObject | null;
   telemetry?: unknown;
+  extra?: JsonObject;
+}
+/** Batch message request options. */
+export interface BatchAddMessagesOptions {
+  telemetry?: unknown;
+  extra?: JsonObject;
+}
+/** Session commit and turn-retention options. */
+export interface CommitSessionOptions {
+  keepRecentCount?: number;
+  retentionMode?: "turn_budget";
+  keepRecentTurnCount?: number;
+  retainedMessageTokenBudget?: number;
+  minRawTailSteps?: number;
+  eventTags?: string[];
+  telemetry?: unknown;
+  extra?: JsonObject;
+}
+/** Pagination options for Experience trajectories. */
+export interface ExperienceTrajectoryOptions {
+  limit?: number;
+  offset?: number;
+  startDate?: string;
+  endDate?: string;
+}
+/** Date filters for Experience outcome aggregation. */
+export interface ExperienceOutcomeOptions {
+  startDate?: string;
+  endDate?: string;
+}
+/** Manifest resolver options. */
+export interface ResolveAssetsOptions {
+  catalogYaml?: string;
+  manifestLabel?: string;
+  catalogLabel?: string;
+  extra?: JsonObject;
+}
+/** One-shot Git credentials for asset preflight. */
+export interface AssetGitAuth {
+  username?: string;
+  token?: string;
+}
+/** Git asset preflight options. */
+export interface PreflightAssetOptions {
+  branch?: string;
+  commit?: string;
+  authConfig?: AssetGitAuth;
+  extra?: JsonObject;
 }
 /** Background task filters. */
 export interface TaskListOptions {
@@ -189,12 +311,39 @@ export interface UpdateWatchOptions {
   reason?: string;
   instruction?: string;
 }
+/** One retrieval hit. Only fields the retrieval pipeline populates are typed;
+ * `search_tags` is surfaced under `tags` to match the tags filter parameter. */
+export interface MatchedContext {
+  uri?: string;
+  context_type?: string;
+  level?: number;
+  abstract?: string;
+  score?: number;
+  tags?: string[];
+  [key: string]: unknown;
+}
 /** Grouped semantic retrieval results. */
 export interface FindResult {
-  memories?: unknown[];
-  resources?: unknown[];
-  skills?: unknown[];
+  memories?: MatchedContext[];
+  resources?: MatchedContext[];
+  skills?: MatchedContext[];
   [key: string]: unknown;
+}
+/** One assembled context entry. */
+export interface SearchContextEntry {
+  uri?: string;
+  category?: string;
+  score?: number;
+  detail?: string;
+  text?: string;
+  origin?: string;
+}
+/** Injection-ready server-side context. */
+export interface SearchContextResult {
+  entries?: SearchContextEntry[];
+  rendered?: string;
+  digest?: string;
+  stats?: JsonObject;
 }
 /** Error payload returned by OpenViking. */
 export interface APIErrorInfo {

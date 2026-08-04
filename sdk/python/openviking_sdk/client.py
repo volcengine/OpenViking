@@ -9,7 +9,7 @@ import uuid
 import zipfile
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Type, Union
 from urllib.parse import quote
 
 import httpx
@@ -38,6 +38,30 @@ from .errors import (
     UnavailableError,
     UnimplementedError,
     VLMFailedError,
+)
+from .message import MessagePart, normalize_part
+from .options import (
+    AddMessageOptions,
+    AddResourceOptions,
+    AddSkillOptions,
+    BatchAddMessagesOptions,
+    BatchWriteOptions,
+    CommitSessionOptions,
+    CreateSessionOptions,
+    ExperienceOutcomeOptions,
+    ExperienceTrajectoryOptions,
+    FindOptions,
+    Message,
+    PreflightAssetOptions,
+    ReindexOptions,
+    ResolveAssetsOptions,
+    SearchContextOptions,
+    SearchContextResult,
+    SearchOptions,
+    SetTagsOptions,
+    UpdateSessionConfigOptions,
+    UpdateSkillOptions,
+    WriteOptions,
 )
 
 ERROR_CODE_TO_EXCEPTION = {
@@ -136,32 +160,20 @@ class Session:
     async def add_message(
         self,
         role: str,
-        content: str | None = None,
-        parts: list[dict] | None = None,
-        created_at: str | None = None,
-        peer_id: str | None = None,
-        turn_id: str | None = None,
-        message_kind: str | None = None,
-        source_message_ids: list[str] | None = None,
+        content: Optional[str] = None,
+        parts: Optional[List[Union[Dict[str, Any], MessagePart]]] = None,
+        options: Optional[AddMessageOptions] = None,
+        peer_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        semantic_kwargs = {
-            key: value
-            for key, value in {
-                "turn_id": turn_id,
-                "message_kind": message_kind,
-                "source_message_ids": source_message_ids,
-            }.items()
-            if value is not None
+        kwargs: Dict[str, Any] = {
+            "role": role,
+            "content": content,
+            "parts": parts,
+            "options": options,
         }
-        return await self._client.add_message(
-            self.session_id,
-            role=role,
-            content=content,
-            parts=parts,
-            created_at=created_at,
-            peer_id=peer_id,
-            **semantic_kwargs,
-        )
+        if peer_id is not None:
+            kwargs["peer_id"] = peer_id
+        return await self._client.add_message(self.session_id, **kwargs)
 
     async def batch_add_messages(self, messages: list[dict]) -> Dict[str, Any]:
         return await self._client.batch_add_messages(self.session_id, messages)
@@ -169,29 +181,12 @@ class Session:
     async def commit(
         self,
         keep_recent_count: int = 0,
-        *,
-        retention_mode: str | None = None,
-        keep_recent_turn_count: int | None = None,
-        retained_message_token_budget: int | None = None,
-        min_raw_tail_steps: int | None = None,
-        event_tags: list[str] | None = None,
+        options: Optional[CommitSessionOptions] = None,
     ) -> Dict[str, Any]:
-        optional_retention = {
-            key: value
-            for key, value in {
-                "retention_mode": retention_mode,
-                "keep_recent_turn_count": keep_recent_turn_count,
-                "retained_message_token_budget": retained_message_token_budget,
-                "min_raw_tail_steps": min_raw_tail_steps,
-            }.items()
-            if value is not None
-        }
-        if event_tags is not None:
-            optional_retention["event_tags"] = event_tags
         return await self._client.commit_session(
             self.session_id,
             keep_recent_count=keep_recent_count,
-            **optional_retention,
+            options=options,
         )
 
     async def delete(self) -> None:
@@ -215,94 +210,41 @@ class SyncSession:
     def add_message(
         self,
         role: str,
-        content: str | None = None,
-        parts: list[dict] | None = None,
-        created_at: str | None = None,
-        peer_id: str | None = None,
-        turn_id: str | None = None,
-        message_kind: str | None = None,
-        source_message_ids: list[str] | None = None,
+        content: Optional[str] = None,
+        parts: Optional[List[Union[Dict[str, Any], MessagePart]]] = None,
+        options: Optional[AddMessageOptions] = None,
+        peer_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        semantic_kwargs = {
-            key: value
-            for key, value in {
-                "turn_id": turn_id,
-                "message_kind": message_kind,
-                "source_message_ids": source_message_ids,
-            }.items()
-            if value is not None
+        kwargs: Dict[str, Any] = {
+            "role": role,
+            "content": content,
+            "parts": parts,
+            "options": options,
         }
-        return self._client.add_message(
-            self.session_id,
-            role=role,
-            content=content,
-            parts=parts,
-            created_at=created_at,
-            peer_id=peer_id,
-            **semantic_kwargs,
-        )
+        if peer_id is not None:
+            kwargs["peer_id"] = peer_id
+        return self._client.add_message(self.session_id, **kwargs)
 
     def batch_add_messages(self, messages: list[dict]) -> Dict[str, Any]:
         return self._client.batch_add_messages(self.session_id, messages)
 
     def commit(
         self,
-        telemetry: Any = False,
-        *,
         keep_recent_count: int = 0,
-        retention_mode: str | None = None,
-        keep_recent_turn_count: int | None = None,
-        retained_message_token_budget: int | None = None,
-        min_raw_tail_steps: int | None = None,
-        event_tags: list[str] | None = None,
+        options: Optional[CommitSessionOptions] = None,
     ) -> Dict[str, Any]:
-        optional_retention = {
-            key: value
-            for key, value in {
-                "retention_mode": retention_mode,
-                "keep_recent_turn_count": keep_recent_turn_count,
-                "retained_message_token_budget": retained_message_token_budget,
-                "min_raw_tail_steps": min_raw_tail_steps,
-            }.items()
-            if value is not None
-        }
-        if event_tags is not None:
-            optional_retention["event_tags"] = event_tags
         return self._client.commit_session(
             self.session_id,
-            telemetry=telemetry,
             keep_recent_count=keep_recent_count,
-            **optional_retention,
+            options=options,
         )
 
     def commit_async(
         self,
-        telemetry: Any = False,
-        *,
         keep_recent_count: int = 0,
-        retention_mode: str | None = None,
-        keep_recent_turn_count: int | None = None,
-        retained_message_token_budget: int | None = None,
-        min_raw_tail_steps: int | None = None,
-        event_tags: list[str] | None = None,
+        options: Optional[CommitSessionOptions] = None,
     ) -> Dict[str, Any]:
-        optional_retention = {
-            key: value
-            for key, value in {
-                "retention_mode": retention_mode,
-                "keep_recent_turn_count": keep_recent_turn_count,
-                "retained_message_token_budget": retained_message_token_budget,
-                "min_raw_tail_steps": min_raw_tail_steps,
-            }.items()
-            if value is not None
-        }
-        if event_tags is not None:
-            optional_retention["event_tags"] = event_tags
-        return self.commit(
-            telemetry=telemetry,
-            keep_recent_count=keep_recent_count,
-            **optional_retention,
-        )
+        return self.commit(keep_recent_count=keep_recent_count, options=options)
 
     def delete(self) -> None:
         self._client.delete_session(self.session_id)
@@ -568,6 +510,85 @@ class AsyncHTTPClient:
             compacted[key] = value
         return compacted
 
+    @classmethod
+    def _normalize_message_payload(cls, message: Mapping[str, Any]) -> Dict[str, Any]:
+        payload = dict(message)
+        if payload.get("parts"):
+            payload["parts"] = [normalize_part(part) for part in payload["parts"]]
+            payload.pop("content", None)
+        else:
+            payload.pop("parts", None)
+            if payload.get("content") is None:
+                raise ValueError("Either content or non-empty parts must be provided")
+        return cls._compact_request_body(payload)
+
+    @classmethod
+    def _build_options_payload(
+        cls,
+        options: Optional[Mapping[str, Any]],
+        options_type: Type[Any],
+        fixed: Optional[Mapping[str, Any]] = None,
+        protected: Optional[set[str]] = None,
+    ) -> Dict[str, Any]:
+        option_values = dict(options or {})
+        allowed = set(options_type.__optional_keys__) | set(options_type.__required_keys__)
+        unknown = sorted(set(option_values) - allowed)
+        if unknown:
+            raise TypeError(
+                f"Unknown option '{unknown[0]}' for {options_type.__name__}; "
+                "use 'extra' for server fields not yet supported by the SDK"
+            )
+
+        extra = dict(option_values.pop("extra", {}) or {})
+        payload = dict(fixed or {})
+        protected_fields = set(payload) | set(protected or ())
+        official_fields = allowed - {"extra"}
+        conflicts = sorted(set(extra) & (official_fields | protected_fields))
+        if conflicts:
+            raise ValueError(f"extra cannot override '{conflicts[0]}'")
+
+        payload.update(option_values)
+        payload.update(extra)
+        return cls._compact_request_body(payload)
+
+    @classmethod
+    def _search_options_payload(
+        cls,
+        query: str,
+        options: Optional[Mapping[str, Any]],
+        options_type: Type[Any],
+        fixed: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        option_values = dict(options or {})
+        if "image" in option_values:
+            option_values["image_url"] = _normalize_image_input(option_values.pop("image"))
+        if "target_uri" in option_values:
+            option_values["target_uri"] = cls._normalize_target_uri(option_values["target_uri"])
+        if "context_type" in option_values:
+            option_values["context_type"] = cls._normalize_context_type(
+                option_values["context_type"]
+            )
+
+        allowed = set(options_type.__optional_keys__) | set(options_type.__required_keys__)
+        allowed.discard("image")
+        allowed.add("image_url")
+        proxy_type = type(
+            f"_{options_type.__name__}Payload",
+            (),
+            {
+                "__optional_keys__": frozenset(allowed),
+                "__required_keys__": frozenset(),
+                "__name__": options_type.__name__,
+            },
+        )
+        fixed_payload = {"query": query}
+        fixed_payload.update(fixed or {})
+        return cls._build_options_payload(
+            option_values,
+            proxy_type,
+            fixed=fixed_payload,
+        )
+
     @staticmethod
     def _normalize_context_type(context_type: Optional[Any]) -> Optional[Any]:
         if context_type is None:
@@ -678,24 +699,12 @@ class AsyncHTTPClient:
         path: str,
         to: Optional[str] = None,
         parent: Optional[str] = None,
-        reason: str = "",
-        instruction: str = "",
         wait: bool = False,
         timeout: Optional[float] = None,
-        strict: bool = False,
-        ignore_dirs: Optional[str] = None,
-        include: Optional[str] = None,
-        exclude: Optional[str] = None,
-        directly_upload_media: bool = True,
-        preserve_structure: Optional[bool] = None,
-        watch_interval: float = 0,
-        args: Optional[Dict[str, Any]] = None,
-        telemetry: Any = False,
-        processing_mode: Optional[str] = None,
-        add_type: Optional[str] = None,
-        tags: Optional[List[str]] = None,
-        tag_mode: str = "replace",
+        options: Optional[AddResourceOptions] = None,
     ) -> Dict[str, Any]:
+        option_values = dict(options or {})
+        add_type = option_values.get("add_type")
         if add_type is not None:
             add_type = add_type.strip() or None
         if add_type and parent:
@@ -705,30 +714,23 @@ class AsyncHTTPClient:
         if to and parent:
             raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
 
-        request_data = {
-            "add_type": add_type,
-            "to": to,
-            "parent": parent,
-            "reason": reason,
-            "instruction": instruction,
-            "wait": wait,
-            "timeout": timeout,
-            "strict": strict,
-            "ignore_dirs": ignore_dirs,
-            "include": include,
-            "exclude": exclude,
-            "directly_upload_media": directly_upload_media,
-            "watch_interval": watch_interval,
-            "args": args or {},
-            "telemetry": telemetry,
-        }
-        if processing_mode is not None:
-            request_data["processing_mode"] = processing_mode
-        if tags is not None:
-            request_data["tags"] = tags
-            request_data["tag_mode"] = tag_mode
-        if preserve_structure is not None:
-            request_data["preserve_structure"] = preserve_structure
+        if to is not None:
+            to = VikingURI.normalize(to)
+        if parent is not None:
+            parent = VikingURI.normalize(parent)
+        if add_type is not None:
+            option_values["add_type"] = add_type
+        request_data = self._build_options_payload(
+            option_values,
+            AddResourceOptions,
+            fixed={
+                "to": to,
+                "parent": parent,
+                "wait": wait,
+                "timeout": timeout,
+            },
+            protected={"path", "temp_file_id", "source_name"},
+        )
 
         path_obj = Path(path)
         if not add_type and path_obj.exists():
@@ -754,13 +756,16 @@ class AsyncHTTPClient:
     async def batch_add_messages(
         self,
         session_id: str,
-        messages: list[dict],
-        telemetry: Any = False,
+        messages: list[Message],
+        options: Optional[BatchAddMessagesOptions] = None,
     ) -> Dict[str, Any]:
         session_path = self._path_segment(session_id)
-        payload: Dict[str, Any] = {"messages": messages}
-        if telemetry is not False:
-            payload["telemetry"] = telemetry
+        normalized_messages = [self._normalize_message_payload(message) for message in messages]
+        payload = self._build_options_payload(
+            options,
+            BatchAddMessagesOptions,
+            fixed={"messages": normalized_messages},
+        )
         response = await self._request(
             "POST",
             f"/api/v1/sessions/{session_path}/messages/batch",
@@ -773,12 +778,17 @@ class AsyncHTTPClient:
         data: Any,
         wait: bool = False,
         timeout: Optional[float] = None,
-        telemetry: Any = False,
-        target_uri: Optional[str] = None,
+        options: Optional[AddSkillOptions] = None,
     ) -> Dict[str, Any]:
-        request_data = {"wait": wait, "timeout": timeout, "telemetry": telemetry}
-        if target_uri is not None:
-            request_data["target_uri"] = target_uri
+        option_values = dict(options or {})
+        if "target_uri" in option_values:
+            option_values["target_uri"] = VikingURI.normalize(option_values["target_uri"])
+        request_data = self._build_options_payload(
+            option_values,
+            AddSkillOptions,
+            fixed={"wait": wait, "timeout": timeout},
+            protected={"data", "temp_file_id"},
+        )
         if isinstance(data, str):
             path_obj = Path(data)
             if path_obj.exists():
@@ -879,18 +889,17 @@ class AsyncHTTPClient:
         data: Any,
         wait: bool = False,
         timeout: Optional[float] = None,
-        source_metadata: Optional[Dict[str, Any]] = None,
-        telemetry: Any = False,
-        target_uri: Optional[str] = None,
+        options: Optional[UpdateSkillOptions] = None,
     ) -> Dict[str, Any]:
-        request_data: Dict[str, Any] = {
-            "wait": wait,
-            "timeout": timeout,
-            "source_metadata": source_metadata,
-            "telemetry": telemetry,
-        }
-        if target_uri is not None:
-            request_data["target_uri"] = target_uri
+        option_values = dict(options or {})
+        if "target_uri" in option_values:
+            option_values["target_uri"] = VikingURI.normalize(option_values["target_uri"])
+        request_data = self._build_options_payload(
+            option_values,
+            UpdateSkillOptions,
+            fixed={"wait": wait, "timeout": timeout},
+            protected={"data", "temp_file_id"},
+        )
         if isinstance(data, str):
             path_obj = Path(data)
             if path_obj.exists():
@@ -1171,19 +1180,19 @@ class AsyncHTTPClient:
         mode: str = "replace",
         wait: bool = False,
         timeout: Optional[float] = None,
-        telemetry: Any = False,
-        processing_mode: Optional[str] = None,
+        options: Optional[WriteOptions] = None,
     ) -> Dict[str, Any]:
-        payload = {
-            "uri": VikingURI.normalize(uri),
-            "content": content,
-            "mode": mode,
-            "wait": wait,
-            "timeout": timeout,
-            "telemetry": telemetry,
-        }
-        if processing_mode is not None:
-            payload["processing_mode"] = processing_mode
+        payload = self._build_options_payload(
+            options,
+            WriteOptions,
+            fixed={
+                "uri": VikingURI.normalize(uri),
+                "content": content,
+                "mode": mode,
+                "wait": wait,
+                "timeout": timeout,
+            },
+        )
         response = await self._request(
             "POST",
             "/api/v1/content/write",
@@ -1197,7 +1206,7 @@ class AsyncHTTPClient:
         operations: List[Dict[str, Any]],
         wait: bool = True,
         timeout: Optional[float] = None,
-        telemetry: Any = False,
+        options: Optional[BatchWriteOptions] = None,
     ) -> Dict[str, Any]:
         """Apply multiple content writes, then refresh semantics once."""
         normalized_operations = []
@@ -1205,16 +1214,20 @@ class AsyncHTTPClient:
             item = dict(operation)
             item["uri"] = VikingURI.normalize(str(item.get("uri") or ""))
             normalized_operations.append(item)
-        response = await self._request(
-            "POST",
-            "/api/v1/content/batch-write",
-            json={
+        payload = self._build_options_payload(
+            options,
+            BatchWriteOptions,
+            fixed={
                 "root_uri": VikingURI.normalize(root_uri),
                 "operations": normalized_operations,
                 "wait": wait,
                 "timeout": timeout,
-                "telemetry": telemetry,
             },
+        )
+        response = await self._request(
+            "POST",
+            "/api/v1/content/batch-write",
+            json=payload,
             **self._wait_request_kwargs(wait=wait, timeout=timeout),
         )
         return self._handle_response_data(response).get("result", {})
@@ -1225,18 +1238,22 @@ class AsyncHTTPClient:
         tags: List[str],
         mode: str = "replace",
         recursive: bool = False,
-        telemetry: Any = False,
+        options: Optional[SetTagsOptions] = None,
     ) -> Dict[str, Any]:
-        response = await self._request(
-            "POST",
-            "/api/v1/fs/attrs/set_tags",
-            json={
+        payload = self._build_options_payload(
+            options,
+            SetTagsOptions,
+            fixed={
                 "uri": VikingURI.normalize(uri),
                 "tags": tags,
                 "mode": mode,
                 "recursive": recursive,
-                "telemetry": telemetry,
             },
+        )
+        response = await self._request(
+            "POST",
+            "/api/v1/fs/attrs/set_tags",
+            json=payload,
         )
         return self._handle_response_data(response).get("result", {})
 
@@ -1245,60 +1262,72 @@ class AsyncHTTPClient:
         query: str = "",
         target_uri: Union[str, List[str]] = "",
         limit: int = 10,
-        node_limit: Optional[int] = None,
-        score_threshold: Optional[float] = None,
-        filter: Optional[Dict[str, Any]] = None,
-        context_type: Optional[Any] = None,
-        tags: Optional[List[str]] = None,
-        telemetry: Any = False,
         image: Any = None,
+        options: Optional[FindOptions] = None,
     ) -> Dict[str, Any]:
-        actual_limit = node_limit if node_limit is not None else limit
-        payload = {
-            "query": query,
-            "image_url": _normalize_image_input(image),
-            "target_uri": self._normalize_target_uri(target_uri),
-            "limit": actual_limit,
-            "score_threshold": score_threshold,
-            "filter": filter,
-            "context_type": self._normalize_context_type(context_type),
-            "tags": tags,
-            "telemetry": telemetry,
-        }
-        payload = self._compact_request_body(payload)
+        search_options = dict(options or {})
+        if image is not None:
+            search_options["image"] = image
+        payload = self._search_options_payload(
+            query,
+            search_options,
+            FindOptions,
+            fixed={
+                "target_uri": self._normalize_target_uri(target_uri),
+                "limit": limit,
+            },
+        )
         response = await self._request("POST", "/api/v1/search/find", json=payload)
         return self._handle_response_data(response).get("result", {})
 
     async def search(
         self,
         query: str = "",
-        target_uri: Union[str, List[str]] = "",
-        session: Optional[Any] = None,
         session_id: Optional[str] = None,
+        target_uri: Union[str, List[str]] = "",
         limit: int = 10,
-        node_limit: Optional[int] = None,
-        score_threshold: Optional[float] = None,
-        filter: Optional[Dict[str, Any]] = None,
-        context_type: Optional[Any] = None,
-        tags: Optional[List[str]] = None,
-        telemetry: Any = False,
         image: Any = None,
+        options: Optional[SearchOptions] = None,
     ) -> Dict[str, Any]:
-        actual_limit = node_limit if node_limit is not None else limit
-        sid = session_id or (session.session_id if session else None)
-        payload = {
-            "query": query,
-            "image_url": _normalize_image_input(image),
-            "target_uri": self._normalize_target_uri(target_uri),
-            "session_id": sid,
-            "limit": actual_limit,
-            "score_threshold": score_threshold,
-            "filter": filter,
-            "context_type": self._normalize_context_type(context_type),
-            "tags": tags,
-            "telemetry": telemetry,
-        }
-        payload = self._compact_request_body(payload)
+        search_options = dict(options or {})
+        if image is not None:
+            search_options["image"] = image
+        payload = self._search_options_payload(
+            query,
+            search_options,
+            SearchOptions,
+            fixed={
+                "session_id": session_id,
+                "target_uri": self._normalize_target_uri(target_uri),
+                "limit": limit,
+            },
+        )
+        response = await self._request("POST", "/api/v1/search/search", json=payload)
+        return self._handle_response_data(response).get("result", {})
+
+    async def search_context(
+        self,
+        query: str = "",
+        session_id: Optional[str] = None,
+        target_uri: Union[str, List[str]] = "",
+        limit: int = 10,
+        image: Any = None,
+        options: Optional[SearchContextOptions] = None,
+    ) -> SearchContextResult:
+        search_options = dict(options or {})
+        if image is not None:
+            search_options["image"] = image
+        payload = self._search_options_payload(
+            query,
+            search_options,
+            SearchContextOptions,
+            fixed={
+                "mode": "context",
+                "session_id": session_id,
+                "target_uri": self._normalize_target_uri(target_uri),
+                "limit": limit,
+            },
+        )
         response = await self._request("POST", "/api/v1/search/search", json=payload)
         return self._handle_response_data(response).get("result", {})
 
@@ -1341,22 +1370,16 @@ class AsyncHTTPClient:
     async def create_session(
         self,
         session_id: Optional[str] = None,
-        telemetry: Any = False,
-        memory_policy: Optional[Dict[str, Any]] = None,
-        auto_commit_policy: Any = _SESSION_CONFIG_UNSET,
-        memory_extraction_config: Optional[Dict[str, Any]] = None,
+        options: Optional[CreateSessionOptions] = None,
     ) -> Dict[str, Any]:
-        json_body: Dict[str, Any] = {}
-        if session_id is not None:
-            json_body["session_id"] = session_id
-        if memory_policy is not None:
-            json_body["memory_policy"] = memory_policy
-        if auto_commit_policy is not _SESSION_CONFIG_UNSET:
-            json_body["auto_commit_policy"] = auto_commit_policy
-        if memory_extraction_config is not None:
-            json_body["memory_extraction_config"] = memory_extraction_config
-        if telemetry is not False:
-            json_body["telemetry"] = telemetry
+        option_values = dict(options or {})
+        json_body = self._build_options_payload(
+            option_values,
+            CreateSessionOptions,
+            fixed={"session_id": session_id},
+        )
+        if "auto_commit_policy" in option_values:
+            json_body["auto_commit_policy"] = option_values["auto_commit_policy"]
         response = await self._request("POST", "/api/v1/sessions", json=json_body)
         return self._handle_response_data(response).get("result", {})
 
@@ -1373,18 +1396,12 @@ class AsyncHTTPClient:
     async def update_session_config(
         self,
         session_id: str,
-        *,
-        memory_extraction_config: Optional[Dict[str, Any]] = None,
-        auto_commit_policy: Any = _SESSION_CONFIG_UNSET,
-        telemetry: Any = False,
+        options: Optional[UpdateSessionConfigOptions] = None,
     ) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {}
-        if memory_extraction_config is not None:
-            payload["memory_extraction_config"] = memory_extraction_config
-        if auto_commit_policy is not _SESSION_CONFIG_UNSET:
-            payload["auto_commit_policy"] = auto_commit_policy
-        if telemetry is not False:
-            payload["telemetry"] = telemetry
+        option_values = dict(options or {})
+        payload = self._build_options_payload(option_values, UpdateSessionConfigOptions)
+        if "auto_commit_policy" in option_values:
+            payload["auto_commit_policy"] = option_values["auto_commit_policy"]
         session_path = self._path_segment(session_id)
         response = await self._request(
             "PATCH",
@@ -1447,27 +1464,30 @@ class AsyncHTTPClient:
     async def commit_session(
         self,
         session_id: str,
-        telemetry: Any = False,
-        *,
         keep_recent_count: int = 0,
-        retention_mode: str | None = None,
-        keep_recent_turn_count: int | None = None,
-        retained_message_token_budget: int | None = None,
-        min_raw_tail_steps: int | None = None,
-        event_tags: list[str] | None = None,
+        options: Optional[CommitSessionOptions] = None,
     ) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {
-            "keep_recent_count": keep_recent_count,
-            "telemetry": telemetry,
+        option_values = dict(options or {})
+        event_tags = option_values.pop("event_tags", _SESSION_CONFIG_UNSET)
+        turn_fields = {
+            "keep_recent_turn_count",
+            "retained_message_token_budget",
+            "min_raw_tail_steps",
         }
-        optional = {
-            "retention_mode": retention_mode,
-            "keep_recent_turn_count": keep_recent_turn_count,
-            "retained_message_token_budget": retained_message_token_budget,
-            "min_raw_tail_steps": min_raw_tail_steps,
-        }
-        payload.update({key: value for key, value in optional.items() if value is not None})
-        if event_tags is not None:
+        if (
+            turn_fields & set(option_values)
+            and option_values.get("retention_mode") != "turn_budget"
+        ):
+            raise ValueError(
+                "retention_mode='turn_budget' is required when Turn retention fields are set"
+            )
+        payload = self._build_options_payload(
+            option_values,
+            CommitSessionOptions,
+            fixed={"keep_recent_count": keep_recent_count},
+            protected={"extraction_metadata"},
+        )
+        if event_tags is not _SESSION_CONFIG_UNSET:
             payload["extraction_metadata"] = {"event": {"tags": event_tags}}
         session_path = self._path_segment(session_id)
         response = await self._request(
@@ -1481,32 +1501,27 @@ class AsyncHTTPClient:
         self,
         session_id: str,
         role: str,
-        content: str | None = None,
-        parts: list[dict] | None = None,
-        created_at: str | None = None,
-        peer_id: str | None = None,
-        telemetry: Any = False,
-        turn_id: str | None = None,
-        message_kind: str | None = None,
-        source_message_ids: list[str] | None = None,
+        content: Optional[str] = None,
+        parts: Optional[List[Union[Dict[str, Any], MessagePart]]] = None,
+        options: Optional[AddMessageOptions] = None,
+        peer_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {"role": role}
-        if parts is not None:
-            payload["parts"] = parts
-        elif content is not None:
-            payload["content"] = content
-        else:
-            raise ValueError("Either content or parts must be provided")
-        optional = {
-            "created_at": created_at,
-            "peer_id": peer_id,
-            "turn_id": turn_id,
-            "message_kind": message_kind,
-            "source_message_ids": source_message_ids,
+        if peer_id is not None and options and "peer_id" in options:
+            raise ValueError("options cannot override 'peer_id'")
+        fixed = {
+            "role": role,
+            "content": content,
+            "parts": parts,
         }
-        payload.update({key: value for key, value in optional.items() if value is not None})
-        if telemetry is not False:
-            payload["telemetry"] = telemetry
+        if peer_id is not None:
+            fixed["peer_id"] = peer_id
+        payload = self._build_options_payload(
+            options,
+            AddMessageOptions,
+            fixed=fixed,
+            protected={"role", "content", "parts"},
+        )
+        payload = self._normalize_message_payload(payload)
         session_path = self._path_segment(session_id)
         response = await self._request(
             "POST", f"/api/v1/sessions/{session_path}/messages", json=payload
@@ -1618,20 +1633,19 @@ class AsyncHTTPClient:
         wait: bool = True,
         dry_run: bool = False,
         recursive: bool = True,
-        tags: Optional[List[str]] = None,
-        tag_mode: str = "replace",
+        options: Optional[ReindexOptions] = None,
     ) -> Dict[str, Any]:
-        payload = {
-            "uri": uri,
-            "mode": mode,
-            "wait": wait,
-            "dry_run": dry_run,
-        }
-        if not recursive:
-            payload["recursive"] = False
-        if tags is not None:
-            payload["tags"] = tags
-            payload["tag_mode"] = tag_mode
+        payload = self._build_options_payload(
+            options,
+            ReindexOptions,
+            fixed={
+                "uri": VikingURI.normalize(uri),
+                "mode": mode,
+                "wait": wait,
+                "dry_run": dry_run,
+                "recursive": recursive,
+            },
+        )
         response = await self._request(
             "POST",
             "/api/v1/content/reindex",
@@ -1736,6 +1750,101 @@ class AsyncHTTPClient:
     async def admin_migrate(self, cleanup: bool = False) -> Dict[str, Any]:
         action = "cleanup" if cleanup else "migrate"
         response = await self._request("POST", "/api/v1/admin/migrate", json={"action": action})
+        return self._handle_response(response)
+
+    async def admin_get_agent_evolution(self) -> Dict[str, Any]:
+        """Return the effective Agent Evolution switch for the caller's account."""
+        response = await self._request("GET", "/api/v1/admin/agent-evolution")
+        return self._handle_response(response)
+
+    async def admin_set_agent_evolution(self, enabled: bool) -> Dict[str, Any]:
+        """Persist and hot-reload Agent Evolution for the caller's account."""
+        response = await self._request(
+            "PUT", "/api/v1/admin/agent-evolution", json={"enabled": enabled}
+        )
+        return self._handle_response(response)
+
+    async def admin_get_account_settings(self, account_id: str) -> Dict[str, Any]:
+        """Return effective and explicitly overridden settings for one account."""
+        response = await self._request("GET", f"/api/v1/admin/accounts/{account_id}/settings")
+        return self._handle_response(response)
+
+    async def admin_set_account_agent_evolution(
+        self, account_id: str, enabled: bool
+    ) -> Dict[str, Any]:
+        """Update the allowlisted Agent Evolution setting for one account."""
+        response = await self._request(
+            "PATCH",
+            f"/api/v1/admin/accounts/{account_id}/settings",
+            json={"agent_evolution": {"enabled": enabled}},
+        )
+        return self._handle_response(response)
+
+    async def list_experience_trajectories(
+        self,
+        experience_uri: str,
+        options: Optional[ExperienceTrajectoryOptions] = None,
+    ) -> Dict[str, Any]:
+        params: Dict[str, Any] = {"experience_uri": VikingURI.normalize(experience_uri)}
+        params.update(dict(options or {}))
+        response = await self._request(
+            "GET",
+            "/api/v1/agent-evolution/experiences/trajectories",
+            params=params,
+        )
+        return self._handle_response(response)
+
+    async def get_experience_outcomes(
+        self,
+        experience_uri: str,
+        options: Optional[ExperienceOutcomeOptions] = None,
+    ) -> Dict[str, Any]:
+        params: Dict[str, Any] = {"experience_uri": VikingURI.normalize(experience_uri)}
+        params.update(dict(options or {}))
+        response = await self._request(
+            "GET",
+            "/api/v1/agent-evolution/experiences/outcomes",
+            params=params,
+        )
+        return self._handle_response(response)
+
+    async def resolve_openviking_assets(
+        self,
+        manifest_yaml: str,
+        options: Optional[ResolveAssetsOptions] = None,
+    ) -> Dict[str, Any]:
+        payload = self._build_options_payload(
+            options,
+            ResolveAssetsOptions,
+            fixed={"manifest_yaml": manifest_yaml},
+        )
+        response = await self._request(
+            "POST",
+            "/api/v1/openviking-assets/resolve",
+            json=payload,
+        )
+        return self._handle_response(response)
+
+    async def preflight_openviking_asset(
+        self,
+        name: str,
+        repo_url: str,
+        options: Optional[PreflightAssetOptions] = None,
+    ) -> Dict[str, Any]:
+        payload = self._build_options_payload(
+            options,
+            PreflightAssetOptions,
+            fixed={
+                "name": name,
+                "connector": "git",
+                "repo_url": repo_url,
+            },
+        )
+        response = await self._request(
+            "POST",
+            "/api/v1/openviking-assets/preflight",
+            json=payload,
+        )
         return self._handle_response(response)
 
     def get_status(self) -> Dict[str, Any]:
@@ -1919,75 +2028,38 @@ class SyncHTTPClient:
         path: str,
         to: Optional[str] = None,
         parent: Optional[str] = None,
-        reason: str = "",
-        instruction: str = "",
         wait: bool = False,
         timeout: Optional[float] = None,
-        strict: bool = False,
-        ignore_dirs: Optional[str] = None,
-        include: Optional[str] = None,
-        exclude: Optional[str] = None,
-        directly_upload_media: bool = True,
-        preserve_structure: Optional[bool] = None,
-        watch_interval: float = 0,
-        args: Optional[Dict[str, Any]] = None,
-        telemetry: Any = False,
-        processing_mode: Optional[str] = None,
-        add_type: Optional[str] = None,
-        tags: Optional[List[str]] = None,
-        tag_mode: str = "replace",
+        options: Optional[AddResourceOptions] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.add_resource(
-                path=path,
-                add_type=add_type,
+                path,
                 to=to,
                 parent=parent,
-                reason=reason,
-                instruction=instruction,
                 wait=wait,
                 timeout=timeout,
-                strict=strict,
-                ignore_dirs=ignore_dirs,
-                include=include,
-                exclude=exclude,
-                directly_upload_media=directly_upload_media,
-                preserve_structure=preserve_structure,
-                watch_interval=watch_interval,
-                processing_mode=processing_mode,
-                args=args,
-                tags=tags,
-                tag_mode=tag_mode,
-                telemetry=telemetry,
+                options=options,
             )
         )
 
     def batch_add_messages(
         self,
         session_id: str,
-        messages: list[dict],
-        telemetry: Any = False,
+        messages: list[Message],
+        options: Optional[BatchAddMessagesOptions] = None,
     ) -> Dict[str, Any]:
-        if telemetry is False:
-            return run_async(self._async_client.batch_add_messages(session_id, messages))
-        return run_async(self._async_client.batch_add_messages(session_id, messages, telemetry))
+        return run_async(self._async_client.batch_add_messages(session_id, messages, options))
 
     def add_skill(
         self,
         data: Any,
         wait: bool = False,
         timeout: Optional[float] = None,
-        telemetry: Any = False,
-        target_uri: Optional[str] = None,
+        options: Optional[AddSkillOptions] = None,
     ) -> Dict[str, Any]:
         return run_async(
-            self._async_client.add_skill(
-                data,
-                wait=wait,
-                timeout=timeout,
-                telemetry=telemetry,
-                target_uri=target_uri,
-            )
+            self._async_client.add_skill(data, wait=wait, timeout=timeout, options=options)
         )
 
     def list_skills(
@@ -2065,19 +2137,11 @@ class SyncHTTPClient:
         data: Any,
         wait: bool = False,
         timeout: Optional[float] = None,
-        source_metadata: Optional[Dict[str, Any]] = None,
-        telemetry: Any = False,
-        target_uri: Optional[str] = None,
+        options: Optional[UpdateSkillOptions] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.update_skill(
-                skill_name,
-                data,
-                wait=wait,
-                timeout=timeout,
-                source_metadata=source_metadata,
-                telemetry=telemetry,
-                target_uri=target_uri,
+                skill_name, data, wait=wait, timeout=timeout, options=options
             )
         )
 
@@ -2231,18 +2295,11 @@ class SyncHTTPClient:
         mode: str = "replace",
         wait: bool = False,
         timeout: Optional[float] = None,
-        telemetry: Any = False,
-        processing_mode: Optional[str] = None,
+        options: Optional[WriteOptions] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.write(
-                uri=uri,
-                content=content,
-                mode=mode,
-                wait=wait,
-                timeout=timeout,
-                telemetry=telemetry,
-                processing_mode=processing_mode,
+                uri, content, mode=mode, wait=wait, timeout=timeout, options=options
             )
         )
 
@@ -2252,15 +2309,11 @@ class SyncHTTPClient:
         operations: List[Dict[str, Any]],
         wait: bool = True,
         timeout: Optional[float] = None,
-        telemetry: Any = False,
+        options: Optional[BatchWriteOptions] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.batch_write(
-                root_uri=root_uri,
-                operations=operations,
-                wait=wait,
-                timeout=timeout,
-                telemetry=telemetry,
+                root_uri, operations, wait=wait, timeout=timeout, options=options
             )
         )
 
@@ -2270,15 +2323,11 @@ class SyncHTTPClient:
         tags: List[str],
         mode: str = "replace",
         recursive: bool = False,
-        telemetry: Any = False,
+        options: Optional[SetTagsOptions] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.set_tags(
-                uri=uri,
-                tags=tags,
-                mode=mode,
-                recursive=recursive,
-                telemetry=telemetry,
+                uri, tags, mode=mode, recursive=recursive, options=options
             )
         )
 
@@ -2287,60 +2336,56 @@ class SyncHTTPClient:
         query: str = "",
         target_uri: Union[str, List[str]] = "",
         limit: int = 10,
-        node_limit: Optional[int] = None,
-        score_threshold: Optional[float] = None,
-        filter: Optional[Dict[str, Any]] = None,
-        context_type: Optional[Any] = None,
-        tags: Optional[List[str]] = None,
-        telemetry: Any = False,
         image: Any = None,
+        options: Optional[FindOptions] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.find(
-                query=query,
+                query,
                 target_uri=target_uri,
                 limit=limit,
-                node_limit=node_limit,
-                score_threshold=score_threshold,
-                filter=filter,
-                context_type=context_type,
-                tags=tags,
-                telemetry=telemetry,
                 image=image,
+                options=options,
             )
         )
 
     def search(
         self,
         query: str = "",
-        target_uri: Union[str, List[str]] = "",
-        session: Optional[Any] = None,
         session_id: Optional[str] = None,
+        target_uri: Union[str, List[str]] = "",
         limit: int = 10,
-        node_limit: Optional[int] = None,
-        score_threshold: Optional[float] = None,
-        filter: Optional[Dict[str, Any]] = None,
-        context_type: Optional[Any] = None,
-        tags: Optional[List[str]] = None,
-        telemetry: Any = False,
         image: Any = None,
+        options: Optional[SearchOptions] = None,
     ) -> Dict[str, Any]:
-        actual_session_id = session_id
-        if actual_session_id is None and session is not None:
-            actual_session_id = getattr(session, "session_id", None)
         return run_async(
             self._async_client.search(
-                query=query,
+                query,
+                session_id=session_id,
                 target_uri=target_uri,
-                session_id=actual_session_id,
                 limit=limit,
-                node_limit=node_limit,
-                score_threshold=score_threshold,
-                filter=filter,
-                context_type=context_type,
-                tags=tags,
-                telemetry=telemetry,
                 image=image,
+                options=options,
+            )
+        )
+
+    def search_context(
+        self,
+        query: str = "",
+        session_id: Optional[str] = None,
+        target_uri: Union[str, List[str]] = "",
+        limit: int = 10,
+        image: Any = None,
+        options: Optional[SearchContextOptions] = None,
+    ) -> SearchContextResult:
+        return run_async(
+            self._async_client.search_context(
+                query,
+                session_id=session_id,
+                target_uri=target_uri,
+                limit=limit,
+                image=image,
+                options=options,
             )
         )
 
@@ -2373,20 +2418,9 @@ class SyncHTTPClient:
     def create_session(
         self,
         session_id: Optional[str] = None,
-        telemetry: Any = False,
-        memory_policy: Optional[Dict[str, Any]] = None,
-        auto_commit_policy: Any = _SESSION_CONFIG_UNSET,
-        memory_extraction_config: Optional[Dict[str, Any]] = None,
+        options: Optional[CreateSessionOptions] = None,
     ) -> Dict[str, Any]:
-        kwargs: Dict[str, Any] = {
-            "session_id": session_id,
-            "telemetry": telemetry,
-            "memory_policy": memory_policy,
-            "memory_extraction_config": memory_extraction_config,
-        }
-        if auto_commit_policy is not _SESSION_CONFIG_UNSET:
-            kwargs["auto_commit_policy"] = auto_commit_policy
-        return run_async(self._async_client.create_session(**kwargs))
+        return run_async(self._async_client.create_session(session_id, options=options))
 
     def list_sessions(self) -> List[Any]:
         return run_async(self._async_client.list_sessions())
@@ -2397,18 +2431,9 @@ class SyncHTTPClient:
     def update_session_config(
         self,
         session_id: str,
-        *,
-        memory_extraction_config: Optional[Dict[str, Any]] = None,
-        auto_commit_policy: Any = _SESSION_CONFIG_UNSET,
-        telemetry: Any = False,
+        options: Optional[UpdateSessionConfigOptions] = None,
     ) -> Dict[str, Any]:
-        kwargs: Dict[str, Any] = {
-            "memory_extraction_config": memory_extraction_config,
-            "telemetry": telemetry,
-        }
-        if auto_commit_policy is not _SESSION_CONFIG_UNSET:
-            kwargs["auto_commit_policy"] = auto_commit_policy
-        return run_async(self._async_client.update_session_config(session_id, **kwargs))
+        return run_async(self._async_client.update_session_config(session_id, options))
 
     def get_session_context(self, session_id: str, token_budget: int = 128_000) -> Dict[str, Any]:
         return run_async(self._async_client.get_session_context(session_id, token_budget))
@@ -2444,42 +2469,12 @@ class SyncHTTPClient:
     def commit_session(
         self,
         session_id: str,
-        telemetry: Any = False,
-        *,
         keep_recent_count: int = 0,
-        retention_mode: str | None = None,
-        keep_recent_turn_count: int | None = None,
-        retained_message_token_budget: int | None = None,
-        min_raw_tail_steps: int | None = None,
-        event_tags: list[str] | None = None,
+        options: Optional[CommitSessionOptions] = None,
     ) -> Dict[str, Any]:
-        kwargs = {"keep_recent_count": keep_recent_count}
-        kwargs.update(
-            {
-                key: value
-                for key, value in {
-                    "retention_mode": retention_mode,
-                    "keep_recent_turn_count": keep_recent_turn_count,
-                    "retained_message_token_budget": retained_message_token_budget,
-                    "min_raw_tail_steps": min_raw_tail_steps,
-                }.items()
-                if value is not None
-            }
-        )
-        if event_tags is not None:
-            kwargs["event_tags"] = event_tags
-        if telemetry is False:
-            return run_async(
-                self._async_client.commit_session(
-                    session_id,
-                    **kwargs,
-                )
-            )
         return run_async(
             self._async_client.commit_session(
-                session_id,
-                telemetry=telemetry,
-                **kwargs,
+                session_id, keep_recent_count=keep_recent_count, options=options
             )
         )
 
@@ -2487,41 +2482,20 @@ class SyncHTTPClient:
         self,
         session_id: str,
         role: str,
-        content: str | None = None,
-        parts: list[dict] | None = None,
-        created_at: str | None = None,
-        peer_id: str | None = None,
-        telemetry: Any = False,
-        turn_id: str | None = None,
-        message_kind: str | None = None,
-        source_message_ids: list[str] | None = None,
+        content: Optional[str] = None,
+        parts: Optional[List[Union[Dict[str, Any], MessagePart]]] = None,
+        options: Optional[AddMessageOptions] = None,
+        peer_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        kwargs = {
+        kwargs: Dict[str, Any] = {
             "role": role,
             "content": content,
             "parts": parts,
-            "created_at": created_at,
-            "peer_id": peer_id,
+            "options": options,
         }
-        kwargs.update(
-            {
-                key: value
-                for key, value in {
-                    "turn_id": turn_id,
-                    "message_kind": message_kind,
-                    "source_message_ids": source_message_ids,
-                }.items()
-                if value is not None
-            }
-        )
-        if telemetry is not False:
-            kwargs["telemetry"] = telemetry
-        return run_async(
-            self._async_client.add_message(
-                session_id,
-                **kwargs,
-            )
-        )
+        if peer_id is not None:
+            kwargs["peer_id"] = peer_id
+        return run_async(self._async_client.add_message(session_id, **kwargs))
 
     def export_ovpack(
         self,
@@ -2577,21 +2551,18 @@ class SyncHTTPClient:
         wait: bool = True,
         dry_run: bool = False,
         recursive: bool = True,
-        tags: Optional[List[str]] = None,
-        tag_mode: str = "replace",
+        options: Optional[ReindexOptions] = None,
     ) -> Dict[str, Any]:
-        kwargs = {
-            "uri": uri,
-            "mode": mode,
-            "wait": wait,
-            "dry_run": dry_run,
-        }
-        if not recursive:
-            kwargs["recursive"] = False
-        if tags is not None:
-            kwargs["tags"] = tags
-            kwargs["tag_mode"] = tag_mode
-        return run_async(self._async_client.reindex(**kwargs))
+        return run_async(
+            self._async_client.reindex(
+                uri,
+                mode=mode,
+                wait=wait,
+                dry_run=dry_run,
+                recursive=recursive,
+                options=options,
+            )
+        )
 
     def admin_create_account(
         self,
@@ -2649,6 +2620,49 @@ class SyncHTTPClient:
 
     def admin_migrate(self, cleanup: bool = False) -> Dict[str, Any]:
         return run_async(self._async_client.admin_migrate(cleanup=cleanup))
+
+    def admin_get_agent_evolution(self) -> Dict[str, Any]:
+        return run_async(self._async_client.admin_get_agent_evolution())
+
+    def admin_set_agent_evolution(self, enabled: bool) -> Dict[str, Any]:
+        return run_async(self._async_client.admin_set_agent_evolution(enabled))
+
+    def admin_get_account_settings(self, account_id: str) -> Dict[str, Any]:
+        return run_async(self._async_client.admin_get_account_settings(account_id))
+
+    def admin_set_account_agent_evolution(self, account_id: str, enabled: bool) -> Dict[str, Any]:
+        return run_async(self._async_client.admin_set_account_agent_evolution(account_id, enabled))
+
+    def list_experience_trajectories(
+        self,
+        experience_uri: str,
+        options: Optional[ExperienceTrajectoryOptions] = None,
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._async_client.list_experience_trajectories(experience_uri, options)
+        )
+
+    def get_experience_outcomes(
+        self,
+        experience_uri: str,
+        options: Optional[ExperienceOutcomeOptions] = None,
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.get_experience_outcomes(experience_uri, options))
+
+    def resolve_openviking_assets(
+        self,
+        manifest_yaml: str,
+        options: Optional[ResolveAssetsOptions] = None,
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.resolve_openviking_assets(manifest_yaml, options))
+
+    def preflight_openviking_asset(
+        self,
+        name: str,
+        repo_url: str,
+        options: Optional[PreflightAssetOptions] = None,
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.preflight_openviking_asset(name, repo_url, options))
 
     def get_status(self) -> Dict[str, Any]:
         return self._async_client.get_status()

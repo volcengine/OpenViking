@@ -287,11 +287,11 @@ async def viking_ingest(
                 session_id=session_id,
                 role=msg["role"],
                 parts=[{"type": "text", "text": msg["text"]}],
-                created_at=msg_created_at,
+                options={"created_at": msg_created_at} if msg_created_at else None,
             )
 
         # Commit
-        result = await client.commit_session(session_id, telemetry=True)
+        result = await client.commit_session(session_id, options={"telemetry": True})
 
         # Accept both "committed" and "accepted" as success - accepted means the session was archived
         if result.get("status") not in ("committed", "accepted"):
