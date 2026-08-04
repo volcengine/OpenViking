@@ -597,6 +597,7 @@ class VikingFS:
             already_exists = "exist" in message or "already" in message
             if exist_ok and already_exists:
                 return
+            raise
 
     async def rm(
         self,
