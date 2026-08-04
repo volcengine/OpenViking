@@ -4,11 +4,17 @@
 
 from __future__ import annotations
 
+import ipaddress
 from collections.abc import Sequence
 from typing import Any
 
 from scrapy.resolver import CachingThreadedResolver
 from twisted.internet import defer
+
+from openviking.utils.network_guard import (
+    RequestValidationResult,
+    normalize_verified_addresses,
+)
 
 _VERIFIED_ADDRESSES: dict[str, str] = {}
 
@@ -17,9 +23,19 @@ def _normalize_host(host: str) -> str:
     return host.rstrip(".").lower()
 
 
-def pin_verified_address(host: str, address: str) -> None:
-    """Pin a hostname to the address returned by the request validator."""
-    _VERIFIED_ADDRESSES[_normalize_host(host)] = address
+def pin_verified_address(host: str, addresses: RequestValidationResult) -> None:
+    """Pin a hostname to one address approved by the request validator."""
+    normalized_addresses = normalize_verified_addresses(addresses)
+    if normalized_addresses is None:
+        return
+
+    # Scrapy's threaded resolver exposes a single-address, IPv4-oriented
+    # interface. Prefer an approved IPv4 address and retain IPv6-only support.
+    selected_address = next(
+        (address for address in normalized_addresses if ipaddress.ip_address(address).version == 4),
+        normalized_addresses[0],
+    )
+    _VERIFIED_ADDRESSES[_normalize_host(host)] = selected_address
 
 
 class ValidatedAddressResolver(CachingThreadedResolver):

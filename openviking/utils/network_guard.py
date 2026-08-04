@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import ipaddress
 import socket
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -15,7 +15,8 @@ import httpx
 from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.utils.config import get_openviking_config
 
-RequestValidator = Callable[[str], Optional[str]]
+RequestValidationResult = Optional[str | Sequence[str]]
+RequestValidator = Callable[[str], RequestValidationResult]
 
 _LOCAL_HOSTNAMES = {
     "localhost",
@@ -57,21 +58,26 @@ def _normalize_host(host: str) -> str:
     return host.rstrip(".").lower()
 
 
-def _resolve_host_addresses(host: str) -> set[str]:
+def _resolve_host_addresses(host: str) -> tuple[str, ...]:
     try:
         infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
     except (socket.gaierror, UnicodeError, OSError):
-        return set()
+        return ()
 
-    addresses: set[str] = set()
+    addresses: list[str] = []
+    seen: set[str] = set()
     for family, _, _, _, sockaddr in infos:
         if family not in {socket.AF_INET, socket.AF_INET6}:
             continue
         addr = sockaddr[0]
+        if not isinstance(addr, str):
+            continue
         if "%" in addr:
             addr = addr.split("%", 1)[0]
-        addresses.add(addr)
-    return addresses
+        if addr not in seen:
+            addresses.append(addr)
+            seen.add(addr)
+    return tuple(addresses)
 
 
 def _is_public_ip(address: str) -> bool:
@@ -81,13 +87,45 @@ def _is_public_ip(address: str) -> bool:
         return False
 
 
-def ensure_public_remote_target(source: str) -> Optional[str]:
+def normalize_verified_addresses(
+    verified_addresses: RequestValidationResult,
+) -> Optional[tuple[str, ...]]:
+    """Normalize a validator result while retaining every approved address."""
+    if verified_addresses is None:
+        return None
+
+    candidates = (
+        (verified_addresses,) if isinstance(verified_addresses, str) else tuple(verified_addresses)
+    )
+    if not candidates:
+        raise PermissionDeniedError("The request validator returned no verified addresses.")
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for address in candidates:
+        if not isinstance(address, str):
+            raise PermissionDeniedError(
+                f"The request validator returned invalid address '{address}'."
+            )
+        try:
+            canonical_address = str(ipaddress.ip_address(address))
+        except ValueError as exc:
+            raise PermissionDeniedError(
+                f"The request validator returned invalid address '{address}'."
+            ) from exc
+        if canonical_address not in seen:
+            normalized.append(canonical_address)
+            seen.add(canonical_address)
+    return tuple(normalized)
+
+
+def ensure_public_remote_target(source: str) -> Optional[tuple[str, ...]]:
     """Reject loopback, link-local, private, and other non-public targets.
 
-    Returns one validated address so guarded HTTP transports can connect to
-    the exact address that passed validation instead of resolving the hostname
-    a second time. Returns ``None`` only when private networks are explicitly
-    enabled in configuration.
+    Returns every validated address so guarded transports can connect to an
+    address that passed validation without resolving the hostname a second
+    time. Returns ``None`` only when private networks are explicitly enabled
+    in configuration.
     """
     host = extract_remote_host(source)
     if not host:
@@ -120,13 +158,7 @@ def ensure_public_remote_target(source: str) -> Optional[str]:
             f"host '{host}' resolves to non-public address '{non_public[0]}'. "
             "To allow private destinations, set allow_private_networks=true in your ov.conf."
         )
-    # Scrapy's threaded resolver exposes an IPv4-only interface. Prefer a
-    # validated IPv4 address when the host publishes both families, while
-    # retaining IPv6 for IPv6-only destinations and HTTPX callers.
-    return sorted(
-        resolved_addresses,
-        key=lambda address: (ipaddress.ip_address(address).version, address),
-    )[0]
+    return tuple(resolved_addresses)
 
 
 class ValidatedAsyncHTTPTransport(httpx.AsyncBaseTransport):
@@ -160,21 +192,32 @@ class ValidatedAsyncHTTPTransport(httpx.AsyncBaseTransport):
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         original_url = request.url
-        verified_ip = self._request_validator(str(original_url))
-        transport = self._transport_for(original_url, verified_ip)
-        if verified_ip is None:
+        verified_addresses = normalize_verified_addresses(
+            self._request_validator(str(original_url))
+        )
+        if verified_addresses is None:
+            transport = self._transport_for(original_url, None)
             return await transport.handle_async_request(request)
 
         original_extensions = request.extensions
-        request.url = original_url.copy_with(host=verified_ip)
-        request.extensions = dict(original_extensions)
-        if original_url.scheme == "https":
-            request.extensions["sni_hostname"] = original_url.host
-        try:
-            return await transport.handle_async_request(request)
-        finally:
-            request.url = original_url
-            request.extensions = original_extensions
+        last_connection_error: httpx.ConnectError | httpx.ConnectTimeout | None = None
+        for verified_ip in verified_addresses:
+            transport = self._transport_for(original_url, verified_ip)
+            request.url = original_url.copy_with(host=verified_ip)
+            request.extensions = dict(original_extensions)
+            if original_url.scheme == "https":
+                request.extensions["sni_hostname"] = original_url.host
+            try:
+                return await transport.handle_async_request(request)
+            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                last_connection_error = exc
+            finally:
+                request.url = original_url
+                request.extensions = original_extensions
+
+        if last_connection_error is not None:
+            raise last_connection_error
+        raise RuntimeError("The request validator returned no usable addresses.")
 
     async def aclose(self) -> None:
         if self._transport is not None:

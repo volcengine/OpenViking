@@ -199,7 +199,7 @@ class URLTypeDetector:
         # === Step 2: Send HEAD request for headers ===
         try:
             httpx = lazy_import("httpx")
-            client_kwargs = {
+            client_kwargs: Dict[str, Any] = {
                 "timeout": timeout if timeout is not None else self.timeout,
                 "follow_redirects": True,
             }
@@ -562,7 +562,7 @@ class HTTPAccessor(DataAccessor):
 
         try:
             # Download content
-            client_kwargs = {
+            client_kwargs: Dict[str, Any] = {
                 "timeout": self.timeout,
                 "follow_redirects": True,
             }

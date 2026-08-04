@@ -18,6 +18,7 @@ from openviking.utils.network_guard import (
     build_httpx_secure_transport,
     ensure_public_remote_target,
     extract_remote_host,
+    normalize_verified_addresses,
 )
 from openviking_cli.exceptions import PermissionDeniedError
 
@@ -134,12 +135,12 @@ class TestResolveHostAddresses:
 
     def test_returns_empty_set_for_unresolvable_host(self) -> None:
         result = _resolve_host_addresses("this.host.definitely.does.not.exist.invalid")
-        assert result == set()
+        assert result == ()
 
     def test_returns_empty_set_for_unicode_error(self) -> None:
         # A hostname that triggers UnicodeError in getaddrinfo
         result = _resolve_host_addresses("\udcff.invalid")
-        assert result == set()
+        assert result == ()
 
     @patch("openviking.utils.network_guard.socket.getaddrinfo")
     def test_strips_ipv6_scope_id(self, mock_getaddrinfo) -> None:
@@ -158,7 +159,22 @@ class TestResolveHostAddresses:
             (999, 1, 0, "", ("1.2.3.4", 0)),  # unknown AF
         ]
         result = _resolve_host_addresses("some-host")
-        assert result == set()
+        assert result == ()
+
+    @patch("openviking.utils.network_guard.socket.getaddrinfo")
+    def test_preserves_resolver_order_and_removes_duplicates(self, mock_getaddrinfo) -> None:
+        import socket
+
+        mock_getaddrinfo.return_value = [
+            (socket.AF_INET6, socket.SOCK_STREAM, 0, "", ("2606:4700::1111", 0, 0, 0)),
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("1.1.1.1", 0)),
+            (socket.AF_INET6, socket.SOCK_STREAM, 0, "", ("2606:4700::1111", 0, 0, 0)),
+        ]
+
+        assert _resolve_host_addresses("dual-stack.example") == (
+            "2606:4700::1111",
+            "1.1.1.1",
+        )
 
 
 # ── ensure_public_remote_target ──────────────────────────────────────────────
@@ -222,7 +238,7 @@ class TestEnsurePublicRemoteTarget:
     def test_rejects_non_public_resolved_addresses(
         self, mock_resolve, source: str, resolved_ip: str
     ) -> None:
-        mock_resolve.return_value = {resolved_ip}
+        mock_resolve.return_value = (resolved_ip,)
         with pytest.raises(PermissionDeniedError, match="non-public address"):
             ensure_public_remote_target(source)
 
@@ -231,7 +247,7 @@ class TestEnsurePublicRemoteTarget:
     @patch("openviking.utils.network_guard._resolve_host_addresses")
     def test_rejects_when_any_resolved_address_is_non_public(self, mock_resolve) -> None:
         """DNS rebinding: even if some IPs are public, one private IP is enough to reject."""
-        mock_resolve.return_value = {"8.8.8.8", "127.0.0.1"}
+        mock_resolve.return_value = ("8.8.8.8", "127.0.0.1")
         with pytest.raises(PermissionDeniedError, match="non-public address"):
             ensure_public_remote_target("http://rebinding.attacker.com/path")
 
@@ -239,37 +255,65 @@ class TestEnsurePublicRemoteTarget:
 
     @patch("openviking.utils.network_guard._resolve_host_addresses")
     def test_allows_public_http_url(self, mock_resolve) -> None:
-        mock_resolve.return_value = {"151.101.1.67"}
-        assert ensure_public_remote_target("https://github.com/repo.git") == "151.101.1.67"
+        mock_resolve.return_value = ("151.101.1.67",)
+        assert ensure_public_remote_target("https://github.com/repo.git") == ("151.101.1.67",)
 
     @patch("openviking.utils.network_guard._resolve_host_addresses")
     def test_allows_public_git_ssh(self, mock_resolve) -> None:
-        mock_resolve.return_value = {"140.82.121.4"}
-        assert ensure_public_remote_target("git@github.com:user/repo.git") == "140.82.121.4"
+        mock_resolve.return_value = ("140.82.121.4",)
+        assert ensure_public_remote_target("git@github.com:user/repo.git") == ("140.82.121.4",)
 
     @patch("openviking.utils.network_guard._resolve_host_addresses")
     def test_configured_code_hosting_domain_does_not_bypass_address_check(
         self, mock_resolve
     ) -> None:
-        mock_resolve.return_value = {"127.0.0.1"}
+        mock_resolve.return_value = ("127.0.0.1",)
         with pytest.raises(PermissionDeniedError, match="non-public address"):
             ensure_public_remote_target("git@ssh.dev.azure.com:v3/org/project/repo")
 
     @patch("openviking.utils.network_guard._resolve_host_addresses")
     def test_rejects_when_dns_returns_empty(self, mock_resolve) -> None:
-        mock_resolve.return_value = set()
+        mock_resolve.return_value = ()
         with pytest.raises(PermissionDeniedError, match="could not resolve"):
             ensure_public_remote_target("http://new-host.example.com/path")
 
     @patch("openviking.utils.network_guard._resolve_host_addresses")
     def test_allows_multiple_public_addresses(self, mock_resolve) -> None:
-        mock_resolve.return_value = {"8.8.8.8", "8.8.4.4"}
-        assert ensure_public_remote_target("http://dns-rr.example.com/path") == "8.8.4.4"
+        mock_resolve.return_value = ("8.8.8.8", "8.8.4.4")
+        assert ensure_public_remote_target("http://dns-rr.example.com/path") == (
+            "8.8.8.8",
+            "8.8.4.4",
+        )
 
     @patch("openviking.utils.network_guard._resolve_host_addresses")
-    def test_prefers_ipv4_for_mixed_address_families(self, mock_resolve) -> None:
-        mock_resolve.return_value = {"2606:4700:4700::1111", "1.1.1.1"}
-        assert ensure_public_remote_target("https://dual-stack.example/") == "1.1.1.1"
+    def test_preserves_both_address_families(self, mock_resolve) -> None:
+        mock_resolve.return_value = ("2606:4700:4700::1111", "1.1.1.1")
+        assert ensure_public_remote_target("https://dual-stack.example/") == (
+            "2606:4700:4700::1111",
+            "1.1.1.1",
+        )
+
+
+class TestNormalizeVerifiedAddresses:
+    def test_accepts_legacy_single_address_result(self) -> None:
+        assert normalize_verified_addresses("8.8.8.8") == ("8.8.8.8",)
+
+    def test_canonicalizes_and_deduplicates_addresses(self) -> None:
+        assert normalize_verified_addresses(("2606:4700:4700:0::1111", "2606:4700:4700::1111")) == (
+            "2606:4700:4700::1111",
+        )
+
+    def test_rejects_empty_address_collection(self) -> None:
+        with pytest.raises(PermissionDeniedError, match="no verified addresses"):
+            normalize_verified_addresses(())
+
+    def test_rejects_non_ip_address(self) -> None:
+        with pytest.raises(PermissionDeniedError, match="invalid address"):
+            normalize_verified_addresses(("example.com",))
+
+    def test_rejects_non_string_address(self) -> None:
+        with pytest.raises(PermissionDeniedError, match="invalid address"):
+            normalize_verified_addresses((8,))  # type: ignore[list-item]
 
 
 # ── build_httpx_request_validation_hooks ─────────────────────────────────────
@@ -342,6 +386,20 @@ class _RecordingTransport(httpx.AsyncBaseTransport):
         self.closed = True
 
 
+class _FallbackRecordingTransport(_RecordingTransport):
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        response = await super().handle_async_request(request)
+        if request.url.host == "192.0.2.1":
+            raise httpx.ConnectError("first address unavailable", request=request)
+        return response
+
+
+class _ReadFailureRecordingTransport(_RecordingTransport):
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        await super().handle_async_request(request)
+        raise httpx.ReadError("response interrupted", request=request)
+
+
 class TestValidatedAsyncHTTPTransport:
     def test_builder_returns_none_without_validator(self) -> None:
         assert build_httpx_secure_transport(None) is None
@@ -384,6 +442,39 @@ class TestValidatedAsyncHTTPTransport:
             "https://8.8.8.8/",
             "https://1.1.1.1/next",
         ]
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_another_verified_address_on_connection_failure(self) -> None:
+        inner = _FallbackRecordingTransport()
+        transport = ValidatedAsyncHTTPTransport(
+            lambda _url: ("192.0.2.1", "2001:4860:4860::8888"),
+            transport=inner,
+        )
+        request = httpx.Request("GET", "https://dual-stack.example/resource")
+
+        response = await transport.handle_async_request(request)
+
+        assert response.status_code == 200
+        assert [recorded["url"] for recorded in inner.requests] == [
+            "https://192.0.2.1/resource",
+            "https://[2001:4860:4860::8888]/resource",
+        ]
+        assert str(request.url) == "https://dual-stack.example/resource"
+
+    @pytest.mark.asyncio
+    async def test_does_not_retry_after_a_non_connection_failure(self) -> None:
+        inner = _ReadFailureRecordingTransport()
+        transport = ValidatedAsyncHTTPTransport(
+            lambda _url: ("192.0.2.1", "2001:4860:4860::8888"),
+            transport=inner,
+        )
+        request = httpx.Request("POST", "https://dual-stack.example/resource")
+
+        with pytest.raises(httpx.ReadError, match="response interrupted"):
+            await transport.handle_async_request(request)
+
+        assert [recorded["url"] for recorded in inner.requests] == ["https://192.0.2.1/resource"]
+        assert str(request.url) == "https://dual-stack.example/resource"
 
     @pytest.mark.asyncio
     async def test_httpx_redirects_keep_original_urls_while_each_hop_is_pinned(self) -> None:

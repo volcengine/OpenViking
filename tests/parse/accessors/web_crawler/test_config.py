@@ -50,8 +50,18 @@ class TestCrawlConfigValidation:
             CrawlConfig(max_html_bytes=0)
 
 
-def test_crawler_uses_validated_address_resolver_without_proxy():
+def test_unguarded_crawler_preserves_default_proxy_support():
     settings = _build_settings(CrawlConfig())
+
+    assert settings.getbool("HTTPPROXY_ENABLED") is True
+    assert (
+        settings["DNS_RESOLVER"]
+        != "openviking.parse.accessors.web_crawler.resolver.ValidatedAddressResolver"
+    )
+
+
+def test_guarded_crawler_uses_validated_address_resolver_without_proxy():
+    settings = _build_settings(CrawlConfig(request_validator=lambda _url: ("8.8.8.8",)))
 
     assert (
         settings["DNS_RESOLVER"]

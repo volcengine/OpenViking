@@ -46,37 +46,42 @@ def _build_settings(config: CrawlConfig):
     from scrapy.settings import Settings
 
     depth_limit = 0 if config.depth < 0 else config.depth
-    return Settings(
-        {
-            "TWISTED_REACTOR": "twisted.internet.asyncioreactor.AsyncioSelectorReactor",
-            "DEPTH_LIMIT": depth_limit,
-            # max_pages is enforced inside the spider by successful-resource count
-            # (OpenVikingWebSpider._success_at_limit). Scrapy's
-            # CLOSESPIDER_PAGECOUNT counts every response, including failed and
-            # skipped ones, so enabling it would stop the crawl on a different
-            # metric and yield fewer successful pages than requested. Keep it
-            # disabled so the spider is the single source of truth.
-            "CLOSESPIDER_PAGECOUNT": 0,
-            "CONCURRENT_REQUESTS": config.concurrency,
-            "DOWNLOAD_TIMEOUT": config.timeout,
-            "DOWNLOAD_DELAY": config.download_delay,
-            "RETRY_ENABLED": True,
-            "RETRY_TIMES": config.retry_times,
-            "ROBOTSTXT_OBEY": True,
-            "LOG_ENABLED": False,
-            "TELNETCONSOLE_ENABLED": False,
-            # A proxy could resolve the original hostname independently and
-            # bypass the validated address selected by the crawler resolver.
-            "HTTPPROXY_ENABLED": False,
-            "USER_AGENT": "OpenViking/0.4 (+recursive-web-crawler)",
-            "DNS_RESOLVER": (
-                "openviking.parse.accessors.web_crawler.resolver.ValidatedAddressResolver"
-            ),
-            "DOWNLOADER_MIDDLEWARES": {
-                "openviking.parse.accessors.web_crawler.middlewares.RequestValidatorMiddleware": 50,
-            },
-        }
-    )
+    settings = {
+        "TWISTED_REACTOR": "twisted.internet.asyncioreactor.AsyncioSelectorReactor",
+        "DEPTH_LIMIT": depth_limit,
+        # max_pages is enforced inside the spider by successful-resource count
+        # (OpenVikingWebSpider._success_at_limit). Scrapy's
+        # CLOSESPIDER_PAGECOUNT counts every response, including failed and
+        # skipped ones, so enabling it would stop the crawl on a different
+        # metric and yield fewer successful pages than requested. Keep it
+        # disabled so the spider is the single source of truth.
+        "CLOSESPIDER_PAGECOUNT": 0,
+        "CONCURRENT_REQUESTS": config.concurrency,
+        "DOWNLOAD_TIMEOUT": config.timeout,
+        "DOWNLOAD_DELAY": config.download_delay,
+        "RETRY_ENABLED": True,
+        "RETRY_TIMES": config.retry_times,
+        "ROBOTSTXT_OBEY": True,
+        "LOG_ENABLED": False,
+        "TELNETCONSOLE_ENABLED": False,
+        "USER_AGENT": "OpenViking/0.4 (+recursive-web-crawler)",
+    }
+    if config.request_validator is not None:
+        # A proxy could resolve the original hostname independently and bypass
+        # the address selected by the guarded crawler resolver. Unguarded local
+        # crawls retain Scrapy's normal environment-proxy behavior.
+        settings.update(
+            {
+                "HTTPPROXY_ENABLED": False,
+                "DNS_RESOLVER": (
+                    "openviking.parse.accessors.web_crawler.resolver.ValidatedAddressResolver"
+                ),
+                "DOWNLOADER_MIDDLEWARES": {
+                    "openviking.parse.accessors.web_crawler.middlewares.RequestValidatorMiddleware": 50,
+                },
+            }
+        )
+    return Settings(settings)
 
 
 class ScrapyWebCrawler:

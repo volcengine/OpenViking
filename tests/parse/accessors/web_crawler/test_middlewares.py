@@ -71,6 +71,24 @@ class TestRequestValidatorMiddleware:
 
         assert _VERIFIED_ADDRESSES == {"example.com": "203.0.113.10"}
 
+    def test_prefers_verified_ipv4_address_for_scrapy(self):
+        mw = RequestValidatorMiddleware()
+        spider = _make_spider(validator=lambda _url: ("2001:4860:4860::8888", "8.8.8.8"))
+        request = _make_request("https://example.com/resource")
+
+        mw.process_request(request, spider)
+
+        assert _VERIFIED_ADDRESSES == {"example.com": "8.8.8.8"}
+
+    def test_pins_ipv6_for_ipv6_only_destination(self):
+        mw = RequestValidatorMiddleware()
+        spider = _make_spider(validator=lambda _url: ("2001:4860:4860::8888",))
+        request = _make_request("https://example.com/resource")
+
+        mw.process_request(request, spider)
+
+        assert _VERIFIED_ADDRESSES == {"example.com": "2001:4860:4860::8888"}
+
     def test_does_not_pin_when_private_networks_are_allowed(self):
         mw = RequestValidatorMiddleware()
         spider = _make_spider(validator=lambda _url: None)
