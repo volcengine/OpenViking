@@ -38,7 +38,7 @@ _BARE_VIKING_URI_RE = re.compile(
 )
 _RELATED_PAGES_RE = re.compile(r"(?mi)^#{1,6}[ \t]+Related pages[ \t]*$")
 _RESERVED_FILENAMES = frozenset(
-    {"index.md", "log.md", ".abstract.md", ".overview.md", ".relations.json"}
+    {".abstract.md", ".overview.md"}
 )
 _PLATFORM_FRONTMATTER_FIELDS = frozenset({"type", "title", "description", "tags"})
 
