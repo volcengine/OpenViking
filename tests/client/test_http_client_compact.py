@@ -103,7 +103,15 @@ async def test_add_resource_omits_empty_args_and_null_fields():
     assert payload["path"] == "https://example.com/doc"
     # `args` is the field that breaks `add-resource` against pre-#2549 instances.
     assert "args" not in payload
-    for dropped in ("to", "parent", "timeout", "ignore_dirs", "include", "exclude"):
+    for dropped in (
+        "add_type",
+        "to",
+        "parent",
+        "timeout",
+        "ignore_dirs",
+        "include",
+        "exclude",
+    ):
         assert dropped not in payload
 
 

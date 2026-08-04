@@ -48,15 +48,23 @@ export interface GroupedFindResult {
 export interface VikingApiError {
   code: string
   message: string
+  requestId?: string
   statusCode?: number
   details?: unknown
 }
 
 export interface FetchFindOptions {
+  contextTypes?: FindContextType[]
+  includeProvenance?: boolean
+  levels?: number[]
   targetUri?: string
   limit?: number
   scoreThreshold?: number
   filter?: Record<string, unknown>
+  since?: string
+  tags?: string[]
+  timeField?: 'created_at' | 'updated_at'
+  until?: string
 }
 
 export interface FetchSearchOptions extends FetchFindOptions {
@@ -82,6 +90,7 @@ function toVikingApiError(error: unknown): VikingApiError {
     code: normalized.code,
     details: normalized.details,
     message: normalized.message,
+    requestId: normalized.requestId,
     statusCode: normalized.statusCode,
   }
 }
@@ -199,10 +208,24 @@ export async function fetchFind(
       postSearchFind({
         body: {
           filter: options.filter,
+          context_type:
+            options.contextTypes && options.contextTypes.length > 0
+              ? options.contextTypes
+              : undefined,
+          include_provenance: options.includeProvenance,
+          level:
+            options.levels && options.levels.length > 0
+              ? options.levels
+              : undefined,
           limit: options.limit ?? 10,
           query,
           score_threshold: options.scoreThreshold,
+          since: options.since,
+          tags:
+            options.tags && options.tags.length > 0 ? options.tags : undefined,
           target_uri: options.targetUri,
+          time_field: options.timeField,
+          until: options.until,
         },
       }),
     )
@@ -222,11 +245,25 @@ export async function fetchSearch(
       postSearchSearch({
         body: {
           filter: options.filter,
+          context_type:
+            options.contextTypes && options.contextTypes.length > 0
+              ? options.contextTypes
+              : undefined,
+          include_provenance: options.includeProvenance,
+          level:
+            options.levels && options.levels.length > 0
+              ? options.levels
+              : undefined,
           limit: options.limit ?? 10,
           query,
           score_threshold: options.scoreThreshold,
+          since: options.since,
           session_id: options.sessionId,
+          tags:
+            options.tags && options.tags.length > 0 ? options.tags : undefined,
           target_uri: options.targetUri,
+          time_field: options.timeField,
+          until: options.until,
         },
       }),
     )

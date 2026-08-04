@@ -98,8 +98,6 @@ class FindRequest(BaseModel):
     image_url: Optional[str] = None
     target_uri: Union[str, List[str]] = ""
     context_type: Optional[Union[str, List[str]]] = None
-    agent_id: Optional[str] = None
-    agent_uri: Optional[str] = None
     limit: int = 10
     node_limit: Optional[int] = None
     score_threshold: Optional[float] = None
@@ -122,8 +120,6 @@ class SearchRequest(BaseModel):
     image_url: Optional[str] = None
     target_uri: Union[str, List[str]] = ""
     context_type: Optional[Union[str, List[str]]] = None
-    agent_id: Optional[str] = None
-    agent_uri: Optional[str] = None
     session_id: Optional[str] = None
     limit: int = 10
     node_limit: Optional[int] = None
@@ -235,7 +231,8 @@ async def search(
 
     async def _search():
         session = None
-        if request.session_id:
+        # Intent off: skip session.load — SearchService will not scan session either.
+        if request.session_id and service.search.is_intent_enabled():
             session = service.sessions.session(_ctx, request.session_id)
             await session.load()
         return await service.search.search(

@@ -14,6 +14,8 @@ Talk to your vikingbot through Telegram, Discord, WhatsApp, Feishu, Mochat, Ding
 | **Email** | Medium (IMAP/SMTP credentials) |
 | **QQ** | Easy (app credentials) |
 
+Channel configuration lives at `bot.channels` in `~/.openviking/ov.conf`. The complete Telegram example below shows the wrapper; later snippets show the `channels` field to merge into the same `bot` object.
+
 <details>
 <summary><b>Telegram</b> (recommended)</summary>
 
@@ -27,14 +29,16 @@ Talk to your vikingbot through Telegram, Discord, WhatsApp, Feishu, Mochat, Ding
 
 ```json
 {
-  "channels": [
-    {
-      "type": "telegram",
-      "enabled": true,
-      "token": "YOUR_BOT_TOKEN",
-      "allowFrom": ["YOUR_USER_ID"]
-    }
-  ]
+  "bot": {
+    "channels": [
+      {
+        "type": "telegram",
+        "enabled": true,
+        "token": "YOUR_BOT_TOKEN",
+        "allowFrom": ["YOUR_USER_ID"]
+      }
+    ]
+  }
 }
 ```
 
@@ -62,7 +66,7 @@ Send the following message to vikingbot, replacing `xxx@xxx` with your actual em
 Read https://raw.githubusercontent.com/HKUDS/MoChat/refs/heads/main/skills/vikingbot/skill.md and register on MoChat. My Email account is xxx@xxx Bind me as your owner and DM me on MoChat.
 ```
 
-vikingbot automatically registers, updates `~/.vikingbot/config.json`, and connects to Mochat.
+After registration, add the returned channel settings to `bot.channels` in `~/.openviking/ov.conf` and connect to Mochat.
 
 **2. Restart the gateway**
 
@@ -77,7 +81,7 @@ That is all—vikingbot handles the rest.
 <details>
 <summary>Manual configuration (advanced)</summary>
 
-If you prefer to configure Mochat manually, add the following to `~/.vikingbot/config.json`:
+If you prefer to configure Mochat manually, merge the following `channels` field into the `bot` object in `~/.openviking/ov.conf`:
 
 > Keep `claw_token` secret. It should only be sent to your Mochat API endpoint in the `X-Claw-Token` header.
 

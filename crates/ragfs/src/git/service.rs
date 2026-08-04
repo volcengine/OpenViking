@@ -106,16 +106,16 @@ impl GitService {
     /// account's VFS subtree.
     ///
     /// - If `paths` is `Some`, only those account-relative paths are
-    ///   considered (each is still pruned via `enumerate::prune_path`).
+    ///   considered. Directories are expanded recursively.
     /// - If `paths` is `None`, the full `/local/{account}` subtree is
     ///   enumerated via `enumerate::collect_all`.
     ///
     /// On no-op (no editor change) the branch ref is untouched and
     /// `CommitResponse::Noop` is returned.
     ///
-    /// When `paths` is `Some(...)`, every listed path must refer to a file in
-    /// the VFS. To commit a subtree, list each file explicitly or omit `paths`
-    /// for full enumeration.
+    /// Entries in `paths` may identify files, directories, or paths deleted
+    /// since the previous snapshot. Directories are expanded recursively;
+    /// missing entries remove matching files/subtrees from the snapshot.
     ///
     /// On a CAS conflict, returns `GitError::ConcurrentCommit` so the
     /// caller can decide whether to retry. There is intentionally no
@@ -1303,6 +1303,8 @@ impl GitService {
                 Err(e) => failed_deletes.push((path, e.to_string())),
             }
         }
+        written_paths.sort();
+        deleted_paths.sort();
 
         let written_actual = written_paths.len();
         let deleted_actual = deleted_paths.len();

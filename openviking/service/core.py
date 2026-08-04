@@ -23,16 +23,15 @@ from openviking.service.resource_memory_link_service import ResourceMemoryLinkSe
 from openviking.service.resource_service import ResourceService
 from openviking.service.search_service import SearchService
 from openviking.service.session_service import SessionService
-from openviking.service.task_tracker import set_task_tracker
+from openviking.service.task_tracker import get_task_tracker, set_task_tracker
 from openviking.session import create_session_compressor
-from openviking.storage import VikingDBManager
 from openviking.storage.collection_schemas import init_context_collection
 from openviking.storage.index_consistency import check_index_consistency
 from openviking.storage.queuefs.add_resource_processor import AddResourceProcessor
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
 from openviking.storage.queuefs.session_commit_processor import SessionCommitProcessor
-from openviking.storage.transaction import LockManager, init_lock_manager
 from openviking.storage.viking_fs import VikingFS, init_viking_fs
+from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.utils.agfs_utils import (
     build_runtime_ragfs_binding_config,
     resolve_queuefs_mount_point,
@@ -88,7 +87,7 @@ class OpenVikingService:
         self._resource_processor: Optional[ResourceProcessor] = None
         self._skill_processor: Optional[SkillProcessor] = None
         self._session_compressor: Optional["SessionCompressorV2"] = None
-        self._lock_manager: Optional[LockManager] = None
+
         self._directory_initializer: Optional[DirectoryInitializer] = None
         self._watch_scheduler: Optional[WatchScheduler] = None
         self._encryptor: Optional[Any] = None
@@ -121,8 +120,9 @@ class OpenVikingService:
         # Initialize storage
         self._init_storage(
             config.storage,
-            config.embedding.max_concurrent,
-            config.vlm.max_concurrent,
+            max_concurrent_embedding=config.embedding.max_concurrent,
+            max_concurrent_semantic=config.vlm.max_concurrent,
+            max_concurrent_external_parse=config.queue_workers.external_parse.max_concurrent,
             binding_config=binding_config,
             git_config=config.git,
         )
@@ -138,6 +138,7 @@ class OpenVikingService:
         config: StorageConfig,
         max_concurrent_embedding: int = 10,
         max_concurrent_semantic: int = 64,
+        max_concurrent_external_parse: int = 4,
         binding_config: Any = None,
         *,
         git_config: Optional[GitConfig] = None,
@@ -158,6 +159,7 @@ class OpenVikingService:
                 mount_point=queue_mount_point,
                 max_concurrent_embedding=max_concurrent_embedding,
                 max_concurrent_semantic=max_concurrent_semantic,
+                max_concurrent_external_parse=max_concurrent_external_parse,
             )
         else:
             logger.warning("RAGFS client not initialized, skipping queue manager")
@@ -173,16 +175,7 @@ class OpenVikingService:
         if self._queue_manager:
             self._queue_manager.setup_standard_queues(self._vikingdb_manager, start=False)
 
-        # Initialize LockManager (fail-fast if RAGFS missing)
-        if self._agfs_client is None:
-            raise RuntimeError("RAGFS client not initialized for LockManager")
-        tx_cfg = config.transaction
-        self._lock_manager = init_lock_manager(
-            agfs=self._agfs_client,
-            lock_timeout=tx_cfg.lock_timeout,
-            lock_expire=tx_cfg.lock_expire,
-            redo_recovery_enabled=tx_cfg.redo_recovery_enabled,
-        )
+        # PathLock has been moved to Rust ragfs; Python-layer LockManager is no longer needed.
         set_task_tracker(config.build_task_tracker(self._agfs_client))
 
     def _build_ragfs_binding_config(self) -> Any:
@@ -231,11 +224,6 @@ class OpenVikingService:
     def vikingdb_manager(self) -> Optional[VikingDBManager]:
         """Get VikingDBManager instance."""
         return self._vikingdb_manager
-
-    @property
-    def lock_manager(self) -> Optional[LockManager]:
-        """Get LockManager instance."""
-        return self._lock_manager
 
     @property
     def session_compressor(self) -> Optional["SessionCompressorV2"]:
@@ -303,8 +291,11 @@ class OpenVikingService:
         if self._vikingdb_manager is None:
             self._init_storage(
                 self._config.storage,
-                self._config.embedding.max_concurrent,
-                self._config.vlm.max_concurrent,
+                max_concurrent_embedding=self._config.embedding.max_concurrent,
+                max_concurrent_semantic=self._config.vlm.max_concurrent,
+                max_concurrent_external_parse=(
+                    self._config.queue_workers.external_parse.max_concurrent
+                ),
                 binding_config=self._build_ragfs_binding_config(),
                 git_config=self._config.git,
             )
@@ -376,17 +367,10 @@ class OpenVikingService:
             skill_processor=self._skill_processor,
         )
 
-        # Start LockManager if initialized
-        if self._lock_manager:
-            await self._lock_manager.start()
-            logger.info("LockManager started")
-
         self._watch_scheduler = WatchScheduler(
             resource_service=self._resource_service,
             viking_fs=self._viking_fs,
         )
-        await self._watch_scheduler.start()
-        logger.info("WatchScheduler started")
 
         # Wire up sub-services
         self._fs_service.set_dependencies(
@@ -437,6 +421,7 @@ class OpenVikingService:
                         self._resource_service,
                         asyncio.get_running_loop(),
                         queue_name,
+                        self._viking_fs,
                     ),
                     allow_create=True,
                 )
@@ -448,6 +433,15 @@ class OpenVikingService:
                 ),
                 allow_create=True,
             )
+            await self._queue_manager.prepare_task_tracking(get_task_tracker())
+
+        if self._config.enable_watch_scheduler:
+            await self._watch_scheduler.start()
+            logger.info("WatchScheduler started")
+        else:
+            logger.info("WatchScheduler disabled by config (enable_watch_scheduler=false)")
+
+        if self._queue_manager:
             self._queue_manager.start()
             logger.info("QueueManager workers started")
 
@@ -475,10 +469,6 @@ class OpenVikingService:
             await asyncio.to_thread(self._queue_manager.stop)
             self._queue_manager = None
             logger.info("Queue manager stopped")
-
-        if self._lock_manager:
-            await self._lock_manager.stop()
-            self._lock_manager = None
 
         if self._vikingdb_manager:
             self._vikingdb_manager.mark_closing()

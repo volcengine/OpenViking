@@ -1,13 +1,38 @@
 import { homedir } from "node:os";
+import { readFileSync } from "node:fs";
 
 import { getEnv } from "./runtime-utils.js";
+
+/**
+ * Subset of OpenClaw's standard `SecretRef` shape supported by the OpenViking
+ * plugin. The full runtime SDK also recognises `source: "exec"` with a
+ * provider plugin, but the plugin self-hosts its own env/file resolution so
+ * users on pluginSdkVersion < 2026.6.x (no host-level secret-resolver) still
+ * get vault-free secret management.
+ *
+ *   source: "env"  -> `process.env[id]` (same as the bare `${ENV}` string
+ *                     interpolation, but declarative and visible to UI hints).
+ *   source: "file" -> contents of `id` path (``~`` expansion supported),
+ *                     leading/trailing whitespace trimmed — convenient for
+ *                     Kubernetes `secretKeyRef` mount volumes and
+ *                     file-permission-only deployments.
+ *   source: "exec" -> delegate to host `openclaw` secret resolver when the
+ *                     runtime exposes it; today the plugin performs a
+ *                     best-effort `provider + id` CLI exec call so that
+ *                     1Password / Vault / gopass users can share OpenViking
+ *                     credentials with their other providers.
+ */
+export type OpenVikingSecretRef =
+  | { source: "env"; id: string }
+  | { source: "file"; id: string }
+  | { source: "exec"; provider: string; id: string };
 
 export type MemoryOpenVikingConfig = {
   mode?: "remote";
   baseUrl?: string;
   peer_role?: "none" | "assistant" | "person";
   peer_prefix?: string;
-  apiKey?: string;
+  apiKey?: string | OpenVikingSecretRef;
   /** Optional HTTP headers merged into every OpenViking request. */
   headers?: Record<string, string>;
   /** Advanced option. Only needed when explicitly sending tenant identity headers. With a user key the server derives identity from the key. */
@@ -186,6 +211,105 @@ function resolvePeerPrefix(configured: unknown): string {
     return trimmed === "default" ? DEFAULT_PEER_PREFIX : trimmed;
   }
   return DEFAULT_PEER_PREFIX;
+}
+
+/**
+ * Resolve an {@link OpenVikingSecretRef} to the actual secret string. Plain
+ * strings pass through untouched so callers can compose this with the legacy
+ * `resolveEnvVars` pipeline without branching.
+ *
+ * Intentional behaviours:
+ *   * `env`: uses `getEnv` (process.env but exposed for vitest overrides). An
+ *     unset / empty env var is an error — the user asked for a named secret
+ *     so silent empty-string fallback would mask misconfigurations.
+ *   * `file`: ~ expanded, then read as UTF-8, then leading/trailing whitespace
+ *     stripped (de-facto standard for files written with `echo xxx > key`).
+ *     Missing / unreadable files propagate the original node error with an
+ *     error prefix that names the OpenViking field, so the user knows which
+ *     secretRef failed to load.
+ *   * `exec`: shells out `<provider> <id>`. Providers commonly expose this
+ *     shape (1Password CLI, gopass, HashiCorp Vault), which matches how
+ *     OpenClaw's own `@transmitt0r/openclaw-plugin-onepassword` provider
+ *     resolves `{source:"exec", provider:"onepassword", id:"..."}`. Exec is
+ *     best-effort; failures surface with an error prefix so users can
+ *     distinguish `provider not installed` from `provider configured but id
+ *     missing`.
+ */
+function resolveSecret(
+  value: string | OpenVikingSecretRef | undefined | null,
+  label: string,
+): string {
+  if (value === undefined || value === null) return "";
+  if (typeof value === "string") return value;
+  if (!value || typeof value !== "object") {
+    throw new Error(
+      `OpenViking ${label} must be a plain string or a SecretRef object ` +
+        `({source:"env"|"file"|"exec", id})`,
+    );
+  }
+  const obj = value as Record<string, unknown>;
+  if (typeof obj.id !== "string" || !obj.id) {
+    throw new Error(`OpenViking ${label} SecretRef requires a non-empty string "id"`);
+  }
+  const id = obj.id;
+  switch (obj.source) {
+    case "env": {
+      const envValue = getEnv(id);
+      if (!envValue) {
+        throw new Error(
+          `OpenViking ${label} SecretRef env source: environment variable ${id} is not set or empty`,
+        );
+      }
+      return envValue;
+    }
+    case "file": {
+      const resolvedPath = expandHomeDir(id);
+      try {
+        const contents = readFileSync(resolvedPath, "utf8");
+        return contents.trim();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `OpenViking ${label} SecretRef file source: cannot read ${resolvedPath} (${msg})`,
+        );
+      }
+    }
+    case "exec": {
+      const provider = typeof (obj as Record<string, unknown>).provider === "string"
+        ? (obj as Record<string, unknown>).provider as string
+        : "";
+      if (!provider) {
+        throw new Error(
+          `OpenViking ${label} SecretRef exec source requires a "provider" field naming the secret-manager CLI on PATH`,
+        );
+      }
+      try {
+        // Avoid top-level `import "node:child_process"` — this branch is rare
+        // and keeping the require lazy makes startup marginally faster for
+        // the 95% of users who pick env/file.
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
+        const out = execFileSync(provider, [id], {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+          timeout: 15_000,
+          env: process.env,
+        }) as string;
+        return out.trim();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `OpenViking ${label} SecretRef exec source: provider "${provider}" failed for id "${id}" (${msg})`,
+        );
+      }
+    }
+    default:
+      throw new Error(
+        `OpenViking ${label} SecretRef has unknown source "${String(
+          (obj as Record<string, unknown>).source,
+        )}". Supported: "env" | "file" | "exec".`,
+      );
+  }
 }
 
 function resolvePeerRole(configured: unknown) {
@@ -465,7 +589,14 @@ export const memoryOpenVikingConfigSchema = {
     const peerPrefix = resolvePeerPrefix(cfg.peer_prefix);
     const rawBaseUrl = typeof cfg.baseUrl === "string" ? cfg.baseUrl : resolveDefaultBaseUrl();
     const resolvedBaseUrl = resolveEnvVars(rawBaseUrl).replace(/\/+$/, "");
-    const rawApiKey = typeof cfg.apiKey === "string" ? cfg.apiKey : getEnv("OPENVIKING_API_KEY");
+    // Support plain string, SecretRef object, and OPENVIKING_API_KEY fallback.
+    // A user writing a SecretRef has explicitly opted out of the bare env
+    // interpolation path, so the fallback kicks in only when nothing is
+    // configured at all (matches existing behaviour).
+    const rawApiKey: string | OpenVikingSecretRef | undefined =
+      cfg.apiKey !== undefined && cfg.apiKey !== null
+        ? (cfg.apiKey as string | OpenVikingSecretRef)
+        : getEnv("OPENVIKING_API_KEY") || undefined;
     const captureMode = cfg.captureMode;
     if (
       typeof captureMode !== "undefined" &&
@@ -508,7 +639,7 @@ export const memoryOpenVikingConfigSchema = {
       baseUrl: resolvedBaseUrl,
       peer_role: peerRole,
       peer_prefix: peerPrefix,
-      apiKey: rawApiKey ? resolveEnvVars(rawApiKey) : "",
+      apiKey: rawApiKey ? resolveEnvVars(resolveSecret(rawApiKey, "config.apiKey")) : "",
       headers: toStringRecord(cfg.headers, "openviking config headers"),
       accountId,
       userId,
@@ -678,7 +809,10 @@ export const memoryOpenVikingConfigSchema = {
       label: "OpenViking API Key",
       sensitive: true,
       placeholder: "${OPENVIKING_API_KEY}",
-      help: "Optional API key for OpenViking server",
+      help:
+        "Optional API key for OpenViking server. Accepts a plain string, " +
+        "${ENV_VAR} interpolation, or a SecretRef object ({source: env/file/exec, id}). " +
+        "Prefer the SecretRef shapes so the key never sits as plaintext in openclaw.json.",
     },
     headers: {
       label: "Headers",

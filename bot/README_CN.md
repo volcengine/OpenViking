@@ -105,13 +105,14 @@ ov find "我的回答偏好"
     "agents": {
       "provider": "openai",
       "model": "gpt-4o-mini",
-      "api_key": "<your-model-api-key>"
+      "api_key": "<your-model-api-key>",
+      "max_tokens": 8192
     }
   }
 }
 ```
 
-也可以只配置根级 `vlm`，VikingBot 会继承其中的模型、Provider、API Key、API Base 和超时配置。
+也可以只配置根级 `vlm`，VikingBot 会继承其中的模型、Provider、API Key、API Base、超时和输出 Token 配置。`bot.agents.max_tokens` 是可选项；不配置时由模型服务决定输出上限。单个 credential 上的 `max_tokens` 会覆盖 Agent 级值。
 
 #### 2. 开始对话
 

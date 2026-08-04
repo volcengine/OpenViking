@@ -16,6 +16,7 @@ class AddResourceMsg:
     user_id: str
     role: str
     path: str = ""
+    source_path: str = ""
     telemetry_id: Optional[str] = None
     prepared: Optional[Dict[str, Any]] = None
     lock_handoff: Optional[Dict[str, Any]] = None
@@ -42,6 +43,8 @@ class AddResourceMsg:
     defer_target_resolution: bool = False
     understanding_response_id: Optional[str] = None
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
+    tags: Optional[list[str]] = None
+    tag_mode: str = "replace"
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
@@ -78,6 +81,7 @@ class AddResourceMsg:
         return cls(
             task_id=str(task_id),
             path=str(path or ""),
+            source_path=str(data.get("source_path") or path or ""),
             root_uri=str(root_uri),
             account_id=str(data.get("account_id", "default")),
             user_id=str(data.get("user_id", "default")),
@@ -120,4 +124,10 @@ class AddResourceMsg:
                 else None
             ),
             processing_mode=data.get("processing_mode", DEFAULT_PROCESSING_MODE),
+            tags=(
+                list(data["tags"])
+                if isinstance(data.get("tags"), list)
+                else None
+            ),
+            tag_mode=str(data.get("tag_mode") or "replace"),
         )

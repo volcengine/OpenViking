@@ -253,3 +253,238 @@ class AsyncAGFSClient:
     ) -> Dict[str, Any]:
         """Retry pending multi-write sync work for a file or directory path."""
         return await self.run("system_sync_retry", path, ctx=_fs_ctx_or_default(path, fs_ctx))
+
+    # -- pathlock async wrappers ------------------------------------------------
+
+    async def pathlock_acquire_exact(
+        self,
+        path: str,
+        timeout_secs: float = 0.0,
+        owner_lease_ref: Dict[str, Any] | None = None,
+        *,
+        fs_ctx: Dict[str, str] | None = None,
+    ) -> Dict[str, Any]:
+        """Acquire an exact lock on a single path."""
+        return await self.run(
+            "pathlock_acquire_exact",
+            _fs_ctx_or_default(path, fs_ctx),
+            path,
+            timeout_secs,
+            owner_lease_ref,
+        )
+
+    async def pathlock_acquire_exact_batch(
+        self,
+        paths: list[str],
+        timeout_secs: float = 0.0,
+        owner_lease_ref: Dict[str, Any] | None = None,
+        *,
+        fs_ctx: Dict[str, str] | None = None,
+    ) -> Dict[str, Any]:
+        """Acquire exact locks on multiple paths."""
+        return await self.run(
+            "pathlock_acquire_exact_batch",
+            _fs_ctx_or_default(paths[0] if paths else "/", fs_ctx),
+            paths,
+            timeout_secs,
+            owner_lease_ref,
+        )
+
+    async def pathlock_acquire_tree(
+        self,
+        path: str,
+        timeout_secs: float = 0.0,
+        owner_lease_ref: Dict[str, Any] | None = None,
+        *,
+        fs_ctx: Dict[str, str] | None = None,
+    ) -> Dict[str, Any]:
+        """Acquire a tree lock on a single path."""
+        return await self.run(
+            "pathlock_acquire_tree",
+            _fs_ctx_or_default(path, fs_ctx),
+            path,
+            timeout_secs,
+            owner_lease_ref,
+        )
+
+    async def pathlock_acquire_tree_batch(
+        self,
+        paths: list[str],
+        timeout_secs: float = 0.0,
+        owner_lease_ref: Dict[str, Any] | None = None,
+        *,
+        fs_ctx: Dict[str, str] | None = None,
+    ) -> Dict[str, Any]:
+        """Acquire tree locks on multiple paths."""
+        return await self.run(
+            "pathlock_acquire_tree_batch",
+            _fs_ctx_or_default(paths[0] if paths else "/", fs_ctx),
+            paths,
+            timeout_secs,
+            owner_lease_ref,
+        )
+
+    async def pathlock_acquire_exact_tree_batch(
+        self,
+        exact_paths: list[str],
+        tree_paths: list[str],
+        timeout_secs: float = 0.0,
+        owner_lease_ref: Dict[str, Any] | None = None,
+        *,
+        fs_ctx: Dict[str, str] | None = None,
+    ) -> Dict[str, Any]:
+        """Acquire a mixed batch of exact and tree locks."""
+        first = exact_paths[0] if exact_paths else (tree_paths[0] if tree_paths else "/")
+        return await self.run(
+            "pathlock_acquire_exact_tree_batch",
+            _fs_ctx_or_default(first, fs_ctx),
+            exact_paths,
+            tree_paths,
+            timeout_secs,
+            owner_lease_ref,
+        )
+
+    async def pathlock_acquire_batch(
+        self,
+        requests: list[Dict[str, str]],
+        timeout_secs: float = 0.0,
+        owner_lease_ref: Dict[str, Any] | None = None,
+        *,
+        fs_ctx: Dict[str, str] | None = None,
+    ) -> Dict[str, Any]:
+        """Acquire a batch of locks from a list of request dicts."""
+        if not requests:
+            raise ValueError("pathlock request batch must not be empty")
+        for request in requests:
+            path = request.get("path")
+            if not path or not path.startswith("/"):
+                raise ValueError("pathlock request.path must be an absolute path")
+            if request.get("kind") not in {"exact", "tree"}:
+                raise ValueError("pathlock request.kind must be 'exact' or 'tree'")
+        first = requests[0]["path"]
+        return await self.run(
+            "pathlock_acquire_batch",
+            _fs_ctx_or_default(first, fs_ctx),
+            requests,
+            timeout_secs,
+            owner_lease_ref,
+        )
+
+    async def pathlock_as_borrowed(
+        self,
+        owned_lease_ref: Dict[str, Any],
+        *,
+        fs_ctx: Dict[str, str] | None = None,
+    ) -> Dict[str, Any]:
+        """Create a borrowed view of an owned lease."""
+        return await self.run(
+            "pathlock_as_borrowed",
+            _fs_ctx_or_default("/", fs_ctx),
+            owned_lease_ref,
+        )
+
+    async def pathlock_refresh(
+        self,
+        owned_lease_ref: Dict[str, Any],
+        *,
+        fs_ctx: Dict[str, str] | None = None,
+    ) -> str:
+        """Refresh an owned lease. Returns 'refreshed', 'lost', or 'failed'."""
+        return await self.run(
+            "pathlock_refresh",
+            _fs_ctx_or_default("/", fs_ctx),
+            owned_lease_ref,
+        )
+
+    async def pathlock_release(
+        self,
+        owned_lease_ref: Dict[str, Any],
+        *,
+        fs_ctx: Dict[str, str] | None = None,
+    ) -> None:
+        """Release an owned lease."""
+        await self.run(
+            "pathlock_release",
+            _fs_ctx_or_default("/", fs_ctx),
+            owned_lease_ref,
+        )
+
+    async def pathlock_release_selected(
+        self,
+        owned_lease_ref: Dict[str, Any],
+        lock_paths: list[str],
+        *,
+        fs_ctx: Dict[str, str] | None = None,
+    ) -> None:
+        """Release selected lock paths from an owned lease."""
+        await self.run(
+            "pathlock_release_selected",
+            _fs_ctx_or_default("/", fs_ctx),
+            owned_lease_ref,
+            lock_paths,
+        )
+
+    async def pathlock_to_handoff(
+        self,
+        owned_lease_ref: Dict[str, Any],
+        *,
+        fs_ctx: Dict[str, str] | None = None,
+    ) -> Dict[str, Any]:
+        """Export a handoff ref from an owned lease."""
+        return await self.run(
+            "pathlock_to_handoff",
+            _fs_ctx_or_default("/", fs_ctx),
+            owned_lease_ref,
+        )
+
+    async def pathlock_handoff(
+        self,
+        owned_lease_ref: Dict[str, Any],
+        *,
+        fs_ctx: Dict[str, str] | None = None,
+    ) -> None:
+        """Mark an owned lease as handed off."""
+        await self.run(
+            "pathlock_handoff",
+            _fs_ctx_or_default("/", fs_ctx),
+            owned_lease_ref,
+        )
+
+    async def pathlock_adopt(
+        self,
+        handoff_ref: Dict[str, Any],
+        *,
+        fs_ctx: Dict[str, str] | None = None,
+    ) -> Dict[str, Any]:
+        """Adopt a handoff ref, returning a new owned lease."""
+        return await self.run(
+            "pathlock_adopt",
+            _fs_ctx_or_default("/", fs_ctx),
+            handoff_ref,
+        )
+
+    async def pathlock_is_locked(
+        self,
+        path: str,
+        ignore_stale: bool = True,
+        *,
+        fs_ctx: Dict[str, str] | None = None,
+    ) -> bool:
+        """Check if a path is locked."""
+        return await self.run(
+            "pathlock_is_locked",
+            _fs_ctx_or_default(path, fs_ctx),
+            path,
+            ignore_stale,
+        )
+
+    async def pathlock_observe(
+        self,
+        *,
+        fs_ctx: Dict[str, str] | None = None,
+    ) -> Dict[str, Any]:
+        """Return an observability snapshot of current lock state."""
+        return await self.run(
+            "pathlock_observe",
+            _fs_ctx_or_default("/", fs_ctx),
+        )

@@ -81,8 +81,10 @@ const TASK_TYPE_OPTIONS: Exclude<TaskTypeFilter, 'all'>[] = [
 const TASK_STATUS_OPTIONS: Exclude<TaskStatusFilter, 'all'>[] = [
   'pending',
   'running',
+  'cancelling',
   'completed',
   'failed',
+  'cancelled',
 ]
 
 async function fetchTasks(
@@ -145,7 +147,7 @@ function TasksRoute() {
     const Icon =
       status === 'completed'
         ? CheckCircle2Icon
-        : status === 'failed'
+        : status === 'failed' || status === 'cancelled'
           ? CircleXIcon
           : status === 'running'
             ? LoaderCircleIcon
@@ -162,7 +164,13 @@ function TasksRoute() {
         }
         className="gap-1 font-normal"
       >
-        <Icon className={status === 'running' ? 'animate-spin' : undefined} />
+        <Icon
+          className={
+            status === 'running' || status === 'cancelling'
+              ? 'animate-spin'
+              : undefined
+          }
+        />
         {t(`status.${status}`)}
       </Badge>
     )

@@ -511,7 +511,7 @@ fn task_help_command(program: &str, tokens: &[&str]) -> String {
             }
             _ => format!("{program} task watch --help"),
         },
-        Some("status" | "list") => format!("{program} task {} --help", tokens[2]),
+        Some("status" | "cancel" | "list") => format!("{program} task {} --help", tokens[2]),
         _ => format!("{program} task --help"),
     }
 }

@@ -12,7 +12,7 @@ hosting ``http(s)`` URLs).
 
 from __future__ import annotations
 
-from typing import Dict, FrozenSet, Optional, Tuple
+from typing import Dict, FrozenSet, List, Optional, Tuple
 
 from openviking.utils import is_git_repo_url
 
@@ -30,14 +30,31 @@ CONNECTOR_SUPPORTED_ARGS: Dict[str, FrozenSet[str]] = {
 # add_resource ``args`` keys carrying source credentials (git: HTTPS PAT as
 # the Basic-Auth password, username defaults to "oauth2" plugin-side). They
 # are stripped out of args and transported in the top-level ``auth_config``
-# request field -- never ``param_config`` -- because only the auth channel
-# is excluded from request logging on every hop (Connector and plugin log
-# param_config verbatim). One-shot use: credentials are never persisted, and
+# request field -- never ``param_config`` -- so Connector and plugin logs
+# redact them while logging param_config verbatim. The incoming OpenViking
+# HTTP body may still be captured when the explicitly unsafe observability
+# body dump is enabled. One-shot use: credentials are never persisted, and
 # requests carrying them must not fall back to a durable native import job.
 CONNECTOR_CREDENTIAL_ARGS: Dict[str, FrozenSet[str]] = {
     "tos": frozenset(),
     "git": frozenset({"token", "username"}),
 }
+
+
+# Reserved ``args`` key for source credentials of declared add_types outside
+# the registries above (e.g. add_type="feishu"). OpenViking cannot know each
+# plugin's credential fields, so the caller supplies them as a mapping under
+# this key; it is lifted verbatim into the top-level ``auth_config`` request
+# field and never merged into param_config. All other args keys travel to the
+# plugin wholesale through param_config.
+CONNECTOR_ARGS_AUTH_CONFIG_KEY = "auth_config"
+
+
+def credential_arg_names(add_type: str, args: Optional[Dict[str, object]]) -> List[str]:
+    """Sorted credential-arg keys of *add_type* that are present in *args*."""
+    return sorted(
+        set(args or ()).intersection(CONNECTOR_CREDENTIAL_ARGS.get(add_type, frozenset()))
+    )
 
 
 def is_full_commit_sha(ref: str) -> bool:

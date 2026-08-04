@@ -16,6 +16,7 @@ import type {
 import type { TaskListResult, TaskRecord } from '@ov-server/api/v1/tasks'
 
 export type ResourceUploadTaskStatus =
+  | 'cancelled'
   | 'pending'
   | 'uploading'
   | 'processing'
@@ -208,6 +209,9 @@ function toUploadStatus(
   if (status === 'failed') {
     return 'failed'
   }
+  if (status === 'cancelled') {
+    return 'cancelled'
+  }
   return 'processing'
 }
 
@@ -224,7 +228,8 @@ function mergeServerTask(
     existing && existing.source !== 'server'
       ? existing.fileName
       : getServerTaskName(record)
-  const isFinished = status === 'success' || status === 'failed'
+  const isFinished =
+    status === 'success' || status === 'failed' || status === 'cancelled'
 
   return {
     id: existing?.id ?? `server-${record.task_id}`,
@@ -244,7 +249,9 @@ function mergeServerTask(
     errorMessage:
       status === 'failed'
         ? record.error || existing?.errorMessage || 'Processing failed'
-        : null,
+        : status === 'cancelled'
+          ? record.error || 'Processing cancelled'
+          : null,
     rootUri,
   }
 }
@@ -692,6 +699,19 @@ export function ResourceUploadProvider({
               ...prev,
               phase: 'idle',
               error: remoteTask.errorMessage || 'Processing failed',
+            }
+          : prev,
+      )
+      return
+    }
+
+    if (remoteTask.status === 'cancelled') {
+      setRemoteState((prev) =>
+        prev.taskId === remoteTask.serverTaskId
+          ? {
+              ...prev,
+              phase: 'idle',
+              error: remoteTask.errorMessage || 'Processing cancelled',
             }
           : prev,
       )

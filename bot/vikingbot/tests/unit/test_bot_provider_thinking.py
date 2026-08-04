@@ -14,6 +14,11 @@ def test_agents_config_defaults_thinking_enabled():
     assert AgentsConfig(thinking=False).thinking is False
 
 
+def test_agents_config_defaults_max_tokens_unset():
+    assert AgentsConfig().max_tokens is None
+    assert AgentsConfig(max_tokens=8192).max_tokens == 8192
+
+
 def test_agents_openviking_retention_defaults_to_turn_budget_values():
     config = AgentsConfig()
 
@@ -206,6 +211,70 @@ async def test_litellm_bot_provider_does_not_send_thinking_to_generic_openai(mon
 
     assert "thinking" not in captured
     assert "extra_body" not in captured
+    assert "max_tokens" not in captured
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configured_max_tokens", "expected_max_tokens"),
+    [(None, None), (8192, 8192)],
+)
+async def test_vlm_adapter_volcengine_stream_respects_optional_max_tokens(
+    configured_max_tokens,
+    expected_max_tokens,
+):
+    captured = {}
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            captured.update(kwargs)
+
+            async def chunks():
+                yield SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            finish_reason="stop",
+                            delta=SimpleNamespace(
+                                reasoning_content=None,
+                                content="ok",
+                                tool_calls=[],
+                            ),
+                        )
+                    ],
+                    usage=None,
+                )
+
+            return chunks()
+
+    vlm = SimpleNamespace(
+        provider="volcengine",
+        model="ep-test",
+        temperature=0.0,
+        max_tokens=configured_max_tokens,
+        thinking=False,
+        extra_headers=None,
+        get_async_client=lambda: SimpleNamespace(
+            chat=SimpleNamespace(completions=FakeCompletions())
+        ),
+    )
+    provider = VLMProviderAdapter(
+        vlm,
+        default_model="ep-test",
+        langfuse_client=SimpleNamespace(enabled=False, _client=None),
+    )
+
+    events = [
+        event
+        async for event in provider.chat_stream(
+            messages=[{"role": "user", "content": "hi"}],
+        )
+    ]
+
+    assert events[-1].response.content == "ok"
+    if expected_max_tokens is None:
+        assert "max_tokens" not in captured
+    else:
+        assert captured["max_tokens"] == expected_max_tokens
 
 
 @pytest.mark.asyncio

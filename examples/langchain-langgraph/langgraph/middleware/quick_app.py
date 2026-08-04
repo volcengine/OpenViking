@@ -7,11 +7,11 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from typing_extensions import Annotated, TypedDict
 
-from openviking.integrations.langchain import (
+from langchain_openviking import (
     InMemoryOpenVikingClient,
     OpenVikingContextMiddleware,
 )
-from openviking.integrations.langchain.client import extract_message_text
+from langchain_openviking.client import extract_message_text
 
 
 class AgentState(TypedDict, total=False):

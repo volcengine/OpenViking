@@ -70,8 +70,9 @@ class ConnectorClient:
 
         ``to`` is the exact OpenViking file or directory target. Source-specific
         settings stay inside ``param_config``; source credentials stay inside
-        ``auth_config``, the only body field redacted from request logs on
-        every hop, and must never be merged into ``param_config``.
+        ``auth_config``, which Connector and plugin request logs redact, and
+        must never be merged into ``param_config``. The incoming OpenViking
+        HTTP body may still be captured when unsafe body dumping is enabled.
 
         Returns the Connector response dict (contains task key / id on success).
         """

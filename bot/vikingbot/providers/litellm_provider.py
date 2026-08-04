@@ -7,6 +7,7 @@ import litellm
 from litellm import acompletion
 from loguru import logger
 
+from openviking.utils.multimodal import redact_image_data_urls
 from vikingbot.integrations.langfuse import LangfuseClient
 from vikingbot.providers.base import (
     LLMProvider,
@@ -136,9 +137,7 @@ class LiteLLMProvider(LLMProvider):
             kwargs["thinking"] = {"type": "enabled"}
             return
 
-        if thinking_param == "dashscope_enable_thinking" or model_lower.startswith(
-            "dashscope/"
-        ):
+        if thinking_param == "dashscope_enable_thinking" or model_lower.startswith("dashscope/"):
             extra_body = dict(kwargs.get("extra_body") or {})
             extra_body["enable_thinking"] = True
             kwargs["extra_body"] = extra_body
@@ -214,7 +213,7 @@ class LiteLLMProvider(LLMProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
-        max_tokens: int = 4096,
+        max_tokens: int | None = None,
         temperature: float = 0.7,
         session_id: str | None = None,
     ) -> LLMResponse:
@@ -225,7 +224,7 @@ class LiteLLMProvider(LLMProvider):
             messages: List of message dicts with 'role' and 'content'.
             tools: Optional list of tool definitions in OpenAI format.
             model: Model identifier (e.g., 'anthropic/claude-sonnet-4-5').
-            max_tokens: Maximum tokens in response.
+            max_tokens: Maximum tokens in response. None uses the model provider default.
             temperature: Sampling temperature.
             session_id: Optional session ID for tracing.
 
@@ -240,9 +239,10 @@ class LiteLLMProvider(LLMProvider):
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": messages,
-            "max_tokens": max_tokens,
             "temperature": temperature,
         }
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
 
         # Apply model-specific overrides (e.g. kimi-k2.5 temperature)
         self._apply_model_overrides(model, kwargs)
@@ -283,7 +283,7 @@ class LiteLLMProvider(LLMProvider):
                         name="llm-chat",
                         as_type="generation",
                         model=model,
-                        input=messages,
+                        input=redact_image_data_urls(messages),
                         metadata=metadata,
                     )
                     if response_id:
@@ -394,7 +394,7 @@ class LiteLLMProvider(LLMProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
-        max_tokens: int = 4096,
+        max_tokens: int | None = None,
         temperature: float = 0.7,
         session_id: str | None = None,
     ) -> AsyncIterator[LLMStreamEvent]:
@@ -405,10 +405,11 @@ class LiteLLMProvider(LLMProvider):
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": messages,
-            "max_tokens": max_tokens,
             "temperature": temperature,
             "stream": True,
         }
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
         self._apply_model_overrides(model, kwargs)
         self._apply_thinking_overrides(model, kwargs)
 

@@ -36,7 +36,6 @@ class TestAddResource:
 
         print(result)
         assert "root_uri" in result
-        assert "queue_status" in result
 
     async def test_local_client_add_resource_with_wait_preserves_queue_status(self):
         """Local SDK add_resource(wait=True) should keep queue_status and internal telemetry."""
@@ -75,6 +74,48 @@ class TestAddResource:
         assert seen["enabled"] is True
         assert str(seen["telemetry_id"]).startswith("tm_")
         assert seen["kwargs"]["wait"] is True
+
+    async def test_local_client_forwards_declared_add_type(self):
+        seen: dict[str, object] = {}
+
+        async def _fake_add_resource(**kwargs):
+            seen.update(kwargs)
+            return {"root_uri": "viking://resources/feishu"}
+
+        client = LocalClient.__new__(LocalClient)
+        client._ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+        client._service = SimpleNamespace(
+            resources=SimpleNamespace(add_resource=_fake_add_resource)
+        )
+
+        result = await LocalClient.add_resource(
+            client,
+            path="space:home",
+            add_type=" feishu ",
+            to="viking://resources/feishu",
+        )
+
+        assert result["root_uri"] == "viking://resources/feishu"
+        assert seen["path"] == "space:home"
+        assert seen["add_type"] == "feishu"
+        assert seen["to"] == "viking://resources/feishu"
+
+    async def test_async_openviking_forwards_declared_add_type(self):
+        backend = SimpleNamespace(add_resource=AsyncMock(return_value={"root_uri": "ok"}))
+        client = AsyncOpenViking.__new__(AsyncOpenViking)
+        client._initialized = True
+        client._client = backend
+
+        result = await AsyncOpenViking.add_resource(
+            client,
+            path="space:home",
+            add_type="feishu",
+            to="viking://resources/feishu",
+        )
+
+        assert result == {"root_uri": "ok"}
+        assert backend.add_resource.await_args.kwargs["add_type"] == "feishu"
+        assert backend.add_resource.await_args.kwargs["to"] == "viking://resources/feishu"
 
     async def test_add_resource_without_wait(
         self, client: AsyncOpenViking, sample_markdown_file: Path

@@ -38,6 +38,17 @@ fn compact_request_body(body: &mut Value) {
     });
 }
 
+fn add_resource_tag_fields(body: &mut Value, tags: &[String], tag_mode: &str) {
+    if tags.is_empty() {
+        return;
+    }
+    let obj = body
+        .as_object_mut()
+        .expect("add_resource request body must be an object");
+    obj.insert("tags".to_string(), serde_json::json!(tags));
+    obj.insert("tag_mode".to_string(), serde_json::json!(tag_mode));
+}
+
 fn normalize_image_input(image: Option<String>) -> Result<Option<String>> {
     let Some(value) = image else {
         return Ok(None);
@@ -681,6 +692,7 @@ impl HttpClient {
     pub async fn add_resource(
         &self,
         path: &str,
+        add_type: Option<String>,
         to: Option<String>,
         parent: Option<String>,
         parent_auto_create: Option<String>,
@@ -696,6 +708,8 @@ impl HttpClient {
         watch_interval: f64,
         processing_mode: String,
         resource_args: Option<Map<String, Value>>,
+        tags: Vec<String>,
+        tag_mode: String,
         show_progress: bool,
         verbose: bool,
     ) -> Result<serde_json::Value> {
@@ -715,6 +729,7 @@ impl HttpClient {
 
         let build_body = |base: serde_json::Value| {
             let mut body = base;
+            add_resource_tag_fields(&mut body, &tags, &tag_mode);
             if create_parent {
                 body.as_object_mut()
                     .expect("add_resource request body must be an object")
@@ -724,7 +739,9 @@ impl HttpClient {
             body
         };
 
-        if path_obj.exists() {
+        // A declared Connector add_type sends the path verbatim as a remote
+        // source; never interpret it as a local file to upload.
+        if add_type.is_none() && path_obj.exists() {
             if path_obj.is_dir() {
                 let source_name = path_obj
                     .file_name()
@@ -826,6 +843,7 @@ impl HttpClient {
         } else {
             let body = build_body(serde_json::json!({
                 "path": path,
+                "add_type": add_type,
                 "to": to,
                 "parent": effective_parent,
                 "reason": reason,
@@ -1156,6 +1174,11 @@ impl HttpClient {
     pub async fn get_task(&self, task_id: &str) -> Result<serde_json::Value> {
         let path = format!("/api/v1/tasks/{}", task_id);
         self.get(&path, &[]).await
+    }
+
+    pub async fn cancel_task(&self, task_id: &str) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/tasks/{}/cancel", task_id);
+        self.post(&path, &serde_json::json!({})).await
     }
 
     pub async fn list_tasks(
@@ -1853,6 +1876,28 @@ mod tests {
         });
         super::compact_request_body(&mut body);
         assert_eq!(body["processing_mode"], "vectors_only");
+    }
+
+    #[test]
+    fn add_resource_tag_fields_adds_tags_and_tag_mode() {
+        let mut body = json!({"path": "https://example.com/demo.md"});
+        let tags = vec!["team=search".to_string(), "env=test".to_string()];
+
+        super::add_resource_tag_fields(&mut body, &tags, "append");
+
+        assert_eq!(body["tags"], json!(["team=search", "env=test"]));
+        assert_eq!(body["tag_mode"], json!("append"));
+    }
+
+    #[test]
+    fn add_resource_tag_fields_omits_empty_tags_for_compatibility() {
+        let mut body = json!({"path": "https://example.com/demo.md"});
+
+        super::add_resource_tag_fields(&mut body, &[], "replace");
+
+        let obj = body.as_object().unwrap();
+        assert!(!obj.contains_key("tags"));
+        assert!(!obj.contains_key("tag_mode"));
     }
 
     #[test]

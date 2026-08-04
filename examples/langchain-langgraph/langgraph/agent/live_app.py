@@ -21,8 +21,8 @@ from langgraph.graph.message import add_messages
 from openai import OpenAI
 from typing_extensions import Annotated, TypedDict
 
-from openviking.integrations.langchain import OpenVikingContextMiddleware
-from openviking.integrations.langchain.client import extract_message_text
+from langchain_openviking import OpenVikingContextMiddleware
+from langchain_openviking.client import extract_message_text
 
 
 class LiveState(TypedDict, total=False):
@@ -30,7 +30,7 @@ class LiveState(TypedDict, total=False):
 
 
 def build_context_client():
-    from openviking.client import SyncHTTPClient
+    from openviking_sdk import SyncHTTPClient
 
     client = SyncHTTPClient(
         url=os.environ.get("OPENVIKING_URL") or None,

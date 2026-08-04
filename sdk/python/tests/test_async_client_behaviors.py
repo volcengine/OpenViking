@@ -1,3 +1,4 @@
+import inspect
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
@@ -6,6 +7,13 @@ import pytest
 from openviking_sdk import AsyncHTTPClient, SyncHTTPClient
 from openviking_sdk.client import Session, SyncSession
 from openviking_sdk.errors import NotFoundError
+
+
+def test_add_resource_signatures_keep_telemetry_position():
+    for func in (AsyncHTTPClient.add_resource, SyncHTTPClient.add_resource):
+        params = list(inspect.signature(func).parameters)
+        assert params.index("telemetry") < params.index("tags")
+        assert params.index("telemetry") < params.index("tag_mode")
 
 
 @pytest.mark.asyncio
@@ -473,6 +481,93 @@ async def test_add_resource_forwards_processing_mode():
 
 
 @pytest.mark.asyncio
+async def test_add_resource_forwards_declared_add_type_with_exact_target():
+    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {
+        "result": {"root_uri": "viking://resources/feishu"}
+    }
+
+    await client.add_resource(
+        "space:home",
+        add_type=" feishu ",
+        to="viking://resources/feishu",
+    )
+
+    payload = fake_http.post.await_args.kwargs["json"]
+    assert payload["path"] == "space:home"
+    assert payload["add_type"] == "feishu"
+    assert payload["to"] == "viking://resources/feishu"
+
+
+@pytest.mark.asyncio
+async def test_add_resource_declared_add_type_requires_exact_target():
+    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
+
+    with pytest.raises(ValueError, match="exact 'to'"):
+        await client.add_resource("space:home", add_type="feishu")
+
+
+@pytest.mark.asyncio
+async def test_add_resource_declared_add_type_rejects_parent():
+    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
+
+    with pytest.raises(ValueError, match="'parent'"):
+        await client.add_resource(
+            "space:home",
+            add_type="feishu",
+            to="viking://resources/feishu",
+            parent="viking://resources/imports",
+        )
+
+
+@pytest.mark.asyncio
+async def test_add_resource_declared_add_type_skips_local_file_upload(tmp_path):
+    source = tmp_path / "source"
+    source.write_text("connector source")
+
+    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._upload_temp_file = AsyncMock(return_value="unexpected-upload")
+    client._handle_response_data = lambda _response: {
+        "result": {"root_uri": "viking://resources/feishu"}
+    }
+
+    await client.add_resource(
+        str(source),
+        add_type="feishu",
+        to="viking://resources/feishu",
+    )
+
+    client._upload_temp_file.assert_not_awaited()
+    payload = fake_http.post.await_args.kwargs["json"]
+    assert payload["path"] == str(source)
+    assert "temp_file_id" not in payload
+
+
+def test_sync_add_resource_accepts_and_forwards_declared_add_type():
+    client = SyncHTTPClient(url="http://127.0.0.1:1933")
+
+    with patch.object(
+        client._async_client,
+        "add_resource",
+        new_callable=AsyncMock,
+        return_value={"root_uri": "viking://resources/feishu"},
+    ) as mock_add_resource:
+        result = client.add_resource(
+            "space:home",
+            add_type="feishu",
+            to="viking://resources/feishu",
+        )
+
+    assert result["root_uri"] == "viking://resources/feishu"
+    assert mock_add_resource.await_args.kwargs["add_type"] == "feishu"
+    assert mock_add_resource.await_args.kwargs["to"] == "viking://resources/feishu"
+
+
+@pytest.mark.asyncio
 async def test_add_resource_omits_default_processing_mode_for_legacy_servers():
     client = AsyncHTTPClient(url="http://127.0.0.1:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
@@ -598,6 +693,36 @@ async def test_import_ovpack_uploads_local_file_even_when_url_is_localhost(tmp_p
             "parent": "viking://resources/",
             "on_conflict": "skip",
             "temp_file_id": "upload_pack.ovpack",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_add_resource_sends_tags_and_tag_mode():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {"result": {"root_uri": "viking://resources/demo"}}
+
+    await client.add_resource(
+        path="https://example.com/demo.md",
+        tags=["team=search"],
+        tag_mode="append",
+    )
+
+    fake_http.post.assert_awaited_once_with(
+        "/api/v1/resources",
+        json={
+            "path": "https://example.com/demo.md",
+            "reason": "",
+            "instruction": "",
+            "wait": False,
+            "strict": False,
+            "directly_upload_media": True,
+            "watch_interval": 0,
+            "telemetry": False,
+            "tags": ["team=search"],
+            "tag_mode": "append",
         },
     )
 

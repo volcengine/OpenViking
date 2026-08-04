@@ -142,6 +142,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 label: "ov add-resource https://example.com/sitemap.xml --watch-interval 1440",
                 description: "Import a whole site via sitemap/RSS and refresh it daily.",
             },
+            HelpItem {
+                label: "ov add-resource tos://bucket/docs/ --add-type tos --to viking://resources/docs",
+                description: "Declare the Connector source type explicitly (Connector integration must be enabled).",
+            },
         ],
         next_steps: &[
             HelpItem {
@@ -543,7 +547,7 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Compare one file between two snapshots.",
             },
             HelpItem {
-                label: "ov snapshot restore viking://projects/acme <commit> --dry-run",
+                label: "ov snapshot restore <commit> viking://projects/acme --dry-run",
                 description: "Preview restoring a directory to a past snapshot.",
             },
         ],
@@ -581,11 +585,11 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         purpose: "Restore a project directory to a past snapshot via a forward commit.",
         examples: &[
             HelpItem {
-                label: "ov snapshot restore viking://projects/acme <commit> --dry-run",
+                label: "ov snapshot restore <commit> viking://projects/acme --dry-run",
                 description: "Preview which files would change.",
             },
             HelpItem {
-                label: "ov snapshot restore viking://projects/acme <commit> -m \"rollback\"",
+                label: "ov snapshot restore <commit> viking://projects/acme -m \"rollback\"",
                 description: "Apply the restore as a new commit.",
             },
         ],
@@ -911,6 +915,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "ov task status <task-id>",
                 description: "Inspect one task.",
+            },
+            HelpItem {
+                label: "ov task cancel <task-id>",
+                description: "Cancel one task.",
             },
         ],
         next_steps: &[HelpItem {
@@ -3115,6 +3123,7 @@ mod tests {
                 .expect("task help should render"),
         );
         assert!(task.contains("status <task-id>"));
+        assert!(task.contains("cancel <task-id>"));
         assert!(task.contains("list"));
     }
 

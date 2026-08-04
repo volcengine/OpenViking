@@ -32,13 +32,13 @@ from openviking.server.request_id import REQUEST_ID_HEADER, RequestIdMiddleware
 from openviking.server.routers import (
     admin_router,
     bot_router,
-    code_router,
     console_router,
     content_router,
     debug_router,
     filesystem_router,
     metrics_router,
     observer_router,
+    openviking_assets_router,
     pack_router,
     privacy_configs_router,
     relations_router,
@@ -58,7 +58,12 @@ from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
 from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.utils import get_logger
-from openviking_cli.utils.config import get_openviking_config
+from openviking_cli.utils.config import (
+    DEFAULT_OV_CONF,
+    OPENVIKING_CONFIG_ENV,
+    get_openviking_config,
+    resolve_config_path,
+)
 from openviking_cli.utils.logger import init_otel_log_handler_from_server_config
 
 logger = get_logger(__name__)
@@ -69,15 +74,20 @@ WORKER_BOT_API_URL_ENV = "OPENVIKING_WORKER_BOT_API_URL"
 
 def create_worker_app() -> FastAPI:
     """Load file config and replay parent-process Bot CLI overrides."""
-    config = load_server_config()
+    resolved_config_path = resolve_config_path(
+        None,
+        OPENVIKING_CONFIG_ENV,
+        DEFAULT_OV_CONF,
+    )
+    config_path = str(resolved_config_path) if resolved_config_path is not None else None
+    config = load_server_config(config_path)
     with_bot = os.environ.get(WORKER_WITH_BOT_ENV)
     if with_bot is not None:
         config.with_bot = with_bot == "1"
     bot_api_url = os.environ.get(WORKER_BOT_API_URL_ENV)
     if bot_api_url is not None:
         config.bot_api_url = bot_api_url
-    return create_app(config)
-
+    return create_app(config, config_path=config_path)
 
 async def _initialize_auth_plugin(
     app: FastAPI,
@@ -203,18 +213,27 @@ def _message_from_http_detail(detail: object) -> str:
 def create_app(
     config: Optional[ServerConfig] = None,
     service: Optional[OpenVikingService] = None,
+    config_path: Optional[str] = None,
 ) -> FastAPI:
     """Create FastAPI application.
 
     Args:
         config: Server configuration. If None, loads from default location.
         service: Pre-initialized OpenVikingService (optional).
+        config_path: Resolved ov.conf path used for live configuration reload.
 
     Returns:
         FastAPI application instance
     """
+    resolved_config_path = (
+        resolve_config_path(config_path, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
+        if config_path is not None or config is None
+        else None
+    )
     if config is None:
-        config = load_server_config()
+        config = load_server_config(
+            str(resolved_config_path) if resolved_config_path is not None else config_path
+        )
 
     validate_server_config(config)
 
@@ -242,6 +261,15 @@ def create_app(
         agent_evolution_setter = getattr(sessions, "set_agent_evolution_config", None)
         if callable(agent_evolution_setter):
             agent_evolution_setter(config.agent_evolution)
+        agent_evolution_path_setter = getattr(
+            sessions,
+            "set_agent_evolution_config_path",
+            None,
+        )
+        if callable(agent_evolution_path_setter):
+            agent_evolution_path_setter(
+                str(resolved_config_path) if resolved_config_path is not None else None
+            )
 
     if service is not None:
         _configure_session_runtime(service)
@@ -549,7 +577,6 @@ def create_app(
     app.include_router(content_router)
     app.include_router(console_router)
     app.include_router(search_router)
-    app.include_router(code_router)
     app.include_router(relations_router)
     app.include_router(privacy_configs_router)
     app.include_router(skills_router)
@@ -559,6 +586,7 @@ def create_app(
     app.include_router(pack_router)
     app.include_router(debug_router)
     app.include_router(observer_router)
+    app.include_router(openviking_assets_router)
     app.include_router(metrics_router)
     app.include_router(tasks_router)
     app.include_router(user_settings_router)

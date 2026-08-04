@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from openviking.utils.ingest_options import IngestOptions
 from openviking.server.identity import RequestContext, Role
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking_cli.session.user_id import UserIdentifier
@@ -49,6 +50,7 @@ def ctx() -> RequestContext:
 @pytest.mark.asyncio
 async def test_vectors_only_persists_tree_and_vectorizes_files_only(monkeypatch, ctx):
     viking_fs = SimpleNamespace(
+        _async_agfs=SimpleNamespace(pathlock_release=AsyncMock()),
         persist_temp_tree=AsyncMock(),
         delete_temp=AsyncMock(),
         tree=AsyncMock(
@@ -77,7 +79,7 @@ async def test_vectors_only_persists_tree_and_vectorizes_files_only(monkeypatch,
     processor._delete_resource_semantic_markers = AsyncMock()
     processor._delete_resource_semantic_vectors = AsyncMock()
     processor._delete_removed_resource_vectors = AsyncMock()
-    lock = SimpleNamespace(active=True, handle="lock-1", close=AsyncMock())
+    lock = {"lease_ref": "lock-1"}
 
     result = await processor.finish_prepared_resource(
         {
@@ -90,16 +92,20 @@ async def test_vectors_only_persists_tree_and_vectorizes_files_only(monkeypatch,
         resource_lock=lock,
         build_index=True,
         processing_mode="vectors_only",
+        ingest_options=IngestOptions.from_search_tags(["team=search"], mode="append"),
     )
 
     assert result == {"status": "success", "root_uri": "viking://resources/demo"}
     viking_fs.persist_temp_tree.assert_awaited_once_with(
-        "viking://temp/demo", "viking://resources/demo", ctx=ctx
+        "viking://temp/demo",
+        "viking://resources/demo",
+        ctx=ctx,
+        lease_ref=lock,
     )
     rewrite_image_uris.assert_awaited_once_with(
         "viking://resources/demo",
         ctx=ctx,
-        lock_handle="lock-1",
+        lease_ref=lock,
     )
     viking_fs.delete_temp.assert_awaited_once_with("tmp/demo", ctx=ctx)
     vectorize_file.assert_awaited_once()
@@ -111,15 +117,20 @@ async def test_vectors_only_persists_tree_and_vectorizes_files_only(monkeypatch,
         "name": "page.md",
         "summary": "",
     }
+    assert vectorize_file.await_args.kwargs["ingest_options"] == IngestOptions(
+        search_tags=["team=search"],
+        search_tag_mode="append",
+    )
     assert vectorize_file.await_args.kwargs["register_request_wait"] is True
     processor._delete_resource_semantic_markers.assert_not_awaited()
     processor._delete_resource_semantic_vectors.assert_not_awaited()
-    lock.close.assert_awaited_once()
+    viking_fs._async_agfs.pathlock_release.assert_awaited_once_with(lock)
 
 
 @pytest.mark.asyncio
 async def test_vectors_only_skips_vectorization_when_build_index_false(monkeypatch, ctx):
     viking_fs = SimpleNamespace(
+        _async_agfs=SimpleNamespace(pathlock_release=AsyncMock()),
         persist_temp_tree=AsyncMock(),
         delete_temp=AsyncMock(),
         tree=AsyncMock(return_value=[]),
@@ -131,7 +142,7 @@ async def test_vectors_only_skips_vectorization_when_build_index_false(monkeypat
     processor = ResourceProcessor(_FakeVikingDB())
     processor._delete_resource_semantic_markers = AsyncMock()
     processor._delete_resource_semantic_vectors = AsyncMock()
-    lock = SimpleNamespace(active=True, handle="lock-1", close=AsyncMock())
+    lock = {"lease_ref": "lock-1"}
 
     await processor.finish_prepared_resource(
         {
@@ -153,6 +164,7 @@ async def test_vectors_only_skips_vectorization_when_build_index_false(monkeypat
 @pytest.mark.asyncio
 async def test_vectors_only_syncs_preexisting_target_instead_of_merging(monkeypatch, ctx):
     viking_fs = SimpleNamespace(
+        _async_agfs=SimpleNamespace(pathlock_release=AsyncMock()),
         persist_temp_tree=AsyncMock(),
         delete_temp=AsyncMock(),
         tree=AsyncMock(return_value=[]),
@@ -168,7 +180,7 @@ async def test_vectors_only_syncs_preexisting_target_instead_of_merging(monkeypa
     monkeypatch.setattr("openviking.utils.resource_processor.vectorize_file", AsyncMock())
     processor = ResourceProcessor(_FakeVikingDB())
     processor._delete_resource_semantic_vectors = AsyncMock()
-    lock = SimpleNamespace(active=True, handle="lock-1", close=AsyncMock())
+    lock = {"lease_ref": "lock-1"}
 
     await processor.finish_prepared_resource(
         {
@@ -196,6 +208,7 @@ async def test_vectors_only_syncs_preexisting_target_instead_of_merging(monkeypa
 @pytest.mark.asyncio
 async def test_vectors_only_leaves_existing_semantic_vectors_untouched(monkeypatch, ctx):
     viking_fs = SimpleNamespace(
+        _async_agfs=SimpleNamespace(pathlock_release=AsyncMock()),
         persist_temp_tree=AsyncMock(),
         delete_temp=AsyncMock(),
         tree=AsyncMock(return_value=[]),
@@ -206,7 +219,7 @@ async def test_vectors_only_leaves_existing_semantic_vectors_untouched(monkeypat
     processor = ResourceProcessor(_FakeVikingDB())
     processor._delete_resource_semantic_vectors = AsyncMock()
     processor._delete_removed_resource_vectors = AsyncMock()
-    lock = SimpleNamespace(active=True, handle="lock-1", close=AsyncMock())
+    lock = {"lease_ref": "lock-1"}
 
     await processor.finish_prepared_resource(
         {
@@ -226,6 +239,7 @@ async def test_vectors_only_leaves_existing_semantic_vectors_untouched(monkeypat
 @pytest.mark.asyncio
 async def test_vectors_only_deletes_sync_removed_detail_vectors(monkeypatch, ctx):
     viking_fs = SimpleNamespace(
+        _async_agfs=SimpleNamespace(pathlock_release=AsyncMock()),
         persist_temp_tree=AsyncMock(),
         delete_temp=AsyncMock(),
         tree=AsyncMock(return_value=[]),
@@ -245,7 +259,7 @@ async def test_vectors_only_deletes_sync_removed_detail_vectors(monkeypatch, ctx
     processor = ResourceProcessor(_FakeVikingDB())
     processor._delete_resource_semantic_vectors = AsyncMock()
     processor._delete_removed_resource_vectors = AsyncMock()
-    lock = SimpleNamespace(active=True, handle="lock-1", close=AsyncMock())
+    lock = {"lease_ref": "lock-1"}
 
     await processor.finish_prepared_resource(
         {

@@ -17,7 +17,7 @@ from typing import Any, Optional
 from openviking.server.config import ServerConfig, TempUploadConfig
 from openviking.server.identity import RequestContext, Role
 from openviking.server.local_input_guard import _read_upload_meta
-from openviking.storage.transaction import get_lock_manager
+from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.utils.config.open_viking_config import get_openviking_config
@@ -36,7 +36,7 @@ class ResolvedTempUpload:
     async def cleanup(self) -> None:
         if self.lock_handle is not None:
             with suppress(Exception):
-                await get_lock_manager().release(self.lock_handle)
+                await get_viking_fs()._async_agfs.pathlock_release(self.lock_handle)
             self.lock_handle = None
 
         if self.mode == "shared" and self.local_path:
@@ -142,7 +142,12 @@ class TempUploadStore:
         meta = await self._read_shared_meta(shared_id, ctx)
         meta["state"] = "uploaded"
         meta["updated_at"] = int(time.time())
-        await self._write_shared_meta(shared_id, ctx, meta)
+        await self._write_shared_meta(
+            shared_id,
+            ctx,
+            meta,
+            lease_ref=resolved.lock_handle,
+        )
 
     async def mark_consumed(self, resolved: ResolvedTempUpload, ctx: RequestContext) -> None:
         shared_id = _parse_shared_temp_file_id(resolved.temp_file_id)
@@ -153,7 +158,7 @@ class TempUploadStore:
             uri,
             recursive=True,
             ctx=self._internal_ctx(ctx),
-            lock_handle=resolved.lock_handle,
+            lease_ref=resolved.lock_handle,
         )
 
     async def try_cleanup_invalid_or_expired(
@@ -315,9 +320,9 @@ class TempUploadStore:
             _shared_upload_uri(self.temp_cfg, ctx, upload_id),
             ctx=internal_ctx,
         )
-        handle = get_lock_manager().create_handle()
-        acquired = await get_lock_manager().acquire_tree(handle, lock_path, timeout=0.0)
-        if not acquired:
+        try:
+            lease = await vfs._async_agfs.pathlock_acquire_tree(lock_path, timeout_secs=0.0)
+        except LockAcquisitionError:
             raise PermissionDeniedError("Temporary upload is being consumed.")
 
         try:
@@ -328,7 +333,7 @@ class TempUploadStore:
 
             meta["state"] = "consuming"
             meta["updated_at"] = now
-            await self._write_shared_meta(upload_id, ctx, meta)
+            await self._write_shared_meta(upload_id, ctx, meta, lease_ref=lease)
 
             file_ext = meta.get("file_ext") or ".tmp"
             fd, temp_path = tempfile.mkstemp(prefix="ov_shared_upload_", suffix=file_ext)
@@ -347,11 +352,11 @@ class TempUploadStore:
                 temp_file_id=temp_file_id,
                 original_filename=meta.get("original_filename") or None,
                 local_path=temp_path,
-                lock_handle=handle,
+                lock_handle=lease,
             )
         except Exception:
             with suppress(Exception):
-                await get_lock_manager().release(handle)
+                await vfs._async_agfs.pathlock_release(lease)
             raise
 
     async def _read_shared_meta(self, upload_id: str, ctx: RequestContext) -> dict[str, Any]:
@@ -370,12 +375,15 @@ class TempUploadStore:
         upload_id: str,
         ctx: RequestContext,
         meta: dict[str, Any],
+        lease_ref: Any = None,
     ) -> None:
+        """Write shared-upload metadata under an optional existing pathlock lease."""
         meta_uri = _shared_meta_uri(self.temp_cfg, ctx, upload_id)
         await get_viking_fs().write_file(
             meta_uri,
             json.dumps(meta, ensure_ascii=False),
             ctx=self._internal_ctx(ctx),
+            lease_ref=lease_ref,
         )
 
     def _validate_shared_meta(

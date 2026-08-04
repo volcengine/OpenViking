@@ -8,9 +8,9 @@
       session cwd repo, falling back to the configured OV user;
     * group-chat harnesses (hermes/openclaw) -> the original username from the log.
 
-peer_id must match OpenViking's identifier rules (``[a-zA-Z0-9_.@-]+``). ASCII values
-stay human-readable; anything else (e.g. CJK usernames) is base64-encoded as ``ext-…``,
-mirroring vikingbot's external-peer convention.
+peer_id must match OpenViking's identifier rules (``[a-zA-Z0-9_.@-]+``). Safe ASCII
+values stay human-readable except for the reserved ``ext-`` namespace; non-ASCII and
+reserved-prefix values are base64-encoded as ``ext-…``.
 """
 
 from __future__ import annotations
@@ -36,21 +36,32 @@ def _sanitize_component(value: str) -> str:
     return cleaned
 
 
+def _encoded_external_peer(value: str) -> Optional[str]:
+    encoded = base64.urlsafe_b64encode(value.encode("utf-8")).decode("ascii").rstrip("=")
+    return safe_peer_id(f"ext-{encoded}")
+
+
 def safe_external_peer(raw: Optional[str]) -> Optional[str]:
-    """Return a valid peer_id for an arbitrary external identifier (readable if ASCII)."""
+    """Return a valid peer_id while keeping encoded and readable IDs disjoint."""
     if not raw:
         return None
     text = str(raw).strip()
     if not text:
         return None
+    if not text.isascii():
+        return _encoded_external_peer(text)
     sanitized = _sanitize_component(text)
     if sanitized:
+        # ``ext-`` is the namespace for encoded external identities. Escape
+        # readable inputs that would enter it so they cannot impersonate the
+        # non-ASCII identity whose base64 payload they happen to contain.
+        if sanitized.startswith("ext-"):
+            return _encoded_external_peer(text)
         pid = safe_peer_id(sanitized)
         if pid:
             return pid
-    # Non-ASCII / unsanitizable -> stable, valid, unique fallback.
-    encoded = base64.urlsafe_b64encode(text.encode("utf-8")).decode("ascii").rstrip("=")
-    return safe_peer_id(f"ext-{encoded}")
+    # Unsanitizable ASCII -> stable, valid, unique fallback.
+    return _encoded_external_peer(text)
 
 
 def assistant_peer_id(

@@ -102,7 +102,7 @@ Custom roles work with `require_role()` and `require_auth_role()` decorators out
 
 ## Managing Accounts and Users
 
-Normal requests in both `api_key` and `trusted` modes do not need Admin API as a prerequisite for ordinary reads, writes, search, or session access. Admin API is still the place to create accounts, register users, change roles, and issue or regenerate user keys.
+Normal requests in both `api_key` and `trusted` modes do not need Admin API as a prerequisite for ordinary reads, writes, search, or session access. Admin API is still the place to create accounts, register users, promote users to admin, and issue or regenerate user keys.
 
 Use the root key to create accounts (workspaces) and users via the Admin API:
 
@@ -136,13 +136,7 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
   -H "Content-Type: application/json" \
   -d '{"account_id": "platform", "admin_user_id": "gateway-admin"}'
 
-# Then promote it to root if it needs cross-account admin access
-curl -X PUT http://localhost:1933/api/v1/admin/accounts/platform/users/gateway-admin/role \
-  -H "X-API-Key: your-secret-root-key" \
-  -H "Content-Type: application/json" \
-  -d '{"role": "root"}'
-
-# Then, in trusted mode, use that identity to call Admin API
+# Then use that identity in trusted mode; admin authorization comes from root_api_key
 curl -X POST http://localhost:1933/api/v1/admin/accounts \
   -H "X-API-Key: your-secret-root-key" \
   -H "X-OpenViking-Account: platform" \
@@ -285,7 +279,7 @@ Implications:
 - Trusted mode does not use the Admin API as a prerequisite for ordinary reads, writes, search, or session access.
 - Admin API remains available in trusted mode to upstreams authenticated with the configured `root_api_key`.
 - Trusted Admin API responses omit `user_key` from account creation and user registration results.
-- `root` can create/delete accounts and change roles; `admin` can manage users inside its own account; `user` cannot call Admin API.
+- `root` can create/delete accounts and promote users to admin; `admin` can manage and promote users inside its own account; `user` cannot call Admin API.
 - To use Admin API in trusted mode on non-localhost deployments, configure `root_api_key` and pass it with each admin request.
 
 **curl**
@@ -363,7 +357,7 @@ curl http://localhost:1933/health
 | POST | `/api/v1/admin/accounts/{id}/users` | ROOT, ADMIN | Register user |
 | GET | `/api/v1/admin/accounts/{id}/users` | ROOT, ADMIN | List users |
 | DELETE | `/api/v1/admin/accounts/{id}/users/{uid}` | ROOT, ADMIN | Remove user |
-| PUT | `/api/v1/admin/accounts/{id}/users/{uid}/role` | ROOT | Change user role |
+| PUT | `/api/v1/admin/accounts/{id}/users/{uid}/role` | ROOT, ADMIN | Promote a user to ADMIN; ADMIN is limited to its own account |
 | POST | `/api/v1/admin/accounts/{id}/users/{uid}/key` | ROOT, ADMIN | Regenerate user key |
 
 ## Related Documentation
