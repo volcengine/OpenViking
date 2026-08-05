@@ -137,6 +137,7 @@ async def test_diff_forwards_validated_path_and_refs(svc, viking_fs_mock):
         path="viking://resources/a.md",
         from_ref=None,
         to_ref="main",
+        raw=True,
         ctx=ctx,
     )
     assert out["change_type"] == "added"
