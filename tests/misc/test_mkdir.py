@@ -19,7 +19,8 @@ def _make_viking_fs():
 
     fs = VikingFS.__new__(VikingFS)
     fs.agfs = MagicMock()
-    fs.agfs.mkdir = MagicMock(return_value=None)
+    fs._async_agfs = MagicMock()
+    fs._async_agfs.mkdir = AsyncMock(return_value=None)
     fs.query_embedder = None
     fs.vector_store = None
     fs._uri_prefix = "viking://"
@@ -32,40 +33,38 @@ class TestMkdir:
 
     @pytest.mark.asyncio
     async def test_mkdir_calls_agfs_mkdir(self):
-        """mkdir() must call agfs.mkdir with the target path."""
+        """mkdir() must call _async_agfs.mkdir with the target path."""
         fs = _make_viking_fs()
         fs._ensure_parent_dirs = AsyncMock()
-        fs.stat = AsyncMock(side_effect=Exception("not found"))
 
         await fs.mkdir("viking://resources/new_dir")
 
-        fs.agfs.mkdir.assert_called_once()
-        call_path = fs.agfs.mkdir.call_args[0][0]
+        fs._async_agfs.mkdir.assert_awaited_once()
+        call_path = fs._async_agfs.mkdir.call_args[0][0]
         assert call_path.endswith("resources/new_dir")
 
     @pytest.mark.asyncio
     async def test_mkdir_exist_ok_true_existing(self):
-        """mkdir(exist_ok=True) should return early if directory exists."""
+        """mkdir(exist_ok=True) should swallow the already-exists error."""
         fs = _make_viking_fs()
         fs._ensure_parent_dirs = AsyncMock()
-        fs.stat = AsyncMock(return_value={"isDir": True})
+        fs._async_agfs.mkdir = AsyncMock(side_effect=FileExistsError("already exists"))
 
         await fs.mkdir("viking://resources/existing_dir", exist_ok=True)
 
-        # Should NOT call agfs.mkdir because directory already exists
-        fs.agfs.mkdir.assert_not_called()
+        # mkdir was attempted, but the already-exists error was swallowed.
+        fs._async_agfs.mkdir.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_mkdir_exist_ok_true_not_existing(self):
         """mkdir(exist_ok=True) should create dir if it does not exist."""
         fs = _make_viking_fs()
         fs._ensure_parent_dirs = AsyncMock()
-        fs.stat = AsyncMock(side_effect=Exception("not found"))
 
         await fs.mkdir("viking://resources/new_dir", exist_ok=True)
 
-        fs.agfs.mkdir.assert_called_once()
-        call_path = fs.agfs.mkdir.call_args[0][0]
+        fs._async_agfs.mkdir.assert_awaited_once()
+        call_path = fs._async_agfs.mkdir.call_args[0][0]
         assert call_path.endswith("resources/new_dir")
 
     @pytest.mark.asyncio
@@ -76,15 +75,22 @@ class TestMkdir:
 
         await fs.mkdir("viking://resources/another_dir")
 
-        fs.agfs.mkdir.assert_called_once()
+        fs._async_agfs.mkdir.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_mkdir_ensures_parents_first(self):
         """mkdir() must call _ensure_parent_dirs before creating target."""
         fs = _make_viking_fs()
         call_order = []
-        fs._ensure_parent_dirs = AsyncMock(side_effect=lambda p: call_order.append("parents"))
-        fs.agfs.mkdir = MagicMock(side_effect=lambda p: call_order.append("mkdir"))
+
+        async def _parents(path, **kwargs):
+            call_order.append("parents")
+
+        async def _mkdir(path, **kwargs):
+            call_order.append("mkdir")
+
+        fs._ensure_parent_dirs = AsyncMock(side_effect=_parents)
+        fs._async_agfs.mkdir = AsyncMock(side_effect=_mkdir)
 
         await fs.mkdir("viking://a/b/c")
 
