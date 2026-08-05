@@ -5,6 +5,10 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 
 ## Unreleased
 
+- **Remote resource network guard**: Guarded HTTP and recursive-crawl requests now fail
+  closed for unresolved or non-public destinations and connect only to validated public
+  addresses. Code-hosting domain lists no longer bypass this check; private or internal
+  hosts require `allow_private_networks=true`.
 - **Session policy compatibility**: String `"false"` memory-policy switches now disable
   extraction correctly. Existing boolean-like values remain temporarily compatible and
   emit deprecation warnings; use JSON booleans for new configurations.
