@@ -18,7 +18,7 @@
           {
             "type": "command",
             "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/auto-recall.mjs",
-            "timeout": 8
+            "timeout": 60
           }
         ]
       }

@@ -26,17 +26,22 @@ These are the enabled built-in types. Deployments can extend or override them wi
 
 ### recall()
 
-Search each memory type independently and assemble a bounded memory block that can be injected directly into Agent context. By default, recall searches `events`, `entities`, and `preferences`; the `experiences` quota defaults to `0` and must be enabled explicitly.
+> **Deprecated**: `/api/v1/search/recall` is now a thin preset over [`/api/v1/search/search` with `mode="context"`](06-retrieval.md#searchmodecontext) and carries no assembly logic of its own. New integrations should target the context face directly; the v1 field aliases are accepted only here and will be removed in the next minor release. Responses carry a `Deprecation: true` header.
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `query` | string | Yes | - | Recall query |
-| `quotas` | object | No | `events=10, entities=10, preferences=3, experiences=0` | Maximum results for each type |
-| `max_chars` | integer | No | `6500` | Maximum rendered memory-block length |
-| `min_score` | number | No | `0.1` | Minimum relevance score |
-| `peer_scope` | string | No | `all` | `actor` searches only the current actor peer; `all` also searches global and other-peer memory |
-| `other_peer_penalty` | number/object | No | Per-type defaults | Score penalty applied to results from other peers |
-| `render` | boolean | No | `true` | Whether to produce the `rendered` memory block |
+Search each memory type independently and assemble a bounded memory block that can be injected directly into Agent context. Relative to the context face, `/recall` overlays `purpose="coding"`, the v1-compatible `score_threshold=0.1`, `dedup_turns=5` when a `session_id` is present, and `query_expansion="auto"`. Coding Agent plugins explicitly send `score_threshold=0.35`; the public `/recall` default remains `0.1` so an unchanged request does not silently lose results after upgrading. Omitting `quotas` keeps v1's bucket defaults (`events=10, entities=10, preferences=3, experiences=0`); sending `"quotas": null` explicitly opts into the `purpose` preset ratios instead.
+
+**v1 field folding**
+
+| v1 field | Folds into | Notes |
+|----------|------------|-------|
+| `max_chars` | `max_tokens = max_chars / 4` | `6500` → `1625`; an explicit `max_tokens` wins |
+| `min_score` | `score_threshold` | When neither is sent, the v1-compatible default `0.1` applies |
+| `render: true` | No `detail` pin | Default behavior: each category takes its default tier |
+| `render: false` | Returns `entries` only, `rendered` empty | |
+| `render: "compact"` | `detail="abstract"` | The prototype-era compact mode; pins every category |
+| v1 `quotas` keys | Overlaid on the v1 bucket defaults | Key names unchanged; a partial map keeps the other buckets |
+
+Context-face parameters (`max_tokens`, `detail`, `dedup_turns`, `session_id`, `query_expansion`, `exclude_uris`, `purpose`, `rewrite`, `rewrite_max_bullets`) are also accepted here, so plugins can transition smoothly on deployments that have not been upgraded yet.
 
 **HTTP API**
 
@@ -48,9 +53,9 @@ Content-Type: application/json
 ```bash
 curl -X POST http://localhost:1933/api/v1/search/recall \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
+  -H "Authorization: Bearer $OPENVIKING_API_KEY" \
   -d '{
-    "query":"OpenViking API documentation preferences",
+    "query":"API documentation preferences",
     "quotas":{"events":5,"entities":5,"preferences":3,"experiences":2},
     "max_chars":6500,
     "peer_scope":"all"
@@ -61,7 +66,7 @@ curl -X POST http://localhost:1933/api/v1/search/recall \
 
 ```text
 recall(
-  query="OpenViking API documentation preferences",
+  query="API documentation preferences",
   quotas={"events": 5, "entities": 5, "preferences": 3, "experiences": 2},
   max_chars=6500,
   peer_scope="all"
@@ -70,6 +75,8 @@ recall(
 
 **Response**
 
+The response shape matches the context face (flat entries, flat XML in `rendered`):
+
 ```json
 {
   "status": "ok",
@@ -77,68 +84,38 @@ recall(
     "entries": [
       {
         "uri": "viking://user/default/memories/preferences/api-docs.md",
+        "category": "preferences",
         "score": 0.82,
-        "type": "preferences",
-        "mode": "full",
-        "rank": 1,
-        "content": "The user prefers API documentation with HTTP, SDK, and CLI examples.",
+        "detail": "full",
+        "text": "User prefers API docs to show HTTP, SDK and CLI examples together.",
         "origin": "self"
       }
     ],
-    "rendered": "## Global Memory\n### Preferences\n[1] viking://user/default/memories/preferences/api-docs.md (score=0.8200)\nThe user prefers API documentation with HTTP, SDK, and CLI examples.",
+    "rendered": "<memory uri=\"viking://user/default/memories/preferences/api-docs.md\" type=\"preferences\" score=\"0.82\" detail=\"full\">\nUser prefers API docs to show HTTP, SDK and CLI examples together.\n</memory>",
+    "digest": "",
     "stats": {
-      "quotas": {
-        "events": 5,
-        "entities": 5,
-        "preferences": 3,
-        "experiences": 2
-      },
-      "roots": [
-        "viking://user/default/memories"
-      ],
-      "searched": {
-        "events": 2,
-        "entities": 1,
-        "preferences": 1,
-        "experiences": 0
-      },
+      "quotas": {"events": 5, "entities": 5, "preferences": 3, "experiences": 2},
+      "candidates": 4,
       "returned": 1,
       "dropped": 0,
-      "max_chars": 6500,
-      "min_score": 0.1,
+      "max_tokens": 1625,
+      "used_tokens": 96,
+      "tier_counts": {"full": 1},
       "peer_scope": "all",
-      "other_peer_penalties": {
-        "events": 0.1,
-        "entities": 0.1,
-        "preferences": 0.02,
-        "experiences": 0.02
-      },
-      "origins": {
-        "actor_peer": 0,
-        "self": 1,
-        "other_peer": 0
+      "origins": {"actor_peer": 0, "self": 1, "other_peer": 0},
+      "deprecated": {
+        "endpoint": "/api/v1/search/recall",
+        "successor": "/api/v1/search/search?mode=context",
+        "aliases_used": ["max_chars"]
       }
     }
   }
 }
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `entries` | object[] | Structured matches selected by per-type quota and relevance |
-| `entries[].uri` | string | Viking URI of the memory entry |
-| `entries[].score` | number | Raw relevance score |
-| `entries[].type` | string | `events`, `entities`, `preferences`, or `experiences` |
-| `entries[].mode` | string | Rendering mode: `full`, `summary`, or `uri` |
-| `entries[].rank` | integer | Rank within the memory type, starting at `1` |
-| `entries[].origin` | string | Source: `actor_peer`, `self`, or `other_peer` |
-| `entries[].content` | string | Full content when `mode=full`; otherwise it may be omitted |
-| `entries[].summary` | string | Summary used for degraded rendering; otherwise it may be omitted |
-| `entries[].abstract` | string | Search-hit abstract; omitted when unavailable |
-| `rendered` | string | Text bounded by `max_chars` and ready for Agent context injection; empty when `render=false` |
-| `stats` | object | Effective quotas, roots, per-type search counts, returned and dropped counts, threshold, peer scope, and origin counts |
+See [Retrieval - search(mode="context")](06-retrieval.md#searchmodecontext) for field meanings. Shape changes relative to v1: `type` → `category`, `mode` → `detail`, `content`/`summary` → `text`, `rendered` moves from three-level nesting to flat `<memory>` tags, and `rank` is no longer returned.
 
-The public Python, TypeScript, and Go SDKs and the `ov` CLI do not currently wrap type-quota recall, so this section shows only the HTTP tab and the existing MCP call.
+The public Python, TypeScript, Go SDKs and the `ov` CLI do not wrap this endpoint yet, so this section shows only the HTTP tab plus the MCP call that does exist.
 
 ## Related Documentation
 

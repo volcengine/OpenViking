@@ -73,6 +73,23 @@ class ToolPartRequest(BaseModel):
 PartRequest = TextPartRequest | ContextPartRequest | ToolPartRequest
 
 
+class AutoCommitPolicyRequest(BaseModel):
+    """Session-level auto-commit policy overrides.
+
+    All fields are optional. Bounds are not enforced here: ``AutoCommitPolicy``
+    clamps every value into ``[0, max]`` so clamping lives in one place across
+    the HTTP, SDK, and CLI entrypoints.
+    """
+
+    pending_token_threshold: Optional[int] = None
+    message_count_threshold: Optional[int] = None
+    idle_timeout_seconds: Optional[int] = None
+    keep_recent_count: Optional[int] = None
+    min_commit_interval_seconds: Optional[int] = None
+
+    model_config = {"extra": "forbid"}
+
+
 class AddMessageRequest(BaseModel):
     """Request model for adding a message.
 
@@ -126,6 +143,7 @@ class CreateSessionRequest(BaseModel):
 
     session_id: Optional[str] = None
     memory_policy: Optional[Dict[str, Any]] = None
+    auto_commit_policy: Optional[AutoCommitPolicyRequest] = None
     telemetry: TelemetryRequest = False
 
 
@@ -200,17 +218,23 @@ async def create_session(
     """
     service = get_service()
 
+    auto_commit_policy_payload: Optional[Dict[str, Any]] = None
+    if request.auto_commit_policy is not None:
+        auto_commit_policy_payload = request.auto_commit_policy.model_dump(exclude_none=True)
+
     async def _create() -> dict[str, Any]:
         await service.initialize_user_directories(_ctx)
         session = await service.sessions.create(
             _ctx,
             request.session_id,
             memory_policy=request.memory_policy,
+            auto_commit_policy=auto_commit_policy_payload,
         )
         return {
             "session_id": session.session_id,
             "uri": session.uri,
             "user": session.user.to_dict(),
+            "auto_commit_policy": service.sessions.effective_auto_commit_policy(session),
         }
 
     execution = await run_operation(
@@ -249,6 +273,7 @@ async def get_session(
     result["uri"] = session.uri
     result["user"] = session.user.to_dict()
     result["pending_tokens"] = int(session.meta.pending_tokens or 0)
+    result["auto_commit_policy"] = service.sessions.effective_auto_commit_policy(session)
     return Response(status="ok", result=result)
 
 
@@ -519,6 +544,12 @@ async def add_message(
             await add_many_async(specs)
         else:
             session.add_messages(specs)
+        await service.sessions.maybe_schedule_auto_commit(
+            session_id,
+            _ctx,
+            reason_hint="message_write",
+            session=session,
+        )
         return {
             "session_id": session_id,
             "message_count": len(session.messages),
@@ -569,6 +600,12 @@ async def batch_add_messages(
             msgs = await add_many_async(specs)
         else:
             msgs = session.add_messages(specs)
+        await service.sessions.maybe_schedule_auto_commit(
+            session_id,
+            _ctx,
+            reason_hint="message_write",
+            session=session,
+        )
         return {
             "session_id": session_id,
             "message_count": len(session.messages),

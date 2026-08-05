@@ -8,5 +8,16 @@
   "timeout": 60.0,
   "output": "table",
   "echo_command": true,
-  "extra_headers": null
+  "extra_headers": null,
+
+  "plugin": {
+    "recallCompress": "auto",
+
+    "claude_code": {},
+    "codex": {},
+    "opencode": {},
+    "cursor": {},
+    "trae": {},
+    "pi": {}
+  }
 }

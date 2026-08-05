@@ -1841,7 +1841,7 @@ mod tests {
     use super::{BaseClient, HttpClient, TimeoutConfig};
     use crate::base_client::api_error_from_envelope;
     use reqwest::StatusCode;
-    use serde_json::json;
+    use serde_json::{Map, json};
     use std::collections::HashMap;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
@@ -1876,6 +1876,78 @@ mod tests {
         let mut body = json!({"path": "x", "args": {"feishu_access_token": "u-x"}});
         super::compact_request_body(&mut body);
         assert!(body.as_object().unwrap().contains_key("args"));
+    }
+
+    #[tokio::test]
+    async fn add_resource_sends_parse_mode_through_args() {
+        let (default_url, default_request_rx) = spawn_request_capture_server().await;
+        let default_client = HttpClient::new(default_url, None, None, None, None, 5.0, false, None);
+        default_client
+            .add_resource(
+                "https://example.com/default.md",
+                None,
+                None,
+                None,
+                None,
+                "",
+                "",
+                false,
+                None,
+                false,
+                None,
+                None,
+                None,
+                true,
+                0.0,
+                "semantic_and_vectors".to_string(),
+                None,
+                Vec::new(),
+                "replace".to_string(),
+                false,
+                false,
+            )
+            .await
+            .expect("default add-resource request should succeed");
+        let default_request = default_request_rx
+            .await
+            .expect("request should be captured");
+        assert!(!default_request.contains("parse_mode"));
+
+        let (no_split_url, no_split_request_rx) = spawn_request_capture_server().await;
+        let no_split_client =
+            HttpClient::new(no_split_url, None, None, None, None, 5.0, false, None);
+        let mut no_split_args = Map::new();
+        no_split_args.insert("parse_mode".to_string(), json!("no_split"));
+        no_split_client
+            .add_resource(
+                "https://example.com/manual.pdf",
+                None,
+                None,
+                None,
+                None,
+                "",
+                "",
+                false,
+                None,
+                false,
+                None,
+                None,
+                None,
+                true,
+                0.0,
+                "semantic_and_vectors".to_string(),
+                Some(no_split_args),
+                Vec::new(),
+                "replace".to_string(),
+                false,
+                false,
+            )
+            .await
+            .expect("no_split add-resource request should succeed");
+        let no_split_request = no_split_request_rx
+            .await
+            .expect("request should be captured");
+        assert!(no_split_request.contains(r#""args":{"parse_mode":"no_split"}"#));
     }
 
     #[test]

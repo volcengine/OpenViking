@@ -22,3 +22,38 @@ OpenViking 可以作为多种 Agent 运行时的长期记忆与上下文后端�
 ## 所有集成的共同前置
 
 本页所有集成都需要连接到一个正在运行的 OpenViking 服务。如果你还没有，请先按 [快速开始](../getting-started/02-quickstart.md) 部署。默认端点是 `http://localhost:1933`；远程使用需要 API Key（参见 [鉴权](../guides/04-authentication.md)）。
+
+## 低延迟召回
+
+查询扩展和召回结果压缩是两个独立的可选模型调用。需要优先保证响应速度时，可以在 Agent 插件端同时关闭它们；语义检索、预算控制、档位降级和跨轮去重仍会正常工作。
+
+下面这组环境变量同时适用于 Claude Code 和 Codex：
+
+```bash
+export OPENVIKING_RECALL_QUERY_EXPANSION=off
+export OPENVIKING_RECALL_COMPRESS=off
+```
+
+两个插件都有本地压缩逻辑，但配置模型不同：
+
+- Claude Code 默认使用 `recallCompress=auto`：优先调用本地 `claude -p`（Sonnet + low），本地 CLI 不可用时回落到 OpenViking 服务端生成 digest。`client` 强制只用本地，`server` 强制只用服务端。
+- Codex 默认调用本地 `codex exec`，模型顺序为 `gpt-5.3-codex-spark`，其次 `gpt-5.6-luna` + low。它不会启用服务端压缩。
+
+两端的共同默认配置是 `recallCompress=auto`。`OPENVIKING_RECALL_COMPRESS=off` 会同时关闭两端压缩；Codex 将 `auto` 或 `client` 解释为启用本地压缩。旧的 Claude Code 变量 `OPENVIKING_RECALL_REWRITE` 仍可兼容，但新配置请使用统一名称。
+
+也可以把同样的设置写进 `~/.openviking/ovcli.conf`：
+
+```json
+{
+  "url": "https://openviking.example.com",
+  "api_key": "your-api-key",
+  "plugin": {
+    "recallQueryExpansion": "off",
+    "recallCompress": "off"
+  }
+}
+```
+
+环境变量优先于 `ovcli.conf`。修改后重启对应的 Agent，让 hook 进程重新加载配置。上述设置属于插件客户端，不需要修改服务端的 `ov.conf`。
+
+当 Claude Code 请求服务端生成 digest 时，这次 context 请求的等待时间比普通请求更长：服务端自身的 rewrite 保险丝是 `retrieval.recall_rewrite_timeout_s`（默认 30 秒），客户端提前中断会丢掉整个响应，而不只是 digest。可以用 `OPENVIKING_RECALL_CONTEXT_TIMEOUT_MS`（或 `plugin.recallContextTimeoutMs`）指定这个上限，取值应高于服务端保险丝、低于 Agent 自身的 hook 超时。

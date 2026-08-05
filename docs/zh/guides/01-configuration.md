@@ -915,7 +915,9 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 {
   "retrieval": {
     "hotness_alpha": 0.0,
-    "score_propagation_alpha": 1.0
+    "score_propagation_alpha": 1.0,
+    "recall_intent_timeout_s": 5.0,
+    "recall_rewrite_timeout_s": 30.0
   }
 }
 ```
@@ -926,6 +928,15 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 | `score_propagation_alpha` | float | 层级检索中，子节点自身分数与父节点传播分数混合时，子节点自身分数的权重。`1.0` 表示忽略父节点分数（仅使用语义相似度）；`0.5` 表示与父节点分数等权混合；`0.0` 表示只使用父节点分数。有效范围：`0.0` 到 `1.0`。 | `1.0` |
 
 如果需要分数严格反映向量相似度，保持 `hotness_alpha` 为 `0.0`。只有当希望高频访问或最近更新的上下文获得排序提升时，才将它设置为大于 `0.0`。
+
+`/search` 的 `mode="context"` 组装面用到两个超时熔断：
+
+| 参数 | 类型 | 说明 | 默认值 |
+|------|------|------|--------|
+| `recall_intent_timeout_s` | float | 会话感知查询扩展的超时；超时后回退为用户原查询 | `5.0` |
+| `recall_rewrite_timeout_s` | float | digest 重写的超时；超时后 `digest` 为空并照常返回 `rendered` | `30.0` |
+
+两个 LLM 环节都是纯 opt-in：查询扩展需要传 `session_id`，重写需要传 `rewrite`。任一环节失败都优雅降级，不会阻塞召回。
 
 ### grep
 
@@ -1077,16 +1088,45 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
 | `mode` | str | QueueFS 命名空间模式：`"shared"` 使用 `/queue`；`"worker"` 为每个 worker 隔离到 `/queue/worker-<index\|pid>` | `"shared"` |
-| `backend` | str | QueueFS 后端：`"memory"`、`"sqlite"` 或 `"sqlite3"` | `"sqlite"` |
+| `backend` | str | QueueFS 后端：`"memory"`、`"sqlite"`、`"sqlite3"` 或 `"redis"` | `"sqlite"` |
 | `db_path` | str（可选） | 当 backend 为 `"sqlite"` 或 `"sqlite3"` 时使用的 QueueFS sqlite 数据库路径 | `null` |
 | `recover_stale_sec` | int | 启动时恢复超过该秒数的 `processing` 队列消息；`0` 表示恢复全部 stale processing 消息 | `0` |
 | `busy_timeout_ms` | int | QueueFS sqlite 的 busy timeout，单位毫秒 | `5000` |
+| `redis` | object | 当 backend 为 `"redis"` 时使用的连接参数 | 见下表 |
+
+QueueFS Redis 参数：
+
+| 参数 | 类型 | 说明 | 默认值 |
+|------|------|------|--------|
+| `mode` | str | Redis 拓扑模式：`"singleton"`、`"cluster"` 或 `"sentinel"` | `"singleton"` |
+| `endpoints` | array[str] | Singleton 的唯一数据节点、Cluster 初始节点或 Sentinel 节点；仅允许协议、主机和端口，认证与 DB 使用独立字段 | `["redis://127.0.0.1:6379"]` |
+| `master_name` | str（可选） | Sentinel master 名称；Sentinel 模式必须配置 | `null` |
+| `username` | str（可选） | Redis ACL 用户名 | `null` |
+| `password` | str（可选） | Redis ACL 密码 | `null` |
+| `sentinel_username` | str（可选） | Sentinel ACL 用户名 | `null` |
+| `sentinel_password` | str（可选） | Sentinel ACL 密码 | `null` |
+| `db` | int | Redis database 编号 | `0` |
+| `connect_timeout_ms` | int | Redis 数据节点物理建连超时，单位毫秒 | `3000` |
+| `command_timeout_ms` | int | 命令读写超时，单位毫秒 | `3000` |
+| `key_prefix` | str | Redis key 隔离前缀，不能为空；所有 QueueFS key 使用 `{key_prefix}:ov:*` | `"default"` |
+| `tls_enabled` | bool | 对 `redis://` endpoint 强制启用 TLS | `false` |
+| `tls_insecure_skip_verify` | bool | 跳过 TLS 证书校验，仅用于受控测试环境 | `false` |
 
 说明：
 
 - 即使主 AGFS 存储后端是 `local`、`s3` 或 `memory`，QueueFS 默认仍使用 `sqlite`。
 - `mode=shared` 会继续使用历史上的全局队列命名空间 `/queue`；`mode=worker` 会为每个 worker 隔离到 `/queue/worker-<index|pid>`。
 - `db_path` 仅在 QueueFS backend 为 `sqlite` 或 `sqlite3` 时生效。
+- `recover_stale_sec` 和 `busy_timeout_ms` 仅在 QueueFS backend 为 `sqlite` 或 `sqlite3` 时生效。
+- Redis Singleton 模式必须且只能配置一个 endpoint。
+- Redis Cluster 模式的 endpoints 是初始节点，且必须配置 `db=0`；slot 路由、`MOVED`/`ASK` 处理和节点重连由 redis-rs 完成。
+- Redis Sentinel 模式的 endpoints 是 Sentinel 节点，并且必须配置非空 `master_name`；master 发现和故障切换后的重连由 redis-rs 完成。
+- Redis Sentinel 模式下，`connect_timeout_ms` 作用于发现 Master 后的数据节点连接；redis-rs 同步 Sentinel discovery 不暴露物理建连 timeout，该阶段由内部固定 5 秒的 pool checkout timeout 限制调用方等待。
+- `username` 和 `password` 用于 Redis 数据节点；`sentinel_username` 和 `sentinel_password` 仅用于 Sentinel 节点。
+- Redis backend 使用 `{key_prefix}:ov:*` key；连接同一 Redis database 的不同业务必须配置不同的 `key_prefix`。
+- Redis backend 的实例心跳 TTL 为 30 秒，每 10 秒续约一次。
+- Redis backend 仅在启动时按实例心跳状态执行一次 `recover_stale`，运行期间不周期恢复。
+- `tls_insecure_skip_verify=true` 时必须同时设置 `tls_enabled=true`。
 - 如果同时设置了 `storage.agfs.queuefs.db_path` 和旧字段 `storage.agfs.queue_db_path`，以前者为准。
 - 如果 QueueFS backend 为 `memory`，则 `db_path` 和旧字段 `queue_db_path` 都会被忽略。
 
@@ -1102,6 +1142,95 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
         "mode": "shared",
         "backend": "sqlite",
         "db_path": "./data/_system/queue/custom-queue.db"
+      }
+    }
+  }
+}
+```
+
+Redis QueueFS 配置示例：
+
+```json
+{
+  "storage": {
+    "workspace": "./data",
+    "agfs": {
+      "backend": "local",
+      "queuefs": {
+        "mode": "shared",
+        "backend": "redis",
+        "redis": {
+          "mode": "singleton",
+          "endpoints": ["redis://127.0.0.1:6379"],
+          "master_name": null,
+          "username": null,
+          "password": null,
+          "sentinel_username": null,
+          "sentinel_password": null,
+          "db": 0,
+          "connect_timeout_ms": 3000,
+          "command_timeout_ms": 3000,
+          "key_prefix": "default",
+          "tls_enabled": false,
+          "tls_insecure_skip_verify": false
+        }
+      }
+    }
+  }
+}
+```
+
+Redis Cluster 只需配置可用于发现拓扑的初始节点：
+
+```json
+{
+  "storage": {
+    "workspace": "./data",
+    "agfs": {
+      "backend": "local",
+      "queuefs": {
+        "mode": "shared",
+        "backend": "redis",
+        "redis": {
+          "mode": "cluster",
+          "endpoints": [
+            "redis://redis-cluster-0:6379",
+            "redis://redis-cluster-1:6379"
+          ],
+          "db": 0,
+          "key_prefix": "default"
+        }
+      }
+    }
+  }
+}
+```
+
+Redis Sentinel 分别配置数据节点和 Sentinel 的 ACL：
+
+```json
+{
+  "storage": {
+    "workspace": "./data",
+    "agfs": {
+      "backend": "local",
+      "queuefs": {
+        "mode": "shared",
+        "backend": "redis",
+        "redis": {
+          "mode": "sentinel",
+          "endpoints": [
+            "redis://redis-sentinel-0:26379",
+            "redis://redis-sentinel-1:26379"
+          ],
+          "master_name": "mymaster",
+          "username": "queue-user",
+          "password": "queue-password",
+          "sentinel_username": "sentinel-user",
+          "sentinel_password": "sentinel-password",
+          "db": 0,
+          "key_prefix": "default"
+        }
       }
     }
   }
@@ -1136,6 +1265,59 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
   }
 }
 ```
+
+##### Session Auto Commit 配置
+
+`memory.session_auto_commit` 用于控制服务端 session 自动 commit 的全局行为。
+
+```json
+{
+  "memory": {
+    "session_auto_commit": {
+      "default_enabled": false,
+      "idle_enabled": false,
+      "check_interval_seconds": 60.0,
+      "scan_batch_size": 16,
+      "scan_batch_pause_seconds": 0.0
+    }
+  }
+}
+```
+
+| 参数 | 类型 | 说明 | 默认值 |
+|------|------|------|--------|
+| `default_enabled` | bool | 对未显式传入 `auto_commit_policy` 的新 session，是否默认开启 auto commit。为 `false` 时，这类 session 保持关闭 | `false` |
+| `idle_enabled` | bool | 是否启用服务端 idle timeout 自动 commit 调度器。关闭后，不会启动 idle scheduler；但 token / message-count 的即时触发仍然生效 | `false` |
+| `check_interval_seconds` | float | idle scheduler 的检查周期，单位秒，必须大于 `0` | `60.0` |
+| `scan_batch_size` | int | 每个 idle 扫描批次最多并发读取的 session meta 文件数量，必须大于 `0` | `16` |
+| `scan_batch_pause_seconds` | float | idle 扫描批次之间的可选暂停时间，单位秒，用于降低大量 session 扫描时的存储压力 | `0.0` |
+
+说明：
+
+- `memory.session_auto_commit` 是服务端全局配置，不是单个 session 的业务 policy。
+- session 级别的自动触发参数通过 session 级 `auto_commit_policy` 设置（见下表）。它只能在创建 session 时通过 `POST /api/v1/sessions` 的顶层 `auto_commit_policy` 字段设置，之后通过 `GET /api/v1/sessions/{session_id}` 查看；不支持运行期 PATCH 修改。
+- `default_enabled=false` 时，未传 `auto_commit_policy` 创建的 session 保持 auto commit 关闭，返回 `auto_commit_policy: null`。显式传 `{}` 或任意 policy 字段会为该 session 开启 auto commit，并用下方默认值补齐缺失字段。
+- `default_enabled=true` 时，未传 `auto_commit_policy` 创建的 session 会带上下方默认 policy。
+- `idle_enabled=false` 时：
+  - 不会启动 `SessionAutoCommitScheduler`
+- `idle_enabled=true` 时：
+  - `SessionAutoCommitScheduler` 会按固定周期扫描 AGFS `/local/{account}/user/{user}/sessions` 下的 session `.meta.json`
+  - 不会做单独的启动恢复扫描，idle 检查只发生在周期扫描时
+- token 和 message-count 自动触发在消息写入后内联执行，不依赖 scheduler，也不受这个开关影响。
+
+###### 单 session 自动 commit 策略
+
+当 session 带有 `auto_commit_policy` 时，未传的字段会回退到下方推荐默认值。没有存储 policy 的 session 保持 auto commit 关闭。取值会被 clamp 到 `[0, 上限]`，未知字段会以 `InvalidArgumentError` 拒绝。设置和查看方式见 [Sessions API](../api/05-sessions.md#create_session)。
+
+| 字段 | 类型 | 默认值 | 上限 | 说明 |
+|------|------|--------|------|------|
+| `pending_token_threshold` | int | 10000 | 50000 | 当未提交的 pending token 超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
+| `message_count_threshold` | int | 50 | 500 | 当未提交的 live message 数量超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
+| `idle_timeout_seconds` | int | 86400 | 604800 | 有未提交内容的 session 在空闲这么多秒后，进入服务端 idle scheduler 的处理范围。idle 触发的 commit 会归档全部积压消息，并忽略 `keep_recent_count`。 |
+| `keep_recent_count` | int | 2 | 500 | 阈值触发的自动 commit 后保留（不归档）的最近 live message 数量。idle 超时触发的 commit 会忽略该值并归档所有消息。 |
+| `min_commit_interval_seconds` | int | 0 | 604800 | 两次自动 commit 之间的最小间隔秒数（节流）。 |
+
+代码入口：`openviking/session/auto_commit_policy.py:AutoCommitPolicy`。
 
 
 ##### S3 后端配置
@@ -1394,6 +1576,7 @@ openviking-server --config /path/to/ov.conf
 | `extraction_enabled` | session commit 时是否执行长期记忆抽取。 | `true` |
 | `session_skill_extraction_enabled` | session commit 时是否同时抽取可复用 skill 到当前用户的 skill 目录。 | `false` |
 | `link_enabled` | 记忆抽取是否写入和解析 memory links。 | `false` |
+| `session_auto_commit` | 服务端 session 自动 commit 的全局控制项。该配置属于 `memory` 段，不属于 `server` 段；详见 [Session Auto Commit 配置](#session-auto-commit-配置)。 | 见上文 |
 
 ### ovcli.conf
 

@@ -171,6 +171,7 @@ class TestWatchTask:
         task = WatchTask.from_dict({"path": "/test/path"})
 
         assert task.processing_mode == "semantic_and_vectors"
+        assert task.to_is_directory is None
 
     def test_calculate_next_execution_time(self):
         """Test calculating next execution time."""

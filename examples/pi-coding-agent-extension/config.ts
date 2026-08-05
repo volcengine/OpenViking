@@ -21,6 +21,7 @@ export interface OVConfig {
   recallMaxContentChars: number;
   recallPreferAbstract: boolean;
   recallLimit: number;
+  recallLimitConfigured: boolean;
   scoreThreshold: number;
   minQueryLength: number;
   profileTokenBudget: number;
@@ -56,7 +57,8 @@ const DEFAULT_CONFIG: OVConfig = {
   recallTokenBudget: 2000,
   recallMaxContentChars: 500,
   recallPreferAbstract: true,
-  recallLimit: 6,
+  recallLimit: 10,
+  recallLimitConfigured: false,
   scoreThreshold: 0.35,
   minQueryLength: 3,
   profileTokenBudget: 10000,
@@ -98,6 +100,7 @@ export function loadConfig(extensionDir: string): OVConfig {
     user: creds.user,
     peerId: creds.peerId,
     userAgent: buildUserAgent("pi", EXTENSION_VERSION),
+    recallLimitConfigured: Object.prototype.hasOwnProperty.call(file, "recallLimit"),
     recallTokenBudget: file.recallTokenBudget ?? file.recallBudget ?? DEFAULT_CONFIG.recallTokenBudget,
     scoreThreshold: file.scoreThreshold ?? file.recallScoreThreshold ?? DEFAULT_CONFIG.scoreThreshold,
     minQueryLength: file.minQueryLength ?? file.recallMinQueryLength ?? DEFAULT_CONFIG.minQueryLength,
@@ -120,6 +123,10 @@ export function loadConfig(extensionDir: string): OVConfig {
   }
   if (process.env.OPENVIKING_RECALL_PEER_SCOPE) {
     config.recallPeerScope = process.env.OPENVIKING_RECALL_PEER_SCOPE === "actor" ? "actor" : "all";
+  }
+  if (process.env.OPENVIKING_RECALL_LIMIT) {
+    config.recallLimit = Number(process.env.OPENVIKING_RECALL_LIMIT);
+    config.recallLimitConfigured = true;
   }
 
   config.recallLimit = clampInt(config.recallLimit, 1, 50, DEFAULT_CONFIG.recallLimit);

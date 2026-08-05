@@ -29,13 +29,10 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from openviking.parse.mode import ParseMode, normalize_parse_mode
 from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
-from openviking.retrieve.type_quota_recall import (
-    DEFAULT_MAX_CHARS,
-    DEFAULT_MIN_SCORE,
-    DEFAULT_QUOTAS,
-    search_type_quota_recall,
-)
+from openviking.retrieve.context_assembler import assemble_context
+from openviking.retrieve.context_assembler.recall_preset import fold_recall_request
 from openviking.server.auth import _extract_api_key, normalize_actor_peer_header, resolve_identity
 from openviking.server.dependencies import get_server_config, get_service
 from openviking.server.identity import RequestContext
@@ -323,25 +320,37 @@ def _format_search_result(result) -> str:
 async def recall(
     query: str,
     quotas: Optional[dict[str, int]] = None,
-    max_chars: int = DEFAULT_MAX_CHARS,
-    min_score: float = DEFAULT_MIN_SCORE,
+    max_chars: Optional[int] = None,
+    min_score: Optional[float] = None,
     peer_scope: str = "all",
     other_peer_penalty: Optional[Union[float, Dict[str, float]]] = None,
+    session_id: Optional[str] = None,
+    detail: Optional[str] = None,
+    max_tokens: Optional[int] = None,
+    rewrite: Union[bool, str] = False,
 ) -> str:
-    """Type-quota memory recall. Searches events, entities, preferences, and experiences separately, then returns a bounded memory_group block."""
+    """Memory recall assembled server-side. Searches each memory type separately, then returns a token-budgeted block where every entry carries its viking:// URI. detail pins the tier for every entry: "abstract", "overview" or "full"."""
     service = get_service()
-    effective_peer_scope = "actor" if peer_scope == "actor" else "all"
-    result = await search_type_quota_recall(
-        service=service,
-        ctx=_get_ctx(),
-        query=query,
-        quotas=quotas or DEFAULT_QUOTAS,
-        max_chars=max(1, int(max_chars)),
-        min_score=min_score,
-        peer_scope=effective_peer_scope,
-        other_peer_penalty=other_peer_penalty,
-        render=True,
-    )
+    # Omitted arguments must stay absent: this is the same preset as POST
+    # /recall, and a signature default sent through as a value would read as an
+    # explicit v1 alias and shift the whole profile.
+    values: Dict[str, Any] = {
+        "query": query,
+        "quotas": quotas,
+        "max_chars": None if max_chars is None else max(1, int(max_chars)),
+        "min_score": min_score,
+        "peer_scope": "actor" if peer_scope == "actor" else "all",
+        "other_peer_penalty": other_peer_penalty,
+        "session_id": session_id,
+        "detail": detail,
+        "max_tokens": max_tokens,
+        "rewrite": rewrite,
+    }
+    provided = {key for key, value in values.items() if value is not None}
+    params, _aliases = fold_recall_request(values, provided)
+    result = await assemble_context(service=service, ctx=_get_ctx(), params=params)
+    if result.digest.strip():
+        return result.digest
     if result.rendered.strip():
         return result.rendered
     return "No relevant memories found."
@@ -578,12 +587,18 @@ async def add_resource(
         tags: Optional explicit k=v retrieval tags to apply after ingestion.
         tag_mode: Tag update mode, "replace" or "append". Defaults to "replace".
         args: Parser-specific options, e.g. {"feishu_access_token": "..."} for Feishu imports,
-            or {"site": true} for whole-site ingestion.
+            {"site": true} for whole-site ingestion, or {"parse_mode": "no_split"}
+            to keep each parsed document body in one file.
     """
     from openviking.server.local_input_guard import require_remote_resource_source
 
     service = get_service()
     ctx = _get_ctx()
+
+    try:
+        mode = normalize_parse_mode((args or {}).get("parse_mode", ParseMode.DEFAULT))
+    except InvalidArgumentError as exc:
+        return f"Error: {exc}"
 
     if watch_interval < 0:
         return (
@@ -717,6 +732,7 @@ async def add_resource(
         processing_mode=processing_mode,
         tags=tags,
         tag_mode=tag_mode,
+        parse_mode=mode.value,
     )
     base_url, url_source = _resolve_public_base_url()
     upload_url = f"{base_url}/api/v1/resources/temp_upload?token={quote(token, safe='')}"

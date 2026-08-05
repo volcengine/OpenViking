@@ -32,7 +32,8 @@ test("queued recall waits for the context phase and still injects current-query 
 
   await recall.searchPending();
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].path, "/api/v1/search/recall");
+  assert.equal(calls[0].path, "/api/v1/search/search");
+  assert.equal(JSON.parse(calls[0].init.body).mode, "context");
 
   const messages = [{ role: "user", content: "current prompt" }];
   const injected = recall.injectRecall(messages);

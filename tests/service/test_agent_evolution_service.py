@@ -7,7 +7,11 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.service.agent_evolution_service import AgentEvolutionService
-from openviking.session.memory.experience_lineage import experience_source_tag
+from openviking.session.memory.experience_lineage import (
+    TRAJECTORY_OUTCOMES,
+    experience_source_tag,
+    trajectory_outcome_tag,
+)
 from openviking.storage.expr import And, Eq, PathScope
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
@@ -135,3 +139,55 @@ async def test_list_trajectories_by_experience_accepts_1000_and_paginates_all_re
     assert second_page["items"] == [{"uri": "viking://user/alice/memories/trajectories/1000.md"}]
     assert second_page["has_more"] is False
     assert [call.kwargs["offset"] for call in vikingdb.filter.await_args_list] == [0, 1000]
+
+
+@pytest.mark.asyncio
+async def test_get_experience_outcome_distribution_counts_two_tags_on_same_list_field():
+    experience_uri = "viking://user/alice/memories/experiences/exchange.md"
+    viking_fs = Mock()
+    viking_fs.stat = AsyncMock(return_value={"isDir": False})
+    vikingdb = Mock()
+    vikingdb.count = AsyncMock(side_effect=[4, 2, 1, 0, 3])
+    service = AgentEvolutionService(viking_fs=viking_fs, vikingdb=vikingdb)
+
+    result = await service.get_experience_outcome_distribution(
+        experience_uri=experience_uri,
+        ctx=_ctx(),
+    )
+
+    assert result == {
+        "experience_uri": experience_uri,
+        "outcome_distribution": [
+            {"outcome": "success", "count": 4},
+            {"outcome": "failure", "count": 2},
+            {"outcome": "partial", "count": 1},
+            {"outcome": "unknown", "count": 0},
+            {"outcome": "unfinished", "count": 3},
+        ],
+    }
+    assert vikingdb.count.await_count == len(TRAJECTORY_OUTCOMES)
+    for call, outcome in zip(vikingdb.count.await_args_list, TRAJECTORY_OUTCOMES, strict=True):
+        assert call.kwargs["filter"] == And(
+            [
+                PathScope(
+                    "uri",
+                    "viking://user/alice/memories/trajectories",
+                    depth=1,
+                ),
+                Eq("context_type", "memory"),
+                Eq("level", 2),
+                Eq("search_tags", experience_source_tag(experience_uri)),
+                Eq("search_tags", trajectory_outcome_tag(outcome)),
+            ]
+        )
+
+
+@pytest.mark.asyncio
+async def test_get_experience_outcome_distribution_rejects_other_user_uri():
+    service = AgentEvolutionService(viking_fs=Mock(), vikingdb=Mock())
+
+    with pytest.raises(InvalidArgumentError):
+        await service.get_experience_outcome_distribution(
+            experience_uri="viking://user/bob/memories/experiences/exchange.md",
+            ctx=_ctx(),
+        )

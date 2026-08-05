@@ -13,6 +13,8 @@ const HARNESS_SHARED_FILES = [
   "pending-queue.mjs",
   "debug-log.mjs",
   "setup-wizard.mjs",
+  "plugin-config.mjs",
+  "recall-compress-core.mjs",
   "recall-core.mjs",
   "workspace-peer.mjs",
   "profile-inject.mjs",

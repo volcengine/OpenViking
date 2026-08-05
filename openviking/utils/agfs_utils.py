@@ -175,13 +175,11 @@ def _build_queuefs_plugin_config(agfs_config: Any, data_path: Path) -> Dict[str,
     queuefs_config = getattr(agfs_config, "queuefs", None)
 
     backend = getattr(queuefs_config, "backend", "sqlite") if queuefs_config else "sqlite"
-    plugin_config: Dict[str, Any] = {
-        "backend": backend,
-        "recover_stale_sec": getattr(queuefs_config, "recover_stale_sec", 0),
-        "busy_timeout_ms": getattr(queuefs_config, "busy_timeout_ms", 5000),
-    }
+    plugin_config: Dict[str, Any] = {"backend": backend}
 
     if backend in {"sqlite", "sqlite3"}:
+        plugin_config["recover_stale_sec"] = getattr(queuefs_config, "recover_stale_sec", 0)
+        plugin_config["busy_timeout_ms"] = getattr(queuefs_config, "busy_timeout_ms", 5000)
         configured_queue_db_path = None
         if queuefs_config is not None:
             configured_queue_db_path = getattr(queuefs_config, "db_path", None)
@@ -194,6 +192,9 @@ def _build_queuefs_plugin_config(agfs_config: Any, data_path: Path) -> Dict[str,
             queue_db_path = str(default_queue_db_path)
 
         plugin_config["db_path"] = queue_db_path
+
+    if backend == "redis":
+        plugin_config["redis"] = queuefs_config.redis.model_dump()
 
     return plugin_config
 

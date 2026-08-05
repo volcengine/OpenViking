@@ -1,6 +1,6 @@
 # Codex Memory Plugin
 
-Equip [Codex](https://developers.openai.com/codex) with persistent memory across sessions. Install it once, and memories will be automatically recalled with every prompt, captured after each turn, and committed before compaction. The plugin also connects Codex to OpenViking's `/mcp` endpoint, enabling the model to call tools such as `find`, `search`, `recall`, and `remember` directly.
+Equip [Codex](https://developers.openai.com/codex) with persistent memory across sessions. Install it once, and your OpenViking profile and memory index are loaded at session start, relevant memories are recalled with every prompt, new turns are captured after each response, and sessions are committed before compaction. The plugin also connects Codex to OpenViking's `/mcp` endpoint, enabling the model to call tools such as `find`, `search`, `recall`, and `remember` directly.
 
 Source: [examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin) | [Blog: Motivation & demo](https://blog.openviking.ai/post/openviking-coding-agent/)
 
@@ -44,11 +44,11 @@ Prerequisites: Node.js >= 22, Codex >= 0.130.0, and the `plugin_hooks` feature e
 
 ## Verify
 
-Launch `codex`; the plugin should seamlessly recall memories on every prompt. Set `OPENVIKING_DEBUG=1` to write events to `~/.openviking/logs/codex-hooks.log`.
+Launch `codex`; on the first prompt of a session, the `SessionStart` hook should load your profile, and the plugin should then recall relevant memories for every prompt. Set `OPENVIKING_DEBUG=1` to write events to `~/.openviking/logs/codex-hooks.log`.
 
 ## How it works
 
-The plugin integrates with Codex's lifecycle by hooking into key events. It searches OpenViking and injects relevant memories before every prompt (`UserPromptSubmit`), appends new turns to the session after each response (`Stop`), and commits the full transcript before compaction (`PreCompact`) to ensure memory extraction processes the entire conversation. Upon starting a fresh session, it also cleans up any orphaned sessions from previous runs.
+The plugin integrates with Codex's lifecycle by hooking into key events. On `SessionStart` (`startup`, `clear`, or `resume`), it injects `profile.md` plus URI and abstract indexes for `preferences/` and `entities/` through the same shared, CJK-aware profile builder used by the other coding-agent integrations. It then searches OpenViking and injects relevant memories before every prompt (`UserPromptSubmit`), appends new turns to the session after each response (`Stop`), and commits the full transcript before compaction (`PreCompact`) to ensure memory extraction processes the entire conversation. Upon starting a fresh session, it also cleans up any orphaned sessions from previous runs. A resumed session may combine the fixed profile block with its latest archive digest.
 
 > **Known limitation**: Codex does not fire a hook upon `SIGTERM`, `Ctrl+C`, or `/exit`. Orphaned sessions are recovered during the next `SessionStart` via the idle-TTL sweep (30 minutes) or the active-window heuristic.
 
@@ -63,9 +63,13 @@ Credential source: active `ovcli.conf` wins by default (`OPENVIKING_CLI_CONFIG_F
 | `OPENVIKING_API_KEY` | — | API key (sent as `Authorization: Bearer`) |
 | `OPENVIKING_CLI_CONFIG_FILE` | `~/.openviking/ovcli.conf` | Active CLI config to use for hooks, MCP, and child `ov` commands |
 | `OPENVIKING_CREDENTIAL_SOURCE` | `auto` | Set `env` to force env-var credentials instead of active ovcli config |
+| `OPENVIKING_NO_AUTO_INJECT` | `false` | Disable fixed session-start profile/background injection without disabling per-prompt recall |
+| `OPENVIKING_PROFILE_TOKEN_BUDGET` | `10000` | CJK-aware token budget for `profile.md` plus `preferences/` and `entities/` indexes |
 | `OPENVIKING_CODEX_ACTIVE_WINDOW_MS` | `120000` | SessionStart active-window threshold |
 | `OPENVIKING_CODEX_IDLE_TTL_MS` | `1800000` | SessionStart idle-TTL sweep threshold |
 | `OPENVIKING_DEBUG` | `false` | Write logs to `~/.openviking/logs/codex-hooks.log` |
+
+If recall latency matters most, see [Low-latency recall](./01-overview.md#low-latency-recall) for the environment-variable and `ovcli.conf` settings that disable query expansion and Codex's local result compression.
 
 Additional tuning options (e.g., `OPENVIKING_RECALL_LIMIT`, `OPENVIKING_CAPTURE_ASSISTANT_TURNS`) are documented in the [plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md#tuning-the-plugin).
 

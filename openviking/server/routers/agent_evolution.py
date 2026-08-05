@@ -36,3 +36,17 @@ async def list_experience_trajectories(
         offset=offset,
     )
     return Response(status="ok", result=result)
+
+
+@router.get("/experiences/outcomes")
+async def get_experience_outcome_distribution(
+    experience_uri: str = Query(..., description="Experience file URI"),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Count application trajectories by outcome for an Experience."""
+    service = get_service()
+    result = await service.agent_evolution.get_experience_outcome_distribution(
+        experience_uri=experience_uri,
+        ctx=_ctx,
+    )
+    return Response(status="ok", result=result)

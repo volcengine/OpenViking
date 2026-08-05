@@ -593,6 +593,177 @@ openviking search "similar poster" --image ./poster.png --uri "viking://resource
 
 ---
 
+### search(mode="context")
+
+Assemble retrieval results into an injection-ready context block. `mode="list"` (the default) returns the ranked hit list and behaves exactly like the previous `search()`; `mode="context"` opens the assembly face: budgeting, tier degradation, cross-turn dedup and the optional LLM digest all happen server-side in one request.
+
+#### 1. Implementation Overview
+
+Injecting context every turn used to mean searching per type, reading each hit back, and stitching the block together client-side. With assembly on the server, a plugin sends one request and every harness shares one budgeting, degradation and dedup implementation.
+
+**Pipeline**:
+1. **L1 query understanding**: optional bounded intent expansion from the session's recent messages (at most 3 queries, timeout fuse, falls back to the original query)
+2. **L0 retrieval**: bucketed per `quotas`, or a single whole-scope search when quotas are off
+3. **L2 assembly**: tier filling inside the token budget (everyone at their category's default tier first, then leftover budget deepens in score order); an oversized tier falls back instead of being truncated
+4. **L3 rewrite**: optional digest with URI citations (timeout fuse; on failure the unrewritten `rendered` is still returned; an exact `NO_RELEVANT_MEMORY` result is reported as `stats.rewrite="no_relevant"` so Coding Agent clients inject nothing instead of falling back to `rendered`)
+
+**Code entry points**:
+- `openviking/server/routers/search.py:_search_context()` - HTTP route branch
+- `openviking/retrieve/context_assembler/pipeline.py:assemble_context()` - assembly orchestration
+- `openviking/retrieve/context_assembler/budget.py:plan_entries()` - budgeting and tier filling
+- `openviking/retrieve/context_assembler/tiers.py` - overview extraction per source type
+
+#### 2. Parameters
+
+**L0 retrieval domain**: `query`, `image_url`, `context_type`, `limit`, `score_threshold`, `filter`, `tags`, `since`/`until` behave as in list mode. `limit` applies only to quota-free retrieval. Once `purpose` or explicit `quotas` enables bucketed retrieval, the per-category quotas are the only candidate ceilings. `target_uri` is not supported in context mode yet (returns 400); `level` is ignored because `detail` governs tiers.
+
+**L1 query understanding**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `session_id` | str | None | Required to enable query expansion and server-side dedup |
+| `query_expansion` | `off` \| `auto` | `auto` | Bounded session-aware expansion; falls back to the original query without a session or on failure |
+
+**L2 assembly**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | int | 10 | Candidate ceiling for quota-free retrieval only; ignored when `purpose` or `quotas` enables bucketed retrieval |
+| `max_tokens` | int | 1600 | The single budget parameter, estimated with a CJK-aware heuristic (codepoint ≥ 0x3000 counts 1.5 tok/char, otherwise chars/4) |
+| `quotas` | object | None | Absolute per-bucket limits; keys are `events`/`entities`/`preferences`/`experiences`/`resources`/`skills`. Explicit quotas ignore `limit` |
+| `purpose` | `chat` \| `coding` | None | Enables six-domain bucket sampling with the absolute preset quotas below. Applies only when `quotas` is not given |
+| `detail` | `abstract` \| `overview` \| `full` \| object | None | Requests one starting/maximum tier for every entry. Entries whose requested tier is unavailable or does not fit step down instead of being truncated. Omitted, each category takes its default tier (below). Also accepts a per-category object such as `{"events":"overview","preferences":"abstract"}`; categories left out keep their default. `"auto"` is a deprecated spelling and behaves as if omitted |
+| `dedup_turns` | int | 0 | Cooldown window in turns; needs `session_id`. Ledger lives at `{session_uri}/.recall_log.json` |
+| `exclude_uris` | string[] | [] | Stateless dedup fallback, up to 200 entries, unioned with `dedup_turns` |
+| `peer_scope` | `actor` \| `all` | `all` | `actor` excludes other peers while keeping global, self-owned and current-actor content |
+| `other_peer_penalty` | number \| object | per-category defaults | Score penalty applied to other-peer hits |
+
+**L3 rewrite**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `rewrite` | bool \| `auto` | `false` | Server-side digest rewrite; `auto` engages only when a query_planner model is configured |
+| `rewrite_max_bullets` | int | 6 | Digest bullet ceiling (1–20) |
+
+**Tier rules**
+
+- **Purpose presets**: `chat` uses `events:3, entities:3, preferences:1, experiences:1, resources:1, skills:1`; `coding` uses `events:1, entities:2, preferences:1, experiences:1, resources:3, skills:2`. These are absolute per-category ceilings, not weights. Results are deduplicated and globally sorted after gathering, but are not truncated by a second global `limit`
+- **Default tier per category**: with `detail` omitted, each category lands on the tier below. Only `events` reads a file; every other category costs no read
+
+  | Category | Default tier | Leftover budget may reach | Why |
+  |----------|--------------|---------------------------|-----|
+  | `events` | overview | full | The one memory type whose body is long enough for `# Summary` extraction to be a real compression |
+  | `entities` / `preferences` / `experiences` | abstract | abstract | Short bodies, and the writer stores the whole body in the abstract scalar, so abstract already is the complete file |
+  | `resources` / `skills` | abstract | abstract | The 256-char abstract from semantic processing; bodies can be large or carry credentials, so deepening is opt-in |
+  | Directory hits | overview | overview | A directory has no abstract, so it reads the `.overview.md` sidecar; a full tier is meaningless for a subtree |
+
+- **Floor**: every result carries at least its `uri`. When a category's default tier yields nothing usable — a resource that never went through semantic processing, or an abstract that busts the per-entry cap — the entry falls back to overview instead of degrading to a bare pointer
+- **Explicit `detail`**: sets that tier as both the requested start and ceiling; entries that do not fit still step down a tier rather than being truncated
+- **Overview by source type**: memory files use the leading `# Summary` section, code files use class and function signatures (reusing `code_outline`), long documents use the heading tree plus first paragraph
+- **Per-entry cap**: `max_tokens ÷ candidate_count × 2`, applied to every tier except the bare `uri`; a tier exceeding it falls back to the previous tier rather than being truncated. If budget is still left over, one final deepening pass ignores the cap and is bounded only by `max_tokens`
+
+#### 3. Examples
+
+**HTTP API**
+
+```bash
+# Basic context assembly
+curl -X POST http://localhost:1933/api/v1/search/search \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $OPENVIKING_API_KEY" \
+  -d '{"query":"what changed on this branch","mode":"context","max_tokens":1600}'
+
+# Session-aware: query expansion plus cross-turn dedup
+curl -X POST http://localhost:1933/api/v1/search/search \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $OPENVIKING_API_KEY" \
+  -d '{
+    "query":"continue that refactor",
+    "mode":"context",
+    "session_id":"cc-1a2b3c",
+    "query_expansion":"auto",
+    "dedup_turns":5,
+    "purpose":"coding",
+    "max_tokens":3000
+  }'
+
+# With the server-side digest rewrite
+curl -X POST http://localhost:1933/api/v1/search/search \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $OPENVIKING_API_KEY" \
+  -d '{"query":"tier design","mode":"context","max_tokens":3000,"rewrite":true}'
+```
+
+**Response**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "entries": [
+      {
+        "uri": "viking://user/default/memories/events/2026/07/14/tier_design.md",
+        "category": "events",
+        "score": 0.45,
+        "detail": "full",
+        "text": "# Summary\nTiers now take a per-category default\n...",
+        "origin": "self"
+      },
+      {
+        "uri": "viking://user/default/memories/entities/software/openviking_fs.md",
+        "category": "entities",
+        "score": 0.43,
+        "detail": "abstract",
+        "text": "OpenViking FS storage layer...",
+        "origin": "self"
+      }
+    ],
+    "rendered": "<memory uri=\"viking://user/default/memories/events/2026/07/14/tier_design.md\" type=\"events\" score=\"0.45\" detail=\"full\">\n# Summary\n...\n</memory>",
+    "digest": "",
+    "stats": {
+      "candidates": 13,
+      "returned": 13,
+      "dropped": 0,
+      "deduped": 0,
+      "max_tokens": 3000,
+      "used_tokens": 2510,
+      "per_entry_cap": 462,
+      "detail": null,
+      "tier_counts": {"full": 4, "overview": 2, "abstract": 7},
+      "fill": {"floor_tokens": 1890, "overview_upgrades": 0, "full_upgrades": 4, "spare_upgrades": 0},
+      "query_expansion": "used",
+      "rewrite": "off",
+      "rewrite_usage": null,
+      "excluded": 0,
+      "dedup": {"turns": 5, "status": "ok", "cooled": 2, "turn": 34}
+    }
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `entries[].uri` | string | Entry URI, always present at every tier, expandable with the MCP `read` tool |
+| `entries[].category` | string | `events`/`entities`/`preferences`/`experiences`/`resources`/`skills` |
+| `entries[].detail` | string | Tier actually served: `full`, `overview`, `abstract` or `uri` |
+| `entries[].text` | string | Body for that tier; empty at the `uri` tier |
+| `rendered` | string | Flat XML context block, ready to inject; empty when rewrite reports `no_relevant` |
+| `digest` | string | Digest when the rewrite succeeded, empty string on failure or when the compressor reports no relevant memory |
+| `stats` | object | Budget usage, tier distribution, expansion and rewrite status (`off`, `ok`, `no_relevant`, `failed` or `timeout`), dedup ledger state; carries `retrieval_errors` when a retrieval scope failed, so a broken index is distinguishable from having no relevant memories |
+
+When `stats.rewrite` is `no_relevant`, the response keeps `entries` for
+inspection but returns both `digest` and `rendered` as empty strings. This makes
+the successful empty result safe for clients that predate the explicit status.
+
+**Validation rules**
+
+- Any context-only parameter sent explicitly under `mode="list"` → 400
+- `target_uri` under `mode="context"` → 400
+- Unknown `quotas` key → 400
+- Fields ignored in context mode (`level`, and `limit` when `purpose` or explicit quotas are active) are reported in `stats.ignored`
+
+---
+
 ### grep()
 
 Search content by pattern (regex).

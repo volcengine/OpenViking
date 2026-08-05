@@ -10,8 +10,10 @@ from typing import TYPE_CHECKING, Any, Optional
 from openviking.core.namespace import canonicalize_uri
 from openviking.server.identity import RequestContext
 from openviking.session.memory.experience_lineage import (
+    TRAJECTORY_OUTCOMES,
     canonical_experience_uri,
     experience_source_tag,
+    trajectory_outcome_tag,
 )
 from openviking.storage.expr import And, Eq, PathScope
 from openviking.storage.viking_fs import VikingFS
@@ -52,20 +54,12 @@ class AgentEvolutionService:
             raise NotInitializedError("VikingFS")
         return self._viking_fs
 
-    async def list_trajectories_by_experience(
+    async def _prepare_experience_query(
         self,
         *,
         experience_uri: str,
         ctx: RequestContext,
-        limit: int = DEFAULT_TRAJECTORY_PAGE_LIMIT,
-        offset: int = 0,
-    ) -> dict[str, Any]:
-        """List trajectories produced by commits that read an Experience."""
-        if limit < 1 or limit > MAX_TRAJECTORY_PAGE_LIMIT:
-            raise InvalidArgumentError(f"limit must be between 1 and {MAX_TRAJECTORY_PAGE_LIMIT}")
-        if offset < 0:
-            raise InvalidArgumentError("offset must be greater than or equal to 0")
-
+    ) -> tuple[str, str, VikingDBManager]:
         canonical_uri = canonical_experience_uri(experience_uri, ctx)
         if canonical_uri is None:
             raise InvalidArgumentError(
@@ -84,6 +78,26 @@ class AgentEvolutionService:
             f"viking://user/{ctx.user.user_id}/memories/trajectories",
             ctx,
         )
+        return canonical_uri, trajectory_root, self._vikingdb
+
+    async def list_trajectories_by_experience(
+        self,
+        *,
+        experience_uri: str,
+        ctx: RequestContext,
+        limit: int = DEFAULT_TRAJECTORY_PAGE_LIMIT,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """List trajectories produced by commits that read an Experience."""
+        if limit < 1 or limit > MAX_TRAJECTORY_PAGE_LIMIT:
+            raise InvalidArgumentError(f"limit must be between 1 and {MAX_TRAJECTORY_PAGE_LIMIT}")
+        if offset < 0:
+            raise InvalidArgumentError("offset must be greater than or equal to 0")
+
+        canonical_uri, trajectory_root, vikingdb = await self._prepare_experience_query(
+            experience_uri=experience_uri,
+            ctx=ctx,
+        )
         lineage_filter = And(
             [
                 PathScope("uri", trajectory_root, depth=1),
@@ -93,7 +107,7 @@ class AgentEvolutionService:
             ]
         )
         records, total = await asyncio.gather(
-            self._vikingdb.filter(
+            vikingdb.filter(
                 filter=lineage_filter,
                 limit=limit,
                 offset=offset,
@@ -102,7 +116,7 @@ class AgentEvolutionService:
                 order_desc=True,
                 ctx=ctx,
             ),
-            self._vikingdb.count(filter=lineage_filter, ctx=ctx),
+            vikingdb.count(filter=lineage_filter, ctx=ctx),
         )
         items = [
             {field: record.get(field) for field in _TRAJECTORY_OUTPUT_FIELDS if field in record}
@@ -115,4 +129,43 @@ class AgentEvolutionService:
             "limit": limit,
             "offset": offset,
             "has_more": offset + len(items) < total,
+        }
+
+    async def get_experience_outcome_distribution(
+        self,
+        *,
+        experience_uri: str,
+        ctx: RequestContext,
+    ) -> dict[str, Any]:
+        """Count application trajectories by outcome for an Experience."""
+        canonical_uri, trajectory_root, vikingdb = await self._prepare_experience_query(
+            experience_uri=experience_uri,
+            ctx=ctx,
+        )
+        base_conditions = [
+            PathScope("uri", trajectory_root, depth=1),
+            Eq("context_type", "memory"),
+            Eq("level", 2),
+            Eq("search_tags", experience_source_tag(canonical_uri)),
+        ]
+        counts = await asyncio.gather(
+            *[
+                vikingdb.count(
+                    filter=And(
+                        [
+                            *base_conditions,
+                            Eq("search_tags", trajectory_outcome_tag(outcome)),
+                        ]
+                    ),
+                    ctx=ctx,
+                )
+                for outcome in TRAJECTORY_OUTCOMES
+            ]
+        )
+        return {
+            "experience_uri": canonical_uri,
+            "outcome_distribution": [
+                {"outcome": outcome, "count": count}
+                for outcome, count in zip(TRAJECTORY_OUTCOMES, counts, strict=True)
+            ],
         }

@@ -106,15 +106,15 @@ async def _commit_experience_snapshot(
     commit = getattr(viking_fs, "commit", None)
     if not callable(commit):
         return
-    has_experience_changes = any(
-        "/memories/experiences/" in uri and uri.endswith(".md")
+    paths = [
+        uri
         for uri in dict.fromkeys(str(uri or "") for uri in experience_uris)
-    )
-    if not has_experience_changes:
+        if "/memories/experiences/" in uri and uri.endswith(".md")
+    ]
+    if not paths:
         return
-    paths = [_experience_root_uri(ctx)]
     archive_ref = archive_uri.rstrip("/") if archive_uri else "unknown"
-    changed_experience_uris = set(dict.fromkeys(str(uri or "") for uri in experience_uris))
+    changed_experience_uris = set(paths)
     trajectory_map = {
         experience_uri: list(dict.fromkeys(trajectory_uris))
         for experience_uri, trajectory_uris in (experience_trajectory_map or {}).items()
@@ -898,6 +898,9 @@ class SessionCompressorV3:
                         *,
                         _fallback_trajectory_uris: set[str] = fallback_trajectory_uris,
                     ) -> None:
+                        persisted_result = (
+                            getattr(batch_result, "batch_result", None) or batch_result
+                        )
                         snapshot_apply_result, experience_trajectory_map = (
                             _experience_snapshot_provenance(
                                 batch_result,
@@ -907,10 +910,10 @@ class SessionCompressorV3:
                         await _commit_experience_snapshot(
                             viking_fs,
                             ctx=ctx,
-                            experience_uris=[
-                                *list(getattr(snapshot_apply_result, "written_uris", []) or []),
-                                *list(getattr(snapshot_apply_result, "deleted_uris", []) or []),
-                            ],
+                            experience_uris=_visible_experience_snapshot_uris(
+                                plan=persisted_result.plan,
+                                apply_result=snapshot_apply_result,
+                            ),
                             archive_uri=archive_uri,
                             experience_trajectory_map=experience_trajectory_map,
                         )
@@ -1764,6 +1767,42 @@ def _experience_trajectory_map(
             continue
         existing = result.setdefault(experience_uri, [])
         existing.extend(uri for uri in source_uris if uri not in existing)
+    return result
+
+
+def _visible_experience_snapshot_uris(
+    *,
+    plan: PolicyUpdatePlan,
+    apply_result: PolicyApplyResult,
+) -> list[str]:
+    """Return successfully applied Experience paths whose visible content changed."""
+    root_uri = getattr(getattr(apply_result, "updated_policy_set", None), "root_uri", "")
+    written_uris = set(getattr(apply_result, "written_uris", []) or [])
+    deleted_uris = set(getattr(apply_result, "deleted_uris", []) or [])
+    result: list[str] = []
+    seen: set[str] = set()
+
+    for item in getattr(plan, "items", []) or []:
+        if item.memory_type != _EXPERIENCES_MEMORY_TYPE:
+            continue
+        if item.before_content == item.after_content:
+            continue
+
+        uri = _experience_plan_item_uri(item, root_uri)
+        if not uri or uri in seen:
+            continue
+        if item.kind == "upsert":
+            applied = uri in written_uris
+        elif item.kind == "delete":
+            applied = uri in deleted_uris
+        else:
+            applied = False
+        if not applied:
+            continue
+
+        seen.add(uri)
+        result.append(uri)
+
     return result
 
 

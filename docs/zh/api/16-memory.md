@@ -26,17 +26,22 @@
 
 ### recall()
 
-按记忆类型分别检索，并在字符预算内组合成可直接注入 Agent 上下文的记忆块。默认检索 `events`、`entities` 和 `preferences`；`experiences` 默认配额为 `0`，需要时应显式开启。
+> **已弃用**：`/api/v1/search/recall` 现在只是 [`/api/v1/search/search` 的 `mode="context"`](06-retrieval.md#searchmodecontext) 之上的轻量预设，自身不再包含独立的组装逻辑。新接入请直接使用 context 面；v1 字段别名仅在本端点保留，将在下一个 minor 版本移除。响应会带上 `Deprecation: true` 头。
 
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| `query` | string | 是 | - | 召回查询 |
-| `quotas` | object | 否 | `events=10, entities=10, preferences=3, experiences=0` | 各类型最大返回数 |
-| `max_chars` | integer | 否 | `6500` | 渲染后记忆块的最大字符数 |
-| `min_score` | number | 否 | `0.1` | 最低相关性分数 |
-| `peer_scope` | string | 否 | `all` | `actor` 只检索当前 actor peer；`all` 同时检索用户全局和其他 peer |
-| `other_peer_penalty` | number/object | 否 | 按类型默认值 | 对其他 peer 结果施加的分数折损 |
-| `render` | boolean | 否 | `true` | 是否生成 `rendered` 记忆块 |
+按记忆类型分别检索，并在预算内组合成可直接注入 Agent 上下文的记忆块。相对 context 面，`/recall` 会叠加 `purpose="coding"`、兼容 v1 的 `score_threshold=0.1`、带 `session_id` 时 `dedup_turns=5`、`query_expansion="auto"`。Coding Agent 插件会显式发送 `score_threshold=0.35`；公共 `/recall` 默认值仍为 `0.1`，避免相同请求在升级后静默减少结果。省略 `quotas` 时沿用 v1 的分桶默认值（`events=10, entities=10, preferences=3, experiences=0`）；显式传 `"quotas": null` 才改用 `purpose` 预设配比。
+
+**v1 字段折叠**
+
+| v1 字段 | 折叠为 | 说明 |
+|---------|--------|------|
+| `max_chars` | `max_tokens = max_chars / 4` | `6500` → `1625`；显式传 `max_tokens` 时以后者为准 |
+| `min_score` | `score_threshold` | 都未提供时取兼容 v1 的默认值 `0.1` |
+| `render: true` | 不钉档位 | 默认行为：各类别取自己的默认档 |
+| `render: false` | 只返回 `entries`，`rendered` 为空 | |
+| `render: "compact"` | `detail="abstract"` | 原型期的紧凑模式；把所有类别钉在摘要档 |
+| v1 `quotas` 键 | 叠加在 v1 分桶默认值之上 | 键名未变；只传一部分键时其余桶保留默认值 |
+
+context 面的参数（`max_tokens`、`detail`、`dedup_turns`、`session_id`、`query_expansion`、`exclude_uris`、`purpose`、`rewrite`、`rewrite_max_bullets`）在本端点同样接受，便于插件在尚未升级的部署上平滑过渡。
 
 **HTTP API**
 
@@ -48,7 +53,7 @@ Content-Type: application/json
 ```bash
 curl -X POST http://localhost:1933/api/v1/search/recall \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
+  -H "Authorization: Bearer $OPENVIKING_API_KEY" \
   -d '{
     "query":"OpenViking API 文档偏好",
     "quotas":{"events":5,"entities":5,"preferences":3,"experiences":2},
@@ -70,6 +75,8 @@ recall(
 
 **响应**
 
+响应形状与 context 面一致（entries 扁平化、`rendered` 为扁平 XML）：
+
 ```json
 {
   "status": "ok",
@@ -77,68 +84,38 @@ recall(
     "entries": [
       {
         "uri": "viking://user/default/memories/preferences/api-docs.md",
+        "category": "preferences",
         "score": 0.82,
-        "type": "preferences",
-        "mode": "full",
-        "rank": 1,
-        "content": "用户偏好在 API 文档中同时提供 HTTP、SDK 和 CLI 示例。",
+        "detail": "full",
+        "text": "用户偏好在 API 文档中同时提供 HTTP、SDK 和 CLI 示例。",
         "origin": "self"
       }
     ],
-    "rendered": "## Global Memory\n### Preferences\n[1] viking://user/default/memories/preferences/api-docs.md (score=0.8200)\n用户偏好在 API 文档中同时提供 HTTP、SDK 和 CLI 示例。",
+    "rendered": "<memory uri=\"viking://user/default/memories/preferences/api-docs.md\" type=\"preferences\" score=\"0.82\" detail=\"full\">\n用户偏好在 API 文档中同时提供 HTTP、SDK 和 CLI 示例。\n</memory>",
+    "digest": "",
     "stats": {
-      "quotas": {
-        "events": 5,
-        "entities": 5,
-        "preferences": 3,
-        "experiences": 2
-      },
-      "roots": [
-        "viking://user/default/memories"
-      ],
-      "searched": {
-        "events": 2,
-        "entities": 1,
-        "preferences": 1,
-        "experiences": 0
-      },
+      "quotas": {"events": 5, "entities": 5, "preferences": 3, "experiences": 2},
+      "candidates": 4,
       "returned": 1,
       "dropped": 0,
-      "max_chars": 6500,
-      "min_score": 0.1,
+      "max_tokens": 1625,
+      "used_tokens": 96,
+      "tier_counts": {"full": 1},
       "peer_scope": "all",
-      "other_peer_penalties": {
-        "events": 0.1,
-        "entities": 0.1,
-        "preferences": 0.02,
-        "experiences": 0.02
-      },
-      "origins": {
-        "actor_peer": 0,
-        "self": 1,
-        "other_peer": 0
+      "origins": {"actor_peer": 0, "self": 1, "other_peer": 0},
+      "deprecated": {
+        "endpoint": "/api/v1/search/recall",
+        "successor": "/api/v1/search/search?mode=context",
+        "aliases_used": ["max_chars"]
       }
     }
   }
 }
 ```
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `entries` | object[] | 结构化召回结果，按类型配额和相关性筛选 |
-| `entries[].uri` | string | 记忆条目的 Viking URI |
-| `entries[].score` | number | 原始相关性分数 |
-| `entries[].type` | string | `events`、`entities`、`preferences` 或 `experiences` |
-| `entries[].mode` | string | 渲染方式：`full`、`summary` 或 `uri` |
-| `entries[].rank` | integer | 该记忆类型内的排名，从 `1` 开始 |
-| `entries[].origin` | string | 来源：`actor_peer`、`self` 或 `other_peer` |
-| `entries[].content` | string | `mode=full` 时返回的正文；否则可能省略 |
-| `entries[].summary` | string | 使用摘要降级时返回；否则可能省略 |
-| `entries[].abstract` | string | 检索命中的摘要；没有摘要时省略 |
-| `rendered` | string | 已受 `max_chars` 限制、可直接注入 Agent 上下文的文本；`render=false` 时为空字符串 |
-| `stats` | object | 实际配额、检索根、各类型检索量、返回量、丢弃量、阈值、peer 范围及来源统计 |
+字段含义见 [检索 - search(mode="context")](06-retrieval.md#searchmodecontext)。相对 v1 的形状变化：`type` → `category`、`mode` → `detail`、`content`/`summary` → `text`，`rendered` 由三层嵌套改为扁平 `<memory>` 标签，`rank` 不再返回。
 
-公共 Python、TypeScript、Go SDK 和 `ov` CLI 当前尚未封装类型配额召回，因此本节只展示 HTTP Tab，并补充实际存在的 MCP 调用。
+公共 Python、TypeScript、Go SDK 和 `ov` CLI 当前尚未封装该端点，因此本节只展示 HTTP Tab，并补充实际存在的 MCP 调用。
 
 ## 相关文档
 

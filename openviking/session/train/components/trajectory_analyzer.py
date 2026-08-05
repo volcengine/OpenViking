@@ -22,6 +22,7 @@ from openviking.session.memory.dataclass import (
 from openviking.session.memory.experience_lineage import (
     collect_read_experience_uris,
     experience_source_tags,
+    trajectory_outcome_tag,
 )
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_updater import ExtractContext, MemoryUpdateResult
@@ -427,13 +428,14 @@ def _trajectory_search_tags_by_uri(
     operations: ResolvedOperations,
     consumed_experience_uris: list[str] | None,
 ) -> dict[str, list[str]]:
-    tags = experience_source_tags(consumed_experience_uris)
-    if not tags:
-        return {}
+    source_tags = experience_source_tags(consumed_experience_uris)
     result: dict[str, list[str]] = {}
     for op in getattr(operations, "upsert_operations", []) or []:
         if getattr(op, "memory_type", None) != _TRAJECTORY_MEMORY_TYPE:
             continue
+        fields = getattr(op, "memory_fields", None)
+        outcome = fields.get("outcome") if isinstance(fields, dict) else None
+        tags = [*source_tags, trajectory_outcome_tag(outcome)]
         for uri in getattr(op, "uris", []) or []:
             if uri:
                 result[uri] = list(tags)

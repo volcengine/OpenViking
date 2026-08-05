@@ -62,6 +62,18 @@ def _uri_in_roots(uri: str, roots: tuple[str, ...]) -> bool:
     )
 
 
+def _skill_workspace_read_hint(uri: str) -> str | None:
+    value = str(uri or "").strip()
+    if value.startswith("viking://skills/"):
+        value = value[len("viking://") :]
+    if not value.startswith("skills/"):
+        return None
+    try:
+        return _normalize_workspace_path(value)
+    except ValueError:
+        return None
+
+
 class CompileScopedTool(Tool):
     """Guard an existing OpenViking read tool without changing its implementation."""
 
@@ -121,6 +133,12 @@ class CompileScopedTool(Tool):
             return "Error: Compile tool URI limit exceeded."
         for uri in uris:
             if not _uri_in_roots(uri, self._roots):
+                workspace_path = _skill_workspace_read_hint(uri)
+                if workspace_path:
+                    return (
+                        "Error: Skill workspace files must be read with read_file using path "
+                        f'"{workspace_path}", not with an openviking_* tool.'
+                    )
                 return f"Error: URI is outside the Compile task scope: {uri}"
 
         result = await self._tool.execute(tool_context, **kwargs)

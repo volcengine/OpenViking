@@ -29,6 +29,7 @@ class BuildingTree:
         self._uri_map: Dict[str, "Context"] = {}
         self._root_uri: Optional[str] = None
         self._candidate_uri: Optional[str] = None
+        self._root_is_file = False
 
     def add_context(self, context: "Context") -> None:
         """Add a context to the tree."""

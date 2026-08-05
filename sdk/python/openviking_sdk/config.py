@@ -130,16 +130,34 @@ def load_ovcli_config(config_path: Optional[str] = None) -> Optional[OVCLIConfig
     try:
         data = _require_mapping(raw, path="ovcli")
 
+        # ovcli.conf is written by the Rust CLI (crates/ov_cli/src/config.rs).
+        # Accept every field it can write, including the ones the SDK does not
+        # read, plus the `plugin` section the harness memory plugins own.
         allowed_keys = {
-            "url", "api_key", "root_api_key", "account", "user",
-            "actor_peer_id", "agent_id",
-            "timeout", "profile", "output",
-            "upload", "extra_headers", "extra_header",
+        allowed_keys = {
+            "url",
+            "api_key",
+            "account",
+            "user",
+            "actor_peer_id",
+            "agent_id",
+            "timeout",
+            "profile",
+            "upload",
+            "extra_headers",
+            "extra_header",
+            "output",
+            "echo_command",
+            "show_progress",
+            "verbose",
+            "root_api_key",
             "gateway_token",
+            "plugin",
             # Authentication
             "auth_mode",
             # LDAP
-            "ldap_username", "ldap_password",
+            "ldap_username",
+            "ldap_password",
             # OIDC
             "oidc_token",
         }

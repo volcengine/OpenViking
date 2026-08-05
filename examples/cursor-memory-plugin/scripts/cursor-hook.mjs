@@ -106,7 +106,7 @@ async function main() {
         : state.promptHash === promptHash && now - Number(state.promptAt || 0) < 500;
       if (duplicateEvent) return { continue: true };
       if (state.promptHash !== promptHash || !state.recallBlock) {
-        const recallBlock = await recallForPrompt(fetchJSON, cfg, prompt, cwd, log).catch((error) => {
+        const recallBlock = await recallForPrompt(fetchJSON, cfg, prompt, cwd, log, { sessionId }).catch((error) => {
           logError("recall", error);
           return null;
         });

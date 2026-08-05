@@ -125,7 +125,10 @@ Expect: `appended 2 turn(s) to OpenViking session cx-verify-sess`.
 
 `source=startup` and `source=clear` both run the same logic
 (matcher = `clear|startup|resume`). `source=resume` never commits or sweeps;
-it may inject latest archive context if a committed archive exists.
+all three sources inject the shared profile/background block by default, and
+resume may additionally inject latest archive context if a committed archive
+exists. Set `OPENVIKING_NO_AUTO_INJECT=1` when a cleanup-only smoke test needs
+the historical `{}` output.
 See `DESIGN.md` §3 + §5 for the full decision tree.
 
 ### 6a. `1 active` → commit
@@ -142,7 +145,9 @@ echo '{"session_id":"new-after-verify","source":"startup","cwd":"/tmp","model":"
     node $PLUGIN/scripts/session-start-commit.mjs
 ```
 
-Expect: `OpenViking session cx-verify-sess is committed`.
+Expect: `hookSpecificOutput.additionalContext` contains the OpenViking profile
+block, and `systemMessage` is
+`OpenViking session cx-verify-sess is committed`.
 After this `verify-sess.json` is gone from `$STATE_DIR/state`.
 
 ### 6b. `0 active` → no-op
@@ -154,7 +159,8 @@ echo '{"session_id":"another-fresh","source":"startup","cwd":"/tmp","model":"x",
     OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
     CODEX_PLUGIN_ROOT=$PLUGIN \
     node $PLUGIN/scripts/session-start-commit.mjs
-# Expect: {} (no orphan to commit)
+# Expect: profile context in hookSpecificOutput.additionalContext.
+# Add OPENVIKING_NO_AUTO_INJECT=1 to expect {} (no orphan to commit).
 ```
 
 ### 6c. `≥2 active` → skip; rely on idle TTL
@@ -180,7 +186,7 @@ echo '{"session_id":"sess-ccc","source":"startup","cwd":"/tmp","model":"x","perm
     node $PLUGIN/scripts/session-start-commit.mjs
 ```
 
-Expect: `{}` on stdout. In `~/.openviking/logs/codex-hooks.log` look for
+Expect: profile context on stdout. In `~/.openviking/logs/codex-hooks.log` look for
 `"branch":">=2_active","action":"skip; rely on idle TTL"`. The two state
 files are still present — the skip path does not clear them.
 
@@ -214,9 +220,11 @@ echo '{"session_id":"any","source":"resume","cwd":"/tmp","model":"x","permission
     OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
     CODEX_PLUGIN_ROOT=$PLUGIN \
     node $PLUGIN/scripts/session-start-commit.mjs
-# Expect without an existing archive: {}
-# Expect with an existing archive for cx-any: hookSpecificOutput.additionalContext
-# containing "OpenViking session archive digest" and a viking://user/sessions/cx-any/history/ URI.
+# Expect without an existing archive: hookSpecificOutput.additionalContext
+# containing the OpenViking profile block.
+# Expect with an existing archive for cx-any: the same additionalContext also
+# contains "OpenViking session archive digest" and a
+# viking://user/sessions/cx-any/history/ URI.
 ```
 
 ### 6f. Compressor profile detect can be disabled for hook smoke tests

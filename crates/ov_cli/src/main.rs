@@ -4145,6 +4145,22 @@ mod tests {
         assert!(help.contains("--progress"));
         assert!(help.contains("--no-progress"));
         assert!(help.contains("--verbose"));
+        assert!(!help.contains("--parse-mode"));
+        assert!(help.contains("--args"));
+    }
+
+    #[test]
+    fn cli_add_resource_rejects_top_level_parse_mode() {
+        assert!(
+            Cli::try_parse_from([
+                "ov",
+                "add-resource",
+                "./README.md",
+                "--parse-mode",
+                "no_split",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

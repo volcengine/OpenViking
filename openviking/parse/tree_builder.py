@@ -153,6 +153,7 @@ class TreeBuilder:
         source_path: Optional[str] = None,
         source_format: Optional[str] = None,
         create_parent: bool = False,
+        flatten_single_file: bool = False,
     ) -> "BuildingTree":
         """
         Finalize URI metadata for a temp parse result.
@@ -181,6 +182,18 @@ class TreeBuilder:
         original_name = doc_dirs[0]["name"]
         doc_name = VikingURI.sanitize_segment(original_name)
         temp_doc_uri = f"{temp_uri}/{original_name}"  # use original name to find temp dir
+        root_is_file = False
+        if flatten_single_file:
+            doc_entries = [
+                entry
+                for entry in await viking_fs.ls(temp_doc_uri, ctx=ctx)
+                if entry.get("name") not in [".", ".."]
+            ]
+            if len(doc_entries) == 1 and not doc_entries[0].get("isDir"):
+                original_name = doc_entries[0]["name"]
+                doc_name = VikingURI.sanitize_segment(original_name)
+                temp_doc_uri = f"{temp_doc_uri}/{original_name}"
+                root_is_file = True
         if original_name != doc_name:
             logger.debug(f"[TreeBuilder] Sanitized doc name: {original_name!r} -> {doc_name!r}")
 
@@ -200,6 +213,7 @@ class TreeBuilder:
             source_format=source_format,
         )
         tree._root_uri = planned_uri
+        tree._root_is_file = root_is_file
         if unique_candidate_uri:
             tree._candidate_uri = unique_candidate_uri
 

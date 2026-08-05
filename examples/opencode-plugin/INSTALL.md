@@ -110,6 +110,10 @@ Example configuration:
 }
 ```
 
+`autoRecall.limit` is a legacy quota-scaling input, not a final result cap.
+Explicit values from 1 through 5 produce an effective total quota of 6 because
+each coding category keeps one retrieval slot.
+
 It is recommended to provide the API key through an environment variable instead of writing it into the configuration file:
 
 ```bash

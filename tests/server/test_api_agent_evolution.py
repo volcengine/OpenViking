@@ -58,3 +58,37 @@ async def test_list_experience_trajectories_rejects_limit_above_1000(
     )
 
     assert response.status_code == 400
+
+
+async def test_get_experience_outcome_distribution(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+):
+    captured = {}
+
+    async def fake_get(*, experience_uri, ctx):
+        captured.update(experience_uri=experience_uri, ctx=ctx)
+        return {
+            "experience_uri": experience_uri,
+            "outcome_distribution": [{"outcome": "success", "count": 2}],
+        }
+
+    monkeypatch.setattr(
+        service.agent_evolution,
+        "get_experience_outcome_distribution",
+        fake_get,
+    )
+    uri = "viking://user/default/memories/experiences/exchange.md"
+
+    response = await client.get(
+        "/api/v1/agent-evolution/experiences/outcomes",
+        params={"experience_uri": uri},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["result"] == {
+        "experience_uri": uri,
+        "outcome_distribution": [{"outcome": "success", "count": 2}],
+    }
+    assert captured["experience_uri"] == uri

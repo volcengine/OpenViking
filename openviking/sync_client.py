@@ -56,18 +56,22 @@ class SyncOpenViking:
         session_id: Optional[str] = None,
         telemetry: TelemetryRequest = False,
         memory_policy: Optional[Dict[str, Any]] = None,
+        auto_commit_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create a new session.
 
         Args:
             session_id: Optional session ID. If provided, creates a session with the given ID.
                        If None, creates a new session with auto-generated ID.
+            memory_policy: Optional default extraction policy for future commits.
+            auto_commit_policy: Optional automatic-commit policy overrides.
         """
         return run_async(
             self._async_client.create_session(
                 session_id,
                 telemetry=telemetry,
                 memory_policy=memory_policy,
+                auto_commit_policy=auto_commit_policy,
             )
         )
 

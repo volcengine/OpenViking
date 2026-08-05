@@ -1,54 +1,226 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildRecallBlock, buildRecallEndpointBody, postRecall } from "./lib/recall-core.mjs";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  buildContextSearchBody,
+  buildRecallEndpointBody,
+  buildRecallBlock,
+  contextRequestTimeoutMs,
+  isContextFaceLegacy,
+} from "./lib/recall-core.mjs";
 
-test("buildRecallEndpointBody maps quotas and max chars", () => {
-  const body = buildRecallEndpointBody({
-    recallLimit: 6,
-    recallMaxContentChars: 500,
-    scoreThreshold: 0.35,
+async function tempPath(name) {
+  const dir = await mkdtemp(join(tmpdir(), "ov-recall-"));
+  return join(dir, name);
+}
+
+test("context requests preserve the configured recall width and server budget", () => {
+  const body = buildContextSearchBody({
+    recallLimit: 1,
+    recallLimitConfigured: true,
+    recallMaxTokens: 800,
+    recallMaxTokensConfigured: true,
+    recallCompressMaxInputChars: 18000,
   });
-  assert.deepEqual(body.quotas, {
-    events: 6,
-    entities: 6,
-    preferences: 3,
-    experiences: 0,
-  });
-  assert.equal(body.max_chars, 3000);
+
+  assert.equal(Object.values(body.quotas).reduce((sum, quota) => sum + quota, 0), 6);
+  assert.equal(body.quotas.resources, 1);
+  assert.equal(body.quotas.skills, 1);
+  assert.equal(body.max_tokens, 800);
+  assert.equal(body.purpose, "coding");
+});
+
+test("context requests omit defaults owned by the server", () => {
+  const body = buildContextSearchBody({
+    recallLimit: 10,
+    recallLimitConfigured: false,
+    recallMaxTokens: 1600,
+    recallMaxTokensConfigured: false,
+    recallQueryExpansion: "auto",
+    recallQueryExpansionConfigured: false,
+    recallCompressMaxBullets: 6,
+    recallCompressMaxBulletsConfigured: false,
+  }, { sessionId: "cx-defaults" });
+
+  assert.equal(body.limit, undefined);
+  assert.equal(body.quotas, undefined);
+  assert.equal(body.max_tokens, undefined);
+  assert.equal(body.query_expansion, undefined);
+  assert.equal(body.rewrite_max_bullets, undefined);
+  assert.equal(body.purpose, "coding");
+  assert.equal(body.score_threshold, 0.35);
+  assert.equal(body.session_id, "cx-defaults");
+  assert.equal(body.dedup_turns, 5);
+});
+
+test("coding-agent fallback recall explicitly uses the 0.35 threshold", () => {
+  const body = buildRecallEndpointBody({});
+
   assert.equal(body.min_score, 0.35);
-  assert.equal(body.render, true);
-  assert.equal(body.peer_scope, undefined);
 });
 
-test("buildRecallEndpointBody only sends actor peer scope when explicitly configured", () => {
-  assert.equal(buildRecallEndpointBody({ recallPeerScope: "all" }).peer_scope, undefined);
-  assert.equal(buildRecallEndpointBody({ recallPeerScope: "actor" }).peer_scope, "actor");
-});
-
-test("buildRecallBlock uses recall endpoint render when available", async () => {
+test("buildRecallBlock injects context assembled by the server", async () => {
   const calls = [];
+  const legacyCachePath = await tempPath("context-face.json");
   const block = await buildRecallBlock(async (path, init) => {
     calls.push({ path, body: init?.body ? JSON.parse(init.body) : null });
-    return { ok: true, result: { rendered: "- [memory 90%] viking://user/default/memories/a.md" } };
-  }, {
-    recallLimit: 2,
-    recallMaxContentChars: 500,
-    scoreThreshold: 0.35,
-  }, "hello world");
+    return {
+      ok: true,
+      result: {
+        rendered: '<memory uri="viking://user/default/memories/a.md" type="events">body</memory>',
+        entries: [{ uri: "viking://user/default/memories/a.md" }],
+        stats: { used_tokens: 42, rewrite: "off" },
+      },
+    };
+  }, { recallMaxTokens: 1600 }, "hello world", { legacyCachePath });
 
-  assert.equal(calls[0].path, "/api/v1/search/recall");
-  assert.equal(calls[0].body.quotas.events, 2);
+  assert.equal(calls[0].path, "/api/v1/search/search");
+  assert.equal(calls[0].body.mode, "context");
+  assert.equal(calls[0].body.limit, undefined);
+  assert.equal(calls[0].body.max_tokens, undefined);
   assert.match(block, /^<openviking-context>/);
-  assert.match(block, /Relevant memory from OpenViking/);
   assert.match(block, /viking:\/\/user\/default\/memories\/a\.md/);
   assert.match(block, /<\/openviking-context>$/);
 });
 
-test("buildRecallBlock falls back to find and keeps first item over budget", async () => {
+test("a server-side digest outlasts the ordinary request timeout", async () => {
+  const timeouts = [];
+  const fetchJSON = async (path, init, options) => {
+    timeouts.push(options?.timeoutMs);
+    return {
+      ok: true,
+      result: { rendered: '<memory uri="viking://a">body</memory>', entries: [{ uri: "viking://a" }] },
+    };
+  };
+
+  const cfg = { timeoutMs: 15000, recallRewrite: "server" };
+  await buildRecallBlock(fetchJSON, cfg, "hello", {
+    legacyCachePath: await tempPath("context-face.json"),
+  });
+  await buildRecallBlock(fetchJSON, { timeoutMs: 15000 }, "hello", {
+    legacyCachePath: await tempPath("context-face.json"),
+  });
+
+  assert.ok(timeouts[0] > 30000, `server rewrite must outlast the 30s fuse, got ${timeouts[0]}`);
+  assert.equal(timeouts[1], undefined);
+  assert.equal(contextRequestTimeoutMs({ ...cfg, recallContextTimeoutMs: 45000 }, true), 45000);
+});
+
+test("buildRecallBlock prefers a cited server digest", async () => {
+  const legacyCachePath = await tempPath("context-face.json");
+  const block = await buildRecallBlock(async () => ({
+    ok: true,
+    result: {
+      rendered: '<memory uri="viking://a">body</memory>',
+      digest: "OpenViking memory digest:\n- fact 来源：viking://a",
+      entries: [{ uri: "viking://a" }],
+      stats: { rewrite: "ok" },
+    },
+  }), {}, "hello", { legacyCachePath });
+
+  assert.match(block, /OpenViking memory digest:/);
+  assert.doesNotMatch(block, /<memory /);
+});
+
+test("buildRecallBlock injects nothing when server compression finds no relevant memory", async () => {
+  const block = await buildRecallBlock(async () => ({
+    ok: true,
+    result: {
+      rendered: '<memory uri="viking://a">irrelevant body</memory>',
+      digest: "",
+      entries: [{ uri: "viking://a" }],
+      stats: { rewrite: "no_relevant" },
+    },
+  }), { recallRewrite: "server" }, "hello", {
+    legacyCachePath: await tempPath("context-face.json"),
+  });
+
+  assert.equal(block, null);
+});
+
+test("buildRecallBlock uses local compression when configured", async () => {
+  const legacyCachePath = await tempPath("context-face.json");
+  const digestCachePath = await tempPath("recall-digest.json");
+  const block = await buildRecallBlock(async () => ({
+    ok: true,
+    result: {
+      rendered: `<memory uri="viking://a">${"x".repeat(2000)}</memory>`,
+      entries: [{ uri: "viking://a" }],
+      stats: {},
+    },
+  }), { recallRewrite: "client" }, "hello", {
+    legacyCachePath,
+    digestCachePath,
+    runCompressor: async () => "- local fact 来源：viking://a",
+  });
+
+  assert.match(block, /OpenViking memory digest:/);
+  assert.match(block, /local fact/);
+});
+
+test("buildRecallBlock injects nothing when local compression finds no relevant memory", async () => {
+  const legacyCachePath = await tempPath("context-face.json");
+  const digestCachePath = await tempPath("recall-digest.json");
+  const block = await buildRecallBlock(async () => ({
+    ok: true,
+    result: {
+      rendered: `<memory uri="viking://a">${"irrelevant ".repeat(200)}</memory>`,
+      entries: [{ uri: "viking://a" }],
+      stats: {},
+    },
+  }), { recallRewrite: "client" }, "hello", {
+    legacyCachePath,
+    digestCachePath,
+    runCompressor: async () => "NO_RELEVANT_MEMORY",
+  });
+
+  assert.equal(block, null);
+});
+
+test("buildRecallBlock remembers a server that only supports v1 recall", async () => {
+  const legacyCachePath = await tempPath("context-face.json");
+  const paths = [];
+  const fetchJSON = async (path) => {
+    paths.push(path);
+    if (path === "/api/v1/search/search") {
+      return { ok: false, status: 400, error: { message: "Extra inputs: mode" } };
+    }
+    if (path === "/api/v1/search/recall") {
+      return { ok: true, result: { rendered: '<memory uri="viking://a" />' } };
+    }
+    return { ok: false, status: 404 };
+  };
+
+  await buildRecallBlock(fetchJSON, {}, "hello", { legacyCachePath });
+  assert.deepEqual(paths, ["/api/v1/search/search", "/api/v1/search/recall"]);
+  assert.equal(await isContextFaceLegacy(legacyCachePath), true);
+
+  paths.length = 0;
+  await buildRecallBlock(fetchJSON, {}, "hello again", { legacyCachePath });
+  assert.deepEqual(paths, ["/api/v1/search/recall"]);
+});
+
+test("unrelated request errors do not mark the server as legacy", async () => {
+  const legacyCachePath = await tempPath("context-face.json");
+  const fetchJSON = async (path) => {
+    if (path === "/api/v1/search/search") return { ok: false, status: 400, error: "bad query" };
+    if (path === "/api/v1/search/recall") return { ok: true, result: { rendered: "ok" } };
+    return { ok: false, status: 404 };
+  };
+
+  await buildRecallBlock(fetchJSON, {}, "hello", { legacyCachePath });
+
+  assert.equal(await isContextFaceLegacy(legacyCachePath), false);
+});
+
+test("buildRecallBlock falls back to find when neither context endpoint works", async () => {
   const calls = [];
-  const longAbstract = "x".repeat(1200);
+  const legacyCachePath = await tempPath("context-face.json");
   const fetchJSON = async (path) => {
     calls.push(path);
+    if (path === "/api/v1/search/search") return { ok: false, status: 503 };
     if (path === "/api/v1/search/recall") return { ok: false, status: 404 };
     if (path === "/api/v1/system/status") return { ok: true, result: { user: "default" } };
     if (path.startsWith("/api/v1/fs/ls")) return { ok: true, result: [] };
@@ -59,7 +231,7 @@ test("buildRecallBlock falls back to find and keeps first item over budget", asy
           memories: [{
             uri: "viking://user/default/memories/events/a.md",
             score: 0.9,
-            abstract: longAbstract,
+            abstract: "x".repeat(1200),
             level: 1,
             category: "events",
           }],
@@ -76,55 +248,9 @@ test("buildRecallBlock falls back to find and keeps first item over budget", asy
     recallTokenBudget: 20,
     scoreThreshold: 0.35,
     recallPreferAbstract: true,
-  }, "what happened yesterday");
+  }, "what happened yesterday", { legacyCachePath });
 
-  assert.ok(calls.includes("/api/v1/search/recall"));
   assert.ok(calls.includes("/api/v1/search/find"));
   assert.match(block, /^<openviking-context>/);
   assert.match(block, /\[memory 90%\]/);
-  assert.match(block, /x{100}/);
-});
-
-test("postRecall downgrades peer_scope on 400 and 422", async () => {
-  for (const status of [400, 422]) {
-    const bodies = [];
-    const logs = [];
-    const res = await postRecall(async (path, init, opts) => {
-      bodies.push({ path, body: JSON.parse(init.body), opts });
-      return bodies.length === 1
-        ? { ok: false, status }
-        : { ok: true, status: 200, result: { rendered: "ok" } };
-    }, {
-      query: "hello",
-      peer_scope: "actor",
-    }, {
-      actorPeerId: "peer-a",
-      log: (stage, data) => logs.push({ stage, data }),
-    });
-
-    assert.equal(res.ok, true);
-    assert.equal(bodies.length, 2);
-    assert.equal(bodies[0].body.peer_scope, "actor");
-    assert.equal(bodies[1].body.peer_scope, undefined);
-    assert.equal(bodies[0].opts.actorPeerId, "peer-a");
-    assert.deepEqual(logs, [{ stage: "recall_peer_scope_downgrade", data: { status } }]);
-  }
-});
-
-test("postRecall does not retry default body or server errors", async () => {
-  const noScopeBodies = [];
-  const noScope = await postRecall(async (path, init) => {
-    noScopeBodies.push(JSON.parse(init.body));
-    return { ok: false, status: 400 };
-  }, { query: "hello" });
-  assert.equal(noScope.ok, false);
-  assert.equal(noScopeBodies.length, 1);
-
-  const serverErrorBodies = [];
-  const serverError = await postRecall(async (path, init) => {
-    serverErrorBodies.push(JSON.parse(init.body));
-    return { ok: false, status: 500 };
-  }, { query: "hello", peer_scope: "actor" });
-  assert.equal(serverError.ok, false);
-  assert.equal(serverErrorBodies.length, 1);
 });

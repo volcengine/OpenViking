@@ -263,12 +263,29 @@ class MarkdownParser(BaseParser):
         start_time = time.time()
 
         try:
+            split_content = bool(kwargs.get("split_content", True))
+            adaptive_flatten_requested = bool(
+                kwargs.get("flatten_single_output", False) and not split_content
+            )
+            flatten_single_output = adaptive_flatten_requested
+            if flatten_single_output:
+                flatten_single_output = not await self._has_ingestable_local_image(
+                    content,
+                    base_dir=base_dir,
+                    allowed_media_dirs=allowed_media_dirs,
+                )
             # Phase 1 — parse only: turn the markdown into an ordered VikingFS write
             # plan, touching nothing. The temp URI is allocated here (the one
             # FS-scoped step) and threaded in so layout planning stays side-effect free.
             temp_uri = self._create_temp_uri()
+            layout_kwargs = dict(kwargs)
+            layout_kwargs["flatten_single_output"] = flatten_single_output
             layout = await self._compute_layout(
-                content, temp_uri, source_path=source_path, instruction=instruction, **kwargs
+                content,
+                temp_uri,
+                source_path=source_path,
+                instruction=instruction,
+                **layout_kwargs,
             )
 
             # Set up relative-link rewrite context consumed by _write_section during
@@ -284,6 +301,9 @@ class MarkdownParser(BaseParser):
                 "import_root": kwargs.get("link_rewrite_root"),
                 "base_dir": base_dir,
                 "allowed_media_dirs": allowed_media_dirs,
+                "split_content": split_content,
+                "adaptive_flatten_requested": adaptive_flatten_requested,
+                "flatten_single_output": flatten_single_output,
             }
 
             # Phase 2 — write only: replay the plan against the real VikingFS,
@@ -367,14 +387,26 @@ class MarkdownParser(BaseParser):
         root_name = (
             source_name if source_name and supports_code_skeleton(source_name) else doc_name
         )
-        root_dir = f"{temp_uri}/{self._sanitize_for_path(root_name)}"
+        root_dir = (
+            temp_uri
+            if kwargs.get("flatten_single_output", False)
+            else f"{temp_uri}/{self._sanitize_for_path(root_name)}"
+        )
 
         # Find all headings
         headings = self._find_headings(content)
 
         # The temp dir is the first thing materialized on apply.
         ops: List[_LayoutOp] = [_LayoutOp("mkdir", temp_uri)]
-        await self._build_structure(ops, content, headings, root_dir, source_path, doc_name)
+        await self._build_structure(
+            ops,
+            content,
+            headings,
+            root_dir,
+            source_path,
+            doc_name,
+            split_content=kwargs.get("split_content", True),
+        )
 
         return _Layout(
             temp_uri=temp_uri,
@@ -468,6 +500,34 @@ class MarkdownParser(BaseParser):
                 for match in HTML_IMG_PATTERN.finditer(content):
                     if not self._is_remote_uri(match.group(2)):
                         return True
+        return False
+
+    async def _has_ingestable_local_image(
+        self,
+        content: str,
+        *,
+        base_dir: Optional[Path],
+        allowed_media_dirs: Optional[List[Path]],
+    ) -> bool:
+        """Return whether parsing will materialize at least one local image."""
+        from openviking.parse.image_rewrite import HTML_IMG_PATTERN
+
+        image_refs = [match.group(2) for match in self._image_pattern.finditer(content)]
+        image_refs.extend(match.group(2) for match in HTML_IMG_PATTERN.finditer(content))
+        seen: set[Path] = set()
+        for image_ref in image_refs:
+            if self._is_remote_uri(image_ref):
+                continue
+            resolved = self._resolve_image_path(image_ref, base_dir, allowed_media_dirs)
+            if resolved is None or resolved in seen:
+                continue
+            seen.add(resolved)
+            try:
+                image_bytes = await asyncio.to_thread(resolved.read_bytes)
+                if await asyncio.to_thread(self._is_valid_image, image_bytes, resolved):
+                    return True
+            except Exception:
+                continue
         return False
 
     def _extract_frontmatter(self, content: str) -> Tuple[str, Optional[Dict[str, Any]]]:
@@ -1060,7 +1120,10 @@ class MarkdownParser(BaseParser):
 
         src_dir = os.path.dirname(os.path.abspath(source_path))
         import_root_abs = os.path.abspath(import_root)
-        source_new_dir = os.path.join(src_dir, doc_name, section_subpath)
+        if (self._rewrite_ctx or {}).get("flatten_single_output", False):
+            source_new_dir = os.path.join(src_dir, section_subpath)
+        else:
+            source_new_dir = os.path.join(src_dir, doc_name, section_subpath)
 
         out: List[str] = []
         last = 0
@@ -1100,12 +1163,24 @@ class MarkdownParser(BaseParser):
         side-effect-free parse, cached per parse_content() call. None on parse failure."""
         ctx = self._rewrite_ctx or {}
         cache = ctx.setdefault("_split_cache", {})
-        key = os.path.abspath(target_path)
+        split_content = bool(ctx.get("split_content", True))
+        flatten_single_output = bool(ctx.get("adaptive_flatten_requested", False))
+        key = (os.path.abspath(target_path), split_content, flatten_single_output)
         if key not in cache:
-            cache[key] = await self._probe_split_layout(target_path)
+            cache[key] = await self._probe_split_layout(
+                target_path,
+                split_content=split_content,
+                flatten_single_output=flatten_single_output,
+            )
         return cache[key]
 
-    async def _probe_split_layout(self, target_path: str) -> Optional[Dict[str, str]]:
+    async def _probe_split_layout(
+        self,
+        target_path: str,
+        *,
+        split_content: bool,
+        flatten_single_output: bool = False,
+    ) -> Optional[Dict[str, str]]:
         """Plan the target's layout WITHOUT writing anything, returning
         {"<doc_dir>/<section...>": text} keyed by path relative to the temp root, i.e.
         INCLUDING the doc-root dir segment so callers can map each key straight onto
@@ -1113,8 +1188,19 @@ class MarkdownParser(BaseParser):
         with a throwaway temp URI, so no fake FS and no side effects are involved."""
         try:
             probe_root = "viking://temp/_probe"
+            content = self._read_file(target_path)
+            if flatten_single_output:
+                flatten_single_output = not await self._has_ingestable_local_image(
+                    content,
+                    base_dir=Path(target_path).parent,
+                    allowed_media_dirs=(self._rewrite_ctx or {}).get("allowed_media_dirs"),
+                )
             layout = await self._compute_layout(
-                self._read_file(target_path), probe_root, source_path=str(target_path)
+                content,
+                probe_root,
+                source_path=str(target_path),
+                split_content=split_content,
+                flatten_single_output=flatten_single_output,
             )
             root = layout.temp_uri.rstrip("/")
             out: Dict[str, str] = {}
@@ -1165,6 +1251,7 @@ class MarkdownParser(BaseParser):
         root_dir: str,
         source_path: Optional[str] = None,
         doc_name: Optional[str] = None,
+        split_content: bool = True,
     ) -> None:
         """
         Plan the document's directory/file layout into ``ops`` (no VikingFS writes).
@@ -1182,6 +1269,7 @@ class MarkdownParser(BaseParser):
             headings: List of (start, end, title, level) tuples
             root_dir: Root directory URI
             source_path: Source file path for naming
+            split_content: Whether large Markdown may be split into multiple files
         """
         max_size = self.config.max_section_size or self.DEFAULT_MAX_SECTION_SIZE
         max_chars = self.config.max_section_chars
@@ -1197,6 +1285,12 @@ class MarkdownParser(BaseParser):
         doc_name = doc_name or self._sanitize_for_path(
             _smart_stem(source_path) if source_path else "content"
         )
+
+        if not split_content:
+            file_path = f"{root_dir}/{doc_name}.md"
+            ops.append(_LayoutOp("write", file_path, content))
+            logger.debug(f"[MarkdownParser] No-split document planned as: {file_path}")
+            return
 
         # Small document: save as single file (check both token and char limits)
         if estimated_tokens <= max_size and len(content) <= max_chars:

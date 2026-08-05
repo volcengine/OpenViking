@@ -13,6 +13,7 @@ from openviking.server.identity import RequestContext
 from openviking.utils.tags import normalize_search_tag
 
 _EXPERIENCE_SIDECAR_FILENAMES = {".abstract.md", ".overview.md", ".relations.json"}
+TRAJECTORY_OUTCOMES = ("success", "failure", "partial", "unknown", "unfinished")
 
 
 def is_experience_uri_for_user(uri: str, user_id: str) -> bool:
@@ -72,6 +73,19 @@ def experience_source_tags(experience_uris: Iterable[str] | None) -> list[str]:
         seen.add(tag)
         tags.append(tag)
     return tags
+
+
+def normalize_trajectory_outcome(outcome: Any) -> str:
+    """Normalize trajectory outcome values used by scalar lineage aggregation."""
+    normalized = str(outcome or "").strip().lower()
+    if normalized not in TRAJECTORY_OUTCOMES:
+        return "unknown"
+    return normalized
+
+
+def trajectory_outcome_tag(outcome: Any) -> str:
+    """Build the exact scalar tag used for trajectory outcome aggregation."""
+    return normalize_search_tag(f"trajectory_outcome={normalize_trajectory_outcome(outcome)}")
 
 
 def collect_read_experience_uris(

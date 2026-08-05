@@ -28,7 +28,7 @@ const DEFAULT_CONFIG = {
   },
   autoRecall: {
     enabled: true,
-    limit: 6,
+    limit: 10,
     scoreThreshold: 0.35,
     maxContentChars: 500,
     preferAbstract: true,
@@ -128,6 +128,8 @@ function applyBehaviorConfig(config, fileConfig = {}) {
   }
 
   const autoRecall = fileConfig.autoRecall ?? {}
+  config.recallLimitConfigured = autoRecall.limit !== undefined ||
+    fileConfig.recallLimit !== undefined
   config.autoRecall = {
     ...DEFAULT_CONFIG.autoRecall,
     ...autoRecall,
@@ -167,7 +169,10 @@ function applyEnv(config) {
   if (process.env.OPENVIKING_AUTO_RECALL !== undefined) {
     config.autoRecall.enabled = envBool("OPENVIKING_AUTO_RECALL") ?? config.autoRecall.enabled
   }
-  if (process.env.OPENVIKING_RECALL_LIMIT) config.autoRecall.limit = process.env.OPENVIKING_RECALL_LIMIT
+  if (process.env.OPENVIKING_RECALL_LIMIT) {
+    config.autoRecall.limit = process.env.OPENVIKING_RECALL_LIMIT
+    config.recallLimitConfigured = true
+  }
   if (process.env.OPENVIKING_SCORE_THRESHOLD) config.autoRecall.scoreThreshold = process.env.OPENVIKING_SCORE_THRESHOLD
   if (process.env.OPENVIKING_RECALL_MAX_CONTENT_CHARS) {
     config.autoRecall.maxContentChars = process.env.OPENVIKING_RECALL_MAX_CONTENT_CHARS
@@ -229,7 +234,7 @@ function normalizeConfig(config) {
     1000,
     60 * 60 * 1000,
   )
-  config.autoRecall.limit = Math.max(1, Math.min(50, Math.round(Number(config.autoRecall.limit) || 6)))
+  config.autoRecall.limit = Math.max(1, Math.min(50, Math.round(Number(config.autoRecall.limit) || 10)))
   config.autoRecall.scoreThreshold = Math.max(0, Math.min(1, Number(config.autoRecall.scoreThreshold) || 0))
   config.autoRecall.maxContentChars = Math.max(100, Math.min(5000, Math.round(Number(config.autoRecall.maxContentChars) || 500)))
   config.autoRecall.tokenBudget = Math.max(200, Math.min(50000, Math.round(Number(config.autoRecall.tokenBudget) || 2000)))

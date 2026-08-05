@@ -447,7 +447,7 @@ JSON 输出 - 错误：
 | PUT | `/api/v1/skills/{skill_name}` | 更新技能 |
 | DELETE | `/api/v1/skills/{skill_name}` | 删除技能 |
 
-### [会话](05-sessions.md)与[记忆](16-memory.md)
+### [会话](05-sessions.md)、[记忆](16-memory.md)与 [Agent 进化](19-agent-evolution.md)
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -465,14 +465,16 @@ JSON 输出 - 错误：
 | POST | `/api/v1/sessions/{session_id}/messages` | 添加单条消息 |
 | POST | `/api/v1/sessions/{session_id}/messages/batch` | 批量添加消息 |
 | POST | `/api/v1/sessions/{session_id}/used` | 记录实际使用的上下文或技能 |
-| POST | `/api/v1/search/recall` | 召回记忆并返回可直接注入的上下文 |
+| POST | `/api/v1/search/recall` | 已弃用：search 接口 `mode="context"` 之上的轻量预设 |
+| GET | `/api/v1/agent-evolution/experiences/trajectories` | 分页查询应用过指定 Experience 的 Trajectory |
+| GET | `/api/v1/agent-evolution/experiences/outcomes` | 聚合应用过指定 Experience 的 Trajectory 结果分布 |
 
 ### [检索](06-retrieval.md)与[关系](13-relations.md)
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | POST | `/api/v1/search/find` | 语义搜索 |
-| POST | `/api/v1/search/search` | 上下文感知搜索 |
+| POST | `/api/v1/search/search` | 上下文感知搜索；`mode="context"` 返回可注入的组装上下文 |
 | POST | `/api/v1/search/grep` | 内容模式搜索 |
 | POST | `/api/v1/search/glob` | 文件模式匹配 |
 | GET | `/api/v1/relations` | 获取资源关系 |

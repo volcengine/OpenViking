@@ -47,8 +47,9 @@ export function deriveOvSessionId(ccSessionId, suffix = "") {
  * (from scripts/config.mjs loadConfig()) so the timeout can vary per hook.
  */
 export function makeFetchJSON(cfg, timeoutKey = "timeoutMs") {
-  const timeoutMs = Math.max(1000, cfg[timeoutKey] || cfg.timeoutMs || 10000);
+  const defaultTimeoutMs = Math.max(1000, cfg[timeoutKey] || cfg.timeoutMs || 10000);
   return async function fetchJSON(path, init = {}, options = {}) {
+    const timeoutMs = Math.max(1000, Number(options.timeoutMs) || defaultTimeoutMs);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {

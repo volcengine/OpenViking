@@ -16,6 +16,7 @@ func (c *Client) CreateSession(ctx context.Context, opts *CreateSessionOptions) 
 	payload := map[string]any{}
 	setString(payload, "session_id", opts.SessionID)
 	setAny(payload, "memory_policy", opts.MemoryPolicy)
+	setAny(payload, "auto_commit_policy", opts.AutoCommitPolicy)
 	setAny(payload, "telemetry", opts.Telemetry)
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/sessions", nil, payload, &result)

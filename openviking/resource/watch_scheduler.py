@@ -286,6 +286,7 @@ class WatchScheduler:
                         path=task.path,
                         ctx=ctx,
                         to=task.to_uri,
+                        to_is_directory=getattr(task, "to_is_directory", None),
                         parent=task.parent_uri,
                         reason=task.reason,
                         instruction=task.instruction,

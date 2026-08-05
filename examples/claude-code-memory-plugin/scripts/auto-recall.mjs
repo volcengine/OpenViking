@@ -16,10 +16,11 @@
 
 import { isPluginEnabled, loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
-import { isBypassed, makeFetchJSON } from "./lib/ov-session.mjs";
+import { deriveOvSessionId, isBypassed, makeFetchJSON } from "./lib/ov-session.mjs";
 import { writeJsonState } from "./lib/state.mjs";
+import { createHostCompressor } from "./lib/host-compressor.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
-import { postRecall } from "./shared/recall-core.mjs";
+import { buildServerAssembledBlock } from "./shared/recall-core.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -293,33 +294,15 @@ async function buildInjectionBlock(items, actorPeerId = "") {
   return { block: lines.join("\n"), contentCount, hintCount, budgetUsed };
 }
 
-async function recallViaTypeQuotaEndpoint(query, actorPeerId = "") {
-  const body = {
-    query,
-    quotas: {
-      events: Math.max(cfg.recallLimit, 1),
-      entities: Math.max(cfg.recallLimit, 1),
-      preferences: Math.max(1, Math.min(cfg.recallLimit, 3)),
-      experiences: 0,
-    },
-    max_chars: Math.max(cfg.recallMaxContentChars * Math.max(cfg.recallLimit, 1), 1000),
-    min_score: cfg.scoreThreshold,
-    render: true,
-  };
-  if (cfg.recallPeerScope === "actor") body.peer_scope = "actor";
-  const res = await postRecall(fetchJSON, body, { actorPeerId, log });
-  if (!res.ok) {
-    log("recall_endpoint_fallback", { status: res.status || 0 });
-    return null;
-  }
-  const rendered = String(res.result?.rendered || "").trim();
-  if (!rendered) return "";
-  return [
-    "<openviking-context>",
-    "Relevant memory from OpenViking. Use the recall/read MCP tools to expand URIs.",
-    rendered,
-    "</openviking-context>",
-  ].join("\n");
+async function recallViaServerAssembly(query, actorPeerId = "", sessionId = "") {
+  const runCompressor = await createHostCompressor(cfg, log);
+  return buildServerAssembledBlock(fetchJSON, cfg, query, {
+    actorPeerId,
+    sessionId,
+    log,
+    runCompressor,
+    localCompressorAvailable: Boolean(runCompressor),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -395,7 +378,14 @@ async function main() {
     return;
   }
 
-  const endpointBlock = await recallViaTypeQuotaEndpoint(userPrompt, effectivePeer.peerId);
+  // The OV session id is what unlocks server-side query expansion and the
+  // cross-turn dedup ledger; it must match the id auto-capture writes to.
+  const ovSessionId = sessionId && sessionId !== "unknown" ? deriveOvSessionId(sessionId) : "";
+  const endpointBlock = await recallViaServerAssembly(
+    userPrompt,
+    effectivePeer.peerId,
+    ovSessionId,
+  );
   if (endpointBlock !== null) {
     if (!endpointBlock) {
       log("skip", { reason: "recall_endpoint_no_results" });

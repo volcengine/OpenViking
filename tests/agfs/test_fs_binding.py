@@ -14,6 +14,7 @@ import uuid
 import pytest
 
 from openviking.storage.viking_fs import init_viking_fs
+from openviking.utils.resource_processor import ResourceProcessor
 from openviking_cli.utils.config.agfs_config import AGFSConfig
 
 # Direct configuration for testing
@@ -90,6 +91,42 @@ class TestVikingFSBindingLocal:
 
         root_entries = await vfs.ls("viking://temp/")
         assert not any(e["name"] == test_dir for e in root_entries)
+
+    async def test_flat_file_lock_keeps_persisted_target_a_file(
+        self,
+        viking_fs_binding_instance,
+    ):
+        """An exact resource lock must not materialize a file target as a directory."""
+        vfs = viking_fs_binding_instance
+        unique = uuid.uuid4().hex
+        temp_uri = f"viking://temp/flat_lock_{unique}.md"
+        target_uri = f"viking://resources/flat_lock_{unique}.md"
+        target_path = vfs._uri_to_path(target_uri)
+        lease = None
+
+        try:
+            await vfs.write(temp_uri, "flat file content")
+            lease = await ResourceProcessor.acquire_resource_lock(
+                target_path,
+                uri=target_uri,
+                root_is_file=True,
+            )
+            await vfs.persist_temp_tree(
+                temp_uri,
+                target_uri,
+                lease_ref=lease,
+            )
+
+            stat_info = await vfs.stat(target_uri)
+            assert stat_info["isDir"] is False
+            assert await vfs.read(target_uri) == b"flat file content"
+        finally:
+            if lease is not None:
+                await vfs._async_agfs.pathlock_release(lease)
+            for uri in (temp_uri, target_uri):
+                if await vfs.exists(uri):
+                    stat_info = await vfs.stat(uri)
+                    await vfs.rm(uri, recursive=bool(stat_info.get("isDir")))
 
     async def test_borrowed_pathlock_cannot_release_via_raw_ref(self, viking_fs_binding_instance):
         """Reject borrowed lifecycle control through typed and raw lease refs."""

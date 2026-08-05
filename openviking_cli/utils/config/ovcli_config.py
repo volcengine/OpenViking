@@ -24,20 +24,32 @@ class OVCLIUploadConfig(BaseModel):
 
 
 class OVCLIConfig(BaseModel):
-    """Client configuration loaded from ovcli.conf."""
+    """Client configuration loaded from ovcli.conf.
+
+    The file's schema belongs to the Rust CLI (``crates/ov_cli/src/config.rs``),
+    which writes it. Every field it can write is accepted here, including the
+    ones this loader never reads, so one file serves both.
+    """
 
     url: Optional[str] = None
     api_key: Optional[str] = None
+    root_api_key: Optional[str] = None
     account: Optional[str] = None
     user: Optional[str] = None
     actor_peer_id: Optional[str] = None
     agent_id: Optional[str] = None
     timeout: float = 60.0
     profile: bool = False
+    output: Optional[str] = None
     echo_command: Optional[bool] = None
+    show_progress: Optional[bool] = None
+    verbose: Optional[bool] = None
     upload: Optional[OVCLIUploadConfig] = None
     extra_headers: Optional[Dict[str, str]] = None
     gateway_token: Optional[str] = None
+    # Client-side harness plugin settings, owned by the memory plugins. Kept
+    # opaque so a harness can add its own knobs without touching this schema.
+    plugin: Optional[Dict[str, Any]] = None
 
     # Authentication mode: "api_key", "ldap", "oidc"
     auth_mode: Optional[str] = None

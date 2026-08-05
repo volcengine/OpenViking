@@ -67,6 +67,7 @@ GATEWAY_MARKER_HEADER = "X-VikingBot-Gateway"
 GATEWAY_TOKEN_HEADER = "X-Gateway-Token"
 
 
+
 def _image_mime_type(file_name: str = "") -> str:
     mime_type, _ = mimetypes.guess_type(file_name or "")
     if mime_type and mime_type.startswith("image/"):
@@ -1352,12 +1353,15 @@ class AsyncHTTPClient:
         session_id: Optional[str] = None,
         telemetry: Any = False,
         memory_policy: Optional[Dict[str, Any]] = None,
+        auto_commit_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         json_body: Dict[str, Any] = {}
         if session_id is not None:
             json_body["session_id"] = session_id
         if memory_policy is not None:
             json_body["memory_policy"] = memory_policy
+        if auto_commit_policy is not None:
+            json_body["auto_commit_policy"] = auto_commit_policy
         if telemetry is not False:
             json_body["telemetry"] = telemetry
         response = await self._request("POST", "/api/v1/sessions", json=json_body)
@@ -2341,12 +2345,14 @@ class SyncHTTPClient:
         session_id: Optional[str] = None,
         telemetry: Any = False,
         memory_policy: Optional[Dict[str, Any]] = None,
+        auto_commit_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.create_session(
                 session_id=session_id,
                 telemetry=telemetry,
                 memory_policy=memory_policy,
+                auto_commit_policy=auto_commit_policy,
             )
         )
 
