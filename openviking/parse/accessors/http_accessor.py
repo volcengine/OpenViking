@@ -23,12 +23,13 @@ from typing import Any, Dict, Mapping, Optional, Tuple, Union
 from urllib.parse import unquote, urlparse
 
 from openviking.parse.base import lazy_import
-from openviking.parse.parsers.constants import CODE_EXTENSIONS
+from openviking.parse.parsers.constants import CODE_EXTENSIONS, TYPESCRIPT_MPEG_TS_EXTENSION
 from openviking.parse.parsers.media.constants import (
     AUDIO_EXTENSIONS,
     IMAGE_EXTENSIONS,
     VIDEO_EXTENSIONS,
 )
+from openviking.parse.parsers.media.utils import is_mpeg_ts
 from openviking.utils import is_code_hosting_blob_url
 from openviking.utils.network_guard import build_httpx_request_validation_hooks
 from openviking_cli.exceptions import PermissionDeniedError
@@ -186,7 +187,15 @@ class URLTypeDetector:
 
         # === Step 1: Check extension from URL path ===
         path_ext = Path(path_lower).suffix
-        if path_ext and path_ext in valid_extensions:
+        # ".ts" is ambiguous (MPEG transport stream video vs TypeScript source).
+        # Do not resolve it from the extension alone; let Content-Type
+        # (video/mp2t) or post-download magic bytes decide so TypeScript files
+        # are not misrouted to the video parser.
+        if (
+            path_ext
+            and path_ext != TYPESCRIPT_MPEG_TS_EXTENSION
+            and path_ext in valid_extensions
+        ):
             for ext, url_type in self.EXTENSION_MAP.items():
                 if path_lower.endswith(ext):
                     meta["detected_by"] = "extension"
@@ -743,6 +752,11 @@ class HTTPAccessor(DataAccessor):
             return URLType.DOWNLOAD_VIDEO, ".mp4"
         if sample.startswith(b"\x1f\x8b"):
             return URLType.UNKNOWN, ".gz"
+        # MPEG transport stream: sync byte 0x47 repeats every 188-byte packet.
+        # ".ts" is ambiguous with TypeScript, so require the packet signature
+        # before routing to the video parser.
+        if is_mpeg_ts(content):
+            return URLType.DOWNLOAD_VIDEO, TYPESCRIPT_MPEG_TS_EXTENSION
         svg_sample = content[:512].lstrip()
         if svg_sample.startswith(b"<svg") or (
             svg_sample.startswith(b"<?xml") and b"<svg" in svg_sample

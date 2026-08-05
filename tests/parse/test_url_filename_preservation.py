@@ -72,7 +72,10 @@ class TestURLTypeDetectorCodeExtensions:
         assert url_type == URLType.DOWNLOAD_TXT
 
     @pytest.mark.asyncio
-    async def test_ts_extension_defaults_to_video_when_headers_unavailable(self, monkeypatch):
+    async def test_ts_typescript_not_routed_to_video(self, monkeypatch):
+        # ".ts" is ambiguous (TypeScript vs MPEG transport stream). A TypeScript
+        # source served as text/plain must not be classified as video, even
+        # though the URL ends in .ts (issue #3266).
         _patch_httpx_client(
             monkeypatch,
             headers={"content-type": "text/plain"},
@@ -81,9 +84,29 @@ class TestURLTypeDetectorCodeExtensions:
 
         url_type, meta = await self.detector.detect("https://example.com/path/index.ts")
 
+        # ".ts" must not be pinned to video from the extension alone; with no
+        # Content-Type it falls through to the default webpage guess and is
+        # refined only after download (see _download_url tests below).
+        assert url_type != URLType.DOWNLOAD_VIDEO
+        assert meta.get("detected_by") != "extension"
+
+    @pytest.mark.asyncio
+    async def test_ts_mpeg_ts_video_routed_by_content_type(self, monkeypatch):
+        # A real MPEG transport stream served with video/mp2t must still route
+        # to video via Content-Type after the .ts extension shortcut is skipped.
+        _patch_httpx_client(
+            monkeypatch,
+            headers={"content-type": "video/mp2t"},
+            content=b"\x00" * 1880,
+            fail_head=False,
+        )
+
+        url_type, meta = await self.detector.detect(
+            "https://filesamples.com/samples/video/ts/sample_1280x720.ts"
+        )
+
         assert url_type == URLType.DOWNLOAD_VIDEO
-        assert meta["detected_by"] == "extension"
-        assert meta["extension"] == ".ts"
+        assert meta["detected_by"] == "media_type_pattern"
 
     @pytest.mark.asyncio
     async def test_yaml_extension_detected(self):
@@ -367,6 +390,45 @@ class TestHTTPAccessorGetFallback:
         assert temp_path.endswith(expected_ext)
         assert meta["original_filename"] == f"download{expected_ext}"
         assert meta["detected_by"] == "magic_bytes"
+
+    @pytest.mark.asyncio
+    async def test_ts_mpeg_ts_detected_by_magic_bytes(self, monkeypatch):
+        # MPEG transport stream: sync byte 0x47 every 188 bytes. With a generic
+        # Content-Type and a .ts URL, magic bytes must still route it to video
+        # and preserve the .ts extension (issue #3266).
+        mpeg_ts = bytearray(1880)
+        for offset in range(0, len(mpeg_ts), 188):
+            mpeg_ts[offset] = 0x47
+        _patch_httpx_client(
+            monkeypatch,
+            headers={"content-type": "application/octet-stream"},
+            content=bytes(mpeg_ts),
+        )
+
+        accessor = HTTPAccessor()
+        temp_path, url_type, meta = await accessor._download_url(
+            "https://example.com/media/clip.ts"
+        )
+
+        assert url_type == URLType.DOWNLOAD_VIDEO
+        assert temp_path.endswith(".ts")
+        assert meta["detected_by"] == "magic_bytes"
+
+    @pytest.mark.asyncio
+    async def test_ts_typescript_not_routed_to_video_after_download(self, monkeypatch):
+        _patch_httpx_client(
+            monkeypatch,
+            headers={"content-type": "text/plain"},
+            content=b"export const answer: number = 42;\n",
+        )
+
+        accessor = HTTPAccessor()
+        temp_path, url_type, meta = await accessor._download_url(
+            "https://example.com/src/answer.ts"
+        )
+
+        assert url_type != URLType.DOWNLOAD_VIDEO
+        assert temp_path.endswith(".ts")
 
     @pytest.mark.asyncio
     async def test_magic_bytes_recognizes_gzip_without_routing_to_document(self, monkeypatch):
