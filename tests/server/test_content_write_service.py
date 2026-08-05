@@ -1431,10 +1431,15 @@ async def test_set_tags_recursive_directory_all_missing_vector_records_returns_z
     )
 
     assert result["success_count"] == 0
-    assert result["skipped_count"] == 3
+    assert result["skipped_count"] == 2
     assert result["failed_count"] == 0
     assert result["updated_uris"] == []
     assert result["tags_updated"] is False
+    # The .abstract.md/.overview.md entries collapse into the parent directory's
+    # L0/L1 target, leaving one directory target plus the standalone file target.
+    assert sorted(call[0] for call in fake_store.update_calls) == sorted(
+        [file_uri, root_uri]
+    )
 
 
 @pytest.mark.asyncio
@@ -1530,7 +1535,7 @@ async def test_set_tags_does_not_return_write_queue_fields(monkeypatch):
             assert uri == file_uri
             assert list(tags) == ["env=prod"]
             assert mode == "replace"
-            return True
+            return [{"uri": uri}]
 
     fake_vfs.vector_store = _FakeVectorStore()
 
