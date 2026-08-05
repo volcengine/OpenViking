@@ -2136,6 +2136,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
         image_url: Optional[str] = None,
+        context_type: Optional[Union[str, List[str]]] = None,
     ):
         """Semantic search.
 
@@ -2159,7 +2160,9 @@ class VikingFS:
         )
 
         real_ctx = self._ctx_or_default(ctx)
-        retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx)
+        retrieval_targets = resolve_retrieval_targets(
+            target_uri, real_ctx, context_type=context_type
+        )
 
         for target_dir in retrieval_targets.target_directories:
             self._ensure_access(target_dir, ctx)
@@ -2233,6 +2236,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
         image_url: Optional[str] = None,
+        context_type: Optional[Union[str, List[str]]] = None,
     ):
         """Complex search with session context.
 
@@ -2258,7 +2262,9 @@ class VikingFS:
         )
 
         real_ctx = self._ctx_or_default(ctx)
-        retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx)
+        retrieval_targets = resolve_retrieval_targets(
+            target_uri, real_ctx, context_type=context_type
+        )
         primary_target_uri = retrieval_targets.first_explicit_directory
 
         session_summary = (

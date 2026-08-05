@@ -296,6 +296,7 @@ async def find(
             filter=effective_filter,
             level=_resolve_levels(request.level) or None,
             image_url=request.image_url,
+            context_type=request.context_type,
         ),
     )
     result = execution.result
@@ -407,6 +408,7 @@ async def search(
             filter=effective_filter,
             level=_resolve_levels(request.level) or None,
             image_url=request.image_url,
+            context_type=request.context_type,
         )
 
     execution = await run_operation(

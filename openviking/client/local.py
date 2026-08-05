@@ -741,6 +741,7 @@ class LocalClient(BaseClient):
                 filter=resolved_filter,
                 level=level,
                 image_url=image_url,
+                context_type=context_type,
             ),
         )
         return attach_telemetry_payload(
@@ -787,6 +788,7 @@ class LocalClient(BaseClient):
                 filter=resolved_filter,
                 level=level,
                 image_url=image_url,
+                context_type=context_type,
             )
 
         execution = await run_with_telemetry(
