@@ -226,7 +226,6 @@ OIDC Claims: {
       "username_attribute": "uid",
       "email_attribute": "mail",
       "name_attribute": "cn",
-      "memberof_attribute": "memberOf",
       "user_dn_pattern": "uid=%s,ou=users,dc=your-company,dc=com",
       "identity": {
         "account_id": {

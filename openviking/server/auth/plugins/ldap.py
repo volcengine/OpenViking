@@ -18,7 +18,7 @@ from fastapi import Request
 from openviking.server.auth.identity_mapping import IdentityMapper
 from openviking.server.auth.ldap_config import LDAPConfig
 from openviking.server.auth.plugin import AuthPlugin
-from openviking.server.identity import ResolvedIdentity
+from openviking.server.identity import ResolvedIdentity, Role
 from openviking_cli.exceptions import UnauthenticatedError
 
 logger = logging.getLogger(__name__)
@@ -134,21 +134,22 @@ class LDAPAuthPlugin(AuthPlugin):
             )
             raise UnauthenticatedError(f"LDAP authentication failed: {e}") from e
 
-        # Map LDAP attributes to OpenViking identity
+        # Map LDAP attributes to OpenViking identity.
+        # Role is always USER for LDAP-authenticated identities. This is by
+        # design: LDAP authenticates directory users, and their role in the
+        # directory (e.g., membership in an "admins" group) should not
+        # automatically grant OpenViking admin privileges. Operators who
+        # need admin access should use the root API key mechanism.
         try:
             normalized_attrs = self._normalize_attributes(attributes)
-            groups = self._extract_groups(attributes)
             dn_bytes = attributes.get("dn", [None])[0] if attributes else None
             dn = dn_bytes.decode("utf-8") if dn_bytes else None
 
             account_id = self._mapper.map_account_id(
-                claims={}, attributes=normalized_attrs, dn=dn, groups=groups
+                claims={}, attributes=normalized_attrs, dn=dn
             )
             user_id = self._mapper.map_user_id(
-                claims={}, attributes=normalized_attrs, dn=dn, groups=groups
-            )
-            role = self._mapper.map_role(
-                claims={}, attributes=normalized_attrs, dn=dn, groups=groups
+                claims={}, attributes=normalized_attrs, dn=dn
             )
         except ValueError as e:
             logger.error("Failed to map LDAP attributes: %s", e)
@@ -158,10 +159,10 @@ class LDAPAuthPlugin(AuthPlugin):
             "Successfully authenticated LDAP user: account=%s, user=%s, role=%s",
             account_id,
             user_id,
-            role,
+            Role.USER,
         )
 
-        return ResolvedIdentity(role=role, account_id=account_id, user_id=user_id)
+        return ResolvedIdentity(role=Role.USER, account_id=account_id, user_id=user_id)
 
     async def _extract_credentials(
         self,
@@ -192,13 +193,6 @@ class LDAPAuthPlugin(AuthPlugin):
                 return str(username), str(password)
         except Exception:  # noqa: BLE001
             pass
-
-        # Try query params
-        query_params = request.query_params
-        username = query_params.get("username")
-        password = query_params.get("password")
-        if username and password:
-            return username, password
 
         # Fallback: use api_key as password if x_openviking_user is present
         if x_openviking_user and api_key:
@@ -240,7 +234,7 @@ class LDAPAuthPlugin(AuthPlugin):
             search_base,
             ldap.SCOPE_SUBTREE,
             search_filter,
-            ["*", self._config.memberof_attribute],
+            ["*"],
         )
 
         for dn, attrs in result:
@@ -409,27 +403,6 @@ class LDAPAuthPlugin(AuthPlugin):
                         normalized[key.lower()] = ""
         return normalized
 
-    def _extract_groups(self, attributes: Dict[str, List[bytes]]) -> List[str]:
-        """Extract group membership from attributes."""
-        if self._config is None:
-            return []
-
-        groups_attr = self._config.memberof_attribute
-        if groups_attr not in attributes:
-            return []
-
-        groups: List[str] = []
-        for group_dn_bytes in attributes[groups_attr]:
-            try:
-                groups.append(group_dn_bytes.decode("utf-8"))
-            except UnicodeDecodeError:
-                try:
-                    groups.append(group_dn_bytes.decode("latin-1"))
-                except UnicodeDecodeError:
-                    pass
-
-        return groups
-
     def validate_config(self, config) -> None:
         """Validate LDAP configuration."""
         if config.ldap is None:
@@ -474,44 +447,14 @@ class LDAPAuthPlugin(AuthPlugin):
         # here. Operators can still override via the `identity` config block.
         self._mapper = IdentityMapper(self._config.identity)
 
-        # When admin operations require a root API key, instantiate the
-        # APIKeyManager so Admin Router has a valid manager instead of None.
-        if self._config.require_root_api_key_for_admin:
-            await self._initialize_api_key_manager(app, service, config)
-
         logger.info(
             "LDAP auth plugin initialized with host=%s", self._config.host
         )
 
-    async def _initialize_api_key_manager(self, app, service, config) -> None:
-        """Create and wire an APIKeyManager for admin-protected deployments."""
-        from openviking.server.api_keys import APIKeyManager
-
-        if not config.root_api_key:
-            logger.error(
-                "ldap.require_root_api_key_for_admin=true but "
-                "server.root_api_key is not configured. Admin API will be "
-                "unavailable."
-            )
-            sys.exit(1)
-
-        manager = APIKeyManager(
-            root_key=config.root_api_key,
-            viking_fs=service.viking_fs,
-            api_key_hashing_enabled=config.api_key_hashing_enabled,
-        )
-        await manager.load()
-        app.state.api_key_manager = manager
-        logger.info(
-            "LDAP plugin initialized APIKeyManager "
-            "(root_api_key required for admin)"
-        )
-
     def requires_api_key_manager(self) -> bool:
-        """LDAP requires an APIKeyManager when admin endpoints are root-gated."""
-        if self._config is None:
-            return False
-        return self._config.require_root_api_key_for_admin
+        """LDAP does not map external identities to admin roles, so no
+        APIKeyManager is needed. Admin API access is gated by role checks."""
+        return False
 
     def can_skip_api_key_for_bot_proxy(self) -> bool:
         """LDAP does not declare bot-proxy compatibility until VikingBot

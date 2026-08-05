@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import sys
 from typing import Any, Dict, Optional
 
@@ -18,10 +19,15 @@ from fastapi import Request
 from openviking.server.auth.identity_mapping import IdentityMapper
 from openviking.server.auth.oidc_config import OIDCConfig
 from openviking.server.auth.plugin import AuthPlugin
-from openviking.server.identity import ResolvedIdentity
+from openviking.server.identity import ResolvedIdentity, Role
 from openviking_cli.exceptions import UnauthenticatedError
 
 logger = logging.getLogger(__name__)
+
+# Characters allowed in OpenViking user/account identifiers. Any character
+# not in this set (e.g. Auth0's "|" in sub="auth0|123456") is replaced with
+# "_" during identity mapping.
+_ALLOWED_IDENTIFIER_CHARS = re.compile(r"[^a-zA-Z0-9_.@-]")
 
 # Try to import JWT libraries, provide helpful error if missing
 try:
@@ -105,11 +111,18 @@ class OIDCAuthPlugin(AuthPlugin):
             logger.debug("Token validation failed: %s", e)
             raise UnauthenticatedError(f"Invalid OIDC token: {e}") from e
 
-        # Map claims to OpenViking identity
+        # Map claims to OpenViking identity.
+        # Role is always USER for OIDC-authenticated identities. External
+        # identity providers determine authentication, not authorization;
+        # operators who need admin access should use the root API key mechanism.
         try:
             account_id = self._mapper.map_account_id(claims=claims)
             user_id = self._mapper.map_user_id(claims=claims)
-            role = self._mapper.map_role(claims=claims)
+            # Sanitize: replace characters not allowed in OpenViking identifiers
+            # (e.g. Auth0's "|" in sub="auth0|123456") so that valid OIDC
+            # tokens from supported providers always produce a usable identity.
+            user_id = _ALLOWED_IDENTIFIER_CHARS.sub("_", user_id)
+            account_id = _ALLOWED_IDENTIFIER_CHARS.sub("_", account_id)
         except ValueError as e:
             logger.error("Failed to map claims: %s", e)
             raise UnauthenticatedError(f"Failed to map claims: {e}") from e
@@ -118,10 +131,10 @@ class OIDCAuthPlugin(AuthPlugin):
             "Successfully authenticated OIDC user: account=%s, user=%s, role=%s",
             account_id,
             user_id,
-            role,
+            Role.USER,
         )
 
-        return ResolvedIdentity(role=role, account_id=account_id, user_id=user_id)
+        return ResolvedIdentity(role=Role.USER, account_id=account_id, user_id=user_id)
 
     def _extract_token(
         self, request: Request, api_key: Optional[str] = None
@@ -326,44 +339,16 @@ class OIDCAuthPlugin(AuthPlugin):
             self._config.audience or self._config.client_id
         )
 
-        # When admin operations require a root API key, instantiate the
-        # APIKeyManager so Admin Router has a valid manager instead of None.
-        if self._config.require_root_api_key_for_admin:
-            await self._initialize_api_key_manager(app, service, config)
-
         logger.info(
             "OIDC auth plugin initialized with issuer=%s, audience=%s",
             self._config.issuer,
             self._effective_audience,
         )
 
-    async def _initialize_api_key_manager(self, app, service, config) -> None:
-        """Create and wire an APIKeyManager for admin-protected deployments."""
-        from openviking.server.api_keys import APIKeyManager
-
-        if not config.root_api_key:
-            logger.error(
-                "oidc.require_root_api_key_for_admin=true but server.root_api_key "
-                "is not configured. Admin API will be unavailable."
-            )
-            sys.exit(1)
-
-        manager = APIKeyManager(
-            root_key=config.root_api_key,
-            viking_fs=service.viking_fs,
-            api_key_hashing_enabled=config.api_key_hashing_enabled,
-        )
-        await manager.load()
-        app.state.api_key_manager = manager
-        logger.info(
-            "OIDC plugin initialized APIKeyManager (root_api_key required for admin)"
-        )
-
     def requires_api_key_manager(self) -> bool:
-        """OIDC requires an APIKeyManager when admin endpoints are root-gated."""
-        if self._config is None:
-            return False
-        return self._config.require_root_api_key_for_admin
+        """OIDC does not map external identities to admin roles, so no
+        APIKeyManager is needed. Admin API access is gated by role checks."""
+        return False
 
     def can_skip_api_key_for_bot_proxy(self) -> bool:
         """OIDC does not declare bot-proxy compatibility until VikingBot
@@ -375,18 +360,3 @@ class OIDCAuthPlugin(AuthPlugin):
         """
         return False
 
-    def get_request_context_checks(
-        self,
-        path: str,
-        identity: ResolvedIdentity,
-    ) -> None:
-        """Enforce that ROOT/ADMIN identities only reach admin paths when
-        ``require_root_api_key_for_admin`` is enabled and the request carried
-        a valid root API key.
-
-        For external OIDC identities without an APIKeyManager, the admin
-        router itself will raise PermissionDenied via the auth decorator.
-        """
-        # No additional path-level checks here; role enforcement is handled
-        # by the existing require_auth_role decorator + api_key_manager guard.
-        return None

@@ -225,7 +225,6 @@ Configure OIDC in `ov.conf`:
 | `token_location` | Token location: `header` (default) or `query` |
 | `token_header_name` | Header name, default `Authorization` |
 | `token_header_prefix` | Header prefix, default `Bearer ` |
-| `require_root_api_key_for_admin` | Whether admin operations require root API key |
 
 ### Identity Mapping Configuration
 
@@ -363,7 +362,6 @@ LDAP authentication allows using enterprise LDAP servers (Active Directory, Open
       "username_attribute": "uid",
       "email_attribute": "mail",
       "name_attribute": "cn",
-      "memberof_attribute": "memberOf",
       "identity": {
         "account_id": {
           "mode": "team",
@@ -440,9 +438,7 @@ LDAP authentication allows using enterprise LDAP servers (Active Directory, Open
 | `username_attribute` | Username attribute, default `uid` |
 | `email_attribute` | Email attribute, default `mail` |
 | `name_attribute` | Name attribute, default `cn` |
-| `memberof_attribute` | Group attribute, default `memberOf` |
 | `user_dn_pattern` | User DN pattern for direct bind |
-| `require_root_api_key_for_admin` | Whether admin operations require root API key |
 
 ### LDAP Identity Mapping
 
@@ -492,17 +488,11 @@ LDAP authentication allows using enterprise LDAP servers (Active Directory, Open
 
 ### Using LDAP Authentication
 
-Clients submit credentials using Basic Auth or form data:
+Clients submit credentials using Basic Auth:
 
 ```bash
 curl https://openviking.example.com/api/v1/fs/ls?uri=viking:// \
   -u alice:password123
-```
-
-Or using query parameters:
-
-```bash
-curl "https://openviking.example.com/api/v1/fs/ls?uri=viking://&username=alice&password=password123"
 ```
 
 ## Trusted Mode

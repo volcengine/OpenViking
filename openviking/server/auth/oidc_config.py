@@ -28,8 +28,6 @@ class OIDCConfig(BaseModel):
     token_header_prefix: str = "Bearer "
     # Identity mapping
     identity: IdentityMappingConfig = Field(default_factory=IdentityMappingConfig)
-    # Optional: require root API key for admin operations
-    require_root_api_key_for_admin: bool = False
 
     model_config = {"extra": "forbid"}
 

@@ -10,10 +10,8 @@ from pydantic import BaseModel, Field, field_validator
 
 from openviking.server.auth.identity_mapping import (
     IdentityMappingConfig,
-    RoleMappingConfig,
     UserMappingConfig,
 )
-from openviking.server.identity import Role
 
 
 def _ldap_default_identity() -> IdentityMappingConfig:
@@ -25,7 +23,6 @@ def _ldap_default_identity() -> IdentityMappingConfig:
 
     * ``account_id`` -> fixed "default"
     * ``user_id``    -> LDAP attribute ``uid``
-    * ``role``       -> fixed ``user``
 
     Operators can override any field via the ``identity`` config block.
     """
@@ -34,11 +31,6 @@ def _ldap_default_identity() -> IdentityMappingConfig:
             source="attribute",
             claim=None,
             attribute="uid",
-        ),
-        role=RoleMappingConfig(
-            source="fixed",
-            value=Role.USER,
-            default=Role.USER,
         ),
     )
 
@@ -62,15 +54,12 @@ class LDAPConfig(BaseModel):
     username_attribute: str = "uid"
     email_attribute: str = "mail"
     name_attribute: str = "cn"
-    memberof_attribute: str = "memberOf"
     # Direct bind pattern (alternative to search+bind)
     user_dn_pattern: Optional[str] = None
     # Identity mapping (LDAP-specific defaults: user_id <- uid, role=user)
     identity: IdentityMappingConfig = Field(
         default_factory=_ldap_default_identity
     )
-    # Optional: require root API key for admin operations
-    require_root_api_key_for_admin: bool = False
 
     model_config = {"extra": "forbid"}
 
