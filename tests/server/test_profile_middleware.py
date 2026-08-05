@@ -141,5 +141,14 @@ def test_sanitize_profile_path_prefers_package_root_over_project_root_for_venv_p
     assert _sanitize_profile_path(path) == "starlette/middleware/base.py"
 
 
+def test_sanitize_profile_path_matches_versioned_stdlib_dir_not_python_ancestor():
+    path = (
+        "/data00/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/"
+        "lib/python3.11/asyncio/base_events.py"
+    )
+
+    assert _sanitize_profile_path(path) == "asyncio/base_events.py"
+
+
 def test_profile_default_top_n_is_100():
     assert PROFILE_TOP_N == 100

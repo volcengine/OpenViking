@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import cProfile
 import json
+import re
 import site
 import sysconfig
 from pathlib import Path
@@ -21,6 +22,10 @@ PROFILE_SORT_BY = "cumulative"
 PROFILE_TOP_N = 100
 PROFILE_MAX_CHARS = 16 * 1024
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Matches versioned stdlib parent directories such as ``python3.11`` while
+# rejecting an ancestor literally named ``python`` (e.g. ``.../uv/python``).
+_STD_LIB_PARENT_RE = re.compile(r"python\d")
 
 
 def _build_profile_roots() -> tuple[Path, ...]:
@@ -110,7 +115,7 @@ def _sanitize_profile_path(path: str) -> str:
                     return "/".join(parts[idx + 1 :])
 
         for idx, part in enumerate(parts):
-            if part.startswith("python") and idx + 1 < len(parts):
+            if _STD_LIB_PARENT_RE.fullmatch(part) and idx + 1 < len(parts):
                 suffix = parts[idx + 1 :]
                 if suffix:
                     return "/".join(suffix)
