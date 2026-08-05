@@ -650,6 +650,7 @@ class AsyncHTTPClient:
         add_type: Optional[str] = None,
         tags: Optional[List[str]] = None,
         tag_mode: str = "replace",
+        extra: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         if add_type is not None:
             add_type = add_type.strip() or None
@@ -702,6 +703,8 @@ class AsyncHTTPClient:
         else:
             request_data["path"] = path
 
+        if extra:
+            request_data.update(extra)
         request_data = self._compact_request_body(request_data)
         response = await self._request("POST", "/api/v1/resources", json=request_data)
         return self._handle_response_data(response).get("result", {})
@@ -1123,18 +1126,22 @@ class AsyncHTTPClient:
         wait: bool = False,
         timeout: Optional[float] = None,
         telemetry: Any = False,
+        extra: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        payload = {
+            "uri": VikingURI.normalize(uri),
+            "content": content,
+            "mode": mode,
+            "wait": wait,
+            "timeout": timeout,
+            "telemetry": telemetry,
+        }
+        if extra:
+            payload.update(extra)
         response = await self._request(
             "POST",
             "/api/v1/content/write",
-            json={
-                "uri": VikingURI.normalize(uri),
-                "content": content,
-                "mode": mode,
-                "wait": wait,
-                "timeout": timeout,
-                "telemetry": telemetry,
-            },
+            json=payload,
         )
         return self._handle_response_data(response).get("result", {})
 
@@ -1145,6 +1152,7 @@ class AsyncHTTPClient:
         wait: bool = True,
         timeout: Optional[float] = None,
         telemetry: Any = False,
+        extra: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Apply a preconditioned multi-file content write."""
         normalized_operations = []
@@ -1152,16 +1160,19 @@ class AsyncHTTPClient:
             item = dict(operation)
             item["uri"] = VikingURI.normalize(str(item.get("uri") or ""))
             normalized_operations.append(item)
+        payload = {
+            "root_uri": VikingURI.normalize(root_uri),
+            "operations": normalized_operations,
+            "wait": wait,
+            "timeout": timeout,
+            "telemetry": telemetry,
+        }
+        if extra:
+            payload.update(extra)
         response = await self._request(
             "POST",
             "/api/v1/content/batch-write",
-            json={
-                "root_uri": VikingURI.normalize(root_uri),
-                "operations": normalized_operations,
-                "wait": wait,
-                "timeout": timeout,
-                "telemetry": telemetry,
-            },
+            json=payload,
         )
         return self._handle_response_data(response).get("result", {})
 
@@ -1196,8 +1207,13 @@ class AsyncHTTPClient:
         filter: Optional[Dict[str, Any]] = None,
         context_type: Optional[Any] = None,
         tags: Optional[List[str]] = None,
+        level: Optional[Union[int, List[int]]] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
         telemetry: Any = False,
         image: Any = None,
+        extra: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         actual_limit = node_limit if node_limit is not None else limit
         payload = {
@@ -1209,8 +1225,14 @@ class AsyncHTTPClient:
             "filter": filter,
             "context_type": self._normalize_context_type(context_type),
             "tags": tags,
+            "level": level,
+            "since": since,
+            "until": until,
+            "time_field": time_field,
             "telemetry": telemetry,
         }
+        if extra:
+            payload.update(extra)
         payload = self._compact_request_body(payload)
         response = await self._request("POST", "/api/v1/search/find", json=payload)
         return self._handle_response_data(response).get("result", {})
@@ -1227,8 +1249,13 @@ class AsyncHTTPClient:
         filter: Optional[Dict[str, Any]] = None,
         context_type: Optional[Any] = None,
         tags: Optional[List[str]] = None,
+        level: Optional[Union[int, List[int]]] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
         telemetry: Any = False,
         image: Any = None,
+        extra: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         actual_limit = node_limit if node_limit is not None else limit
         sid = session_id or (session.session_id if session else None)
@@ -1242,10 +1269,45 @@ class AsyncHTTPClient:
             "filter": filter,
             "context_type": self._normalize_context_type(context_type),
             "tags": tags,
+            "level": level,
+            "since": since,
+            "until": until,
+            "time_field": time_field,
             "telemetry": telemetry,
         }
+        if extra:
+            payload.update(extra)
         payload = self._compact_request_body(payload)
         response = await self._request("POST", "/api/v1/search/search", json=payload)
+        return self._handle_response_data(response).get("result", {})
+
+    async def recall(
+        self,
+        query: str,
+        quotas: Optional[Dict[str, int]] = None,
+        max_chars: Optional[int] = None,
+        min_score: Optional[float] = None,
+        peer_scope: Optional[str] = None,
+        other_peer_penalty: Optional[Union[float, Dict[str, float]]] = None,
+        render: Optional[bool] = None,
+        telemetry: Any = False,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Type-quota memory recall rendered as injection-ready context."""
+        payload = {
+            "query": query,
+            "quotas": quotas,
+            "max_chars": max_chars,
+            "min_score": min_score,
+            "peer_scope": peer_scope,
+            "other_peer_penalty": other_peer_penalty,
+            "render": render,
+            "telemetry": telemetry,
+        }
+        if extra:
+            payload.update(extra)
+        payload = self._compact_request_body(payload)
+        response = await self._request("POST", "/api/v1/search/recall", json=payload)
         return self._handle_response_data(response).get("result", {})
 
     async def grep(
@@ -1674,6 +1736,36 @@ class AsyncHTTPClient:
         response = await self._request("POST", "/api/v1/admin/migrate", json={"action": action})
         return self._handle_response(response)
 
+    async def admin_get_agent_evolution(self) -> Dict[str, Any]:
+        """Return the effective Agent Evolution switch for the caller's account."""
+        response = await self._request("GET", "/api/v1/admin/agent-evolution")
+        return self._handle_response(response)
+
+    async def admin_set_agent_evolution(self, enabled: bool) -> Dict[str, Any]:
+        """Persist and hot-reload Agent Evolution for the caller's account."""
+        response = await self._request(
+            "PUT", "/api/v1/admin/agent-evolution", json={"enabled": enabled}
+        )
+        return self._handle_response(response)
+
+    async def admin_get_account_settings(self, account_id: str) -> Dict[str, Any]:
+        """Return effective and explicitly overridden settings for one account."""
+        response = await self._request(
+            "GET", f"/api/v1/admin/accounts/{account_id}/settings"
+        )
+        return self._handle_response(response)
+
+    async def admin_set_account_agent_evolution(
+        self, account_id: str, enabled: bool
+    ) -> Dict[str, Any]:
+        """Update the allowlisted Agent Evolution setting for one account."""
+        response = await self._request(
+            "PATCH",
+            f"/api/v1/admin/accounts/{account_id}/settings",
+            json={"agent_evolution": {"enabled": enabled}},
+        )
+        return self._handle_response(response)
+
     def get_status(self) -> Dict[str, Any]:
         return run_async(self._get_system_status())
 
@@ -1872,6 +1964,7 @@ class SyncHTTPClient:
         add_type: Optional[str] = None,
         tags: Optional[List[str]] = None,
         tag_mode: str = "replace",
+        extra: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.add_resource(
@@ -1895,6 +1988,7 @@ class SyncHTTPClient:
                 tags=tags,
                 tag_mode=tag_mode,
                 telemetry=telemetry,
+                extra=extra,
             )
         )
 
@@ -2164,6 +2258,7 @@ class SyncHTTPClient:
         wait: bool = False,
         timeout: Optional[float] = None,
         telemetry: Any = False,
+        extra: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.write(
@@ -2173,6 +2268,7 @@ class SyncHTTPClient:
                 wait=wait,
                 timeout=timeout,
                 telemetry=telemetry,
+                extra=extra,
             )
         )
 
@@ -2183,6 +2279,7 @@ class SyncHTTPClient:
         wait: bool = True,
         timeout: Optional[float] = None,
         telemetry: Any = False,
+        extra: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.batch_write(
@@ -2191,6 +2288,7 @@ class SyncHTTPClient:
                 wait=wait,
                 timeout=timeout,
                 telemetry=telemetry,
+                extra=extra,
             )
         )
 
@@ -2222,8 +2320,13 @@ class SyncHTTPClient:
         filter: Optional[Dict[str, Any]] = None,
         context_type: Optional[Any] = None,
         tags: Optional[List[str]] = None,
+        level: Optional[Union[int, List[int]]] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
         telemetry: Any = False,
         image: Any = None,
+        extra: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.find(
@@ -2235,8 +2338,13 @@ class SyncHTTPClient:
                 filter=filter,
                 context_type=context_type,
                 tags=tags,
+                level=level,
+                since=since,
+                until=until,
+                time_field=time_field,
                 telemetry=telemetry,
                 image=image,
+                extra=extra,
             )
         )
 
@@ -2252,8 +2360,13 @@ class SyncHTTPClient:
         filter: Optional[Dict[str, Any]] = None,
         context_type: Optional[Any] = None,
         tags: Optional[List[str]] = None,
+        level: Optional[Union[int, List[int]]] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
         telemetry: Any = False,
         image: Any = None,
+        extra: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         actual_session_id = session_id
         if actual_session_id is None and session is not None:
@@ -2269,8 +2382,39 @@ class SyncHTTPClient:
                 filter=filter,
                 context_type=context_type,
                 tags=tags,
+                level=level,
+                since=since,
+                until=until,
+                time_field=time_field,
                 telemetry=telemetry,
                 image=image,
+                extra=extra,
+            )
+        )
+
+    def recall(
+        self,
+        query: str,
+        quotas: Optional[Dict[str, int]] = None,
+        max_chars: Optional[int] = None,
+        min_score: Optional[float] = None,
+        peer_scope: Optional[str] = None,
+        other_peer_penalty: Optional[Union[float, Dict[str, float]]] = None,
+        render: Optional[bool] = None,
+        telemetry: Any = False,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._async_client.recall(
+                query=query,
+                quotas=quotas,
+                max_chars=max_chars,
+                min_score=min_score,
+                peer_scope=peer_scope,
+                other_peer_penalty=other_peer_penalty,
+                render=render,
+                telemetry=telemetry,
+                extra=extra,
             )
         )
 
@@ -2553,6 +2697,22 @@ class SyncHTTPClient:
 
     def admin_migrate(self, cleanup: bool = False) -> Dict[str, Any]:
         return run_async(self._async_client.admin_migrate(cleanup=cleanup))
+
+    def admin_get_agent_evolution(self) -> Dict[str, Any]:
+        return run_async(self._async_client.admin_get_agent_evolution())
+
+    def admin_set_agent_evolution(self, enabled: bool) -> Dict[str, Any]:
+        return run_async(self._async_client.admin_set_agent_evolution(enabled))
+
+    def admin_get_account_settings(self, account_id: str) -> Dict[str, Any]:
+        return run_async(self._async_client.admin_get_account_settings(account_id))
+
+    def admin_set_account_agent_evolution(
+        self, account_id: str, enabled: bool
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._async_client.admin_set_account_agent_evolution(account_id, enabled)
+        )
 
     def get_status(self) -> Dict[str, Any]:
         return self._async_client.get_status()

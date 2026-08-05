@@ -88,6 +88,35 @@ func (c *Client) Search(ctx context.Context, queryText string, opts *SearchOptio
 	return &result, err
 }
 
+// Recall renders type-quota memory as injection-ready context. Zero-valued
+// option fields fall back to the server's defaults.
+func (c *Client) Recall(ctx context.Context, query string, opts *RecallOptions) (map[string]any, error) {
+	if opts == nil {
+		opts = &RecallOptions{}
+	}
+	payload := map[string]any{
+		"query": query,
+	}
+	if len(opts.Quotas) > 0 {
+		payload["quotas"] = opts.Quotas
+	}
+	if opts.MaxChars != nil {
+		payload["max_chars"] = *opts.MaxChars
+	}
+	if opts.MinScore != nil {
+		payload["min_score"] = *opts.MinScore
+	}
+	setString(payload, "peer_scope", opts.PeerScope)
+	setAny(payload, "other_peer_penalty", opts.OtherPeerPenalty)
+	if opts.Render != nil {
+		payload["render"] = *opts.Render
+	}
+	setAny(payload, "telemetry", opts.Telemetry)
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/search/recall", nil, payload, &result)
+	return result, err
+}
+
 // Grep searches file content by pattern.
 func (c *Client) Grep(ctx context.Context, uri, pattern string, opts *GrepOptions) (map[string]any, error) {
 	if opts == nil {
