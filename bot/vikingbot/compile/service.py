@@ -71,7 +71,7 @@ _COMPILE_ISOLATED_EXEC_BACKENDS = frozenset(
 _SKILL_EXCLUDED_FILES = frozenset(
     {".abstract.md", ".overview.md", ".relations.json", ".source.json"}
 )
-_CATALOG_EXCLUDED_FILES = _SKILL_EXCLUDED_FILES | {"index.md", "log.md"}
+_CATALOG_EXCLUDED_FILES = _SKILL_EXCLUDED_FILES 
 _CATALOG_FRONTMATTER_LINES = 128
 _TARGET_CATALOG_QUERY_CHARS = 40_000
 _REQUIREMENT_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
