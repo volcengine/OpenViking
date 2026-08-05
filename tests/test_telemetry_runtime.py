@@ -827,6 +827,12 @@ async def test_embedding_handler_binds_registered_operation_telemetry(monkeypatc
             get_current_telemetry().record_token_usage("embedding", 9, 0)
             return EmbedResult(dense_vector=[0.1, 0.2])
 
+        def prepare_embedding_input(self, content):
+            return content
+
+        async def embed_async(self, content, is_query: bool = False) -> EmbedResult:
+            return self.embed(content, is_query=is_query)
+
     class _DummyConfig:
         def __init__(self):
             self.storage = SimpleNamespace(vectordb=SimpleNamespace(name="context"))
