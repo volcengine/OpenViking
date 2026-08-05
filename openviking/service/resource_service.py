@@ -123,6 +123,7 @@ _INTERNAL_INGESTION_FIELDS = frozenset(
         "route_source",
         "skip_watch_management",
         "stage_callback",
+        "to_is_directory",
         "watch_auth_state",
         "understanding_response_id",
         "parser_backend",
@@ -239,6 +240,7 @@ class ResourceService:
         manage_watch: bool,
         watch_interval: float,
         target: ContentTargetSpec,
+        to_is_directory: bool,
         root_uri: str,
         path: str,
         reason: str,
@@ -290,6 +292,7 @@ class ResourceService:
                     await self._handle_watch_task_creation(
                         path=path,
                         to_uri=watch_to,
+                        to_is_directory=to_is_directory,
                         parent_uri=parent_uri,
                         reason=reason,
                         instruction=instruction,
@@ -855,6 +858,7 @@ class ResourceService:
         path: str,
         ctx: RequestContext,
         to: Optional[str] = None,
+        to_is_directory: Optional[bool] = None,
         parent: Optional[str] = None,
         reason: str = "",
         instruction: str = "",
@@ -872,6 +876,7 @@ class ResourceService:
             path=path,
             ctx=ctx,
             to=to,
+            to_is_directory=to_is_directory,
             parent=parent,
             reason=reason,
             instruction=instruction,
@@ -894,6 +899,7 @@ class ResourceService:
         ctx: RequestContext,
         add_type: Optional[str] = None,
         to: Optional[str] = None,
+        to_is_directory: Optional[bool] = None,
         parent: Optional[str] = None,
         reason: str = "",
         instruction: str = "",
@@ -1022,6 +1028,7 @@ class ResourceService:
                 path=path,
                 ctx=ctx,
                 to=to,
+                to_is_directory=to_is_directory,
                 parent=parent,
                 reason=reason,
                 instruction=instruction,
@@ -1043,6 +1050,7 @@ class ResourceService:
                 path=path,
                 ctx=ctx,
                 to=to,
+                to_is_directory=to_is_directory,
                 parent=parent,
                 reason=reason,
                 instruction=instruction,
@@ -1097,6 +1105,7 @@ class ResourceService:
         ctx: RequestContext,
         defer_post_processing: bool,
         to: Optional[str] = None,
+        to_is_directory: Optional[bool] = None,
         parent: Optional[str] = None,
         reason: str = "",
         instruction: str = "",
@@ -1148,7 +1157,9 @@ class ResourceService:
                 parent=parent,
                 create_parent=bool(kwargs.get("create_parent", False)),
             )
-            to_is_directory = bool(target.to)
+            if to_is_directory is None:
+                to_is_directory = bool(target.to)
+            watch_to_is_directory = to_is_directory
             if enforce_public_remote_targets and is_remote_resource_source(path):
                 path = require_remote_resource_source(path)
                 kwargs.setdefault("request_validator", ensure_public_remote_target)
@@ -1338,6 +1349,7 @@ class ResourceService:
                     manage_watch=manage_watch,
                     watch_interval=watch_interval,
                     target=target,
+                    to_is_directory=watch_to_is_directory,
                     root_uri=root_uri,
                     path=path,
                     reason=reason,
@@ -1382,6 +1394,12 @@ class ResourceService:
                 return result
             prepared = result.pop("_post_process", None)
             deferred_lock = result.pop("_resource_lock", None)
+            if (
+                not target.to
+                and isinstance(prepared, dict)
+                and isinstance(prepared.get("root_is_file"), bool)
+            ):
+                watch_to_is_directory = not prepared["root_is_file"]
             if defer_post_processing:
                 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 
@@ -1438,6 +1456,7 @@ class ResourceService:
                 manage_watch=manage_watch,
                 watch_interval=watch_interval,
                 target=target,
+                to_is_directory=watch_to_is_directory,
                 root_uri=str(result.get("root_uri") or ""),
                 path=path,
                 reason=reason,
@@ -1553,6 +1572,7 @@ class ResourceService:
         self,
         path: str,
         to_uri: str,
+        to_is_directory: bool,
         parent_uri: Optional[str],
         reason: str,
         instruction: str,
@@ -1602,6 +1622,7 @@ class ResourceService:
                 role=str(ctx.role),
                 path=path,
                 to_uri=to_uri,
+                to_is_directory=to_is_directory,
                 parent_uri=parent_uri,
                 reason=reason,
                 instruction=instruction,
@@ -1623,6 +1644,7 @@ class ResourceService:
                 user_id=ctx.user.user_id,
                 original_role=str(ctx.role),
                 to_uri=to_uri,
+                to_is_directory=to_is_directory,
                 parent_uri=parent_uri,
                 reason=reason,
                 instruction=instruction,

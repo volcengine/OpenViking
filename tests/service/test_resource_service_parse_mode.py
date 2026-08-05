@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from openviking.resource.watch_manager import WatchManager, WatchTask
+from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.server.identity import RequestContext, Role
 from openviking.service import resource_service as resource_service_module
 from openviking.service.resource_service import ResourceService
@@ -19,13 +21,14 @@ from openviking_cli.session.user_id import UserIdentifier
 class _ResourceProcessor:
     def __init__(self):
         self.calls = []
+        self.root_is_file = True
 
     async def process_resource(self, **kwargs):
         self.calls.append(kwargs)
         return {
             "status": "success",
             "root_uri": "viking://resources/test",
-            "_post_process": {},
+            "_post_process": {"root_is_file": self.root_is_file},
         }
 
 
@@ -100,6 +103,68 @@ async def test_no_split_is_forwarded_and_persisted_for_watch_replay(
     assert watch_manager.create_task.await_args.kwargs["processor_kwargs"]["parse_mode"] == (
         "no_split"
     )
+
+
+@pytest.mark.asyncio
+async def test_no_split_watch_replay_preserves_auto_bound_file_target(
+    service: ResourceService,
+    ctx: RequestContext,
+):
+    watch_manager = WatchManager(viking_fs=None)
+    await watch_manager.initialize()
+    scheduler = WatchScheduler(resource_service=service, check_interval=1)
+    scheduler._watch_manager = watch_manager
+    service._watch_scheduler = scheduler
+
+    await service.add_resource(
+        path="https://example.com/guide.md",
+        ctx=ctx,
+        watch_interval=30.0,
+        args={"parse_mode": "no_split"},
+    )
+
+    tasks = await watch_manager.get_all_tasks(
+        account_id=ctx.account_id,
+        user_id=ctx.user.user_id,
+        role=str(ctx.role),
+    )
+    assert len(tasks) == 1
+    task = tasks[0]
+    assert task.to_uri == "viking://resources/test"
+    assert task.to_is_directory is False
+    task = WatchTask.from_dict(task.to_storage_dict())
+
+    await scheduler._execute_task(task)
+
+    processor = service._resource_processor
+    assert processor.calls[-1]["to"] == "viking://resources/test"
+    assert processor.calls[-1]["to_is_directory"] is False
+
+
+@pytest.mark.asyncio
+async def test_no_split_watch_persists_auto_bound_multi_artifact_directory(
+    service: ResourceService,
+    ctx: RequestContext,
+):
+    service._resource_processor.root_is_file = False
+    watch_manager = WatchManager(viking_fs=None)
+    await watch_manager.initialize()
+    service._watch_scheduler = SimpleNamespace(watch_manager=watch_manager)
+
+    await service.add_resource(
+        path="https://example.com/guide.md",
+        ctx=ctx,
+        watch_interval=30.0,
+        args={"parse_mode": "no_split"},
+    )
+
+    tasks = await watch_manager.get_all_tasks(
+        account_id=ctx.account_id,
+        user_id=ctx.user.user_id,
+        role=str(ctx.role),
+    )
+    assert len(tasks) == 1
+    assert tasks[0].to_is_directory is True
 
 
 @pytest.mark.asyncio
