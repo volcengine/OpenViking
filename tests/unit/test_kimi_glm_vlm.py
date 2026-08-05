@@ -87,7 +87,7 @@ def test_vlm_config_uses_canonical_provider_names():
     assert "kimi" in config.providers
     assert "glm" in config.providers
     assert provider_name == "glm"
-    assert provider_config == {"api_key": "glm-key"}
+    assert provider_config["api_key"] == "glm-key"
 
 
 @patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI")

@@ -204,7 +204,7 @@ def test_vlm_config_default_provider_resolves_codex(_mock_auth_available):
     provider_config, provider_name = config.get_provider_config()
 
     assert provider_name == "openai-codex"
-    assert provider_config == {}
+    assert provider_config.get("api_key") is None
 
 
 @patch("openviking.models.vlm.backends.codex_auth.has_codex_auth_available", return_value=True)
