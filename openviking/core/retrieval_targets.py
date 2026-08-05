@@ -14,6 +14,7 @@ from openviking.core.namespace import (
 )
 from openviking.core.peer_id import normalize_peer_id
 from openviking.server.identity import RequestContext, Role
+from openviking.utils.search_filters import resolve_context_types
 from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.retrieve import ContextType
 from openviking_cli.utils.uri import VikingURI
@@ -30,13 +31,14 @@ class ResolvedRetrievalTargets:
 def resolve_retrieval_targets(
     target_uri: Union[str, List[str]],
     ctx: RequestContext,
+    context_type: Optional[Union[str, ContextType, List]] = None,
 ) -> ResolvedRetrievalTargets:
     """Resolve search/find target directories."""
     target_uris = _canonicalize_target_uris(target_uri, ctx)
 
     if not target_uris:
         return ResolvedRetrievalTargets(
-            target_directories=default_target_directories(ctx),
+            target_directories=default_target_directories(ctx, context_type=context_type),
         )
 
     target_directories: List[str] = []
@@ -53,12 +55,34 @@ def resolve_retrieval_targets(
 def default_target_directories(
     ctx: Optional[RequestContext],
     *,
-    context_type: Optional[ContextType] = None,
+    context_type: Optional[Union[str, ContextType, List]] = None,
 ) -> List[str]:
     """Return default retrieval directories for a user context."""
     if not ctx or ctx.role == Role.ROOT:
         return []
 
+    context_types = resolve_context_types(context_type)
+    if not context_types:
+        return _general_default_target_directories(ctx)
+
+    directories: List[str] = []
+    for value in context_types:
+        for directory in _typed_default_target_directories(ctx, ContextType(value)):
+            if directory not in directories:
+                directories.append(directory)
+    return directories
+
+
+def _general_default_target_directories(ctx: RequestContext) -> List[str]:
+    user_root = canonical_user_root(ctx)
+    if ctx.actor_peer_id:
+        return _dedupe(["viking://resources", *_default_user_root_targets(ctx)])
+    return [user_root, "viking://resources"]
+
+
+def _typed_default_target_directories(
+    ctx: RequestContext, context_type: ContextType
+) -> List[str]:
     user_root = canonical_user_root(ctx)
     if context_type == ContextType.MEMORY:
         if ctx.actor_peer_id:
@@ -81,9 +105,7 @@ def default_target_directories(
         return ["viking://resources", user_root]
     if context_type == ContextType.SKILL:
         return _dedupe([*_default_skill_targets(ctx), *_default_agent_skill_targets()])
-    if ctx.actor_peer_id:
-        return _dedupe(["viking://resources", *_default_user_root_targets(ctx)])
-    return [user_root, "viking://resources"]
+    return _general_default_target_directories(ctx)
 
 
 def _canonicalize_target_uris(

@@ -171,3 +171,56 @@ def test_actor_peer_collection_targets_actor_peer_only():
         "viking://user/support_bot/peers/web-visitor-alice/memories",
         "viking://user/support_bot/peers/web-visitor-alice/resources",
     ]
+
+
+def test_skill_context_type_expands_default_scope_to_agent_skills():
+    targets = resolve_retrieval_targets(
+        "",
+        _ctx(),
+        context_type=ContextType.SKILL,
+    ).target_directories
+
+    assert targets == [
+        "viking://user/support_bot/skills",
+        "viking://agent/skills",
+    ]
+
+
+def test_skill_context_type_accepts_string_and_list_values():
+    assert resolve_retrieval_targets(
+        "", _ctx(), context_type="skill"
+    ).target_directories == [
+        "viking://user/support_bot/skills",
+        "viking://agent/skills",
+    ]
+    assert resolve_retrieval_targets(
+        "", _ctx(), context_type=["skill"]
+    ).target_directories == [
+        "viking://user/support_bot/skills",
+        "viking://agent/skills",
+    ]
+
+
+def test_multi_context_type_unions_default_scopes():
+    targets = resolve_retrieval_targets(
+        "",
+        _ctx(actor_peer_id="web-visitor-alice"),
+        context_type=["memory", "skill"],
+    ).target_directories
+
+    assert targets == [
+        "viking://user/support_bot/memories",
+        "viking://user/support_bot/peers/web-visitor-alice/memories",
+        "viking://user/support_bot/skills",
+        "viking://agent/skills",
+    ]
+
+
+def test_explicit_target_uri_overrides_context_type_scope():
+    targets = resolve_retrieval_targets(
+        "viking://user/support_bot/memories",
+        _ctx(),
+        context_type=ContextType.SKILL,
+    ).target_directories
+
+    assert targets == ["viking://user/support_bot/memories"]

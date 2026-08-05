@@ -253,6 +253,7 @@ async def find(
         score_threshold=min_score,
         filter=_resolve_context_type_filter(context_type),
         level=level,
+        context_type=context_type,
     )
     return _format_search_result(result)
 
@@ -284,6 +285,7 @@ async def search(
         score_threshold=min_score,
         filter=_resolve_context_type_filter(context_type),
         level=level,
+        context_type=context_type,
     )
     return _format_search_result(result)
 
