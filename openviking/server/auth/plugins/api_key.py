@@ -155,7 +155,26 @@ class ApiKeyAuthPlugin(AuthPlugin):
                     "please re-authorize the client."
                 )
 
-        # Silently ignore identity assertion headers in api_key mode.
+        # In api_key mode the OAuth token's bound account/user is the sole
+        # authority for caller identity. For USER tokens (the lowest rank,
+        # which cannot legitimately target other tenants) a *mismatched*
+        # assertion header is an impersonation attempt and must fail closed.
+        # Matching headers are harmless. Privileged tokens retain the legacy
+        # silent-strip behavior for backwards compatibility.
+        if role == Role.USER:
+            if x_openviking_account and x_openviking_account != record.account_id:
+                raise PermissionDeniedError(
+                    "OAuth token cannot override its bound account via "
+                    "X-OpenViking-Account."
+                )
+            if x_openviking_user and x_openviking_user != record.user_id:
+                raise PermissionDeniedError(
+                    "OAuth token cannot override its bound user via "
+                    "X-OpenViking-User."
+                )
+
+        # Strip any surviving identity assertion headers so downstream code
+        # never acts on a client-supplied account/user in api_key mode.
         if x_openviking_account:
             _remove_header(request, b"x-openviking-account")
         if x_openviking_user:
