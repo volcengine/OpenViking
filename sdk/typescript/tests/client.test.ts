@@ -122,6 +122,29 @@ describe("OpenVikingClient", () => {
     });
   });
 
+  it("sends processing_mode for write requests", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(ok({}));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await client.write("resources/demo.md", "updated", {
+      processingMode: "vectors_only",
+      wait: true,
+    });
+
+    const [url, init] = fetcher.mock.calls[0]!;
+    expect(String(url)).toBe("https://example.com/api/v1/content/write");
+    expect(JSON.parse(String(init?.body))).toMatchObject({
+      uri: "viking://resources/demo.md",
+      content: "updated",
+      mode: "replace",
+      processing_mode: "vectors_only",
+      wait: true,
+    });
+  });
+
   it("maps response envelopes to typed errors", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(

@@ -19,6 +19,12 @@ from openviking.core.namespace import (
     relative_uri_path,
     uri_parts,
 )
+from openviking.resource.processing_mode import (
+    DEFAULT_PROCESSING_MODE,
+    VECTORS_ONLY,
+    ProcessingMode,
+    normalize_processing_mode,
+)
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
 from openviking.session.memory.memory_updater import MemoryUpdater
@@ -35,6 +41,7 @@ from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import build_queue_status_payload
 from openviking.utils.path_safety import validate_safe_viking_uri_path
+from openviking.utils.embedding_utils import vectorize_file
 from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import (
     AlreadyExistsError,
@@ -86,12 +93,14 @@ class ContentWriteCoordinator:
         mode: str = "replace",
         wait: bool = False,
         timeout: Optional[float] = None,
+        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
     ) -> Dict[str, Any]:
         try:
             normalized_uri = canonicalize_uri(uri, ctx)
         except NamespaceShapeError as exc:
             raise InvalidArgumentError(str(exc)) from exc
         self._validate_mode(mode)
+        processing_mode = normalize_processing_mode(processing_mode)
         self._validate_target_uri(normalized_uri)
         self._viking_fs._ensure_mutable_access(normalized_uri, ctx)
 
@@ -102,6 +111,7 @@ class ContentWriteCoordinator:
                 ctx=ctx,
                 wait=wait,
                 timeout=timeout,
+                processing_mode=processing_mode,
             )
 
         stat = await self._safe_stat(normalized_uri, ctx=ctx)
@@ -124,6 +134,7 @@ class ContentWriteCoordinator:
                 ctx=ctx,
                 written_bytes=written_bytes,
                 telemetry_id=telemetry_id,
+                processing_mode=processing_mode,
             )
 
         return await self._write_direct_with_refresh(
@@ -137,6 +148,7 @@ class ContentWriteCoordinator:
             ctx=ctx,
             written_bytes=written_bytes,
             telemetry_id=telemetry_id,
+            processing_mode=processing_mode,
         )
 
     async def batch_write(
@@ -692,6 +704,7 @@ class ContentWriteCoordinator:
         ctx: RequestContext,
         written_bytes: int,
         telemetry_id: str,
+        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
     ) -> Dict[str, Any]:
         lock_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
         try:
@@ -704,8 +717,9 @@ class ContentWriteCoordinator:
 
         previous_content: Optional[str] = None
         content_written = False
-        semantic_enqueued = False
+        post_process_started = False
         lock_released = False
+        vector_enqueued = False
         try:
             if mode != "create":
                 previous_content = await self._viking_fs.read_file(uri, ctx=ctx)
@@ -713,14 +727,22 @@ class ContentWriteCoordinator:
                 get_request_wait_tracker().register_request(telemetry_id)
             await self._write_in_place(uri, content, mode=mode, ctx=ctx, lease_ref=lease)
             content_written = True
-            await self._enqueue_semantic_refresh(
-                root_uri=root_uri,
-                changed_uri=uri,
-                context_type=context_type,
-                ctx=ctx,
-                change_type="added" if mode == "create" else "modified",
-            )
-            semantic_enqueued = True
+            if processing_mode == VECTORS_ONLY:
+                vector_enqueued = await self._vectorize_written_file(
+                    uri=uri,
+                    context_type=context_type,
+                    ctx=ctx,
+                )
+                post_process_started = True
+            else:
+                await self._enqueue_semantic_refresh(
+                    root_uri=root_uri,
+                    changed_uri=uri,
+                    context_type=context_type,
+                    ctx=ctx,
+                    change_type="added" if mode == "create" else "modified",
+                )
+                post_process_started = True
             await self._viking_fs._async_agfs.pathlock_release(lease)
             lock_released = True
             queue_status = (
@@ -728,6 +750,19 @@ class ContentWriteCoordinator:
                 if wait
                 else None
             )
+            result_kwargs = {}
+            if processing_mode == VECTORS_ONLY:
+                if vector_enqueued:
+                    _, vector_status = self._refresh_statuses(
+                        wait=wait,
+                        queue_status=queue_status,
+                    )
+                else:
+                    vector_status = "skipped"
+                result_kwargs = {
+                    "semantic_status": "skipped",
+                    "vector_status": vector_status,
+                }
             return self._build_write_result(
                 uri=uri,
                 root_uri=root_uri,
@@ -736,9 +771,10 @@ class ContentWriteCoordinator:
                 written_bytes=written_bytes,
                 wait=wait,
                 queue_status=queue_status,
+                **result_kwargs,
             )
         except Exception:
-            if not semantic_enqueued and content_written:
+            if not post_process_started and content_written:
                 await self._rollback_direct_write(
                     uri=uri,
                     previous_content=previous_content,
@@ -775,6 +811,26 @@ class ContentWriteCoordinator:
                 )
         except Exception:
             logger.error("Failed to rollback direct content write for %s", uri, exc_info=True)
+
+    async def _vectorize_written_file(
+        self,
+        *,
+        uri: str,
+        context_type: str,
+        ctx: RequestContext,
+    ) -> bool:
+        parent = VikingURI(uri).parent
+        if parent is None:
+            return False
+        name = uri.rstrip("/").rsplit("/", 1)[-1]
+        return await vectorize_file(
+            file_path=uri,
+            summary_dict={"name": name, "summary": ""},
+            parent_uri=parent.uri,
+            context_type=context_type,
+            ctx=ctx,
+            register_request_wait=True,
+        )
 
     def _validate_mode(self, mode: str) -> None:
         if mode not in {"replace", "append", "create"}:
@@ -834,6 +890,7 @@ class ContentWriteCoordinator:
         ctx: RequestContext,
         wait: bool,
         timeout: Optional[float],
+        processing_mode: ProcessingMode,
     ) -> Dict[str, Any]:
         self._validate_create_extension(uri)
 
@@ -859,6 +916,7 @@ class ContentWriteCoordinator:
                 ctx=ctx,
                 written_bytes=written_bytes,
                 telemetry_id=telemetry_id,
+                processing_mode=processing_mode,
             )
 
         return await self._write_direct_with_refresh(
@@ -872,6 +930,7 @@ class ContentWriteCoordinator:
             ctx=ctx,
             written_bytes=written_bytes,
             telemetry_id=telemetry_id,
+            processing_mode=processing_mode,
         )
 
     async def _write_in_place(
@@ -967,7 +1026,10 @@ class ContentWriteCoordinator:
         ctx: RequestContext,
         written_bytes: int,
         telemetry_id: str,
+        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
     ) -> Dict[str, Any]:
+        del processing_mode
+
         lock_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
         try:
             lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(lock_path)

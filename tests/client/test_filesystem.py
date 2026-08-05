@@ -108,6 +108,26 @@ class TestRead:
         assert str(seen["telemetry_id"]).startswith("tm_")
         assert seen["kwargs"]["wait"] is True
 
+    async def test_local_client_write_forwards_processing_mode(self):
+        seen: dict[str, object] = {}
+
+        async def _fake_write(**kwargs):
+            seen["kwargs"] = kwargs
+            return {"uri": kwargs["uri"]}
+
+        client = LocalClient.__new__(LocalClient)
+        client._ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+        client._service = SimpleNamespace(fs=SimpleNamespace(write=_fake_write))
+
+        await LocalClient.write(
+            client,
+            uri="viking://resources/demo.md",
+            content="Updated from client test",
+            processing_mode="vectors_only",
+        )
+
+        assert seen["kwargs"]["processing_mode"] == "vectors_only"
+
 
 class TestAbstract:
     """Test abstract operation"""
@@ -190,6 +210,7 @@ async def test_sync_openviking_write_updates_existing_file(test_data_dir, sample
             wait=True,
             timeout=3.0,
             telemetry=False,
+            processing_mode="vectors_only",
         )
 
         assert write_result == {"uri": "viking://resources/demo.md"}
@@ -200,6 +221,7 @@ async def test_sync_openviking_write_updates_existing_file(test_data_dir, sample
             wait=True,
             timeout=3.0,
             telemetry=False,
+            processing_mode="vectors_only",
         )
     finally:
         client.close()

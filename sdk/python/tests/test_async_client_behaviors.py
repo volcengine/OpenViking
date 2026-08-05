@@ -164,6 +164,36 @@ async def test_async_http_client_reindex_posts_content_reindex():
 
 
 @pytest.mark.asyncio
+async def test_async_http_client_write_forwards_processing_mode():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {"result": {"uri": "viking://resources/demo.md"}}
+
+    await client.write(
+        "viking://resources/demo.md",
+        "updated",
+        processing_mode="vectors_only",
+    )
+
+    payload = fake_http.post.await_args.kwargs["json"]
+    assert payload["processing_mode"] == "vectors_only"
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_write_omits_default_processing_mode_for_legacy_servers():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {"result": {"uri": "viking://resources/demo.md"}}
+
+    await client.write("viking://resources/demo.md", "updated")
+
+    payload = fake_http.post.await_args.kwargs["json"]
+    assert "processing_mode" not in payload
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(("cleanup", "action"), [(False, "migrate"), (True, "cleanup")])
 async def test_async_http_client_admin_migrate_posts_action_payload(cleanup, action):
     client = AsyncHTTPClient(url="http://localhost:1933")

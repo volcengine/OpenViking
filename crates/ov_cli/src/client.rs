@@ -387,8 +387,9 @@ impl HttpClient {
         mode: &str,
         wait: bool,
         timeout: Option<f64>,
+        processing_mode: &str,
     ) -> Result<serde_json::Value> {
-        let body = Self::build_write_body(uri, content, mode, wait, timeout);
+        let body = Self::build_write_body(uri, content, mode, wait, timeout, processing_mode);
         self.post("/api/v1/content/write", &body).await
     }
 
@@ -414,14 +415,18 @@ impl HttpClient {
         mode: &str,
         wait: bool,
         timeout: Option<f64>,
+        processing_mode: &str,
     ) -> Value {
-        serde_json::json!({
+        let mut body = serde_json::json!({
             "uri": uri,
             "content": content,
             "mode": mode,
             "wait": wait,
             "timeout": timeout,
-        })
+            "processing_mode": processing_mode,
+        });
+        compact_request_body(&mut body);
+        body
     }
 
     pub async fn reindex(
@@ -2046,6 +2051,7 @@ mod tests {
             "replace",
             true,
             Some(3.0),
+            "semantic_and_vectors",
         );
 
         assert_eq!(
@@ -2060,6 +2066,34 @@ mod tests {
         );
         assert!(body.get("regenerate_semantics").is_none());
         assert!(body.get("revectorize").is_none());
+    }
+
+    #[test]
+    fn build_write_body_drops_default_processing_mode_for_legacy_servers() {
+        let body = HttpClient::build_write_body(
+            "viking://resources/demo.md",
+            "updated",
+            "replace",
+            true,
+            None,
+            "semantic_and_vectors",
+        );
+
+        assert!(body.get("processing_mode").is_none());
+    }
+
+    #[test]
+    fn build_write_body_keeps_vectors_only_processing_mode() {
+        let body = HttpClient::build_write_body(
+            "viking://resources/demo.md",
+            "updated",
+            "replace",
+            true,
+            None,
+            "vectors_only",
+        );
+
+        assert_eq!(body["processing_mode"], "vectors_only");
     }
 
     #[tokio::test]

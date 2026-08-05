@@ -1123,18 +1123,22 @@ class AsyncHTTPClient:
         wait: bool = False,
         timeout: Optional[float] = None,
         telemetry: Any = False,
+        processing_mode: Optional[str] = None,
     ) -> Dict[str, Any]:
+        payload = {
+            "uri": VikingURI.normalize(uri),
+            "content": content,
+            "mode": mode,
+            "wait": wait,
+            "timeout": timeout,
+            "telemetry": telemetry,
+        }
+        if processing_mode is not None:
+            payload["processing_mode"] = processing_mode
         response = await self._request(
             "POST",
             "/api/v1/content/write",
-            json={
-                "uri": VikingURI.normalize(uri),
-                "content": content,
-                "mode": mode,
-                "wait": wait,
-                "timeout": timeout,
-                "telemetry": telemetry,
-            },
+            json=payload,
         )
         return self._handle_response_data(response).get("result", {})
 
@@ -2164,6 +2168,7 @@ class SyncHTTPClient:
         wait: bool = False,
         timeout: Optional[float] = None,
         telemetry: Any = False,
+        processing_mode: Optional[str] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.write(
@@ -2173,6 +2178,7 @@ class SyncHTTPClient:
                 wait=wait,
                 timeout=timeout,
                 telemetry=telemetry,
+                processing_mode=processing_mode,
             )
         )
 

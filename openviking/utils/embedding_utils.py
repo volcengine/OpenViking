@@ -23,6 +23,7 @@ from openviking.parse.parsers.media.utils import (
     MPEG_TS_PROBE_BYTES,
     is_mpeg_ts,
 )
+from openviking.parse.parsers.upload_utils import is_text_file
 from openviking.server.identity import RequestContext
 from openviking.service.task_work_index import TaskWorkRejected
 from openviking.storage.queuefs import get_queue_manager
@@ -488,13 +489,14 @@ async def vectorize_file(
     scalar_override: Optional[Dict[str, Any]] = None,
     register_request_wait: bool = False,
     ingest_options: IngestOptions | None = None,
-) -> None:
+) -> bool:
     """
     Vectorize a single file.
 
     Creates Context object for the file and enqueues it.
     The effective vectorization strategy is resolved once from either the explicit
     `use_summary` flag (code path override) or the embedding config.
+    Returns whether an embedding message was enqueued.
     """
     enqueued = False
     registered_wait_root: Optional[tuple[str, str]] = None
@@ -502,7 +504,7 @@ async def vectorize_file(
     try:
         if not ctx:
             logger.warning("No context provided for vectorization")
-            return
+            return False
 
         queue_manager = get_queue_manager()
         embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING)
@@ -535,9 +537,7 @@ async def vectorize_file(
             owner_space=owner_space_for_uri(file_path, ctx),
         )
 
-        content_type = await _resolve_resource_content_type(
-            file_path, file_name, viking_fs, ctx
-        )
+        content_type = await _resolve_resource_content_type(file_path, file_name, viking_fs, ctx)
         embedding_cfg = get_openviking_config().embedding
         configured_text_source = getattr(embedding_cfg, "text_source", "content_only")
         effective_text_source = "summary_only" if use_summary else configured_text_source
@@ -547,22 +547,25 @@ async def vectorize_file(
             context.abstract = effective_text
             context.set_vectorize(Vectorize(text=effective_text, full_text=effective_text))
         elif content_type is None:
-            # Unsupported file type: fall back to summary if available
-            if summary:
-                logger.warning(
-                    f"Unsupported file type for {file_path}, falling back to summary for vectorization"
-                )
+            full_content = ""
+            if summary or is_text_file(file_name):
                 full_content = (
                     reusable_content
                     if has_reusable_content
                     else await _read_unknown_file_text_for_fulltext(file_path, viking_fs, ctx)
                 )
+            if summary:
+                logger.warning(
+                    f"Unsupported file type for {file_path}, falling back to summary for vectorization"
+                )
                 context.set_vectorize(Vectorize(text=summary, full_text=full_content or summary))
+            elif full_content:
+                context.set_vectorize(Vectorize(text=full_content, full_text=full_content))
             else:
                 logger.warning(
                     f"Unsupported file type for {file_path} and no summary available, skipping vectorization"
                 )
-                return
+                return False
         elif content_type == ResourceContentType.TEXT:
             # Known text files use VikingFS' text read path once, then reuse that
             # content for BM25 regardless of whether embedding uses summary or raw text.
@@ -580,7 +583,7 @@ async def vectorize_file(
                     context.set_vectorize(Vectorize(text=summary, full_text=summary))
                 else:
                     logger.warning(f"No summary available for {file_path}, skipping vectorization")
-                    return
+                    return False
             else:
                 if summary and effective_text_source in {"summary_first", "summary_only"}:
                     # Use summary for vectorization, but reuse the single raw text read for BM25.
@@ -599,17 +602,17 @@ async def vectorize_file(
                 logger.debug(
                     f"Skipping image {file_path} (image unreadable and no summary available)"
                 )
-                return
+                return False
         elif summary:
             # For non-text files, use summary
             context.set_vectorize(Vectorize(text=summary, full_text=summary))
         else:
             logger.debug(f"Skipping file {file_path} (no text content or summary)")
-            return
+            return False
 
         embedding_msg = EmbeddingMsgConverter.from_context(context)
         if not embedding_msg:
-            return
+            return False
 
         _apply_scalar_overrides(embedding_msg, scalar_override)
         _apply_ingest_options(embedding_msg, ingest_options)
@@ -627,7 +630,7 @@ async def vectorize_file(
                 embedding_msg.id,
                 f"Failed to enqueue file vector for {file_path}",
             )
-            return
+            return False
         enqueued = True
         logger.debug(f"Enqueued file for vectorization: {file_path}")
 
@@ -651,6 +654,7 @@ async def vectorize_file(
     finally:
         if not enqueued:
             await _decrement_embedding_tracker(semantic_msg_id, 1)
+    return enqueued
 
 
 async def index_resource(

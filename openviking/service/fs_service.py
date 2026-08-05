@@ -584,6 +584,7 @@ class FSService:
         mode: str = "replace",
         wait: bool = False,
         timeout: Optional[float] = None,
+        processing_mode: str = "semantic_and_vectors",
     ) -> Dict[str, Any]:
         """Write to an existing file and refresh semantics/vectors."""
         uri = validate_viking_uri(uri)
@@ -596,6 +597,7 @@ class FSService:
             mode=mode,
             wait=wait,
             timeout=timeout,
+            processing_mode=processing_mode,
         )
 
     async def batch_write(

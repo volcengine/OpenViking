@@ -327,6 +327,58 @@ async def test_vectorize_unknown_text_file_embeds_summary_but_indexes_raw_conten
 
 
 @pytest.mark.asyncio
+async def test_vectorize_unknown_text_file_without_summary_indexes_raw_content(monkeypatch):
+    queue = DummyQueue()
+    raw_makefile = "build:\n\tcargo build --release\n"
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS(raw_makefile))
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
+        ),
+    )
+
+    enqueued = await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/Makefile",
+        summary_dict={"name": "Makefile", "summary": ""},
+        parent_uri="viking://user/default/resources",
+        ctx=DummyReq(),
+    )
+
+    assert enqueued is True
+    assert len(queue.items) == 1
+    msg = queue.items[0]
+    assert msg.context_data["content"] == raw_makefile
+    assert msg.message == raw_makefile
+
+
+@pytest.mark.asyncio
+async def test_vectorize_empty_content_reports_not_enqueued(monkeypatch):
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS(""))
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
+        ),
+    )
+
+    enqueued = await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/obsolete.md",
+        summary_dict={"name": "obsolete.md", "summary": ""},
+        parent_uri="viking://user/default/resources",
+        ctx=DummyReq(),
+    )
+
+    assert enqueued is False
+    assert queue.items == []
+
+
+@pytest.mark.asyncio
 async def test_vectorize_file_writes_search_tags_into_embedding_context(monkeypatch):
     queue = DummyQueue()
     monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))

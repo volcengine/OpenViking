@@ -90,6 +90,11 @@ export interface AddResourceOptions extends WaitOptions {
   tags?: string[];
   tagMode?: "replace" | "append";
 }
+/** Content write options. */
+export interface WriteOptions extends WaitOptions {
+  mode?: string;
+  processingMode?: ProcessingMode;
+}
 /** Semantic retrieval options. */
 export interface SearchOptions {
   targetUri?: TargetURI;

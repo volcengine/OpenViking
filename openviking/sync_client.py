@@ -525,6 +525,7 @@ class SyncOpenViking:
         wait: bool = False,
         timeout: Optional[float] = None,
         telemetry: TelemetryRequest = False,
+        processing_mode: str = "semantic_and_vectors",
     ) -> Dict[str, Any]:
         """Write text content to an existing file and refresh semantics/vectors."""
         return run_async(
@@ -535,6 +536,7 @@ class SyncOpenViking:
                 wait=wait,
                 timeout=timeout,
                 telemetry=telemetry,
+                processing_mode=processing_mode,
             )
         )
 

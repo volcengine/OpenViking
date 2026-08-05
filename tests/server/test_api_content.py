@@ -9,8 +9,48 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import content as content_router
-from openviking.server.routers.content import ReindexRequest, reindex
+from openviking.server.routers.content import ReindexRequest, WriteContentRequest, reindex
 from openviking_cli.session.user_id import UserIdentifier
+
+
+def test_write_content_request_accepts_processing_mode():
+    request = WriteContentRequest(
+        uri="viking://resources/demo.md",
+        content="updated",
+        processing_mode="vectors_only",
+    )
+
+    assert request.processing_mode == "vectors_only"
+
+
+def test_write_content_request_defaults_processing_mode():
+    request = WriteContentRequest(uri="viking://resources/demo.md", content="updated")
+
+    assert request.processing_mode == "semantic_and_vectors"
+
+
+async def test_write_forwards_processing_mode_to_service(monkeypatch):
+    seen = {}
+
+    async def fake_write(**kwargs):
+        seen.update(kwargs)
+        return {"uri": kwargs["uri"], "semantic_status": "skipped"}
+
+    service = SimpleNamespace(fs=SimpleNamespace(write=fake_write))
+    monkeypatch.setattr(content_router, "get_service", lambda: service)
+    ctx = RequestContext(user=UserIdentifier("account-1", "user-1"), role=Role.USER)
+
+    response = await content_router.write(
+        WriteContentRequest(
+            uri="viking://resources/demo.md",
+            content="updated",
+            processing_mode="vectors_only",
+        ),
+        ctx,
+    )
+
+    assert response["status"] == "ok"
+    assert seen["processing_mode"] == "vectors_only"
 
 
 async def _first_child_uri(client, uri: str) -> str:
