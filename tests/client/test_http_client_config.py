@@ -49,17 +49,43 @@ def test_async_http_client_loads_missing_fields_from_ovcli_config(tmp_path, monk
     )
     monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
 
+    # Explicit url wins over the configured url. The gateway token is a secret
+    # bound to its configured host, so it must NOT follow the client across a
+    # host mismatch (no token leakage to another endpoint). It is also sent
+    # only on a WWW-Authenticate challenge, never eagerly in _extra_headers.
     client = AsyncHTTPClient(url="http://explicit-host:1933")
 
     assert client._url == "http://explicit-host:1933"
     assert client._api_key == "config-key"
-    assert client._gateway_token == "gateway-secret"
-    assert client._extra_headers["X-Gateway-Token"] == "gateway-secret"
+    assert client._gateway_token is None
+    assert "X-Gateway-Token" not in client._extra_headers
     assert client._account == "config-account"
     assert client._user_id == "config-user"
     assert client._actor_peer_id == "config-actor"
     assert client._timeout == 12.5
     assert client._profile_enabled is True
+
+
+def test_async_http_client_loads_gateway_token_for_matching_config_url(tmp_path, monkeypatch):
+    """Gateway token loads from ovcli config when the effective URL matches the configured host."""
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "url": "http://config-host:1933",
+                "api_key": "config-key",
+                "gateway_token": "gateway-secret",
+            }
+        )
+    )
+    monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
+
+    client = AsyncHTTPClient()
+
+    assert client._url == "http://config-host:1933"
+    assert client._gateway_token == "gateway-secret"
+    # Challenge-only: the token is not attached to default headers.
+    assert "X-Gateway-Token" not in client._extra_headers
 
 
 def test_async_http_client_explicit_values_override_ovcli_config(tmp_path, monkeypatch):
