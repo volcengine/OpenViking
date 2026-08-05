@@ -465,10 +465,9 @@ class SessionMeta:
     # Timestamp of the most recent add_message, used by the idle scan to decide
     # whether an idle-timeout commit is due.
     last_message_at: str = ""
-    # Best-effort auto-commit success/error bookkeeping surfaced via session GET.
+    # Timestamp of the most recent successful auto-commit, surfaced via session
+    # GET and used to throttle auto-commit frequency.
     last_auto_commit_at: str = ""
-    auto_commit_last_error: str = ""
-    auto_commit_last_error_at: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         data = {
@@ -495,8 +494,6 @@ class SessionMeta:
             ),
             "last_message_at": self.last_message_at,
             "last_auto_commit_at": self.last_auto_commit_at,
-            "auto_commit_last_error": self.auto_commit_last_error,
-            "auto_commit_last_error_at": self.auto_commit_last_error_at,
         }
         if self.total_message_count is not None:
             data["total_message_count"] = self.total_message_count
@@ -549,8 +546,6 @@ class SessionMeta:
             auto_commit_policy=data.get("auto_commit_policy"),
             last_message_at=data.get("last_message_at", ""),
             last_auto_commit_at=data.get("last_auto_commit_at", ""),
-            auto_commit_last_error=data.get("auto_commit_last_error", ""),
-            auto_commit_last_error_at=data.get("auto_commit_last_error_at", ""),
         )
 
 
@@ -665,9 +660,12 @@ class Session:
             if not _is_storage_not_found(exc):
                 raise
             # Old session without meta — derive from existing data
-            self._meta.message_count = len(self._messages)
             self._meta.commit_count = self._compression.compression_index
             self._meta.total_message_count = None
+
+        # message_count mirrors the live message list, maintained by every write
+        # path. Recompute on load so a stale persisted value can't drift.
+        self._meta.message_count = len(self._messages)
 
         if not self._meta.created_by_account_id:
             self._meta.created_by_account_id = self.ctx.account_id
@@ -1755,16 +1753,6 @@ class Session:
 
         trace_id = tracer.get_trace_id()
         keep_recent_count = max(0, int(keep_recent_count or 0))
-        # keep_recent_count controls how many live messages survive this commit.
-        # stored_keep_recent_count is what we persist for future add_message
-        # accounting: the idle full-commit path archives everything once
-        # (keep_recent_count=0) without discarding the caller's stored keep
-        # preference.
-        stored_keep_recent_count = (
-            keep_recent_count
-            if persist_keep_recent_count
-            else max(0, int(self._meta.keep_recent_count or 0))
-        )
         if retention_mode not in (None, RETENTION_MODE_TURN_BUDGET):
             raise ValueError(f"Unsupported retention_mode: {retention_mode}")
         if retention_mode is None and any(
@@ -1845,6 +1833,18 @@ class Session:
                 # The root JSONL remains authoritative for message correctness;
                 # legacy sessions may not have metadata yet.
                 pass
+
+            # keep_recent_count controls how many live messages survive this
+            # commit. stored_keep_recent_count is what we persist for future
+            # add_message accounting: the idle full-commit path archives
+            # everything once (keep_recent_count=0) without discarding the
+            # caller's stored keep preference. Read it from the freshly reloaded
+            # meta so a concurrent manual commit's value is not reverted.
+            stored_keep_recent_count = (
+                keep_recent_count
+                if persist_keep_recent_count
+                else max(0, int(self._meta.keep_recent_count or 0))
+            )
 
             # A Session object may have been loaded by another worker before a
             # different worker updated the persisted default policy. Phase 2
@@ -2045,11 +2045,9 @@ class Session:
                 )
                 self._meta.last_commit_at = get_current_timestamp()
                 if record_auto_commit_success:
-                    # Clear the last error and stamp success in the same
-                    # lock-protected meta write as the commit boundary, so an
-                    # idle scan and a concurrent worker never see a stale error.
-                    self._meta.auto_commit_last_error = ""
-                    self._meta.auto_commit_last_error_at = ""
+                    # Stamp success in the same lock-protected meta write as the
+                    # commit boundary, so an idle scan and a concurrent worker
+                    # never see a stale state.
                     self._meta.last_auto_commit_at = get_current_timestamp()
                 await self._save_meta(lease_ref=lease)
                 await self._write_phase1_ready_marker(archive_uri, lease_ref=lease)
@@ -3973,8 +3971,6 @@ class Session:
             if record_auto_commit_success:
                 # Mirror the Phase 1 success stamp so the persisted meta reflects
                 # a clean auto-commit even after Phase 2 reloads the latest meta.
-                latest_meta.auto_commit_last_error = ""
-                latest_meta.auto_commit_last_error_at = ""
                 latest_meta.last_auto_commit_at = get_current_timestamp()
             self._meta = latest_meta
             await self._save_meta(lease_ref=lease)

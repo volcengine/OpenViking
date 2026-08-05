@@ -34,7 +34,7 @@ from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory_policy import MemoryPolicy
 from openviking.storage.viking_fs import VikingFS
 from openviking.storage.vikingdb_manager import VikingDBManager
-from openviking.utils.time_utils import get_current_timestamp, parse_iso_datetime
+from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import (
     AlreadyExistsError,
     NotFoundError,
@@ -550,15 +550,6 @@ class SessionService:
                 )
         except Exception as exc:
             logger.warning("Automatic session commit failed for %s: %s", session_id, exc)
-            try:
-                session = await self.get(session_id, ctx, auto_create=False)
-                session.meta.auto_commit_last_error = str(exc)
-                session.meta.auto_commit_last_error_at = get_current_timestamp()
-                await session._save_meta()
-            except Exception:
-                logger.debug(
-                    "Failed to persist auto-commit error for %s", session_id, exc_info=True
-                )
         finally:
             async with self._auto_commit_inflight_lock:
                 self._auto_commit_inflight.discard(claim)
@@ -605,6 +596,8 @@ class SessionService:
                 return False
             idle_timeout = get_idle_timeout_seconds(policy)
             if idle_timeout is None or not has_idle_uncommitted_content(session.meta.to_dict()):
+                return False
+            if self._within_min_commit_interval(session, policy):
                 return False
             next_check_at = compute_next_check_at(session.meta.last_message_at, idle_timeout)
             if not next_check_at:

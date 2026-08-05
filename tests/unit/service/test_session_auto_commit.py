@@ -167,8 +167,6 @@ class _FakeSessionMeta:
         self.keep_recent_count = keep_recent_count
         self.last_message_at = last_message_at
         self.last_auto_commit_at = last_auto_commit_at
-        self.auto_commit_last_error = ""
-        self.auto_commit_last_error_at = ""
 
     def to_dict(self) -> dict:
         return {

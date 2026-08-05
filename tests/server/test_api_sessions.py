@@ -486,9 +486,9 @@ async def test_add_message_records_last_message_at_with_single_meta_save(
     save_session_ids = []
     original_save_meta = Session._save_meta
 
-    async def counting_save_meta(self):
+    async def counting_save_meta(self, *args, **kwargs):
         save_session_ids.append(self.session_id)
-        await original_save_meta(self)
+        await original_save_meta(self, *args, **kwargs)
 
     monkeypatch.setattr(Session, "_save_meta", counting_save_meta)
 
