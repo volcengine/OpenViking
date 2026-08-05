@@ -9,7 +9,7 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import NotFoundError
+from openviking_cli.exceptions import NotFoundError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -107,6 +107,58 @@ class FakeAGFS:
             }
         return list(children.values())
 
+    def tree_directory(
+        self,
+        path,
+        *,
+        show_hidden=False,
+        node_limit=None,
+        level_limit=None,
+        ctx=None,
+    ):
+        del show_hidden, node_limit, level_limit, ctx
+        base = path.rstrip("/") or "/"
+        entries = []
+        for dir_path in sorted(self.dirs):
+            if dir_path in {"/", base} or not dir_path.startswith(base + "/"):
+                continue
+            rel_path = dir_path[len(base) + 1 :]
+            name = rel_path.rsplit("/", 1)[-1]
+            entries.append(
+                {
+                    "path": dir_path,
+                    "rel_path": rel_path,
+                    "info": {
+                        "name": name,
+                        "size": 0,
+                        "mode": 0o40755,
+                        "modTime": datetime.now(timezone.utc).isoformat(),
+                        "isDir": True,
+                    },
+                    "extra": {},
+                }
+            )
+        for file_path, content in sorted(self.files.items()):
+            if not file_path.startswith(base + "/"):
+                continue
+            rel_path = file_path[len(base) + 1 :]
+            name = rel_path.rsplit("/", 1)[-1]
+            entries.append(
+                {
+                    "path": file_path,
+                    "rel_path": rel_path,
+                    "info": {
+                        "name": name,
+                        "size": len(content),
+                        "mode": 0o100644,
+                        "modTime": datetime.now(timezone.utc).isoformat(),
+                        "isDir": False,
+                    },
+                    "extra": {},
+                }
+            )
+        return entries
+
 
 @pytest.fixture
 def viking_fs():
@@ -132,10 +184,10 @@ async def test_temp_scope_isolated_between_users_in_same_account(viking_fs):
 
     assert (await viking_fs.read(secret_uri, ctx=owner_ctx)).decode("utf-8") == "owner secret"
 
-    with pytest.raises(PermissionError):
+    with pytest.raises(PermissionDeniedError):
         await viking_fs.read(secret_uri, ctx=other_ctx)
 
-    with pytest.raises(PermissionError):
+    with pytest.raises(PermissionDeniedError):
         await viking_fs.write(secret_uri, "tampered", ctx=other_ctx)
 
 
@@ -157,7 +209,7 @@ async def test_temp_scope_user_id_matching_legacy_pattern_stays_isolated(viking_
     await viking_fs.write(secret_uri, "owner secret", ctx=owner_ctx)
 
     assert temp_uri.startswith("viking://temp/04011234_abcdef/")
-    with pytest.raises(PermissionError):
+    with pytest.raises(PermissionDeniedError):
         await viking_fs.read(secret_uri, ctx=other_ctx)
 
 
@@ -201,10 +253,10 @@ async def test_temp_root_destructive_operations_are_blocked_for_non_root_users(v
         role=Role.USER,
     )
 
-    with pytest.raises(PermissionError):
+    with pytest.raises(PermissionDeniedError):
         await viking_fs.rm("viking://temp", recursive=True, ctx=alice_ctx)
 
-    with pytest.raises(PermissionError):
+    with pytest.raises(PermissionDeniedError):
         await viking_fs.delete_temp("viking://temp", ctx=alice_ctx)
 
 
@@ -308,7 +360,7 @@ async def test_non_root_cannot_delete_temp_root_recursively(viking_fs):
     await viking_fs.mkdir(bob_temp_uri, exist_ok=True, ctx=bob_ctx)
     await viking_fs.write(bob_secret_uri, "bob secret", ctx=bob_ctx)
 
-    with pytest.raises(PermissionError):
+    with pytest.raises(PermissionDeniedError):
         await viking_fs.rm("viking://temp", recursive=True, ctx=alice_ctx)
 
     assert (await viking_fs.read(bob_secret_uri, ctx=bob_ctx)).decode("utf-8") == "bob secret"
