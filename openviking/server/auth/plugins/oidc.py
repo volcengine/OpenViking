@@ -12,7 +12,7 @@ import asyncio
 import logging
 import re
 import sys
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, TYPE_CHECKING
 
 from fastapi import Request
 
@@ -22,6 +22,9 @@ from openviking.server.auth.plugin import AuthPlugin
 from openviking.server.identity import ResolvedIdentity, Role
 from openviking_cli.exceptions import UnauthenticatedError
 
+if TYPE_CHECKING:
+    from jose.backends.base import Key
+
 logger = logging.getLogger(__name__)
 
 # Characters allowed in OpenViking user/account identifiers. Any character
@@ -29,20 +32,22 @@ logger = logging.getLogger(__name__)
 # "_" during identity mapping.
 _ALLOWED_IDENTIFIER_CHARS = re.compile(r"[^a-zA-Z0-9_.@-]")
 
-# Try to import JWT libraries, provide helpful error if missing
-try:
-    import httpx
-    from jose import JWTError, jwk, jwt
-    from jose.backends.base import Key
-    from jose.exceptions import ExpiredSignatureError, JWTClaimsError
-
-    JWT_AVAILABLE = True
-except ImportError:
-    JWT_AVAILABLE = False
-    logger.warning(
-        "JWT libraries not available. OIDC authentication will not work. "
-        "Install with: uv pip install python-jose[cryptography] httpx"
-    )
+def _check_jwt_available() -> bool:
+    """Lazy check for JWT library availability (cached after first call)."""
+    if not hasattr(_check_jwt_available, "_cached"):
+        try:
+            import httpx  # noqa: F401
+            from jose import JWTError, jwk, jwt  # noqa: F401
+            from jose.backends.base import Key  # noqa: F401
+            from jose.exceptions import ExpiredSignatureError, JWTClaimsError  # noqa: F401
+            _check_jwt_available._cached = True
+        except ImportError:
+            logger.warning(
+                "JWT libraries not available. OIDC authentication will not work. "
+                "Install with: uv pip install python-jose[cryptography] httpx"
+            )
+            _check_jwt_available._cached = False
+    return _check_jwt_available._cached
 
 
 # Supported signing algorithms. Asymmetric algorithms are preferred for OIDC;
@@ -83,7 +88,7 @@ class OIDCAuthPlugin(AuthPlugin):
         x_openviking_user: Optional[str] = None,
     ) -> ResolvedIdentity:
         """Resolve identity from OIDC JWT token."""
-        if not JWT_AVAILABLE:
+        if not _check_jwt_available():
             raise UnauthenticatedError(
                 "OIDC authentication not available: missing python-jose and httpx"
             )
