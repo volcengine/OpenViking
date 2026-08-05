@@ -134,7 +134,6 @@ def load_ovcli_config(config_path: Optional[str] = None) -> Optional[OVCLIConfig
         # Accept every field it can write, including the ones the SDK does not
         # read, plus the `plugin` section the harness memory plugins own.
         allowed_keys = {
-        allowed_keys = {
             "url",
             "api_key",
             "account",
