@@ -152,6 +152,32 @@
 1. `backend`: 填写 Adapter 类的完整 Python 路径（例如 `my_project.adapters.MyAdapter`）。
 2. `custom_params`: 这是一个字典，你可以放入任何自定义参数，Adapter 的 `from_config` 方法可以通过 `config.custom_params` 获取这些值。
 
+内置 Milvus 后端可直接使用 registry 名称，并通过 `milvus` 配置块传递连接信息：
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "backend": "milvus",
+      "name": "context",
+      "project": "default",
+      "distance_metric": "cosine",
+      "dimension": 1024,
+      "milvus": {
+        "uri": "./milvus.db",
+        "token": null,
+        "db_name": null,
+        "consistency_level": "Session"
+      }
+    }
+  }
+}
+```
+
+`uri` 默认为 Milvus Lite 本地文件；也可以设置为自建 Milvus 服务
+（如 `http://localhost:19530`）或 Zilliz Cloud endpoint，认证统一使用
+`token` 字段。
+
 
 
 ---
@@ -175,6 +201,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from openviking.storage.vectordb_adapters.base import CollectionAdapter
+
 
 class ThirdPartyCollectionAdapter(CollectionAdapter):
     def __init__(self, *, endpoint: str, token: str, collection_name: str):
