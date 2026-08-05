@@ -219,7 +219,7 @@ class TestPageIdInstruction:
             ) as mock_create_model,
         ):
             mock_config.return_value = SimpleNamespace(memory=SimpleNamespace(link_enabled=False))
-            mock_create_model.return_value = SimpleNamespace(model_json_schema=lambda: {})
+            mock_create_model.return_value = SimpleNamespace(model_fields={}, model_json_schema=lambda: {})
 
             await loop.run()
 
@@ -298,7 +298,7 @@ class TestPageIdInstruction:
             ) as mock_create_model,
         ):
             mock_config.return_value = SimpleNamespace(memory=SimpleNamespace(link_enabled=True))
-            mock_create_model.return_value = SimpleNamespace(model_json_schema=lambda: {})
+            mock_create_model.return_value = SimpleNamespace(model_fields={}, model_json_schema=lambda: {})
 
             await loop.run()
 
@@ -364,7 +364,7 @@ class TestFinalOperationsHydration:
             patch("openviking.session.memory.extract_loop.tracer.info") as mock_tracer_info,
         ):
             mock_config.return_value = SimpleNamespace(memory=SimpleNamespace(link_enabled=False))
-            mock_create_model.return_value = SimpleNamespace(model_json_schema=lambda: {})
+            mock_create_model.return_value = SimpleNamespace(model_fields={}, model_json_schema=lambda: {})
 
             final_operations, _ = await loop.run()
 
