@@ -63,8 +63,9 @@ def test_async_http_client_zip_directory_warns_when_archive_is_empty(tmp_path):
         pytest.skip(f"symlinks are not available in this environment: {exc}")
 
     client = AsyncHTTPClient(url="http://localhost:1933")
-    with patch.object(http_module.logger, "warning") as mock_warning:
-        zip_path = Path(client._zip_directory(str(root)))
+    # Only an out-of-root symlink is present, so nothing is archived. The SDK
+    # zip helper no longer logs here; assert the resulting archive is empty.
+    zip_path = Path(client._zip_directory(str(root)))
     try:
         with zipfile.ZipFile(zip_path) as zipf:
             names = sorted(zipf.namelist())
@@ -72,10 +73,7 @@ def test_async_http_client_zip_directory_warns_when_archive_is_empty(tmp_path):
         zip_path.unlink(missing_ok=True)
 
     assert names == []
-    mock_warning.assert_called_once_with(
-        "Created empty directory upload archive for %s",
-        root,
-    )
+    assert not zip_path.exists()
 
 
 async def test_async_openviking_reindex_forwards_to_local_client(tmp_path):
@@ -294,6 +292,11 @@ async def test_local_client_batch_add_messages_forwards_to_session():
             assert auto_create is True
             return fake_session
 
+        async def maybe_schedule_auto_commit(
+            self, session_id, ctx, *, reason_hint=None, session=None
+        ):
+            return None
+
     client = LocalClient.__new__(LocalClient)
     client._service = SimpleNamespace(sessions=FakeSessions())
     client._ctx = SimpleNamespace(user=SimpleNamespace(user_id="user-1"))
@@ -352,6 +355,11 @@ async def test_local_client_add_message_accepts_image_parts():
             assert ctx is client._ctx
             assert auto_create is True
             return fake_session
+
+        async def maybe_schedule_auto_commit(
+            self, session_id, ctx, *, reason_hint=None, session=None
+        ):
+            return None
 
     client = LocalClient.__new__(LocalClient)
     client._service = SimpleNamespace(sessions=FakeSessions())
@@ -498,17 +506,18 @@ def test_sync_http_client_batch_add_messages_forwards_to_async_client():
     with patch.object(
         client._async_client,
         "batch_add_messages",
+        new_callable=Mock,
         return_value={"session_id": "batch-session", "message_count": 2, "added": 2},
     ) as mock_batch:
         with patch(
-            "openviking_cli.client.sync_http.run_async",
+            "openviking_sdk.client.run_async",
             return_value={"session_id": "batch-session", "message_count": 2, "added": 2},
         ) as mock_run:
             result = client.batch_add_messages("batch-session", messages)
 
     assert result == {"session_id": "batch-session", "message_count": 2, "added": 2}
     assert mock_run.called
-    mock_batch.assert_called_once_with("batch-session", messages, False)
+    mock_batch.assert_called_once_with("batch-session", messages)
 
 
 def test_run_async_from_foreign_event_loop_uses_shared_background_loop():
