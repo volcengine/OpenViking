@@ -9,8 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from openviking_cli.utils.config import GitConfig, GitLocalConfig
 from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
+from openviking_cli.utils.config import GitConfig, GitLocalConfig
 
 
 class _FakeAgfsConfig:
@@ -22,6 +22,8 @@ class _FakeAgfsConfig:
         self.s3 = None
         # cache section consumed by RagfsBindingConfig.to_binding_dict()
         self.cache = SimpleNamespace(model_dump=lambda **kwargs: {})
+        # pathlock section consumed by RagfsBindingConfig.to_binding_dict()
+        self.pathlock = SimpleNamespace(model_dump=lambda **kwargs: {})
         # queuefs default
         self.queuefs = SimpleNamespace(
             backend="sqlite", recover_stale_sec=0, busy_timeout_ms=5000, db_path=None
