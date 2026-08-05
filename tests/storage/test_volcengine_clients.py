@@ -253,6 +253,7 @@ def test_volcengine_collection_update_data_posts_to_update_endpoint(monkeypatch)
         "project": "default",
         "collection_name": "context",
         "data": [{"id": "doc-1", "name": "updated"}],
+        "ignore_unknown_fields": True,
     }
 
 
@@ -290,6 +291,7 @@ def test_volcengine_collection_update_data_sanitizes_uri_fields(monkeypatch):
         "project": "default",
         "collection_name": "context",
         "data": [{"id": "doc-1", "uri": "/resources/demo", "parent_uri": "/resources"}],
+        "ignore_unknown_fields": True,
     }
 
 
@@ -331,6 +333,7 @@ def test_volcengine_api_key_collection_update_data_posts_to_update_endpoint(monk
         "project": "default",
         "collection_name": "context",
         "data": [{"id": "doc-1", "name": "updated"}],
+        "ignore_unknown_fields": True,
     }
 
 
@@ -370,6 +373,7 @@ def test_volcengine_api_key_collection_update_data_sanitizes_uri_fields(monkeypa
         "project": "default",
         "collection_name": "context",
         "data": [{"id": "doc-1", "uri": "/resources/demo", "parent_uri": "/resources"}],
+        "ignore_unknown_fields": True,
     }
 
 
