@@ -178,9 +178,11 @@ class TestObserverService:
     @patch("openviking.service.debug_service.ModelsObserver")
     def test_models_property(self, mock_observer_cls):
         """Test models property returns ComponentStatus."""
-        mock_config = MagicMock(spec=["vlm"])  # Only allow vlm attribute
+        mock_config = MagicMock(spec=["vlm", "embedding", "rerank"])
         mock_vlm_instance = MagicMock()
         mock_config.vlm.get_vlm_instance.return_value = mock_vlm_instance
+        mock_config.embedding = None
+        mock_config.rerank = None
 
         mock_observer = MagicMock()
         mock_observer.is_healthy.return_value = True
@@ -243,8 +245,10 @@ class TestObserverService:
             "conflicts": [],
         }
 
-        mock_config = MagicMock(spec=["vlm"])  # Only allow vlm attribute
+        mock_config = MagicMock(spec=["vlm", "embedding", "rerank"])  # Only allow known attributes
         mock_config.vlm.get_vlm_instance.return_value = MagicMock()
+        mock_config.embedding = None
+        mock_config.rerank = None
         service = ObserverService(vikingdb=MagicMock(), config=mock_config)
         status = service.system()
 
@@ -310,8 +314,10 @@ class TestObserverService:
             "conflicts": [],
         }
 
-        mock_config = MagicMock(spec=["vlm"])  # Only allow vlm attribute
+        mock_config = MagicMock(spec=["vlm", "embedding", "rerank"])  # Only allow known attributes
         mock_config.vlm.get_vlm_instance.return_value = MagicMock()
+        mock_config.embedding = None
+        mock_config.rerank = None
         service = ObserverService(vikingdb=MagicMock(), config=mock_config)
         status = service.system()
 
@@ -354,8 +360,10 @@ class TestObserverService:
             "conflicts": [],
         }
 
-        mock_config = MagicMock(spec=["vlm"])
+        mock_config = MagicMock(spec=["vlm", "embedding", "rerank"])
         mock_config.vlm.get_vlm_instance.return_value = MagicMock()
+        mock_config.embedding = None
+        mock_config.rerank = None
         service = ObserverService(vikingdb=MagicMock(), config=mock_config)
         status = service.system()
         assert all(c.is_healthy for name, c in status.components.items() if name != "transaction")
@@ -415,8 +423,10 @@ class TestObserverService:
             mock_observer.get_status_table.return_value = "OK"
             mock_cls.return_value = mock_observer
 
-        mock_config = MagicMock(spec=["vlm"])  # Only allow vlm attribute
+        mock_config = MagicMock(spec=["vlm", "embedding", "rerank"])  # Only allow known attributes
         mock_config.vlm.get_vlm_instance.return_value = MagicMock()
+        mock_config.embedding = None
+        mock_config.rerank = None
         service = ObserverService(vikingdb=MagicMock(), config=mock_config)
         assert service.is_healthy() is False
 
