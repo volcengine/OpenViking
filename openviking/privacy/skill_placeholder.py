@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Placeholder helpers for skill privacy values."""
 
+import re
 from dataclasses import dataclass, field
 
 
@@ -18,27 +19,21 @@ def build_placeholder(skill_name: str, field_name: str) -> str:
 
 
 def _replace_structured_value(content: str, raw_value: str, placeholder: str) -> tuple[str, bool]:
-    replacements = (
-        (f'"{raw_value}"', f'"{placeholder}"'),
-        (f"'{raw_value}'", f"'{placeholder}'"),
-        (f": {raw_value}\n", f": {placeholder}\n"),
-        (f": {raw_value}\r\n", f": {placeholder}\r\n"),
-        (f":{raw_value}\n", f":{placeholder}\n"),
-        (f":{raw_value}\r\n", f":{placeholder}\r\n"),
-        (f": {raw_value}", f": {placeholder}"),
-        (f":{raw_value}", f":{placeholder}"),
-        (f"= {raw_value}\n", f"= {placeholder}\n"),
-        (f"= {raw_value}\r\n", f"= {placeholder}\r\n"),
-        (f"={raw_value}\n", f"={placeholder}\n"),
-        (f"={raw_value}\r\n", f"={placeholder}\r\n"),
-        (f"= {raw_value}", f"= {placeholder}"),
-        (f"={raw_value}", f"={placeholder}"),
+    escaped = re.escape(raw_value)
+    # A bare assignment (``key: value`` or ``key=value``) is only treated as
+    # structured when the value runs to end of line, so prose occurrences such
+    # as ``text: prod should stay here`` are not over-redacted. The original
+    # separator and spacing are preserved.
+    patterns = (
+        (f'"{escaped}"', f'"{placeholder}"'),
+        (f"'{escaped}'", f"'{placeholder}'"),
+        (rf"(:|=)([ \t]*){escaped}$", rf"\1\g<2>{placeholder}"),
     )
 
     replaced = False
-    for old, new in replacements:
-        if old in content:
-            content = content.replace(old, new)
+    for pattern, replacement in patterns:
+        content, count = re.subn(pattern, replacement, content, flags=re.MULTILINE)
+        if count:
             replaced = True
     return content, replaced
 

@@ -280,3 +280,19 @@ def test_placeholderization_replaces_all_structured_occurrences_for_same_value()
         'api_key: "{{ov_privacy:skill:multi-hit-skill:api_key}}"\n'
         "backup={{ov_privacy:skill:multi-hit-skill:api_key}}\n"
     )
+
+
+def test_placeholderization_does_not_replace_value_in_prose():
+    result = placeholderize_skill_content_with_blocks(
+        "region: cn\nnotes: region is cn in docs\ndefault_env=prod\ntext: prod stays here\n",
+        "prose-skill",
+        {"region": "cn", "env": "prod"},
+    )
+
+    assert result.replaced_values == {"region": "cn", "env": "prod"}
+    assert result.sanitized_content == (
+        "region: {{ov_privacy:skill:prose-skill:region}}\n"
+        "notes: region is cn in docs\n"
+        "default_env={{ov_privacy:skill:prose-skill:env}}\n"
+        "text: prod stays here\n"
+    )
