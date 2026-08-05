@@ -584,6 +584,8 @@ class FSService:
         mode: str = "replace",
         wait: bool = False,
         timeout: Optional[float] = None,
+        tags: Optional[list[str]] = None,
+        tag_mode: str = "replace",
     ) -> Dict[str, Any]:
         """Write to an existing file and refresh semantics/vectors."""
         uri = validate_viking_uri(uri)
@@ -596,6 +598,8 @@ class FSService:
             mode=mode,
             wait=wait,
             timeout=timeout,
+            tags=tags,
+            tag_mode=tag_mode,
         )
 
     async def batch_write(

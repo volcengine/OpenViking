@@ -44,6 +44,8 @@ class WriteContentRequest(BaseModel):
     mode: str = "replace"
     wait: bool = False
     timeout: float | None = None
+    tags: list[str] | None = None
+    tag_mode: str = "replace"
     telemetry: TelemetryRequest = False
 
 
@@ -257,6 +259,8 @@ async def write(
             mode=request.mode,
             wait=request.wait,
             timeout=request.timeout,
+            tags=request.tags,
+            tag_mode=request.tag_mode,
         ),
     )
     return Response(

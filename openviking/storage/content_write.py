@@ -34,6 +34,7 @@ from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import build_queue_status_payload
+from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.path_safety import validate_safe_viking_uri_path
 from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import (
@@ -86,6 +87,8 @@ class ContentWriteCoordinator:
         mode: str = "replace",
         wait: bool = False,
         timeout: Optional[float] = None,
+        tags: Optional[list[str]] = None,
+        tag_mode: str = "replace",
     ) -> Dict[str, Any]:
         try:
             normalized_uri = canonicalize_uri(uri, ctx)
@@ -95,6 +98,13 @@ class ContentWriteCoordinator:
         self._validate_target_uri(normalized_uri)
         self._viking_fs._ensure_mutable_access(normalized_uri, ctx)
 
+        ingest_options: Optional[IngestOptions] = None
+        if tags is not None:
+            if context_type_for_uri(normalized_uri) == "memory":
+                raise InvalidArgumentError("tags are not supported for memory writes")
+            self._validate_tag_mode(tag_mode)
+            ingest_options = IngestOptions.from_search_tags(tags, mode=tag_mode)
+
         if mode == "create":
             return await self._create_and_write(
                 uri=normalized_uri,
@@ -102,6 +112,7 @@ class ContentWriteCoordinator:
                 ctx=ctx,
                 wait=wait,
                 timeout=timeout,
+                ingest_options=ingest_options,
             )
 
         stat = await self._safe_stat(normalized_uri, ctx=ctx)
@@ -137,6 +148,7 @@ class ContentWriteCoordinator:
             ctx=ctx,
             written_bytes=written_bytes,
             telemetry_id=telemetry_id,
+            ingest_options=ingest_options,
         )
 
     async def batch_write(
@@ -509,6 +521,7 @@ class ContentWriteCoordinator:
         ctx: RequestContext,
         target_uri: str = "",
         recursive: bool = False,
+        ingest_options: Optional[IngestOptions] = None,
     ) -> None:
         queue_manager = get_queue_manager()
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
@@ -523,6 +536,7 @@ class ContentWriteCoordinator:
             role=str(ctx.role),
             skip_vectorization=False,
             telemetry_id=telemetry.telemetry_id,
+            ingest_options=ingest_options,
             coalesce_key=(
                 build_semantic_coalesce_key(
                     context_type=context_type,
@@ -692,6 +706,7 @@ class ContentWriteCoordinator:
         ctx: RequestContext,
         written_bytes: int,
         telemetry_id: str,
+        ingest_options: Optional[IngestOptions] = None,
     ) -> Dict[str, Any]:
         lock_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
         try:
@@ -719,6 +734,7 @@ class ContentWriteCoordinator:
                 context_type=context_type,
                 ctx=ctx,
                 change_type="added" if mode == "create" else "modified",
+                ingest_options=ingest_options,
             )
             semantic_enqueued = True
             await self._viking_fs._async_agfs.pathlock_release(lease)
@@ -834,6 +850,7 @@ class ContentWriteCoordinator:
         ctx: RequestContext,
         wait: bool,
         timeout: Optional[float],
+        ingest_options: Optional[IngestOptions] = None,
     ) -> Dict[str, Any]:
         self._validate_create_extension(uri)
 
@@ -872,6 +889,7 @@ class ContentWriteCoordinator:
             ctx=ctx,
             written_bytes=written_bytes,
             telemetry_id=telemetry_id,
+            ingest_options=ingest_options,
         )
 
     async def _write_in_place(
@@ -922,6 +940,7 @@ class ContentWriteCoordinator:
         change_type: str = "modified",
         target_uri: str = "",
         recursive: bool = False,
+        ingest_options: Optional[IngestOptions] = None,
     ) -> None:
         await self._enqueue_semantic_refresh_changes(
             root_uri=root_uri,
@@ -930,6 +949,7 @@ class ContentWriteCoordinator:
             changes={change_type: [changed_uri]},
             target_uri=target_uri,
             recursive=recursive,
+            ingest_options=ingest_options,
         )
 
     async def _wait_for_queues(self, *, timeout: Optional[float]) -> Dict[str, Any]:

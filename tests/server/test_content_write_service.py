@@ -1545,3 +1545,121 @@ async def test_set_tags_does_not_return_write_queue_fields(monkeypatch):
     assert "semantic_status" not in result
     assert "vector_status" not in result
     assert "queue_status" not in result
+
+
+@pytest.mark.asyncio
+async def test_resource_write_tags_thread_into_semantic_msg(monkeypatch):
+    file_uri = "viking://resources/demo/doc.md"
+    root_uri = "viking://resources/demo"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    viking_fs = _FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
+    coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+    queue = _FakeSemanticQueue()
+
+    monkeypatch.setattr(
+        "openviking.storage.content_write.get_queue_manager",
+        lambda: _FakeQueueManager(queue),
+    )
+
+    result = await coordinator.write(
+        uri=file_uri,
+        content="updated",
+        ctx=ctx,
+        mode="replace",
+        tags=["Team=Search", " env=test "],
+        tag_mode="append",
+    )
+
+    assert result["content_updated"] is True
+    assert len(queue.messages) == 1
+    msg = queue.messages[0]
+    assert msg.ingest_options.search_tags == ["team=search", "env=test"]
+    assert msg.ingest_options.search_tag_mode == "append"
+
+
+@pytest.mark.asyncio
+async def test_resource_write_without_tags_keeps_default_ingest_options(monkeypatch):
+    file_uri = "viking://resources/demo/doc.md"
+    root_uri = "viking://resources/demo"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    viking_fs = _FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
+    coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+    queue = _FakeSemanticQueue()
+
+    monkeypatch.setattr(
+        "openviking.storage.content_write.get_queue_manager",
+        lambda: _FakeQueueManager(queue),
+    )
+
+    await coordinator.write(
+        uri=file_uri,
+        content="updated",
+        ctx=ctx,
+        mode="replace",
+    )
+
+    assert len(queue.messages) == 1
+    assert queue.messages[0].ingest_options.search_tags is None
+    assert queue.messages[0].ingest_options.search_tag_mode == "replace"
+
+
+@pytest.mark.asyncio
+async def test_resource_write_rejects_invalid_tag_mode():
+    file_uri = "viking://resources/demo/doc.md"
+    root_uri = "viking://resources/demo"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    viking_fs = _FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
+    coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+
+    with pytest.raises(InvalidArgumentError, match="unsupported tag mode"):
+        await coordinator.write(
+            uri=file_uri,
+            content="updated",
+            ctx=ctx,
+            mode="replace",
+            tags=["env=prod"],
+            tag_mode="merge",
+        )
+
+    assert viking_fs.content[file_uri] == "original"
+    assert viking_fs.write_file_calls == []
+
+
+@pytest.mark.asyncio
+async def test_resource_write_rejects_malformed_tag():
+    file_uri = "viking://resources/demo/doc.md"
+    root_uri = "viking://resources/demo"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    viking_fs = _FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
+    coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+
+    with pytest.raises(InvalidArgumentError, match="expected strict k=v"):
+        await coordinator.write(
+            uri=file_uri,
+            content="updated",
+            ctx=ctx,
+            mode="replace",
+            tags=["no-equals-sign"],
+        )
+
+    assert viking_fs.write_file_calls == []
+
+
+@pytest.mark.asyncio
+async def test_memory_write_rejects_tags():
+    file_uri = "viking://user/default/memories/preferences/theme.md"
+    root_uri = "viking://user/default/memories/preferences"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    viking_fs = _FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
+    coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+
+    with pytest.raises(InvalidArgumentError, match="not supported for memory writes"):
+        await coordinator.write(
+            uri=file_uri,
+            content="updated",
+            ctx=ctx,
+            mode="replace",
+            tags=["env=prod"],
+        )
+
+    assert viking_fs.write_file_calls == []

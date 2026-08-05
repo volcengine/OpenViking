@@ -595,6 +595,21 @@ class SemanticDagExecutor:
         prefix = uri.rstrip("/") + "/"
         return any(path.startswith(prefix) for path in self._changed_paths)
 
+    def _file_ingest_options(self, file_path: str) -> IngestOptions:
+        """Full-tree runs tag every generated record; changes-scoped runs
+        (content writes, incremental refreshes) tag only the changed files."""
+        if not self._changed_paths or file_path in self._changed_paths:
+            return self._ingest_options
+        return IngestOptions()
+
+    def _directory_ingest_options(self) -> IngestOptions:
+        """Directory L0/L1 records summarize sibling files, so per-file tags
+        from changes-scoped runs must not leak into them; the embedding
+        partial_update then keeps the directory's existing tags."""
+        if not self._changed_paths:
+            return self._ingest_options
+        return IngestOptions()
+
     async def _check_file_content_changed(self, file_path: str) -> bool:
         if self._is_direct_incremental_update():
             return file_path in self._changed_paths
@@ -767,7 +782,7 @@ class SemanticDagExecutor:
                     summary_dict=summary_dict,
                     parent_uri=parent_uri,
                     use_summary=use_summary,
-                    ingest_options=self._ingest_options,
+                    ingest_options=self._file_ingest_options(file_path),
                 )
                 await self._add_vectorize_task(task)
         except Exception as e:
@@ -947,7 +962,7 @@ class SemanticDagExecutor:
                         semantic_msg_id=self._embedding_tracker_id,
                         abstract=abstract,
                         overview=overview,
-                        ingest_options=self._ingest_options,
+                        ingest_options=self._directory_ingest_options(),
                     )
                     await self._add_vectorize_task(task)
             except Exception as e:
