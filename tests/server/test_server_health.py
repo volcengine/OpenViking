@@ -11,6 +11,7 @@ import httpx
 
 from openviking.server.app import _initialize_runtime_state, create_app
 from openviking.server.config import ServerConfig
+from openviking.service.task_tracker import set_task_tracker
 
 
 async def test_health_endpoint(client: httpx.AsyncClient):
@@ -20,17 +21,38 @@ async def test_health_endpoint(client: httpx.AsyncClient):
     assert body["status"] == "ok"
 
 
-async def test_health_endpoint_resolves_identity_with_api_key(caplog):
+async def test_health_endpoint_resolves_identity_with_api_key(caplog, monkeypatch):
     """When an API key is provided, /health should return identity information."""
+    class FakeAPIKeyManager:
+        def resolve(self, api_key):
+            assert api_key == "test-root-key"
+            return SimpleNamespace(role="root", account_id="default", user_id="default")
+
     app = create_app(
         config=ServerConfig(
             auth_mode="api_key",
             host="127.0.0.1",
             root_api_key="test-root-key",
         ),
-        service=SimpleNamespace(),
+        service=SimpleNamespace(viking_fs=object()),
     )
+    app.state.api_key_manager = FakeAPIKeyManager()
     transport = httpx.ASGITransport(app=app)
+
+    async def fake_resolve_identity(
+        request,
+        x_api_key=None,
+        authorization=None,
+        x_openviking_account=None,
+        x_openviking_user=None,
+    ):
+        del request, authorization, x_openviking_account, x_openviking_user
+        from openviking.server.identity import ResolvedIdentity, Role
+
+        assert x_api_key == "test-root-key"
+        return ResolvedIdentity(role=Role.ROOT, account_id="default", user_id="default")
+
+    monkeypatch.setattr("openviking.server.auth.resolve_identity", fake_resolve_identity)
 
     with caplog.at_level("WARNING", logger="openviking.server.routers.system"):
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -185,10 +207,15 @@ async def test_lifespan_shutdown_ignores_cancelled_service_close():
         async def close(self):
             raise asyncio.CancelledError("shutdown")
 
-    app = create_app(config=ServerConfig(), service=_Service())
+    tracker = SimpleNamespace(start_cleanup_loop=lambda: None, stop_cleanup_loop=lambda: None)
+    set_task_tracker(tracker)
+    try:
+        app = create_app(config=ServerConfig(), service=_Service())
 
-    async with app.router.lifespan_context(app):
-        pass
+        async with app.router.lifespan_context(app):
+            pass
+    finally:
+        set_task_tracker(None)
 
 
 async def test_health_responds_during_initialization(monkeypatch):
@@ -258,6 +285,15 @@ async def test_ready_returns_200_after_initialized(monkeypatch):
         "openviking_cli.utils.ollama.detect_ollama_in_config",
         lambda config: (False, None, None),
     )
+    def _fake_config_singleton():
+        return SimpleNamespace(
+            embedding=SimpleNamespace(get_embedder=lambda: None),
+        )
+
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.open_viking_config.OpenVikingConfigSingleton.get_instance",
+        _fake_config_singleton,
+    )
 
     app = create_app(config=ServerConfig(), service=service)
     transport = httpx.ASGITransport(app=app)
@@ -314,7 +350,7 @@ async def test_initialize_runtime_state_loads_api_key_manager(monkeypatch):
         async def load(self):
             self.loaded = True
 
-    monkeypatch.setattr("openviking.server.app.APIKeyManager", FakeAPIKeyManager)
+    monkeypatch.setattr("openviking.server.auth.plugins.api_key.APIKeyManager", FakeAPIKeyManager)
 
     app = SimpleNamespace(state=SimpleNamespace(api_key_manager=None))
     service = MockService()
