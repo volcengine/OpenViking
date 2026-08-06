@@ -41,6 +41,15 @@ class MockVikingFS:
         path = self._uri_to_path(uri)
         self.agfs.write(path, content.encode("utf-8"))
 
+    async def exists(self, uri: str, ctx=None) -> bool:
+        return self.agfs.exists(self._uri_to_path(uri), ctx=ctx)
+
+    async def rm(self, uri: str, ctx=None) -> None:
+        self.agfs.rm(self._uri_to_path(uri), ctx=ctx)
+
+    async def mv(self, src: str, dst: str, ctx=None) -> None:
+        self.agfs.mv(self._uri_to_path(src), self._uri_to_path(dst), ctx=ctx)
+
     def _uri_to_path(self, uri: str) -> str:
         """Convert URI to path."""
         if uri.startswith("viking://"):
@@ -60,6 +69,20 @@ async def temp_storage(tmp_path: Path) -> AsyncGenerator[Path, None]:
 async def mock_viking_fs(temp_storage: Path) -> MockVikingFS:
     """Create mock VikingFS instance."""
     return MockVikingFS(root_path=str(temp_storage))
+
+
+@pytest_asyncio.fixture
+async def watch_manager(mock_viking_fs: MockVikingFS) -> AsyncGenerator[WatchManager, None]:
+    manager = WatchManager(viking_fs=mock_viking_fs)
+    await manager.initialize()
+    yield manager
+
+
+@pytest_asyncio.fixture
+async def watch_manager_no_fs() -> AsyncGenerator[WatchManager, None]:
+    manager = WatchManager(viking_fs=None)
+    await manager.initialize()
+    yield manager
 
 
 class TestWatchTask:
