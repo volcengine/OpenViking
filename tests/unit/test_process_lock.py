@@ -78,10 +78,11 @@ class TestIsPidAlive:
         current_pid = os.getpid()
         assert _is_pid_alive(current_pid) is True
 
-    def test_pid_1_is_alive(self):
-        """Test that PID 1 (init) is typically alive."""
-        # PID 1 is usually init process on Linux
-        assert _is_pid_alive(1) is True
+    def test_pid_1_recycled_non_openviking_treated_stale(self):
+        """PID 1 (init) is alive but not an OpenViking process, so it is stale."""
+        # On Linux, a live PID whose cmdline is not an OpenViking process is
+        # treated as a recycled-PID stale lock rather than a live holder.
+        assert _is_pid_alive(1) is False
 
     def test_nonexistent_pid_not_alive(self):
         """Test that nonexistent PID is not alive."""
@@ -155,9 +156,9 @@ class TestAcquireDataDirLock:
         lock_path = acquire_data_dir_lock(str(tmp_path))
         assert lock_path == str(tmp_path / LOCK_FILENAME)
 
-    def test_acquire_with_live_process_raises(self, tmp_path: Path):
+    def test_acquire_with_live_process_raises(self, tmp_path: Path, monkeypatch):
         """Test acquiring lock with live process raises DataDirectoryLocked."""
-        # Use PID 1 (init) which is typically alive
+        monkeypatch.setattr(process_lock_module, "_is_pid_alive", lambda pid: True)
         (tmp_path / LOCK_FILENAME).write_text("1")
 
         with pytest.raises(DataDirectoryLocked) as exc_info:
@@ -188,8 +189,9 @@ class TestAcquireDataDirLock:
 
         assert not (workspace / LOCK_FILENAME).exists()
 
-    def test_error_message_suggests_http_mode(self, tmp_path: Path):
+    def test_error_message_suggests_http_mode(self, tmp_path: Path, monkeypatch):
         """Test error message suggests HTTP mode."""
+        monkeypatch.setattr(process_lock_module, "_is_pid_alive", lambda pid: True)
         (tmp_path / LOCK_FILENAME).write_text("1")
 
         with pytest.raises(DataDirectoryLocked) as exc_info:
@@ -199,8 +201,9 @@ class TestAcquireDataDirLock:
         assert "HTTP mode" in error_msg
         assert "openviking-server" in error_msg
 
-    def test_error_message_shows_pid(self, tmp_path: Path):
+    def test_error_message_shows_pid(self, tmp_path: Path, monkeypatch):
         """Test error message shows conflicting PID."""
+        monkeypatch.setattr(process_lock_module, "_is_pid_alive", lambda pid: True)
         (tmp_path / LOCK_FILENAME).write_text("1")
 
         with pytest.raises(DataDirectoryLocked) as exc_info:
@@ -209,8 +212,9 @@ class TestAcquireDataDirLock:
         error_msg = str(exc_info.value)
         assert "PID 1" in error_msg
 
-    def test_error_message_shows_directory(self, tmp_path: Path):
+    def test_error_message_shows_directory(self, tmp_path: Path, monkeypatch):
         """Test error message shows directory path."""
+        monkeypatch.setattr(process_lock_module, "_is_pid_alive", lambda pid: True)
         (tmp_path / LOCK_FILENAME).write_text("1")
 
         with pytest.raises(DataDirectoryLocked) as exc_info:
