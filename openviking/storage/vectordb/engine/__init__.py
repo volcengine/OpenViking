@@ -31,6 +31,17 @@ _REQUEST_ALIASES = {
 _WINDOWS_DLL_DIR_HANDLES = []
 
 
+class _DummyBackend:
+    def __getattr__(self, name: str):
+        return self
+
+    def __call__(self, *args, **kwargs):
+        return self
+
+
+_ABI3_EXPORT_NAMES = frozenset(build_abi3_exports(_DummyBackend()))
+
+
 def _is_x86_machine(machine: str | None = None) -> bool:
     normalized = (machine or platform.machine() or "").strip().lower()
     # platform.machine() returns empty string on some Windows 11 builds.
@@ -231,14 +242,14 @@ else:
 
 
 def __getattr__(name: str):
-    if _BACKEND is None and _ENGINE_IMPORT_ERROR is not None:
+    if _BACKEND is None and name in _ABI3_EXPORT_NAMES:
         return _MissingBackendSymbol(name, _ENGINE_IMPORT_ERROR)
     raise AttributeError(name)
 
 
 __all__ = tuple(
     sorted(
-        set(_EXPORTED_NAMES).union(
+        (_ABI3_EXPORT_NAMES if _BACKEND is None else set(_EXPORTED_NAMES)).union(
             {
                 "AVAILABLE_ENGINE_VARIANTS",
                 "ENGINE_VARIANT",
