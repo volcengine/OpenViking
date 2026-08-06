@@ -62,6 +62,20 @@ async def mock_viking_fs(temp_storage: Path) -> MockVikingFS:
     return MockVikingFS(root_path=str(temp_storage))
 
 
+@pytest_asyncio.fixture
+async def watch_manager(mock_viking_fs: MockVikingFS) -> AsyncGenerator[WatchManager, None]:
+    manager = WatchManager(viking_fs=mock_viking_fs)
+    await manager.initialize()
+    yield manager
+
+
+@pytest_asyncio.fixture
+async def watch_manager_no_fs() -> AsyncGenerator[WatchManager, None]:
+    manager = WatchManager(viking_fs=None)
+    await manager.initialize()
+    yield manager
+
+
 class TestWatchTask:
     """Tests for WatchTask data model."""
 
