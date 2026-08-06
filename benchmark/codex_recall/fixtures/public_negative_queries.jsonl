@@ -1,0 +1,4 @@
+{"id":"negative-random-token","query":"zxqv-1847 unrelated synthetic lookup","expected":"abstain"}
+{"id":"negative-out-of-domain","query":"Explain the taxonomy of deep-sea bioluminescent organisms","expected":"abstain"}
+{"id":"negative-control-continue","query":"continue","expected":"abstain"}
+{"id":"negative-control-confirm","query":"确认","expected":"abstain"}
