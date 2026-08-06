@@ -18,10 +18,10 @@ class MemoryVikingFS:
     def __init__(self):
         self.files = {}
 
-    async def write_file(self, uri, content, *, ctx=None):  # noqa: ANN001
+    async def write_file(self, uri, content, *, ctx=None, lease_ref=None):  # noqa: ANN001
         self.files[uri] = content
 
-    async def append_file(self, uri, content, *, ctx=None):  # noqa: ANN001
+    async def append_file(self, uri, content, *, ctx=None, lease_ref=None):  # noqa: ANN001
         self.files[uri] = self.files.get(uri, "") + content
 
     async def read_file(self, uri, *, ctx=None):  # noqa: ANN001
