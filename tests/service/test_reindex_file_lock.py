@@ -11,10 +11,28 @@ from openviking.service.reindex_executor import ReindexExecutor
 from openviking_cli.session.user_id import UserIdentifier
 
 
+class _FakePathLockClient:
+    def __init__(self):
+        self.held = False
+
+    async def pathlock_acquire_tree(self, path):
+        del path
+        self.held = True
+        return {"lease_ref": "lock-1"}
+
+    async def pathlock_as_borrowed(self, lease):
+        return {"lease_ref": lease["lease_ref"], "borrowed": True}
+
+    async def pathlock_release(self, lease):
+        assert lease == {"lease_ref": "lock-1"}
+        self.held = False
+
+
 class _FakeVikingFS:
     def __init__(self, uri: str, path: str):
         self._uri = uri
         self._path = path
+        self._async_agfs = _FakePathLockClient()
 
     def _uri_to_path(self, uri: str, ctx=None):
         assert uri == self._uri
