@@ -188,10 +188,10 @@ async def test_enforce_admission_rejects_before_content_read():
 async def test_enforce_admission_backfills_quota_after_other_peer_rejection():
     self_uri = f"{USER_ROOT}/memories/events/self.md"
     peer_uri = f"{USER_ROOT}/peers/other/memories/events/peer.md"
-    requested_limits = []
+    requests = []
 
     async def fake_find(**kwargs):
-        requested_limits.append(kwargs["limit"])
+        requests.append(kwargs)
         target = kwargs["target_uri"]
         if target == f"{USER_ROOT}/memories/events":
             return _FakeFindResult(
@@ -232,7 +232,20 @@ async def test_enforce_admission_backfills_quota_after_other_peer_rejection():
     assert [entry.uri for entry in result.entries] == [self_uri]
     assert result.stats["admission"]["accepted"] == 1
     assert result.stats["admission"]["rejected"] == 1
-    assert min(requested_limits) == 4
+    assert min(request["limit"] for request in requests) == 1
+    assert {
+        request["score_threshold"]
+        for request in requests
+        if request["target_uri"] != f"{USER_ROOT}/peers"
+    } == {0.5}
+    assert (
+        next(
+            request["score_threshold"]
+            for request in requests
+            if request["target_uri"] == f"{USER_ROOT}/peers"
+        )
+        == 0.6
+    )
 
 
 async def test_query_expansion_fans_out_planned_queries(monkeypatch):

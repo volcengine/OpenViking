@@ -82,13 +82,14 @@ def decide_recall_admission(
         config.type_min_scores.get(category, 0.0),
     )
     candidate_score = _clamp_score(score)
+    required_score = base_required
     if origin == "other_peer":
-        peer_required = min(1.0, base_required + config.other_peer_score_delta)
-        if candidate_score < peer_required:
+        required_score = min(1.0, base_required + config.other_peer_score_delta)
+        if candidate_score < required_score:
             return RecallAdmissionDecision(
                 admitted=False,
                 reason=REASON_BELOW_OTHER_PEER_MIN_SCORE,
-                required_score=peer_required,
+                required_score=required_score,
             )
     if candidate_score < base_required:
         return RecallAdmissionDecision(
@@ -96,7 +97,7 @@ def decide_recall_admission(
             reason=REASON_BELOW_TYPE_MIN_SCORE,
             required_score=base_required,
         )
-    return RecallAdmissionDecision(admitted=True, reason=None, required_score=base_required)
+    return RecallAdmissionDecision(admitted=True, reason=None, required_score=required_score)
 
 
 @dataclass

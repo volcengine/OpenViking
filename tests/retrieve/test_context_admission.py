@@ -65,6 +65,16 @@ def test_other_peer_delta_only_raises_other_peer_requirement():
     assert peer_decision.reason == REASON_BELOW_OTHER_PEER_MIN_SCORE
     assert peer_decision.required_score == 0.5
 
+    admitted_peer = decide_recall_admission(
+        score=0.55,
+        category="preferences",
+        origin="other_peer",
+        score_threshold=0.35,
+        config=config,
+    )
+    assert admitted_peer.admitted is True
+    assert admitted_peer.required_score == 0.5
+
 
 def test_shadow_observes_rejection_without_enforcing_it():
     tracker = RecallAdmissionTracker(

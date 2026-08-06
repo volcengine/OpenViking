@@ -14,7 +14,10 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from openviking.core.namespace import AGENT_SHARED_ROOTS, canonical_user_root
 from openviking.core.retrieval_targets import default_target_directories
-from openviking.retrieve.context_assembler.admission import RecallAdmissionTracker
+from openviking.retrieve.context_assembler.admission import (
+    RecallAdmissionTracker,
+    decide_recall_admission,
+)
 from openviking.retrieve.context_assembler.params import (
     MEMORY_CATEGORIES,
     ORIGIN_ORDER,
@@ -259,16 +262,6 @@ async def gather_candidates(
             )
         return built
 
-    admission_active = bool(
-        admission_tracker and admission_tracker.config.mode in {"shadow", "enforce"}
-    )
-
-    def _admission_width(want: int) -> int:
-        # Admission can remove the top-ranked row after retrieval (notably an
-        # other-peer row with a stricter delta). Keep a bounded tail available
-        # so a lower-ranked eligible self row can backfill the quota.
-        return want * OTHER_PEER_OVERFETCH if admission_active else want
-
     def _overfetch(want: int) -> int:
         """Rows to request on top of ``want`` to cover post-retrieval filtering.
 
@@ -277,6 +270,17 @@ async def gather_candidates(
         instead of falling through to the next-best hits.
         """
         return want + min(len(excluded), want * 2)
+
+    def _search_score_threshold(category: str, origin: str) -> Optional[float]:
+        if admission_tracker is None or admission_tracker.config.mode != "enforce":
+            return score_threshold
+        return decide_recall_admission(
+            score=1.0,
+            category=category,
+            origin=origin,
+            score_threshold=score_threshold,
+            config=admission_tracker.config,
+        ).required_score
 
     def _apply_admission(candidates: List[Candidate]) -> List[Candidate]:
         if admission_tracker is None:
@@ -298,6 +302,7 @@ async def gather_candidates(
         target_uri: str,
         find_limit: int,
         find_filter: Optional[Dict[str, Any]] = None,
+        find_score_threshold: Optional[float] = None,
     ) -> Any:
         return _safe_find(
             service,
@@ -306,7 +311,9 @@ async def gather_candidates(
             ctx=find_ctx,
             target_uri=target_uri,
             limit=find_limit,
-            score_threshold=score_threshold,
+            score_threshold=(
+                score_threshold if find_score_threshold is None else find_score_threshold
+            ),
             filter=find_filter if find_filter is not None else filter,
             image_url=image_url,
             level=None,
@@ -324,8 +331,9 @@ async def gather_candidates(
                 query=query,
                 find_ctx=ctx,
                 target_uri=target,
-                find_limit=_overfetch(_admission_width(quota)),
+                find_limit=_overfetch(quota),
                 find_filter=bucket_filter,
+                find_score_threshold=_search_score_threshold(bucket, "self"),
             )
             for query in planned
             for target in targets
@@ -337,10 +345,9 @@ async def gather_candidates(
                     query=query,
                     find_ctx=open_ctx,
                     target_uri=f"{user_root}/peers",
-                    find_limit=_overfetch(
-                        max(quota * OTHER_PEER_OVERFETCH, _admission_width(quota))
-                    ),
+                    find_limit=_overfetch(max(quota * OTHER_PEER_OVERFETCH, quota)),
                     find_filter=bucket_filter,
+                    find_score_threshold=_search_score_threshold(bucket, "other_peer"),
                 )
                 for query in planned
             )
@@ -369,7 +376,7 @@ async def gather_candidates(
                 query=query,
                 find_ctx=ctx,
                 target_uri="",
-                find_limit=_overfetch(_admission_width(limit)),
+                find_limit=_overfetch(limit),
             )
             for query in planned
         ]
@@ -380,9 +387,7 @@ async def gather_candidates(
                     query=query,
                     find_ctx=open_ctx,
                     target_uri=f"{user_root}/peers",
-                    find_limit=_overfetch(
-                        max(limit * OTHER_PEER_OVERFETCH, _admission_width(limit))
-                    ),
+                    find_limit=_overfetch(max(limit * OTHER_PEER_OVERFETCH, limit)),
                 )
                 for query in planned
             )
