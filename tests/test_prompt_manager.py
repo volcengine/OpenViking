@@ -77,7 +77,8 @@ def test_profile_memory_template_includes_stable_identity_work_style_and_prefere
     )
 
     assert '"who the user is"' in text
-    assert "identity, work style, and preferences" in text
+    assert "identity summary of who the user is as a person" in text
+    assert "define the user's identity at a high level" in text
     assert "profession, experience level, technical background" in text
     assert "communication style, work habits" in text
     assert "Do NOT include transient conversation content" in text
@@ -101,7 +102,7 @@ def test_preferences_memory_template_keeps_topic_specific_preferences():
     assert "specific topic" in text
     assert "code style, communication style, tools, workflow" in text
     assert "Store different topics as separate memory files" in text
-    assert "do not mix unrelated preferences" in text
+    assert "do NOT mix unrelated preferences" in text
 
 
 def test_prompt_manager_prefers_env_templates_dir_over_config(tmp_path, monkeypatch):
