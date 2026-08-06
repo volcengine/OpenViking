@@ -1,7 +1,7 @@
 import os
 import uuid
 
-from conftest import create_test_file
+from build_test_helpers import create_test_file
 
 
 class TestSemanticRetrieval:
