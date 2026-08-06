@@ -3,10 +3,10 @@
 """Search endpoints for OpenViking HTTP Server."""
 
 import math
-from typing import Annotated, Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
@@ -135,21 +135,6 @@ class SearchRequest(BaseModel):
     telemetry: TelemetryRequest = False
 
 
-MemoryType = Literal["events", "entities", "preferences", "experiences"]
-
-
-class RecallAdmissionRequest(BaseModel):
-    """Optional deterministic guard applied before memory content is read."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    mode: Literal["off", "shadow", "enforce"] = "off"
-    type_min_scores: Dict[MemoryType, Annotated[float, Field(ge=0.0, le=1.0)]] = Field(
-        default_factory=dict
-    )
-    other_peer_score_delta: float = Field(default=0.0, ge=0.0, le=1.0)
-
-
 class RecallRequest(BaseModel):
     """Request model for type-quota memory recall."""
 
@@ -161,7 +146,6 @@ class RecallRequest(BaseModel):
     min_score: float = DEFAULT_MIN_SCORE
     peer_scope: Literal["actor", "all"] = "all"
     other_peer_penalty: Optional[Union[float, Dict[str, float]]] = None
-    admission: Optional[RecallAdmissionRequest] = None
     render: bool = True
     telemetry: TelemetryRequest = False
 
@@ -301,7 +285,6 @@ async def recall(
             other_peer_penalty=request.other_peer_penalty
             if request.other_peer_penalty is not None
             else DEFAULT_OTHER_PEER_PENALTIES,
-            admission=request.admission.model_dump() if request.admission is not None else None,
         ),
     )
     return Response(

@@ -15,15 +15,10 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Mapping
 
 from openviking.core.namespace import canonical_user_root
-from openviking.retrieve.recall_admission import (
-    MEMORY_TYPE_ORDER,
-    RecallAdmissionConfig,
-    RecallAdmissionTracker,
-)
 from openviking.server.identity import RequestContext
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 
-TYPE_ORDER = MEMORY_TYPE_ORDER
+TYPE_ORDER = ("events", "entities", "preferences", "experiences")
 DEFAULT_QUOTAS = {"events": 10, "entities": 10, "preferences": 3, "experiences": 0}
 DEFAULT_OTHER_PEER_PENALTIES = {
     "events": 0.1,
@@ -303,14 +298,9 @@ async def search_type_quota_recall(
     render: bool = True,
     peer_scope: str = "all",
     other_peer_penalty: Any = None,
-    admission: Mapping[str, Any] | None = None,
 ) -> RecallResult:
     normalized_quotas = normalize_quotas(quotas)
     normalized_penalties = normalize_penalties(other_peer_penalty)
-    admission_tracker = RecallAdmissionTracker(
-        config=RecallAdmissionConfig.from_value(admission),
-        min_score=min_score,
-    )
     peer_scope = "actor" if peer_scope == "actor" else "all"
     user_root = canonical_user_root(ctx)
     roots = memory_target_roots(ctx)
@@ -407,8 +397,6 @@ async def search_type_quota_recall(
         if not uri or uri.rstrip("/").endswith("/profile.md"):
             continue
         score = _score(item)
-        if not admission_tracker.evaluate(score=score, memory_type=memory_type, origin=origin):
-            continue
         abstract = _abstract(item)
         content = ""
         try:
@@ -527,6 +515,5 @@ async def search_type_quota_recall(
             "peer_scope": peer_scope,
             "other_peer_penalties": normalized_penalties,
             "origins": origins,
-            "admission": admission_tracker.to_stats(),
         },
     )

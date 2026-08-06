@@ -36,16 +36,7 @@ Search each memory type independently and assemble a bounded memory block that c
 | `min_score` | number | No | `0.1` | Minimum relevance score |
 | `peer_scope` | string | No | `all` | `actor` searches only the current actor peer; `all` also searches global and other-peer memory |
 | `other_peer_penalty` | number/object | No | Per-type defaults | Score penalty applied to results from other peers |
-| `admission` | object | No | `mode=off` | Optional pre-render admission policy; see below |
 | `render` | boolean | No | `true` | Whether to produce the `rendered` memory block |
-
-`admission.mode` can be `off`, `shadow`, or `enforce`. `shadow` reports the
-decision without changing legacy results; `enforce` drops rejected candidates
-before their content is read or rendered. `admission.type_min_scores` sets a
-minimum raw score per memory type, and `admission.other_peer_score_delta` adds
-an extra requirement for `other_peer` candidates. These scores are retrieval
-signals, not calibrated probabilities, so tune them against a regression set
-before enabling enforcement.
 
 **HTTP API**
 
@@ -62,12 +53,7 @@ curl -X POST http://localhost:1933/api/v1/search/recall \
     "query":"OpenViking API documentation preferences",
     "quotas":{"events":5,"entities":5,"preferences":3,"experiences":2},
     "max_chars":6500,
-    "peer_scope":"all",
-    "admission":{
-      "mode":"shadow",
-      "type_min_scores":{"events":0.5,"entities":0.5,"preferences":0.5},
-      "other_peer_score_delta":0.08
-    }
+    "peer_scope":"all"
   }'
 ```
 
@@ -131,21 +117,6 @@ recall(
         "actor_peer": 0,
         "self": 1,
         "other_peer": 0
-      },
-      "admission": {
-        "mode": "shadow",
-        "evaluated": 1,
-        "accepted": 1,
-        "rejected": 0,
-        "reason_counts": {},
-        "type_min_scores": {
-          "events": 0.5,
-          "entities": 0.5,
-          "preferences": 0.5
-        },
-        "other_peer_score_delta": 0.08,
-        "would_abstain": false,
-        "abstained": false
       }
     }
   }
@@ -166,7 +137,6 @@ recall(
 | `entries[].abstract` | string | Search-hit abstract; omitted when unavailable |
 | `rendered` | string | Text bounded by `max_chars` and ready for Agent context injection; empty when `render=false` |
 | `stats` | object | Effective quotas, roots, per-type search counts, returned and dropped counts, threshold, peer scope, and origin counts |
-| `stats.admission` | object | Aggregate admission decision and stable reason counts; never includes query text, memory content, or URIs |
 
 The public Python, TypeScript, and Go SDKs and the `ov` CLI do not currently wrap type-quota recall, so this section shows only the HTTP tab and the existing MCP call.
 

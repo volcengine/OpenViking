@@ -315,19 +315,8 @@ async function recallViaTypeQuotaEndpoint(query) {
     render: true,
   };
   if (cfg.recallPeerScope === "actor") body.peer_scope = "actor";
-  if (cfg.recallAdmissionMode !== "off") {
-    body.admission = {
-      mode: cfg.recallAdmissionMode,
-      type_min_scores: cfg.recallAdmissionTypeMinScores,
-      other_peer_score_delta: cfg.recallAdmissionOtherPeerScoreDelta,
-    };
-  }
   const result = await postRecall(fetchJSON, body, { actorPeerId: effectivePeer.peerId, log });
   if (!result.ok) {
-    if (cfg.recallAdmissionMode === "enforce") {
-      log("recall_admission_fail_closed", { status: result.status || 0 });
-      return { context: "", items: [] };
-    }
     log("recall_endpoint_fallback", { status: result.status || 0 });
     return null;
   }
@@ -574,7 +563,6 @@ async function main() {
       scoreThreshold: cfg.scoreThreshold,
       peerSource: effectivePeer.source,
       recallPeerScope: cfg.recallPeerScope,
-      recallAdmissionMode: cfg.recallAdmissionMode,
     },
   });
 

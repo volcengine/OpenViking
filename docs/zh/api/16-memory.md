@@ -36,14 +36,7 @@
 | `min_score` | number | 否 | `0.1` | 最低相关性分数 |
 | `peer_scope` | string | 否 | `all` | `actor` 只检索当前 actor peer；`all` 同时检索用户全局和其他 peer |
 | `other_peer_penalty` | number/object | 否 | 按类型默认值 | 对其他 peer 结果施加的分数折损 |
-| `admission` | object | 否 | `mode=off` | 可选的渲染前准入策略，详见下文 |
 | `render` | boolean | 否 | `true` | 是否生成 `rendered` 记忆块 |
-
-`admission.mode` 支持 `off`、`shadow` 和 `enforce`。`shadow` 只报告准入结论，
-不改变旧版返回结果；`enforce` 会在读取正文和渲染之前丢弃被拒候选。
-`admission.type_min_scores` 可按记忆类型设置最低原始分数，
-`admission.other_peer_score_delta` 则为 `other_peer` 候选增加额外门槛。
-这些分数是检索信号而非校准后的概率，启用强制模式前应使用回归集调参。
 
 **HTTP API**
 
@@ -60,12 +53,7 @@ curl -X POST http://localhost:1933/api/v1/search/recall \
     "query":"OpenViking API 文档偏好",
     "quotas":{"events":5,"entities":5,"preferences":3,"experiences":2},
     "max_chars":6500,
-    "peer_scope":"all",
-    "admission":{
-      "mode":"shadow",
-      "type_min_scores":{"events":0.5,"entities":0.5,"preferences":0.5},
-      "other_peer_score_delta":0.08
-    }
+    "peer_scope":"all"
   }'
 ```
 
@@ -129,21 +117,6 @@ recall(
         "actor_peer": 0,
         "self": 1,
         "other_peer": 0
-      },
-      "admission": {
-        "mode": "shadow",
-        "evaluated": 1,
-        "accepted": 1,
-        "rejected": 0,
-        "reason_counts": {},
-        "type_min_scores": {
-          "events": 0.5,
-          "entities": 0.5,
-          "preferences": 0.5
-        },
-        "other_peer_score_delta": 0.08,
-        "would_abstain": false,
-        "abstained": false
       }
     }
   }
@@ -164,7 +137,6 @@ recall(
 | `entries[].abstract` | string | 检索命中的摘要；没有摘要时省略 |
 | `rendered` | string | 已受 `max_chars` 限制、可直接注入 Agent 上下文的文本；`render=false` 时为空字符串 |
 | `stats` | object | 实际配额、检索根、各类型检索量、返回量、丢弃量、阈值、peer 范围及来源统计 |
-| `stats.admission` | object | 聚合准入结论与稳定原因计数；不会包含查询文本、记忆正文或 URI |
 
 公共 Python、TypeScript、Go SDK 和 `ov` CLI 当前尚未封装类型配额召回，因此本节只展示 HTTP Tab，并补充实际存在的 MCP 调用。
 

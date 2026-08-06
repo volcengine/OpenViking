@@ -305,7 +305,6 @@ async def test_mcp_recall_tool_passes_peer_scope_and_penalty(service, monkeypatc
             quotas={"events": 1},
             peer_scope="actor",
             other_peer_penalty={"events": 0.5},
-            admission={"mode": "shadow", "type_min_scores": {"events": 0.6}},
         )
     finally:
         _mcp_ctx.reset(token)
@@ -313,7 +312,3 @@ async def test_mcp_recall_tool_passes_peer_scope_and_penalty(service, monkeypatc
     assert "other-projects" in result
     assert captured["peer_scope"] == "actor"
     assert captured["other_peer_penalty"] == {"events": 0.5}
-    assert captured["admission"] == {
-        "mode": "shadow",
-        "type_min_scores": {"events": 0.6},
-    }
