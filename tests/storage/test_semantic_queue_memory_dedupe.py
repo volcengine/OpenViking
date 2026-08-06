@@ -125,8 +125,8 @@ class _FakeVikingFS:
         del ctx
         return f"/fake/{uri.replace('://', '/').strip('/')}"
 
-    async def write_file(self, uri, content, ctx=None):
-        del ctx
+    async def write_file(self, uri, content, ctx=None, lease_ref=None):
+        del ctx, lease_ref
         self.writes.append((uri, content))
 
 
