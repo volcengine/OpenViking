@@ -84,6 +84,15 @@ describe("OpenClaw plugin package and install contract", () => {
     ]));
   });
 
+  it("ships the Experience Memory skill with source installs", () => {
+    const installManifest = readJson("install-manifest.json");
+    const installHelper = readFileSync(join(rootDir, "setup-helper/install.js"), "utf8");
+
+    expect(installManifest.files.optional).toContain("skills/ov-experience-memory/SKILL.md");
+    expect(existsSync(join(rootDir, "skills/ov-experience-memory/SKILL.md"))).toBe(true);
+    expect(installHelper).toContain('"skills/ov-experience-memory/SKILL.md"');
+  });
+
   it("keeps runtime dependencies and overrides available for installed plugin loading", () => {
     const packageJson = readJson("package.json");
 

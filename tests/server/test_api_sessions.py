@@ -22,8 +22,10 @@ from openviking.server.config import (
 from openviking.server.dependencies import set_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import sessions as sessions_router
+from openviking.session.session import Session
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
+from openviking_cli.utils.config.memory_config import SessionAutoCommitConfig
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 from tests.utils.mock_agfs import MockLocalAGFS
 
@@ -183,6 +185,112 @@ async def test_legacy_session_uri_alias_reads_current_user_session(client: httpx
 
     assert resp.status_code == 200
     assert "legacy alias message" in resp.json()["result"]
+
+
+@pytest.mark.parametrize("artifact", ["empty", "recall_ledger", "meta"])
+async def test_add_message_repairs_session_directory_without_live_messages(
+    client: httpx.AsyncClient,
+    service,
+    artifact: str,
+):
+    session_id = f"{artifact}-only-session"
+    ctx = RequestContext(user=DEFAULT_USER, role=Role.ROOT)
+    ledger_uri = f"viking://user/default/sessions/{session_id}/.recall_log.json"
+    meta_uri = f"viking://user/default/sessions/{session_id}/.meta.json"
+    await service.viking_fs.mkdir(
+        f"viking://user/default/sessions/{session_id}",
+        exist_ok=True,
+        ctx=ctx,
+    )
+    if artifact == "recall_ledger":
+        await service.viking_fs.write_file(
+            uri=ledger_uri,
+            content=json.dumps({"version": 1, "updated_turn": 0, "entries": {}}),
+            ctx=ctx,
+        )
+    elif artifact == "meta":
+        meta = service.sessions.session(ctx, session_id).meta.to_dict()
+        meta["last_commit_at"] = "preserve-existing-meta"
+        await service.viking_fs.write_file(
+            uri=meta_uri,
+            content=json.dumps(meta),
+            ctx=ctx,
+        )
+
+    resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json=_message_request("user", content="first captured message"),
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["result"]["message_count"] == 1
+    messages = await service.viking_fs.read_file(
+        f"viking://user/default/sessions/{session_id}/messages.jsonl",
+        ctx=ctx,
+    )
+    assert "first captured message" in messages
+    assert await service.viking_fs.exists(ledger_uri, ctx=ctx) is (artifact == "recall_ledger")
+    persisted_meta = json.loads(await service.viking_fs.read_file(meta_uri, ctx=ctx))
+    if artifact == "meta":
+        assert persisted_meta["last_commit_at"] == "preserve-existing-meta"
+
+
+async def test_partial_session_remains_visible_and_deletable(
+    client: httpx.AsyncClient,
+    service,
+):
+    session_id = "partial-session-lifecycle"
+    ctx = RequestContext(user=DEFAULT_USER, role=Role.ROOT)
+    session_uri = f"viking://user/default/sessions/{session_id}"
+    await service.viking_fs.mkdir(session_uri, exist_ok=True, ctx=ctx)
+
+    get_resp = await client.get(f"/api/v1/sessions/{session_id}")
+    assert get_resp.status_code == 200
+    assert get_resp.json()["result"]["message_count"] == 0
+
+    duplicate = await client.post("/api/v1/sessions", json={"session_id": session_id})
+    assert duplicate.status_code == 409
+
+    delete_resp = await client.delete(f"/api/v1/sessions/{session_id}")
+    assert delete_resp.status_code == 200
+    assert not await service.viking_fs.exists(session_uri, ctx=ctx)
+
+
+async def test_add_message_recovers_after_interrupted_session_initialization(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+):
+    session_id = "interrupted-initialization"
+    ctx = RequestContext(user=DEFAULT_USER, role=Role.ROOT)
+    session_uri = f"viking://user/default/sessions/{session_id}"
+    original_write_file = service.viking_fs.write_file
+    failed_once = False
+
+    async def fail_first_message_file(uri, content, **kwargs):
+        nonlocal failed_once
+        if uri == f"{session_uri}/messages.jsonl" and not failed_once:
+            failed_once = True
+            raise OSError("simulated initialization interruption")
+        return await original_write_file(uri, content, **kwargs)
+
+    monkeypatch.setattr(service.viking_fs, "write_file", fail_first_message_file)
+    first = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json=_message_request("user", content="first attempt"),
+    )
+    assert first.status_code == 500
+    assert await service.viking_fs.exists(session_uri, ctx=ctx)
+    assert not await service.viking_fs.exists(f"{session_uri}/messages.jsonl", ctx=ctx)
+
+    second = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json=_message_request("user", content="second attempt"),
+    )
+    assert second.status_code == 200
+    assert second.json()["result"]["message_count"] == 1
+    messages = await service.viking_fs.read_file(f"{session_uri}/messages.jsonl", ctx=ctx)
+    assert "second attempt" in messages
 
 
 async def test_get_session_context(client: httpx.AsyncClient):
@@ -447,6 +555,222 @@ async def test_add_message(client: httpx.AsyncClient):
     assert body["result"]["message_count"] == 1
 
 
+async def test_add_message_records_last_message_at(client: httpx.AsyncClient):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"role": "user", "content": "Hello, world!"},
+    )
+    assert resp.status_code == 200
+
+    session_resp = await client.get(f"/api/v1/sessions/{session_id}")
+    assert session_resp.status_code == 200
+    assert session_resp.json()["result"]["last_message_at"]
+
+
+async def test_direct_session_add_message_records_last_message_at(service):
+    session = await service.sessions.get(
+        "direct-last-message-at-session",
+        RequestContext(user=DEFAULT_USER, role=Role.ROOT),
+        auto_create=True,
+    )
+    assert session.meta.last_message_at == ""
+
+    session.add_message("user", [TextPart("Hello, world!")])
+
+    assert session.meta.last_message_at
+
+
+async def test_add_message_records_last_message_at_with_single_meta_save(
+    client: httpx.AsyncClient,
+    monkeypatch,
+):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+    save_session_ids = []
+    original_save_meta = Session._save_meta
+
+    async def counting_save_meta(self, *args, **kwargs):
+        save_session_ids.append(self.session_id)
+        await original_save_meta(self, *args, **kwargs)
+
+    monkeypatch.setattr(Session, "_save_meta", counting_save_meta)
+
+    resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"role": "user", "content": "Hello, world!"},
+    )
+    assert resp.status_code == 200
+
+    assert save_session_ids == [session_id]
+
+    session_resp = await client.get(f"/api/v1/sessions/{session_id}")
+    assert session_resp.status_code == 200
+    assert session_resp.json()["result"]["last_message_at"]
+
+
+async def test_add_message_ignores_extra_metadata_fields(client: httpx.AsyncClient):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={
+            "role": "user",
+            "content": "Hello, world!",
+            "metadata": {"source": "test"},
+            "auto_commit_policy": {"pending_token_threshold": 123},
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["result"]["message_count"] == 1
+
+
+async def test_create_session_defaults_auto_commit_policy_to_disabled(
+    client: httpx.AsyncClient,
+):
+    resp = await client.post("/api/v1/sessions", json={})
+    assert resp.status_code == 200
+    assert resp.json()["result"]["auto_commit_policy"] is None
+
+
+async def test_create_session_uses_default_policy_when_server_default_enabled(
+    client: httpx.AsyncClient,
+    service,
+):
+    service.sessions.set_session_auto_commit_config(
+        SessionAutoCommitConfig(default_enabled=True)
+    )
+
+    resp = await client.post("/api/v1/sessions", json={})
+    assert resp.status_code == 200
+    assert resp.json()["result"]["auto_commit_policy"] == {
+        "pending_token_threshold": 10000,
+        "message_count_threshold": 50,
+        "idle_timeout_seconds": 86400,
+        "keep_recent_count": 2,
+        "min_commit_interval_seconds": 0,
+    }
+
+
+async def test_auto_created_session_uses_default_policy_when_server_default_enabled(
+    client: httpx.AsyncClient,
+    service,
+):
+    service.sessions.set_session_auto_commit_config(
+        SessionAutoCommitConfig(default_enabled=True)
+    )
+    session_id = "auto-created-default-policy"
+
+    add_resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"role": "user", "content": "create this session by writing first"},
+    )
+    assert add_resp.status_code == 200
+
+    session_resp = await client.get(f"/api/v1/sessions/{session_id}")
+    assert session_resp.status_code == 200
+    assert session_resp.json()["result"]["auto_commit_policy"] == {
+        "pending_token_threshold": 10000,
+        "message_count_threshold": 50,
+        "idle_timeout_seconds": 86400,
+        "keep_recent_count": 2,
+        "min_commit_interval_seconds": 0,
+    }
+
+
+async def test_create_session_applies_config_and_fills_defaults(client: httpx.AsyncClient):
+    resp = await client.post(
+        "/api/v1/sessions",
+        json={
+            "auto_commit_policy": {
+                "pending_token_threshold": 8000,
+                "keep_recent_count": 10,
+            }
+        },
+    )
+    assert resp.status_code == 200
+    result = resp.json()["result"]
+    assert result["auto_commit_policy"] == {
+        "pending_token_threshold": 8000,
+        "message_count_threshold": 50,
+        "idle_timeout_seconds": 86400,
+        "keep_recent_count": 10,
+        "min_commit_interval_seconds": 0,
+    }
+
+    session_resp = await client.get(f"/api/v1/sessions/{result['session_id']}")
+    session_result = session_resp.json()["result"]
+    assert session_result["auto_commit_policy"]["pending_token_threshold"] == 8000
+    assert session_result["auto_commit_policy"]["keep_recent_count"] == 10
+
+
+async def test_create_session_clamps_config_above_bounds(client: httpx.AsyncClient):
+    resp = await client.post(
+        "/api/v1/sessions",
+        json={"auto_commit_policy": {"pending_token_threshold": 10_000_000}},
+    )
+    assert resp.status_code == 200
+    policy = resp.json()["result"]["auto_commit_policy"]
+    assert policy["pending_token_threshold"] == 50000
+
+
+async def test_get_session_returns_effective_config(client: httpx.AsyncClient):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    resp = await client.get(f"/api/v1/sessions/{session_id}")
+    assert resp.status_code == 200
+    assert resp.json()["result"]["auto_commit_policy"] is None
+
+
+async def test_patch_session_config_is_not_supported(client: httpx.AsyncClient):
+    create_resp = await client.post(
+        "/api/v1/sessions",
+        json={
+            "auto_commit_policy": {
+                "pending_token_threshold": 8000,
+                "message_count_threshold": 40,
+                "keep_recent_count": 10,
+            }
+        },
+    )
+    session_id = create_resp.json()["result"]["session_id"]
+
+    patch_resp = await client.patch(
+        f"/api/v1/sessions/{session_id}",
+        json={"auto_commit_policy": {"message_count_threshold": 25}},
+    )
+    assert patch_resp.status_code == 405
+
+    session_resp = await client.get(f"/api/v1/sessions/{session_id}")
+    session_config = session_resp.json()["result"]["auto_commit_policy"]
+    assert session_config["message_count_threshold"] == 40
+    assert session_config["pending_token_threshold"] == 8000
+
+
+async def test_session_load_recovers_message_count_from_live_messages(service):
+    ctx = RequestContext(user=UserIdentifier("acct_a", "user_b"), role=Role.ADMIN)
+    await service.initialize_account_directories(ctx)
+    await service.initialize_user_directories(ctx)
+
+    session = await service.sessions.create(ctx)
+    session.add_message("user", [TextPart("我爱吃西瓜")])
+
+    session = await service.sessions.get(session.session_id, ctx, auto_create=False)
+    session.meta.message_count = 0
+    session.meta.pending_tokens = 0
+    await session._save_meta()
+
+    reloaded = service.sessions.session(ctx, session.session_id)
+    await reloaded.load()
+
+    assert len(reloaded.messages) == 1
+    assert reloaded.meta.message_count == 1
+
+
 async def test_write_responses_return_pending_tokens_for_commit_policy(
     client: httpx.AsyncClient,
 ):
@@ -646,6 +970,22 @@ async def test_batch_add_message_accepts_mixed_parts(client: httpx.AsyncClient, 
     await session.load()
     assert isinstance(session.messages[0].parts[0], TextPart)
     assert isinstance(session.messages[0].parts[1], ImagePart)
+
+
+async def test_batch_add_message_ignores_removed_auto_commit_policy(client: httpx.AsyncClient):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages/batch",
+        json={
+            "messages": [{"role": "user", "content": "hello"}],
+            "auto_commit_policy": {"pending_token_threshold": 1},
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["result"]["message_count"] == 1
 
 
 async def test_add_message_splits_tool_result_aggregate(client: httpx.AsyncClient):

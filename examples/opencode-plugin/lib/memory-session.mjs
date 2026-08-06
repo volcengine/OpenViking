@@ -16,6 +16,9 @@ import {
   sendSessionMessages,
 } from "./shared/batch-send.mjs"
 import {
+  isRetryableFailure,
+} from "./shared/retryable.mjs"
+import {
   log,
   effectivePeerId,
   fetchJSON,
@@ -475,9 +478,4 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     }
   }
 
-  function isRetryableFailure(res) {
-    if (!res || res.ok) return false
-    const status = Number(res.status || 0)
-    return !status || status >= 500 || status === 408 || status === 429
-  }
 }

@@ -56,18 +56,22 @@ class SyncOpenViking:
         session_id: Optional[str] = None,
         telemetry: TelemetryRequest = False,
         memory_policy: Optional[Dict[str, Any]] = None,
+        auto_commit_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create a new session.
 
         Args:
             session_id: Optional session ID. If provided, creates a session with the given ID.
                        If None, creates a new session with auto-generated ID.
+            memory_policy: Optional default extraction policy for future commits.
+            auto_commit_policy: Optional automatic-commit policy overrides.
         """
         return run_async(
             self._async_client.create_session(
                 session_id,
                 telemetry=telemetry,
                 memory_policy=memory_policy,
+                auto_commit_policy=auto_commit_policy,
             )
         )
 
@@ -509,6 +513,10 @@ class SyncOpenViking:
         """Read file"""
         return run_async(self._async_client.read(uri, offset=offset, limit=limit))
 
+    def read_raw(self, uri: str, offset: int = 0, limit: int = -1) -> str:
+        """Read raw file content, including hidden MEMORY_FIELDS metadata."""
+        return run_async(self._async_client.read_raw(uri, offset=offset, limit=limit))
+
     def write(
         self,
         uri: str,
@@ -517,6 +525,7 @@ class SyncOpenViking:
         wait: bool = False,
         timeout: Optional[float] = None,
         telemetry: TelemetryRequest = False,
+        processing_mode: str = "semantic_and_vectors",
     ) -> Dict[str, Any]:
         """Write text content to an existing file and refresh semantics/vectors."""
         return run_async(
@@ -527,6 +536,7 @@ class SyncOpenViking:
                 wait=wait,
                 timeout=timeout,
                 telemetry=telemetry,
+                processing_mode=processing_mode,
             )
         )
 
@@ -579,15 +589,22 @@ class SyncOpenViking:
     def import_ovpack(
         self,
         file_path: str,
-        target: str,
+        parent: Optional[str] = None,
         on_conflict: Optional[str] = None,
         vector_mode: Optional[str] = None,
+        *,
+        target: Optional[str] = None,
     ) -> str:
         """Import .ovpack file (triggers vectorization by default)"""
+        if parent is not None and target is not None:
+            raise ValueError("parent cannot be used with legacy target")
+        parent = parent if parent is not None else target
+        if parent is None:
+            raise TypeError("parent or legacy target is required")
         return run_async(
             self._async_client.import_ovpack(
                 file_path,
-                target,
+                parent,
                 on_conflict=on_conflict,
                 vector_mode=vector_mode,
             )
@@ -633,6 +650,14 @@ class SyncOpenViking:
     def wait_processed(self, timeout: float = None) -> Dict[str, Any]:
         """Wait for all async operations to complete"""
         return run_async(self._async_client.wait_processed(timeout))
+
+    def build_index(self, resource_uris: Union[str, List[str]], **kwargs) -> Dict[str, Any]:
+        """Manually trigger index building for resources."""
+        return run_async(self._async_client.build_index(resource_uris, **kwargs))
+
+    def summarize(self, resource_uris: Union[str, List[str]], **kwargs) -> Dict[str, Any]:
+        """Manually trigger summarization for resources."""
+        return run_async(self._async_client.summarize(resource_uris, **kwargs))
 
     def grep(
         self,

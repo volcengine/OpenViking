@@ -62,6 +62,10 @@ class WatchTask(BaseModel):
     )
     path: str = Field(..., description="Resource path to monitor")
     to_uri: Optional[str] = Field(None, description="Target URI")
+    to_is_directory: Optional[bool] = Field(
+        None,
+        description="Whether the target URI is a directory destination",
+    )
     parent_uri: Optional[str] = Field(None, description="Parent URI")
     reason: str = Field(default="", description="Reason for monitoring")
     instruction: str = Field(default="", description="Monitoring instruction")
@@ -120,6 +124,7 @@ class WatchTask(BaseModel):
     def to_storage_dict(self) -> Dict[str, Any]:
         """Convert task to dictionary for watch-task persistence."""
         data = self.to_dict()
+        data["to_is_directory"] = self.to_is_directory
         if self.auth_state is not None:
             data["auth_state"] = self.auth_state
         return data
@@ -384,6 +389,7 @@ class WatchManager:
         user_id: str = "default",
         original_role: str = "user",
         to_uri: Optional[str] = None,
+        to_is_directory: Optional[bool] = None,
         parent_uri: Optional[str] = None,
         reason: str = "",
         instruction: str = "",
@@ -428,6 +434,7 @@ class WatchManager:
             task = WatchTask(
                 path=path,
                 to_uri=to_uri,
+                to_is_directory=to_is_directory,
                 parent_uri=parent_uri,
                 reason=reason,
                 instruction=instruction,
@@ -463,6 +470,7 @@ class WatchManager:
         role: str,
         path: Optional[str] = None,
         to_uri: Optional[str] = None,
+        to_is_directory: Optional[bool] = None,
         parent_uri: Optional[str] = None,
         reason: Optional[str] = None,
         instruction: Optional[str] = None,
@@ -521,6 +529,8 @@ class WatchManager:
                 task.path = path
             if to_uri is not None:
                 task.to_uri = to_uri
+            if to_is_directory is not None:
+                task.to_is_directory = to_is_directory
             if parent_uri is not None:
                 task.parent_uri = parent_uri
             if reason is not None:

@@ -19,6 +19,11 @@ class _DummyQueue:
         self.msgs.append(msg)
 
 
+class _FailingQueue:
+    async def enqueue(self, msg):
+        raise RuntimeError("queue unavailable")
+
+
 class _DummyQueueManager:
     SEMANTIC = "semantic"
 
@@ -32,9 +37,13 @@ class _DummyQueueManager:
 class _DummyWaitTracker:
     def __init__(self):
         self.registered = []
+        self.failed = []
 
     def register_semantic_root(self, telemetry_id, msg_id):
         self.registered.append((telemetry_id, msg_id))
+
+    def mark_semantic_failed(self, telemetry_id, msg_id, error):
+        self.failed.append((telemetry_id, msg_id, error))
 
 
 class _DummyVikingFS:
@@ -178,3 +187,67 @@ async def test_resources_root_empty_import_is_error():
 
     assert res["status"] == "error"
     assert queue.msgs == []
+
+
+@pytest.mark.asyncio
+async def test_flat_file_refresh_enqueues_incremental_parent_summary():
+    queue = _DummyQueue()
+    qm = _DummyQueueManager(queue)
+    wait_tracker = _DummyWaitTracker()
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    with (
+        patch("openviking.utils.summarizer.get_queue_manager", return_value=qm),
+        patch(
+            "openviking.utils.summarizer.get_current_telemetry",
+            return_value=SimpleNamespace(telemetry_id="tid"),
+        ),
+        patch(
+            "openviking.utils.summarizer.get_request_wait_tracker",
+            return_value=wait_tracker,
+        ),
+    ):
+        result = await Summarizer(vlm_processor=None).refresh_file_parent(
+            file_uri="viking://resources/神雕.md",
+            ctx=ctx,
+            skip_vectorization=False,
+        )
+
+    assert result == {"status": "success", "enqueued_count": 1}
+    assert len(queue.msgs) == 1
+    msg = queue.msgs[0]
+    assert msg.uri == "viking://resources"
+    assert msg.recursive is False
+    assert msg.changes == {"modified": ["viking://resources/神雕.md"]}
+    assert msg.skip_vectorization is False
+    assert msg.telemetry_id == "tid"
+    assert wait_tracker.registered == [("tid", msg.id)]
+
+
+@pytest.mark.asyncio
+async def test_flat_file_refresh_marks_wait_failed_when_enqueue_fails():
+    qm = _DummyQueueManager(_FailingQueue())
+    wait_tracker = _DummyWaitTracker()
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    with (
+        patch("openviking.utils.summarizer.get_queue_manager", return_value=qm),
+        patch(
+            "openviking.utils.summarizer.get_current_telemetry",
+            return_value=SimpleNamespace(telemetry_id="tid"),
+        ),
+        patch(
+            "openviking.utils.summarizer.get_request_wait_tracker",
+            return_value=wait_tracker,
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="queue unavailable"):
+            await Summarizer(vlm_processor=None).refresh_file_parent(
+                file_uri="viking://resources/神雕.md",
+                ctx=ctx,
+            )
+
+    assert len(wait_tracker.registered) == 1
+    assert wait_tracker.failed == [
+        (*wait_tracker.registered[0], "queue unavailable"),
+    ]

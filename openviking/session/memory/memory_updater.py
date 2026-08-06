@@ -806,6 +806,7 @@ class MemoryUpdater:
         ctx: RequestContext,
         extract_context: ExtractContext = None,
         isolation_handler: MemoryIsolationHandler = None,
+        search_tags_by_uri: Dict[str, List[str]] = None,
     ) -> MemoryUpdateResult:
         result = MemoryUpdateResult()
         viking_fs = self._get_viking_fs()
@@ -925,6 +926,7 @@ class MemoryUpdater:
             ctx,
             extract_context=extract_context,
             uri_memory_type_map=uri_memory_type_map,
+            search_tags_by_uri=search_tags_by_uri,
         )
 
         # Apply links to endpoint files not covered by upsert_operations
@@ -1291,6 +1293,7 @@ class MemoryUpdater:
         ctx: RequestContext,
         extract_context: Any = None,
         uri_memory_type_map: Dict[str, str] = None,
+        search_tags_by_uri: Dict[str, List[str]] = None,
     ) -> int:
         """Vectorize written and edited memory files.
 
@@ -1299,12 +1302,14 @@ class MemoryUpdater:
             ctx: Request context
             extract_context: Extract context for embedding template rendering
             uri_memory_type_map: Mapping from URI to memory_type
+            search_tags_by_uri: Transient search tags to attach while indexing each URI
         """
         if not self._vikingdb:
             logger.debug("VikingDB not available, skipping vectorization")
             return 0
 
         uri_memory_type_map = uri_memory_type_map or {}
+        search_tags_by_uri = search_tags_by_uri or {}
         viking_fs = self._get_viking_fs()
         request_wait_tracker = get_request_wait_tracker()
         attempted_count = 0
@@ -1385,6 +1390,12 @@ class MemoryUpdater:
                 # Convert to embedding msg and enqueue
                 embedding_msg = EmbeddingMsgConverter.from_context(memory_context)
                 if embedding_msg:
+                    transient_tags = search_tags_by_uri.get(uri)
+                    if transient_tags:
+                        embedding_msg.context_data["search_tags"] = list(transient_tags)
+                        embedding_msg.context_data["_upsert_options"] = {
+                            "search_tag_mode": "append"
+                        }
                     if embedding_msg.telemetry_id:
                         request_wait_tracker.register_embedding_root(
                             embedding_msg.telemetry_id, embedding_msg.id

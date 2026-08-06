@@ -30,8 +30,8 @@ export default async function (pi: ExtensionAPI) {
 
   // --- Initialize modules ---
   const client = new OVClient(config);
-  const recall = new RecallManager(client, config);
   const sync = new SyncManager(client, config);
+  const recall = new RecallManager(client, config, () => sync.sessionId);
   const debugLog = (message: string) => {
     const file = process.env.OV_DEBUG_LOG;
     if (!file) return;

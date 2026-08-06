@@ -16,11 +16,14 @@ export interface OVConfig {
   userAgent: string;
   workspacePeer: boolean;
   recallPeerScope: "actor" | "all";
+  recallQueryExpansion: "auto" | "off";
+  recallQueryExpansionConfigured: boolean;
   syncTurns: boolean;
   recallTokenBudget: number;
   recallMaxContentChars: number;
   recallPreferAbstract: boolean;
   recallLimit: number;
+  recallLimitConfigured: boolean;
   scoreThreshold: number;
   minQueryLength: number;
   profileTokenBudget: number;
@@ -52,11 +55,16 @@ const DEFAULT_CONFIG: OVConfig = {
   userAgent: "",
   workspacePeer: true,
   recallPeerScope: "all",
+  // Server-side query expansion costs a model call before retrieval starts, so
+  // it has to be switchable from the client that pays the latency.
+  recallQueryExpansion: "auto",
+  recallQueryExpansionConfigured: false,
   syncTurns: true,
   recallTokenBudget: 2000,
   recallMaxContentChars: 500,
   recallPreferAbstract: true,
-  recallLimit: 6,
+  recallLimit: 10,
+  recallLimitConfigured: false,
   scoreThreshold: 0.35,
   minQueryLength: 3,
   profileTokenBudget: 10000,
@@ -98,6 +106,8 @@ export function loadConfig(extensionDir: string): OVConfig {
     user: creds.user,
     peerId: creds.peerId,
     userAgent: buildUserAgent("pi", EXTENSION_VERSION),
+    recallLimitConfigured: Object.prototype.hasOwnProperty.call(file, "recallLimit"),
+    recallQueryExpansionConfigured: Object.prototype.hasOwnProperty.call(file, "recallQueryExpansion"),
     recallTokenBudget: file.recallTokenBudget ?? file.recallBudget ?? DEFAULT_CONFIG.recallTokenBudget,
     scoreThreshold: file.scoreThreshold ?? file.recallScoreThreshold ?? DEFAULT_CONFIG.scoreThreshold,
     minQueryLength: file.minQueryLength ?? file.recallMinQueryLength ?? DEFAULT_CONFIG.minQueryLength,
@@ -121,6 +131,14 @@ export function loadConfig(extensionDir: string): OVConfig {
   if (process.env.OPENVIKING_RECALL_PEER_SCOPE) {
     config.recallPeerScope = process.env.OPENVIKING_RECALL_PEER_SCOPE === "actor" ? "actor" : "all";
   }
+  if (process.env.OPENVIKING_RECALL_LIMIT) {
+    config.recallLimit = Number(process.env.OPENVIKING_RECALL_LIMIT);
+    config.recallLimitConfigured = true;
+  }
+  if (process.env.OPENVIKING_RECALL_QUERY_EXPANSION) {
+    config.recallQueryExpansion = process.env.OPENVIKING_RECALL_QUERY_EXPANSION === "off" ? "off" : "auto";
+    config.recallQueryExpansionConfigured = true;
+  }
 
   config.recallLimit = clampInt(config.recallLimit, 1, 50, DEFAULT_CONFIG.recallLimit);
   config.recallMaxContentChars = clampInt(config.recallMaxContentChars, 100, 5000, DEFAULT_CONFIG.recallMaxContentChars);
@@ -141,6 +159,7 @@ export function loadConfig(extensionDir: string): OVConfig {
   config.captureToolMaxChars = clampInt(config.captureToolMaxChars, 200, 20000, DEFAULT_CONFIG.captureToolMaxChars);
   config.captureMode = config.captureMode === "keyword" ? "keyword" : "semantic";
   config.recallPeerScope = config.recallPeerScope === "actor" ? "actor" : "all";
+  config.recallQueryExpansion = config.recallQueryExpansion === "off" ? "off" : "auto";
   if (!Array.isArray(config.bypassPatterns)) config.bypassPatterns = [];
   config.peerId = resolveEffectivePeerId({ cfg: config as any, cwd: process.cwd() }).peerId;
   return config;

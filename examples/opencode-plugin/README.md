@@ -132,7 +132,12 @@ Create `~/.config/opencode/openviking-config.json`:
 }
 ```
 
-API keys are resolved from environment variables or `~/.openviking/ovcli.conf` and sent as `Authorization: Bearer ...` by both hooks and the MCP proxy. `account` and `user` are trusted-mode identity
+`autoRecall.limit` is a legacy quota-scaling input, not a final result cap.
+Explicit values from 1 through 5 produce an effective total quota of 6 because
+each coding category keeps one retrieval slot. Use Context `quotas` directly
+when exact category ceilings are required.
+
+API keys are resolved from environment variables or `~/.openviking/ovcli.conf` and sent as `Authorization: Bearer ...` by both hooks and the MCP proxy. Recall goes through the server-side context face (`POST /api/v1/search/search` with `mode="context"`), falling back to the deprecated `/api/v1/search/recall` on older deployments. `account` and `user` are trusted-mode identity
 headers sent as `X-OpenViking-Account` and `X-OpenViking-User`; leave them empty
 when using API-key mode with user/admin API keys.
 By default the plugin derives a peer from the project directory using Claude's

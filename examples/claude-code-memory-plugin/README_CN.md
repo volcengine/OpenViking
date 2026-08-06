@@ -142,13 +142,18 @@ claude
 | 环境变量                                | 默认值        | 说明                                                                |
 |----------------------------------------|---------------|--------------------------------------------------------------------|
 | `OPENVIKING_AUTO_RECALL`               | `true`        | 启用每轮自动召回                                                   |
-| `OPENVIKING_RECALL_LIMIT`              | `6`           | 每轮最多注入的记忆条数                                             |
-| `OPENVIKING_RECALL_TOKEN_BUDGET`       | `2000`        | 内联内容的 token 预算；超出预算的项降级为 URI hint                  |
+| `OPENVIKING_RECALL_LIMIT`              | `10`          | 遗留配额缩放输入；转换为六类 coding 配额，不是最终结果上限          |
+| `OPENVIKING_RECALL_TOKEN_BUDGET`       | `2000`        | 仅用于最终 raw-find fallback 的内联 token 预算                      |
 | `OPENVIKING_RECALL_MAX_CONTENT_CHARS`  | `500`         | 单条记忆内容字符上限                                               |
 | `OPENVIKING_RECALL_PREFER_ABSTRACT`    | `true`        | 有 abstract 时优先用 abstract 而非完整 body                        |
 | `OPENVIKING_SCORE_THRESHOLD`           | `0.35`        | 最低相关度得分（0–1）                                               |
 | `OPENVIKING_MIN_QUERY_LENGTH`          | `3`           | 短于此长度的 query 跳过召回                                        |
 | `OPENVIKING_LOG_RANKING_DETAILS`       | `false`       | 每候选打分日志（很啰嗦）                                           |
+| `OPENVIKING_RECALL_MAX_TOKENS`         | `1600`        | 服务端组装上下文块的 token 预算（与本地压缩输入上限相互独立）         |
+| `OPENVIKING_RECALL_DEDUP_TURNS`        | `5`           | 跨轮冷却：最近 N 轮已注入过的 URI 本轮跳过                           |
+| `OPENVIKING_RECALL_QUERY_EXPANSION`    | `auto`        | `auto` 让服务端结合会话上下文扩展短提问；`off` 关闭                   |
+| `OPENVIKING_RECALL_COMPRESS`           | `auto`        | digest 压缩：`off`、`client`（本地宿主 CLI）、`server`、`auto`（本地优先、失败回落服务端） |
+| `OPENVIKING_RECALL_COMPRESS_MAX_BULLETS` | `6`         | digest 条数上限                                                     |
 
 #### 捕获调优
 
@@ -208,6 +213,30 @@ OPENVIKING_BYPASS_SESSION=1 claude
 
 bypass 命中时所有 hook 直接放行，不联系 OpenViking。
 
+### 插件配置放在 `ovcli.conf`
+
+客户端侧的调优应写在 `~/.openviking/ovcli.conf` 的 `plugin` 区域。共享键对所有 harness 生效，分 harness 的对象可覆盖它：
+
+```json
+{
+  "url": "http://127.0.0.1:1933",
+  "plugin": {
+    "recallCompress": "auto"
+  }
+}
+```
+
+解析顺序：env vars → `plugin.claude_code` → `plugin` → `ov.conf` 里遗留的 `claude_code` 块 → 内置默认值。
+除非用户显式覆盖，插件不会发送 `limit=10`、`max_tokens=1600`、
+`query_expansion="auto"` 等由服务端拥有的 Context 默认值。
+显式设置遗留 `recallLimit` 时，插件会将其转换为各分类 coding 配额，而不会作为
+最终结果上限执行。因此值为 1 到 5 时，有效总配额仍为 6，即六个 coding 域各一个
+检索槽位。新的直接 API 接入应优先配置 `quotas`。
+
+### digest 压缩
+
+`recallCompress` 决定 digest 在哪里生成，默认值为 `auto`。`client` 始终通过 `claude -p` 在本地压缩（默认 Sonnet + 低推理档——Haiku 不支持 effort 旋钮，时延不可控），token 成本留在你自己的订阅额度里。`server` 让 OpenViking 生成 digest。`auto` 优先本地，探测不到可用的宿主 CLI 时回落到服务端。压缩器执行失败或输出校验失败时会退回未压缩的上下文块；任一压缩器精确返回 `NO_RELEVANT_MEMORY` 都是成功的空结果，不注入任何内容。压缩子进程运行时所有 OpenViking hook 均被禁用，不会递归。旧的环境变量 `OPENVIKING_RECALL_REWRITE` 和配置键 `recallRewrite` 仍作为低优先级兼容别名保留。
+
 ### 遗留 `claude_code` 块（在 `ov.conf` 里）
 
 早期插件版本把调优字段配在 `~/.openviking/ov.conf` 的 `claude_code` 块里。出于向后兼容，这种方式仍能用——上面每个 env var 都有对应的 camelCase 字段（`OPENVIKING_RECALL_LIMIT` → `claude_code.recallLimit`、`OPENVIKING_BYPASS_SESSION_PATTERNS` → `claude_code.bypassSessionPatterns` JSON 数组等）。env vars 优先级更高。新部署应优先使用 env vars + shell rc——服务端配置文件不应承载每开发机自己的调优偏好。
@@ -219,7 +248,7 @@ bypass 命中时所有 hook 直接放行，不联系 OpenViking。
 | Hook                | 超时   | 备注                                                                                          |
 |---------------------|--------|----------------------------------------------------------------------------------------------|
 | `SessionStart`      | `120s` | 充裕，因为 resume / compact 可能拉一个较大的 archive overview                                |
-| `UserPromptSubmit`  | `8s`   | 自动召回必须快，prompt 提交不能被 hook 阻塞                                                  |
+| `UserPromptSubmit`  | `60s`  | 给默认本地压缩器留出完成时间；其自身超时更短，失败时可在 hook 截止前安全降级                  |
 | `Stop`              | `45s`  | 自动捕获要解析 transcript + 推 turn；async detach 让用户感知接近 0                          |
 | `PreCompact`        | `30s`  | 同步 commit，CC 紧接着会改 transcript                                                        |
 | `SessionEnd`        | `30s`  | 最终 commit；async detach                                                                    |

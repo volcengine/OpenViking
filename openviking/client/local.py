@@ -633,7 +633,12 @@ class LocalClient(BaseClient):
             offset: Starting line number (0-indexed). Default 0.
             limit: Number of lines to read. -1 means read to end. Default -1.
         """
-        return await self._service.fs.read(uri, ctx=self._ctx, offset=offset, limit=limit)
+        return await self._service.fs.read_visible(
+            uri,
+            ctx=self._ctx,
+            offset=offset,
+            limit=limit,
+        )
 
     async def read_raw(self, uri: str, offset: int = 0, limit: int = -1) -> str:
         """Read raw file content, including hidden MEMORY_FIELDS metadata."""
@@ -655,6 +660,7 @@ class LocalClient(BaseClient):
         wait: bool = False,
         timeout: Optional[float] = None,
         telemetry: TelemetryRequest = False,
+        processing_mode: str = "semantic_and_vectors",
     ) -> Dict[str, Any]:
         """Write text content to an existing file and refresh semantics/vectors."""
         execution = await run_with_telemetry(
@@ -667,6 +673,7 @@ class LocalClient(BaseClient):
                 mode=mode,
                 wait=wait,
                 timeout=timeout,
+                processing_mode=processing_mode,
             ),
         )
         return attach_telemetry_payload(
@@ -837,17 +844,20 @@ class LocalClient(BaseClient):
         session_id: Optional[str] = None,
         telemetry: TelemetryRequest = False,
         memory_policy: Optional[Dict[str, Any]] = None,
+        auto_commit_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create a new session.
 
         Args:
             session_id: Optional session ID. If provided, creates a session with the given ID.
                        If None, creates a new session with auto-generated ID.
+            memory_policy: Optional default extraction policy for future commits.
+            auto_commit_policy: Optional automatic-commit policy overrides.
         """
         execution = await run_with_telemetry(
             operation="session.create",
             telemetry=telemetry,
-            fn=lambda: self._create_session_impl(session_id, memory_policy),
+            fn=lambda: self._create_session_impl(session_id, memory_policy, auto_commit_policy),
         )
         return attach_telemetry_payload(
             execution.result,
@@ -858,17 +868,20 @@ class LocalClient(BaseClient):
         self,
         session_id: Optional[str],
         memory_policy: Optional[Dict[str, Any]],
+        auto_commit_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         await self._service.initialize_user_directories(self._ctx)
         session = await self._service.sessions.create(
             self._ctx,
             session_id,
             memory_policy=memory_policy,
+            auto_commit_policy=auto_commit_policy,
         )
         return {
             "session_id": session.session_id,
             "uri": session.uri,
             "user": session.user.to_dict(),
+            "auto_commit_policy": self._service.sessions.effective_auto_commit_policy(session),
         }
 
     async def list_sessions(self) -> List[Any]:
@@ -881,6 +894,7 @@ class LocalClient(BaseClient):
         result = session.meta.to_dict()
         result["uri"] = session.uri
         result["user"] = session.user.to_dict()
+        result["auto_commit_policy"] = self._service.sessions.effective_auto_commit_policy(session)
         return result
 
     async def get_session_context(
@@ -1058,6 +1072,12 @@ class LocalClient(BaseClient):
             await add_async(role, message_parts, **add_kwargs)
         else:
             session.add_message(role, message_parts, **add_kwargs)
+        await self._service.sessions.maybe_schedule_auto_commit(
+            session_id,
+            self._ctx,
+            reason_hint="message_write",
+            session=session,
+        )
         return {
             "session_id": session_id,
             "message_count": len(session.messages),
@@ -1123,6 +1143,12 @@ class LocalClient(BaseClient):
             added = await add_many_async(specs)
         else:
             added = session.add_messages(specs)
+        await self._service.sessions.maybe_schedule_auto_commit(
+            session_id,
+            self._ctx,
+            reason_hint="message_write",
+            session=session,
+        )
         return {
             "session_id": session_id,
             "message_count": len(session.messages),

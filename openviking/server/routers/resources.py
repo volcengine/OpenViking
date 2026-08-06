@@ -182,6 +182,7 @@ async def temp_upload(
             processing_mode=signed.processing_mode,
             tags=signed.tags,
             tag_mode=signed.tag_mode,
+            parse_mode=signed.parse_mode,
         )
 
     try:

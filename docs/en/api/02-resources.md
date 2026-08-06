@@ -143,7 +143,7 @@ This endpoint is the core entry point for resource management, supporting adding
 **Processing Flow**:
 1. Identify and validate the resource source (URL or uploaded temporary file)
 2. Resolve the target URI
-3. Call the corresponding Parser to parse content
+3. Call the corresponding format Parser; `args.parse_mode` controls whether the converted Markdown body may be split
 4. Build the directory tree and write to AGFS
 5. Run post-ingest processing according to `processing_mode`: `semantic_and_vectors` generates semantic artifacts and vectors; `vectors_only` skips semantic understanding and only enqueues file vectorization
 6. Wait for semantic processing/vectorization completion when `wait=true`; with `wait=false`, return a `task_id` for queue tracking
@@ -178,7 +178,7 @@ This endpoint is the core entry point for resource management, supporting adding
 | exclude | string | No | None | File patterns to exclude (glob) |
 | directly_upload_media | bool | No | True | Whether to directly upload media files |
 | preserve_structure | bool | No | None | Whether to preserve directory structure |
-| args | object | No | `{}` | Parser-specific import options forwarded to the source parser/accessor. E.g. `args.site=true/false` forces/opts out of whole-site (sitemap/RSS) ingestion, `args.max_pages` etc. override the `webfeed` config; the recursive web crawler accepts `args.depth`, `args.max_pages`, `args.include_paths`, `args.exclude_paths`, `args.allow_external_links`, `args.skip_download_links`; Feishu user-token imports pass `args.feishu_access_token`. Core `add_resource` fields such as `path`, `to`, `watch_interval`, `include`, and `exclude` are not allowed inside `args` |
+| args | object | No | `{}` | Parser-specific import options forwarded to the source parser/accessor. `args.parse_mode` accepts `default` (existing splitting behavior) or `no_split` (parse and convert each source document to one Markdown body). E.g. `args.site=true/false` forces/opts out of whole-site (sitemap/RSS) ingestion, `args.max_pages` etc. override the `webfeed` config; the recursive web crawler accepts `args.depth`, `args.max_pages`, `args.include_paths`, `args.exclude_paths`, `args.allow_external_links`, `args.skip_download_links`; Feishu user-token imports pass `args.feishu_access_token`. Core `add_resource` fields such as `path`, `to`, `watch_interval`, `include`, and `exclude` are not allowed inside `args` |
 | watch_interval | float | No | 0 | Scheduled update interval (minutes). >0 creates a task for a re-readable URL/sitemap/RSS source; uploaded `temp_file_id` content is a one-time snapshot and must be re-added when it changes. <=0 cancels a task; explicit `to` wins, otherwise binds to the imported `root_uri` |
 | processing_mode | string | No | `semantic_and_vectors` | Post-ingest processing mode. `semantic_and_vectors` is the normal flow: generate semantic artifacts (`.abstract.md`, `.overview.md`) and vectors. `vectors_only` skips semantic understanding/VLM summarization and only vectorizes current resource files |
 | telemetry | TelemetryRequest | No | False | Whether to return telemetry data |
@@ -204,6 +204,9 @@ This endpoint is the core entry point for resource management, supporting adding
 - Feishu/Lark user-token watches require `FEISHU_APP_ID` and `FEISHU_APP_SECRET` (or `feishu.app_id` and `feishu.app_secret` in `ov.conf`) because Feishu refresh tokens are bound to the app that issued them. The supplied user token must come from the same Feishu app configured in OpenViking.
 - Watch task token state is stored in the internal `viking://resources/.watch_tasks.json` control file and is hidden from watch API/MCP/CLI responses. If VikingFS file encryption is enabled, this control file is encrypted at rest; otherwise the server-side control file contains plaintext token state.
 - For local directory inputs, scanning respects `.gitignore` files (root and nested) with standard Git semantics; `ignore_dirs`, `include`, and `exclude` further refine what is ingested.
+- `args.parse_mode=no_split` still invokes the normal format Parser. PDF, Word, PowerPoint, HTML, and other supported documents are converted to Markdown, but heading-, paragraph-, and size-based splitting is skipped. A directory import applies this independently to each supported document and continues to honor `.gitignore`, filters, and `preserve_structure`.
+- For a single-file input in `no_split` mode, when parsing produces exactly one visible file and `to` is omitted, that file is stored directly under the resolved parent (for example, `guide.md` becomes `viking://resources/guide.md`). No wrapper directory or directory-level `.abstract.md` / `.overview.md` is created. If parsing also produces images or other visible files, the wrapper directory is retained. An explicit `to` is always preserved as the exact final URI.
+- `no_split` changes only the stored Markdown layout. Semantic processing, file vectorization, and any internal embedding chunking remain unchanged. Relative Markdown links are resolved against the same no-split output layout, so links do not point to split-only paths. A configured Understanding parser that cannot guarantee a single Markdown body returns an explicit unsupported-mode error.
 - To create or update plain text directly, use [content/write](03-filesystem.md#write) instead of `add_resource`. Semantic processing and embeddings are refreshed automatically after resource ingestion and content writes.
 
 #### 3. Usage Examples
@@ -322,6 +325,12 @@ result = client.add_resource(
 )
 print(f"Added: {result['root_uri']}")
 
+# Parse each document to Markdown without splitting its body
+result = client.add_resource(
+    "./documents",
+    args={"parse_mode": "no_split"},
+)
+
 # Add from URL to specific location
 result = client.add_resource(
     "https://example.com/api-docs.md",
@@ -390,6 +399,7 @@ client.add_resource(
 const task = await client.addResource("https://example.com/docs", {
   to: "viking://resources/docs/",
   wait: true,
+  args: { parse_mode: "no_split" },
 });
 console.log(task);
 ```
@@ -400,6 +410,7 @@ console.log(task);
 result, err := client.AddResource(ctx, "./documents/guide.md", &openviking.AddResourceOptions{
     Reason: "User guide documentation",
     Wait:   true,
+    Args:   map[string]any{"parse_mode": "no_split"},
 })
 if err != nil {
     return err
@@ -412,6 +423,9 @@ fmt.Println(result["root_uri"])
 ```bash
 # Add local file
 ov add-resource ./documents/guide.md --reason "User guide"
+
+# Parse each document to one Markdown body
+ov add-resource ./documents --args parse_mode:no_split
 
 # Add from URL
 ov add-resource https://example.com/guide.md --to viking://resources/guide.md

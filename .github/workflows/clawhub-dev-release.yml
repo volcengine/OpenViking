@@ -7,6 +7,11 @@ name: OpenViking OpenClaw plugin release
 # until ClawHub legacy /download hashes are compatible with npm-pack releases.
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - "examples/openclaw-plugin/**"
   workflow_dispatch:
     inputs:
       version:
@@ -39,6 +44,12 @@ on:
         required: false
         type: boolean
         default: true
+
+# Serialize releases so back-to-back merges don't race the auto-generated
+# YYYY.M.D / YYYY.M.D-N version resolution.
+concurrency:
+  group: openclaw-plugin-release
+  cancel-in-progress: false
 
 permissions:
   actions: read
@@ -326,7 +337,7 @@ jobs:
 
   publish-clawhub:
     name: Publish to ClawHub
-    if: ${{ inputs.publish_clawhub }}
+    if: ${{ github.event_name == 'push' || inputs.publish_clawhub }}
     needs:
       - guard
       - prepare-package-source
@@ -488,9 +499,24 @@ jobs:
           VERSION: ${{ needs.guard.outputs.version }}
         run: |
           set -euo pipefail
-          node "$CLAWHUB_BIN" package inspect "@openviking/openclaw-plugin" \
-            --version "$VERSION" \
-            --json | tee "$RUNNER_TEMP/clawhub-package-inspect.json"
+          # ClawHub version lookup is not read-after-write consistent and the
+          # API rate-limit window can return "Version not found" seconds after
+          # a successful publish. Retry with backoff before failing the job.
+          attempts=6
+          delay=30
+          for i in $(seq 1 "$attempts"); do
+            if node "$CLAWHUB_BIN" package inspect "@openviking/openclaw-plugin" \
+              --version "$VERSION" \
+              --json | tee "$RUNNER_TEMP/clawhub-package-inspect.json"; then
+              break
+            fi
+            if [ "$i" -eq "$attempts" ]; then
+              echo "::error title=ClawHub verify failed::Version $VERSION still not visible after $attempts attempts."
+              exit 1
+            fi
+            echo "ClawHub version $VERSION not visible yet (attempt $i/$attempts); retrying in ${delay}s..."
+            sleep "$delay"
+          done
 
           python3 - <<'PY'
           import json
@@ -519,7 +545,7 @@ jobs:
 
   publish-npm:
     name: Publish to npm
-    if: ${{ inputs.publish_npm }}
+    if: ${{ github.event_name == 'push' || inputs.publish_npm }}
     needs:
       - guard
       - prepare-package-source

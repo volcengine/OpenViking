@@ -22,7 +22,12 @@ from openviking.server.dependencies import get_service
 from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
-from openviking_cli.exceptions import InternalError, NotFoundError, OpenVikingError
+from openviking_cli.exceptions import (
+    InternalError,
+    InvalidArgumentError,
+    NotFoundError,
+    OpenVikingError,
+)
 
 router = APIRouter(prefix="/api/v1/snapshot", tags=["snapshot"])
 
@@ -158,6 +163,7 @@ async def restore(
 async def show(
     target_ref: str = Query(..., description="Commit oid, branch, or tag"),
     path: Optional[str] = Query(None, description="Optional viking:// URI for a single blob"),
+    raw: bool = Query(True, description="Return raw stored content with memory fields"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Without ``path``: commit metadata JSON. With ``path``: raw blob bytes + X-Snapshot-* headers."""
@@ -177,12 +183,23 @@ async def show(
             raise mapped from e
         raise
 
+    content = blob["bytes"]
+    if not raw:
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise InvalidArgumentError("raw=false requires UTF-8 snapshot content") from exc
+
+        from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+
+        content = MemoryFileUtils.read(text, uri=path).content.encode("utf-8")
+
     return FastAPIResponse(
-        content=blob["bytes"],
+        content=content,
         media_type="application/octet-stream",
         headers={
             "X-Snapshot-Oid": str(blob["oid"]),
-            "X-Snapshot-Size": str(blob["size"]),
+            "X-Snapshot-Size": str(len(content)),
         },
     )
 
@@ -196,6 +213,7 @@ async def diff(
         description="Base commit oid, branch, or tag; omit to compare against an empty file",
     ),
     to_ref: str = Query(..., alias="to", description="Target commit oid, branch, or tag"),
+    raw: bool = Query(True, description="Compare raw stored content with memory fields"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Return a unified text diff for one path between two snapshots."""
@@ -205,6 +223,7 @@ async def diff(
             path=path,
             from_ref=from_ref,
             to_ref=to_ref,
+            raw=raw,
             ctx=_ctx,
         )
     except (AGFSClientError, ValueError) as exc:

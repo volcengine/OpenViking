@@ -140,18 +140,22 @@ class AsyncOpenViking:
         session_id: Optional[str] = None,
         telemetry: TelemetryRequest = False,
         memory_policy: Optional[Dict[str, Any]] = None,
+        auto_commit_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create a new session.
 
         Args:
             session_id: Optional session ID. If provided, creates a session with the given ID.
                        If None, creates a new session with auto-generated ID.
+            memory_policy: Optional default extraction policy for future commits.
+            auto_commit_policy: Optional automatic-commit policy overrides.
         """
         await self._ensure_initialized()
         return await self._client.create_session(
             session_id,
             telemetry=telemetry,
             memory_policy=memory_policy,
+            auto_commit_policy=auto_commit_policy,
         )
 
     async def list_sessions(self) -> List[Any]:
@@ -682,6 +686,7 @@ class AsyncOpenViking:
         wait: bool = False,
         timeout: Optional[float] = None,
         telemetry: TelemetryRequest = False,
+        processing_mode: str = "semantic_and_vectors",
     ) -> Dict[str, Any]:
         """Write text content to an existing file and refresh semantics/vectors."""
         await self._ensure_initialized()
@@ -692,6 +697,7 @@ class AsyncOpenViking:
             wait=wait,
             timeout=timeout,
             telemetry=telemetry,
+            processing_mode=processing_mode,
         )
 
     async def set_tags(
@@ -729,7 +735,7 @@ class AsyncOpenViking:
         simple = kwargs.get("simple", False)
         output = kwargs.get("output", "original")
         abs_limit = kwargs.get("abs_limit", 256)
-        show_all_hidden = kwargs.get("show_all_hidden", True)
+        show_all_hidden = kwargs.get("show_all_hidden", False)
         node_limit = kwargs.get("node_limit", 1000)
         sort_by = kwargs.get("sort_by")
         sort_order = kwargs.get("sort_order", "asc")
@@ -791,7 +797,7 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         output = kwargs.get("output", "original")
         abs_limit = kwargs.get("abs_limit", 128)
-        show_all_hidden = kwargs.get("show_all_hidden", True)
+        show_all_hidden = kwargs.get("show_all_hidden", False)
         node_limit = kwargs.get("node_limit", 1000)
         return await self._client.tree(
             uri,

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from openviking.message import Message, TextPart
+from openviking.message import Message, TextPart, ToolPart
 from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOperations
 from openviking.session.train import (
     Case,
@@ -90,8 +90,8 @@ class FakeVikingFS:
     async def read_file(self, uri, ctx=None):
         return self.files[uri]
 
-    async def write_file(self, uri, content, ctx=None, lock_handle=None):
-        del lock_handle
+    async def write_file(self, uri, content, ctx=None, lock_handle=None, lease_ref=None):
+        del lock_handle, lease_ref
         self.files[uri] = content
         self.writes.append((uri, content, ctx))
 
@@ -157,7 +157,24 @@ async def test_trajectory_rollout_analyzer_extracts_and_persists_trajectory(monk
         source_archive_uri="viking://user/u/sessions/s1/history/archive_001",
     )
 
-    analysis = await analyzer.analyze(_rollout(), context)
+    rollout = _rollout()
+    rollout.messages.append(
+        Message(
+            id="tool-result",
+            role="user",
+            parts=[
+                ToolPart(
+                    tool_id="read-1",
+                    tool_name="read_experience",
+                    tool_input={"uri": "viking://user/u/memories/experiences/exchange.md"},
+                    tool_output="experience body",
+                    tool_status="completed",
+                )
+            ],
+        )
+    )
+
+    analysis = await analyzer.analyze(rollout, context)
 
     assert FakeExtractLoop.created
     created_loop = FakeExtractLoop.created[0]
@@ -173,6 +190,7 @@ async def test_trajectory_rollout_analyzer_extracts_and_persists_trajectory(monk
     assert (
         '"source_archive_uri": "viking://user/u/sessions/s1/history/archive_001"' in fs.writes[0][1]
     )
+    assert '"source_experience_uris"' not in fs.writes[0][1]
     assert '"source_session_id"' not in fs.writes[0][1]
     assert '"source_messages_uri"' not in fs.writes[0][1]
     assert '"source_task_id"' not in fs.writes[0][1]

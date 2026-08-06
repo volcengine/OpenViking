@@ -220,7 +220,6 @@ OpenViking は、コンテキストデータエコシステムを構築するた
 - [NoKV](https://github.com/NoKV-Lab/NoKV) - AI ネイティブの分散ファイルシステム
 - [loopx](https://github.com/huangruiteng/loopx) - 軽量なループエンジニアリング状態カーネル
 - [Hermes Agent](https://github.com/NousResearch/hermes-agent) - あなたと共に成長するエージェント
-- [heima](https://github.com/litentry/heima) - Substrate ベースの EVM 互換 L1 チェーン
 
 パートナーリストへの参加に興味がありますか？コミュニティに issue を提出して申請してください。
 

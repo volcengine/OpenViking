@@ -25,13 +25,13 @@ from openviking.parse.parsers.constants import (
     FILE_TYPE_OTHER,
 )
 from openviking.parse.parsers.media.utils import (
+    MPEG_TS_PROBE_BYTES,
     generate_audio_summary,
     generate_image_summary,
     generate_video_summary,
     get_media_type,
 )
 from openviking.prompts import render_prompt
-from openviking.utils.ingest_options import IngestOptions
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
@@ -49,6 +49,7 @@ from openviking.utils.circuit_breaker import (
     CircuitBreakerOpen,
     classify_api_error,
 )
+from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.model_retry import ERROR_CLASS_INPUT_TOO_LARGE, ERROR_CLASS_PERMANENT
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import VikingURI
@@ -1158,6 +1159,17 @@ class SemanticProcessor(DequeueHandlerBase):
         file_name = file_path.split("/")[-1]
         llm_sem = llm_sem or asyncio.Semaphore(self.max_concurrent_llm)
         media_type = get_media_type(file_name, None)
+        if file_name.lower().endswith(".ts"):
+            try:
+                prefix = await get_viking_fs().read(
+                    file_path,
+                    offset=0,
+                    size=MPEG_TS_PROBE_BYTES,
+                    ctx=ctx,
+                )
+            except Exception:
+                prefix = None
+            media_type = get_media_type(file_name, None, content=prefix)
         if media_type == "image":
             return await generate_image_summary(file_path, file_name, llm_sem, ctx=ctx)
         elif media_type == "audio":

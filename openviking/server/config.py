@@ -8,6 +8,8 @@ from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 # Import auth plugin registry for config validation
+from openviking.server.auth.ldap_config import LDAPConfig
+from openviking.server.auth.oidc_config import OIDCConfig
 from openviking.server.auth.registry import get_registry
 from openviking.server.identity import AuthMode
 from openviking_cli.utils import get_logger
@@ -82,7 +84,7 @@ class AddTargetsConfig(BaseModel):
 
 
 class AgentEvolutionConfig(BaseModel):
-    """Server-wide Agent Evolution production switch."""
+    """Default Agent Evolution setting for accounts without an override."""
 
     enabled: bool = False
 
@@ -268,8 +270,20 @@ class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 1933
     workers: int = 1
+    # Seconds an idle HTTP keep-alive connection is kept open before the server
+    # closes it. Defaults to 5 to match uvicorn's built-in default and preserve
+    # the existing service behavior. Raise it above the idle-connection lifetime
+    # of any upstream client or load balancer that reuses connections (e.g. the
+    # serverless VKE forwarder keeps idle connections for up to 60s via
+    # WithMaxIdleConnDuration(1*time.Minute)); otherwise the server may close
+    # connections the client still believes are reusable, causing sporadic
+    # connection-reset / EOF errors.
+    timeout_keep_alive: int = 5
     auth_mode: Optional[str] = None  # If None, auto-detect based on root_api_key
     root_api_key: Optional[str] = None
+    # OIDC/LDAP authentication configuration
+    oidc: Optional[OIDCConfig] = None
+    ldap: Optional[LDAPConfig] = None
     profile_enabled: bool = False
     cors_origins: List[str] = Field(default_factory=lambda: ["*"])
     with_bot: bool = False  # Enable Bot API proxy to Vikingbot

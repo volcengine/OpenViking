@@ -337,6 +337,7 @@ class BaseClient(ABC):
         session_id: Optional[str] = None,
         telemetry: TelemetryRequest = False,
         memory_policy: Optional[Dict[str, Any]] = None,
+        auto_commit_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create a new session.
 
@@ -345,6 +346,7 @@ class BaseClient(ABC):
                        If None, creates a new session with auto-generated ID.
             telemetry: Whether to attach operation telemetry data to the result.
             memory_policy: Optional default memory extraction policy.
+            auto_commit_policy: Optional automatic-commit policy overrides.
         """
         ...
 

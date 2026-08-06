@@ -8,17 +8,14 @@ import pytest
 
 pytest.importorskip("langchain_core")
 pytest.importorskip("langgraph")
+pytest.importorskip("langchain_openviking")
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from openviking_cli._sdk_import import import_openviking_sdk
-
-# Load the workspace SDK before the integration package so this cross-package
-# feature is tested even when an older released SDK is installed.
-_openviking_sdk = import_openviking_sdk()
-actor_peer_module = import_module("openviking.integrations.langchain.actor_peer")
-_langchain_integration = import_module("openviking.integrations.langchain")
-_langchain_client = import_module("openviking.integrations.langchain.client")
+_openviking_sdk = import_module("openviking_sdk")
+actor_peer_module = import_module("langchain_openviking.actor_peer")
+_langchain_integration = import_module("langchain_openviking")
+_langchain_client = import_module("langchain_openviking.client")
 InMemoryOpenVikingClient = _langchain_integration.InMemoryOpenVikingClient
 OpenVikingContextMiddleware = _langchain_integration.OpenVikingContextMiddleware
 OpenVikingClientHandle = _langchain_client.OpenVikingClientHandle
@@ -36,12 +33,12 @@ def _older_sdk_actor_peer_support(
 
 
 def test_langchain_exports_actor_peer_capability_helper():
-    integration = import_module("openviking.integrations.langchain")
+    integration = import_module("langchain_openviking")
     assert integration.has_request_actor_peer_support()
     assert "has_request_actor_peer_support" in integration.__all__
 
     namespace: dict[str, Any] = {}
-    exec("from openviking.integrations.langchain import *", namespace)
+    exec("from langchain_openviking import *", namespace)
 
     assert namespace["has_request_actor_peer_support"] is (
         integration.has_request_actor_peer_support
@@ -52,12 +49,12 @@ def test_langchain_exports_actor_peer_capability_helper():
 def test_langchain_star_import_remains_usable_with_older_sdk(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    integration = import_module("openviking.integrations.langchain")
+    integration = import_module("langchain_openviking")
     with _older_sdk_actor_peer_support(monkeypatch):
         assert not integration.has_request_actor_peer_support()
 
         namespace: dict[str, Any] = {}
-        exec("from openviking.integrations.langchain import *", namespace)
+        exec("from langchain_openviking import *", namespace)
 
         assert namespace["OpenVikingContextMiddleware"] is (integration.OpenVikingContextMiddleware)
         assert not namespace["has_request_actor_peer_support"]()

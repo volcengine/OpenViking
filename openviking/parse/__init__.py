@@ -11,6 +11,7 @@ from openviking.parse.directory_scan import (
     DirectoryScanResult,
     scan_directory,
 )
+from openviking.parse.mode import ParseMode, ParseModeInput
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.html import HTMLParser
 from openviking.parse.parsers.markdown import MarkdownParser
@@ -42,4 +43,6 @@ __all__ = [
     "ClassifiedFile",
     "DirectoryScanResult",
     "scan_directory",
+    "ParseMode",
+    "ParseModeInput",
 ]

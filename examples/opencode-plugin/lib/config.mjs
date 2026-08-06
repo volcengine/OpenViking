@@ -17,6 +17,9 @@ const DEFAULT_CONFIG = {
   peerId: "",
   workspacePeer: true,
   recallPeerScope: "all",
+  // Server-side query expansion costs a model call before retrieval starts, so
+  // it has to be switchable from the client that pays the latency.
+  recallQueryExpansion: "auto",
   enabled: true,
   timeoutMs: 30000,
   runtime: {
@@ -28,7 +31,7 @@ const DEFAULT_CONFIG = {
   },
   autoRecall: {
     enabled: true,
-    limit: 6,
+    limit: 10,
     scoreThreshold: 0.35,
     maxContentChars: 500,
     preferAbstract: true,
@@ -128,6 +131,8 @@ function applyBehaviorConfig(config, fileConfig = {}) {
   }
 
   const autoRecall = fileConfig.autoRecall ?? {}
+  config.recallLimitConfigured = autoRecall.limit !== undefined ||
+    fileConfig.recallLimit !== undefined
   config.autoRecall = {
     ...DEFAULT_CONFIG.autoRecall,
     ...autoRecall,
@@ -157,9 +162,11 @@ function applyBehaviorConfig(config, fileConfig = {}) {
     "debugLogPath",
     "workspacePeer",
     "recallPeerScope",
+    "recallQueryExpansion",
   ]) {
     if (fileConfig[key] !== undefined) config[key] = fileConfig[key]
   }
+  config.recallQueryExpansionConfigured = fileConfig.recallQueryExpansion !== undefined
 }
 
 function applyEnv(config) {
@@ -167,7 +174,10 @@ function applyEnv(config) {
   if (process.env.OPENVIKING_AUTO_RECALL !== undefined) {
     config.autoRecall.enabled = envBool("OPENVIKING_AUTO_RECALL") ?? config.autoRecall.enabled
   }
-  if (process.env.OPENVIKING_RECALL_LIMIT) config.autoRecall.limit = process.env.OPENVIKING_RECALL_LIMIT
+  if (process.env.OPENVIKING_RECALL_LIMIT) {
+    config.autoRecall.limit = process.env.OPENVIKING_RECALL_LIMIT
+    config.recallLimitConfigured = true
+  }
   if (process.env.OPENVIKING_SCORE_THRESHOLD) config.autoRecall.scoreThreshold = process.env.OPENVIKING_SCORE_THRESHOLD
   if (process.env.OPENVIKING_RECALL_MAX_CONTENT_CHARS) {
     config.autoRecall.maxContentChars = process.env.OPENVIKING_RECALL_MAX_CONTENT_CHARS
@@ -177,6 +187,10 @@ function applyEnv(config) {
     config.autoRecall.preferAbstract = envBool("OPENVIKING_RECALL_PREFER_ABSTRACT") ?? config.autoRecall.preferAbstract
   }
   if (process.env.OPENVIKING_RECALL_PEER_SCOPE) config.recallPeerScope = process.env.OPENVIKING_RECALL_PEER_SCOPE
+  if (process.env.OPENVIKING_RECALL_QUERY_EXPANSION) {
+    config.recallQueryExpansion = process.env.OPENVIKING_RECALL_QUERY_EXPANSION
+    config.recallQueryExpansionConfigured = true
+  }
   if (process.env.OPENVIKING_WORKSPACE_PEER !== undefined) {
     config.workspacePeer = envBool("OPENVIKING_WORKSPACE_PEER") ?? config.workspacePeer
   }
@@ -229,13 +243,14 @@ function normalizeConfig(config) {
     1000,
     60 * 60 * 1000,
   )
-  config.autoRecall.limit = Math.max(1, Math.min(50, Math.round(Number(config.autoRecall.limit) || 6)))
+  config.autoRecall.limit = Math.max(1, Math.min(50, Math.round(Number(config.autoRecall.limit) || 10)))
   config.autoRecall.scoreThreshold = Math.max(0, Math.min(1, Number(config.autoRecall.scoreThreshold) || 0))
   config.autoRecall.maxContentChars = Math.max(100, Math.min(5000, Math.round(Number(config.autoRecall.maxContentChars) || 500)))
   config.autoRecall.tokenBudget = Math.max(200, Math.min(50000, Math.round(Number(config.autoRecall.tokenBudget) || 2000)))
   config.autoRecall.minQueryLength = Math.max(1, Math.min(64, Math.round(Number(config.autoRecall.minQueryLength) || 3)))
   config.captureMode = config.captureMode === "keyword" ? "keyword" : "semantic"
   config.recallPeerScope = config.recallPeerScope === "actor" ? "actor" : "all"
+  config.recallQueryExpansion = config.recallQueryExpansion === "off" ? "off" : "auto"
   config.captureMaxLength = Math.max(200, Math.min(100000, Math.round(Number(config.captureMaxLength) || 24000)))
   config.captureToolMaxChars = Math.max(200, Math.min(20000, Math.round(Number(config.captureToolMaxChars) || 2000)))
   config.commitTokenThreshold = Math.max(1000, Math.round(Number(config.commitTokenThreshold) || 20000))

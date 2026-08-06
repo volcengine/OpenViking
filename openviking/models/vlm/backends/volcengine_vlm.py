@@ -116,6 +116,39 @@ class VolcEngineVLM(OpenAIVLM):
             max_retries=0,
         )
 
+    def supports_media(
+        self,
+        *,
+        media_type: str,
+        filename: str,
+        size_bytes: int,
+    ) -> bool:
+        from .volcengine_media import supports_media
+
+        return supports_media(
+            media_type=media_type,
+            filename=filename,
+            size_bytes=size_bytes,
+        )
+
+    async def get_media_completion_async(
+        self,
+        *,
+        prompt: str,
+        media_path: Path,
+        filename: str,
+        media_type: str,
+    ) -> str:
+        from .volcengine_media import understand_media
+
+        return await understand_media(
+            self,
+            prompt=prompt,
+            media_path=media_path,
+            filename=filename,
+            media_type=media_type,
+        )
+
     def get_completion(
         self,
         prompt: str = "",

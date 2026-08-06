@@ -1,6 +1,6 @@
 # Codex 记忆插件
 
-本插件旨在为 [Codex](https://developers.openai.com/codex) 提供持久化的跨会话（session）记忆功能。只需安装一次，即可实现：在每次用户输入前自动召回相关记忆，在每轮对话结束后进行增量捕获，并在上下文压缩（compaction）前将完整记录提交给记忆抽取器。同时，该插件将 Codex 连接至 OpenViking 的 `/mcp` 端点，使模型能够直接调用 `find`、`search`、`recall`、`remember` 等工具来主动管理记忆。
+本插件旨在为 [Codex](https://developers.openai.com/codex) 提供持久化的跨会话（session）记忆功能。只需安装一次，即可实现：在会话开始时加载 OpenViking profile 与记忆索引，在每次用户输入前自动召回相关记忆，在每轮对话结束后进行增量捕获，并在上下文压缩（compaction）前将完整记录提交给记忆抽取器。同时，该插件将 Codex 连接至 OpenViking 的 `/mcp` 端点，使模型能够直接调用 `find`、`search`、`recall`、`remember` 等工具来主动管理记忆。
 
 源码：[examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin) | [博客：动机与效果展示](https://blog.openviking.ai/post/openviking-coding-agent/)
 
@@ -44,11 +44,11 @@ codex              # 首次启动需进入 /hooks 完成一次审批
 
 ## 验证
 
-启动 `codex` 后，插件将在每次用户输入前自动召回记忆。若设置环境变量 `OPENVIKING_DEBUG=1`，则会将相关事件日志写入 `~/.openviking/logs/codex-hooks.log`。
+启动 `codex` 后，当前会话首次提交 prompt 时触发的 `SessionStart` 会加载 profile，之后插件将在每次用户输入前自动召回相关记忆。若设置环境变量 `OPENVIKING_DEBUG=1`，则会将相关事件日志写入 `~/.openviking/logs/codex-hooks.log`。
 
 ## 工作原理
 
-本插件深度挂载于 Codex 的生命周期之中：在每次用户输入前，它会搜索 OpenViking 并注入相关的记忆（触发 `UserPromptSubmit`）；在每轮对话结束后，会将新的对话追加至当前会话（触发 `Stop`）；在上下文压缩前，补齐并提交（commit）完整的对话记录（触发 `PreCompact`），以确保记忆抽取器能够在完整的上下文环境中运行。此外，在启动新会话时，插件还会自动清理前次运行遗留的孤儿会话（orphan session）。
+本插件深度挂载于 Codex 的生命周期之中：在 `SessionStart`（`startup`、`clear` 或 `resume`）阶段，它会复用其他 coding-agent 集成共用的 CJK-aware profile 构建逻辑，注入 `profile.md`，以及 `preferences/`、`entities/` 的 URI 和摘要索引；在每次用户输入前，它会搜索 OpenViking 并注入相关的记忆（触发 `UserPromptSubmit`）；在每轮对话结束后，会将新的对话追加至当前会话（触发 `Stop`）；在上下文压缩前，补齐并提交（commit）完整的对话记录（触发 `PreCompact`），以确保记忆抽取器能够在完整的上下文环境中运行。此外，在启动新会话时，插件还会自动清理前次运行遗留的孤儿会话（orphan session）。恢复已有会话时，固定 profile 背景还会与最新的 archive digest 合并注入。
 
 > **已知局限**：当通过 `SIGTERM`、`Ctrl+C` 或输入 `/exit` 退出 Codex 时，不会触发任何 hook（钩子）。遗留的孤儿会话将在下一次触发 `SessionStart` 时，通过闲置 TTL（生存时间，默认为 30 分钟）机制或活动窗口启发式策略进行回收清理。
 
@@ -63,9 +63,13 @@ codex              # 首次启动需进入 /hooks 完成一次审批
 | `OPENVIKING_API_KEY` | — | API 密钥（将通过 `Authorization: Bearer` 标头发送） |
 | `OPENVIKING_CLI_CONFIG_FILE` | `~/.openviking/ovcli.conf` | hook、MCP 和 Codex 内部 `ov` 命令共同使用的当前 CLI 配置 |
 | `OPENVIKING_CREDENTIAL_SOURCE` | `auto` | 设置为 `env` 时强制使用环境变量凭据 |
+| `OPENVIKING_NO_AUTO_INJECT` | `false` | 关闭会话启动阶段的固定 profile/背景注入，但不关闭逐 prompt 语义召回 |
+| `OPENVIKING_PROFILE_TOKEN_BUDGET` | `10000` | `profile.md` 及 `preferences/`、`entities/` 索引共用的 CJK-aware token 预算 |
 | `OPENVIKING_CODEX_ACTIVE_WINDOW_MS` | `120000` | `SessionStart` 活动窗口阈值（毫秒） |
 | `OPENVIKING_CODEX_IDLE_TTL_MS` | `1800000` | `SessionStart` 闲置 TTL 清理阈值（毫秒） |
 | `OPENVIKING_DEBUG` | `false` | 是否将日志写入 `~/.openviking/logs/codex-hooks.log` |
+
+如果更看重召回响应速度，请参阅[低延迟召回](./01-overview.md#低延迟召回)，其中说明了如何通过环境变量或 `ovcli.conf` 关闭查询扩展与 Codex 本地结果压缩。
 
 更多调参说明（如 `OPENVIKING_RECALL_LIMIT`、`OPENVIKING_CAPTURE_ASSISTANT_TURNS` 等），请参考 [插件 README](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md#tuning-the-plugin)。
 

@@ -268,13 +268,15 @@ async def test_search_tool_calls_context_aware_search_with_session(service, monk
     }
 
 
-async def test_recall_tool_returns_type_quota_memory_groups(service, monkeypatch):
+async def test_recall_tool_returns_assembled_context(service, monkeypatch):
+    memory_uri = "viking://user/test_user/memories/events/e.md"
+
     async def fake_find(**kwargs):
         if kwargs["target_uri"].endswith("/events"):
             return SimpleNamespace(
                 memories=[
                     SimpleNamespace(
-                        uri="viking://user/test_user/memories/events/e.md",
+                        uri=memory_uri,
                         score=0.9,
                         abstract="event abstract",
                     )
@@ -284,7 +286,7 @@ async def test_recall_tool_returns_type_quota_memory_groups(service, monkeypatch
 
     async def fake_read(uri, **kwargs):
         del uri, kwargs
-        return "Summary: MCP recall event.\n2026-07-06 ChatLog: details"
+        return "# Summary\nMCP recall event.\n\n# 2026-07-06 ChatLog:\ndetails"
 
     monkeypatch.setattr(service.search, "find", fake_find)
     monkeypatch.setattr(service.fs, "read", fake_read)
@@ -292,11 +294,12 @@ async def test_recall_tool_returns_type_quota_memory_groups(service, monkeypatch
     result = await recall(
         query="what happened",
         quotas={"events": 1, "entities": 0, "preferences": 0, "experiences": 0},
-        max_chars=200,
+        max_chars=800,
         min_score=0.1,
     )
 
-    assert '<memory_group type="events"' in result
+    assert f'<memory uri="{memory_uri}"' in result
+    assert 'type="events"' in result
     assert "MCP recall event." in result
 
 
@@ -407,6 +410,19 @@ async def test_read_batch(service):
     )
     assert "===" in result
     assert "nothing found" in result.lower()
+
+
+async def test_read_uses_public_content_projection(monkeypatch):
+    read_visible = AsyncMock(return_value="visible memory")
+    monkeypatch.setattr(
+        mcp_endpoint,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(read_visible=read_visible)),
+    )
+    uri = "viking://user/default/memories/private.md"
+
+    assert await read(uri) == "visible memory"
+    read_visible.assert_awaited_once_with(uri, ctx=DEFAULT_CTX)
 
 
 # ---------------------------------------------------------------------------

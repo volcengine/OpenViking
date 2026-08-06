@@ -24,7 +24,7 @@ export async function OpenVikingPlugin({ client, directory }) {
 
   const repoContext = createRepoContext({ config })
   const sessionManager = createMemorySessionManager({ config, pluginRoot: dataDir })
-  const recall = createMemoryRecall({ config })
+  const recall = createMemoryRecall({ config, sessionManager })
   const sessionInject = createSessionInject({ config, sessionManager })
   const vikingUriGuard = createVikingUriGuard()
 

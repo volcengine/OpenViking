@@ -11,11 +11,20 @@ from openviking.storage.queuefs.semantic_dag import SemanticDagExecutor
 from openviking_cli.session.user_id import UserIdentifier
 
 
+class _FakeAgfs:
+    async def pathlock_acquire_exact_batch(self, _paths):
+        return {"lease_ref": "test"}
+
+    async def pathlock_release(self, _lease):
+        return None
+
+
 class _FakeVikingFS:
     def __init__(self, tree, file_contents):
         self._tree = {self._norm(k): v for k, v in tree.items()}
         self._file_contents = {self._norm(k): v for k, v in file_contents.items()}
         self.writes = []
+        self._async_agfs = _FakeAgfs()
 
     def _norm(self, path):
         if "://" not in path:
@@ -34,7 +43,7 @@ class _FakeVikingFS:
     async def read_file(self, path, ctx=None):
         return self._file_contents.get(self._norm(path), "")
 
-    async def write_file(self, path, content, ctx=None):
+    async def write_file(self, path, content, ctx=None, lease_ref=None):
         norm_path = self._norm(path)
         self._file_contents[norm_path] = content
         self.writes.append((norm_path, content))
@@ -125,7 +134,8 @@ async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypa
         target_uri=root_uri,
         changes={"modified": [f"{root_uri}/a.txt"]},
     )
-    monkeypatch.setattr(executor, "_add_vectorize_task", AsyncMock())
+    add_vectorize_task = AsyncMock()
+    monkeypatch.setattr(executor, "_add_vectorize_task", add_vectorize_task)
 
     await executor.run(root_uri)
 
@@ -134,6 +144,17 @@ async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypa
     overview = fake_fs._file_contents[f"{root_uri}/.overview.md"]
     assert "- a.txt: summary" in overview
     assert "- b.txt: old-b" in overview
+    changed_file_tasks = [
+        call.args[0]
+        for call in add_vectorize_task.await_args_list
+        if call.args[0].task_type == "file"
+    ]
+    assert len(changed_file_tasks) == 1
+    assert changed_file_tasks[0].file_path == f"{root_uri}/a.txt"
+    assert changed_file_tasks[0].summary_dict == {
+        "name": "a.txt",
+        "summary": "summary",
+    }
 
 
 if __name__ == "__main__":

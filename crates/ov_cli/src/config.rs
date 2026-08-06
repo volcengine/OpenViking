@@ -88,6 +88,16 @@ pub struct Config {
     pub extra_headers: Option<HashMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gateway_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_mode: Option<String>,
+    /// LDAP username for authentication.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ldap_username: Option<String>,
+    /// LDAP password for authentication.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ldap_password: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oidc_token: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -185,6 +195,10 @@ impl Default for Config {
             upload: UploadConfig::default(),
             extra_headers: None,
             gateway_token: None,
+            auth_mode: None,
+            ldap_username: None,
+            ldap_password: None,
+            oidc_token: None,
         }
     }
 }

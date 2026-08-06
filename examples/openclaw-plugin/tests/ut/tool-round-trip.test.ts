@@ -39,6 +39,43 @@ describe("extractNewTurnMessages: toolCallId propagation", () => {
     }
   });
 
+  it("preserves standard Experience calls as completed ToolParts", () => {
+    const uri = "viking://user/test/memories/experiences/无订单号换货处理.md";
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_experience_search",
+            name: "search_experience",
+            arguments: { query: "没有订单号时如何换货", limit: 5 },
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_experience_search",
+        toolName: "search_experience",
+        content: [{ type: "text", text: JSON.stringify({ results: [{ uri }] }) }],
+      },
+    ];
+
+    const { messages: extracted } = extractNewTurnMessages(messages, 0);
+    const toolPart = extracted.flatMap((message) => message.parts).find((part) => part.type === "tool");
+
+    expect(toolPart).toMatchObject({
+      type: "tool",
+      toolCallId: "call_experience_search",
+      toolName: "search_experience",
+      toolInput: { query: "没有订单号时如何换货", limit: 5 },
+      toolStatus: "completed",
+    });
+    if (toolPart?.type === "tool") {
+      expect(JSON.parse(toolPart.toolOutput)).toEqual({ results: [{ uri }] });
+    }
+  });
+
   it("sets toolCallId to undefined when original message has no toolCallId", () => {
     const messages = [
       {

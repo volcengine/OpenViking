@@ -43,6 +43,7 @@ from .parser_config import (
     WebFeedConfig,
 )
 from .prompts_config import PromptsConfig
+from .queue_worker_config import QueueWorkersConfig
 from .rerank_config import RerankConfig
 from .retrieval_config import RetrievalConfig
 from .storage_config import StorageConfig
@@ -99,7 +100,6 @@ class ParserApiConfig(BaseModel):
     http_timeout_seconds: float = 10.0
     response_timeout_seconds: int = 1800
     poll_interval_ms: int = 3000
-
     model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
@@ -237,6 +237,11 @@ class OpenVikingConfig(BaseModel):
         description="Semantic processing configuration (overview/abstract limits)",
     )
 
+    queue_workers: QueueWorkersConfig = Field(
+        default_factory=QueueWorkersConfig,
+        description="Queue worker runtime configuration",
+    )
+
     parser_api: ParserApiConfig = Field(
         default_factory=ParserApiConfig,
         description="Third-party parser API configuration (files/responses)",
@@ -245,6 +250,15 @@ class OpenVikingConfig(BaseModel):
     connector: ConnectorConfig = Field(
         default_factory=ConnectorConfig,
         description="External Connector service configuration for data import",
+    )
+
+    enable_watch_scheduler: bool = Field(
+        default=True,
+        description=(
+            "Whether to start the background WatchScheduler that periodically re-processes "
+            "watched resources. Disable on read-only replicas that share a writer's data "
+            "so only the writer runs the watch/refresh background loop."
+        ),
     )
 
     auto_generate_l0: bool = Field(

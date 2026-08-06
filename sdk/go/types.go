@@ -241,9 +241,10 @@ type GlobOptions struct {
 
 // CreateSessionOptions controls CreateSession.
 type CreateSessionOptions struct {
-	SessionID    string
-	MemoryPolicy map[string]any
-	Telemetry    any
+	SessionID        string
+	MemoryPolicy     map[string]any
+	AutoCommitPolicy map[string]any
+	Telemetry        any
 }
 
 // GetSessionOptions controls GetSession.

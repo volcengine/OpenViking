@@ -59,8 +59,8 @@ Admin API 用于多租户环境下的账户和用户管理。包括工作区（a
 
 ### get_agent_evolution_status
 
-返回实例级 Agent 进化开关的实时状态和已配置的默认 account ID。该接口仅限
-ROOT 调用。
+返回调用方所属 account 的 Agent 进化实时状态。ROOT 操作已配置的默认
+account，ADMIN 仅操作自己所属的 account。
 
 **HTTP API**
 
@@ -86,9 +86,34 @@ curl http://localhost:1933/api/v1/admin/agent-evolution \
 }
 ```
 
-`enabled` 来自 session commit 实际使用的
-`server.agent_evolution.enabled` 实时值；`account_id` 是部署配置的默认
-account。
+`enabled` 优先读取
+`/local/{account_id}/_system/setting.json` 中的 account 级覆盖值；未配置时使用
+`server.agent_evolution.enabled`。Session commit 会实时读取生效值，无需重启。
+
+现有更新接口名保持不变：
+
+```http
+PUT /api/v1/admin/agent-evolution
+Content-Type: application/json
+
+{"enabled": true}
+```
+
+### account_settings
+
+ROOT 可管理任意 account，ADMIN 仅可管理自己所属的 account。通用配置接口仅允许
+显式列入白名单的字段；当前只允许修改 `agent_evolution.enabled`。
+
+```http
+GET /api/v1/admin/accounts/{account_id}/settings
+PATCH /api/v1/admin/accounts/{account_id}/settings
+Content-Type: application/json
+
+{"agent_evolution": {"enabled": true}}
+```
+
+覆盖已有配置前，内核会先备份到
+`/local/{account_id}/_system/setting.backup.json`。
 
 ---
 

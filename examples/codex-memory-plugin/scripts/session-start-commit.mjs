@@ -9,6 +9,11 @@
  *   - source=resume  → `/resume` or short reconnect (no commit/sweep;
  *     may inject latest archive summary if the live OV session was already committed)
  *
+ * Every source injects the shared OpenViking profile block unless
+ * OPENVIKING_NO_AUTO_INJECT=1. The block contains profile.md plus
+ * abstract-annotated indexes of preferences/ and entities/, capped by
+ * OPENVIKING_PROFILE_TOKEN_BUDGET with the shared CJK-aware estimator.
+ *
  * Behavior (see DESIGN.md §3 — "SessionStart source=startup, heuristic"):
  *   On `startup` or `clear`, run the active-window heuristic over state files
  *   excluding the new session_id:
@@ -28,14 +33,15 @@
  *   clearState — we keep the state file with ovSessionId still set so the
  *   next sweep retries. A transient OV outage shouldn't lose memory.
  *
- * Output schema accepts {} as a no-op, or hookSpecificOutput.additionalContext
- * for resume archive context injection.
+ * Output may contain hookSpecificOutput.additionalContext for profile/archive
+ * injection and systemMessage for commit status at the same time.
  */
 
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { detectRecallCompressorProfile } from "./recall-compressor-profile.mjs";
 import { clearState, deriveOvSessionId, listStates, loadState, saveState } from "./session-state.mjs";
+import { buildProfileBlock } from "./shared/profile-inject.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
 const cfg = loadConfig();
@@ -60,25 +66,20 @@ function noop(message) {
   output(message ? { systemMessage: message } : {});
 }
 
-function emitAdditionalContext(additionalContext) {
-  if (!additionalContext) {
-    noop();
-    return;
-  }
-  const wrappedContext = wrapResumeContext(additionalContext);
-  if (!wrappedContext) {
-    noop();
-    return;
-  }
-  output({
-    hookSpecificOutput: {
+function emitSessionStartOutput({ contexts = [], systemMessage = "" } = {}) {
+  const additionalContext = contexts.filter(Boolean).join("\n\n");
+  const response = {};
+  if (additionalContext) {
+    response.hookSpecificOutput = {
       hookEventName: "SessionStart",
-      additionalContext: wrappedContext,
-    },
-  });
+      additionalContext,
+    };
+  }
+  if (systemMessage) response.systemMessage = systemMessage;
+  output(response);
 }
 
-async function fetchJSON(path, init = {}) {
+async function requestJSON(path, init = {}, options = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), cfg.captureTimeoutMs);
   try {
@@ -89,18 +90,26 @@ async function fetchJSON(path, init = {}) {
     }
     if (cfg.sendIdentityHeaders && cfg.account) headers["X-OpenViking-Account"] = cfg.account;
     if (cfg.sendIdentityHeaders && cfg.user) headers["X-OpenViking-User"] = cfg.user;
-    if (activePeerId) headers["X-OpenViking-Actor-Peer"] = activePeerId;
+    const actorPeerId = options.actorPeerId ?? activePeerId;
+    if (actorPeerId) headers["X-OpenViking-Actor-Peer"] = actorPeerId;
     if (cfg.userAgent) headers["User-Agent"] = cfg.userAgent;
     const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
     const body = await res.json().catch(() => null);
-    if (!body) return null;
-    if (!res.ok || body.status === "error") return null;
-    return body.result ?? body;
-  } catch {
-    return null;
+    if (!body) return { ok: false, status: res.status };
+    if (!res.ok || body.status === "error") {
+      return { ok: false, status: res.status, error: body.error || body };
+    }
+    return { ok: true, status: res.status, result: body.result ?? body };
+  } catch (error) {
+    return { ok: false, status: 0, error: { message: error?.message || String(error) } };
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function fetchJSON(path, init = {}, options = {}) {
+  const response = await requestJSON(path, init, options);
+  return response.ok ? response.result : null;
 }
 
 async function commitOvSession(ovSessionId) {
@@ -117,7 +126,7 @@ function truncateText(text, maxChars) {
   return `${value.slice(0, Math.max(0, maxChars - 20)).trimEnd()}\n[truncated]`;
 }
 
-function buildResumeArchiveContext(ovSessionId, context) {
+function formatResumeArchiveContext(ovSessionId, context) {
   const overview = String(context?.latest_archive_overview || "").trim();
   if (!overview) return "";
   const archiveUri = `viking://user/sessions/${ovSessionId}/history/`;
@@ -143,11 +152,50 @@ function wrapResumeContext(additionalContext) {
   ].join("\n");
 }
 
-async function injectResumeArchive(newSessionId) {
+function wrapProfileContext(profileBlock) {
+  if (!profileBlock) return "";
+  return [
+    '<openviking-context source="session-start">',
+    profileBlock,
+    "</openviking-context>",
+  ].join("\n");
+}
+
+async function buildSessionProfileContext() {
+  if (cfg.noAutoInject) {
+    log("skip", { stage: "profile_inject", reason: "disabled" });
+    return "";
+  }
+  try {
+    const profile = await buildProfileBlock(
+      requestJSON,
+      cfg.profileTokenBudget,
+      activePeerId,
+    );
+    if (!profile?.block) {
+      log("skip", { stage: "profile_inject", reason: "no profile content" });
+      return "";
+    }
+    log("profile_inject", {
+      chars: profile.chars,
+      tokens: profile.tokens,
+      profileChars: profile.profileChars,
+      prefCount: profile.prefCount,
+      entCount: profile.entCount,
+      droppedPref: profile.droppedPref,
+      droppedEnt: profile.droppedEnt,
+    });
+    return wrapProfileContext(profile.block);
+  } catch (error) {
+    logError("profile_inject", error);
+    return "";
+  }
+}
+
+async function buildResumeArchiveContext(newSessionId) {
   if (!cfg.resumeArchiveInject) {
     log("skip", { stage: "resume_archive", reason: "disabled" });
-    noop();
-    return;
+    return "";
   }
 
   const state = await loadState(newSessionId);
@@ -157,19 +205,17 @@ async function injectResumeArchive(newSessionId) {
       reason: "live OV session still open",
       ovSessionId: state.ovSessionId,
     });
-    noop();
-    return;
+    return "";
   }
 
   const ovSessionId = deriveOvSessionId(newSessionId);
   const context = await fetchJSON(
     `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/context?token_budget=${cfg.resumeArchiveTokenBudget}`,
   );
-  const additionalContext = buildResumeArchiveContext(ovSessionId, context);
+  const additionalContext = formatResumeArchiveContext(ovSessionId, context);
   if (!additionalContext) {
     log("skip", { stage: "resume_archive", reason: "no archive overview", ovSessionId });
-    noop();
-    return;
+    return "";
   }
 
   log("resume_archive_inject", {
@@ -177,7 +223,7 @@ async function injectResumeArchive(newSessionId) {
     chars: additionalContext.length,
     tokenBudget: cfg.resumeArchiveTokenBudget,
   });
-  emitAdditionalContext(additionalContext);
+  return wrapResumeContext(additionalContext);
 }
 
 /**
@@ -238,7 +284,8 @@ async function main() {
 
   const source = input.source || "unknown";
   const newSessionId = input.session_id || "unknown";
-  const effectivePeer = resolveEffectivePeerId({ cfg, cwd: process.cwd() });
+  const cwd = typeof input.cwd === "string" && input.cwd.trim() ? input.cwd : process.cwd();
+  const effectivePeer = resolveEffectivePeerId({ cfg, cwd });
   activePeerId = effectivePeer.peerId;
   if (newSessionId !== "unknown") {
     const state = await loadState(newSessionId);
@@ -262,7 +309,17 @@ async function main() {
   }
 
   if (source === "resume") {
-    await injectResumeArchive(newSessionId);
+    const health = await fetchJSON("/health");
+    if (!health) {
+      logError("health_check", "server unreachable; skipping profile + archive injection");
+      noop();
+      return;
+    }
+    const [profileContext, archiveContext] = await Promise.all([
+      buildSessionProfileContext(),
+      buildResumeArchiveContext(newSessionId),
+    ]);
+    emitSessionStartOutput({ contexts: [profileContext, archiveContext] });
     return;
   }
 
@@ -277,11 +334,12 @@ async function main() {
 
   const health = await fetchJSON("/health");
   if (!health) {
-    logError("health_check", "server unreachable; skipping commit + sweep");
+    logError("health_check", "server unreachable; skipping profile injection + commit + sweep");
     noop();
     return;
   }
 
+  const profileContext = await buildSessionProfileContext();
   const now = Date.now();
   const states = await listStates();
 
@@ -364,9 +422,12 @@ async function main() {
   });
 
   if (totalCommitted > 0) {
-    noop(describeCommittedSessions(ovSessionIds));
+    emitSessionStartOutput({
+      contexts: [profileContext],
+      systemMessage: describeCommittedSessions(ovSessionIds),
+    });
   } else {
-    noop();
+    emitSessionStartOutput({ contexts: [profileContext] });
   }
 }
 

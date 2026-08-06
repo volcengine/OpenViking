@@ -78,6 +78,8 @@ Agent 会自动完成安装 → 配置 → 重启 → 验证。详见 [INSTALL-A
 | `ov_read` | 读取 `ov_search` / trace 返回的 `viking://...` OpenViking 虚拟 URI 完整内容 |
 | `ov_multi_read` | 一次读取多个精确 `viking://...` URI，适合同时读取 overview 和同级切片 |
 | `ov_list` | 在检索后列出 OpenViking 目录，补查同级切片和 `.overview.md` 文件 |
+| `search_experience` | 检索当前 OpenViking 用户的可复用执行经验 |
+| `read_experience` | 读取 `search_experience` 返回的单条 Experience 全文 |
 | `openviking_tool_result_list` | 列出当前 session 中被外置的大工具输出 |
 | `openviking_tool_result_search` | 在外置工具输出中按关键词搜索 |
 | `openviking_tool_result_read` | 通过 `viking://session/.../tool-results/...` ref 分页读取外置工具输出 |
@@ -263,7 +265,7 @@ preflight 阶段的 `assemble()` 并不是简单地把旧聊天记录塞回来�
 
 ## 工具层与可展开能力
 
-这套插件除了自动行为，默认直接暴露 12 个工具；当 `enableAddResourceTool=true` 时才额外暴露 opt-in 的 `add_resource` 导入工具。Agent 可见工具可以通过 `enabledTools` 和 `disabledTools` 灵活裁剪：
+这套插件除了自动行为，还会直接暴露一组 Agent 工具；当 `enableAddResourceTool=true` 时才额外暴露 opt-in 的 `add_resource` 导入工具。Agent 可见工具可以通过 `enabledTools` 和 `disabledTools` 灵活裁剪：
 
 - `memory_recall`：在 memory/resource 目标上显式语义召回
 - `memory_store`：把明确的长期事实写入 OpenViking session 并触发阻塞 commit/抽取
@@ -276,11 +278,13 @@ preflight 阶段的 `assemble()` 并不是简单地把旧聊天记录塞回来�
 - `ov_read`：读取 `ov_search` 或 recall trace 返回的 `viking://...` OpenViking 虚拟 URI 完整内容
 - `ov_multi_read`：读取多个精确 `viking://...` URI，适合同时读取 overview 和同级切片
 - `ov_list`：在 `ov_search` 命中后列出父目录，用来补齐同级切片、`.overview.md` 和同源文档上下文
+- `search_experience`：检索当前 OpenViking 用户的可复用执行经验
+- `read_experience`：读取 `search_experience` 返回的单条 Experience 全文
 - `openviking_tool_result_list`：列出当前 session 中被外置的大工具输出
 - `openviking_tool_result_search`：在外置工具输出中按关键词搜索
 - `openviking_tool_result_read`：通过 ref 和 offset/limit 分页读取外置工具输出
 
-工具选择器支持精确工具名，也支持分组：`default`、`all`、`memory`、`resource_query`、`import`、`recall_trace`、`archive`、`tool_result`。例如，禁用记忆并只保留资源查询工具：
+工具选择器支持精确工具名，也支持分组：`default`、`all`、`memory`、`resource_query`、`experience`、`import`、`recall_trace`、`archive`、`tool_result`。例如，禁用记忆并只保留资源查询工具：
 
 ```json
 {

@@ -23,6 +23,7 @@ import { mkdir, readdir, readFile, rename, writeFile, unlink, stat, chmod } from
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { isRetryableFailure } from "./retryable.mjs";
 
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_TTL_DAYS = 7;
@@ -108,9 +109,7 @@ function pendingFromProcessingFilename(filename) {
 }
 
 function isRetryableReplayFailure(res) {
-  if (!res || res.ok) return false;
-  const status = Number(res.status || 0);
-  return !status || status >= 500 || status === 408 || status === 429;
+  return isRetryableFailure(res);
 }
 
 async function readEntry(dir, filename) {

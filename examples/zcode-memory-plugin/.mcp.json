@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "openviking": {
+      "command": "node",
+      "args": [
+        "${ZCODE_PLUGIN_ROOT}/servers/mcp-proxy.mjs"
+      ]
+    }
+  }
+}

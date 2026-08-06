@@ -175,6 +175,7 @@ async function runEndpointCompressionCase({
           ...env,
           OPENVIKING_AUTO_RECALL: "1",
           OPENVIKING_CODEX_STATE_DIR: stateDir,
+          OPENVIKING_STATE_DIR: stateDir,
           OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
           OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
           OPENVIKING_CREDENTIAL_SOURCE: "env",
@@ -199,7 +200,7 @@ async function runEndpointCompressionCase({
   }
 }
 
-test("auto-recall uses context-aware search with the derived OpenViking session id", async () => {
+test("auto-recall asks the context face with the derived OpenViking session id", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-recall-state-"));
   const requests = [];
 
@@ -213,27 +214,21 @@ test("auto-recall uses context-aware search with the derived OpenViking session 
       if (req.method === "POST" && url.pathname === "/api/v1/search/search") {
         const body = await readRequestBody(req);
         requests.push({ path: url.pathname, body });
-        if (body.target_uri === "viking://user/memories") {
-          writeJson(res, {
-            status: "ok",
-            result: {
-              memories: [{
-                uri: "viking://user/zeus/memories/events/context-search.md",
-                level: 2,
-                score: 0.9,
-                category: "events",
-                abstract: "context search memory",
-              }],
-              skills: [],
-            },
-          });
-          return;
-        }
-        writeJson(res, { status: "ok", result: { memories: [], skills: [] } });
-        return;
-      }
-      if (req.method === "GET" && url.pathname === "/api/v1/content/read") {
-        writeJson(res, { status: "ok", result: "context-aware recalled detail" });
+        writeJson(res, {
+          status: "ok",
+          result: {
+            entries: [{
+              uri: "viking://user/zeus/memories/events/context-search.md",
+              category: "events",
+              detail: "full",
+              score: 0.9,
+              text: "context-aware recalled detail",
+            }],
+            rendered: '<memory uri="viking://user/zeus/memories/events/context-search.md" type="events" score="0.90" detail="full">\ncontext-aware recalled detail\n</memory>',
+            digest: "",
+            stats: { returned: 1, used_tokens: 40 },
+          },
+        });
         return;
       }
       res.writeHead(404, { "Content-Type": "application/json" });
@@ -244,11 +239,13 @@ test("auto-recall uses context-aware search with the derived OpenViking session 
         {
           OPENVIKING_AUTO_RECALL: "1",
           OPENVIKING_CODEX_STATE_DIR: stateDir,
+          OPENVIKING_STATE_DIR: stateDir,
           OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
           OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
           OPENVIKING_CREDENTIAL_SOURCE: "env",
           OPENVIKING_RECALL_COMPRESS: "0",
           OPENVIKING_RECALL_LIMIT: "1",
+          OPENVIKING_RECALL_MAX_TOKENS: "800",
           OPENVIKING_RECALL_TIMEOUT_MS: "10000",
           OPENVIKING_MIN_QUERY_LENGTH: "1",
           OPENVIKING_SCORE_THRESHOLD: "0",
@@ -264,15 +261,18 @@ test("auto-recall uses context-aware search with the derived OpenViking session 
       );
     });
 
-    assert.equal(requests.length, 3);
-    assert.deepEqual(
-      requests.map((request) => [request.body.target_uri, Boolean(request.body.session_id)]).sort(),
-      [
-        ["viking://user/memories", true],
-        ["viking://user/skills", false],
-        ["viking://user/skills", true],
-      ],
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].body.mode, "context");
+    assert.equal(requests[0].body.session_id, "cx-codex_123");
+    assert.equal(requests[0].body.purpose, "coding");
+    assert.equal(requests[0].body.limit, undefined);
+    assert.equal(
+      Object.values(requests[0].body.quotas).reduce((sum, quota) => sum + quota, 0),
+      6,
     );
+    assert.equal(requests[0].body.max_tokens, 800);
+    assert.equal(requests[0].body.dedup_turns, 5);
+    assert.equal(requests[0].body.target_uri, undefined);
   } finally {
     await rm(stateDir, { recursive: true, force: true });
   }
@@ -310,7 +310,11 @@ test("auto-recall prefers the server recall endpoint when available", async () =
       }
       if (req.method === "POST" && url.pathname === "/api/v1/search/search") {
         requests.push({ path: url.pathname, body: await readRequestBody(req) });
-        writeStatusJson(res, 500, { status: "error", error: "should not fallback" });
+        // Pre-context-face deployment: extra fields are rejected outright.
+        writeStatusJson(res, 400, {
+          status: "error",
+          error: "Extra inputs are not permitted: mode",
+        });
         return;
       }
       res.writeHead(404, { "Content-Type": "application/json" });
@@ -321,6 +325,7 @@ test("auto-recall prefers the server recall endpoint when available", async () =
         {
           OPENVIKING_AUTO_RECALL: "1",
           OPENVIKING_CODEX_STATE_DIR: stateDir,
+          OPENVIKING_STATE_DIR: stateDir,
           OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
           OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
           OPENVIKING_CREDENTIAL_SOURCE: "env",
@@ -339,9 +344,12 @@ test("auto-recall prefers the server recall endpoint when available", async () =
       assert.match(output.hookSpecificOutput.additionalContext, /Launch summary/);
     });
 
-    assert.deepEqual(requests.map((request) => request.path), ["/api/v1/search/recall"]);
-    assert.equal(requests[0].body.quotas.events, 2);
-    assert.equal(requests[0].body.max_chars, 6500);
+    assert.deepEqual(requests.map((request) => request.path), [
+      "/api/v1/search/search",
+      "/api/v1/search/recall",
+    ]);
+    assert.equal(Object.values(requests[1].body.quotas).reduce((sum, quota) => sum + quota, 0), 3);
+    assert.equal(requests[1].body.max_chars, 6500);
   } finally {
     await rm(stateDir, { recursive: true, force: true });
   }
@@ -438,6 +446,14 @@ test("auto-recall expands configured user in memory search target", async () => 
       }
       if (req.method === "POST" && url.pathname === "/api/v1/search/search") {
         const body = await readRequestBody(req);
+        if (body.mode === "context") {
+          // Exercise the legacy per-scope sweep below.
+          writeStatusJson(res, 400, {
+            status: "error",
+            error: "Extra inputs are not permitted: mode",
+          });
+          return;
+        }
         requests.push({ path: url.pathname, body });
         if (body.target_uri === "viking://user/zeus/memories") {
           writeJson(res, {
@@ -470,6 +486,7 @@ test("auto-recall expands configured user in memory search target", async () => 
         {
           OPENVIKING_AUTO_RECALL: "1",
           OPENVIKING_CODEX_STATE_DIR: stateDir,
+          OPENVIKING_STATE_DIR: stateDir,
           OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
           OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
           OPENVIKING_CREDENTIAL_SOURCE: "env",
@@ -515,6 +532,14 @@ test("auto-recall preserves explicit default user memory target", async () => {
       }
       if (req.method === "POST" && url.pathname === "/api/v1/search/search") {
         const body = await readRequestBody(req);
+        if (body.mode === "context") {
+          // Exercise the legacy per-scope sweep below.
+          writeStatusJson(res, 400, {
+            status: "error",
+            error: "Extra inputs are not permitted: mode",
+          });
+          return;
+        }
         requests.push({ path: url.pathname, body });
         if (body.target_uri === "viking://user/default/memories") {
           writeJson(res, {
@@ -547,6 +572,7 @@ test("auto-recall preserves explicit default user memory target", async () => {
         {
           OPENVIKING_AUTO_RECALL: "1",
           OPENVIKING_CODEX_STATE_DIR: stateDir,
+          OPENVIKING_STATE_DIR: stateDir,
           OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
           OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
           OPENVIKING_CREDENTIAL_SOURCE: "env",

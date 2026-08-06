@@ -873,6 +873,92 @@ async def test_streaming_policy_trainer_scopes_concurrent_submit_results_by_sour
 
 
 @pytest.mark.asyncio
+async def test_streaming_policy_trainer_finalizes_snapshot_before_next_flush_writes():
+    from openviking.session.train import StreamingPolicyTrainer, StreamingPolicyTrainerConfig
+
+    writes: list[str] = []
+    snapshots: list[tuple[str, list[str], list[str]]] = []
+    first_finalizer_started = asyncio.Event()
+    release_first_finalizer = asyncio.Event()
+
+    class RecordingCore:
+        async def plan_and_apply(self, *, gradients, policy_set, ctx):
+            del ctx
+            uris = [gradient.target_uri for gradient in gradients]
+            writes.extend(uris)
+            return (
+                PolicyUpdatePlan(metadata={"uris": uris}),
+                PolicyApplyResult(updated_policy_set=policy_set, written_uris=uris),
+            )
+
+    trainer = StreamingPolicyTrainer(
+        policy_set=_policy_set(),
+        rollout_analyzer=DummyAnalyzer(),
+        gradient_estimator=DummyEstimator(),
+        policy_optimizer=DummyOptimizer(),
+        policy_updater=DummyUpdater(),
+        context=PipelineContext(),
+        config=StreamingPolicyTrainerConfig(
+            max_gradients_per_update=1,
+            max_wait_seconds=60.0,
+            timer_check_interval_seconds=60.0,
+        ),
+    )
+    trainer._core = RecordingCore()
+
+    async def finalize_first(result):
+        first_finalizer_started.set()
+        await release_first_finalizer.wait()
+        snapshots.append(("first", list(writes), list(result.apply_result.written_uris)))
+
+    async def finalize_second(result):
+        snapshots.append(("second", list(writes), list(result.apply_result.written_uris)))
+
+    def gradient(name: str) -> DummyGradient:
+        uri = f"viking://user/u/memories/experiences/{name}.md"
+        return DummyGradient(
+            target_name=name,
+            target_uri=uri,
+            base_version=None,
+            rationale="test",
+            links=[],
+            confidence=1.0,
+        )
+
+    first_task = asyncio.create_task(
+        trainer.submit_gradients([gradient("exp_a")], batch_finalizer=finalize_first)
+    )
+    await first_finalizer_started.wait()
+    second_task = asyncio.create_task(
+        trainer.submit_gradients([gradient("exp_b")], batch_finalizer=finalize_second)
+    )
+    await asyncio.sleep(0)
+
+    assert writes == ["viking://user/u/memories/experiences/exp_a.md"]
+
+    release_first_finalizer.set()
+    await asyncio.gather(first_task, second_task)
+
+    assert snapshots == [
+        (
+            "first",
+            ["viking://user/u/memories/experiences/exp_a.md"],
+            ["viking://user/u/memories/experiences/exp_a.md"],
+        ),
+        (
+            "second",
+            [
+                "viking://user/u/memories/experiences/exp_a.md",
+                "viking://user/u/memories/experiences/exp_b.md",
+            ],
+            ["viking://user/u/memories/experiences/exp_b.md"],
+        ),
+    ]
+
+    assert await trainer.close() is None
+
+
+@pytest.mark.asyncio
 async def test_streaming_policy_trainer_splits_flush_by_gradient_count():
     from openviking.session.train import StreamingPolicyTrainer, StreamingPolicyTrainerConfig
 

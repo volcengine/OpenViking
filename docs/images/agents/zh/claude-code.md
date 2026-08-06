@@ -70,13 +70,15 @@ Claude Code 和 Codex 共用这一个安装脚本。它会依次询问要安装�
 | 环境变量 | 默认值 | 说明 |
 |---------|--------|------|
 | `OPENVIKING_AUTO_RECALL` | `true` | 每次用户输入前自动触发记忆召回 |
-| `OPENVIKING_RECALL_LIMIT` | `6` | 单轮对话最多注入的记忆条数 |
-| `OPENVIKING_RECALL_TOKEN_BUDGET` | `2000` | 内联记忆内容的 Token 预算上限 |
+| `OPENVIKING_RECALL_LIMIT` | `10` | 遗留宽度覆盖，会转换为各分类 coding 配额 |
+| `OPENVIKING_RECALL_TOKEN_BUDGET` | `2000` | 最终 raw-find fallback 的内联 Token 预算 |
 | `OPENVIKING_AUTO_CAPTURE` | `true` | 每轮对话结束后自动捕获新记忆 |
 | `OPENVIKING_BYPASS_SESSION` | `false` | 禁用当前会话的所有 Hook |
 | `OPENVIKING_BYPASS_SESSION_PATTERNS` | `""` | 通过 CSV 格式的 glob 模式匹配并自动跳过特定会话 |
 | `OPENVIKING_MEMORY_ENABLED` | (auto) | 强制开启或关闭插件 |
 | `OPENVIKING_DEBUG` | `false` | 将调试日志输出至 `~/.openviking/logs/cc-hooks.log` |
+
+如果更看重召回响应速度，请参阅[低延迟召回](https://docs.openviking.net/zh/agent-integrations/01-overview#低延迟召回)。
 
 在多租户场景下，请额外配置 `OPENVIKING_ACCOUNT` 和 `OPENVIKING_USER`。完整的环境变量列表请参阅 [插件 README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README_CN.md#配置)。
 

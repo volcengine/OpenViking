@@ -18,7 +18,9 @@ from openviking_cli.utils.config.config_loader import (
     require_config,
     resolve_config_path,
 )
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfig, ParserApiConfig
 from openviking_cli.utils.config.parser_config import CodeHostingConfig
+from openviking_cli.utils.config.queue_worker_config import QueueWorkersConfig
 
 
 class TestResolveConfigPath:
@@ -117,6 +119,35 @@ class TestRequireConfig:
         monkeypatch.delenv("TEST_MISSING_ENV", raising=False)
         with pytest.raises(FileNotFoundError, match="configuration file not found"):
             require_config(None, "TEST_MISSING_ENV", "nonexistent_file.conf", "test")
+
+
+def test_external_parse_worker_max_concurrent_defaults_to_four():
+    config = OpenVikingConfig.from_dict({})
+
+    assert config.queue_workers.external_parse.max_concurrent == 4
+
+
+def test_external_parse_worker_max_concurrent_accepts_positive_value():
+    config = OpenVikingConfig.from_dict(
+        {"queue_workers": {"external_parse": {"max_concurrent": 9}}}
+    )
+
+    assert config.queue_workers.external_parse.max_concurrent == 9
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_external_parse_worker_max_concurrent_rejects_non_positive_value(value):
+    with pytest.raises(ValueError) as exc_info:
+        QueueWorkersConfig(external_parse={"max_concurrent": value})
+
+    assert exc_info.value.errors()[0]["type"] == "greater_than"
+
+
+def test_parser_api_rejects_worker_max_concurrent():
+    with pytest.raises(ValueError) as exc_info:
+        ParserApiConfig(max_concurrent=9)
+
+    assert exc_info.value.errors()[0]["type"] == "extra_forbidden"
 
 
 def test_generic_code_hosting_domains_include_supported_platforms():

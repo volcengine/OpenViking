@@ -8,15 +8,24 @@ from openviking.storage.queuefs.semantic_dag import SemanticDagExecutor
 from openviking_cli.session.user_id import UserIdentifier
 
 
+class _FakeAgfs:
+    async def pathlock_acquire_exact_batch(self, _paths):
+        return {"lease_ref": "test"}
+
+    async def pathlock_release(self, _lease):
+        return None
+
+
 class _FakeVikingFS:
     def __init__(self, tree):
         self._tree = tree
         self.writes = []
+        self._async_agfs = _FakeAgfs()
 
     async def ls(self, uri, node_limit=None, ctx=None):
         return self._tree.get(uri, [])
 
-    async def write_file(self, path, content, ctx=None):
+    async def write_file(self, path, content, ctx=None, lease_ref=None):
         self.writes.append((path, content))
 
     def _uri_to_path(self, uri, ctx=None):
@@ -39,7 +48,14 @@ class _FakeProcessor:
         return overview, "abstract"
 
     async def _vectorize_directory(
-        self, uri, context_type, abstract, overview, ctx=None, semantic_msg_id=None
+        self,
+        uri,
+        context_type,
+        abstract,
+        overview,
+        ctx=None,
+        semantic_msg_id=None,
+        ingest_options=None,
     ):
         pass
 
@@ -55,6 +71,7 @@ class _FakeProcessor:
         ctx=None,
         semantic_msg_id=None,
         use_summary=False,
+        ingest_options=None,
     ):
         self.vectorized_files.append(file_path)
 

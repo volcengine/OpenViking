@@ -99,3 +99,12 @@ class MockLocalAGFS:
 
     def bind_request_context(self, ctx):
         return MagicMock(__enter__=lambda x: None, __exit__=lambda x, y, z: None)
+
+    def pathlock_acquire_tree(self, *args, **kwargs):
+        return {"lease_ref": "mock-lease"}
+
+    def pathlock_acquire_exact(self, *args, **kwargs):
+        return {"lease_ref": "mock-lease"}
+
+    def pathlock_release(self, *args, **kwargs):
+        return None

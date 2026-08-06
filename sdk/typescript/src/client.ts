@@ -26,6 +26,7 @@ import type {
   TreeOptions,
   UpdateWatchOptions,
   WaitOptions,
+  WriteOptions,
 } from "./types.js";
 
 const compact = (value: JsonObject): JsonObject =>
@@ -502,13 +503,14 @@ export class OpenVikingClient {
   write(
     uri: string,
     content: string,
-    options: WaitOptions & { mode?: string } = {},
+    options: WriteOptions = {},
   ): Promise<JsonObject> {
     return this.request("POST", "/api/v1/content/write", {
       body: compact({
         uri: normalizeURI(uri),
         content,
         mode: options.mode ?? "replace",
+        processing_mode: options.processingMode,
         wait: options.wait ?? false,
         timeout: options.timeout,
         telemetry: options.telemetry,
@@ -552,6 +554,7 @@ export class OpenVikingClient {
       body: compact({
         session_id: options.sessionId,
         memory_policy: options.memoryPolicy,
+        auto_commit_policy: options.autoCommitPolicy,
         telemetry: options.telemetry,
       }),
     });

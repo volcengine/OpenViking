@@ -180,6 +180,7 @@ def test_agfs_queuefs_validation_accepts_supported_shapes(queuefs, expected):
         ({"backend": "bogus"}, "queuefs"),
         ({"busy_timeout_ms": -1}, "busy_timeout_ms"),
         ({"recover_stale_sec": -1}, "recover_stale_sec"),
+        ({"backend": "redis", "redis": {"key_prefix": ""}}, "key_prefix"),
     ],
 )
 def test_agfs_queuefs_validation_rejects_invalid_shapes(queuefs, match):
@@ -340,6 +341,149 @@ def test_generate_plugin_config_forwards_queuefs_runtime_options():
     assert plugins["queuefs"]["config"]["backend"] == "sqlite3"
     assert plugins["queuefs"]["config"]["recover_stale_sec"] == 17
     assert plugins["queuefs"]["config"]["busy_timeout_ms"] == 1234
+
+
+def test_agfs_queuefs_accepts_redis_config():
+    """Validate the QueueFS Redis configuration model."""
+    config = AGFSConfig(
+        path="/tmp/ov-test",
+        backend="local",
+        queuefs={
+            "backend": "redis",
+            "redis": {
+                "mode": "singleton",
+                "endpoints": ["redis://redis.example.com:6379"],
+                "master_name": None,
+                "username": "queue-user",
+                "password": "secret",
+                "sentinel_username": None,
+                "sentinel_password": None,
+                "db": 2,
+                "connect_timeout_ms": 3000,
+                "command_timeout_ms": 4000,
+                "key_prefix": "tenant-a",
+                "tls_enabled": False,
+                "tls_insecure_skip_verify": False,
+            },
+        },
+    )
+
+    assert config.queuefs.backend == "redis"
+    assert config.queuefs.redis.mode == "singleton"
+    assert config.queuefs.redis.endpoints == ["redis://redis.example.com:6379"]
+    assert config.queuefs.redis.db == 2
+    assert config.queuefs.redis.key_prefix == "tenant-a"
+
+
+def test_agfs_queuefs_redis_defaults_singleton_mode_and_key_prefix():
+    """Use the documented Redis mode and key prefix defaults."""
+    config = AGFSConfig(
+        path="/tmp/ov-test",
+        backend="local",
+        queuefs={"backend": "redis"},
+    )
+
+    assert config.queuefs.redis.mode == "singleton"
+    assert config.queuefs.redis.key_prefix == "default"
+
+
+@pytest.mark.parametrize(
+    ("redis_config", "match"),
+    [
+        ({"mode": "invalid"}, "mode"),
+        (
+            {
+                "mode": "singleton",
+                "endpoints": ["redis://redis-1:6379", "redis://redis-2:6379"],
+            },
+            "singleton",
+        ),
+        ({"mode": "cluster", "endpoints": []}, "endpoints"),
+        ({"mode": "cluster", "db": 1}, "db"),
+        ({"mode": "sentinel", "endpoints": [], "master_name": "mymaster"}, "endpoints"),
+        ({"mode": "sentinel", "master_name": ""}, "master_name"),
+        ({"key_prefix": "invalid{tag}"}, "key_prefix"),
+    ],
+)
+def test_agfs_queuefs_redis_rejects_invalid_mode_config(redis_config, match):
+    """Reject Redis topology settings that violate the selected mode."""
+    with pytest.raises(ValueError, match=match):
+        AGFSConfig(
+            path="/tmp/ov-test",
+            backend="local",
+            queuefs={"backend": "redis", "redis": redis_config},
+        )
+
+
+@pytest.mark.parametrize(
+    "redis_config",
+    [
+        {
+            "mode": "cluster",
+            "endpoints": ["redis://cluster-1:6379", "redis://cluster-2:6379"],
+            "db": 0,
+        },
+        {
+            "mode": "sentinel",
+            "endpoints": ["redis://sentinel-1:26379", "redis://sentinel-2:26379"],
+            "master_name": "mymaster",
+        },
+    ],
+)
+def test_agfs_queuefs_redis_accepts_high_availability_modes(redis_config):
+    """Accept valid Cluster and Sentinel QueueFS configurations."""
+    config = AGFSConfig(
+        path="/tmp/ov-test",
+        backend="local",
+        queuefs={"backend": "redis", "redis": redis_config},
+    )
+
+    assert config.queuefs.redis.mode == redis_config["mode"]
+    assert config.queuefs.redis.endpoints == redis_config["endpoints"]
+
+
+def test_agfs_queuefs_redis_rejects_removed_pool_max_size():
+    """Reject the removed Redis connection pool setting."""
+    with pytest.raises(ValueError, match="pool_max_size"):
+        AGFSConfig(
+            path="/tmp/ov-test",
+            backend="local",
+            queuefs={
+                "backend": "redis",
+                "redis": {"pool_max_size": 16},
+            },
+        )
+
+
+def test_generate_plugin_config_forwards_queuefs_redis_config():
+    """Forward the complete Redis child object to the QueueFS plugin."""
+    redis_config = {
+        "mode": "singleton",
+        "endpoints": ["rediss://redis.example.com:6380"],
+        "master_name": None,
+        "username": "queue-user",
+        "password": "secret",
+        "sentinel_username": None,
+        "sentinel_password": None,
+        "db": 3,
+        "connect_timeout_ms": 1500,
+        "command_timeout_ms": 2500,
+        "key_prefix": "tenant-b",
+        "tls_enabled": True,
+        "tls_insecure_skip_verify": False,
+    }
+    config = AGFSConfig(
+        path="/tmp/ov-test",
+        backend="local",
+        queuefs={"backend": "redis", "redis": redis_config},
+    )
+
+    plugins = _generate_plugin_config(config, Path("/tmp/ov-test"))
+
+    assert plugins["queuefs"]["config"] == {
+        "backend": "redis",
+        "redis": redis_config,
+    }
 
 
 def test_agfs_redirects_require_backups():

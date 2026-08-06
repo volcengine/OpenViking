@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::crypto;
 use crate::core::internal_names::is_hidden_runtime_lock_name;
@@ -389,6 +389,8 @@ impl FileSystem for EncryptionWrappedFS {
             .map_err(|error| {
                 Error::internal(format!("encrypted write lock context error: {error}"))
             })?;
+        let action_name = match &action { AutoPathLockAction::Disabled => "disabled", AutoPathLockAction::Covered(_) => "covered", AutoPathLockAction::Acquire => "acquire" };
+        debug!(path = %path, temp_path = %temp_path, final_lock_path = %requests[1].path, temp_lock_path = %requests[0].path, action = %action_name, "encrypted write resolved dual-path pathlock action");
         let lock_guard = match action {
             AutoPathLockAction::Disabled => None,
             AutoPathLockAction::Covered(outer) => {

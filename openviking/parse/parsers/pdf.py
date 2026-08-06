@@ -140,6 +140,7 @@ class PDFParser(BaseParser):
                 source_name=resource_name,
                 base_dir=pdf_path.parent,
                 allowed_media_dirs=[storage.media_dir],
+                split_content=kwargs.get("split_content", True),
             )
 
             # Step 3: Update metadata for PDF origin

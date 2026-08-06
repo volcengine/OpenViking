@@ -94,7 +94,7 @@ impl CliContext {
 
     pub fn get_client_with_timeout(&self, timeout_secs: Option<f64>) -> client::HttpClient {
         let auth = self.config.effective_auth(self.sudo);
-        client::HttpClient::new(
+        let mut client = client::HttpClient::new(
             &self.config.url,
             auth.api_key,
             auth.account,
@@ -104,7 +104,34 @@ impl CliContext {
             self.profile.unwrap_or(self.config.profile),
             self.config.effective_extra_headers(),
         )
-        .with_gateway_token(self.config.effective_gateway_token())
+        .with_gateway_token(self.config.effective_gateway_token());
+
+        // Add LDAP or OIDC authentication if configured
+        if let Some(auth_mode) = &self.config.auth_mode {
+            match auth_mode.as_str() {
+                "ldap" => {
+                    client = client.with_auth_mode(Some("ldap".to_string()));
+                    if let Some(ldap_username) = &self.config.ldap_username {
+                        client = client.with_ldap_username(Some(ldap_username.clone()));
+                    }
+                    if let Some(ldap_password) = &self.config.ldap_password {
+                        client = client.with_ldap_password(Some(ldap_password.clone()));
+                    }
+                }
+                "oidc" => {
+                    client = client.with_auth_mode(Some("oidc".to_string()));
+                    if let Some(token) = &self.config.oidc_token {
+                        client = client.with_oidc_token(Some(token.clone()));
+                    } else if let Some(api_key) = &self.config.api_key {
+                        // Fallback: use api_key as OIDC token if it looks like a JWT
+                        client = client.with_oidc_token(Some(api_key.clone()));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        client
     }
 }
 
@@ -619,6 +646,14 @@ enum Commands {
         /// Wait for async processing to finish
         #[arg(long, default_value = "false", help_heading = "Common options")]
         wait: bool,
+        /// Content post-write processing mode
+        #[arg(
+            long = "processing-mode",
+            default_value = "semantic_and_vectors",
+            value_parser = ["semantic_and_vectors", "vectors_only"],
+            help_heading = "Advanced options"
+        )]
+        processing_mode: String,
         /// Optional wait timeout in seconds
         #[arg(
             long,
@@ -3369,6 +3404,7 @@ async fn main() {
             append,
             mode,
             wait,
+            processing_mode,
             timeout,
         } => {
             let effective_mode = if let Some(m) = mode {
@@ -3378,8 +3414,17 @@ async fn main() {
             } else {
                 "replace".to_string()
             };
-            handlers::handle_write(uri, content, from_file, effective_mode, wait, timeout, ctx)
-                .await
+            handlers::handle_write(
+                uri,
+                content,
+                from_file,
+                effective_mode,
+                wait,
+                timeout,
+                processing_mode,
+                ctx,
+            )
+            .await
         }
         Commands::SetTags {
             uri,
@@ -4118,6 +4163,22 @@ mod tests {
         assert!(help.contains("--progress"));
         assert!(help.contains("--no-progress"));
         assert!(help.contains("--verbose"));
+        assert!(!help.contains("--parse-mode"));
+        assert!(help.contains("--args"));
+    }
+
+    #[test]
+    fn cli_add_resource_rejects_top_level_parse_mode() {
+        assert!(
+            Cli::try_parse_from([
+                "ov",
+                "add-resource",
+                "./README.md",
+                "--parse-mode",
+                "no_split",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

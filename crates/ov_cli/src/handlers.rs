@@ -1285,6 +1285,7 @@ pub async fn handle_write(
     mode: String,
     wait: bool,
     timeout: Option<f64>,
+    processing_mode: String,
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
@@ -1305,6 +1306,7 @@ pub async fn handle_write(
         &mode,
         wait,
         timeout,
+        &processing_mode,
         ctx.output_format,
         ctx.compact,
     )

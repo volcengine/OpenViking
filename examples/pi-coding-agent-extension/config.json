@@ -4,7 +4,6 @@
   "recallTokenBudget": 2000,
   "recallMaxContentChars": 500,
   "recallPreferAbstract": true,
-  "recallLimit": 6,
   "scoreThreshold": 0.35,
   "minQueryLength": 3,
   "profileTokenBudget": 10000,

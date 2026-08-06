@@ -26,6 +26,16 @@ class RetrievalConfig(BaseModel):
             "1 uses only the child score."
         ),
     )
+    recall_intent_timeout_s: float = Field(
+        default=5.0,
+        gt=0.0,
+        description="Timeout in seconds for optional context query expansion.",
+    )
+    recall_rewrite_timeout_s: float = Field(
+        default=30.0,
+        gt=0.0,
+        description="Timeout in seconds for optional context digest rewriting.",
+    )
     enable_intent: bool = Field(
         default=True,
         description=(
