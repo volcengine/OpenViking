@@ -32,6 +32,11 @@ import {
 import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
 import { sendSessionMessages } from "./shared/batch-send.mjs";
+import {
+  compactToolInputForPart,
+  compactToolInputForProse,
+  TOOL_INPUT_POLICIES,
+} from "./lib/compact-tool-input.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -154,12 +159,19 @@ function buildParts(content, toolNameById) {
     if (block.type === "text" && typeof block.text === "string") {
       if (block.text.trim()) out.push({ type: "text", text: block.text });
     } else if (block.type === "tool_use" && typeof block.name === "string") {
+      // Structured parts: tool_input MUST be an object (server expects
+      // Optional[Dict[str, Any]]). compactToolInputForPart returns an object.
+      const useCompaction = cfg ? cfg.toolInputCompaction !== false : true;
+      const rawInput = block.input && typeof block.input === "object" ? block.input : undefined;
       out.push({
         type: "tool",
         tool_id: typeof block.id === "string" ? block.id : undefined,
         tool_name: block.name,
-        tool_input:
-          block.input && typeof block.input === "object" ? block.input : undefined,
+        tool_input: rawInput
+          ? (useCompaction
+              ? compactToolInputForPart(block.name, block.input)
+              : block.input)
+          : undefined,
         tool_status: "running",
       });
     } else if (block.type === "tool_result") {
@@ -203,7 +215,12 @@ function extractTurns(messages) {
             parts.push(block.text);
           } else if (block.type === "tool_use" && typeof block.name === "string") {
             toolNames.push(block.name);
-            parts.push(`[tool: ${block.name}]\n${formatToolInput(block.input)}`);
+            const maxChars = cfg?.toolInputMaxChars || 0;
+            const useCompaction = cfg ? cfg.toolInputCompaction !== false : true;
+            const inputText = useCompaction
+              ? compactToolInputForProse(block.name, block.input, maxChars)
+              : formatToolInput(block.input);
+            parts.push(`[tool: ${block.name}]\n${inputText}`);
           } else if (block.type === "tool_result") {
             const resultText = extractToolResultText(block.content);
             const truncated = resultText ? truncateToolResult(resultText) : null;
