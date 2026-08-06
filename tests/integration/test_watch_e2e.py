@@ -4,6 +4,8 @@
 
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
@@ -352,7 +354,11 @@ class TestWatchE2EErrorHandling:
 
         class MockResourceProcessor:
             async def process_resource(self, **kwargs):
-                return {"root_uri": kwargs.get("to", "viking://resources/test")}
+                root_uri = kwargs.get("to", "viking://resources/test")
+                return {
+                    "root_uri": root_uri,
+                    "_post_process": {"root_uri": root_uri},
+                }
 
         class MockSkillProcessor:
             async def process_skill(self, **kwargs):
@@ -364,6 +370,9 @@ class TestWatchE2EErrorHandling:
             resource_processor=MockResourceProcessor(),
             skill_processor=MockSkillProcessor(),
             watch_scheduler=None,
+        )
+        resource_service._enqueue_add_resource_job = AsyncMock(
+            return_value=SimpleNamespace(task_id="test-task")
         )
 
         ctx = RequestContext(
