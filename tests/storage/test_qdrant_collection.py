@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List
 
 import pytest
@@ -57,31 +58,43 @@ class _RecordingMetaStore:
 
 
 def test_sparse_to_qdrant_warns_on_hash_collision(monkeypatch, caplog):
-    monkeypatch.setattr(
-        qdrant_collection_module,
-        "_hash_sparse_term",
-        lambda term: 7 if term in {"alpha", "beta"} else 9,
-    )
+    logger = qdrant_collection_module.logger
+    logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.WARNING, logger=logger.name):
+            monkeypatch.setattr(
+                qdrant_collection_module,
+                "_hash_sparse_term",
+                lambda term: 7 if term in {"alpha", "beta"} else 9,
+            )
 
-    payload = _sparse_to_qdrant({"alpha": 1.0, "beta": 2.5, "gamma": 4.0})
+            payload = _sparse_to_qdrant({"alpha": 1.0, "beta": 2.5, "gamma": 4.0})
 
-    assert payload == {"indices": [7, 9], "values": [3.5, 4.0]}
-    assert "hash collision detected" in caplog.text
+            assert payload == {"indices": [7, 9], "values": [3.5, 4.0]}
+            assert "hash collision detected" in caplog.text
+    finally:
+        logger.removeHandler(caplog.handler)
 
 
 def test_scroll_points_stops_on_repeated_next_page_offset(caplog):
-    client = _StubClient(
-        [
-            {"result": {"points": [{"id": "p1"}], "next_page_offset": "repeat-me"}},
-            {"result": {"points": [{"id": "p2"}], "next_page_offset": "repeat-me"}},
-        ]
-    )
-    collection = _build_collection_stub(client)
+    logger = qdrant_collection_module.logger
+    logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.WARNING, logger=logger.name):
+            client = _StubClient(
+                [
+                    {"result": {"points": [{"id": "p1"}], "next_page_offset": "repeat-me"}},
+                    {"result": {"points": [{"id": "p2"}], "next_page_offset": "repeat-me"}},
+                ]
+            )
+            collection = _build_collection_stub(client)
 
-    points = collection._scroll_points(limit=None)
+            points = collection._scroll_points(limit=None)
 
-    assert [point["id"] for point in points] == ["p1", "p2"]
-    assert "next_page_offset repeated" in caplog.text
+            assert [point["id"] for point in points] == ["p1", "p2"]
+            assert "next_page_offset repeated" in caplog.text
+    finally:
+        logger.removeHandler(caplog.handler)
 
 
 def test_delete_all_data_prefers_filter_delete():
@@ -105,23 +118,29 @@ def test_delete_all_data_prefers_filter_delete():
 
 
 def test_delete_all_data_falls_back_to_batched_delete(caplog):
-    client = _StubClient([QdrantRestError("delete failed")])
-    collection = _build_collection_stub(client)
-    collection._scan_points_with_warning = lambda **_: [
-        {"id": str(i)} for i in range(QdrantCollection.DEFAULT_DELETE_BATCH_SIZE * 2 + 5)
-    ]
+    logger = qdrant_collection_module.logger
+    logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.WARNING, logger=logger.name):
+            client = _StubClient([QdrantRestError("delete failed")])
+            collection = _build_collection_stub(client)
+            collection._scan_points_with_warning = lambda **_: [
+                {"id": str(i)} for i in range(QdrantCollection.DEFAULT_DELETE_BATCH_SIZE * 2 + 5)
+            ]
 
-    deleted_batches: List[List[str]] = []
-    collection._delete_points = lambda ids: deleted_batches.append(list(ids))
+            deleted_batches: List[List[str]] = []
+            collection._delete_points = lambda ids: deleted_batches.append(list(ids))
 
-    collection.delete_all_data()
+            collection.delete_all_data()
 
-    assert [len(batch) for batch in deleted_batches] == [
-        QdrantCollection.DEFAULT_DELETE_BATCH_SIZE,
-        QdrantCollection.DEFAULT_DELETE_BATCH_SIZE,
-        5,
-    ]
-    assert "Falling back to batched delete_all_data" in caplog.text
+            assert [len(batch) for batch in deleted_batches] == [
+                QdrantCollection.DEFAULT_DELETE_BATCH_SIZE,
+                QdrantCollection.DEFAULT_DELETE_BATCH_SIZE,
+                5,
+            ]
+            assert "Falling back to batched delete_all_data" in caplog.text
+    finally:
+        logger.removeHandler(caplog.handler)
 
 
 def test_make_point_accepts_zero_id():
