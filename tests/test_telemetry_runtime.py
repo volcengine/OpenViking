@@ -820,12 +820,18 @@ async def test_embedding_handler_binds_registered_operation_telemetry(monkeypatc
     telemetry = MemoryOperationTelemetry(operation="resources.add_resource", enabled=True)
     register_telemetry(telemetry)
 
-    class _TelemetryAwareEmbedder:
+    class _TelemetryAwareEmbedder(DenseEmbedderBase):
+        def __init__(self):
+            super().__init__("telemetry-test", config={"max_input_tokens": None})
+
         def embed(self, text: str, is_query: bool = False) -> EmbedResult:
             assert text == "hello"
             assert is_query is False
             get_current_telemetry().record_token_usage("embedding", 9, 0)
             return EmbedResult(dense_vector=[0.1, 0.2])
+
+        def get_dimension(self) -> int:
+            return 2
 
     class _DummyConfig:
         def __init__(self):
