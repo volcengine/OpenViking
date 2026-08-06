@@ -1083,6 +1083,30 @@ class OpenGaussCollection(ICollection):
             ids.append(record_id)
         return ids
 
+    def update_data(self, data_list: List[Dict[str, Any]]):
+        if not data_list:
+            return []
+        primary_keys = []
+        for record in data_list:
+            record_id = record.get("id")
+            if record_id is None or record_id == "":
+                raise ValueError("openGauss vector record requires id")
+            primary_keys.append(record_id)
+
+        existing = self.fetch_data(primary_keys)
+        existing_map = {str(item.id): item.fields for item in existing.items}
+        missing_ids = [key for key in primary_keys if str(key) not in existing_map]
+        if missing_ids:
+            raise ValueError(f"record not found for primary key(s): {missing_ids}")
+
+        merged_list = []
+        for record in data_list:
+            existing_fields = existing_map[str(record["id"])] or {}
+            merged = dict(existing_fields)
+            merged.update(record)
+            merged_list.append(merged)
+        return self.upsert_data(merged_list)
+
     def _upsert_row(self, columns: List[str], values: List[Any]) -> None:
         id_index = columns.index("id")
         update_columns = [column for column in columns if column != "id"]
@@ -1510,6 +1534,17 @@ class OpenGaussCollectionAdapter(CollectionAdapter):
             current_parts.append(part)
             roots.append("/" + "/".join(current_parts))
         return roots
+
+    def update_data(self, data_list: List[Dict[str, Any]]):
+        normalized = [self._normalize_record_for_write(record) for record in data_list]
+        collection = self.get_collection()
+        result = collection.update_data(normalized)
+        if isinstance(result, list):
+            return [str(item) for item in result if item is not None]
+        fallback_ids = [
+            record.get("id") for record in normalized if record.get("id") is not None
+        ]
+        return [str(item) for item in fallback_ids]
 
     def _normalize_record_for_write(self, record: Dict[str, Any]) -> Dict[str, Any]:
         normalized = dict(super()._normalize_record_for_write(record))

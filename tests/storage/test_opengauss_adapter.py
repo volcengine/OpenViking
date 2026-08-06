@@ -8,7 +8,11 @@ import uuid
 
 import pytest
 
-from openviking.storage.vectordb.collection.result import SearchResult
+from openviking.storage.vectordb.collection.result import (
+    DataItem,
+    FetchDataInCollectionResult,
+    SearchResult,
+)
 from openviking.storage.vectordb_adapters.factory import create_collection_adapter
 from openviking.storage.vectordb_adapters.opengauss_adapter import (
     OpenGaussCollection,
@@ -258,6 +262,73 @@ def test_vector_search_binds_vector_before_filter_params():
 
     assert captured["fetch"] is True
     assert captured["params"] == ["[0.1,0.2]", "%\n/a\n%", "[0.1,0.2]", 10, 0]
+
+
+def test_update_data_merges_existing_fields_and_upserts():
+    collection = object.__new__(OpenGaussCollection)
+    existing = {"uri": "/a", "text": "old", "account_id": "acct"}
+    upserted = {}
+
+    collection.fetch_data = lambda primary_keys: FetchDataInCollectionResult(
+        items=[DataItem(id="row-1", fields=dict(existing))]
+    )
+
+    def fake_upsert(data_list, ttl=0):
+        upserted["data"] = data_list
+        return ["row-1"]
+
+    collection.upsert_data = fake_upsert
+
+    result = collection.update_data([{"id": "row-1", "text": "new"}])
+
+    assert result == ["row-1"]
+    assert upserted["data"] == [
+        {"id": "row-1", "uri": "/a", "text": "new", "account_id": "acct"}
+    ]
+
+
+def test_update_data_rejects_missing_primary_key():
+    collection = object.__new__(OpenGaussCollection)
+
+    with pytest.raises(ValueError, match="requires id"):
+        collection.update_data([{"text": "no id"}])
+
+
+def test_update_data_rejects_unknown_record():
+    collection = object.__new__(OpenGaussCollection)
+    collection.fetch_data = lambda primary_keys: FetchDataInCollectionResult(items=[])
+
+    with pytest.raises(ValueError, match="record not found"):
+        collection.update_data([{"id": "missing", "text": "x"}])
+
+
+def test_update_data_empty_list_returns_empty():
+    collection = object.__new__(OpenGaussCollection)
+    assert collection.update_data([]) == []
+
+
+def test_adapter_update_data_normalizes_and_returns_ids(monkeypatch):
+    adapter = object.__new__(OpenGaussCollectionAdapter)
+    adapter._collection_name = "context"
+    adapter._index_name = "default"
+    captured = {}
+
+    class FakeCollection:
+        def update_data(self, data_list):
+            captured["data"] = data_list
+            return ["row-1"]
+
+    monkeypatch.setattr(adapter, "get_collection", lambda: FakeCollection())
+    monkeypatch.setattr(
+        adapter,
+        "_normalize_record_for_write",
+        lambda record: {**record, "uri": "/a/b/"},
+    )
+
+    result = adapter.update_data([{"id": "row-1", "uri": "/a/b/", "text": "new"}])
+
+    assert result == ["row-1"]
+    assert captured["data"] == [{"id": "row-1", "uri": "/a/b/", "text": "new"}]
 
 
 @pytest.mark.skipif(
