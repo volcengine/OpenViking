@@ -19,6 +19,12 @@ class _FakeCacheConfig:
         return {"enabled": False, "provider": "memory"}
 
 
+class _FakePathLockConfig:
+    def model_dump(self, mode: str) -> dict:
+        assert mode == "json"
+        return {"provider": "filesystem", "lock_timeout_secs": 0.0, "lock_expire_secs": 1800.0}
+
+
 class _FakeConfig:
     """Minimal config object exposing the service-facing to_dict API."""
 
@@ -27,6 +33,7 @@ class _FakeConfig:
             path="/tmp/ov-test",
             backend="local",
             cache=_FakeCacheConfig(),
+            pathlock=_FakePathLockConfig(),
         ),
         skip_process_lock=False,
     )
@@ -72,6 +79,15 @@ async def test_build_ragfs_binding_config_works_inside_running_event_loop(monkey
         "cache": {
             "enabled": False,
             "provider": "memory",
+        },
+        "pathlock": {
+            "provider": "filesystem",
+            "lock_timeout_secs": 0.0,
+            "lock_expire_secs": 1800.0,
+        },
+        "log": {
+            "level": "INFO",
+            "output": "stdout",
         },
         "encryption": {
             "root_key": b"k" * 32,
