@@ -303,6 +303,8 @@ class OpenVikingBuildExt(build_ext):
                     "maturin",
                     "build",
                     "--release",
+                    "--features",
+                    "s3",
                     "--out",
                     tmpdir,
                 ]
@@ -564,6 +566,7 @@ setup(
             "lib/ragfs_python*.pyd",
             "bin/ov",
             "bin/ov.exe",
+            "console/static/**/*",
             "server/static/**/*",
             "web_studio/dist/**/*",
             "storage/vectordb/engine/*.abi3.so",
