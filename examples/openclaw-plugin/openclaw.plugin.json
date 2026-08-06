@@ -100,7 +100,7 @@
       "label": "OpenViking API Key",
       "sensitive": true,
       "placeholder": "${OPENVIKING_API_KEY}",
-      "help": "Optional API key for OpenViking server. Accepts a plain string, ${ENV_VAR} interpolation, or a SecretRef object ({source: env/file/exec, id}). Prefer a SecretRef so the key is never stored as plaintext in openclaw.json."
+      "help": "Optional API key for OpenViking server. Accepts a plain string, ${ENV_VAR} interpolation, or a SecretRef object ({source: env/file, id}). Prefer a SecretRef so the key is never stored as plaintext in openclaw.json."
     },
     "headers": {
       "label": "Headers",
@@ -319,18 +319,6 @@
             "properties": {
               "source": { "type": "string", "const": "file" },
               "id": { "type": "string", "description": "Absolute file path or ~/relative path. Example: /etc/secrets/openviking.key." }
-            }
-          },
-          {
-            "type": "object",
-            "title": "SecretRef (exec)",
-            "description": "Read the API key by shelling out to a secret-manager CLI. Matches the shape used by OpenClaw's core provider configs so 1Password, HashiCorp Vault, gopass, etc. can manage the OpenViking key alongside LLM/TTS/MCP credentials.",
-            "additionalProperties": false,
-            "required": ["source", "provider", "id"],
-            "properties": {
-              "source": { "type": "string", "const": "exec" },
-              "provider": { "type": "string", "description": "CLI binary name on PATH. Examples: op, vault, gopass." },
-              "id": { "type": "string", "description": "Argument passed to the provider CLI to select the specific secret, e.g. 'vault kv get -field=key secret/openviking' in plain-arg form; this implementation passes id as a single arg." }
             }
           }
         ]
