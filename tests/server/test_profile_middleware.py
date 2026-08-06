@@ -141,5 +141,14 @@ def test_sanitize_profile_path_prefers_package_root_over_project_root_for_venv_p
     assert _sanitize_profile_path(path) == "starlette/middleware/base.py"
 
 
+def test_sanitize_profile_path_prefers_stdlib_root_over_python_prefix(monkeypatch):
+    from openviking.server import profile_middleware
+
+    stdlib = "/data00/home/me/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11"
+    monkeypatch.setattr(profile_middleware, "PROFILE_ROOTS", (profile_middleware.Path(stdlib),))
+
+    assert _sanitize_profile_path(f"{stdlib}/asyncio/events.py") == "asyncio/events.py"
+
+
 def test_profile_default_top_n_is_100():
     assert PROFILE_TOP_N == 100

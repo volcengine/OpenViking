@@ -109,17 +109,17 @@ def _sanitize_profile_path(path: str) -> str:
                 if idx + 1 < len(parts):
                     return "/".join(parts[idx + 1 :])
 
-        for idx, part in enumerate(parts):
-            if part.startswith("python") and idx + 1 < len(parts):
-                suffix = parts[idx + 1 :]
-                if suffix:
-                    return "/".join(suffix)
-
         for root in PROFILE_ROOTS:
             try:
                 return candidate.relative_to(root).as_posix()
             except ValueError:
                 continue
+
+        for idx, part in enumerate(parts):
+            if part.startswith("python") and idx + 1 < len(parts):
+                suffix = parts[idx + 1 :]
+                if suffix:
+                    return "/".join(suffix)
 
     return _infer_module_suffix(raw_path)
 
