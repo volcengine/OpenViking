@@ -24,6 +24,7 @@ import type {
   SearchOptions,
   TaskListOptions,
   TreeOptions,
+  UpdateSessionConfigOptions,
   UpdateWatchOptions,
   WaitOptions,
   WriteOptions,
@@ -555,6 +556,7 @@ export class OpenVikingClient {
         session_id: options.sessionId,
         memory_policy: options.memoryPolicy,
         auto_commit_policy: options.autoCommitPolicy,
+        memory_extraction_config: options.memoryExtractionConfig,
         telemetry: options.telemetry,
       }),
     });
@@ -568,6 +570,22 @@ export class OpenVikingClient {
     return this.request("GET", `/api/v1/sessions/${pathPart(sessionId)}`, {
       query: { auto_create: autoCreate || undefined },
     });
+  }
+  /** Update mutable session memory extraction settings. */
+  updateSessionConfig(
+    sessionId: string,
+    options: UpdateSessionConfigOptions,
+  ): Promise<JsonObject> {
+    return this.request(
+      "PATCH",
+      `/api/v1/sessions/${pathPart(sessionId)}/config`,
+      {
+        body: compact({
+          memory_extraction_config: options.memoryExtractionConfig,
+          telemetry: options.telemetry,
+        }),
+      },
+    );
   }
   /** Test whether a session exists. */
   async sessionExists(sessionId: string): Promise<boolean> {
@@ -659,11 +677,19 @@ export class OpenVikingClient {
     sessionId: string,
     keepRecentCount = 0,
     telemetry?: unknown,
+    eventTags?: string[],
   ): Promise<JsonObject> {
     return this.request(
       "POST",
       `/api/v1/sessions/${pathPart(sessionId)}/commit`,
-      { body: compact({ keep_recent_count: keepRecentCount, telemetry }) },
+      {
+        body: compact({
+          keep_recent_count: keepRecentCount,
+          telemetry,
+          extraction_metadata:
+            eventTags === undefined ? undefined : { event: { tags: eventTags } },
+        }),
+      },
     );
   }
   /** Export a resource subtree to a local OVPack file. */

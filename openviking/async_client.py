@@ -171,6 +171,21 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         return await self._client.get_session(session_id, auto_create=auto_create)
 
+    async def update_session_config(
+        self,
+        session_id: str,
+        *,
+        memory_extraction_config: Dict[str, Any],
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Update mutable session memory extraction settings."""
+        await self._ensure_initialized()
+        return await self._client.update_session_config(
+            session_id,
+            memory_extraction_config=memory_extraction_config,
+            telemetry=telemetry,
+        )
+
     async def get_session_context(
         self, session_id: str, token_budget: int = 128_000
     ) -> Dict[str, Any]:
@@ -258,6 +273,7 @@ class AsyncOpenViking:
         keep_recent_turn_count: int | None = None,
         retained_message_token_budget: int | None = None,
         min_raw_tail_steps: int | None = None,
+        event_tags: list[str] | None = None,
     ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
         await self._ensure_initialized()
@@ -271,6 +287,8 @@ class AsyncOpenViking:
             }.items()
             if value is not None
         }
+        if event_tags is not None:
+            optional_retention["event_tags"] = event_tags
         return await self._client.commit_session(
             session_id,
             telemetry=telemetry,

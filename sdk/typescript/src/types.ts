@@ -151,6 +151,18 @@ export interface CreateSessionOptions {
   sessionId?: string;
   memoryPolicy?: JsonObject;
   autoCommitPolicy?: JsonObject;
+  memoryExtractionConfig?: MemoryExtractionConfig;
+  telemetry?: unknown;
+}
+/** Event-memory extraction settings shared by session create and update. */
+export interface MemoryExtractionConfig {
+  events?: {
+    tags?: string[];
+  };
+}
+/** Mutable session configuration. */
+export interface UpdateSessionConfigOptions {
+  memoryExtractionConfig: MemoryExtractionConfig;
   telemetry?: unknown;
 }
 /** Background task filters. */

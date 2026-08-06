@@ -918,6 +918,36 @@ class LocalClient(BaseClient):
         )
         return result
 
+    async def update_session_config(
+        self,
+        session_id: str,
+        *,
+        memory_extraction_config: Dict[str, Any],
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Update mutable session memory extraction settings."""
+        event_tags = memory_extraction_config.get("events", {}).get("tags")
+
+        async def _update() -> Dict[str, Any]:
+            session = await self._service.sessions.update_config(
+                session_id,
+                self._ctx,
+                event_tags=event_tags,
+            )
+            return {
+                "session_id": session.session_id,
+                "memory_extraction_config": (
+                    self._service.sessions.effective_memory_extraction_config(session)
+                ),
+            }
+
+        execution = await run_with_telemetry(
+            operation="session.update_config",
+            telemetry=telemetry,
+            fn=_update,
+        )
+        return attach_telemetry_payload(execution.result, execution.telemetry)
+
     async def get_session_context(
         self, session_id: str, token_budget: int = 128_000
     ) -> Dict[str, Any]:
@@ -946,6 +976,7 @@ class LocalClient(BaseClient):
         keep_recent_turn_count: Optional[int] = None,
         retained_message_token_budget: Optional[int] = None,
         min_raw_tail_steps: Optional[int] = None,
+        event_tags: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
         commit_kwargs: Dict[str, Any] = {"keep_recent_count": keep_recent_count}
@@ -958,6 +989,8 @@ class LocalClient(BaseClient):
         commit_kwargs.update(
             {key: value for key, value in optional_retention.items() if value is not None}
         )
+        if event_tags is not None:
+            commit_kwargs["event_tags"] = event_tags
         execution = await run_with_telemetry(
             operation="session.commit",
             telemetry=telemetry,

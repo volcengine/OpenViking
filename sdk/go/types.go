@@ -241,15 +241,22 @@ type GlobOptions struct {
 
 // CreateSessionOptions controls CreateSession.
 type CreateSessionOptions struct {
-	SessionID        string
-	MemoryPolicy     map[string]any
-	AutoCommitPolicy map[string]any
-	Telemetry        any
+	SessionID              string
+	MemoryPolicy           map[string]any
+	AutoCommitPolicy       map[string]any
+	MemoryExtractionConfig map[string]any
+	Telemetry              any
 }
 
 // GetSessionOptions controls GetSession.
 type GetSessionOptions struct {
 	AutoCreate bool
+}
+
+// UpdateSessionConfigOptions controls UpdateSessionConfig.
+type UpdateSessionConfigOptions struct {
+	MemoryExtractionConfig map[string]any
+	Telemetry              any
 }
 
 // AddMessageOptions controls AddMessage.
@@ -279,6 +286,7 @@ type BatchAddMessagesOptions struct {
 type CommitSessionOptions struct {
 	KeepRecentCount int
 	Telemetry       any
+	EventTags       []string
 }
 
 // ListTasksOptions controls ListTasks.

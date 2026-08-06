@@ -301,6 +301,33 @@ describe("OpenVikingClient", () => {
     ).toThrow("each message requires content or parts");
   });
 
+  it("sends event memory tag configuration for session APIs", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => ok({}));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+    const memoryExtractionConfig = {
+      events: { tags: ["team=search", "channel=web"] },
+    };
+
+    await client.createSession({ sessionId: "tagged", memoryExtractionConfig });
+    await client.updateSessionConfig("tagged", { memoryExtractionConfig });
+    await client.commitSession("tagged", 0, undefined, []);
+
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
+      session_id: "tagged",
+      memory_extraction_config: memoryExtractionConfig,
+    });
+    expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toEqual({
+      memory_extraction_config: memoryExtractionConfig,
+    });
+    expect(JSON.parse(String(fetcher.mock.calls[2]![1]?.body))).toEqual({
+      keep_recent_count: 0,
+      extraction_metadata: { event: { tags: [] } },
+    });
+  });
+
   it("maps typed watch options to the server contract", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(ok({}));
     const client = new OpenVikingClient({

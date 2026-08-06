@@ -86,6 +86,22 @@ class SyncOpenViking:
         """Get session details."""
         return run_async(self._async_client.get_session(session_id, auto_create=auto_create))
 
+    def update_session_config(
+        self,
+        session_id: str,
+        *,
+        memory_extraction_config: Dict[str, Any],
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Update mutable session memory extraction settings."""
+        return run_async(
+            self._async_client.update_session_config(
+                session_id,
+                memory_extraction_config=memory_extraction_config,
+                telemetry=telemetry,
+            )
+        )
+
     def get_session_context(self, session_id: str, token_budget: int = 128_000) -> Dict[str, Any]:
         """Get assembled session context."""
         return run_async(
@@ -172,6 +188,7 @@ class SyncOpenViking:
         keep_recent_turn_count: int | None = None,
         retained_message_token_budget: int | None = None,
         min_raw_tail_steps: int | None = None,
+        event_tags: list[str] | None = None,
     ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
         optional_retention = {
@@ -184,6 +201,8 @@ class SyncOpenViking:
             }.items()
             if value is not None
         }
+        if event_tags is not None:
+            optional_retention["event_tags"] = event_tags
         return run_async(
             self._async_client.commit_session(
                 session_id,

@@ -506,8 +506,20 @@ use crate::SessionCommands;
 pub async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     match cmd {
-        SessionCommands::New => {
-            commands::session::new_session(&client, ctx.output_format, ctx.compact).await
+        SessionCommands::New {
+            session_id,
+            event_tags,
+            config_json,
+        } => {
+            commands::session::new_session(
+                &client,
+                session_id.as_deref(),
+                &event_tags,
+                config_json.as_deref(),
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
         }
         SessionCommands::List => {
             commands::session::list_sessions(&client, ctx.output_format, ctx.compact).await
@@ -576,9 +588,37 @@ pub async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()>
             )
             .await
         }
-        SessionCommands::Commit { session_id } => {
-            commands::session::commit_session(&client, &session_id, ctx.output_format, ctx.compact)
+        SessionCommands::Config { action } => match action {
+            crate::SessionConfigCommands::Set {
+                session_id,
+                event_tags,
+                no_event_tags,
+            } => {
+                commands::session::set_session_config(
+                    &client,
+                    &session_id,
+                    &event_tags,
+                    no_event_tags,
+                    ctx.output_format,
+                    ctx.compact,
+                )
                 .await
+            }
+        },
+        SessionCommands::Commit {
+            session_id,
+            event_tags,
+            no_event_tags,
+        } => {
+            commands::session::commit_session(
+                &client,
+                &session_id,
+                &event_tags,
+                no_event_tags,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
         }
     }
 }

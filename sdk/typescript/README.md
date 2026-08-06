@@ -34,6 +34,24 @@ await client.addResource("./docs/guide.md", {
 });
 ```
 
+Event-memory tags can be configured as session defaults, updated later, or overridden per commit. Passing `[]` to `commitSession` explicitly skips the session defaults for that commit.
+
+```ts
+await client.createSession({
+  sessionId: "s1",
+  memoryExtractionConfig: {
+    events: { tags: ["team=search", "channel=web"] },
+  },
+});
+await client.updateSessionConfig("s1", {
+  memoryExtractionConfig: {
+    events: { tags: ["team=search", "channel=app"] },
+  },
+});
+await client.commitSession("s1", 0, undefined, ["team=search", "channel=web"]);
+await client.commitSession("s1", 0, undefined, []);
+```
+
 Deployments using shared temporary storage can set `uploadMode: "shared"`; the server also accepts `"local"` (the default).
 
 OVPack exports and backups follow the Python and Go SDK contract: they are streamed to a Node.js local file and return its final path.

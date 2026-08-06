@@ -1353,7 +1353,17 @@ enum ObserverCommands {
 #[derive(Subcommand)]
 enum SessionCommands {
     /// Create a new session
-    New,
+    New {
+        /// Optional session ID
+        #[arg(long = "session-id", value_name = "session-id")]
+        session_id: Option<String>,
+        /// Default event-memory tags as comma-separated key=value pairs
+        #[arg(long = "event-tags", value_name = "key=value", value_delimiter = ',')]
+        event_tags: Vec<String>,
+        /// Raw session config JSON; event tags are merged into memory_extraction_config
+        #[arg(long = "config-json", value_name = "json")]
+        config_json: Option<String>,
+    },
     /// List sessions
     List,
     /// Get session details
@@ -1410,11 +1420,53 @@ enum SessionCommands {
         #[arg(value_name = "messages-json")]
         messages: String,
     },
+    /// Update mutable session configuration
+    Config {
+        #[command(subcommand)]
+        action: SessionConfigCommands,
+    },
     /// Commit a session (archive messages and extract memories)
     Commit {
         /// Session ID
         #[arg(value_name = "session-id")]
         session_id: String,
+        /// Event-memory tags for this commit as comma-separated key=value pairs
+        #[arg(
+            long = "event-tags",
+            value_name = "key=value",
+            value_delimiter = ',',
+            conflicts_with = "no_event_tags"
+        )]
+        event_tags: Vec<String>,
+        /// Do not apply the session's default event tags to this commit
+        #[arg(long = "no-event-tags", conflicts_with = "event_tags")]
+        no_event_tags: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum SessionConfigCommands {
+    /// Set mutable session configuration
+    Set {
+        /// Session ID
+        #[arg(value_name = "session-id")]
+        session_id: String,
+        /// Default event-memory tags as comma-separated key=value pairs
+        #[arg(
+            long = "event-tags",
+            value_name = "key=value",
+            value_delimiter = ',',
+            required_unless_present = "no_event_tags",
+            conflicts_with = "no_event_tags"
+        )]
+        event_tags: Vec<String>,
+        /// Clear the session's default event-memory tags
+        #[arg(
+            long = "no-event-tags",
+            required_unless_present = "event_tags",
+            conflicts_with = "event_tags"
+        )]
+        no_event_tags: bool,
     },
 }
 
@@ -3522,7 +3574,10 @@ mod tests {
     };
     use crate::config::{Config, DEFAULT_CUSTOM_URL};
     use crate::output::OutputFormat;
-    use crate::{AdminCommands, SystemBackendCommands, SystemCommands, handlers};
+    use crate::{
+        AdminCommands, SessionCommands, SessionConfigCommands, SystemBackendCommands,
+        SystemCommands, handlers,
+    };
     use clap::{CommandFactory, Parser};
     use std::ffi::OsString;
 
@@ -3705,6 +3760,96 @@ mod tests {
             }
             _ => panic!("expected chat command"),
         }
+    }
+
+    #[test]
+    fn cli_parses_session_event_tag_options() {
+        let create = Cli::try_parse_from([
+            "ov",
+            "session",
+            "new",
+            "--session-id",
+            "s1",
+            "--event-tags",
+            "team=search,channel=web",
+        ])
+        .expect("session new event tags should parse");
+        match create.command {
+            Commands::Session {
+                action:
+                    SessionCommands::New {
+                        session_id,
+                        event_tags,
+                        config_json,
+                    },
+            } => {
+                assert_eq!(session_id.as_deref(), Some("s1"));
+                assert_eq!(event_tags, vec!["team=search", "channel=web"]);
+                assert!(config_json.is_none());
+            }
+            _ => panic!("expected session new"),
+        }
+
+        let update = Cli::try_parse_from([
+            "ov",
+            "session",
+            "config",
+            "set",
+            "s1",
+            "--event-tags",
+            "channel=app",
+        ])
+        .expect("session config set should parse");
+        match update.command {
+            Commands::Session {
+                action:
+                    SessionCommands::Config {
+                        action:
+                            SessionConfigCommands::Set {
+                                session_id,
+                                event_tags,
+                                no_event_tags,
+                            },
+                    },
+            } => {
+                assert_eq!(session_id, "s1");
+                assert_eq!(event_tags, vec!["channel=app"]);
+                assert!(!no_event_tags);
+            }
+            _ => panic!("expected session config set"),
+        }
+
+        let commit = Cli::try_parse_from(["ov", "session", "commit", "s1", "--no-event-tags"])
+            .expect("session commit no-event-tags should parse");
+        match commit.command {
+            Commands::Session {
+                action:
+                    SessionCommands::Commit {
+                        session_id,
+                        event_tags,
+                        no_event_tags,
+                    },
+            } => {
+                assert_eq!(session_id, "s1");
+                assert!(event_tags.is_empty());
+                assert!(no_event_tags);
+            }
+            _ => panic!("expected session commit"),
+        }
+
+        assert!(
+            Cli::try_parse_from([
+                "ov",
+                "session",
+                "commit",
+                "s1",
+                "--event-tags",
+                "channel=web",
+                "--no-event-tags",
+            ])
+            .is_err()
+        );
+        assert!(Cli::try_parse_from(["ov", "session", "config", "set", "s1"]).is_err());
     }
 
     #[test]

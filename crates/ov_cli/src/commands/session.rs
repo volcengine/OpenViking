@@ -9,12 +9,54 @@ use serde_json::json;
 
 pub async fn new_session(
     client: &HttpClient,
+    session_id: Option<&str>,
+    event_tags: &[String],
+    config_json: Option<&str>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let response: serde_json::Value = client.post("/api/v1/sessions", &json!({})).await?;
+    let body = create_session_body(session_id, event_tags, config_json)?;
+    let response: serde_json::Value = client.post("/api/v1/sessions", &body).await?;
     output_success(&response, output_format, compact);
     Ok(())
+}
+
+fn create_session_body(
+    session_id: Option<&str>,
+    event_tags: &[String],
+    config_json: Option<&str>,
+) -> Result<Value> {
+    let mut body = match config_json {
+        Some(raw) => serde_json::from_str::<Value>(raw)
+            .map_err(|error| Error::Client(format!("invalid --config-json: {error}")))?,
+        None => json!({}),
+    };
+    let object = body
+        .as_object_mut()
+        .ok_or_else(|| Error::Client("--config-json must be a JSON object".to_string()))?;
+    if let Some(session_id) = session_id {
+        object.insert("session_id".to_string(), json!(session_id));
+    }
+    if !event_tags.is_empty() {
+        let extraction_config = object
+            .entry("memory_extraction_config")
+            .or_insert_with(|| json!({}));
+        let extraction_object = extraction_config.as_object_mut().ok_or_else(|| {
+            Error::Client(
+                "--config-json memory_extraction_config must be a JSON object".to_string(),
+            )
+        })?;
+        let events = extraction_object
+            .entry("events")
+            .or_insert_with(|| json!({}));
+        let events_object = events.as_object_mut().ok_or_else(|| {
+            Error::Client(
+                "--config-json memory_extraction_config.events must be a JSON object".to_string(),
+            )
+        })?;
+        events_object.insert("tags".to_string(), json!(event_tags));
+    }
+    Ok(body)
 }
 
 pub async fn list_sessions(
@@ -100,6 +142,13 @@ fn render_session_get_for_table(value: &Value) -> Option<String> {
                 ],
             ),
         );
+    }
+    if let Some(tags) = object
+        .get("memory_extraction_config")
+        .and_then(|config| config.get("events"))
+        .and_then(|events| events.get("tags"))
+    {
+        push_optional_row(&mut lines, "event tags", Some(tags));
     }
 
     lines.push(String::new());
@@ -340,13 +389,50 @@ pub async fn add_messages(
 pub async fn commit_session(
     client: &HttpClient,
     session_id: &str,
+    event_tags: &[String],
+    no_event_tags: bool,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     let path = format!("/api/v1/sessions/{}/commit", url_encode(session_id));
-    let response: serde_json::Value = client.post(&path, &json!({})).await?;
+    let tags = if no_event_tags {
+        Some(&[][..])
+    } else if event_tags.is_empty() {
+        None
+    } else {
+        Some(event_tags)
+    };
+    let body = event_tags_body(tags);
+    let response: serde_json::Value = client.post(&path, &body).await?;
     output_success(&response, output_format, compact);
     Ok(())
+}
+
+pub async fn set_session_config(
+    client: &HttpClient,
+    session_id: &str,
+    event_tags: &[String],
+    no_event_tags: bool,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let path = format!("/api/v1/sessions/{}/config", url_encode(session_id));
+    let tags = if no_event_tags { &[][..] } else { event_tags };
+    let body = json!({
+        "memory_extraction_config": {
+            "events": {"tags": tags}
+        }
+    });
+    let response: serde_json::Value = client.patch(&path, &body, &[]).await?;
+    output_success(&response, output_format, compact);
+    Ok(())
+}
+
+fn event_tags_body(event_tags: Option<&[String]>) -> Value {
+    match event_tags {
+        Some(tags) => json!({"extraction_metadata": {"event": {"tags": tags}}}),
+        None => json!({}),
+    }
 }
 
 /// Add memory in one shot: creates a session, adds messages, and commits.
@@ -414,7 +500,9 @@ fn url_encode(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_messages, render_session_get_for_table};
+    use super::{
+        create_session_body, event_tags_body, parse_messages, render_session_get_for_table,
+    };
     use crate::error::Error;
     use serde_json::json;
 
@@ -429,6 +517,28 @@ mod tests {
             }
             other => panic!("expected client error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn session_event_tag_request_bodies_preserve_explicit_empty_tags() {
+        let create = create_session_body(
+            Some("s1"),
+            &["team=search".to_string()],
+            Some(r#"{"memory_policy":{"memory_types":["events"]}}"#),
+        )
+        .expect("create body");
+        assert_eq!(create["session_id"], "s1");
+        assert_eq!(
+            create["memory_extraction_config"]["events"]["tags"],
+            json!(["team=search"])
+        );
+        assert_eq!(create["memory_policy"]["memory_types"], json!(["events"]));
+
+        assert_eq!(event_tags_body(None), json!({}));
+        assert_eq!(
+            event_tags_body(Some(&[])),
+            json!({"extraction_metadata": {"event": {"tags": []}}})
+        );
     }
 
     #[test]
@@ -478,6 +588,11 @@ mod tests {
                 "events": 0,
                 "total": 3
             },
+            "memory_extraction_config": {
+                "events": {
+                    "tags": ["team=search", "channel=web"]
+                }
+            },
             "llm_token_usage": {
                 "prompt_tokens": 14807,
                 "completion_tokens": 1087,
@@ -503,6 +618,8 @@ mod tests {
         assert!(rendered.contains("Tokens"));
         assert!(rendered.contains("d34f8a7c-eb14-49c4-b689-2743ddb9b75e"));
         assert!(rendered.contains("memories extracted"));
+        assert!(rendered.contains("event tags"));
+        assert!(rendered.contains("team=search"));
         assert!(rendered.contains("profile 0, preferences 0, entities 0, events 0, total 3"));
         assert!(!rendered.contains("{\"profile\":0"));
     }

@@ -138,6 +138,36 @@ async def test_async_http_client_sends_message_semantics_and_turn_retention():
 
 
 @pytest.mark.asyncio
+async def test_async_http_client_sends_event_memory_tag_configuration():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(
+        post=AsyncMock(return_value=object()),
+        patch=AsyncMock(return_value=object()),
+    )
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {"result": {"status": "ok"}}
+    config = {"events": {"tags": ["team=search", "channel=web"]}}
+
+    await client.create_session("tagged-session", memory_extraction_config=config)
+    await client.update_session_config("tagged-session", memory_extraction_config=config)
+    await client.commit_session("tagged-session", event_tags=[])
+
+    assert fake_http.post.await_args_list[0].kwargs["json"] == {
+        "session_id": "tagged-session",
+        "memory_extraction_config": config,
+    }
+    fake_http.patch.assert_awaited_once_with(
+        "/api/v1/sessions/tagged-session/config",
+        json={"memory_extraction_config": config},
+    )
+    assert fake_http.post.await_args_list[1].kwargs["json"] == {
+        "keep_recent_count": 0,
+        "telemetry": False,
+        "extraction_metadata": {"event": {"tags": []}},
+    }
+
+
+@pytest.mark.asyncio
 async def test_async_http_client_reindex_posts_content_reindex():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))

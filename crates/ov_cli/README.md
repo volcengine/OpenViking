@@ -151,13 +151,21 @@ Run `ov --help` and `ov <command> --help` for the exact command surface of your 
 
 ### Sessions And Memory
 
-- `session new` - Create a session.
+- `session new` - Create a session, optionally with default event-memory tags.
 - `session list` - List sessions.
 - `session get` - Get session details.
 - `session get-session-context` - Get merged session context.
 - `session add-message` / `session add-messages` - Add messages to a session.
-- `session commit` - Archive messages and extract memories.
+- `session config set` - Update the session's default event-memory tags.
+- `session commit` - Archive messages and extract memories, optionally overriding event tags.
 - `add-memory` - Create a session, add messages, and commit in one shot. Experimental.
+
+```bash
+ov session new --session-id s1 --event-tags team=search,channel=web
+ov session config set s1 --event-tags team=search,channel=app
+ov session commit s1 --event-tags team=search,channel=web
+ov session commit s1 --no-event-tags
+```
 
 ### Interactive
 
