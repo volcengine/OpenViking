@@ -209,7 +209,8 @@ class TestOverviewGenerationFlow:
         )
         assert f"Output Language: {lang}" in prompt
         assert "Output in Markdown format" in prompt
-        assert "Brief Description" in prompt
+        expected_heading = "简要描述" if lang == "zh-CN" else "Brief Description"
+        assert expected_heading in prompt
         assert "abstract_max_chars" not in prompt
 
     def test_overview_generation_prompt_preserves_repository_hierarchy(self):

@@ -13,6 +13,7 @@ async def test_mv_canonicalizes_user_shorthand_before_vector_update(monkeypatch)
     fs = VikingFS.__new__(VikingFS)
     fs._async_agfs = AsyncMock()
     fs._async_agfs.stat.return_value = {"isDir": False}
+    fs._async_agfs.pathlock_acquire_batch.return_value = {"lease_ref": "lease-1"}
     fs._collect_uris = AsyncMock(return_value=[])
     fs._copy_for_mv = AsyncMock()
     fs._update_vector_store_uris = AsyncMock()
