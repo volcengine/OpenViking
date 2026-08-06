@@ -4,12 +4,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Protocol
 
 from openviking.pyagfs import AsyncAGFSClient
-from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
+from openviking.pyagfs.exceptions import AGFSAlreadyExistsError
 
 SYSTEM_TASK_ACCOUNT_ID = "_system"
 SYSTEM_TASK_USER_ID = "root"
@@ -65,7 +67,7 @@ class PersistentTaskStore:
         path = self._task_path(account_id, user_id, task_id)
         try:
             raw = await self._agfs.read(path)
-        except (AGFSNotFoundError, FileNotFoundError):
+        except Exception:
             return None
         return json.loads(_decode_bytes(raw))
 
@@ -73,9 +75,14 @@ class PersistentTaskStore:
         if not user_id:
             return []
         directory = self._task_dir(account_id, user_id)
+        rel_path = directory.removeprefix(self.ROOT_PREFIX).lstrip("/")
+        local_dir = os.path.expanduser(f"~/.openviking/data/viking/{rel_path}")
+        if os.path.isdir(local_dir):
+            return await asyncio.to_thread(self._fast_read_dir, local_dir)
+
         try:
             items = await self._agfs.ls(directory)
-        except (AGFSNotFoundError, FileNotFoundError):
+        except Exception:
             return []
         tasks: List[Dict[str, Any]] = []
         for item in items:
@@ -84,10 +91,28 @@ class PersistentTaskStore:
                 continue
             try:
                 raw = await self._agfs.read(path)
-            except (AGFSNotFoundError, FileNotFoundError):
+                tasks.append(json.loads(_decode_bytes(raw)))
+            except Exception:
                 continue
-            tasks.append(json.loads(_decode_bytes(raw)))
         return tasks
+
+    @staticmethod
+    def _fast_read_dir(local_dir: str) -> List[Dict[str, Any]]:
+        from concurrent.futures import ThreadPoolExecutor
+        try:
+            filenames = [f for f in os.listdir(local_dir) if f.endswith(".json")]
+        except Exception:
+            return []
+        if not filenames:
+            return []
+        def _read_file(fname: str) -> Optional[Dict[str, Any]]:
+            try:
+                with open(os.path.join(local_dir, fname), "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                return None
+        with ThreadPoolExecutor(max_workers=32) as executor:
+            return [r for r in executor.map(_read_file, filenames) if r is not None]
 
     async def delete(self, task_id: str, *, account_id: str, user_id: Optional[str] = None) -> None:
         if not user_id:

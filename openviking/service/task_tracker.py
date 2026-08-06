@@ -14,6 +14,8 @@ Design decisions:
 """
 
 import asyncio
+import json
+import os
 import re
 import threading
 import time
@@ -21,7 +23,7 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 from uuid import uuid4
 
 from openviking.service.task_store import TaskStore
@@ -51,8 +53,6 @@ _CANCELLABLE_TASK_TYPES = {
     "admin_reindex",
     "snapshot_restore_reindex",
 }
-
-
 @dataclass
 class TaskRecord:
     """Immutable snapshot of an async task."""
@@ -163,6 +163,7 @@ class TaskTracker:
     def __init__(self, store: TaskStore) -> None:
         self._store = store
         self._tasks: Dict[str, TaskRecord] = {}
+        self._loaded_accounts: Set[Tuple[str, Optional[str]]] = set()
         self._lock = threading.Lock()
         self._async_lock = asyncio.Lock()
         self._cleanup_task: Optional[asyncio.Task] = None
@@ -226,22 +227,37 @@ class TaskTracker:
             )
 
     def start_cleanup_loop(self) -> None:
-        """Start the background TTL cleanup coroutine.
-
-        Safe to call multiple times; subsequent calls are no-ops.
-        Must be called from within a running event loop.
-        """
+        """Start background task cleanup and store preload."""
         if self._cleanup_task is not None and not self._cleanup_task.done():
             return
         self._runtime_loop = asyncio.get_running_loop()
         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
-        logger.debug("[TaskTracker] Cleanup loop started")
+        asyncio.create_task(self._preload_store())
+        logger.debug("[TaskTracker] Cleanup loop & background store preload started")
+
+    async def _preload_store(self) -> None:
+        """Non-blocking background store preload across system and default scopes."""
+        for acc, usr in [("_system", "root"), ("default", "default")]:
+            if (acc, usr) not in self._loaded_accounts:
+                async with self._async_lock:
+                    if (acc, usr) not in self._loaded_accounts:
+                        self._loaded_accounts.add((acc, usr))
+                        try:
+                            loaded = await self._load_all_from_store(acc, usr)
+                            if loaded:
+                                with self._lock:
+                                    for task in loaded:
+                                        self._tasks[task.task_id] = task
+                        except Exception as e:
+                            logger.warning(
+                                "[TaskTracker] Preload failed for %s/%s: %s", acc, usr, e
+                            )
 
     def stop_cleanup_loop(self) -> None:
         """Cancel the background cleanup task. Safe to call if not started."""
         if self._cleanup_task is not None and not self._cleanup_task.done():
             self._cleanup_task.cancel()
-            logger.debug("[TaskTracker] Cleanup loop stopped")
+        logger.debug("[TaskTracker] Cleanup loop stopped")
 
     async def _cleanup_loop(self) -> None:
         while True:
@@ -271,10 +287,22 @@ class TaskTracker:
                     self._tasks.pop(tid, None)
 
                 if len(self._tasks) > self.MAX_TASKS:
-                    sorted_tasks = sorted(self._tasks.items(), key=lambda x: x[1].created_at)
                     excess = len(self._tasks) - self.MAX_TASKS
-                    for tid, _ in sorted_tasks[:excess]:
+                    finished_tasks = [
+                        (tid, t)
+                        for tid, t in self._tasks.items()
+                        if t.status in (TaskStatus.COMPLETED, TaskStatus.FAILED)
+                    ]
+                    sorted_finished = sorted(finished_tasks, key=lambda x: x[1].created_at)
+                    evicted = 0
+                    for tid, _ in sorted_finished[:excess]:
                         self._tasks.pop(tid, None)
+                        evicted += 1
+                    remaining_excess = excess - evicted
+                    if remaining_excess > 0:
+                        sorted_all = sorted(self._tasks.items(), key=lambda x: x[1].created_at)
+                        for tid, _ in sorted_all[:remaining_excess]:
+                            self._tasks.pop(tid, None)
 
             if expired_ids:
                 logger.debug("[TaskTracker] Evicted %d expired tasks", len(expired_ids))
@@ -356,12 +384,19 @@ class TaskTracker:
 
         Returns TaskRecord on success, None if a running task already exists.
         This eliminates the race condition between has_running() and create().
+        When a new task is successfully created, any old FAILED tasks for the
+        same (task_type, resource_id) are automatically cleaned up so they no
+        longer appear in the failed list.
         """
         self._validate_owner(account_id, user_id)
+        account_key = (account_id, user_id)
         async with self._async_lock:
-            for task in await self._load_all_from_store(account_id, user_id):
-                with self._lock:
-                    self._tasks[task.task_id] = task
+            # Only load from disk if this account scope has never been loaded.
+            if account_key not in self._loaded_accounts:
+                for task in await self._load_all_from_store(account_id, user_id):
+                    with self._lock:
+                        self._tasks[task.task_id] = task
+                self._loaded_accounts.add(account_key)
 
             with self._lock:
                 tasks = list(self._tasks.values())
@@ -374,6 +409,28 @@ class TaskTracker:
             )
             if has_active:
                 return None
+
+            # Auto-cleanup: delete ALL old FAILED records for the same resource_id
+            # (regardless of task_type) so the failed list stays clean after re-queue.
+            # e.g. an old 'add_resource' failure gets cleaned when re-queued as 'reindex'.
+            failed_ids = [
+                t.task_id
+                for t in tasks
+                if t.resource_id == resource_id
+                and self._matches_owner(t, account_id, user_id)
+                and t.status == TaskStatus.FAILED
+            ]
+            for fid in failed_ids:
+                await self._store.delete(fid, account_id=account_id, user_id=user_id)
+                with self._lock:
+                    self._tasks.pop(fid, None)
+            if failed_ids:
+                logger.info(
+                    "[TaskTracker] Auto-cleaned %d failed task(s) for resource=%s before re-queue",
+                    len(failed_ids),
+                    resource_id,
+                )
+
             task = TaskRecord(
                 task_id=str(uuid4()),
                 task_type=task_type,
@@ -434,7 +491,6 @@ class TaskTracker:
         result: Dict[str, Any],
         account_id: Optional[str] = None,
         user_id: Optional[str] = None,
-        *,
         resource_id: Optional[str] = None,
     ) -> None:
         """Record successful completion and finalize after owned work settles."""
@@ -617,26 +673,70 @@ class TaskTracker:
         limit: int = 50,
         account_id: Optional[str] = None,
         user_id: Optional[str] = None,
+        include_archived: bool = False,
     ) -> List[TaskRecord]:
         """List tasks with optional filters. Most-recent first. Returns snapshot copies."""
-        async with self._async_lock:
-            if account_id is not None:
-                loaded = await self._load_all_from_store(account_id, user_id)
-                if loaded:
-                    with self._lock:
-                        for task in loaded:
-                            self._tasks[task.task_id] = task
-            with self._lock:
-                source = list(self._tasks.values())
-            tasks = [self._copy(t) for t in source if self._matches_owner(t, account_id, user_id)]
+        account_key = (account_id, user_id)
+        if account_id is not None and account_key not in self._loaded_accounts:
+            async with self._async_lock:
+                if account_key not in self._loaded_accounts:
+                    self._loaded_accounts.add(account_key)
+                    loaded = await self._load_all_from_store(account_id, user_id)
+                    if loaded:
+                        with self._lock:
+                            for task in loaded:
+                                self._tasks[task.task_id] = task
+        source_dict: Dict[str, TaskRecord] = {}
+        with self._lock:
+            for t in self._tasks.values():
+                source_dict[t.task_id] = t
+
+        if include_archived and account_id is not None:
+            archived = await self._load_all_from_store(account_id, user_id)
+            for t in archived:
+                if t.task_id not in source_dict:
+                    source_dict[t.task_id] = t
+
+        source = list(source_dict.values())
+        filtered = [t for t in source if self._matches_owner(t, account_id, user_id)]
         if task_type:
-            tasks = [t for t in tasks if t.task_type == task_type]
+            filtered = [t for t in filtered if t.task_type == task_type]
         if status:
-            tasks = [t for t in tasks if t.status.value == status]
+            filtered = [t for t in filtered if t.status.value == status]
         if resource_id:
-            tasks = [t for t in tasks if t.resource_id == resource_id]
-        tasks.sort(key=lambda t: t.created_at, reverse=True)
-        return tasks[:limit]
+            filtered = [t for t in filtered if t.resource_id == resource_id]
+        filtered.sort(key=lambda t: t.created_at, reverse=True)
+        return [self._copy(t) for t in filtered[:limit]]
+
+    async def get_stats(
+        self,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> Dict[str, int]:
+        """Return task count breakdown for the requested owner filter without full copy overhead."""
+        account_key = (account_id, user_id)
+        if account_id is not None and account_key not in self._loaded_accounts:
+            async with self._async_lock:
+                if account_key not in self._loaded_accounts:
+                    self._loaded_accounts.add(account_key)
+                    loaded = await self._load_all_from_store(account_id, user_id)
+                    if loaded:
+                        with self._lock:
+                            for task in loaded:
+                                self._tasks[task.task_id] = task
+        with self._lock:
+            source = list(self._tasks.values())
+        matching = [t for t in source if self._matches_owner(t, account_id, user_id)]
+        from collections import Counter
+
+        counts = Counter(t.status.value for t in matching)
+        return {
+            "total": len(matching),
+            "completed": counts.get("completed", 0),
+            "pending": counts.get("pending", 0),
+            "running": counts.get("running", 0),
+            "failed": counts.get("failed", 0),
+        }
 
     async def has_running(
         self,
@@ -680,6 +780,12 @@ class TaskTracker:
     @staticmethod
     def _record_from_payload(payload: Dict[str, Any]) -> TaskRecord:
         data = dict(payload)
+        status_val = data.get("status")
+        stage_val = data.get("stage")
+        if stage_val == "completed" and status_val != "completed":
+            data["status"] = "completed"
+        elif stage_val == "failed" and status_val != "failed":
+            data["status"] = "failed"
         data["status"] = TaskStatus(data["status"])
         return TaskRecord(**data)
 
@@ -697,10 +803,47 @@ class TaskTracker:
     async def _load_all_from_store(
         self, account_id: str, user_id: Optional[str]
     ) -> List[TaskRecord]:
-        return [
+        records = [
             self._record_from_payload(payload)
             for payload in await self._store.list(account_id, user_id=user_id)
         ]
+        auto_healed = []
+        now = time.time()
+        for task in records:
+            if task.status == TaskStatus.RUNNING:
+                task.status = TaskStatus.FAILED
+                task.stage = "failed"
+                task.error = "[Auto-Healing] Task was interrupted by service restart"
+                task.updated_at = now
+                auto_healed.append(task)
+        if auto_healed:
+            logger.info(
+                "[TaskTracker] Auto-healed %d interrupted task(s) for owner %s/%s",
+                len(auto_healed),
+                account_id,
+                user_id,
+            )
+            from concurrent.futures import ThreadPoolExecutor
+
+            def _update_task(t: TaskRecord) -> None:
+                try:
+                    if hasattr(self._store, "_task_dir") and user_id:
+                        directory = self._store._task_dir(account_id, user_id)
+                        rel_path = directory.removeprefix("/local/").lstrip("/")
+                        local_dir = os.path.expanduser(f"~/.openviking/data/viking/{rel_path}")
+                        filepath = os.path.join(local_dir, f"{t.task_id}.json")
+                        if os.path.exists(filepath):
+                            with open(filepath, "w", encoding="utf-8") as f:
+                                json.dump(t.to_dict(), f, ensure_ascii=False)
+                except Exception:
+                    pass
+
+            def _bulk_update():
+                with ThreadPoolExecutor(max_workers=32) as executor:
+                    list(executor.map(_update_task, auto_healed))
+
+            await asyncio.to_thread(_bulk_update)
+        return records
 
     @staticmethod
     def _copy(task: TaskRecord) -> TaskRecord:

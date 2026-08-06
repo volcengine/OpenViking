@@ -159,6 +159,8 @@ class NamedQueue:
         with self._lock:
             self._in_progress -= 1
             self._processed += 1
+            if self._error_count > 0:
+                self._error_count -= 1
 
     def _on_process_requeue(self) -> None:
         """Called when a dequeued message is re-enqueued for later retry."""
@@ -215,8 +217,9 @@ class NamedQueue:
         if not self._initialized:
             try:
                 await self._async_agfs.mkdir(self.path)
-            except (AGFSAlreadyExistsError, FileExistsError):
-                pass
+            except Exception as e:
+                if "exist" not in str(e).lower():
+                    logger.warning(f"[NamedQueue] Failed to ensure queue {self.name}: {e}")
             self._initialized = True
 
     async def enqueue(self, data: Union[str, Dict[str, Any]]) -> str:
@@ -396,17 +399,16 @@ class NamedQueue:
 
         try:
             content = await self._async_agfs.read(size_file)
-            if content is None:
+            if not content:
                 return 0
             if isinstance(content, bytes):
-                text = content.decode("utf-8")
+                return int(content.decode("utf-8").strip())
             elif isinstance(content, str):
-                text = content
+                return int(content.strip())
             else:
-                raise TypeError(f"Unexpected queue size response: {type(content).__name__}")
-            text = text.strip()
-            return int(text) if text else 0
-        except (AGFSNotFoundError, FileNotFoundError):
+                return 0
+        except Exception as e:
+            logger.debug(f"[NamedQueue] Get size failed for {self.name}: {e}")
             return 0
 
     async def snapshot(self) -> List[Dict[str, Any]]:
