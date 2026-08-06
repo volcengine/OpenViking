@@ -34,6 +34,8 @@ _ALLOWED_IDENTIFIER_CHARS = re.compile(r"[^a-zA-Z0-9_.@-]")
 
 def _check_jwt_available() -> bool:
     """Lazy check for JWT library availability (cached after first call)."""
+    global httpx, JWTError, jwk, jwt, Key, ExpiredSignatureError, JWTClaimsError
+
     if not hasattr(_check_jwt_available, "_cached"):
         try:
             import httpx  # noqa: F401
@@ -364,4 +366,3 @@ class OIDCAuthPlugin(AuthPlugin):
         error instead of producing a silent auth-mode mismatch at runtime.
         """
         return False
-
