@@ -108,6 +108,7 @@ def fold_recall_request(
         exclude_uris=exclude_uris,
         peer_scope=values.get("peer_scope") or "all",
         other_peer_penalty=values.get("other_peer_penalty"),
+        admission=values.get("admission"),
         rewrite=values.get("rewrite", False),
         rewrite_max_bullets=int(values.get("rewrite_max_bullets") or 6),
         render=render,

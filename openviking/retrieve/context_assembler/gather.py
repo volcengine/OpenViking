@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from openviking.core.namespace import AGENT_SHARED_ROOTS, canonical_user_root
 from openviking.core.retrieval_targets import default_target_directories
+from openviking.retrieve.context_assembler.admission import RecallAdmissionTracker
 from openviking.retrieve.context_assembler.params import (
     MEMORY_CATEGORIES,
     ORIGIN_ORDER,
@@ -211,6 +212,7 @@ async def gather_candidates(
     peer_scope: str = "all",
     penalties: Optional[Mapping[str, float]] = None,
     excluded: Optional[Set[str]] = None,
+    admission_tracker: Optional[RecallAdmissionTracker] = None,
 ) -> Tuple[List[Candidate], Dict[str, Any]]:
     """Retrieve and rank candidates, returning ``(candidates, stats)``."""
     peer_scope = "actor" if peer_scope == "actor" else "all"
@@ -257,6 +259,16 @@ async def gather_candidates(
             )
         return built
 
+    admission_active = bool(
+        admission_tracker and admission_tracker.config.mode in {"shadow", "enforce"}
+    )
+
+    def _admission_width(want: int) -> int:
+        # Admission can remove the top-ranked row after retrieval (notably an
+        # other-peer row with a stricter delta). Keep a bounded tail available
+        # so a lower-ranked eligible self row can backfill the quota.
+        return want * OTHER_PEER_OVERFETCH if admission_active else want
+
     def _overfetch(want: int) -> int:
         """Rows to request on top of ``want`` to cover post-retrieval filtering.
 
@@ -265,6 +277,19 @@ async def gather_candidates(
         instead of falling through to the next-best hits.
         """
         return want + min(len(excluded), want * 2)
+
+    def _apply_admission(candidates: List[Candidate]) -> List[Candidate]:
+        if admission_tracker is None:
+            return candidates
+        return [
+            candidate
+            for candidate in candidates
+            if admission_tracker.evaluate(
+                score=candidate.score,
+                category=candidate.category,
+                origin=candidate.origin,
+            )
+        ]
 
     def _find(
         *,
@@ -299,7 +324,7 @@ async def gather_candidates(
                 query=query,
                 find_ctx=ctx,
                 target_uri=target,
-                find_limit=_overfetch(quota),
+                find_limit=_overfetch(_admission_width(quota)),
                 find_filter=bucket_filter,
             )
             for query in planned
@@ -312,7 +337,9 @@ async def gather_candidates(
                     query=query,
                     find_ctx=open_ctx,
                     target_uri=f"{user_root}/peers",
-                    find_limit=_overfetch(max(quota * OTHER_PEER_OVERFETCH, quota)),
+                    find_limit=_overfetch(
+                        max(quota * OTHER_PEER_OVERFETCH, _admission_width(quota))
+                    ),
                     find_filter=bucket_filter,
                 )
                 for query in planned
@@ -333,6 +360,7 @@ async def gather_candidates(
         searched[bucket] = len(found)
         candidates = _build([(item, bucket) for item in found])
         candidates.sort(key=_rank_key, reverse=True)
+        candidates = _apply_admission(candidates)
         return candidates[: max(0, quota)]
 
     async def gather_flat() -> List[Candidate]:
@@ -341,7 +369,7 @@ async def gather_candidates(
                 query=query,
                 find_ctx=ctx,
                 target_uri="",
-                find_limit=_overfetch(limit),
+                find_limit=_overfetch(_admission_width(limit)),
             )
             for query in planned
         ]
@@ -352,7 +380,9 @@ async def gather_candidates(
                     query=query,
                     find_ctx=open_ctx,
                     target_uri=f"{user_root}/peers",
-                    find_limit=_overfetch(max(limit * OTHER_PEER_OVERFETCH, limit)),
+                    find_limit=_overfetch(
+                        max(limit * OTHER_PEER_OVERFETCH, _admission_width(limit))
+                    ),
                 )
                 for query in planned
             )
@@ -377,6 +407,7 @@ async def gather_candidates(
         searched["all"] = len(found)
         candidates = _build([(item, buckets.get(_uri(item))) for item in found])
         candidates.sort(key=_rank_key, reverse=True)
+        candidates = _apply_admission(candidates)
         return candidates[: max(0, limit)]
 
     if quotas is None:

@@ -123,6 +123,10 @@ export OPENVIKING_RECALL_COMPRESS=1
 export OPENVIKING_RECALL_COMPRESS_MODEL=gpt-5.3-codex-spark
 export OPENVIKING_RECALL_COMPRESS_THINKING=default
 export OPENVIKING_RECALL_TIMEOUT_MS=120000
+# Observe a model-free guard before enforcing it.
+export OPENVIKING_RECALL_ADMISSION_MODE=shadow
+export OPENVIKING_RECALL_ADMISSION_TYPE_MIN_SCORES='{"events":0.50,"entities":0.50,"resources":0.45}'
+export OPENVIKING_RECALL_ADMISSION_OTHER_PEER_SCORE_DELTA=0.08
 export OPENVIKING_CAPTURE_ASSISTANT_TURNS=1
 export OPENVIKING_AUTO_COMMIT_ON_COMPACT=1
 export OPENVIKING_PROFILE_TOKEN_BUDGET=10000
@@ -130,6 +134,13 @@ export OPENVIKING_DEBUG=1
 ```
 
 Full list: see the `Misc env vars` block in `scripts/config.mjs`. Tuning fields have `OPENVIKING_*` counterparts and env vars win for those tuning fields.
+
+Recall admission is off by default. `shadow` records aggregate decisions while
+preserving the current context; `enforce` rejects low-confidence candidates in
+the shared server-side context assembler before their bodies are read. Tune
+against negative and known-positive cases before enforcement. If an older
+server cannot apply an enforced policy, the plugin injects nothing instead of
+falling back around the guard.
 
 #### Legacy `codex` block in `ov.conf`
 
@@ -216,6 +227,9 @@ Config knobs:
 | Env var | Default | Meaning |
 |---|---|---|
 | `OPENVIKING_RECALL_LIMIT` | `10` | Legacy quota-scaling input; explicit values are converted to six coding quotas, not enforced as a final result cap. |
+| `OPENVIKING_RECALL_ADMISSION_MODE` | `off` | `shadow` observes aggregate decisions; `enforce` rejects below-threshold candidates and fails closed on unsupported servers. |
+| `OPENVIKING_RECALL_ADMISSION_TYPE_MIN_SCORES` | `{}` | JSON object of per-category minimum retrieval scores. |
+| `OPENVIKING_RECALL_ADMISSION_OTHER_PEER_SCORE_DELTA` | `0` | Extra minimum score required for other-peer candidates. |
 | `OPENVIKING_RECALL_COMPRESS` | `1` | Set `0` / `off` to disable `codex exec` compression. |
 | `OPENVIKING_RECALL_COMPRESS_MODEL` | unset | Custom first-choice compressor model. Set `off` to disable compression. |
 | `OPENVIKING_RECALL_COMPRESS_THINKING` | unset | Custom `model_reasoning_effort`; `default` omits the Codex config override. Alias: `OPENVIKING_RECALL_COMPRESS_REASONING_EFFORT`. |

@@ -136,6 +136,7 @@ class AssembleParams:
     exclude_uris: Sequence[str] = field(default_factory=tuple)
     peer_scope: Literal["actor", "all"] = "all"
     other_peer_penalty: Any = None
+    admission: Optional[Mapping[str, Any]] = None
 
     rewrite: Any = False
     rewrite_max_bullets: int = 6

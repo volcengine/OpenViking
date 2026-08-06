@@ -606,8 +606,9 @@ Agent 插件每轮注入上下文时，过去需要按类型逐个检索、再�
 **处理流程**：
 1. **L1 查询理解**：可选，结合 Session 最近消息做有界意图扩展（最多 3 条查询，超时熔断，失败回退原查询）
 2. **L0 检索**：按 `quotas` 分桶独立检索，或不设配额时全域检索一次
-3. **L2 组装**：token 预算内填充档位（全员先落到各自类别的默认档，再用剩余预算按分数序加深），超限退档不截断
-4. **L3 重写**：可选，把组装结果压成带 URI 引用的 digest（超时熔断，失败仍返回未重写的 `rendered`；精确返回 `NO_RELEVANT_MEMORY` 时记为 `stats.rewrite="no_relevant"`，Coding Agent 客户端不会再回退注入 `rendered`）
+3. **准入**：可选，在读取候选正文前用 `shadow` 或 `enforce` 模式执行无模型分数策略
+4. **L2 组装**：token 预算内填充档位（全员先落到各自类别的默认档，再用剩余预算按分数序加深），超限退档不截断
+5. **L3 重写**：可选，把组装结果压成带 URI 引用的 digest（超时熔断，失败仍返回未重写的 `rendered`；精确返回 `NO_RELEVANT_MEMORY` 时记为 `stats.rewrite="no_relevant"`，Coding Agent 客户端不会再回退注入 `rendered`）
 
 **代码入口**：
 - `openviking/server/routers/search.py:_search_context()` - HTTP 路由分支
@@ -639,6 +640,13 @@ Agent 插件每轮注入上下文时，过去需要按类型逐个检索、再�
 | `exclude_uris` | string[] | [] | 无状态去重兜底，最多 200 条，与 `dedup_turns` 取并集 |
 | `peer_scope` | `actor` \| `all` | `all` | `actor` 排除其他 peer，但仍保留全局、User 自有和当前 Actor Peer 内容 |
 | `other_peer_penalty` | number \| object | 按类型默认值 | 对其他 peer 结果施加的分数折损 |
+| `admission` | object | `{"mode":"off"}` | 可选的正文读取前门禁。`shadow` 只报告决策而不改变结果；`enforce` 丢弃低于 `type_min_scores` 的候选，并可用 `other_peer_score_delta` 提高其他 peer 的要求 |
+
+准入阈值支持所有上报类别：`events`、`entities`、`preferences`、
+`experiences`、`resources`、`skills`，以及 quota-free 检索使用的
+`memories` 兜底类别。检索分数是排序信号，不是校准后的概率；启用
+`enforce` 前，应先用 `shadow` 在负例和已知正例上共同调参。准入不会
+增加模型、embedding、rerank 或 rewrite 调用。
 
 **L3 重写**
 
@@ -695,6 +703,20 @@ curl -X POST http://localhost:1933/api/v1/search/search \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $OPENVIKING_API_KEY" \
   -d '{"query":"档位设计","mode":"context","max_tokens":3000,"rewrite":true}'
+
+# 仅观察准入决策，不改变返回条目
+curl -X POST http://localhost:1933/api/v1/search/search \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $OPENVIKING_API_KEY" \
+  -d '{
+    "query":"部署规则",
+    "mode":"context",
+    "admission":{
+      "mode":"shadow",
+      "type_min_scores":{"events":0.50,"entities":0.50,"resources":0.45},
+      "other_peer_score_delta":0.08
+    }
+  }'
 ```
 
 **响应**
@@ -737,6 +759,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
       "query_expansion": "used",
       "rewrite": "off",
       "rewrite_usage": null,
+      "admission": {"mode": "off", "evaluated": 0, "accepted": 0, "rejected": 0, "reason_counts": {}, "type_min_scores": {}, "other_peer_score_delta": 0.0, "would_abstain": false, "abstained": false},
       "excluded": 0,
       "dedup": {"turns": 5, "status": "ok", "cooled": 2, "turn": 34}
     }
@@ -753,6 +776,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 | `rendered` | string | 扁平 XML 上下文块，可直接注入；重写返回 `no_relevant` 时为空 |
 | `digest` | string | 重写成功时的摘要；失败或压缩器判定无相关记忆时为空字符串 |
 | `stats` | object | 预算用量、档位分布、扩展与重写状态（`off`、`ok`、`no_relevant`、`failed` 或 `timeout`）、去重账本状态；某个检索域失败时附带 `retrieval_errors`，用于区分「检索坏了」和「确实没有相关记忆」 |
+| `stats.admission` | object | 准入聚合计数和稳定原因码；不会包含查询文本、正文或 URI |
 
 当 `stats.rewrite` 为 `no_relevant` 时，响应仍保留 `entries` 供检查，但 `digest` 和
 `rendered` 都为空字符串。这样即使客户端尚未识别新状态，也不会回退注入原文。本轮
@@ -764,6 +788,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 - `mode="list"` 下显式携带任何 context 专用参数 → 400
 - `mode="context"` 下传 `target_uri` → 400
 - `quotas` 出现未知键 → 400
+- admission 出现未知类别、模式、字段或越界分数 → 400
 - context 模式下被忽略的字段（`level`、`purpose` 或显式配额生效时的 `limit`）会记录在 `stats.ignored`
 
 ---

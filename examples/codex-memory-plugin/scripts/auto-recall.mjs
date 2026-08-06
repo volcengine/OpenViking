@@ -349,6 +349,10 @@ async function recallViaServerAssembly(query, ovSessionId = "") {
   body.max_chars = maxInputChars;
   const result = await postRecall(fetchJSON, body, { actorPeerId: effectivePeer.peerId, log });
   if (!result.ok) {
+    if (cfg.recallAdmissionMode === "enforce") {
+      log("recall_admission_fail_closed", { status: result.status || 0 });
+      return { context: "", items: [] };
+    }
     log("recall_endpoint_fallback", { status: result.status || 0 });
     return null;
   }
@@ -578,6 +582,7 @@ async function main() {
       scoreThreshold: cfg.scoreThreshold,
       peerSource: effectivePeer.source,
       recallPeerScope: cfg.recallPeerScope,
+      recallAdmissionMode: cfg.recallAdmissionMode,
     },
   });
 

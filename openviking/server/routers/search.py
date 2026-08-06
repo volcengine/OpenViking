@@ -3,7 +3,7 @@
 """Search endpoints for OpenViking HTTP Server."""
 
 import math
-from typing import Any, Dict, List, Literal, Optional, Sequence, Union
+from typing import Annotated, Any, Dict, List, Literal, Optional, Sequence, Union
 
 from fastapi import APIRouter, Depends
 from fastapi import Response as FastAPIResponse
@@ -148,9 +148,26 @@ CONTEXT_ONLY_FIELDS = (
     "exclude_uris",
     "peer_scope",
     "other_peer_penalty",
+    "admission",
     "rewrite",
     "rewrite_max_bullets",
 )
+
+ContextCategory = Literal[
+    "events", "entities", "preferences", "experiences", "resources", "skills", "memories"
+]
+
+
+class RecallAdmissionRequest(BaseModel):
+    """Optional deterministic guard applied before context bodies are read."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["off", "shadow", "enforce"] = "off"
+    type_min_scores: Dict[ContextCategory, Annotated[float, Field(ge=0.0, le=1.0)]] = Field(
+        default_factory=dict
+    )
+    other_peer_score_delta: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
 class SearchRequest(BaseModel):
@@ -192,6 +209,7 @@ class SearchRequest(BaseModel):
     exclude_uris: List[str] = Field(default_factory=list, max_length=MAX_EXCLUDE_URIS)
     peer_scope: Literal["actor", "all"] = "all"
     other_peer_penalty: Optional[Union[float, Dict[str, float]]] = None
+    admission: Optional[RecallAdmissionRequest] = None
     rewrite: Union[bool, Literal["auto"]] = False
     rewrite_max_bullets: int = Field(default=6, ge=1, le=20)
 
@@ -228,6 +246,7 @@ class RecallRequest(BaseModel):
     min_score: float = DEFAULT_MIN_SCORE
     peer_scope: Literal["actor", "all"] = "all"
     other_peer_penalty: Optional[Union[float, Dict[str, float]]] = None
+    admission: Optional[RecallAdmissionRequest] = None
     render: Union[bool, Literal["full", "compact"]] = True
     telemetry: TelemetryRequest = False
 
@@ -346,6 +365,7 @@ async def _search_context(
         exclude_uris=request.exclude_uris,
         peer_scope=request.peer_scope,
         other_peer_penalty=request.other_peer_penalty,
+        admission=request.admission.model_dump() if request.admission is not None else None,
         rewrite=request.rewrite,
         rewrite_max_bullets=request.rewrite_max_bullets,
     )
