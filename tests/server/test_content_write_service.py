@@ -1397,14 +1397,17 @@ async def test_set_tags_recursive_directory_all_missing_vector_records_returns_z
 ):
     root_uri = "viking://resources/demo"
     file_uri = f"{root_uri}/doc.md"
+    nested_uri = f"{root_uri}/nested/note.md"
     abstract_uri = f"{root_uri}/.abstract.md"
     overview_uri = f"{root_uri}/.overview.md"
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
     fake_vfs = _FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
+    fake_vfs.content[nested_uri] = "nested"
     fake_vfs.tree_entries = [
         {"uri": abstract_uri, "isDir": False},
         {"uri": overview_uri, "isDir": False},
         {"uri": file_uri, "isDir": False},
+        {"uri": nested_uri, "isDir": False},
     ]
     coordinator = ContentWriteCoordinator(viking_fs=fake_vfs)
 
@@ -1435,6 +1438,13 @@ async def test_set_tags_recursive_directory_all_missing_vector_records_returns_z
     assert result["failed_count"] == 0
     assert result["updated_uris"] == []
     assert result["tags_updated"] is False
+    assert sorted(fake_store.update_calls) == sorted(
+        [
+            (root_uri, ["env=prod"], "replace", [0, 1]),
+            (file_uri, ["env=prod"], "replace"),
+            (nested_uri, ["env=prod"], "replace"),
+        ]
+    )
 
 
 @pytest.mark.asyncio
@@ -1530,7 +1540,7 @@ async def test_set_tags_does_not_return_write_queue_fields(monkeypatch):
             assert uri == file_uri
             assert list(tags) == ["env=prod"]
             assert mode == "replace"
-            return True
+            return [{"uri": file_uri}]
 
     fake_vfs.vector_store = _FakeVectorStore()
 
