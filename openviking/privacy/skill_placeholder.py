@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Placeholder helpers for skill privacy values."""
 
+import re
 from dataclasses import dataclass, field
 
 
@@ -18,29 +19,18 @@ def build_placeholder(skill_name: str, field_name: str) -> str:
 
 
 def _replace_structured_value(content: str, raw_value: str, placeholder: str) -> tuple[str, bool]:
-    replacements = (
-        (f'"{raw_value}"', f'"{placeholder}"'),
-        (f"'{raw_value}'", f"'{placeholder}'"),
-        (f": {raw_value}\n", f": {placeholder}\n"),
-        (f": {raw_value}\r\n", f": {placeholder}\r\n"),
-        (f":{raw_value}\n", f":{placeholder}\n"),
-        (f":{raw_value}\r\n", f":{placeholder}\r\n"),
-        (f": {raw_value}", f": {placeholder}"),
-        (f":{raw_value}", f":{placeholder}"),
-        (f"= {raw_value}\n", f"= {placeholder}\n"),
-        (f"= {raw_value}\r\n", f"= {placeholder}\r\n"),
-        (f"={raw_value}\n", f"={placeholder}\n"),
-        (f"={raw_value}\r\n", f"={placeholder}\r\n"),
-        (f"= {raw_value}", f"= {placeholder}"),
-        (f"={raw_value}", f"={placeholder}"),
+    sanitized, quoted_replacements = re.subn(
+        rf'(["\']){re.escape(raw_value)}\1',
+        rf"\1{placeholder}\1",
+        content,
     )
-
-    replaced = False
-    for old, new in replacements:
-        if old in content:
-            content = content.replace(old, new)
-            replaced = True
-    return content, replaced
+    sanitized, assignment_replacements = re.subn(
+        rf"([:=])([ \t]*){re.escape(raw_value)}(?=\r?$)",
+        rf"\1\2{placeholder}",
+        sanitized,
+        flags=re.MULTILINE,
+    )
+    return sanitized, quoted_replacements + assignment_replacements > 0
 
 
 def placeholderize_skill_content_with_blocks(

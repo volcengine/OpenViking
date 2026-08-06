@@ -104,7 +104,23 @@ async def test_skill_read_restores_placeholder_with_user_shorthand(service):
 
 
 @pytest.mark.asyncio
-async def test_skill_privacy_extraction_returns_content_blocks():
+async def test_skill_privacy_extraction_returns_content_blocks(monkeypatch):
+    async def fake_completion_async(_prompt):
+        return '{"values": {"api_key": "secret-xyz", "base_url": "https://example.com"}}'
+
+    monkeypatch.setattr(
+        "openviking.privacy.skill_extractor.get_openviking_config",
+        lambda: type(
+            "Cfg",
+            (),
+            {
+                "vlm": type(
+                    "VLM", (), {"get_completion_async": staticmethod(fake_completion_async)}
+                )()
+            },
+        )(),
+    )
+
     content = 'api_key: "secret-xyz"\nbase_url: "https://example.com"\n'
     result = await extract_skill_privacy_values(
         skill_name="extract-block-skill",
