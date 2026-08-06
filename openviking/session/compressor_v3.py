@@ -26,6 +26,7 @@ from openviking.session.memory import ExtractLoop, MemoryUpdater, StreamingMemor
 from openviking.session.memory.constants import (
     AGENT_EVOLUTION_MEMORY_TYPES,
     CASE_MEMORY_TYPE,
+    EVENT_MEMORY_TYPE,
     EXECUTION_MEMORY_TYPES,
     EXPERIENCE_MEMORY_TYPE,
     TRAJECTORY_MEMORY_TYPE,
@@ -87,12 +88,31 @@ logger = get_logger(__name__)
 _CASES_MEMORY_TYPE = CASE_MEMORY_TYPE
 _TRAJECTORIES_MEMORY_TYPE = TRAJECTORY_MEMORY_TYPE
 _EXPERIENCES_MEMORY_TYPE = EXPERIENCE_MEMORY_TYPE
+_EVENTS_MEMORY_TYPE = EVENT_MEMORY_TYPE
 _AGENT_MEMORY_TYPES = EXECUTION_MEMORY_TYPES
 _TRAINING_CASE_SPEC_PROTOCOL = "openviking.batch_train.case_spec.v1"
 _TRAINING_CASE_SPEC_HEADER = "# OpenViking Batch Training CaseSpec v1"
 _TRAINING_FAST_PATH_MEMORY_TYPES = frozenset({"cases", "trajectories", "experiences"})
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
 _EXPERIENCE_TRAJECTORY_MAP_PREFIX = "OpenViking-Experience-Trajectory-Map: "
+
+
+def _apply_event_search_tags(
+    operations: Optional["ResolvedOperations"],
+    event_search_tags: Optional[List[str]],
+) -> None:
+    """Attach custom scalar tags to event-memory operations in place.
+
+    Only ``events``-type upsert operations are tagged so the scalars ride the
+    same first write into the vector index. Empty/None tags are a no-op, and a
+    missing operations object is tolerated (the orchestrator may return None).
+    """
+    if not event_search_tags or operations is None:
+        return
+    tags = list(event_search_tags)
+    for op in getattr(operations, "upsert_operations", []) or []:
+        if getattr(op, "memory_type", None) == _EVENTS_MEMORY_TYPE:
+            op.search_tags = list(tags)
 
 
 async def _commit_experience_snapshot(
@@ -314,6 +334,7 @@ class SessionCompressorV3:
         agent_evolution_enabled: bool = True,
         allow_self_memory: bool = True,
         allowed_peer_ids: Optional[set[str]] = None,
+        event_search_tags: Optional[List[str]] = None,
     ):
         if not agent_evolution_enabled:
             effective_types = (
@@ -348,6 +369,7 @@ class SessionCompressorV3:
             allowed_memory_types=allowed_memory_types,
             allow_self_memory=allow_self_memory,
             allowed_peer_ids=allowed_peer_ids,
+            event_search_tags=event_search_tags,
         )
         agent_memory_types = _allowed_agent_memory_types(allowed_memory_types)
         cases_allowed = allowed_memory_types is None or _CASES_MEMORY_TYPE in allowed_memory_types
@@ -541,6 +563,7 @@ class SessionCompressorV3:
         allowed_memory_types: Optional[set[str]] = None,
         allow_self_memory: bool = True,
         allowed_peer_ids: Optional[set[str]] = None,
+        event_search_tags: Optional[List[str]] = None,
     ) -> "_V3ExtractionResult":
         del user
         if not messages:
@@ -583,6 +606,10 @@ class SessionCompressorV3:
         if operations is None:
             tracer.info("[v3_patch_merge] No memory operations generated")
             return _V3ExtractionResult()
+
+        # Attach caller-provided custom scalar tags to event memories so they
+        # ride the same first write into the vector index (人填标量).
+        _apply_event_search_tags(operations, event_search_tags)
 
         extraction_id = uuid4().hex
         extracted_at = datetime.now(timezone.utc).isoformat()

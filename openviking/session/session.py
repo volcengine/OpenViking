@@ -164,6 +164,25 @@ def _default_memory_counts() -> Dict[str, int]:
     return {"total": 0}
 
 
+def _resolve_event_search_tags(
+    commit_tags: Optional[List[str]],
+    session_default_tags: Optional[List[str]],
+) -> List[str]:
+    """Resolve the event tags for a commit against the session default.
+
+    Three-state precedence:
+      - ``commit_tags is None``  -> use the session default (may be empty)
+      - ``commit_tags == []``    -> do not inject default tags for this commit
+      - non-empty ``commit_tags`` -> override the session default
+
+    The chosen list is normalized to canonical ``key=value`` tags.
+    """
+    from openviking.utils.tags import normalize_search_tags
+
+    chosen = commit_tags if commit_tags is not None else session_default_tags
+    return normalize_search_tags(chosen)
+
+
 def _message_peer_ids(messages: List[Message]) -> set[str]:
     return {
         peer_id
@@ -468,6 +487,10 @@ class SessionMeta:
     # Timestamp of the most recent successful auto-commit, surfaced via session
     # GET and used to throttle auto-commit frequency.
     last_auto_commit_at: str = ""
+    # Default custom scalar tags applied to event memories extracted from this
+    # session. Maps to config.memory_extraction_config.events.tags in the API.
+    # None means no session default; a commit may still override per-call.
+    event_search_tags: Optional[List[str]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         data = {
@@ -497,6 +520,8 @@ class SessionMeta:
         }
         if self.total_message_count is not None:
             data["total_message_count"] = self.total_message_count
+        if self.event_search_tags is not None:
+            data["event_search_tags"] = list(self.event_search_tags)
         return data
 
     @classmethod
@@ -546,6 +571,7 @@ class SessionMeta:
             auto_commit_policy=data.get("auto_commit_policy"),
             last_message_at=data.get("last_message_at", ""),
             last_auto_commit_at=data.get("last_auto_commit_at", ""),
+            event_search_tags=data.get("event_search_tags"),
         )
 
 
@@ -755,6 +781,27 @@ class Session:
             ctx=self.ctx,
             lease_ref=lease_ref,
         )
+
+    async def update_event_search_tags(self, event_search_tags: List[str]) -> None:
+        """Update event-memory default tags without overwriting concurrent meta changes."""
+        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
+        lease = await self._viking_fs._async_agfs.pathlock_acquire_tree(
+            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
+        )
+        try:
+            try:
+                meta_content = await self._viking_fs.read_file(
+                    f"{self._session_uri}/.meta.json",
+                    ctx=self.ctx,
+                )
+                self._meta = SessionMeta.from_dict(json.loads(meta_content))
+            except Exception as exc:
+                if not _is_storage_not_found(exc):
+                    raise
+            self._meta.event_search_tags = list(event_search_tags)
+            await self._save_meta(lease_ref=lease)
+        finally:
+            await self._viking_fs._async_agfs.pathlock_release(lease)
 
     @property
     def messages(self) -> List[Message]:
@@ -1720,6 +1767,7 @@ class Session:
         min_raw_tail_steps: Optional[int] = None,
         persist_keep_recent_count: bool = True,
         record_auto_commit_success: bool = False,
+        event_tags: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Archive immediately and enqueue restart-safe Phase 2 processing.
 
@@ -1744,6 +1792,10 @@ class Session:
             record_auto_commit_success: When ``True``, clear the auto-commit
                 error fields and stamp ``last_auto_commit_at`` in the same
                 lock-protected meta update as the commit boundary.
+            event_tags: Per-commit override for the custom scalar tags applied
+                to event memories. ``None`` uses the session default
+                (``meta.event_search_tags``); an empty list disables default-tag
+                injection for this commit; a non-empty list overrides it.
 
         Returns a task_id for tracking Phase 2 progress.
         """
@@ -1833,6 +1885,10 @@ class Session:
                 # The root JSONL remains authoritative for message correctness;
                 # legacy sessions may not have metadata yet.
                 pass
+
+            effective_event_tags = _resolve_event_search_tags(
+                event_tags, self._meta.event_search_tags
+            )
 
             # keep_recent_count controls how many live messages survive this
             # commit. stored_keep_recent_count is what we persist for future
@@ -1961,6 +2017,7 @@ class Session:
                 memory_policy=effective_memory_policy,
                 usage_uris=list(dict.fromkeys(u.uri for u in usage_snapshot if u.uri)),
                 record_auto_commit_success=record_auto_commit_success,
+                event_search_tags=list(effective_event_tags),
             )
             phase1_stage = "phase1_persist"
             try:
@@ -2232,6 +2289,7 @@ class Session:
             agent_memory_skip_reason=agent_memory_skip_reason,
             user_config_error=user_config_error,
             record_auto_commit_success=msg.record_auto_commit_success,
+            event_search_tags=list(msg.event_search_tags or []),
         )
 
     async def _run_usage_reporting(
@@ -2270,6 +2328,7 @@ class Session:
         agent_memory_skip_reason: Optional[str] = None,
         user_config_error: Optional[str] = None,
         record_auto_commit_success: bool = False,
+        event_search_tags: Optional[List[str]] = None,
     ) -> None:
         """Phase 2: Extract memories, write relations, enqueue — runs in background."""
         from openviking.service.task_tracker import get_task_tracker
@@ -2521,6 +2580,7 @@ class Session:
                                     agent_evolution_enabled=agent_evolution_enabled,
                                     allow_self_memory=self_memory_enabled,
                                     allowed_peer_ids=allowed_peer_ids,
+                                    event_search_tags=event_search_tags,
                                 )
 
                             extraction_tasks.append(

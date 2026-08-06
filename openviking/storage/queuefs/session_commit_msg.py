@@ -18,6 +18,9 @@ class SessionCommitMsg:
     # When True, Phase 2's final meta merge also clears the auto-commit error
     # fields and stamps last_auto_commit_at. Defaults keep old producers working.
     record_auto_commit_success: bool = False
+    # Resolved custom scalar tags to attach to event memories extracted in this
+    # commit. Already normalized by the producer; empty means "no tags".
+    event_search_tags: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

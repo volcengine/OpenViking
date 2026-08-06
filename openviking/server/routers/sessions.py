@@ -90,6 +90,29 @@ class AutoCommitPolicyRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class EventExtractionConfigRequest(BaseModel):
+    """Default event-memory extraction settings for a session."""
+
+    tags: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Default custom scalar tags applied to event memories extracted from "
+            "this session. Each element is a strict 'key=value' string. Commit-time "
+            "tags override this default; an empty list clears it."
+        ),
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class MemoryExtractionConfigRequest(BaseModel):
+    """Per-memory-type extraction configuration."""
+
+    events: Optional[EventExtractionConfigRequest] = None
+
+    model_config = {"extra": "forbid"}
+
+
 class AddMessageRequest(BaseModel):
     """Request model for adding a message.
 
@@ -144,7 +167,41 @@ class CreateSessionRequest(BaseModel):
     session_id: Optional[str] = None
     memory_policy: Optional[Dict[str, Any]] = None
     auto_commit_policy: Optional[AutoCommitPolicyRequest] = None
+    memory_extraction_config: Optional[MemoryExtractionConfigRequest] = None
     telemetry: TelemetryRequest = False
+
+
+def _event_tags_from_extraction_config(
+    config: Optional[MemoryExtractionConfigRequest],
+) -> Optional[List[str]]:
+    """Extract event default tags from a memory extraction config.
+
+    Returns ``None`` when the caller did not specify event tags (so the session
+    default is left untouched), otherwise the provided list (possibly empty to
+    clear the default). Normalization/validation happens in the service layer.
+    """
+    if config is None:
+        return None
+    events = config.events
+    if events is None:
+        return None
+    return events.tags
+
+
+def _commit_event_tags(
+    metadata: "Optional[ExtractionMetadataRequest]",
+) -> Optional[List[str]]:
+    """Extract commit-time event tags from ``extraction_metadata``.
+
+    Returns ``None`` when the caller did not specify event tags (so the session
+    default applies), otherwise the provided list (possibly empty to disable
+    default-tag injection for this commit). Normalization/validation happens in
+    the service layer.
+    """
+    if metadata is None or metadata.event is None:
+        return None
+    return metadata.event.tags
+
 
 
 def _resolve_message_parts(msg_request: AddMessageRequest) -> List[Part]:
@@ -222,6 +279,8 @@ async def create_session(
     if request.auto_commit_policy is not None:
         auto_commit_policy_payload = request.auto_commit_policy.model_dump(exclude_none=True)
 
+    event_tags = _event_tags_from_extraction_config(request.memory_extraction_config)
+
     async def _create() -> dict[str, Any]:
         await service.initialize_user_directories(_ctx)
         session = await service.sessions.create(
@@ -229,12 +288,16 @@ async def create_session(
             request.session_id,
             memory_policy=request.memory_policy,
             auto_commit_policy=auto_commit_policy_payload,
+            event_tags=event_tags,
         )
         return {
             "session_id": session.session_id,
             "uri": session.uri,
             "user": session.user.to_dict(),
             "auto_commit_policy": service.sessions.effective_auto_commit_policy(session),
+            "memory_extraction_config": service.sessions.effective_memory_extraction_config(
+                session
+            ),
         }
 
     execution = await run_operation(
@@ -274,7 +337,66 @@ async def get_session(
     result["user"] = session.user.to_dict()
     result["pending_tokens"] = int(session.meta.pending_tokens or 0)
     result["auto_commit_policy"] = service.sessions.effective_auto_commit_policy(session)
+    result.pop("event_search_tags", None)
+    result["memory_extraction_config"] = (
+        service.sessions.effective_memory_extraction_config(session)
+    )
     return Response(status="ok", result=result)
+
+
+class UpdateSessionConfigRequest(BaseModel):
+    """Request body for PATCH /sessions/{id}/config.
+
+    Only the mutable extraction config is editable. Fields left unset are not
+    changed; setting ``events.tags`` to an empty list clears the default.
+    """
+
+    memory_extraction_config: Optional[MemoryExtractionConfigRequest] = None
+    telemetry: TelemetryRequest = False
+
+    model_config = {"extra": "forbid"}
+
+
+@router.patch("/{session_id}/config")
+async def update_session_config(
+    session_id: str = Path(..., description="Session ID"),
+    request: UpdateSessionConfigRequest = Body(default_factory=UpdateSessionConfigRequest),
+    _ctx: RequestContext = Depends(get_session_request_context),
+):
+    """Update mutable session config (event-memory default tags).
+
+    Takes effect on the next commit. ``auto_commit_policy`` is immutable after
+    creation and is not editable here.
+    """
+    from openviking_cli.exceptions import NotFoundError
+
+    service = get_service()
+    event_tags = _event_tags_from_extraction_config(
+        request.memory_extraction_config
+    )
+
+    async def _update() -> dict[str, Any]:
+        session = await service.sessions.update_config(
+            session_id, _ctx, event_tags=event_tags
+        )
+        return {
+            "session_id": session.session_id,
+            "memory_extraction_config": service.sessions.effective_memory_extraction_config(
+                session
+            ),
+        }
+
+    try:
+        execution = await run_operation(
+            operation="session.update_config",
+            telemetry=request.telemetry,
+            fn=_update,
+        )
+    except NotFoundError:
+        return error_response("NOT_FOUND", f"Session {session_id} not found")
+    return Response(
+        status="ok", result=execution.result, telemetry=execution.telemetry
+    ).model_dump(exclude_none=True)
 
 
 @router.get("/{session_id}/tool-results")
@@ -391,6 +513,36 @@ async def delete_session(
     return Response(status="ok", result={"session_id": session_id})
 
 
+class EventExtractionMetadataRequest(BaseModel):
+    """Commit-time event-memory tag override.
+
+    ``tags`` uses three-state semantics: unset/``None`` falls back to the
+    session default, an empty list disables default-tag injection for this
+    commit, and a non-empty list overrides the session default. Existing tags
+    on a pre-existing URI are not removed. Normalization happens in the service
+    layer, so ``None`` is preserved here (not coerced to ``[]``).
+    """
+
+    tags: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Custom scalar tags applied to event memories from this commit. Each "
+            "element is a strict 'key=value' string. Overrides the session default; "
+            "an empty list disables default-tag injection for this commit."
+        ),
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class ExtractionMetadataRequest(BaseModel):
+    """Per-memory-type extraction overrides for a single commit."""
+
+    event: Optional[EventExtractionMetadataRequest] = None
+
+    model_config = {"extra": "forbid"}
+
+
 class CommitRequest(BaseModel):
     """Commit request body.
 
@@ -433,6 +585,14 @@ class CommitRequest(BaseModel):
         le=10_000,
         description="Minimum number of latest atomic assistant Steps kept raw.",
     )
+    extraction_metadata: Optional[ExtractionMetadataRequest] = Field(
+        default=None,
+        description=(
+            "Per-commit memory extraction overrides. ``event.tags`` sets the "
+            "custom scalar tags for event memories produced by this commit, "
+            "overriding the session default."
+        ),
+    )
     telemetry: TelemetryRequest = False
 
     @model_validator(mode="after")
@@ -474,6 +634,9 @@ async def commit_session(
     commit_kwargs.update(
         {key: value for key, value in optional_retention.items() if value is not None}
     )
+    event_tags = _commit_event_tags(body.extraction_metadata)
+    if event_tags is not None:
+        commit_kwargs["event_tags"] = event_tags
     execution = await run_operation(
         operation="session.commit",
         telemetry=body.telemetry,

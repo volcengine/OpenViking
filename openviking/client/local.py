@@ -845,6 +845,7 @@ class LocalClient(BaseClient):
         telemetry: TelemetryRequest = False,
         memory_policy: Optional[Dict[str, Any]] = None,
         auto_commit_policy: Optional[Dict[str, Any]] = None,
+        memory_extraction_config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create a new session.
 
@@ -853,11 +854,22 @@ class LocalClient(BaseClient):
                        If None, creates a new session with auto-generated ID.
             memory_policy: Optional default extraction policy for future commits.
             auto_commit_policy: Optional automatic-commit policy overrides.
+            memory_extraction_config: Optional memory extraction settings.
         """
+        event_tags = (
+            memory_extraction_config.get("events", {}).get("tags")
+            if memory_extraction_config is not None
+            else None
+        )
         execution = await run_with_telemetry(
             operation="session.create",
             telemetry=telemetry,
-            fn=lambda: self._create_session_impl(session_id, memory_policy, auto_commit_policy),
+            fn=lambda: self._create_session_impl(
+                session_id,
+                memory_policy,
+                auto_commit_policy,
+                event_tags,
+            ),
         )
         return attach_telemetry_payload(
             execution.result,
@@ -869,6 +881,7 @@ class LocalClient(BaseClient):
         session_id: Optional[str],
         memory_policy: Optional[Dict[str, Any]],
         auto_commit_policy: Optional[Dict[str, Any]] = None,
+        event_tags: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         await self._service.initialize_user_directories(self._ctx)
         session = await self._service.sessions.create(
@@ -876,12 +889,16 @@ class LocalClient(BaseClient):
             session_id,
             memory_policy=memory_policy,
             auto_commit_policy=auto_commit_policy,
+            event_tags=event_tags,
         )
         return {
             "session_id": session.session_id,
             "uri": session.uri,
             "user": session.user.to_dict(),
             "auto_commit_policy": self._service.sessions.effective_auto_commit_policy(session),
+            "memory_extraction_config": (
+                self._service.sessions.effective_memory_extraction_config(session)
+            ),
         }
 
     async def list_sessions(self) -> List[Any]:
@@ -895,6 +912,10 @@ class LocalClient(BaseClient):
         result["uri"] = session.uri
         result["user"] = session.user.to_dict()
         result["auto_commit_policy"] = self._service.sessions.effective_auto_commit_policy(session)
+        result.pop("event_search_tags", None)
+        result["memory_extraction_config"] = (
+            self._service.sessions.effective_memory_extraction_config(session)
+        )
         return result
 
     async def get_session_context(
