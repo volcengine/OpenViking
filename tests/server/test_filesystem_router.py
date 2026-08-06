@@ -55,7 +55,7 @@ async def test_attrs_returns_memory_fields_and_tags(monkeypatch):
         async def filter(self, **kwargs):
             return [
                 {
-                    "uri": kwargs["filter"]["conds"][0],
+                    "uri": "viking://user/alice/memories/preferences/theme.md",
                     "level": 2,
                     "search_tags": ["team=search"],
                 }
@@ -81,5 +81,6 @@ async def test_attrs_returns_memory_fields_and_tags(monkeypatch):
         "fields": {"topic": "theme"},
         "resource_refs": ["viking://resources/docs/api.md"],
         "memory_type": "preferences",
+        "version": 1,
     }
     assert attrs["tags"] == ["team=search"]
