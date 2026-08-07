@@ -15,6 +15,25 @@ from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
+_CONTENT_REF_URI_KEY = "_content_ref_uri"
+_CONTENT_REF_KIND_KEY = "_content_ref_kind"
+_CONTENT_REF_KIND_VIKING_FILE = "viking_file"
+
+
+def _current_backend_uses_content_field() -> bool:
+    """Return whether the configured vector backend needs full content in queue data."""
+    try:
+        from openviking.storage.vectordb_adapters.factory import backend_uses_content_field
+        from openviking_cli.utils.config import get_openviking_config
+
+        config = get_openviking_config()
+        vectordb_config = getattr(getattr(config, "storage", None), "vectordb", None)
+        if vectordb_config is None:
+            return False
+        return backend_uses_content_field(vectordb_config)
+    except Exception:
+        return False
+
 
 class EmbeddingMsgConverter:
     """Converter for Context objects to EmbeddingMsg."""
@@ -69,9 +88,18 @@ class EmbeddingMsgConverter:
         context_data["level"] = int(resolved_level)
 
         # Store full content in content field for bm25 full-text search.
-        # Use full_text (raw file content) when available; fall back to vectorization_text.
+        # If a producer supplies a full_text_ref_uri, keep queue content empty and
+        # let the embedding worker load original content at upsert.
         full_content = context.vectorize.full_text or vectorization_text
-        context_data["content"] = full_content
+        content_ref_uri = getattr(context.vectorize, "full_text_ref_uri", "") or ""
+        if not _current_backend_uses_content_field():
+            context_data["content"] = ""
+        elif content_ref_uri:
+            context_data["content"] = ""
+            context_data[_CONTENT_REF_URI_KEY] = content_ref_uri
+            context_data[_CONTENT_REF_KIND_KEY] = _CONTENT_REF_KIND_VIKING_FILE
+        else:
+            context_data["content"] = full_content
 
         if vectorization_images:
             # Multimodal message: combine text (if any) and image references into the

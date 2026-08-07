@@ -567,29 +567,38 @@ async def vectorize_file(
                 )
                 return False
         elif content_type == ResourceContentType.TEXT:
-            # Known text files use VikingFS' text read path once, then reuse that
-            # content for BM25 regardless of whether embedding uses summary or raw text.
-            try:
-                content = (
-                    reusable_content
-                    if has_reusable_content
-                    else _coerce_text_file_content(await viking_fs.read_file(file_path, ctx=ctx))
-                )
-            except Exception as e:
-                logger.warning(
-                    f"Failed to read file content for {file_path}, falling back to summary: {e}"
-                )
-                if summary:
-                    context.set_vectorize(Vectorize(text=summary, full_text=summary))
+            if summary and effective_text_source in {"summary_first", "summary_only"}:
+                if has_reusable_content:
+                    context.set_vectorize(
+                        Vectorize(text=summary, full_text=reusable_content or summary)
+                    )
                 else:
-                    logger.warning(f"No summary available for {file_path}, skipping vectorization")
-                    return False
+                    context.set_vectorize(
+                        Vectorize(
+                            text=summary,
+                            full_text=summary,
+                            full_text_ref_uri=file_path,
+                        )
+                    )
             else:
-                if summary and effective_text_source in {"summary_first", "summary_only"}:
-                    # Use summary for vectorization, but reuse the single raw text read for BM25.
-                    context.set_vectorize(Vectorize(text=summary, full_text=content or summary))
+                # Embedders apply their own input guard, so content-source embedding
+                # still needs the raw text before enqueue.
+                try:
+                    content = (
+                        reusable_content
+                        if has_reusable_content
+                        else _coerce_text_file_content(await viking_fs.read_file(file_path, ctx=ctx))
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to read file content for {file_path}, falling back to summary: {e}"
+                    )
+                    if summary:
+                        context.set_vectorize(Vectorize(text=summary, full_text=summary))
+                    else:
+                        logger.warning(f"No summary available for {file_path}, skipping vectorization")
+                        return False
                 else:
-                    # Embedders apply their own input guard.
                     context.set_vectorize(Vectorize(text=content, full_text=content))
         elif content_type == ResourceContentType.IMAGE:
             # Multimodal embedders consume both parts; text-only embedders fall back to summary.

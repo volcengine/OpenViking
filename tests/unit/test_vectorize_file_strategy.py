@@ -140,9 +140,9 @@ async def test_vectorize_disambiguates_typescript_and_mpeg_ts(monkeypatch):
     video_queue, video_fs = await vectorize("broadcast.ts", _mpeg_ts_bytes(), "")
 
     assert text_fs.read_file_calls == 1
-    assert text_queue.items[0].context_data["content"] == source
+    assert text_queue.items[0].context_data["content"] == ""
     assert video_fs.read_file_calls == 0
-    assert video_queue.items[0].context_data["content"] == "broadcast.ts"
+    assert video_queue.items[0].context_data["content"] == ""
 
 
 @pytest.mark.asyncio
@@ -323,7 +323,7 @@ async def test_vectorize_unknown_text_file_embeds_summary_but_indexes_raw_conten
     assert len(queue.items) == 1
     msg = queue.items[0]
     assert msg.message == "VLM generated build file summary"
-    assert msg.context_data["content"] == raw_makefile
+    assert msg.context_data["content"] == ""
 
 
 @pytest.mark.asyncio
@@ -350,7 +350,7 @@ async def test_vectorize_unknown_text_file_without_summary_indexes_raw_content(m
     assert enqueued is True
     assert len(queue.items) == 1
     msg = queue.items[0]
-    assert msg.context_data["content"] == raw_makefile
+    assert msg.context_data["content"] == ""
     assert msg.message == raw_makefile
 
 
@@ -546,7 +546,7 @@ async def test_vectorize_unknown_text_file_sniffs_non_utf8_raw_content(monkeypat
     assert len(queue.items) == 1
     msg = queue.items[0]
     assert msg.message == "VLM generated build file summary"
-    assert msg.context_data["content"] == raw_content
+    assert msg.context_data["content"] == ""
     assert fs.read_file_bytes_calls == 1
     assert fs.read_file_calls == 0
 
@@ -580,7 +580,7 @@ async def test_vectorize_unknown_file_reuses_summary_content_without_reread(monk
     assert len(queue.items) == 1
     msg = queue.items[0]
     assert msg.message == "VLM generated build file summary"
-    assert msg.context_data["content"] == raw_content
+    assert msg.context_data["content"] == ""
     assert fs.read_file_bytes_calls == 0
     assert fs.read_file_calls == 0
 
@@ -611,7 +611,7 @@ async def test_vectorize_unknown_binary_file_falls_back_to_summary(monkeypatch):
     assert len(queue.items) == 1
     msg = queue.items[0]
     assert msg.message == summary
-    assert msg.context_data["content"] == summary
+    assert msg.context_data["content"] == ""
     assert fs.read_file_bytes_calls == 1
     assert fs.read_file_calls == 0
 
@@ -646,13 +646,13 @@ async def test_vectorize_unknown_unrecognizable_encoding_falls_back_to_summary(m
     assert len(queue.items) == 1
     msg = queue.items[0]
     assert msg.message == summary
-    assert msg.context_data["content"] == summary
+    assert msg.context_data["content"] == ""
     assert fs.read_file_bytes_calls == 1
     assert fs.read_file_calls == 0
 
 
 @pytest.mark.asyncio
-async def test_vectorize_text_summary_first_reuses_single_file_read(monkeypatch):
+async def test_vectorize_text_summary_first_defers_full_content_read(monkeypatch):
     queue = DummyQueue()
     fs = DummyFS("# README\nraw text for bm25\n")
     monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
@@ -675,8 +675,43 @@ async def test_vectorize_text_summary_first_reuses_single_file_read(monkeypatch)
     assert len(queue.items) == 1
     msg = queue.items[0]
     assert msg.message == "summary for embedding"
-    assert msg.context_data["content"] == "# README\nraw text for bm25\n"
-    assert fs.read_file_calls == 1
+    assert msg.context_data["content"] == ""
+    assert fs.read_file_calls == 0
+    assert fs.read_file_bytes_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_vectorize_text_summary_first_sets_full_text_ref_uri(monkeypatch):
+    queue = DummyQueue()
+    fs = DummyFS("# README\nraw text for bm25\n")
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: fs)
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="summary_first", max_input_tokens=1000)
+        ),
+    )
+    monkeypatch.setattr(
+        embedding_utils.EmbeddingMsgConverter,
+        "from_context",
+        lambda context: context,
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/README.md",
+        summary_dict={"name": "README.md", "summary": "summary for embedding"},
+        parent_uri="viking://user/default/resources",
+        ctx=DummyReq(),
+    )
+
+    assert len(queue.items) == 1
+    context = queue.items[0]
+    assert context.get_vectorization_text() == "summary for embedding"
+    assert context.vectorize.full_text == "summary for embedding"
+    assert context.vectorize.full_text_ref_uri == "viking://user/default/resources/README.md"
+    assert fs.read_file_calls == 0
     assert fs.read_file_bytes_calls == 0
 
 
@@ -706,7 +741,7 @@ async def test_vectorize_image_file_enqueues_summary_and_image(monkeypatch):
     assert msg.message[0] == {"type": "text", "text": "a cat on a sofa"}
     assert msg.message[1]["type"] == "image_url"
     assert msg.message[1]["image_url"]["url"].startswith("data:image/png;base64,")
-    assert msg.context_data["content"] == "a cat on a sofa"
+    assert msg.context_data["content"] == ""
 
 
 @pytest.mark.asyncio
@@ -734,8 +769,8 @@ async def test_vectorize_svg_file_uses_summary_and_indexes_markup(monkeypatch):
     assert len(queue.items) == 1
     msg = queue.items[0]
     assert msg.message == "queue processing diagram"
-    assert msg.context_data["content"] == svg_content
-    assert fs.read_file_calls == 1
+    assert msg.context_data["content"] == ""
+    assert fs.read_file_calls == 0
     assert fs.read_file_bytes_calls == 0
 
 
@@ -799,7 +834,7 @@ async def test_vectorize_text_file_reuses_summary_content_without_reread(monkeyp
     assert len(queue.items) == 1
     msg = queue.items[0]
     assert msg.message == "summary for embedding"
-    assert msg.context_data["content"] == raw_content
+    assert msg.context_data["content"] == ""
     assert fs.read_file_calls == 0
     assert fs.read_file_bytes_calls == 0
 
@@ -834,7 +869,7 @@ async def test_vectorize_text_bytes_sniffs_non_utf8_content(monkeypatch):
     assert len(queue.items) == 1
     msg = queue.items[0]
     assert msg.message == "summary for embedding"
-    assert msg.context_data["content"] == raw_content
+    assert msg.context_data["content"] == ""
     assert fs.read_file_calls == 1
     assert fs.read_file_bytes_calls == 0
 
@@ -972,7 +1007,7 @@ async def test_empty_media_uses_filename_but_unknown_binary_skips(monkeypatch):
         ctx=DummyReq(),
     )
 
-    assert queue.items[0].context_data["content"] == "meeting.mp3"
+    assert queue.items[0].context_data["content"] == ""
 
     queue = DummyQueue()
     monkeypatch.setattr(
