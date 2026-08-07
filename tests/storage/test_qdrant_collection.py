@@ -69,6 +69,86 @@ def test_sparse_to_qdrant_warns_on_hash_collision(monkeypatch, caplog):
     assert "hash collision detected" in caplog.text
 
 
+@pytest.mark.parametrize(
+    "encoded",
+    [
+        {"indices": [7, 9, 13], "values": [1.0, 2.5, 4.0]},
+        # Numeric strings in values are tolerated; indices stay ints.
+        {"indices": [1], "values": ["0.5"]},
+    ],
+)
+def test_sparse_to_qdrant_passes_through_qdrant_encoded_shape(encoded):
+    # Records read back from Qdrant with with_vector=True carry sparse vectors
+    # in the {"indices": [...], "values": [...]} encoding. Feeding them back
+    # into _make_point on a full-record upsert must emit them verbatim instead
+    # of silently dropping the sparse vector.
+    payload = _sparse_to_qdrant(encoded)
+
+    assert payload == {"indices": encoded["indices"], "values": [float(v) for v in encoded["values"]]}
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        {"indices": [1, 2], "values": [1.0]},  # length mismatch
+        {"indices": [], "values": []},  # empty
+        {"indices": ["a"], "values": [1.0]},  # non-int index
+        {"indices": [1, 2]},  # missing values
+        {"values": [1.0, 2.0]},  # missing indices
+    ],
+)
+def test_sparse_to_qdrant_falls_back_to_hashing_for_malformed_encoded_shape(malformed):
+    # A malformed {"indices":...} dict must not short-circuit; it should be
+    # treated as a {term: weight} map. "indices"/"values" are not float-able
+    # weights, so they are skipped and the result is None.
+    assert _sparse_to_qdrant(malformed) is None
+
+
+def test_fetch_data_then_update_preserves_both_dense_and_sparse_vectors():
+    # Regression test for the set_tags / update_search_tags full-record upsert
+    # on a hybrid (dense + sparse) point: fetch_data must surface both vectors,
+    # and the subsequent update_data (which re-fetches the point itself) must
+    # re-emit both vectors unchanged rather than silently dropping the sparse
+    # vector read back in Qdrant-encoded form.
+    point_id = _to_qdrant_point_id("doc_1")
+    hybrid_point = {
+        "id": point_id,
+        "payload": {ORIGINAL_ID_FIELD: "doc_1", "name": "Before"},
+        "vector": {
+            "vector": [0.1, 0.2, 0.3],
+            "sparse_vector": {"indices": [7, 9], "values": [1.0, 4.0]},
+        },
+    }
+    client = _StubClient(
+        [
+            # 1) explicit fetch_data() call.
+            {"result": [hybrid_point]},
+            # 2) update_data() re-fetches the existing point internally.
+            {"result": [hybrid_point]},
+            # 3) update_data() upserts the merged record.
+            {"status": "ok"},
+        ]
+    )
+    collection = _build_collection_stub(client)
+
+    fetched = collection.fetch_data(["doc_1"])
+    assert fetched.items[0].fields["vector"] == [0.1, 0.2, 0.3]
+    assert fetched.items[0].fields["sparse_vector"] == {"indices": [7, 9], "values": [1.0, 4.0]}
+
+    collection.update_data([{"id": "doc_1", "name": "After"}])
+
+    # The last recorded request is the upsert; the one before it is the
+    # re-fetch that update_data performed internally.
+    upsert_call = client.calls[-1]
+    assert upsert_call["method"] == "PUT"
+    upsert_point = upsert_call["json_body"]["points"][0]
+    assert upsert_point["vector"]["vector"] == [0.1, 0.2, 0.3]
+    # The sparse vector read back in Qdrant-encoded form must be re-emitted
+    # verbatim, NOT silently dropped.
+    assert upsert_point["vector"]["sparse_vector"] == {"indices": [7, 9], "values": [1.0, 4.0]}
+    assert upsert_point["payload"]["name"] == "After"
+
+
 def test_scroll_points_stops_on_repeated_next_page_offset(caplog):
     client = _StubClient(
         [
