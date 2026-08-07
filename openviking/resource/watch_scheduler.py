@@ -294,6 +294,7 @@ class WatchScheduler:
                         summarize=getattr(task, "summarize", False),
                         processing_mode=getattr(task, "processing_mode", "semantic_and_vectors"),
                         watch_interval=task.watch_interval,
+                        enforce_public_remote_targets=True,
                         **processor_kwargs,
                     )
 
