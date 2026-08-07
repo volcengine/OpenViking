@@ -346,6 +346,12 @@ def create_app(
         await shutdown_usage_audit(app=app)
         await shutdown_metrics_async(app=app)
         task_tracker.stop_cleanup_loop()
+        auth_plugin_state = getattr(app.state, "auth_plugin", None)
+        if auth_plugin_state is not None:
+            try:
+                await auth_plugin_state.shutdown()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Auth plugin shutdown failed: %s", e)
         if oauth_gc_task is not None:
             oauth_gc_task.cancel()
             try:

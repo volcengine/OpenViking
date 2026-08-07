@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Legacy API Key management (original implementation)."""
 
+import asyncio
 import fnmatch
 import hashlib
 import hmac
@@ -81,6 +82,8 @@ class LegacyAPIKeyManager:
         self._accounts: Dict[str, AccountInfo] = {}
         # Prefix index: key_prefix -> list[UserKeyEntry]
         self._prefix_index: Dict[str, list[UserKeyEntry]] = {}
+        # Serializes reload() so overlapping refreshes can't interleave.
+        self._reload_lock = asyncio.Lock()
 
     def _discard_account_state(self, account_id: str) -> None:
         """Remove an account and its key index entries from in-memory state."""
@@ -117,7 +120,7 @@ class LegacyAPIKeyManager:
             logger.exception("Failed to persist rollback for account %s", account_id)
 
     async def load(self) -> None:
-        """Load accounts and user keys from VikingFS into memory."""
+        """Load keys into memory (writable startup path; migrates plaintext; see reload())."""
         accounts_data = await self._read_json(ACCOUNTS_PATH)
         if accounts_data is None:
             # First run: create default account
@@ -125,65 +128,123 @@ class LegacyAPIKeyManager:
             accounts_data = {"accounts": {"default": {"created_at": now}}}
             await self._write_json(ACCOUNTS_PATH, accounts_data)
 
-        for account_id, info in accounts_data.get("accounts", {}).items():
-            users_path = USERS_PATH_TEMPLATE.format(account_id=account_id)
-            users_data = await self._read_json(users_path)
-            users = users_data.get("users", {}) if users_data else {}
-
-            self._accounts[account_id] = AccountInfo(
-                created_at=info.get("created_at", ""),
-                users=users,
-            )
-
-            for user_id, user_info in users.items():
-                key_or_hash = user_info.get("key", "")
-                if key_or_hash:
-                    # Check if it's a hashed key
-                    if key_or_hash.startswith("$argon2"):
-                        # Already hashed
-                        stored_key = key_or_hash
-                        is_hashed = True
-                        key_prefix = user_info.get("key_prefix", "")
-                    else:
-                        # Plaintext key
-                        if self._api_key_hashing_enabled:
-                            # If API key hashing enabled, migrate to hashed
-                            stored_key = self._hash_api_key(key_or_hash)
-                            is_hashed = True
-                            key_prefix = self._get_key_prefix(key_or_hash)
-                            # Update storage
-                            user_info["key"] = stored_key
-                            user_info["key_prefix"] = key_prefix
-                            await self._save_users_json(account_id)
-                            logger.info(
-                                "Migrated API key for user %s in account %s", user_id, account_id
-                            )
-                        else:
-                            # If API key hashing not enabled, keep as plaintext
-                            stored_key = key_or_hash
-                            is_hashed = False
-                            # For plaintext keys, compute prefix on the fly for indexing
-                            key_prefix = self._get_key_prefix(key_or_hash)
-
-                    entry = UserKeyEntry(
-                        account_id=account_id,
-                        user_id=user_id,
-                        role=Role(user_info.get("role", "user")),
-                        key_or_hash=stored_key,
-                        is_hashed=is_hashed,
-                    )
-
-                    # Add to prefix index
-                    if key_prefix:
-                        if key_prefix not in self._prefix_index:
-                            self._prefix_index[key_prefix] = []
-                        self._prefix_index[key_prefix].append(entry)
+        accounts, prefix_index = await self._build_state(accounts_data, allow_migration=True)
+        self._accounts = accounts
+        self._prefix_index = prefix_index
 
         logger.info(
             "LegacyAPIKeyManager loaded: %d accounts, %d user keys",
             len(self._accounts),
             sum(len(info.users) for info in self._accounts.values()),
         )
+
+    async def reload(self) -> None:
+        """Read-only refresh: re-read store and atomically swap state (never writes/migrates)."""
+        async with self._reload_lock:
+            accounts_data = await self._read_json(ACCOUNTS_PATH)
+            if accounts_data is None:
+                # Store not initialized yet (reader started before writer): keep state.
+                return
+
+            accounts, prefix_index = await self._build_state(accounts_data, allow_migration=False)
+            # Atomic swap: rebind so readers never observe a half-built index.
+            self._accounts = accounts
+            self._prefix_index = prefix_index
+
+            logger.debug(
+                "LegacyAPIKeyManager reloaded: %d accounts, %d user keys",
+                len(self._accounts),
+                sum(len(info.users) for info in self._accounts.values()),
+            )
+
+    async def _build_state(
+        self, accounts_data: dict, *, allow_migration: bool
+    ) -> tuple[Dict[str, AccountInfo], Dict[str, list[UserKeyEntry]]]:
+        """Build fresh (accounts, prefix_index) state; migrate plaintext only if allow_migration."""
+        accounts: Dict[str, AccountInfo] = {}
+        prefix_index: Dict[str, list[UserKeyEntry]] = {}
+
+        for account_id, info in accounts_data.get("accounts", {}).items():
+            users_path = USERS_PATH_TEMPLATE.format(account_id=account_id)
+            users_data = await self._read_json(users_path)
+            users = users_data.get("users", {}) if users_data else {}
+
+            accounts[account_id] = AccountInfo(
+                created_at=info.get("created_at", ""),
+                users=users,
+            )
+
+            for user_id, user_info in users.items():
+                key_or_hash = user_info.get("key", "")
+                if not key_or_hash:
+                    continue
+
+                if key_or_hash.startswith("$argon2"):
+                    # Already hashed
+                    stored_key = key_or_hash
+                    is_hashed = True
+                    key_prefix = user_info.get("key_prefix", "")
+                elif self._api_key_hashing_enabled and allow_migration:
+                    # Migrate plaintext to hashed and persist.
+                    stored_key = self._hash_api_key(key_or_hash)
+                    is_hashed = True
+                    key_prefix = self._get_key_prefix(key_or_hash)
+                    user_info["key"] = stored_key
+                    user_info["key_prefix"] = key_prefix
+                    await self._save_users_json_for(account_id, accounts)
+                    logger.info("Migrated API key for user %s in account %s", user_id, account_id)
+                else:
+                    # Keep plaintext (hashing off or read-only refresh); prefix on the fly.
+                    stored_key = key_or_hash
+                    is_hashed = False
+                    key_prefix = self._get_key_prefix(key_or_hash)
+
+                entry = UserKeyEntry(
+                    account_id=account_id,
+                    user_id=user_id,
+                    role=Role(user_info.get("role", "user")),
+                    key_or_hash=stored_key,
+                    is_hashed=is_hashed,
+                )
+
+                # Add to prefix index
+                if key_prefix:
+                    if key_prefix not in prefix_index:
+                        prefix_index[key_prefix] = []
+                    prefix_index[key_prefix].append(entry)
+
+        return accounts, prefix_index
+
+    async def compute_store_signature(self) -> tuple:
+        """Return a cheap (path, size, modTime) signature over accounts.json + all users.json."""
+        signature: list[tuple] = []
+
+        accounts_data = await self._read_json(ACCOUNTS_PATH)
+        signature.append(await self._stat_signature(ACCOUNTS_PATH))
+
+        if accounts_data:
+            for account_id in accounts_data.get("accounts", {}):
+                users_path = USERS_PATH_TEMPLATE.format(account_id=account_id)
+                signature.append(await self._stat_signature(users_path))
+
+        return tuple(signature)
+
+    async def _stat_signature(self, path: str) -> tuple:
+        """Return a (path, size, mod_time) tuple for one file; missing/error yields a sentinel."""
+        try:
+            info = await self._async_agfs.stat(path)
+        except AGFSNotFoundError:
+            return (path, None, None)
+        except Exception:
+            logger.debug("Failed to stat %s for key-store signature", path, exc_info=True)
+            return (path, None, None)
+
+        if not isinstance(info, dict):
+            return (path, None, None)
+
+        size = info.get("size")
+        mod_time = info.get("modTime", info.get("mod_time", info.get("mtime")))
+        return (path, size, mod_time)
 
     def resolve(self, api_key: str) -> ResolvedIdentity:
         """Resolve an API key to identity. Sequential matching: root key first, then user key index."""
@@ -701,6 +762,10 @@ class LegacyAPIKeyManager:
 
     async def _save_users_json(self, account_id: str) -> None:
         """Persist a single account's user registry."""
+        await self._save_users_json_for(account_id, self._accounts)
+
+    async def _save_users_json_for(self, account_id: str, accounts: Dict[str, AccountInfo]) -> None:
+        """Persist one account's user registry from the given accounts map."""
         path = USERS_PATH_TEMPLATE.format(account_id=account_id)
         try:
             lease = await self._async_agfs.pathlock_acquire_exact(path, timeout_secs=10.0)
@@ -711,7 +776,7 @@ class LegacyAPIKeyManager:
                 conflict_type="user_registry_busy",
             ) from exc
         try:
-            account = self._accounts.get(account_id)
+            account = accounts.get(account_id)
             if account is None:
                 return
             await self._write_json(path, {"users": account.users}, lease_ref=lease)

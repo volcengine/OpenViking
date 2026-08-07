@@ -113,6 +113,14 @@ class NewAPIKeyManager:
             sum(len(info.users) for info in self._legacy._accounts.values()),
         )
 
+    async def reload(self) -> None:
+        """Read-only refresh of in-memory key state; delegates to the legacy manager."""
+        await self._legacy.reload()
+
+    async def compute_store_signature(self) -> tuple:
+        """Return a cheap change signature for the on-disk key store."""
+        return await self._legacy.compute_store_signature()
+
     def resolve(self, api_key: str) -> ResolvedIdentity:
         """Resolve an API key to identity.
 
