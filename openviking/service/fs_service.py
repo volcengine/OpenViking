@@ -6,6 +6,7 @@ File System Service for OpenViking.
 Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, overview, grep, glob.
 """
 
+import asyncio
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.core.namespace import classify_uri, context_type_for_uri
@@ -15,6 +16,7 @@ from openviking.privacy import (
     get_skill_name_from_uri,
     restore_skill_content,
 )
+from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
 from openviking.session.memory.memory_updater import MemoryUpdater
@@ -64,12 +66,14 @@ class FSService:
         privacy_config_service: Optional[UserPrivacyConfigService] = None,
         resource_memory_link_service: Optional["ResourceMemoryLinkService"] = None,
         watch_scheduler: Optional["WatchScheduler"] = None,
+        uri_mutation_coordinator: Optional[UriMutationCoordinator] = None,
     ):
         self._viking_fs = viking_fs
         self._vikingdb = vikingdb
         self._privacy_config_service = privacy_config_service
         self._resource_memory_link_service = resource_memory_link_service
         self._watch_scheduler = watch_scheduler
+        self._uri_mutation_coordinator = uri_mutation_coordinator or UriMutationCoordinator()
 
     def set_dependencies(
         self,
@@ -78,6 +82,7 @@ class FSService:
         privacy_config_service: Optional[UserPrivacyConfigService] = None,
         resource_memory_link_service: Optional["ResourceMemoryLinkService"] = None,
         watch_scheduler: Optional["WatchScheduler"] = None,
+        uri_mutation_coordinator: Optional[UriMutationCoordinator] = None,
     ) -> None:
         """Set service dependencies (for deferred initialization)."""
         self._viking_fs = viking_fs
@@ -85,6 +90,8 @@ class FSService:
         self._privacy_config_service = privacy_config_service
         self._resource_memory_link_service = resource_memory_link_service
         self._watch_scheduler = watch_scheduler
+        if uri_mutation_coordinator is not None:
+            self._uri_mutation_coordinator = uri_mutation_coordinator
 
     def _ensure_initialized(self) -> VikingFS:
         """Ensure VikingFS is initialized."""
@@ -421,13 +428,72 @@ class FSService:
             await viking_fs.mv(from_uri, to_uri, ctx=ctx)
             return
 
-        await watch_manager.sync_tasks_with_resource_move_internal(
-            from_uri,
-            to_uri,
-            account_id=ctx.account_id,
-            move_resource=lambda: viking_fs.mv(from_uri, to_uri, ctx=ctx),
-            rollback_resource=lambda: viking_fs.mv(to_uri, from_uri, ctx=ctx),
+        transaction_task = asyncio.create_task(
+            self._move_resource_with_watch_transaction(
+                viking_fs,
+                watch_manager,
+                from_uri,
+                to_uri,
+                ctx,
+            )
         )
+        try:
+            await asyncio.shield(transaction_task)
+        except asyncio.CancelledError:
+            while not transaction_task.done():
+                try:
+                    await asyncio.shield(transaction_task)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            try:
+                transaction_task.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.error(
+                    "Resource move transaction failed while caller was cancelled",
+                    exc_info=True,
+                )
+            raise
+
+    async def _move_resource_with_watch_transaction(
+        self,
+        viking_fs: VikingFS,
+        watch_manager: "WatchManager",
+        from_uri: str,
+        to_uri: str,
+        ctx: RequestContext,
+    ) -> None:
+        async with self._uri_mutation_coordinator.mutation(
+            ctx.account_id,
+            [from_uri, to_uri],
+        ):
+            await watch_manager.validate_target_prefix_rewrite_internal(
+                from_uri,
+                to_uri,
+                account_id=ctx.account_id,
+            )
+            await viking_fs.mv(from_uri, to_uri, ctx=ctx)
+            try:
+                await watch_manager.rewrite_target_prefix_internal(
+                    from_uri,
+                    to_uri,
+                    account_id=ctx.account_id,
+                )
+            except Exception as commit_error:
+                try:
+                    await viking_fs.mv(to_uri, from_uri, ctx=ctx)
+                except Exception as rollback_error:
+                    logger.error(
+                        "Failed to roll back resource move from %s to %s",
+                        to_uri,
+                        from_uri,
+                        exc_info=True,
+                    )
+                    raise rollback_error from commit_error
+                raise
 
     async def _sync_watch_after_rm(self, uri: str, *, account_id: str, context_type: str) -> None:
         if context_type != "resource":

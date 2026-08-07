@@ -2,21 +2,25 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for file-system service coordination behavior."""
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
+from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
 from openviking.server.identity import RequestContext, Role
 from openviking.service.fs_service import FSService
 from openviking_cli.session.user_id import UserIdentifier
 
 
 class _FakeVikingFS:
-    def __init__(self, *, rm_error=None):
+    def __init__(self, *, rm_error=None, events=None):
         self.rm_calls = []
         self.mv_calls = []
         self.rm_error = rm_error
+        self.mv_errors = []
+        self.events = events
 
     async def rm(self, uri, recursive=False, ctx=None):
         self.rm_calls.append({"uri": uri, "recursive": recursive, "ctx": ctx})
@@ -26,38 +30,40 @@ class _FakeVikingFS:
 
     async def mv(self, from_uri, to_uri, ctx=None):
         self.mv_calls.append({"from_uri": from_uri, "to_uri": to_uri, "ctx": ctx})
+        if self.events is not None:
+            self.events.append(("mv", from_uri, to_uri))
+        if self.mv_errors:
+            error = self.mv_errors.pop(0)
+            if error:
+                raise error
 
 
 class _FakeWatchManager:
-    def __init__(self):
-        self.plan_calls = []
-        self.move_calls = []
-        self.sync_calls = []
+    def __init__(self, *, events=None):
+        self.validate_calls = []
+        self.rewrite_calls = []
         self.deactivate_calls = []
-        self.plan_error = None
+        self.validate_error = None
+        self.rewrite_error = None
+        self.events = events
 
-    async def plan_move_tasks_under_uri_internal(self, from_uri, to_uri):
-        self.plan_calls.append({"from_uri": from_uri, "to_uri": to_uri})
-        if self.plan_error:
-            raise self.plan_error
-        return {}
+    async def validate_target_prefix_rewrite_internal(self, from_uri, to_uri, account_id):
+        self.validate_calls.append(
+            {"from_uri": from_uri, "to_uri": to_uri, "account_id": account_id}
+        )
+        if self.events is not None:
+            self.events.append(("validate", from_uri, to_uri))
+        if self.validate_error:
+            raise self.validate_error
 
-    async def move_tasks_under_uri_internal(self, from_uri, to_uri):
-        self.move_calls.append({"from_uri": from_uri, "to_uri": to_uri})
-        return [SimpleNamespace(task_id="watch-1")]
-
-    async def sync_tasks_with_resource_move_internal(
-        self,
-        from_uri,
-        to_uri,
-        account_id,
-        move_resource,
-        rollback_resource=None,
-    ):
-        self.sync_calls.append({"from_uri": from_uri, "to_uri": to_uri, "account_id": account_id})
-        if self.plan_error:
-            raise self.plan_error
-        await move_resource()
+    async def rewrite_target_prefix_internal(self, from_uri, to_uri, account_id):
+        self.rewrite_calls.append(
+            {"from_uri": from_uri, "to_uri": to_uri, "account_id": account_id}
+        )
+        if self.events is not None:
+            self.events.append(("rewrite", from_uri, to_uri))
+        if self.rewrite_error:
+            raise self.rewrite_error
         return [SimpleNamespace(task_id="watch-1")]
 
     async def deactivate_tasks_under_uri_internal(self, uri, account_id):
@@ -316,11 +322,13 @@ async def test_resource_rm_does_not_deactivate_watch_task_control_uri(request_co
 
 @pytest.mark.asyncio
 async def test_resource_mv_plans_then_moves_then_rewrites_watch_tasks(request_context):
-    viking_fs = _FakeVikingFS()
-    watch_manager = _FakeWatchManager()
+    events = []
+    viking_fs = _FakeVikingFS(events=events)
+    watch_manager = _FakeWatchManager(events=events)
     service = FSService(
         viking_fs=viking_fs,
         watch_scheduler=_FakeWatchScheduler(watch_manager),
+        uri_mutation_coordinator=UriMutationCoordinator(),
     )
 
     await service.mv(
@@ -329,13 +337,15 @@ async def test_resource_mv_plans_then_moves_then_rewrites_watch_tasks(request_co
         ctx=request_context,
     )
 
-    assert watch_manager.sync_calls == [
+    expected_watch_call = [
         {
             "from_uri": "viking://resources/codeask/wiki",
             "to_uri": "viking://resources/codeask/wiki-renamed",
             "account_id": "default",
         }
     ]
+    assert watch_manager.validate_calls == expected_watch_call
+    assert watch_manager.rewrite_calls == expected_watch_call
     assert viking_fs.mv_calls == [
         {
             "from_uri": "viking://resources/codeask/wiki",
@@ -343,18 +353,18 @@ async def test_resource_mv_plans_then_moves_then_rewrites_watch_tasks(request_co
             "ctx": request_context,
         }
     ]
-    assert watch_manager.plan_calls == []
-    assert watch_manager.move_calls == []
+    assert [event[0] for event in events] == ["validate", "mv", "rewrite"]
 
 
 @pytest.mark.asyncio
 async def test_resource_mv_conflict_fails_before_resource_move(request_context):
     viking_fs = _FakeVikingFS()
     watch_manager = _FakeWatchManager()
-    watch_manager.plan_error = RuntimeError("watch conflict")
+    watch_manager.validate_error = RuntimeError("watch conflict")
     service = FSService(
         viking_fs=viking_fs,
         watch_scheduler=_FakeWatchScheduler(watch_manager),
+        uri_mutation_coordinator=UriMutationCoordinator(),
     )
 
     with pytest.raises(RuntimeError, match="watch conflict"):
@@ -365,7 +375,177 @@ async def test_resource_mv_conflict_fails_before_resource_move(request_context):
         )
 
     assert viking_fs.mv_calls == []
-    assert watch_manager.move_calls == []
+    assert watch_manager.rewrite_calls == []
+
+
+@pytest.mark.asyncio
+async def test_resource_mv_rewrite_failure_rolls_resource_back(request_context):
+    viking_fs = _FakeVikingFS()
+    watch_manager = _FakeWatchManager()
+    watch_manager.rewrite_error = RuntimeError("watch save failed")
+    service = FSService(
+        viking_fs=viking_fs,
+        watch_scheduler=_FakeWatchScheduler(watch_manager),
+        uri_mutation_coordinator=UriMutationCoordinator(),
+    )
+
+    with pytest.raises(RuntimeError, match="watch save failed"):
+        await service.mv(
+            "viking://resources/codeask/wiki",
+            "viking://resources/codeask/wiki-renamed",
+            ctx=request_context,
+        )
+
+    assert [(call["from_uri"], call["to_uri"]) for call in viking_fs.mv_calls] == [
+        ("viking://resources/codeask/wiki", "viking://resources/codeask/wiki-renamed"),
+        ("viking://resources/codeask/wiki-renamed", "viking://resources/codeask/wiki"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_resource_mv_forward_failure_does_not_rewrite_or_rollback(request_context):
+    viking_fs = _FakeVikingFS()
+    viking_fs.mv_errors = [RuntimeError("move failed")]
+    watch_manager = _FakeWatchManager()
+    service = FSService(
+        viking_fs=viking_fs,
+        watch_scheduler=_FakeWatchScheduler(watch_manager),
+        uri_mutation_coordinator=UriMutationCoordinator(),
+    )
+
+    with pytest.raises(RuntimeError, match="move failed"):
+        await service.mv(
+            "viking://resources/codeask/wiki",
+            "viking://resources/codeask/wiki-renamed",
+            ctx=request_context,
+        )
+
+    assert len(viking_fs.mv_calls) == 1
+    assert watch_manager.rewrite_calls == []
+
+
+@pytest.mark.asyncio
+async def test_resource_mv_rollback_failure_preserves_commit_error_as_cause(request_context):
+    commit_error = RuntimeError("watch save failed")
+    rollback_error = RuntimeError("rollback failed")
+    viking_fs = _FakeVikingFS()
+    viking_fs.mv_errors = [None, rollback_error]
+    watch_manager = _FakeWatchManager()
+    watch_manager.rewrite_error = commit_error
+    service = FSService(
+        viking_fs=viking_fs,
+        watch_scheduler=_FakeWatchScheduler(watch_manager),
+        uri_mutation_coordinator=UriMutationCoordinator(),
+    )
+
+    with pytest.raises(RuntimeError, match="rollback failed") as exc_info:
+        await service.mv(
+            "viking://resources/codeask/wiki",
+            "viking://resources/codeask/wiki-renamed",
+            ctx=request_context,
+        )
+
+    assert exc_info.value.__cause__ is commit_error
+
+
+@pytest.mark.parametrize("blocked_phase", ["forward", "rewrite"])
+@pytest.mark.asyncio
+async def test_resource_mv_cancellation_waits_for_successful_transaction(
+    request_context,
+    blocked_phase,
+):
+    phase_started = asyncio.Event()
+    release_phase = asyncio.Event()
+
+    class BlockingForwardFS(_FakeVikingFS):
+        async def mv(self, from_uri, to_uri, ctx=None):
+            await super().mv(from_uri, to_uri, ctx=ctx)
+            if blocked_phase == "forward":
+                phase_started.set()
+                await release_phase.wait()
+
+    class BlockingRewriteWatchManager(_FakeWatchManager):
+        async def rewrite_target_prefix_internal(self, from_uri, to_uri, account_id):
+            if blocked_phase == "rewrite":
+                phase_started.set()
+                await release_phase.wait()
+            return await super().rewrite_target_prefix_internal(from_uri, to_uri, account_id)
+
+    viking_fs = BlockingForwardFS()
+    watch_manager = BlockingRewriteWatchManager()
+    service = FSService(
+        viking_fs=viking_fs,
+        watch_scheduler=_FakeWatchScheduler(watch_manager),
+        uri_mutation_coordinator=UriMutationCoordinator(),
+    )
+
+    move_task = asyncio.create_task(
+        service.mv(
+            "viking://resources/codeask/wiki",
+            "viking://resources/codeask/wiki-renamed",
+            ctx=request_context,
+        )
+    )
+    await phase_started.wait()
+    move_task.cancel()
+    await asyncio.sleep(0)
+    assert not move_task.done()
+
+    release_phase.set()
+    with pytest.raises(asyncio.CancelledError):
+        await move_task
+
+    assert len(viking_fs.mv_calls) == 1
+    assert len(watch_manager.rewrite_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_resource_mv_cancellation_waits_for_rollback(request_context):
+    rollback_started = asyncio.Event()
+    release_rollback = asyncio.Event()
+    rollback_finished = asyncio.Event()
+
+    class BlockingRollbackFS(_FakeVikingFS):
+        async def mv(self, from_uri, to_uri, ctx=None):
+            await super().mv(from_uri, to_uri, ctx=ctx)
+            if from_uri.endswith("wiki-renamed"):
+                rollback_started.set()
+                await release_rollback.wait()
+                rollback_finished.set()
+
+    viking_fs = BlockingRollbackFS()
+    watch_manager = _FakeWatchManager()
+    watch_manager.rewrite_error = RuntimeError("watch save failed")
+    coordinator = UriMutationCoordinator()
+    service = FSService(
+        viking_fs=viking_fs,
+        watch_scheduler=_FakeWatchScheduler(watch_manager),
+        uri_mutation_coordinator=coordinator,
+    )
+
+    move_task = asyncio.create_task(
+        service.mv(
+            "viking://resources/codeask/wiki",
+            "viking://resources/codeask/wiki-renamed",
+            ctx=request_context,
+        )
+    )
+    await rollback_started.wait()
+    move_task.cancel()
+    await asyncio.sleep(0)
+    assert not move_task.done()
+
+    release_rollback.set()
+    with pytest.raises(asyncio.CancelledError):
+        await move_task
+
+    assert rollback_finished.is_set()
+    async with asyncio.timeout(1):
+        async with coordinator.access(
+            request_context.account_id,
+            ["viking://resources/codeask/wiki"],
+        ):
+            pass
 
 
 @pytest.mark.asyncio
