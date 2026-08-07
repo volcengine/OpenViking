@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from openviking.core.directories import DirectoryInitializer
 from openviking.core.namespace import canonicalize_uri
 from openviking.privacy import UserPrivacyConfigService
+from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
 from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.server.identity import RequestContext, Role
 from openviking.service.agent_evolution_service import AgentEvolutionService
@@ -23,8 +24,8 @@ from openviking.service.relation_service import RelationService
 from openviking.service.resource_memory_link_service import ResourceMemoryLinkService
 from openviking.service.resource_service import ResourceService
 from openviking.service.search_service import SearchService
-from openviking.service.session_service import SessionService
 from openviking.service.session_auto_commit import SessionAutoCommitScheduler
+from openviking.service.session_service import SessionService
 from openviking.service.task_tracker import get_task_tracker, set_task_tracker
 from openviking.session import create_session_compressor
 from openviking.storage.collection_schemas import init_context_collection
@@ -92,6 +93,7 @@ class OpenVikingService:
         self._session_compressor: Optional["SessionCompressorV2"] = None
 
         self._directory_initializer: Optional[DirectoryInitializer] = None
+        self._uri_mutation_coordinator = UriMutationCoordinator()
         self._watch_scheduler: Optional[WatchScheduler] = None
         self._session_auto_commit_scheduler: Optional[SessionAutoCommitScheduler] = None
         self._encryptor: Optional[Any] = None
@@ -100,7 +102,9 @@ class OpenVikingService:
         self._data_dir_lock_path: Optional[str] = None
 
         # Sub-services
-        self._fs_service = FSService()
+        self._fs_service = FSService(
+            uri_mutation_coordinator=self._uri_mutation_coordinator,
+        )
         self._relation_service = RelationService()
         self._pack_service = PackService()
         self._search_service = SearchService()
@@ -380,6 +384,7 @@ class OpenVikingService:
         self._watch_scheduler = WatchScheduler(
             resource_service=self._resource_service,
             viking_fs=self._viking_fs,
+            uri_mutation_coordinator=self._uri_mutation_coordinator,
         )
 
         # Wire up sub-services
@@ -389,6 +394,7 @@ class OpenVikingService:
             privacy_config_service=self._privacy_config_service,
             resource_memory_link_service=self._resource_memory_link_service,
             watch_scheduler=self._watch_scheduler,
+            uri_mutation_coordinator=self._uri_mutation_coordinator,
         )
         self._relation_service.set_viking_fs(self._viking_fs)
         self._pack_service.set_dependencies(
