@@ -31,6 +31,7 @@ from openviking.storage.vectordb_adapters.base import (
     VIKINGDB_TEXT_FIELD_BYTE_LIMIT,
     _truncate_text_field,
 )
+from openviking.storage.vectordb_adapters.factory import backend_uses_content_field
 from openviking.storage.vectordb_adapters.local_adapter import LocalCollectionAdapter
 from openviking.storage.viking_vector_index_backend import (
     VIKINGDB_CONTENT_MAX_SIZE,
@@ -99,6 +100,24 @@ class _DummyConfig:
                 max_reset_timeout=600.0,
             ),
         )
+
+
+@pytest.mark.parametrize(
+    ("backend", "expected"),
+    [
+        ("local", False),
+        ("cuvs", False),
+        ("http", False),
+        ("qdrant", False),
+        ("opengauss", False),
+        ("volcengine", True),
+        ("vikingdb", True),
+    ],
+)
+def test_backend_content_field_capability_matches_adapter_flag(backend, expected):
+    config = SimpleNamespace(backend=backend)
+
+    assert backend_uses_content_field(config) is expected
 
 
 def _build_queue_payload() -> dict:
