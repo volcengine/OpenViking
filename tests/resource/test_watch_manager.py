@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock
 import pytest
 import pytest_asyncio
 
+from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
 from openviking.resource.watch_manager import WatchManager, WatchTask
 from openviking_cli.exceptions import ConflictError
 from tests.utils.mock_agfs import MockLocalAGFS
@@ -254,31 +255,24 @@ class TestWatchManager:
         assert (await watch_manager_no_fs.get_task(sibling.task_id)).is_active is True
 
     @pytest.mark.asyncio
-    async def test_sync_tasks_with_resource_move_internal_rolls_back_task_state_on_save_failure(
-        self, watch_manager_no_fs: WatchManager
-    ):
-        root = await watch_manager_no_fs.create_task(
+    async def test_target_prefix_rewrite_rolls_back_task_state_on_save_failure(self):
+        manager = WatchManager()
+        root = await manager.create_task(
             path="/test/root",
             to_uri="viking://resources/codeask/wiki",
             parent_uri=None,
             watch_interval=30.0,
         )
-        watch_manager_no_fs._save_tasks = AsyncMock(side_effect=RuntimeError("save failed"))
-        move_resource = AsyncMock()
-        rollback_resource = AsyncMock()
+        manager._save_tasks = AsyncMock(side_effect=RuntimeError("save failed"))
 
         with pytest.raises(RuntimeError, match="save failed"):
-            await watch_manager_no_fs.sync_tasks_with_resource_move_internal(
+            await manager.rewrite_target_prefix_internal(
                 "viking://resources/codeask/wiki",
                 "viking://resources/codeask/wiki-renamed",
-                move_resource=move_resource,
-                rollback_resource=rollback_resource,
                 account_id=TEST_ACCOUNT_ID,
             )
 
-        move_resource.assert_awaited_once()
-        rollback_resource.assert_awaited_once()
-        restored = await watch_manager_no_fs.get_task(root.task_id)
+        restored = await manager.get_task(root.task_id)
         assert restored is not None
         assert restored.to_uri == "viking://resources/codeask/wiki"
         assert restored.parent_uri is None
@@ -292,10 +286,14 @@ class TestWatchManager:
         with pytest.raises(ConflictError):
             await manager.create_task(path="/duplicate", account_id="account-a", to_uri=uri)
 
-        await manager.sync_tasks_with_resource_move_internal(
+        await manager.validate_target_prefix_rewrite_internal(
             uri,
             f"{uri}-moved",
-            move_resource=AsyncMock(),
+            account_id="account-a",
+        )
+        await manager.rewrite_target_prefix_internal(
+            uri,
+            f"{uri}-moved",
             account_id="account-a",
         )
         deactivated = await manager.deactivate_tasks_under_uri_internal(uri, "account-b")
@@ -738,29 +736,26 @@ class TestWatchManagerConcurrency:
     """Tests for WatchManager concurrent access."""
 
     @pytest.mark.asyncio
-    async def test_resource_move_does_not_block_unrelated_watch_reads(self):
-        manager = WatchManager()
+    async def test_mutation_lease_does_not_block_unrelated_watch_read(self):
+        coordinator = UriMutationCoordinator()
+        manager = WatchManager(uri_mutation_coordinator=coordinator)
         unrelated = await manager.create_task(
             path="/test/unrelated",
             to_uri="viking://resources/unrelated",
         )
-        move_started = asyncio.Event()
-        release_move = asyncio.Event()
+        mutation_entered = asyncio.Event()
+        release_mutation = asyncio.Event()
 
-        async def slow_move() -> None:
-            move_started.set()
-            await release_move.wait()
+        async def hold_mutation() -> None:
+            async with coordinator.mutation(
+                TEST_ACCOUNT_ID,
+                ["viking://resources/source", "viking://resources/target"],
+            ):
+                mutation_entered.set()
+                await release_mutation.wait()
 
-        move_task = asyncio.create_task(
-            manager.sync_tasks_with_resource_move_internal(
-                "viking://resources/source",
-                "viking://resources/target",
-                move_resource=slow_move,
-                account_id=TEST_ACCOUNT_ID,
-            )
-        )
-        await move_started.wait()
-
+        mutation_task = asyncio.create_task(hold_mutation())
+        await mutation_entered.wait()
         try:
             found = await asyncio.wait_for(
                 manager.get_task_by_uri(
@@ -772,75 +767,41 @@ class TestWatchManagerConcurrency:
                 timeout=1.0,
             )
         finally:
-            release_move.set()
-            await move_task
+            release_mutation.set()
+            await mutation_task
 
         assert found is unrelated
 
     @pytest.mark.asyncio
-    async def test_resource_move_blocks_overlapping_watch_uri_read(self):
-        manager = WatchManager()
+    async def test_mutation_lease_blocks_overlapping_watch_operations(self):
+        coordinator = UriMutationCoordinator()
+        manager = WatchManager(uri_mutation_coordinator=coordinator)
         watched = await manager.create_task(
             path="/test/source",
             to_uri="viking://resources/source/child",
         )
-        move_started = asyncio.Event()
-        release_move = asyncio.Event()
+        mutation_entered = asyncio.Event()
+        release_mutation = asyncio.Event()
 
-        async def slow_move() -> None:
-            move_started.set()
-            await release_move.wait()
+        async def hold_mutation() -> None:
+            async with coordinator.mutation(
+                TEST_ACCOUNT_ID,
+                ["viking://resources/source", "viking://resources/target"],
+            ):
+                mutation_entered.set()
+                await release_mutation.wait()
 
-        move_task = asyncio.create_task(
-            manager.sync_tasks_with_resource_move_internal(
-                "viking://resources/source",
-                "viking://resources/target",
-                move_resource=slow_move,
-                account_id=TEST_ACCOUNT_ID,
-            )
-        )
-        await move_started.wait()
-        read_task = asyncio.create_task(
+        mutation_task = asyncio.create_task(hold_mutation())
+        await mutation_entered.wait()
+        read_by_uri = asyncio.create_task(
             manager.get_task_by_uri(
-                "viking://resources/target/child",
+                watched.to_uri or "",
                 TEST_ACCOUNT_ID,
                 TEST_USER_ID,
                 TEST_ROLE,
             )
         )
-        await asyncio.sleep(0)
-        was_blocked = not read_task.done()
-
-        release_move.set()
-        _, found = await asyncio.gather(move_task, read_task)
-
-        assert was_blocked
-        assert found is watched
-
-    @pytest.mark.asyncio
-    async def test_resource_move_blocks_overlapping_watch_task_read(self):
-        manager = WatchManager()
-        watched = await manager.create_task(
-            path="/test/source",
-            to_uri="viking://resources/source/child",
-        )
-        move_started = asyncio.Event()
-        release_move = asyncio.Event()
-
-        async def slow_move() -> None:
-            move_started.set()
-            await release_move.wait()
-
-        move_task = asyncio.create_task(
-            manager.sync_tasks_with_resource_move_internal(
-                "viking://resources/source",
-                "viking://resources/target",
-                move_resource=slow_move,
-                account_id=TEST_ACCOUNT_ID,
-            )
-        )
-        await move_started.wait()
-        read_task = asyncio.create_task(
+        read_by_id = asyncio.create_task(
             manager.get_task(
                 watched.task_id,
                 TEST_ACCOUNT_ID,
@@ -848,234 +809,7 @@ class TestWatchManagerConcurrency:
                 TEST_ROLE,
             )
         )
-        await asyncio.sleep(0)
-        was_blocked = not read_task.done()
-
-        release_move.set()
-        _, found = await asyncio.gather(move_task, read_task)
-
-        assert was_blocked
-        assert found is watched
-        assert found.to_uri == "viking://resources/target/child"
-
-    @pytest.mark.asyncio
-    async def test_resource_move_blocks_overlapping_watch_creation(self):
-        manager = WatchManager()
-        move_started = asyncio.Event()
-        release_move = asyncio.Event()
-
-        async def slow_move() -> None:
-            move_started.set()
-            await release_move.wait()
-
-        move_task = asyncio.create_task(
-            manager.sync_tasks_with_resource_move_internal(
-                "viking://resources/source",
-                "viking://resources/target",
-                move_resource=slow_move,
-                account_id=TEST_ACCOUNT_ID,
-            )
-        )
-        await move_started.wait()
-
-        create_task = asyncio.create_task(
-            manager.create_task(
-                path="/test/overlapping",
-                to_uri="viking://resources/source/child",
-            )
-        )
-        await asyncio.sleep(0)
-        was_blocked = not create_task.done()
-
-        release_move.set()
-        _, created = await asyncio.gather(move_task, create_task)
-
-        assert was_blocked
-        assert created.to_uri == "viking://resources/source/child"
-
-    @pytest.mark.asyncio
-    async def test_resource_move_rollback_does_not_block_unrelated_watch_reads(self):
-        manager = WatchManager()
-        watched = await manager.create_task(
-            path="/test/source",
-            to_uri="viking://resources/source",
-        )
-        unrelated = await manager.create_task(
-            path="/test/unrelated",
-            to_uri="viking://resources/unrelated",
-        )
-        manager._save_tasks = AsyncMock(side_effect=RuntimeError("save failed"))
-        rollback_started = asyncio.Event()
-        release_rollback = asyncio.Event()
-
-        async def slow_rollback() -> None:
-            rollback_started.set()
-            await release_rollback.wait()
-
-        move_task = asyncio.create_task(
-            manager.sync_tasks_with_resource_move_internal(
-                "viking://resources/source",
-                "viking://resources/target",
-                move_resource=AsyncMock(),
-                rollback_resource=slow_rollback,
-                account_id=TEST_ACCOUNT_ID,
-            )
-        )
-        await rollback_started.wait()
-
-        read_task = asyncio.create_task(
-            manager.get_task_by_uri(
-                unrelated.to_uri or "",
-                TEST_ACCOUNT_ID,
-                TEST_USER_ID,
-                TEST_ROLE,
-            )
-        )
-        completed, _ = await asyncio.wait({read_task}, timeout=1.0)
-        read_completed = read_task in completed
-        release_rollback.set()
-
-        with pytest.raises(RuntimeError, match="save failed"):
-            await move_task
-        if not read_completed:
-            read_task.cancel()
-            await asyncio.gather(read_task, return_exceptions=True)
-
-        assert read_completed
-        found = read_task.result()
-        assert found is unrelated
-        assert watched.to_uri == "viking://resources/source"
-
-    @pytest.mark.asyncio
-    async def test_resource_move_cancellation_after_move_finishes_commits_watch_state(self):
-        manager = WatchManager()
-        watched = await manager.create_task(
-            path="/test/source",
-            to_uri="viking://resources/source",
-        )
-        lock_held = asyncio.Event()
-        release_lock = asyncio.Event()
-        move_finished = asyncio.Event()
-        rollback_called = False
-
-        async def hold_watch_lock() -> None:
-            async with manager._lock:
-                lock_held.set()
-                await release_lock.wait()
-
-        async def move_resource() -> None:
-            holder = asyncio.create_task(hold_watch_lock())
-            await lock_held.wait()
-            move_finished.set()
-            await asyncio.sleep(0)
-            assert not holder.done()
-
-        async def rollback_resource() -> None:
-            nonlocal rollback_called
-            rollback_called = True
-
-        move_task = asyncio.create_task(
-            manager.sync_tasks_with_resource_move_internal(
-                "viking://resources/source",
-                "viking://resources/target",
-                move_resource=move_resource,
-                rollback_resource=rollback_resource,
-                account_id=TEST_ACCOUNT_ID,
-            )
-        )
-        await move_finished.wait()
-        await asyncio.sleep(0)
-        move_task.cancel()
-        release_lock.set()
-
-        with pytest.raises(asyncio.CancelledError):
-            await move_task
-
-        found = await asyncio.wait_for(
-            manager.get_task_by_uri(
-                "viking://resources/target",
-                TEST_ACCOUNT_ID,
-                TEST_USER_ID,
-                TEST_ROLE,
-            ),
-            timeout=1.0,
-        )
-        assert found is watched
-        assert rollback_called is False
-
-    @pytest.mark.asyncio
-    async def test_resource_move_cancellation_waits_for_rollback_to_finish(self):
-        manager = WatchManager()
-        watched = await manager.create_task(
-            path="/test/source",
-            to_uri="viking://resources/source",
-        )
-        manager._save_tasks = AsyncMock(side_effect=RuntimeError("save failed"))
-        rollback_started = asyncio.Event()
-        release_rollback = asyncio.Event()
-        rollback_finished = False
-
-        async def rollback_resource() -> None:
-            nonlocal rollback_finished
-            rollback_started.set()
-            await release_rollback.wait()
-            rollback_finished = True
-
-        move_task = asyncio.create_task(
-            manager.sync_tasks_with_resource_move_internal(
-                "viking://resources/source",
-                "viking://resources/target",
-                move_resource=AsyncMock(),
-                rollback_resource=rollback_resource,
-                account_id=TEST_ACCOUNT_ID,
-            )
-        )
-        await rollback_started.wait()
-        move_task.cancel()
-        await asyncio.sleep(0)
-        was_waiting_for_rollback = not move_task.done()
-        release_rollback.set()
-
-        with pytest.raises(asyncio.CancelledError):
-            await move_task
-
-        assert was_waiting_for_rollback
-        assert rollback_finished
-        found = await asyncio.wait_for(
-            manager.get_task_by_uri(
-                "viking://resources/source",
-                TEST_ACCOUNT_ID,
-                TEST_USER_ID,
-                TEST_ROLE,
-            ),
-            timeout=1.0,
-        )
-        assert found is watched
-
-    @pytest.mark.asyncio
-    async def test_resource_move_blocks_overlapping_watch_update(self):
-        manager = WatchManager()
-        watched = await manager.create_task(
-            path="/test/source",
-            to_uri="viking://resources/source/child",
-        )
-        move_started = asyncio.Event()
-        release_move = asyncio.Event()
-
-        async def slow_move() -> None:
-            move_started.set()
-            await release_move.wait()
-
-        move_task = asyncio.create_task(
-            manager.sync_tasks_with_resource_move_internal(
-                "viking://resources/source",
-                "viking://resources/target",
-                move_resource=slow_move,
-                account_id=TEST_ACCOUNT_ID,
-            )
-        )
-        await move_started.wait()
-        update_task = asyncio.create_task(
+        update = asyncio.create_task(
             manager.update_task(
                 watched.task_id,
                 TEST_ACCOUNT_ID,
@@ -1085,120 +819,173 @@ class TestWatchManagerConcurrency:
             )
         )
         await asyncio.sleep(0)
-        was_blocked = not update_task.done()
+        assert not any(task.done() for task in (read_by_uri, read_by_id, update))
 
-        release_move.set()
-        _, updated = await asyncio.gather(move_task, update_task)
-
-        assert was_blocked
-        assert updated.to_uri == "viking://resources/target/child"
-        assert updated.is_active is False
+        release_mutation.set()
+        await mutation_task
+        results = await asyncio.gather(read_by_uri, read_by_id, update)
+        assert results[0] is watched
+        assert results[1] is watched
+        assert results[2] is watched
 
     @pytest.mark.asyncio
-    async def test_resource_move_blocks_overlapping_watch_deactivation(self):
-        manager = WatchManager()
+    async def test_mutation_lease_blocks_overlapping_watch_deletion(self):
+        coordinator = UriMutationCoordinator()
+        manager = WatchManager(uri_mutation_coordinator=coordinator)
         watched = await manager.create_task(
             path="/test/source",
             to_uri="viking://resources/source/child",
         )
-        move_started = asyncio.Event()
-        release_move = asyncio.Event()
+        mutation_entered = asyncio.Event()
+        release_mutation = asyncio.Event()
 
-        async def slow_move() -> None:
-            move_started.set()
-            await release_move.wait()
-
-        move_task = asyncio.create_task(
-            manager.sync_tasks_with_resource_move_internal(
-                "viking://resources/source",
-                "viking://resources/target",
-                move_resource=slow_move,
-                account_id=TEST_ACCOUNT_ID,
-            )
-        )
-        await move_started.wait()
-        deactivate_task = asyncio.create_task(
-            manager.deactivate_tasks_under_uri_internal(
-                "viking://resources/target",
+        async def hold_mutation() -> None:
+            async with coordinator.mutation(
                 TEST_ACCOUNT_ID,
+                ["viking://resources/source", "viking://resources/target"],
+            ):
+                mutation_entered.set()
+                await release_mutation.wait()
+
+        mutation_task = asyncio.create_task(hold_mutation())
+        await mutation_entered.wait()
+        delete = asyncio.create_task(
+            manager.delete_task(
+                watched.task_id,
+                TEST_ACCOUNT_ID,
+                TEST_USER_ID,
+                TEST_ROLE,
             )
         )
         await asyncio.sleep(0)
-        was_blocked = not deactivate_task.done()
+        assert not delete.done()
 
-        release_move.set()
-        _, deactivated = await asyncio.gather(move_task, deactivate_task)
-
-        assert was_blocked
-        assert deactivated == [watched]
-        assert watched.to_uri == "viking://resources/target/child"
-        assert watched.is_active is False
+        release_mutation.set()
+        await mutation_task
+        assert await delete is True
 
     @pytest.mark.asyncio
-    async def test_resource_move_hides_overlapping_watch_from_due_tasks(self):
-        manager = WatchManager()
+    async def test_mutation_lease_blocks_overlapping_watch_creation(self):
+        coordinator = UriMutationCoordinator()
+        manager = WatchManager(uri_mutation_coordinator=coordinator)
+        mutation_entered = asyncio.Event()
+        release_mutation = asyncio.Event()
+
+        async def hold_mutation() -> None:
+            async with coordinator.mutation(
+                TEST_ACCOUNT_ID,
+                ["viking://resources/source", "viking://resources/target"],
+            ):
+                mutation_entered.set()
+                await release_mutation.wait()
+
+        mutation_task = asyncio.create_task(hold_mutation())
+        await mutation_entered.wait()
+        create = asyncio.create_task(
+            manager.create_task(
+                path="/test/source",
+                to_uri="viking://resources/source/child",
+            )
+        )
+        await asyncio.sleep(0)
+        assert not create.done()
+
+        release_mutation.set()
+        await mutation_task
+        created = await create
+        assert created.to_uri == "viking://resources/source/child"
+
+    @pytest.mark.asyncio
+    async def test_mutation_lease_blocks_overlapping_watch_deactivation(self):
+        coordinator = UriMutationCoordinator()
+        manager = WatchManager(uri_mutation_coordinator=coordinator)
+        watched = await manager.create_task(
+            path="/test/source",
+            to_uri="viking://resources/source/child",
+        )
+        mutation_entered = asyncio.Event()
+        release_mutation = asyncio.Event()
+
+        async def hold_mutation() -> None:
+            async with coordinator.mutation(
+                TEST_ACCOUNT_ID,
+                ["viking://resources/source", "viking://resources/target"],
+            ):
+                mutation_entered.set()
+                await release_mutation.wait()
+
+        mutation_task = asyncio.create_task(hold_mutation())
+        await mutation_entered.wait()
+        deactivate = asyncio.create_task(
+            manager.deactivate_tasks_under_uri_internal(
+                "viking://resources/source", TEST_ACCOUNT_ID
+            )
+        )
+        await asyncio.sleep(0)
+        assert not deactivate.done()
+
+        release_mutation.set()
+        await mutation_task
+        assert await deactivate == [watched]
+
+    @pytest.mark.asyncio
+    async def test_stable_uri_read_retries_after_target_rewrite(self):
+        coordinator = UriMutationCoordinator()
+        manager = WatchManager(uri_mutation_coordinator=coordinator)
+        watched = await manager.create_task(
+            path="/test/source",
+            to_uri="viking://resources/source/child",
+        )
+        mutation_entered = asyncio.Event()
+        release_mutation = asyncio.Event()
+
+        async def hold_mutation() -> None:
+            async with coordinator.mutation(
+                TEST_ACCOUNT_ID,
+                ["viking://resources/source", "viking://resources/target"],
+            ):
+                mutation_entered.set()
+                await release_mutation.wait()
+
+        mutation_task = asyncio.create_task(hold_mutation())
+        await mutation_entered.wait()
+        read = asyncio.create_task(
+            manager.get_task(
+                watched.task_id,
+                TEST_ACCOUNT_ID,
+                TEST_USER_ID,
+                TEST_ROLE,
+            )
+        )
+        await asyncio.sleep(0)
+        await manager.rewrite_target_prefix_internal(
+            "viking://resources/source",
+            "viking://resources/target",
+            TEST_ACCOUNT_ID,
+        )
+        release_mutation.set()
+        await mutation_task
+
+        found = await asyncio.wait_for(read, timeout=1.0)
+        assert found is watched
+        assert found.to_uri == "viking://resources/target/child"
+
+    @pytest.mark.asyncio
+    async def test_due_queries_do_not_depend_on_mutation_state(self):
+        coordinator = UriMutationCoordinator()
+        manager = WatchManager(uri_mutation_coordinator=coordinator)
         watched = await manager.create_task(
             path="/test/source",
             to_uri="viking://resources/source/child",
         )
         watched.next_execution_time = datetime.now() - timedelta(seconds=1)
-        move_started = asyncio.Event()
-        release_move = asyncio.Event()
 
-        async def slow_move() -> None:
-            move_started.set()
-            await release_move.wait()
-
-        move_task = asyncio.create_task(
-            manager.sync_tasks_with_resource_move_internal(
-                "viking://resources/source",
-                "viking://resources/target",
-                move_resource=slow_move,
-                account_id=TEST_ACCOUNT_ID,
-            )
-        )
-        await move_started.wait()
-
-        try:
-            due_tasks = await manager.get_due_tasks()
-        finally:
-            release_move.set()
-            await move_task
-
-        assert due_tasks == []
-
-    @pytest.mark.asyncio
-    async def test_resource_move_hides_overlapping_watch_next_execution_time(self):
-        manager = WatchManager()
-        watched = await manager.create_task(
-            path="/test/source",
-            to_uri="viking://resources/source/child",
-        )
-        watched.next_execution_time = datetime.now() - timedelta(seconds=1)
-        move_started = asyncio.Event()
-        release_move = asyncio.Event()
-
-        async def slow_move() -> None:
-            move_started.set()
-            await release_move.wait()
-
-        move_task = asyncio.create_task(
-            manager.sync_tasks_with_resource_move_internal(
-                "viking://resources/source",
-                "viking://resources/target",
-                move_resource=slow_move,
-                account_id=TEST_ACCOUNT_ID,
-            )
-        )
-        await move_started.wait()
-
-        try:
-            next_execution_time = await manager.get_next_execution_time()
-        finally:
-            release_move.set()
-            await move_task
-
-        assert next_execution_time is None
+        async with coordinator.mutation(
+            TEST_ACCOUNT_ID,
+            ["viking://resources/source", "viking://resources/target"],
+        ):
+            assert await manager.get_due_tasks() == [watched]
+            assert await manager.get_next_execution_time() == watched.next_execution_time
 
     @pytest.mark.asyncio
     async def test_concurrent_task_creation(self, watch_manager: WatchManager):
