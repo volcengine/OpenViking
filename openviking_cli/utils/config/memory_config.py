@@ -33,19 +33,24 @@ class MemoryConfig(BaseModel):
         description="Custom memory templates directory. If set, templates from this directory will be loaded in addition to built-in templates",
     )
     v2_lock_retry_interval_seconds: float = Field(
-        default=0.2,
+        default=1.0,
         ge=0.0,
         description=(
             "Retry interval (seconds) when SessionCompressorV2 fails to acquire memory subtree "
-            "locks. Set to 0 for immediate retries."
+            "locks. Set to 0 for immediate retries. The 1.0s default avoids the CPU/executor "
+            "churn and log flood observed with aggressive polling under contended extraction "
+            "(see issue #3274)."
         ),
     )
     v2_lock_max_retries: int = Field(
-        default=0,
+        default=300,
         ge=0,
         description=(
-            "Maximum retries for SessionCompressorV2 memory lock acquisition. "
-            "0 means unlimited retries."
+            "Maximum retries for SessionCompressorV2 memory lock acquisition before giving up "
+            "with TimeoutError. 0 means unlimited retries (not recommended in production: "
+            "without a bound, contended extractions can accumulate waiters without bound and "
+            "saturate CPU / flood logs; see issue #3274). Default 300 gives roughly a 5-minute "
+            "ceiling at the 1.0s retry interval, matching the v2 lock expiry window."
         ),
     )
     experimental_memory_switch: bool = Field(

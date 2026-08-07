@@ -286,8 +286,8 @@ See [Encryption](../guides/08-encryption.md) for provider and key-management set
     "extraction_enabled": true,
     "session_skill_extraction_enabled": false,
     "link_enabled": false,
-    "v2_lock_retry_interval_seconds": 0.2,
-    "v2_lock_max_retries": 0
+    "v2_lock_retry_interval_seconds": 1.0,
+    "v2_lock_max_retries": 300
   }
 }
 ```
@@ -303,8 +303,8 @@ See [Encryption](../guides/08-encryption.md) for provider and key-management set
 | `extraction_enabled` | boolean | `true` | Extract long-term memories on session commit |
 | `session_skill_extraction_enabled` | boolean | `false` | Also extract reusable skills |
 | `link_enabled` | boolean | `false` | Generate and resolve memory links |
-| `v2_lock_retry_interval_seconds` | number, `>= 0` | `0.2` | Memory-lock retry interval |
-| `v2_lock_max_retries` | integer, `>= 0` | `0` | Retry limit; `0` means unlimited |
+| `v2_lock_retry_interval_seconds` | number, `>= 0` | `1.0` | Memory-lock retry interval. The default avoids CPU/log floods under contended extraction; set to `0` for immediate retries. |
+| `v2_lock_max_retries` | integer, `>= 0` | `300` | Retry limit before giving up with `TimeoutError`; `0` means unlimited (not recommended in production). |
 
 ## Parser Settings
 
