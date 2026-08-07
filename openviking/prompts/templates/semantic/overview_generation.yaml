@@ -51,6 +51,8 @@ template: |
   - Treat child directories as parts of the same repository unless the summaries clearly show they are independent projects.
   - Do not describe every child directory as an independent project by default.
   - When the summaries suggest a code repository, explain how subdirectories relate to the whole repo, such as services, libraries, apps, modules, or support folders.
+  - Faithfulness: describe only what the provided summaries state; do not invent or generalize entities, facts, or relationships not present in them.
+  - Do not introduce organization, company, product, or brand names that are not present in the content. When the owning entity is not stated, simply omit it rather than guessing.
 
   Output in Markdown format, strictly following this structure:
 

@@ -42,6 +42,8 @@ template: |
   - Describe the target audience and prerequisite knowledge if apparent
   - Include relevant keywords for semantic search
   - Output plain text directly, no markdown format
+  - Faithfulness: describe only what the content states; do not invent or generalize entities, facts, or relationships not present in the content
+  - Do not introduce organization, company, product, or brand names that are not present in the content. When the owning entity is not stated, simply omit it rather than guessing.
 
   Structure your summary with:
   1. One sentence describing the document's primary purpose
