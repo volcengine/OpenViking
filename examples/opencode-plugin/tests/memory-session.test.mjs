@@ -213,3 +213,46 @@ test("assistant messages are captured even when finish is not stop", async () =>
     })
   })
 })
+
+test("concurrent flushAll/debounced saves do not corrupt state file", async () => {
+  await withCaptureServer(async ({ endpoint }) => {
+    await withTempDir("ov-oc-session-", async (dir) => {
+      const manager = createMemorySessionManager({ config: baseConfig(endpoint), pluginRoot: dir })
+      await manager.init()
+
+      for (let i = 0; i < 20; i++) {
+        await manager.handleEvent({ type: "session.created", properties: { info: { id: `oc-session-${i}` } } })
+        await manager.handleEvent({
+          type: "message.updated",
+          properties: { info: { id: `msg-${i}`, sessionID: `oc-session-${i}`, role: "user" } },
+        })
+        await manager.handleEvent({
+          type: "message.part.updated",
+          properties: {
+            part: {
+              id: `part-${i}`,
+              messageID: `msg-${i}`,
+              sessionID: `oc-session-${i}`,
+              type: "text",
+              text: `hello from session ${i}`,
+            },
+          },
+        })
+      }
+
+      await Promise.all([
+        manager.flushAll({ commit: false }),
+        manager.flushAll({ commit: false }),
+        manager.flushAll({ commit: false }),
+      ])
+      await manager.flushAll({ commit: false })
+
+      const { readFile } = await import("node:fs/promises")
+      const statePath = `${dir}/openviking-session-state.json`
+      const raw = await readFile(statePath, "utf8")
+      const parsed = JSON.parse(raw)
+      assert.equal(parsed.version, 2)
+      assert.equal(Object.keys(parsed.sessions).length, 20)
+    })
+  })
+})

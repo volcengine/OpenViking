@@ -30,6 +30,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   const statePath = path.join(pluginRoot, "openviking-session-state.json")
   const oldSessionMapPath = path.join(pluginRoot, "openviking-session-map.json")
   let saveTimer = null
+  let saveChain = Promise.resolve()
 
   async function init() {
     if (config.autoCapture) await migrateLegacySessionMap()
@@ -67,24 +68,38 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   }
 
   async function saveState() {
+    const persisted = {}
+    for (const [opencodeSessionId, state] of sessions.entries()) {
+      persisted[opencodeSessionId] = serializeSessionState(state)
+    }
+    const tempPath = `${statePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`
     try {
-      const persisted = {}
-      for (const [opencodeSessionId, state] of sessions.entries()) {
-        persisted[opencodeSessionId] = serializeSessionState(state)
-      }
-      const tempPath = `${statePath}.tmp`
       await fs.promises.writeFile(tempPath, JSON.stringify({ version: 2, sessions: persisted, lastSaved: Date.now() }, null, 2), "utf8")
       await fs.promises.rename(tempPath, statePath)
       log("DEBUG", "persistence", "Session state saved", { count: sessions.size })
     } catch (error) {
       log("ERROR", "persistence", "Failed to save session state", { error: error?.message })
+      try {
+        await fs.promises.unlink(tempPath)
+      } catch {
+        // temp file already renamed or never created
+      }
     }
+  }
+
+  function enqueueSave() {
+    const run = saveChain.then(() => saveState(), (reason) => {
+      log("ERROR", "persistence", "Previous save failed, continuing", { error: reason?.message })
+      return saveState()
+    })
+    saveChain = run.catch(() => {})
+    return run
   }
 
   function debouncedSaveState() {
     if (saveTimer) clearTimeout(saveTimer)
     saveTimer = setTimeout(() => {
-      saveState().catch((error) => {
+      enqueueSave().catch((error) => {
         log("ERROR", "persistence", "Debounced save failed", { error: error?.message })
       })
     }, 300)
@@ -176,7 +191,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     if (!sessionId) return
     await flushSession(sessionId, { commit: true, reason: event.type })
     sessions.delete(sessionId)
-    await saveState()
+    await enqueueSave()
   }
 
   async function handleSessionError(event) {
@@ -253,7 +268,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     for (const sessionId of sessions.keys()) {
       await flushSession(sessionId, { commit, reason: "flushAll" })
     }
-    await saveState()
+    await enqueueSave()
   }
 
   async function flushSession(opencodeSessionId, { commit = false, reason = "manual" } = {}) {
@@ -267,7 +282,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     } else if (added > 0) {
       await maybeCommitByThreshold(state)
     }
-    await saveState()
+    await enqueueSave()
     return true
   }
 
