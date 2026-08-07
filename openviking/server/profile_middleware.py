@@ -110,7 +110,7 @@ def _sanitize_profile_path(path: str) -> str:
                     return "/".join(parts[idx + 1 :])
 
         for idx, part in enumerate(parts):
-            if part.startswith("python") and idx + 1 < len(parts):
+            if part[:6] == "python" and part[6:7].isdigit() and idx + 1 < len(parts):
                 suffix = parts[idx + 1 :]
                 if suffix:
                     return "/".join(suffix)
