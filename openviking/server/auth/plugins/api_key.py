@@ -37,18 +37,6 @@ def _api_key_root_can_access_path(path: str) -> bool:
     return False
 
 
-def _remove_header(request: Request, name: bytes) -> None:
-    """Remove a header from the underlying request scope.
-
-    Starlette's Headers object is immutable; we mutate the raw scope list
-    so downstream middleware and handlers do not see the header.
-    """
-    scope_headers = request.scope.get("headers", [])
-    request.scope["headers"] = [
-        (key, value) for key, value in scope_headers if key.lower() != name.lower()
-    ]
-
-
 class ApiKeyAuthPlugin(AuthPlugin):
     """API key mode: resolve identity via APIKeyManager.
 
@@ -86,13 +74,21 @@ class ApiKeyAuthPlugin(AuthPlugin):
         identity.account_id = identity.account_id or "default"
         identity.user_id = identity.user_id or "default"
 
-        # Silently ignore identity assertion headers in api_key mode.
-        # Older clients may send these headers out of habit; clearing them
-        # avoids breaking compatibility without weakening security.
+        # Identity-assertion headers belong to trusted mode. Reject them in
+        # api_key mode so an API key cannot be used to impersonate a
+        # different account or user. Matching headers are also rejected to
+        # keep the api_key mode identity model simple: the key alone pins
+        # the caller.
         if x_openviking_account:
-            _remove_header(request, b"x-openviking-account")
+            raise PermissionDeniedError(
+                "X-OpenViking-Account header is not permitted in api_key auth mode; "
+                "use trusted mode for header-based identity assertion."
+            )
         if x_openviking_user:
-            _remove_header(request, b"x-openviking-user")
+            raise PermissionDeniedError(
+                "X-OpenViking-User header is not permitted in api_key auth mode; "
+                "use trusted mode for header-based identity assertion."
+            )
 
         return identity
 
@@ -155,11 +151,19 @@ class ApiKeyAuthPlugin(AuthPlugin):
                     "please re-authorize the client."
                 )
 
-        # Silently ignore identity assertion headers in api_key mode.
+        # Identity-assertion headers belong to trusted mode. Reject them in
+        # api_key mode even on the OAuth fast-path so an OAuth token cannot
+        # be used to impersonate a different account or user.
         if x_openviking_account:
-            _remove_header(request, b"x-openviking-account")
+            raise PermissionDeniedError(
+                "X-OpenViking-Account header is not permitted in api_key auth mode; "
+                "use trusted mode for header-based identity assertion."
+            )
         if x_openviking_user:
-            _remove_header(request, b"x-openviking-user")
+            raise PermissionDeniedError(
+                "X-OpenViking-User header is not permitted in api_key auth mode; "
+                "use trusted mode for header-based identity assertion."
+            )
 
         return ResolvedIdentity(
             role=role,
