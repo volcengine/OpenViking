@@ -107,6 +107,11 @@ def _mpeg_ts_bytes() -> bytes:
         content[offset] = 0x47
     return bytes(content)
 
+@pytest.mark.parametrize("extension", [".cu", ".cuh"])
+def test_get_resource_content_type_recognizes_cuda_extensions_as_text(extension):
+    assert (
+        embedding_utils.get_resource_content_type(f"kernel{extension}") == ResourceContentType.TEXT
+    )
 
 @pytest.mark.asyncio
 async def test_vectorize_disambiguates_typescript_and_mpeg_ts(monkeypatch):
@@ -514,6 +519,53 @@ async def test_vectorize_directory_meta_appends_search_tags_by_level(monkeypatch
     assert queue.items[1].context_data["level"] == 1
     assert queue.items[1].context_data["search_tags"] == ["env=prod", "team=search"]
     assert queue.items[1].context_data["_upsert_options"] == {"search_tag_mode": "append"}
+
+
+@pytest.mark.asyncio
+async def test_vectorize_directory_meta_include_abstract_false_produces_only_overview(monkeypatch):
+    """include_abstract=False produces exactly one L1 OVERVIEW record and no L0."""
+    from openviking.core.context import ContextLevel
+
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("ignored"))
+
+    await embedding_utils.vectorize_directory_meta(
+        uri="viking://user/default/resources/demo",
+        abstract="demo abstract",
+        overview="demo overview",
+        ctx=DummyReq(),
+        include_overview=True,
+        include_abstract=False,
+    )
+
+    assert len(queue.items) == 1
+    msg = queue.items[0]
+    assert msg.context_data["level"] == int(ContextLevel.OVERVIEW)
+    assert msg.context_data["is_leaf"] is False
+    assert msg.context_data["uri"] == "viking://user/default/resources/demo"
+
+
+@pytest.mark.asyncio
+async def test_vectorize_directory_meta_default_includes_both_levels(monkeypatch):
+    """Default behavior still produces L0 ABSTRACT + L1 OVERVIEW records."""
+    from openviking.core.context import ContextLevel
+
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("ignored"))
+
+    await embedding_utils.vectorize_directory_meta(
+        uri="viking://user/default/resources/demo",
+        abstract="demo abstract",
+        overview="demo overview",
+        ctx=DummyReq(),
+    )
+
+    assert len(queue.items) == 2
+    levels = [m.context_data["level"] for m in queue.items]
+    assert int(ContextLevel.ABSTRACT) in levels
+    assert int(ContextLevel.OVERVIEW) in levels
 
 
 @pytest.mark.asyncio

@@ -788,6 +788,41 @@ class MemoryUpdater:
                 raise
             return False
 
+    @classmethod
+    async def initialize_and_vectorize_default_files(
+        cls,
+        *,
+        vikingdb: Any,
+        ctx: RequestContext,
+        allowed_memory_types: Optional[set[str]] = None,
+    ) -> list[str]:
+        """Initialize default memory files and enqueue embeddings only for URIs
+        newly created by this call. Pre-existing files are not re-embedded."""
+        from openviking.session.memory.memory_type_registry import create_default_registry
+        from openviking.storage.viking_fs import get_viking_fs
+
+        if not vikingdb or not bool(getattr(vikingdb, "has_queue_manager", False)):
+            return []
+
+        registry = create_default_registry()
+        created_uris = await registry.initialize_memory_files(
+            ctx,
+            allowed_memory_types=allowed_memory_types,
+        )
+        if not created_uris:
+            return []
+
+        viking_fs = get_viking_fs()
+        for uri in created_uris:
+            await cls.refresh_file_embedding(
+                viking_fs=viking_fs,
+                vikingdb=vikingdb,
+                uri=uri,
+                memory_type=cls.memory_type_from_uri(uri),
+                ctx=ctx,
+            )
+        return created_uris
+
     @staticmethod
     def memory_type_from_uri(uri: str) -> Optional[str]:
         parts = [part for part in VikingURI(uri).full_path.split("/") if part]
@@ -916,31 +951,6 @@ class MemoryUpdater:
 
         await self._sync_resource_refs_for_result(result, ctx, lease_ref=self._transaction_handle)
 
-        # Vectorize written and edited memories
-        uri_memory_type_map = {}
-        for op in operations.upsert_operations:
-            for uri in op.uris:
-                uri_memory_type_map[uri] = op.memory_type
-        await self._vectorize_memories(
-            result,
-            ctx,
-            extract_context=extract_context,
-            uri_memory_type_map=uri_memory_type_map,
-            search_tags_by_uri=search_tags_by_uri,
-        )
-
-        # Apply links to endpoint files not covered by upsert_operations
-        if operations.resolved_links:
-            await self._apply_links_to_existing_files(
-                operations.resolved_links,
-                result,
-                ctx,
-                deleted_uris=set(result.deleted_uris),
-                lease_ref=self._transaction_handle,
-            )
-
-        tracer.info(f"Memory operations applied: {result.summary()}")
-
         # Collect directories that need overview generation
         # uri is now a string, so extract directory using os.path
         dirs = {}
@@ -956,14 +966,46 @@ class MemoryUpdater:
                 or "unknown"
             )
 
+        # Generate overviews BEFORE vectorization so we can enqueue L1 directory vectors
+        # in the same transaction. Overview files are not added to written_uris because
+        # _vectorize_memories handles only leaf memory files.
+        overview_uris = []
         for dir, memory_type in dirs.items():
-            await self.generate_overview(
+            overview_uri = await self.generate_overview(
                 memory_type,
                 dir,
                 ctx,
                 extract_context,
                 lease_ref=self._transaction_handle,
             )
+            if overview_uri:
+                overview_uris.append(overview_uri)
+
+        # Vectorize leaf memory files only
+        uri_memory_type_map = {}
+        for op in operations.upsert_operations:
+            for uri in op.uris:
+                uri_memory_type_map[uri] = op.memory_type
+        await self._vectorize_memories(
+            result,
+            ctx,
+            extract_context=extract_context,
+            uri_memory_type_map=uri_memory_type_map,
+            search_tags_by_uri=search_tags_by_uri,
+            overview_uris=overview_uris,
+        )
+
+        # Apply links to endpoint files not covered by upsert_operations
+        if operations.resolved_links:
+            await self._apply_links_to_existing_files(
+                operations.resolved_links,
+                result,
+                ctx,
+                deleted_uris=set(result.deleted_uris),
+                lease_ref=self._transaction_handle,
+            )
+
+        tracer.info(f"Memory operations applied: {result.summary()}")
 
         return result
 
@@ -1294,6 +1336,7 @@ class MemoryUpdater:
         extract_context: Any = None,
         uri_memory_type_map: Dict[str, str] = None,
         search_tags_by_uri: Dict[str, List[str]] = None,
+        overview_uris: List[str] = None,
     ) -> int:
         """Vectorize written and edited memory files.
 
@@ -1303,6 +1346,7 @@ class MemoryUpdater:
             extract_context: Extract context for embedding template rendering
             uri_memory_type_map: Mapping from URI to memory_type
             search_tags_by_uri: Transient search tags to attach while indexing each URI
+            overview_uris: Overview (.overview.md) URIs to enqueue as L1 directory records
         """
         if not self._vikingdb:
             logger.debug("VikingDB not available, skipping vectorization")
@@ -1310,6 +1354,7 @@ class MemoryUpdater:
 
         uri_memory_type_map = uri_memory_type_map or {}
         search_tags_by_uri = search_tags_by_uri or {}
+        overview_uris = overview_uris or []
         viking_fs = self._get_viking_fs()
         request_wait_tracker = get_request_wait_tracker()
         attempted_count = 0
@@ -1325,8 +1370,10 @@ class MemoryUpdater:
                 uris_to_vectorize.append(uri)
 
         if not uris_to_vectorize:
-            logger.debug("No memory files to vectorize")
-            return 0
+            # Still process overview URIs if any were passed in
+            if not overview_uris:
+                logger.debug("No memory files to vectorize")
+                return 0
 
         for uri in uris_to_vectorize:
             try:
@@ -1421,6 +1468,38 @@ class MemoryUpdater:
 
             except Exception as e:
                 tracer.error(f"Failed to vectorize memory {uri}: {e}")
+
+        # Vectorize directory .overview.md files as L1 directory records.
+        # Uses vectorize_directory_meta with include_abstract=False so we only
+        # produce a single OVERVIEW-level record per directory (matching the
+        # .overview.md lifecycle). The shared helper preserves owner/timestamp
+        # and telemetry semantics from the indexing path.
+        for overview_uri in overview_uris:
+            try:
+                overview_text = await viking_fs.read_file(overview_uri, ctx=ctx) or ""
+                if isinstance(overview_text, bytes):
+                    overview_text = overview_text.decode("utf-8", errors="ignore")
+                if not overview_text.strip():
+                    continue
+
+                from openviking.utils.embedding_utils import vectorize_directory_meta
+
+                directory_uri = overview_uri[: -len("/.overview.md")]
+                await vectorize_directory_meta(
+                    uri=directory_uri,
+                    abstract="",
+                    overview=overview_text,
+                    context_type="memory",
+                    ctx=ctx,
+                    include_overview=True,
+                    include_abstract=False,
+                )
+                attempted_count += 1
+                logger.debug("Enqueued directory overview for vectorization: %s", directory_uri)
+
+            except Exception as e:
+                tracer.error("Failed to vectorize directory overview %s: %s", overview_uri, e)
+
         return attempted_count
 
     @staticmethod
@@ -1438,7 +1517,7 @@ class MemoryUpdater:
         ctx: RequestContext,
         extract_context: Any = None,
         lease_ref: Any = None,
-    ) -> None:
+    ) -> Optional[str]:
         """
         Generate .overview.md file for a directory based on overview_template.
 
@@ -1562,5 +1641,7 @@ class MemoryUpdater:
                 ctx=ctx,
                 lease_ref=lease_ref,
             )
+            return overview_path
         except Exception as e:
             tracer.error(f"Failed to write overview {overview_path}: {e}")
+            return None

@@ -222,7 +222,7 @@ class MemoryTypeRegistry:
         self,
         ctx: Any,
         allowed_memory_types: Optional[set[str]] = None,
-    ) -> None:
+    ) -> list[str]:
         """
         Initialize memory files with init_value for fields that have it.
 
@@ -244,6 +244,7 @@ class MemoryTypeRegistry:
             f"[MemoryTypeRegistry] Starting memory files initialization for user={user_space}"
         )
 
+        created_uris: list[str] = []
         viking_fs = get_viking_fs()
 
         for schema in self.list_all(include_disabled=False):
@@ -305,8 +306,11 @@ class MemoryTypeRegistry:
             try:
                 await viking_fs.write_file(file_uri, full_content, ctx=ctx)
                 logger.info(f"[MemoryTypeRegistry] Initialized memory file: {file_uri}")
+                created_uris.append(file_uri)
             except Exception:
                 pass
+
+        return created_uris
 
 
 def create_default_registry() -> MemoryTypeRegistry:
