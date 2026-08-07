@@ -88,14 +88,14 @@ class EmbeddingMsgConverter:
         context_data["level"] = int(resolved_level)
 
         # Store full content in content field for bm25 full-text search.
-        # If a producer supplies a full_text_ref_uri, keep only a small fallback in
-        # the queue and let the embedding worker materialize full content at upsert.
+        # If a producer supplies a full_text_ref_uri, keep queue content empty and
+        # let the embedding worker load original content at upsert.
         full_content = context.vectorize.full_text or vectorization_text
         content_ref_uri = getattr(context.vectorize, "full_text_ref_uri", "") or ""
         if not _current_backend_uses_content_field():
             context_data["content"] = ""
         elif content_ref_uri:
-            context_data["content"] = full_content or ""
+            context_data["content"] = ""
             context_data[_CONTENT_REF_URI_KEY] = content_ref_uri
             context_data[_CONTENT_REF_KIND_KEY] = _CONTENT_REF_KIND_VIKING_FILE
         else:

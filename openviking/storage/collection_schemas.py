@@ -553,7 +553,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
         if ref_kind != _CONTENT_REF_KIND_VIKING_FILE or not ref_uri:
             return
 
-        fallback = inserted_data.get("content") or inserted_data.get("abstract") or ""
+        fallback = inserted_data.get("abstract") or ""
         try:
             from openviking.storage.viking_fs import get_viking_fs
 
@@ -563,7 +563,8 @@ class TextEmbeddingHandler(DequeueHandlerBase):
             inserted_data["content"] = str(content or fallback)
         except Exception as exc:
             logger.warning(
-                "Failed to load full content for vector upsert from %s: %s",
+                "Failed to read original file content for vector upsert "
+                "from %s; writing abstract to the content field for this record instead: %s",
                 ref_uri,
                 exc,
             )

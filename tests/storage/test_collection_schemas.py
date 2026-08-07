@@ -469,7 +469,7 @@ async def test_embedding_handler_materializes_deferred_content_ref(monkeypatch):
 
     handler = TextEmbeddingHandler(_DummyVikingDB())
     inserted_data = {
-        "content": "summary fallback",
+        "content": "",
         "abstract": "abstract fallback",
         "_content_ref_uri": "viking://resources/large.txt",
         "_content_ref_kind": "viking_file",
@@ -498,10 +498,15 @@ async def test_embedding_handler_materialize_content_ref_falls_back(monkeypatch)
         lambda: _DummyConfig(embedder),
     )
     monkeypatch.setattr("openviking.storage.viking_fs.get_viking_fs", lambda: _BrokenFS())
+    warnings = []
+    monkeypatch.setattr(
+        "openviking.storage.collection_schemas.logger.warning",
+        lambda message, *args: warnings.append((message, args)),
+    )
 
     handler = TextEmbeddingHandler(_DummyVikingDB())
     inserted_data = {
-        "content": "summary fallback",
+        "content": "stale queued content should not be used",
         "abstract": "abstract fallback",
         "_content_ref_uri": "viking://resources/missing.txt",
         "_content_ref_kind": "viking_file",
@@ -510,9 +515,13 @@ async def test_embedding_handler_materialize_content_ref_falls_back(monkeypatch)
 
     await handler._materialize_content_for_upsert(inserted_data, ctx=ctx)
 
-    assert inserted_data["content"] == "summary fallback"
+    assert inserted_data["content"] == "abstract fallback"
     assert "_content_ref_uri" not in inserted_data
     assert "_content_ref_kind" not in inserted_data
+    assert warnings
+    assert "Failed to read original file content" in warnings[0][0]
+    assert "writing abstract to the content field for this record instead" in warnings[0][0]
+    assert warnings[0][1][0] == "viking://resources/missing.txt"
 
 
 @pytest.mark.asyncio

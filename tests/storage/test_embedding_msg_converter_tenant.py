@@ -90,6 +90,6 @@ def test_embedding_msg_converter_uses_ref_when_backend_needs_content(monkeypatch
 
     assert msg is not None
     assert msg.message == "short embedding text"
-    assert msg.context_data["content"] == "short embedding text"
+    assert msg.context_data["content"] == ""
     assert msg.context_data["_content_ref_uri"] == "viking://resources/large.txt"
     assert msg.context_data["_content_ref_kind"] == "viking_file"
