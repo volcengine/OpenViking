@@ -551,14 +551,16 @@ export class OpenVikingClient {
 
   /** Create a session. */
   createSession(options: CreateSessionOptions = {}): Promise<JsonObject> {
+    const body = compact({
+      session_id: options.sessionId,
+      memory_policy: options.memoryPolicy,
+      memory_extraction_config: options.memoryExtractionConfig,
+      telemetry: options.telemetry,
+    });
+    if ("autoCommitPolicy" in options)
+      body.auto_commit_policy = options.autoCommitPolicy ?? null;
     return this.request("POST", "/api/v1/sessions", {
-      body: compact({
-        session_id: options.sessionId,
-        memory_policy: options.memoryPolicy,
-        auto_commit_policy: options.autoCommitPolicy,
-        memory_extraction_config: options.memoryExtractionConfig,
-        telemetry: options.telemetry,
-      }),
+      body,
     });
   }
   /** List sessions visible to the caller. */

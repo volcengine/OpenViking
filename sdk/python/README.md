@@ -184,6 +184,8 @@ result = client.create_session(
     "demo-session",
     memory_extraction_config=event_config,
 )
+# Explicit None disables a server-wide auto-commit default at creation time.
+client.create_session("manual-session", auto_commit_policy=None)
 client.update_session_config(
     "demo-session",
     auto_commit_policy={"message_count_threshold": 25},

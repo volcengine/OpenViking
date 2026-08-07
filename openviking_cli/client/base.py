@@ -339,7 +339,7 @@ class BaseClient(ABC):
         session_id: Optional[str] = None,
         telemetry: TelemetryRequest = False,
         memory_policy: Optional[Dict[str, Any]] = None,
-        auto_commit_policy: Optional[Dict[str, Any]] = None,
+        auto_commit_policy: Any = SESSION_CONFIG_UNSET,
         memory_extraction_config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create a new session.

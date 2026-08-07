@@ -212,6 +212,7 @@ class SessionService:
         session_id: Optional[str] = None,
         memory_policy: Optional[Dict[str, Any]] = None,
         auto_commit_policy: Optional[Dict[str, Any]] = None,
+        update_auto_commit_policy: bool = False,
         event_tags: Optional[List[str]] = None,
     ) -> Session:
         """Create a session and persist its root path.
@@ -245,7 +246,9 @@ class SessionService:
                 session.meta.memory_policy = policy.to_dict()
             # Auto-commit is enabled when the caller supplies a policy, or when
             # the server default turns it on. Absent both, it stays disabled.
-            if auto_commit_policy is not None or self._session_auto_commit_config.default_enabled:
+            if update_auto_commit_policy and auto_commit_policy is None:
+                session.meta.auto_commit_policy = None
+            elif auto_commit_policy is not None or self._session_auto_commit_config.default_enabled:
                 session.meta.auto_commit_policy = AutoCommitPolicy.from_dict(
                     auto_commit_policy
                 ).to_dict()

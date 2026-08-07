@@ -106,6 +106,10 @@ session, err := client.CreateSession(ctx, &openviking.CreateSessionOptions{
 		},
 	},
 })
+_, err = client.CreateSession(ctx, &openviking.CreateSessionOptions{
+	SessionID:         "manual-session",
+	DisableAutoCommit: true,
+})
 _, err = client.UpdateSessionConfig(ctx, "demo-session", &openviking.UpdateSessionConfigOptions{
 	AutoCommitPolicy: openviking.Map(map[string]any{"message_count_threshold": 25}),
 	MemoryExtractionConfig: map[string]any{

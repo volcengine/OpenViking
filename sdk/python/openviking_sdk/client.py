@@ -1336,7 +1336,7 @@ class AsyncHTTPClient:
         session_id: Optional[str] = None,
         telemetry: Any = False,
         memory_policy: Optional[Dict[str, Any]] = None,
-        auto_commit_policy: Optional[Dict[str, Any]] = None,
+        auto_commit_policy: Any = _SESSION_CONFIG_UNSET,
         memory_extraction_config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         json_body: Dict[str, Any] = {}
@@ -1344,7 +1344,7 @@ class AsyncHTTPClient:
             json_body["session_id"] = session_id
         if memory_policy is not None:
             json_body["memory_policy"] = memory_policy
-        if auto_commit_policy is not None:
+        if auto_commit_policy is not _SESSION_CONFIG_UNSET:
             json_body["auto_commit_policy"] = auto_commit_policy
         if memory_extraction_config is not None:
             json_body["memory_extraction_config"] = memory_extraction_config
@@ -2359,18 +2359,18 @@ class SyncHTTPClient:
         session_id: Optional[str] = None,
         telemetry: Any = False,
         memory_policy: Optional[Dict[str, Any]] = None,
-        auto_commit_policy: Optional[Dict[str, Any]] = None,
+        auto_commit_policy: Any = _SESSION_CONFIG_UNSET,
         memory_extraction_config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        return run_async(
-            self._async_client.create_session(
-                session_id=session_id,
-                telemetry=telemetry,
-                memory_policy=memory_policy,
-                auto_commit_policy=auto_commit_policy,
-                memory_extraction_config=memory_extraction_config,
-            )
-        )
+        kwargs: Dict[str, Any] = {
+            "session_id": session_id,
+            "telemetry": telemetry,
+            "memory_policy": memory_policy,
+            "memory_extraction_config": memory_extraction_config,
+        }
+        if auto_commit_policy is not _SESSION_CONFIG_UNSET:
+            kwargs["auto_commit_policy"] = auto_commit_policy
+        return run_async(self._async_client.create_session(**kwargs))
 
     def list_sessions(self) -> List[Any]:
         return run_async(self._async_client.list_sessions())

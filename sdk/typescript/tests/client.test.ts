@@ -335,6 +335,11 @@ describe("OpenVikingClient", () => {
     expect(JSON.parse(String(fetcher.mock.calls[3]![1]?.body))).toEqual({
       auto_commit_policy: null,
     });
+
+    await client.createSession({ autoCommitPolicy: null });
+    expect(JSON.parse(String(fetcher.mock.calls[4]![1]?.body))).toEqual({
+      auto_commit_policy: null,
+    });
   });
 
   it("maps typed watch options to the server contract", async () => {

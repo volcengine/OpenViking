@@ -43,6 +43,7 @@ await client.createSession({
     events: { tags: ["team=search", "channel=web"] },
   },
 });
+await client.createSession({ sessionId: "manual", autoCommitPolicy: null });
 await client.updateSessionConfig("s1", {
   autoCommitPolicy: { message_count_threshold: 25 },
   memoryExtractionConfig: {

@@ -57,7 +57,7 @@ class SyncOpenViking:
         session_id: Optional[str] = None,
         telemetry: TelemetryRequest = False,
         memory_policy: Optional[Dict[str, Any]] = None,
-        auto_commit_policy: Optional[Dict[str, Any]] = None,
+        auto_commit_policy: Any = SESSION_CONFIG_UNSET,
         memory_extraction_config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create a new session.
@@ -69,15 +69,14 @@ class SyncOpenViking:
             auto_commit_policy: Optional automatic-commit policy overrides.
             memory_extraction_config: Optional memory extraction settings.
         """
-        return run_async(
-            self._async_client.create_session(
-                session_id,
-                telemetry=telemetry,
-                memory_policy=memory_policy,
-                auto_commit_policy=auto_commit_policy,
-                memory_extraction_config=memory_extraction_config,
-            )
-        )
+        kwargs: Dict[str, Any] = {
+            "telemetry": telemetry,
+            "memory_policy": memory_policy,
+            "memory_extraction_config": memory_extraction_config,
+        }
+        if auto_commit_policy is not SESSION_CONFIG_UNSET:
+            kwargs["auto_commit_policy"] = auto_commit_policy
+        return run_async(self._async_client.create_session(session_id, **kwargs))
 
     def list_sessions(self) -> List[Any]:
         """List all sessions."""

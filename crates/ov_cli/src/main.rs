@@ -1360,9 +1360,16 @@ enum SessionCommands {
         /// Default event-memory tags as comma-separated key=value pairs
         #[arg(long = "event-tags", value_name = "key=value", value_delimiter = ',')]
         event_tags: Vec<String>,
-        /// Raw session config JSON; event tags are merged into memory_extraction_config
-        #[arg(long = "config-json", value_name = "json")]
-        config_json: Option<String>,
+        /// Auto-commit policy as a JSON object
+        #[arg(
+            long = "auto-commit-policy-json",
+            value_name = "json",
+            conflicts_with = "no_auto_commit"
+        )]
+        auto_commit_policy_json: Option<String>,
+        /// Disable automatic commits for this session
+        #[arg(long = "no-auto-commit", conflicts_with = "auto_commit_policy_json")]
+        no_auto_commit: bool,
     },
     /// List sessions
     List,
@@ -3807,13 +3814,45 @@ mod tests {
                     SessionCommands::New {
                         session_id,
                         event_tags,
-                        config_json,
+                        auto_commit_policy_json,
+                        ..
                     },
             } => {
                 assert_eq!(session_id.as_deref(), Some("s1"));
                 assert_eq!(event_tags, vec!["team=search", "channel=web"]);
-                assert!(config_json.is_none());
+                assert!(auto_commit_policy_json.is_none());
             }
+            _ => panic!("expected session new"),
+        }
+        let create_with_policy = Cli::try_parse_from([
+            "ov",
+            "session",
+            "new",
+            "--auto-commit-policy-json",
+            r#"{"message_count_threshold":25}"#,
+        ])
+        .expect("session new auto-commit policy should parse");
+        match create_with_policy.command {
+            Commands::Session {
+                action:
+                    SessionCommands::New {
+                        auto_commit_policy_json,
+                        ..
+                    },
+            } => assert_eq!(
+                auto_commit_policy_json.as_deref(),
+                Some(r#"{"message_count_threshold":25}"#)
+            ),
+            _ => panic!("expected session new"),
+        }
+        assert!(Cli::try_parse_from(["ov", "session", "new", "--config-json", "{}"]).is_err());
+        let create_without_auto_commit =
+            Cli::try_parse_from(["ov", "session", "new", "--no-auto-commit"])
+                .expect("session new no-auto-commit should parse");
+        match create_without_auto_commit.command {
+            Commands::Session {
+                action: SessionCommands::New { no_auto_commit, .. },
+            } => assert!(no_auto_commit),
             _ => panic!("expected session new"),
         }
 

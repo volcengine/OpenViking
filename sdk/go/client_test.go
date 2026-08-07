@@ -1418,3 +1418,22 @@ func TestUpdateSessionConfigCanDisableAutoCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestCreateSessionCanDisableAutoCommit(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		value, ok := body["auto_commit_policy"]
+		if !ok || value != nil {
+			t.Fatalf("auto_commit_policy = %#v, present = %v", value, ok)
+		}
+		writeOK(t, w, map[string]any{"auto_commit_policy": nil})
+	}))
+	defer closeServer()
+
+	if _, err := client.CreateSession(
+		context.Background(),
+		&CreateSessionOptions{DisableAutoCommit: true},
+	); err != nil {
+		t.Fatal(err)
+	}
+}

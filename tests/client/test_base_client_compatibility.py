@@ -1,7 +1,10 @@
 import inspect
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
+from openviking.client.local import LocalClient
 from openviking_cli.client.base import BaseClient
 
 
@@ -39,3 +42,36 @@ async def test_base_client_update_session_config_is_optional_for_legacy_subclass
             "s1",
             memory_extraction_config={"events": {"tags": []}},
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method_name", ["create_session", "update_session_config"])
+async def test_local_client_accepts_null_events_config(method_name):
+    client = LocalClient.__new__(LocalClient)
+    client._ctx = object()
+    session = SimpleNamespace(
+        session_id="s1",
+        uri="viking://session/s1",
+        user=SimpleNamespace(to_dict=lambda: {}),
+        meta=SimpleNamespace(auto_commit_policy=None, event_search_tags=None),
+    )
+    sessions = SimpleNamespace(
+        create=AsyncMock(return_value=session),
+        update_config=AsyncMock(return_value=session),
+        effective_auto_commit_policy=lambda _session: None,
+        effective_memory_extraction_config=lambda _session: {"events": {"tags": []}},
+    )
+    client._service = SimpleNamespace(
+        sessions=sessions,
+        initialize_user_directories=AsyncMock(),
+    )
+
+    await getattr(client, method_name)(
+        "s1",
+        memory_extraction_config={"events": None},
+    )
+
+    if method_name == "create_session":
+        assert sessions.create.await_args.kwargs["event_tags"] is None
+    else:
+        assert sessions.update_config.await_args.kwargs["event_tags"] is None

@@ -11,11 +11,17 @@ pub async fn new_session(
     client: &HttpClient,
     session_id: Option<&str>,
     event_tags: &[String],
-    config_json: Option<&str>,
+    auto_commit_policy_json: Option<&str>,
+    no_auto_commit: bool,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let body = create_session_body(session_id, event_tags, config_json)?;
+    let body = create_session_body(
+        session_id,
+        event_tags,
+        auto_commit_policy_json,
+        no_auto_commit,
+    )?;
     let response: serde_json::Value = client.post("/api/v1/sessions", &body).await?;
     output_success(&response, output_format, compact);
     Ok(())
@@ -24,37 +30,29 @@ pub async fn new_session(
 fn create_session_body(
     session_id: Option<&str>,
     event_tags: &[String],
-    config_json: Option<&str>,
+    auto_commit_policy_json: Option<&str>,
+    no_auto_commit: bool,
 ) -> Result<Value> {
-    let mut body = match config_json {
-        Some(raw) => serde_json::from_str::<Value>(raw)
-            .map_err(|error| Error::Client(format!("invalid --config-json: {error}")))?,
-        None => json!({}),
-    };
+    let mut body = json!({});
     let object = body
         .as_object_mut()
-        .ok_or_else(|| Error::Client("--config-json must be a JSON object".to_string()))?;
+        .expect("session create request body must be an object");
     if let Some(session_id) = session_id {
         object.insert("session_id".to_string(), json!(session_id));
     }
     if !event_tags.is_empty() {
-        let extraction_config = object
-            .entry("memory_extraction_config")
-            .or_insert_with(|| json!({}));
-        let extraction_object = extraction_config.as_object_mut().ok_or_else(|| {
-            Error::Client(
-                "--config-json memory_extraction_config must be a JSON object".to_string(),
-            )
-        })?;
-        let events = extraction_object
-            .entry("events")
-            .or_insert_with(|| json!({}));
-        let events_object = events.as_object_mut().ok_or_else(|| {
-            Error::Client(
-                "--config-json memory_extraction_config.events must be a JSON object".to_string(),
-            )
-        })?;
-        events_object.insert("tags".to_string(), json!(event_tags));
+        object.insert(
+            "memory_extraction_config".to_string(),
+            json!({"events": {"tags": event_tags}}),
+        );
+    }
+    if no_auto_commit {
+        object.insert("auto_commit_policy".to_string(), Value::Null);
+    } else if let Some(raw) = auto_commit_policy_json {
+        object.insert(
+            "auto_commit_policy".to_string(),
+            parse_auto_commit_policy(raw)?,
+        );
     }
     Ok(body)
 }
@@ -450,16 +448,23 @@ fn session_config_body(
     if no_auto_commit {
         object.insert("auto_commit_policy".to_string(), Value::Null);
     } else if let Some(raw) = auto_commit_policy_json {
-        let policy = serde_json::from_str::<Value>(raw)
-            .map_err(|error| Error::Client(format!("invalid auto-commit policy JSON: {error}")))?;
-        if !policy.is_object() {
-            return Err(Error::Client(
-                "--auto-commit-policy-json must be a JSON object".to_string(),
-            ));
-        }
-        object.insert("auto_commit_policy".to_string(), policy);
+        object.insert(
+            "auto_commit_policy".to_string(),
+            parse_auto_commit_policy(raw)?,
+        );
     }
     Ok(body)
+}
+
+fn parse_auto_commit_policy(raw: &str) -> Result<Value> {
+    let policy = serde_json::from_str::<Value>(raw)
+        .map_err(|error| Error::Client(format!("invalid auto-commit policy JSON: {error}")))?;
+    if !policy.is_object() {
+        return Err(Error::Client(
+            "--auto-commit-policy-json must be a JSON object".to_string(),
+        ));
+    }
+    Ok(policy)
 }
 
 fn event_tags_body(event_tags: Option<&[String]>) -> Value {
@@ -559,7 +564,8 @@ mod tests {
         let create = create_session_body(
             Some("s1"),
             &["team=search".to_string()],
-            Some(r#"{"memory_policy":{"memory_types":["events"]}}"#),
+            Some(r#"{"message_count_threshold":25}"#),
+            false,
         )
         .expect("create body");
         assert_eq!(create["session_id"], "s1");
@@ -567,7 +573,14 @@ mod tests {
             create["memory_extraction_config"]["events"]["tags"],
             json!(["team=search"])
         );
-        assert_eq!(create["memory_policy"]["memory_types"], json!(["events"]));
+        assert_eq!(
+            create["auto_commit_policy"]["message_count_threshold"],
+            json!(25)
+        );
+        assert_eq!(
+            create_session_body(None, &[], None, true).expect("disabled create body"),
+            json!({"auto_commit_policy": null})
+        );
 
         assert_eq!(event_tags_body(None), json!({}));
         assert_eq!(

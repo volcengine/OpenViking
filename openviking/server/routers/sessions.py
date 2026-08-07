@@ -89,6 +89,16 @@ class AutoCommitPolicyRequest(BaseModel):
 
     model_config = {"extra": "forbid"}
 
+    @model_validator(mode="after")
+    def reject_explicit_null_fields(self) -> "AutoCommitPolicyRequest":
+        null_fields = [field for field in self.model_fields_set if getattr(self, field) is None]
+        if null_fields:
+            raise ValueError(
+                "auto_commit_policy fields must be integers; use "
+                "auto_commit_policy=null to disable automatic commits"
+            )
+        return self
+
 
 class EventExtractionConfigRequest(BaseModel):
     """Default event-memory extraction settings for a session."""
@@ -203,7 +213,6 @@ def _commit_event_tags(
     return metadata.event.tags
 
 
-
 def _resolve_message_parts(msg_request: AddMessageRequest) -> List[Part]:
     """Resolve parts from an AddMessageRequest, handling path variables."""
     if msg_request.parts is not None:
@@ -275,6 +284,7 @@ async def create_session(
     """
     service = get_service()
 
+    update_auto_commit_policy = "auto_commit_policy" in request.model_fields_set
     auto_commit_policy_payload: Optional[Dict[str, Any]] = None
     if request.auto_commit_policy is not None:
         auto_commit_policy_payload = request.auto_commit_policy.model_dump(exclude_none=True)
@@ -288,6 +298,7 @@ async def create_session(
             request.session_id,
             memory_policy=request.memory_policy,
             auto_commit_policy=auto_commit_policy_payload,
+            update_auto_commit_policy=update_auto_commit_policy,
             event_tags=event_tags,
         )
         return {

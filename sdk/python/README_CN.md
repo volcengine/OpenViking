@@ -181,6 +181,8 @@ result = client.create_session(
     "demo-session",
     memory_extraction_config=event_config,
 )
+# 创建时显式传 None，可覆盖服务端默认并禁用自动提交。
+client.create_session("manual-session", auto_commit_policy=None)
 client.update_session_config(
     "demo-session",
     auto_commit_policy={"message_count_threshold": 25},

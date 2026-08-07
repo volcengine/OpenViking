@@ -844,7 +844,7 @@ class LocalClient(BaseClient):
         session_id: Optional[str] = None,
         telemetry: TelemetryRequest = False,
         memory_policy: Optional[Dict[str, Any]] = None,
-        auto_commit_policy: Optional[Dict[str, Any]] = None,
+        auto_commit_policy: Any = SESSION_CONFIG_UNSET,
         memory_extraction_config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create a new session.
@@ -856,18 +856,19 @@ class LocalClient(BaseClient):
             auto_commit_policy: Optional automatic-commit policy overrides.
             memory_extraction_config: Optional memory extraction settings.
         """
-        event_tags = (
-            memory_extraction_config.get("events", {}).get("tags")
-            if memory_extraction_config is not None
-            else None
+        events_config = (
+            memory_extraction_config.get("events") if memory_extraction_config is not None else None
         )
+        event_tags = events_config.get("tags") if events_config is not None else None
+        update_auto_commit_policy = auto_commit_policy is not SESSION_CONFIG_UNSET
         execution = await run_with_telemetry(
             operation="session.create",
             telemetry=telemetry,
             fn=lambda: self._create_session_impl(
                 session_id,
                 memory_policy,
-                auto_commit_policy,
+                auto_commit_policy if update_auto_commit_policy else None,
+                update_auto_commit_policy,
                 event_tags,
             ),
         )
@@ -881,6 +882,7 @@ class LocalClient(BaseClient):
         session_id: Optional[str],
         memory_policy: Optional[Dict[str, Any]],
         auto_commit_policy: Optional[Dict[str, Any]] = None,
+        update_auto_commit_policy: bool = False,
         event_tags: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         await self._service.initialize_user_directories(self._ctx)
@@ -889,6 +891,7 @@ class LocalClient(BaseClient):
             session_id,
             memory_policy=memory_policy,
             auto_commit_policy=auto_commit_policy,
+            update_auto_commit_policy=update_auto_commit_policy,
             event_tags=event_tags,
         )
         return {
@@ -927,11 +930,10 @@ class LocalClient(BaseClient):
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Update mutable session memory extraction settings."""
-        event_tags = (
-            memory_extraction_config.get("events", {}).get("tags")
-            if memory_extraction_config is not None
-            else None
+        events_config = (
+            memory_extraction_config.get("events") if memory_extraction_config is not None else None
         )
+        event_tags = events_config.get("tags") if events_config is not None else None
         update_auto_commit_policy = auto_commit_policy is not SESSION_CONFIG_UNSET
 
         async def _update() -> Dict[str, Any]:
@@ -939,9 +941,7 @@ class LocalClient(BaseClient):
                 session_id,
                 self._ctx,
                 event_tags=event_tags,
-                auto_commit_policy=(
-                    auto_commit_policy if update_auto_commit_policy else None
-                ),
+                auto_commit_policy=(auto_commit_policy if update_auto_commit_policy else None),
                 update_auto_commit_policy=update_auto_commit_policy,
             )
             return {
