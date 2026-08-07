@@ -80,6 +80,7 @@ button { font: inherit; color: inherit; }
 .b-small { font-size: 0.85em; color: var(--th-mute); }
 
 .b-strong { font-weight: 500; }
+.agent-colleague-keyline { font-weight: 700; }
 .b-em { font-style: normal; color: var(--th-accent); }
 .b-mark {
   color: var(--th-mark-color, var(--th-ink));
@@ -570,6 +571,11 @@ html[lang="zh"] body {
   letter-spacing: 0.02em;
   line-break: loose;
   word-break: normal;
+}
+
+html[lang="zh"] .agent-colleague-article :is(.b-strong, .agent-colleague-keyline) {
+  font-weight: 700;
+  font-synthesis: weight;
 }
 
 html[lang="zh"] .b-lead,

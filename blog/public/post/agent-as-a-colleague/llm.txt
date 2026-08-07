@@ -1,0 +1,113 @@
+# From Assistant to Colleague: Building Multi-User Agents with OpenViking's Peer Mode
+
+We put an AI agent into a 20-person project channel. The first thing it had to learn wasn't how to answer. It was when to stay quiet.
+
+We learned this the hard way. It was a standard Tuesday morning. Maya said the demo got pushed to Friday, Chris flagged a release blocker, and Alex said he was in a client meeting. Not a single message was directed at the agent. Twenty minutes later, someone asked the channel: "What changed this morning?"
+
+The agent received every single message, but it completely blanked. It was in the group, sure, but it was watching the play from behind soundproof glass. The messages hit the logs, but they didn't translate into usable context.
+
+During the post-mortem, we had to admit a hard truth: "reading" a message and "catching" the context are two entirely different things. An agent living in a team channel can't just wake up when someone @-mentions it. Nor can it eagerly reply to every stray thought. It needs to know when to listen, what's worth remembering, and—crucially—who exactly a memory belongs to.
+
+## Group Chats Aren't Just Giant DMs
+
+We started with the classic assistant model: one user, one agent, one giant memory bucket. Chat history, preferences, half-finished tasks—we dumped it all in.
+
+The second we put it in a group chat, this model broke. The exact same sentence can have entirely different ownership:
+
+| What was said in chat | Who it actually belongs to |
+|-|-|
+| "Pause this feature until Risk confirms the schedule." | A team-wide decision. |
+| "Just give me the conclusion, owner, and deadline." | A specific person's communication preference. |
+| "Check the deployment diff before shipping—that saved us last time." | The agent's own learned execution experience. |
+
+If you smash all of this into a single bucket, one person's quirk becomes a team rule. A temporary call becomes a permanent fact. The real danger isn't that the agent doesn't know the answer—it's that it answers with absolute confidence, but gets the subject completely wrong.
+
+OpenViking's User/Peer Mode gave us a much better starting point. The resident agent operates in a `user space`, while everyone in the chat maps to an independent `peer` tied to their stable platform identity. Human facts, preferences, and events get written to the corresponding peer. The agent itself is treated as a first-class citizen—it gets its own dedicated memory space to store its identity and learned execution experience. Docs, runbooks, and project materials remain shared resources.
+
+We didn't do this to silo memories away from each other. Our rule is actually the opposite: **Write narrow, read wide.** When writing, pin it to the right owner. When recalling, the agent can scour authorized team memories and resources for the answer—but the results must carry enough provenance. It needs to know if this is Chris's preference, a risk Maya flagged, or a confirmed team decision.
+
+Memories without ownership eventually devolve into "I heard this somewhere, but I don't know who said it." In a group chat, that's basically just confidently spreading gossip.
+
+## It Remembered the People, But Still Sounded Like Customer Support
+
+Once we sorted out memory ownership, a new problem immediately popped up. A teammate just wanted a quick status update. The agent replied with a three-paragraph consulting report.
+
+Here's how people actually talked in this channel:
+
+- "Stop calling it an edge case. Did we figure out why only new accounts are failing?"
+- "Did anyone actually test the rollback? Just mentioning it in the PR doesn't count."
+- "p50 doubled. Even if the error rate looks fine, dig into it."
+
+Short, direct, sometimes a little sharp. Dropping a watertight, overly polite essay into that mix makes the agent sound like an outsider who only reads Jira tickets and never attends standups.
+
+We ended up separating understanding others from maintaining the agent's own identity. Every peer gets a `profile.md` to track their background, communication quirks, and work habits. The agent gets its own `identity.md` to answer "Who am I?" and a `soul.md` for its values, boundaries, and working style. It can give Maya the conclusion and deadline first, and hand Chris the logs and failure chain first—without having to invent a new personality for every person it talks to.
+
+These files aren't magic prompts. They work because they decouple two things we usually conflate: **Relationships adapt. Personalities persist.**
+
+Next, we broke the agent's group chat behavior into three distinct actions:
+
+1. **Observe:** Ingest the conversation. Keep the speaker, channel, thread, and timestamp intact.
+2. **Remember:** Write durable human evidence to the right peer, keep the agent's own execution experience in its dedicated memory space, and leave team materials as shared resources.
+3. **Engage:** Decide if speaking up right now is actually helpful.
+
+The first two steps can happen constantly. The third step might never happen. Silence no longer means it wasn't paying attention.
+
+## Memory Actually Runs on Two Clocks
+
+A teammate says, "The client pushed the meeting to 4 PM." Thirty seconds later, someone else asks about it. The agent can't wait for a background memory extraction job to finish. It needs immediate access to recent, attributed chat context.
+
+But if someone asks next month, "Does this client always reschedule last minute?" replaying a massive chunk of raw chat logs is useless. What you need then is durable memory—patterns distilled from multiple conversations over time.
+
+So we kept two parallel, non-interchangeable tracks:
+
+- **The Now:** A bounded window of recent dialogue to maintain immediate continuity.
+- **The Later:** Sessions committed to OpenViking, which handle the extraction, organization, and retrieval of durable memory.
+
+The real-time window handles "what just happened." OpenViking handles "what's worth remembering later." Mashing them into a single mechanism sounds elegant, but in practice, it either drags down real-time chat with extraction latency, or degrades long-term memory into an infinitely scrolling chat replay.
+
+## Our First Attribution Leak
+
+These principles sounded a bit abstract—until we hit our first attribution leak.
+
+A teammate's personal preference got written to a shared location instead of their peer space. The agent could still search and find it, so on the surface, it didn't "forget." The real issue? It could no longer reliably tell us *whose* preference it was. The answer was fluent, but the ownership was busted.
+
+The root cause wasn't that OpenViking lacked peers. It was that the identity pipeline on the agent side was incomplete. The gateway knew the speaker's platform user ID, but that identity didn't reliably translate into a peer ID, nor did it thread through the entire execution cycle, memory hooks, and write requests.
+
+After we fixed it, the pipeline became dead simple:
+
+1. The gateway identifies the speaker using their stable platform ID.
+2. The runtime builds a structured identity context for the current turn.
+3. The same identity travels with every memory read and write.
+4. Human evidence gets written with a specific peer ID; the agent's own operational evidence stays in its dedicated memory space.
+5. Recall preserves the source, so the agent can actually explain *who* said *what*.
+
+Break this chain anywhere, and retrieval might still "look fine"—but the memory has quietly lost its owner.
+
+## Three Moments It Started Feeling Like a Colleague
+
+I eventually realized that progress didn't show up in the benchmarks first. It showed up in tiny, quiet moments.
+
+One time, the team was arguing over a release window. The agent didn't interrupt once. When someone finally asked, "What are we actually blocked on right now?" it didn't spit out a sanitized pros-and-cons list. It reconstructed the actual friction: Maya was worried about the rollback window, Chris refused to accept conclusions without load-testing data, and the owner hadn't confirmed the on-call rotation. More importantly, it nailed exactly *who* raised which concern.
+
+Another moment happened between a DM and a project channel. A coworker had mentioned in a DM: for urgent issues, just give me the conclusion and next steps—skip the background. Later, when production actually caught fire in the group chat, the agent led with the conclusion, owner, and deadline, then backfilled the evidence. It didn't broadcast the private DM to the group; it just used that relational memory to adjust its delivery. That kind of personalization doesn't feel like "I remember you prefer short replies." It feels like someone who actually knows how to work with you.
+
+The most obvious one was when it botched the weekly report. Date ranges, formatting, publishing steps—all wrong. A teammate corrected it line by line. The following week, it didn't just regurgitate an apology. It actually followed the right process.
+
+This was OpenViking's Agent Evolution capability at work. Once we flipped it on server-side, OpenViking started extracting `trajectory` and `experience` from agent sessions that involved tool calls and decision-making. Trajectories save reusable operational contracts; experiences save more abstract execution lessons. It doesn't guarantee every correction magically turns into a flawless rule, but it finally gives "what we did right this time" and "what to avoid next time" a better home than a raw chat log.
+
+Chat logs can store apologies. But only reusable trajectories and experiences can store actual, valuable lessons.
+
+## Wrapping Up
+
+Memory alone doesn't make a colleague. You need the right tools, sane permissions, low latency, and—crucially—the ability to fail quietly and step back.
+
+What OpenViking changed was continuity. It means an agent living in a multiplayer environment doesn't have to flatten everyone into one blurry "User." It doesn't have to treat every chat log as the exact same type of memory. Humans get their own peer spaces. The agent gets its own dedicated space for its identity, soul, and execution experience. Team materials stay shared. Recent context keeps it up to speed right now, and durable memory ensures it actually does better next time.
+
+We ended up with four dead-simple rules:
+
+1. Put the agent where the actual work happens.
+2. Let it listen first, then decide if it should speak.
+3. Remember *who* said what, not just *what* was said.
+4. Let it accumulate experience from its own work.
+
+Nail these, and when the agent finally speaks up, it won't sound like a script desperately parsing chat logs. It'll sound like a colleague who was in the room the whole time—and who will actually remember it tomorrow.
