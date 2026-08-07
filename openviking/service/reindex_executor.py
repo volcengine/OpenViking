@@ -1056,8 +1056,15 @@ class ReindexExecutor:
                 counters.warnings.append(f"No vector source found for {file_uri}")
                 continue
             abstract = self._prefer_non_empty(summary, vector_text)
-            # Read full file content for BM25 content field (not embedding-truncated)
-            full_text = await self._safe_read_text(file_uri, ctx=ctx) or vector_text
+            full_text_ref_uri = ""
+            full_text = ""
+            if summary and vector_text == summary:
+                full_text = summary
+                full_text_ref_uri = file_uri
+            else:
+                # Read full file content for BM25 content field when the embedding
+                # input itself may already depend on file content.
+                full_text = await self._safe_read_text(file_uri, ctx=ctx) or vector_text
             try:
                 await self._upsert_context(
                     uri=file_uri,
@@ -1065,6 +1072,7 @@ class ReindexExecutor:
                     abstract=abstract,
                     vector_text=vector_text,
                     full_text=full_text,
+                    full_text_ref_uri=full_text_ref_uri,
                     is_leaf=True,
                     context_type=context_type_for_uri(file_uri),
                     level=ContextLevel.DETAIL,
@@ -1601,7 +1609,6 @@ class ReindexExecutor:
         summary: str,
         ctx: RequestContext,
     ) -> str:
-        text_source = getattr(get_openviking_config().embedding, "text_source", "summary_first")
         existing = await self._fetch_existing_record(
             uri=uri,
             level=2,
@@ -1611,9 +1618,10 @@ class ReindexExecutor:
         content_type = get_resource_content_type(uri.rsplit("/", 1)[-1])
 
         if content_type == ResourceContentType.TEXT:
-            content = await self._safe_read_text(uri, ctx=ctx)
+            text_source = getattr(get_openviking_config().embedding, "text_source", "summary_first")
             if text_source in {"summary_first", "summary_only"} and summary:
                 return summary
+            content = await self._safe_read_text(uri, ctx=ctx)
             if content:
                 return self._truncate_embedding_text(content)
             if summary:
@@ -1632,6 +1640,7 @@ class ReindexExecutor:
         abstract: str,
         vector_text: str,
         full_text: str = "",
+        full_text_ref_uri: str = "",
         is_leaf: bool,
         context_type: str,
         level: ContextLevel,
@@ -1662,7 +1671,13 @@ class ReindexExecutor:
             owner_space=owner_space_for_uri(uri, owner_ctx),
             meta=merged_meta,
         )
-        context.set_vectorize(Vectorize(text=vector_text, full_text=full_text or vector_text))
+        context.set_vectorize(
+            Vectorize(
+                text=vector_text,
+                full_text=full_text or vector_text,
+                full_text_ref_uri=full_text_ref_uri,
+            )
+        )
         msg = EmbeddingMsgConverter.from_context(context)
         if msg is None:
             raise OpenVikingError(

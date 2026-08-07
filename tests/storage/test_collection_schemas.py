@@ -450,6 +450,92 @@ async def test_embedding_handler_propagates_account_id_on_success(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_embedding_handler_materializes_deferred_content_ref(monkeypatch):
+    class _DummyVikingDB:
+        is_closing = False
+
+    class _FakeFS:
+        async def read_file(self, uri, *, ctx):
+            assert uri == "viking://resources/large.txt"
+            assert ctx.account_id == "default"
+            return "full text from fs"
+
+    embedder = _DummyEmbedder()
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(embedder),
+    )
+    monkeypatch.setattr("openviking.storage.viking_fs.get_viking_fs", lambda: _FakeFS())
+
+    handler = TextEmbeddingHandler(_DummyVikingDB())
+    inserted_data = {
+        "content": "summary fallback",
+        "abstract": "abstract fallback",
+        "_content_ref_uri": "viking://resources/large.txt",
+        "_content_ref_kind": "viking_file",
+    }
+    ctx = RequestContext(user=UserIdentifier("default", "default"), role=Role.ROOT)
+
+    await handler._materialize_content_for_upsert(inserted_data, ctx=ctx)
+
+    assert inserted_data["content"] == "full text from fs"
+    assert "_content_ref_uri" not in inserted_data
+    assert "_content_ref_kind" not in inserted_data
+
+
+@pytest.mark.asyncio
+async def test_embedding_handler_materialize_content_ref_falls_back(monkeypatch):
+    class _DummyVikingDB:
+        is_closing = False
+
+    class _BrokenFS:
+        async def read_file(self, uri, *, ctx):
+            raise FileNotFoundError(uri)
+
+    embedder = _DummyEmbedder()
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(embedder),
+    )
+    monkeypatch.setattr("openviking.storage.viking_fs.get_viking_fs", lambda: _BrokenFS())
+
+    handler = TextEmbeddingHandler(_DummyVikingDB())
+    inserted_data = {
+        "content": "summary fallback",
+        "abstract": "abstract fallback",
+        "_content_ref_uri": "viking://resources/missing.txt",
+        "_content_ref_kind": "viking_file",
+    }
+    ctx = RequestContext(user=UserIdentifier("default", "default"), role=Role.ROOT)
+
+    await handler._materialize_content_for_upsert(inserted_data, ctx=ctx)
+
+    assert inserted_data["content"] == "summary fallback"
+    assert "_content_ref_uri" not in inserted_data
+    assert "_content_ref_kind" not in inserted_data
+
+
+@pytest.mark.asyncio
+async def test_embedding_handler_materialize_content_without_ref_keeps_inline(monkeypatch):
+    class _DummyVikingDB:
+        is_closing = False
+
+    embedder = _DummyEmbedder()
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(embedder),
+    )
+
+    handler = TextEmbeddingHandler(_DummyVikingDB())
+    inserted_data = {"content": "already inline", "abstract": "abstract fallback"}
+    ctx = RequestContext(user=UserIdentifier("default", "default"), role=Role.ROOT)
+
+    await handler._materialize_content_for_upsert(inserted_data, ctx=ctx)
+
+    assert inserted_data == {"content": "already inline", "abstract": "abstract fallback"}
+
+
+@pytest.mark.asyncio
 async def test_embedding_handler_propagates_account_id_on_error(monkeypatch):
     class _DummyVikingDB:
         is_closing = False

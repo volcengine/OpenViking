@@ -47,6 +47,9 @@ from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 
 logger = get_logger(__name__)
 EMBEDDING_META_MARKER = "\n\n[openviking.embedding]\n"
+_CONTENT_REF_URI_KEY = "_content_ref_uri"
+_CONTENT_REF_KIND_KEY = "_content_ref_kind"
+_CONTENT_REF_KIND_VIKING_FILE = "viking_file"
 
 _EMBEDDING_COMPATIBILITY_KEYS = ("provider", "model", "dimension", "model_identity")
 
@@ -538,6 +541,34 @@ class TextEmbeddingHandler(DequeueHandlerBase):
     ) -> str:
         return f"{message} ({cls._embedding_msg_log_context(embedding_msg)})"
 
+    async def _materialize_content_for_upsert(
+        self,
+        inserted_data: Dict[str, Any],
+        *,
+        ctx: RequestContext,
+    ) -> None:
+        """Load deferred full content just before vector DB upsert."""
+        ref_uri = inserted_data.pop(_CONTENT_REF_URI_KEY, "")
+        ref_kind = inserted_data.pop(_CONTENT_REF_KIND_KEY, "")
+        if ref_kind != _CONTENT_REF_KIND_VIKING_FILE or not ref_uri:
+            return
+
+        fallback = inserted_data.get("content") or inserted_data.get("abstract") or ""
+        try:
+            from openviking.storage.viking_fs import get_viking_fs
+
+            content = await get_viking_fs().read_file(ref_uri, ctx=ctx)
+            if isinstance(content, bytes):
+                content = content.decode("utf-8", errors="replace")
+            inserted_data["content"] = str(content or fallback)
+        except Exception as exc:
+            logger.warning(
+                "Failed to load full content for vector upsert from %s: %s",
+                ref_uri,
+                exc,
+            )
+            inserted_data["content"] = fallback
+
     async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """Process dequeued message and add embedding vector(s)."""
         if not data:
@@ -766,6 +797,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         user_id="default",
                     )
                     ctx = RequestContext(user=user, role=Role.ROOT)
+                    await self._materialize_content_for_upsert(inserted_data, ctx=ctx)
                     result = await self._vikingdb.upsert(
                         inserted_data,
                         ctx=ctx,

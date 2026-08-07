@@ -652,7 +652,7 @@ async def test_vectorize_unknown_unrecognizable_encoding_falls_back_to_summary(m
 
 
 @pytest.mark.asyncio
-async def test_vectorize_text_summary_first_reuses_single_file_read(monkeypatch):
+async def test_vectorize_text_summary_first_defers_full_content_read(monkeypatch):
     queue = DummyQueue()
     fs = DummyFS("# README\nraw text for bm25\n")
     monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
@@ -676,7 +676,42 @@ async def test_vectorize_text_summary_first_reuses_single_file_read(monkeypatch)
     msg = queue.items[0]
     assert msg.message == "summary for embedding"
     assert msg.context_data["content"] == ""
-    assert fs.read_file_calls == 1
+    assert fs.read_file_calls == 0
+    assert fs.read_file_bytes_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_vectorize_text_summary_first_sets_full_text_ref_uri(monkeypatch):
+    queue = DummyQueue()
+    fs = DummyFS("# README\nraw text for bm25\n")
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: fs)
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="summary_first", max_input_tokens=1000)
+        ),
+    )
+    monkeypatch.setattr(
+        embedding_utils.EmbeddingMsgConverter,
+        "from_context",
+        lambda context: context,
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/README.md",
+        summary_dict={"name": "README.md", "summary": "summary for embedding"},
+        parent_uri="viking://user/default/resources",
+        ctx=DummyReq(),
+    )
+
+    assert len(queue.items) == 1
+    context = queue.items[0]
+    assert context.get_vectorization_text() == "summary for embedding"
+    assert context.vectorize.full_text == "summary for embedding"
+    assert context.vectorize.full_text_ref_uri == "viking://user/default/resources/README.md"
+    assert fs.read_file_calls == 0
     assert fs.read_file_bytes_calls == 0
 
 
@@ -735,7 +770,7 @@ async def test_vectorize_svg_file_uses_summary_and_indexes_markup(monkeypatch):
     msg = queue.items[0]
     assert msg.message == "queue processing diagram"
     assert msg.context_data["content"] == ""
-    assert fs.read_file_calls == 1
+    assert fs.read_file_calls == 0
     assert fs.read_file_bytes_calls == 0
 
 
