@@ -192,7 +192,7 @@ Search and Find requests default to `limit: 10`; override the limit on each API 
 |---|---|---|---|
 | `workspace` | path | `"./data"` | OpenViking workspace |
 | `agfs.backend` | `local`, `memory`, `s3` | `local` | File and metadata backend |
-| `vectordb.backend` | `local`, `cuvs`, `http`, `volcengine`, `vikingdb`, `qdrant`, `opengauss` | `local` | Vector database backend |
+| `vectordb.backend` | `local`, `cuvs`, `http`, `volcengine`, `vikingdb` | `local` | Vector database backend |
 | `vectordb.dimension` | integer | follows Embedding | Vector collection dimension |
 | `skip_process_lock` | boolean | `false` | Skip the workspace process lock; use only when accepting concurrent-write risk |
 

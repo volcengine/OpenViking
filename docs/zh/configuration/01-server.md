@@ -192,7 +192,7 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 |---|---|---|---|
 | `workspace` | path | `"./data"` | OpenViking 工作目录 |
 | `agfs.backend` | `local`、`memory`、`s3` | `local` | 文件与元数据存储后端 |
-| `vectordb.backend` | `local`、`cuvs`、`http`、`volcengine`、`vikingdb`、`qdrant`、`opengauss` | `local` | 向量数据库后端 |
+| `vectordb.backend` | `local`、`cuvs`、`http`、`volcengine`、`vikingdb` | `local` | 向量数据库后端 |
 | `vectordb.dimension` | integer | 跟随 Embedding | 向量集合维度 |
 | `skip_process_lock` | boolean | `false` | 是否跳过 workspace 进程锁；仅在明确接受并发写风险时启用 |
 
