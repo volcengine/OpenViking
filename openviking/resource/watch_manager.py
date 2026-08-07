@@ -37,7 +37,11 @@ def _as_utc_aware(value: Optional[datetime]) -> Optional[datetime]:
     if value is None:
         return None
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
+        # `datetime.now()` and older serialization wrote naive wall-clock
+        # times in the host's local timezone. `astimezone(utc)` on a naive
+        # datetime first assumes local time, which preserves the original
+        # instant that the producer recorded.
+        return value.astimezone(timezone.utc)
     return value.astimezone(timezone.utc)
 
 

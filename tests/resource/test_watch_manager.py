@@ -168,12 +168,18 @@ class TestWatchTask:
         assert task.last_execution_time == now
 
     def test_from_dict_normalizes_naive_and_offset_timestamps_to_utc(self):
-        """Legacy naive and offset-aware timestamps should load as UTC-aware."""
-        naive = datetime(2026, 7, 9, 4, 14, 37)
+        """Legacy naive and offset-aware timestamps should load as UTC-aware.
+
+        Naive wall-clock times must be interpreted in the host's local timezone
+        (matching how the original naive ``datetime.now()`` producer recorded
+        them) and then converted to UTC, rather than being relabeled as UTC.
+        Offset-aware inputs are converted to their equivalent UTC instant.
+        """
+        naive_local = datetime(2026, 7, 9, 4, 14, 37)
         offset = datetime(2026, 7, 9, 4, 14, 37, tzinfo=timezone(timedelta(hours=8)))
         data = {
             "path": "/test/path",
-            "created_at": naive.isoformat(),
+            "created_at": naive_local.isoformat(),
             "next_execution_time": offset.isoformat(),
         }
 
@@ -183,7 +189,22 @@ class TestWatchTask:
         assert task.created_at.utcoffset() == timedelta(0)
         assert task.next_execution_time is not None
         assert task.next_execution_time.utcoffset() == timedelta(0)
+        # naive wall-clock treated as local time -> matching UTC instant
+        assert task.created_at == naive_local.astimezone(timezone.utc)
+        # offset-aware converted to its UTC equivalent
         assert task.next_execution_time == offset.astimezone(timezone.utc)
+
+    def test_from_dict_naive_wall_time_interpreted_as_local_then_utc(self):
+        """A naive datetime must be interpreted in the host's local timezone
+        (matching how the original ``datetime.now()`` producer recorded it)
+        and then converted to UTC, rather than relabeled as UTC directly.
+        """
+        from openviking.resource.watch_manager import _as_utc_aware
+
+        naive = datetime(2026, 7, 9, 18, 40, 0)
+        expected_utc = naive.astimezone(timezone.utc)
+        assert _as_utc_aware(naive) == expected_utc
+        assert _as_utc_aware(naive).utcoffset() == timedelta(0)
 
     def test_from_dict_defaults_legacy_processing_mode(self):
         task = WatchTask.from_dict({"path": "/test/path"})
@@ -305,12 +326,8 @@ class TestWatchManager:
     async def test_uri_index_move_and_deactivate_are_account_scoped(self):
         manager = WatchManager()
         uri = "viking://resources/shared"
-        task_a = await manager.create_task(
-            path="/a", account_id="account-a", to_uri=uri
-        )
-        task_b = await manager.create_task(
-            path="/b", account_id="account-b", to_uri=uri
-        )
+        task_a = await manager.create_task(path="/a", account_id="account-a", to_uri=uri)
+        task_b = await manager.create_task(path="/b", account_id="account-b", to_uri=uri)
         with pytest.raises(ConflictError):
             await manager.create_task(path="/duplicate", account_id="account-a", to_uri=uri)
 
@@ -327,9 +344,7 @@ class TestWatchManager:
         assert task_b.to_uri == uri
         assert task_b.is_active is False
         assert deactivated == [task_b]
-        moved = await manager.get_task_by_uri(
-            f"{uri}-moved", "account-a", "default", "root"
-        )
+        moved = await manager.get_task_by_uri(f"{uri}-moved", "account-a", "default", "root")
         assert moved is task_a
         assert await manager.get_task_by_uri(uri, "account-b", "default", "root") is task_b
 
