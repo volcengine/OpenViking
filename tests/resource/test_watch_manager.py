@@ -4,7 +4,7 @@
 
 import asyncio
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import AsyncGenerator
 from unittest.mock import AsyncMock
@@ -140,7 +140,7 @@ class TestWatchTask:
 
     def test_from_dict(self):
         """Test creating task from dictionary."""
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         data = {
             "task_id": "test-id",
             "path": "/test/path",
@@ -166,6 +166,24 @@ class TestWatchTask:
         assert task.is_active is False
         assert task.created_at == now
         assert task.last_execution_time == now
+
+    def test_from_dict_normalizes_naive_and_offset_timestamps_to_utc(self):
+        """Legacy naive and offset-aware timestamps should load as UTC-aware."""
+        naive = datetime(2026, 7, 9, 4, 14, 37)
+        offset = datetime(2026, 7, 9, 4, 14, 37, tzinfo=timezone(timedelta(hours=8)))
+        data = {
+            "path": "/test/path",
+            "created_at": naive.isoformat(),
+            "next_execution_time": offset.isoformat(),
+        }
+
+        task = WatchTask.from_dict(data)
+
+        assert task.created_at.tzinfo is not None
+        assert task.created_at.utcoffset() == timedelta(0)
+        assert task.next_execution_time is not None
+        assert task.next_execution_time.utcoffset() == timedelta(0)
+        assert task.next_execution_time == offset.astimezone(timezone.utc)
 
     def test_from_dict_defaults_legacy_processing_mode(self):
         task = WatchTask.from_dict({"path": "/test/path"})

@@ -10,7 +10,7 @@ import asyncio
 import inspect
 import json
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -27,6 +27,18 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 _UNSET = object()
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _as_utc_aware(value: Optional[datetime]) -> Optional[datetime]:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _uri_matches_prefix(uri: Optional[str], prefix: str) -> bool:
@@ -82,7 +94,7 @@ class WatchTask(BaseModel):
     auth_state: Optional[Dict[str, Any]] = Field(
         default=None, description="Private authentication state for scheduled re-processing"
     )
-    created_at: datetime = Field(default_factory=datetime.now, description="Task creation time")
+    created_at: datetime = Field(default_factory=_utcnow, description="Task creation time")
     last_execution_time: Optional[datetime] = Field(None, description="Last execution time")
     next_execution_time: Optional[datetime] = Field(None, description="Next execution time")
     is_active: bool = Field(default=True, description="Whether the task is active")
@@ -133,12 +145,14 @@ class WatchTask(BaseModel):
     def from_dict(cls, data: Dict[str, Any]) -> "WatchTask":
         """Create task from dictionary."""
         data = dict(data)
-        if isinstance(data.get("created_at"), str):
-            data["created_at"] = datetime.fromisoformat(data["created_at"])
-        if isinstance(data.get("last_execution_time"), str):
-            data["last_execution_time"] = datetime.fromisoformat(data["last_execution_time"])
-        if isinstance(data.get("next_execution_time"), str):
-            data["next_execution_time"] = datetime.fromisoformat(data["next_execution_time"])
+        for ts_field in ("created_at", "last_execution_time", "next_execution_time"):
+            value = data.get(ts_field)
+            if isinstance(value, str):
+                data[ts_field] = _as_utc_aware(datetime.fromisoformat(value))
+            elif isinstance(value, datetime):
+                data[ts_field] = _as_utc_aware(value)
+            else:
+                data.pop(ts_field, None)
         if data.get("processor_kwargs") is None:
             data["processor_kwargs"] = {}
         if data.get("auth_state") is not None and not isinstance(data.get("auth_state"), dict):
@@ -284,7 +298,7 @@ class WatchManager:
 
             data = {
                 "tasks": [task.to_storage_dict() for task in self._tasks.values()],
-                "updated_at": datetime.now().isoformat(),
+                "updated_at": _utcnow().isoformat(),
             }
 
             content = json.dumps(data, ensure_ascii=False, indent=2)
@@ -849,7 +863,7 @@ class WatchManager:
                 await self._save_tasks()
                 return
 
-            task.last_execution_time = datetime.now()
+            task.last_execution_time = _utcnow()
             task.next_execution_time = task.calculate_next_execution_time()
 
             await self._save_tasks()
@@ -864,7 +878,7 @@ class WatchManager:
             List of tasks that need to be executed
         """
         async with self._lock:
-            now = datetime.now()
+            now = _utcnow()
             due_tasks = []
 
             for task in self._tasks.values():
