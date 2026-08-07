@@ -212,6 +212,7 @@ class AsyncHTTPClient(import_openviking_sdk().AsyncHTTPClient):
         keep_recent_turn_count: int | None = None,
         retained_message_token_budget: int | None = None,
         min_raw_tail_steps: int | None = None,
+        event_tags: list[str] | None = None,
     ) -> Dict[str, Any]:
         """Commit with optional Turn-aware retention fields understood by the server."""
         payload: Dict[str, Any] = {
@@ -225,6 +226,8 @@ class AsyncHTTPClient(import_openviking_sdk().AsyncHTTPClient):
             "min_raw_tail_steps": min_raw_tail_steps,
         }
         payload.update({key: value for key, value in optional.items() if value is not None})
+        if event_tags is not None:
+            payload["extraction_metadata"] = {"event": {"tags": event_tags}}
         session_path = self._path_segment(session_id)
         response = await self._request(
             "POST",
@@ -277,6 +280,7 @@ class SyncHTTPClient(import_openviking_sdk().SyncHTTPClient):
         keep_recent_turn_count: int | None = None,
         retained_message_token_budget: int | None = None,
         min_raw_tail_steps: int | None = None,
+        event_tags: list[str] | None = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.commit_session(
@@ -287,5 +291,6 @@ class SyncHTTPClient(import_openviking_sdk().SyncHTTPClient):
                 keep_recent_turn_count=keep_recent_turn_count,
                 retained_message_token_budget=retained_message_token_budget,
                 min_raw_tail_steps=min_raw_tail_steps,
+                event_tags=event_tags,
             )
         )
