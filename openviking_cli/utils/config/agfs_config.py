@@ -398,16 +398,27 @@ class AGFSCacheConfig(BaseModel):
 class AGFSPathLockConfig(BaseModel):
     """Configuration for the native RAGFS path lock service."""
 
+    @model_validator(mode="after")
+    def ignore_deprecated_lock_timeout(self):
+        """Warn and force the deprecated timeout back to the fixed runtime value."""
+        if "lock_timeout_secs" in self.model_fields_set:
+            logger.warning(
+                "AGFSPathLockConfig: 'storage.agfs.pathlock.lock_timeout_secs' is deprecated "
+                "and ignored; the runtime wait timeout is fixed at 0.0 seconds."
+            )
+            self.lock_timeout_secs = 0.0
+        return self
+
     provider: str = Field(
         default="filesystem",
         description="PathLock provider: 'filesystem' | 'memory'",
     )
     lock_timeout_secs: float = Field(
         default=0.0,
-        description="Default wait timeout for auto-acquired path locks in seconds.",
+        description="Deprecated internal field. Runtime auto-pathlock wait timeout is fixed at 0.0 seconds.",
     )
     lock_expire_secs: float = Field(
-        default=1800.0,
+        default=30.0,
         description="Seconds before an unrefreshed lock token becomes stale.",
     )
 
@@ -418,8 +429,6 @@ class AGFSPathLockConfig(BaseModel):
         """Validate provider and timeout/expiry ranges."""
         if self.provider not in {"filesystem", "memory"}:
             raise ValueError("pathlock provider must be one of: 'filesystem', 'memory'")
-        if self.lock_timeout_secs < 0.0:
-            raise ValueError("pathlock lock_timeout_secs must be >= 0.0")
         if self.lock_expire_secs < 1.0:
             raise ValueError("pathlock lock_expire_secs must be >= 1.0")
         return self

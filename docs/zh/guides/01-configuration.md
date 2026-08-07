@@ -1824,7 +1824,7 @@ openviking add-resource ./docs --exclude "*.tmp"
 
 ## storage.transaction 段
 
-`storage.transaction` 已废弃，仅保留为兼容旧配置。新配置请使用 `storage.agfs.pathlock`。若旧字段仍然出现，OpenViking 会在运行时给出 warning；其中 `lock_timeout` 和 `lock_expire` 会在未显式配置新字段时自动映射到新的 `pathlock` 配置，`redo_recovery_enabled` 则会被忽略。
+`storage.transaction` 已废弃，仅保留为兼容旧配置。新配置请仅使用 `storage.agfs.pathlock` 配置过期时间。若旧字段仍然出现，OpenViking 会在运行时给出 warning；其中 `lock_timeout` 已废弃且会被忽略，`lock_expire` 会在未显式配置新字段时自动映射到新的 `pathlock` 配置，`redo_recovery_enabled` 则会被忽略。
 
 推荐写法：
 
@@ -1833,8 +1833,7 @@ openviking add-resource ./docs --exclude "*.tmp"
   "storage": {
     "agfs": {
       "pathlock": {
-        "lock_timeout_secs": 5.0,
-        "lock_expire_secs": 1800.0
+        "lock_expire_secs": 30.0
       }
     }
   }
@@ -1847,8 +1846,7 @@ openviking add-resource ./docs --exclude "*.tmp"
 {
   "storage": {
     "transaction": {
-      "lock_timeout": 5.0,
-      "lock_expire": 1800.0
+      "lock_expire": 30.0
     }
   }
 }
@@ -1856,8 +1854,8 @@ openviking add-resource ./docs --exclude "*.tmp"
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `lock_timeout` | float | 已废弃。改用 `storage.agfs.pathlock.lock_timeout_secs`。未显式配置新字段时会自动映射。 | `0.0` |
-| `lock_expire` | float | 已废弃。改用 `storage.agfs.pathlock.lock_expire_secs`。未显式配置新字段时会自动映射。 | `1800.0` |
+| `lock_timeout` | float | 已废弃且忽略。运行时等待超时固定为 `0.0`。 | `0.0` |
+| `lock_expire` | float | 已废弃。改用 `storage.agfs.pathlock.lock_expire_secs`。未显式配置新字段时会自动映射。 | `30.0` |
 | `redo_recovery_enabled` | bool | 已废弃且忽略。当前版本的 `session.commit` phase-2 恢复由持久化 `session_commit` 队列负责。 | `true` |
 
 路径锁机制的详细说明见 [路径锁与崩溃恢复](../concepts/09-transaction.md)。
@@ -1943,7 +1941,6 @@ Task 记录文件位于所属账号的系统目录：
       "timeout": 10
     },
     "transaction": {
-      "lock_timeout": 0.0,
       "lock_expire": 300.0
     },
     "vectordb": {

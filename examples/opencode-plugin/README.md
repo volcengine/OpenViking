@@ -114,6 +114,7 @@ Create `~/.config/opencode/openviking-config.json`:
 ```json
 {
   "enabled": true,
+  "mcp": { "enabled": true },
   "timeoutMs": 30000,
   "repoContext": { "enabled": true, "cacheTtlMs": 60000 },
   "autoRecall": {
@@ -162,6 +163,20 @@ another person's session.
 and `OPENVIKING_PEER_ID` take precedence over values in this file.
 
 For advanced setups, `OPENVIKING_PLUGIN_CONFIG` can point to another config file path.
+
+### Hook-only mode
+
+When OpenViking is already exposed through another MCP server, retain the lifecycle hooks while
+skipping this plugin's bundled MCP registration:
+
+```json
+{
+  "mcp": { "enabled": false }
+}
+```
+
+This leaves repository context, automatic recall, message capture, and lifecycle commits enabled.
+It does not add or overwrite OpenCode's `mcp.openviking` entry.
 
 OpenCode's local `read`, `glob`, and `grep` tools cannot read `viking://` URIs.
 When the agent accidentally tries that, the plugin blocks the filesystem tool

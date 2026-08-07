@@ -1327,7 +1327,7 @@ impl RAGFSBindingClient {
                     pl_value
                         .get("lock_expire_secs")
                         .and_then(|v| v.as_f64())
-                        .unwrap_or(1800.0),
+                        .unwrap_or(30.0),
                 )?;
                 let lock_timeout_secs = validate_timeout_secs(
                     pl_value

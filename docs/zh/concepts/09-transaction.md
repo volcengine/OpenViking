@@ -366,7 +366,7 @@ fencing token 校验通过的一方成功持有 `TreeLock(java-guide)`；失败�
 
 ### 锁过期清理
 
-**陈旧锁检测**：PathLockEngine 检查 fencing token 中的时间戳。超过 `lock_expire`（默认 1800s / 30 分钟）的锁被视为陈旧锁，在加锁过程中自动移除。
+**陈旧锁检测**：PathLockEngine 检查 fencing token 中的时间戳。超过 `lock_expire`（默认 30s）的锁被视为陈旧锁，在加锁过程中自动移除。
 
 **进程内清理**：LockManager 每 60 秒检查活跃的 LockHandle。仍持有锁文件且失活时间超过 `lock_expire` 的 handle 会被强制释放。
 
@@ -379,7 +379,7 @@ fencing token 校验通过的一方成功持有 `TreeLock(java-guide)`；失败�
 | 场景 | 恢复方式 |
 |------|---------|
 | session_memory 提取中途崩溃 | 从 archive 恢复 Phase 2 并继续消费 `session_commit` 任务 |
-| 锁持有期间崩溃 | 锁文件留在 AGFS，下次获取时 stale 检测自动清理（默认 1800s / 30 分钟过期）|
+| 锁持有期间崩溃 | 锁文件留在 AGFS，下次获取时 stale 检测自动清理（默认 30s 过期）|
 | enqueue 后 worker 处理前崩溃 | QueueFS SQLite 持久化，worker 重启后自动拉取 |
 | 孤儿索引 | L2 按需加载时清理 |
 
@@ -395,7 +395,7 @@ fencing token 校验通过的一方成功持有 `TreeLock(java-guide)`；失败�
 
 ## 配置
 
-路径锁默认启用，无需额外配置。推荐通过 `storage.agfs.pathlock` 配置默认等待时间和过期时间。`storage.transaction` 仅保留为兼容旧配置：`lock_timeout` 和 `lock_expire` 会在未显式配置新字段时自动映射，`redo_recovery_enabled` 已废弃且会被忽略。
+路径锁默认启用，无需额外配置。推荐通过 `storage.agfs.pathlock` 配置过期时间。运行时等待超时固定为 `0.0` 秒，不再接受外部配置。`storage.transaction` 仅保留为兼容旧配置：`lock_timeout` 已废弃且会被忽略，`lock_expire` 会在未显式配置新字段时自动映射，`redo_recovery_enabled` 已废弃且会被忽略。
 
 推荐写法：
 
@@ -404,8 +404,7 @@ fencing token 校验通过的一方成功持有 `TreeLock(java-guide)`；失败�
   "storage": {
     "agfs": {
       "pathlock": {
-        "lock_timeout_secs": 5.0,
-        "lock_expire_secs": 1800.0
+        "lock_expire_secs": 30.0
       }
     }
   }
@@ -418,8 +417,7 @@ fencing token 校验通过的一方成功持有 `TreeLock(java-guide)`；失败�
 {
   "storage": {
     "transaction": {
-      "lock_timeout": 5.0,
-      "lock_expire": 1800.0
+      "lock_expire": 30.0
     }
   }
 }
@@ -427,8 +425,8 @@ fencing token 校验通过的一方成功持有 `TreeLock(java-guide)`；失败�
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `lock_timeout` | float | 已废弃。改用 `storage.agfs.pathlock.lock_timeout_secs`。 | `0.0` |
-| `lock_expire` | float | 已废弃。改用 `storage.agfs.pathlock.lock_expire_secs`。 | `1800.0` |
+| `lock_timeout` | float | 已废弃且忽略。运行时等待超时固定为 `0.0`。 | `0.0` |
+| `lock_expire` | float | 已废弃。改用 `storage.agfs.pathlock.lock_expire_secs`。 | `30.0` |
 
 ### QueueFS 持久化
 

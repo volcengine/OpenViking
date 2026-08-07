@@ -1647,7 +1647,7 @@ For startup and deployment details see [Deployment](./03-deployment.md), for aut
 
 ## storage.transaction Section
 
-`storage.transaction` is deprecated and kept only for legacy compatibility. Use `storage.agfs.pathlock` for active PathLock configuration. When legacy fields are still present, OpenViking logs a warning at runtime; `lock_timeout` and `lock_expire` are automatically mapped when the new fields are unset, while `redo_recovery_enabled` is ignored.
+`storage.transaction` is deprecated and kept only for legacy compatibility. Use `storage.agfs.pathlock` only for active PathLock expiry configuration. When legacy fields are still present, OpenViking logs a warning at runtime; `lock_timeout` is deprecated and ignored, `lock_expire` is automatically mapped when the new field is unset, and `redo_recovery_enabled` is ignored.
 
 Recommended configuration:
 
@@ -1656,8 +1656,7 @@ Recommended configuration:
   "storage": {
     "agfs": {
       "pathlock": {
-        "lock_timeout_secs": 5.0,
-        "lock_expire_secs": 1800.0
+        "lock_expire_secs": 30.0
       }
     }
   }
@@ -1670,8 +1669,7 @@ Legacy compatibility form (not recommended for new deployments):
 {
   "storage": {
     "transaction": {
-      "lock_timeout": 5.0,
-      "lock_expire": 1800.0
+      "lock_expire": 30.0
     }
   }
 }
@@ -1679,8 +1677,8 @@ Legacy compatibility form (not recommended for new deployments):
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `lock_timeout` | float | Deprecated. Use `storage.agfs.pathlock.lock_timeout_secs`. Automatically mapped when the new field is unset. | `0.0` |
-| `lock_expire` | float | Deprecated. Use `storage.agfs.pathlock.lock_expire_secs`. Automatically mapped when the new field is unset. | `1800.0` |
+| `lock_timeout` | float | Deprecated and ignored. Runtime wait timeout is fixed at `0.0`. | `0.0` |
+| `lock_expire` | float | Deprecated. Use `storage.agfs.pathlock.lock_expire_secs`. Automatically mapped when the new field is unset. | `30.0` |
 | `redo_recovery_enabled` | bool | Deprecated and ignored. Session commit phase-2 recovery now resumes from the persistent `session_commit` queue. | `true` |
 
 For details on the lock mechanism, see [Path Locks and Crash Recovery](../concepts/09-transaction.md).
@@ -1861,7 +1859,6 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
       "timeout": 10
     },
     "transaction": {
-      "lock_timeout": 0.0,
       "lock_expire": 300.0
     },
     "vectordb": {

@@ -92,6 +92,7 @@ export { OpenVikingPlugin, default } from "./openviking/index.mjs"
 ```json
 {
   "enabled": true,
+  "mcp": { "enabled": true },
   "timeoutMs": 30000,
   "repoContext": { "enabled": true, "cacheTtlMs": 60000 },
   "autoRecall": {
@@ -129,6 +130,19 @@ user/admin API key 的 API_KEY mode 时应留空。
 优先级高于 `openviking-config.json` 里的同名配置。
 
 高级场景可以用 `OPENVIKING_PLUGIN_CONFIG` 指向其他配置文件路径。
+
+### 仅 Hooks 模式
+
+如果其他 MCP server 已经提供 OpenViking，可以关闭本插件附带的 MCP 注册，同时保留生命周期 hooks：
+
+```json
+{
+  "mcp": { "enabled": false }
+}
+```
+
+repository context、自动 recall、消息 capture 和生命周期 commit 会继续工作，也不会添加或覆盖
+OpenCode 的 `mcp.openviking` 配置。
 
 ## 验证
 

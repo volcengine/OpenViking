@@ -119,3 +119,19 @@ def test_content_write_rejects_watch_task_control_files(uri):
 
     with pytest.raises(InvalidArgumentError, match="watch task control file"):
         coordinator._validate_target_uri(uri)
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "viking://resources//.watch_tasks.json",
+        "resources//.watch_tasks.json.bak",
+        "/resources///.watch_tasks.json.tmp/",
+    ],
+)
+def test_redundant_separator_aliases_cannot_bypass_watch_task_acl(bare_viking_fs, user_ctx, uri):
+    assert bare_viking_fs._is_accessible(uri, user_ctx) is False
+
+    coordinator = object.__new__(ContentWriteCoordinator)
+    with pytest.raises(InvalidArgumentError, match="watch task control file"):
+        coordinator._validate_target_uri(uri)
