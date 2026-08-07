@@ -33,24 +33,27 @@ class MemoryConfig(BaseModel):
         description="Custom memory templates directory. If set, templates from this directory will be loaded in addition to built-in templates",
     )
     v2_lock_retry_interval_seconds: float = Field(
-        default=1.0,
+        default=3.0,
         ge=0.0,
         description=(
             "Retry interval (seconds) when SessionCompressorV2 fails to acquire memory subtree "
-            "locks. Set to 0 for immediate retries. The 1.0s default avoids the CPU/executor "
-            "churn and log flood observed with aggressive polling under contended extraction "
-            "(see issue #3274)."
+            "locks. Set to 0 for immediate retries. The 3.0s default matches the outer "
+            "compressor-retry mitigation validated against the CPU/log flood reported in "
+            "issue #3274; it is independent of the Rust path-lock inner poll cadence."
         ),
     )
     v2_lock_max_retries: int = Field(
-        default=300,
+        default=100,
         ge=0,
         description=(
             "Maximum retries for SessionCompressorV2 memory lock acquisition before giving up "
             "with TimeoutError. 0 means unlimited retries (not recommended in production: "
             "without a bound, contended extractions can accumulate waiters without bound and "
-            "saturate CPU / flood logs; see issue #3274). Default 300 gives roughly a 5-minute "
-            "ceiling at the 1.0s retry interval, matching the v2 lock expiry window."
+            "saturate CPU / flood logs; see issue #3274). Default 100 with the 3.0s retry "
+            "interval caps the outer compressor wait at roughly five minutes, matching the "
+            "field-validated mitigation carried by the obsolete #3281 proposal. This bound "
+            "governs the outer Python retry loop; the Rust PathLock manager enforces its own "
+            "per-attempt acquisition timeout."
         ),
     )
     experimental_memory_switch: bool = Field(
