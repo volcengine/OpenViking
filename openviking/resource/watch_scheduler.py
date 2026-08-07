@@ -17,6 +17,7 @@ from openviking.resource.feishu_watch_auth import (
     feishu_auth_state_needs_refresh,
     is_feishu_auth_state,
 )
+from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
 from openviking.resource.watch_manager import WatchManager
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext, Role
@@ -44,6 +45,7 @@ class WatchScheduler:
         viking_fs: Optional[Any] = None,
         check_interval: float = DEFAULT_CHECK_INTERVAL,
         max_concurrency: int = 4,
+        uri_mutation_coordinator: Optional[UriMutationCoordinator] = None,
     ):
         """Initialize WatchScheduler.
 
@@ -54,6 +56,7 @@ class WatchScheduler:
         """
         self._resource_service = resource_service
         self._viking_fs = viking_fs
+        self._uri_mutation_coordinator = uri_mutation_coordinator or UriMutationCoordinator()
         if check_interval <= 0:
             raise ValueError("check_interval must be > 0")
         if max_concurrency <= 0:
@@ -85,7 +88,10 @@ class WatchScheduler:
             return
 
         # Initialize WatchManager
-        self._watch_manager = WatchManager(viking_fs=self._viking_fs)
+        self._watch_manager = WatchManager(
+            viking_fs=self._viking_fs,
+            uri_mutation_coordinator=self._uri_mutation_coordinator,
+        )
         await self._watch_manager.initialize()
         logger.info("[WatchScheduler] WatchManager initialized")
 
@@ -211,6 +217,38 @@ class WatchScheduler:
             await asyncio.gather(*(asyncio.create_task(run_one(t)) for t in tasks_to_run))
 
     async def _execute_task(self, task) -> None:
+        """Execute a task only after confirming its target URI is stable."""
+        if not self._watch_manager:
+            return
+
+        candidate = task
+        while True:
+            stable_account_id = candidate.account_id
+            stable_to_uri = candidate.to_uri
+            async with self._uri_mutation_coordinator.access(
+                stable_account_id,
+                [stable_to_uri],
+            ):
+                current = await self._watch_manager.get_task(
+                    candidate.task_id,
+                    account_id=candidate.account_id,
+                    user_id=candidate.user_id,
+                    role=getattr(candidate, "original_role", None) or str(Role.USER),
+                )
+                if current is None:
+                    logger.info(
+                        f"[WatchScheduler] Task {candidate.task_id} disappeared before execution"
+                    )
+                    return
+                if current.account_id != stable_account_id or current.to_uri != stable_to_uri:
+                    candidate = current
+                    continue
+
+                stable_task = current.model_copy(deep=True)
+                await self._execute_stable_task(stable_task)
+                return
+
+    async def _execute_stable_task(self, task) -> None:
         """Execute a single watch task.
 
         Calls ResourceService.refresh_resource to re-process the resource.
