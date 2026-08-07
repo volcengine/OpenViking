@@ -41,7 +41,7 @@ Search each memory type independently and assemble a bounded memory block that c
 | `render: "compact"` | `detail="abstract"` | The prototype-era compact mode; pins every category |
 | v1 `quotas` keys | Overlaid on the v1 bucket defaults | Key names unchanged; a partial map keeps the other buckets |
 
-Context-face parameters (`max_tokens`, `detail`, `dedup_turns`, `session_id`, `query_expansion`, `exclude_uris`, `purpose`, `rewrite`, `rewrite_max_bullets`) are also accepted here, so plugins can transition smoothly on deployments that have not been upgraded yet.
+Context-face parameters (`max_tokens`, `detail`, `dedup_turns`, `session_id`, `query_expansion`, `exclude_uris`, `purpose`, `admission`, `rewrite`, `rewrite_max_bullets`) are also accepted here, so plugins can transition smoothly on deployments that have not been upgraded yet.
 
 **HTTP API**
 

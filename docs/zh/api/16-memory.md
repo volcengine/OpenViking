@@ -41,7 +41,7 @@
 | `render: "compact"` | `detail="abstract"` | 原型期的紧凑模式；把所有类别钉在摘要档 |
 | v1 `quotas` 键 | 叠加在 v1 分桶默认值之上 | 键名未变；只传一部分键时其余桶保留默认值 |
 
-context 面的参数（`max_tokens`、`detail`、`dedup_turns`、`session_id`、`query_expansion`、`exclude_uris`、`purpose`、`rewrite`、`rewrite_max_bullets`）在本端点同样接受，便于插件在尚未升级的部署上平滑过渡。
+context 面的参数（`max_tokens`、`detail`、`dedup_turns`、`session_id`、`query_expansion`、`exclude_uris`、`purpose`、`admission`、`rewrite`、`rewrite_max_bullets`）在本端点同样接受，便于插件在尚未升级的部署上平滑过渡。
 
 **HTTP API**
 

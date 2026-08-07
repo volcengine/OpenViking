@@ -374,6 +374,82 @@ test("auto-recall applies the relevance compressor to server recall entries", as
   assert.equal(result.requestBody.max_chars, 18000);
 });
 
+test("auto-recall forwards admission policy to the context and recall faces", async () => {
+  const result = await runEndpointCompressionCase({
+    prompt: "Which deployment rule applies?",
+    entry: {
+      uri: "viking://user/zeus/memories/entities/deployment.md",
+      score: 0.72,
+      type: "entities",
+      mode: "summary",
+      summary: "Use the staged deployment rule",
+    },
+    rendered: "<memory_group>Use the staged deployment rule</memory_group>",
+    compressorOutput: "OpenViking memory digest:\n- Use the staged deployment rule",
+    extraEnv: {
+      OPENVIKING_RECALL_ADMISSION_MODE: "shadow",
+      OPENVIKING_RECALL_ADMISSION_TYPE_MIN_SCORES: JSON.stringify({
+        events: 0.5,
+        entities: 0.55,
+        resources: 0.45,
+        unknown: 0.99,
+      }),
+      OPENVIKING_RECALL_ADMISSION_OTHER_PEER_SCORE_DELTA: "0.08",
+    },
+  });
+
+  assert.deepEqual(result.requestBody.admission, {
+    mode: "shadow",
+    type_min_scores: { events: 0.5, entities: 0.55, resources: 0.45 },
+    other_peer_score_delta: 0.08,
+  });
+});
+
+test("auto-recall fails closed when enforced admission is unsupported", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-recall-admission-enforce-"));
+  const paths = [];
+  try {
+    await withMockOpenViking(async (req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      paths.push(url.pathname);
+      if (req.method === "GET" && url.pathname === "/health") {
+        writeJson(res, { status: "ok", result: { ok: true } });
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/v1/search/search") {
+        writeStatusJson(res, 400, { status: "error", error: "Extra inputs: mode" });
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/v1/search/recall") {
+        writeStatusJson(res, 422, { status: "error", error: "unknown field: admission" });
+        return;
+      }
+      writeStatusJson(res, 500, { status: "error", error: "must not fall back" });
+    }, async (baseUrl) => {
+      const result = await runAutoRecall(
+        { prompt: "unrelated negative query", session_id: "codex:admission-enforce" },
+        {
+          OPENVIKING_AUTO_RECALL: "1",
+          OPENVIKING_CODEX_STATE_DIR: stateDir,
+          OPENVIKING_STATE_DIR: stateDir,
+          OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
+          OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
+          OPENVIKING_CREDENTIAL_SOURCE: "env",
+          OPENVIKING_RECALL_ADMISSION_MODE: "enforce",
+          OPENVIKING_RECALL_COMPRESS: "0",
+          OPENVIKING_MIN_QUERY_LENGTH: "1",
+          OPENVIKING_TIMEOUT_MS: "5000",
+          OPENVIKING_URL: baseUrl,
+        },
+      );
+      assert.deepEqual(JSON.parse(result.stdout.trim()), {});
+    });
+    assert.deepEqual(paths, ["/health", "/api/v1/search/search", "/api/v1/search/recall"]);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("auto-recall falls back to a bounded deterministic digest when endpoint compression fails", async () => {
   const result = await runEndpointCompressionCase({
     prompt: "Which editor do I prefer?",

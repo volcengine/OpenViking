@@ -55,10 +55,15 @@ def test_v1_aliases_fold_into_the_context_contract():
     assert defaults.dedup_turns == 0
 
     coding, _ = fold_recall_request(
-        {"query": "q", "score_threshold": 0.35},
-        {"score_threshold"},
+        {
+            "query": "q",
+            "score_threshold": 0.35,
+            "admission": {"mode": "shadow", "type_min_scores": {"events": 0.5}},
+        },
+        {"score_threshold", "admission"},
     )
     assert coding.score_threshold == 0.35
+    assert coding.admission == {"mode": "shadow", "type_min_scores": {"events": 0.5}}
 
 
 async def test_recall_endpoint_omitted_min_score_keeps_v1_default(

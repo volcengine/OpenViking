@@ -32,6 +32,24 @@ test("context requests preserve the configured recall width and server budget", 
   assert.equal(body.purpose, "coding");
 });
 
+test("context and fallback recall requests carry the same admission policy", () => {
+  const cfg = {
+    recallAdmissionMode: "enforce",
+    recallAdmissionTypeMinScores: { events: 0.5, resources: 0.45 },
+    recallAdmissionOtherPeerScoreDelta: 0.08,
+  };
+  const expected = {
+    mode: "enforce",
+    type_min_scores: { events: 0.5, resources: 0.45 },
+    other_peer_score_delta: 0.08,
+  };
+
+  assert.deepEqual(buildContextSearchBody(cfg).admission, expected);
+  assert.deepEqual(buildRecallEndpointBody(cfg).admission, expected);
+  assert.equal(buildContextSearchBody({}).admission, undefined);
+  assert.equal(buildRecallEndpointBody({}).admission, undefined);
+});
+
 test("context requests omit defaults owned by the server", () => {
   const body = buildContextSearchBody({
     recallLimit: 10,
@@ -280,4 +298,19 @@ test("buildRecallBlock falls back to find when neither context endpoint works", 
   assert.ok(calls.includes("/api/v1/search/find"));
   assert.match(block, /^<openviking-context>/);
   assert.match(block, /\[memory 90%\]/);
+});
+
+test("enforced admission fails closed instead of falling back to raw find", async () => {
+  const calls = [];
+  const legacyCachePath = await tempPath("context-face.json");
+  const block = await buildRecallBlock(async (path) => {
+    calls.push(path);
+    return { ok: false, status: path.endsWith("/search") ? 400 : 422, error: "unsupported" };
+  }, {
+    recallAdmissionMode: "enforce",
+    recallAdmissionTypeMinScores: { events: 0.5 },
+  }, "unrelated", { legacyCachePath });
+
+  assert.equal(block, null);
+  assert.deepEqual(calls, ["/api/v1/search/search", "/api/v1/search/recall"]);
 });

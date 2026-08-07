@@ -81,6 +81,13 @@ export function buildRecallEndpointBody(cfg = {}) {
     render: true,
   };
   if (cfg.recallPeerScope === "actor") body.peer_scope = "actor";
+  if (cfg.recallAdmissionMode && cfg.recallAdmissionMode !== "off") {
+    body.admission = {
+      mode: cfg.recallAdmissionMode,
+      type_min_scores: cfg.recallAdmissionTypeMinScores || {},
+      other_peer_score_delta: Number(cfg.recallAdmissionOtherPeerScoreDelta) || 0,
+    };
+  }
   return body;
 }
 
@@ -107,6 +114,13 @@ export function buildContextSearchBody(cfg = {}, options = {}) {
   if (limitConfigured) body.quotas = codingQuotas(limit);
   if (maxTokensConfigured) body.max_tokens = maxTokens;
   if (cfg.recallPeerScope === "actor") body.peer_scope = "actor";
+  if (cfg.recallAdmissionMode && cfg.recallAdmissionMode !== "off") {
+    body.admission = {
+      mode: cfg.recallAdmissionMode,
+      type_min_scores: cfg.recallAdmissionTypeMinScores || {},
+      other_peer_score_delta: Number(cfg.recallAdmissionOtherPeerScoreDelta) || 0,
+    };
+  }
 
   const sessionId = String(options.sessionId || "").trim();
   if (sessionId) {
@@ -543,6 +557,10 @@ async function recallViaEndpoint(fetchJSON, cfg, query, actorPeerId = "", log = 
   body.query = query;
   const res = await postRecall(fetchJSON, body, { actorPeerId, log });
   if (!res.ok) {
+    if (cfg.recallAdmissionMode === "enforce") {
+      log("recall_admission_fail_closed", { status: res.status || 0 });
+      return "";
+    }
     log("recall_endpoint_fallback", { status: res.status || 0 });
     return null;
   }
