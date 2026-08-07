@@ -155,11 +155,22 @@ class ApiKeyAuthPlugin(AuthPlugin):
                     "please re-authorize the client."
                 )
 
-        # Silently ignore identity assertion headers in api_key mode.
-        if x_openviking_account:
-            _remove_header(request, b"x-openviking-account")
-        if x_openviking_user:
-            _remove_header(request, b"x-openviking-user")
+        if role in (Role.ROOT, Role.ADMIN):
+            # Privileged OAuth tokens keep the legacy silent-strip behavior so
+            # operator tooling can omit or override tenant context.
+            if x_openviking_account:
+                _remove_header(request, b"x-openviking-account")
+            if x_openviking_user:
+                _remove_header(request, b"x-openviking-user")
+        else:
+            if x_openviking_account and x_openviking_account != record.account_id:
+                raise PermissionDeniedError(
+                    "OAuth token does not match the requested X-OpenViking-Account"
+                )
+            if x_openviking_user and x_openviking_user != record.user_id:
+                raise PermissionDeniedError(
+                    "OAuth token does not match the requested X-OpenViking-User"
+                )
 
         return ResolvedIdentity(
             role=role,

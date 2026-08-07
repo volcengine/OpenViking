@@ -227,6 +227,67 @@ async def test_oauth_user_role_rejects_account_override(provider, store):
 
 
 @pytest.mark.asyncio
+async def test_oauth_user_role_rejects_user_override(provider, store):
+    """A USER OAuth token cannot impersonate another user via header."""
+    token = await _mint_token(provider, store, account_id="tenant-a", user_id="alice", role="user")
+    request = _make_request(
+        bearer=token,
+        api_key_manager=_StubKeyManager(),
+        oauth_provider=provider,
+        extra_headers={"x-openviking-user": "bob"},
+    )
+    with pytest.raises(PermissionDeniedError):
+        await resolve_identity(
+            request,
+            x_api_key=None,
+            authorization=f"Bearer {token}",
+            x_openviking_user="bob",
+        )
+
+
+@pytest.mark.asyncio
+async def test_oauth_user_role_accepts_matching_identity_headers(provider, store):
+    """Identity headers matching the bound token remain accepted."""
+    token = await _mint_token(provider, store, account_id="tenant-a", user_id="alice", role="user")
+    request = _make_request(
+        bearer=token,
+        api_key_manager=_StubKeyManager(),
+        oauth_provider=provider,
+        extra_headers={"x-openviking-account": "tenant-a", "x-openviking-user": "alice"},
+    )
+    identity = await resolve_identity(
+        request,
+        x_api_key=None,
+        authorization=f"Bearer {token}",
+        x_openviking_account="tenant-a",
+        x_openviking_user="alice",
+    )
+    assert identity.role == Role.USER
+    assert identity.account_id == "tenant-a"
+    assert identity.user_id == "alice"
+
+
+@pytest.mark.asyncio
+async def test_oauth_admin_keeps_legacy_silent_strip_on_override(provider, store):
+    """ADMIN OAuth tokens retain the legacy silent-strip behavior."""
+    token = await _mint_token(provider, store, account_id="tenant-a", user_id="alice", role="admin")
+    request = _make_request(
+        bearer=token,
+        api_key_manager=_StubKeyManager(default_role=Role.ADMIN),
+        oauth_provider=provider,
+        extra_headers={"x-openviking-account": "tenant-b"},
+    )
+    identity = await resolve_identity(
+        request,
+        x_api_key=None,
+        authorization=f"Bearer {token}",
+        x_openviking_account="tenant-b",
+    )
+    assert identity.role == Role.ADMIN
+    assert identity.account_id == "tenant-a"
+
+
+@pytest.mark.asyncio
 async def test_oauth_root_can_be_used_without_explicit_tenant_headers(provider, store):
     """ROOT OAuth tokens carry account/user in claims — no header requirement."""
     token = await _mint_token(provider, store, account_id="tenant-a", user_id="alice", role="root")
