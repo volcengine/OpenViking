@@ -151,3 +151,32 @@ def test_abstract_truncation_accepts_sentence_period_after_number(monkeypatch):
     _, abstract = processor._enforce_size_limits("# README\n\nBody", abstract)
 
     assert abstract == "This import check was generated at 16:55."
+
+
+def test_truncate_generated_text_ignores_numbered_list_marker(monkeypatch):
+    """Regression test for #3709: a leading '1.'/'12.' numbered-list marker must
+    not be treated as a sentence boundary. Otherwise an abstract starting with
+    OV's own '1. **Title**\\n\\n' overview format followed by a long first prose
+    sentence is silently truncated to '1.' when abstract_max_chars is 256."""
+    _patch_semantic_limits(monkeypatch, abstract_max_chars=256)
+    processor = SemanticProcessor()
+    long_prose = "This directory contains a very long flowing first sentence " * 30
+    abstract = f"1. **Some Directory**\n\n{long_prose}"
+
+    _, truncated = processor._enforce_size_limits("# D\n\nBody", abstract)
+
+    assert truncated.strip() != "1."
+    assert len(truncated) > 100
+    assert truncated.startswith("1. **Some Directory**")
+
+
+def test_truncate_generated_text_ignores_multidigit_list_marker(monkeypatch):
+    _patch_semantic_limits(monkeypatch, abstract_max_chars=256)
+    processor = SemanticProcessor()
+    long_prose = "A long descriptive sentence that runs well past the limit " * 30
+    abstract = f"12. **Another Dir**\n\n{long_prose}"
+
+    _, truncated = processor._enforce_size_limits("# D\n\nBody", abstract)
+
+    assert truncated.strip() != "12."
+    assert len(truncated) > 100

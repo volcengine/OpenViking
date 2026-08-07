@@ -1199,6 +1199,17 @@ class SemanticProcessor(DequeueHandlerBase):
         last_sentence_end_within_limit = None
         for sentence_end_match in re.finditer(r"\.(?!\d)(?=\s|$)|[!?](?=\s|$)|[。？！]", text):
             sentence_end = sentence_end_match.end()
+            # Skip numbered-list markers like "1." or "12." at line start
+            # (Markdown allows optional leading whitespace and bold/heading
+            # markers before the digit). Without this guard, an abstract
+            # beginning with "1. **Title**\n\n<long prose>" silently truncates
+            # to "1." when the first prose sentence exceeds max_chars (#3709).
+            if sentence_end_match.group() == ".":
+                dot_start = sentence_end_match.start()
+                prefix = text[:dot_start]
+                m = re.search(r"(?:^|\n)\s*(?:[#>*`\-\s]*\**)?(\d+)$", prefix)
+                if m is not None:
+                    continue
             if first_sentence_end is None:
                 first_sentence_end = sentence_end
             if sentence_end <= max_chars:
