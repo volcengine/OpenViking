@@ -258,6 +258,14 @@ class MissingSidecarBackupVikingFS(FakeBackupVikingFS):
         )
 
 
+class PermissionDeniedError(Exception):
+    """Minimal stand-in mirroring storage.errors.PermissionDeniedError."""
+
+    def __init__(self, message: str, resource: str | None = None) -> None:
+        super().__init__(message)
+        self.resource = resource
+
+
 class FakeRestoreVectorVikingFS(FakeVikingFS):
     async def tree(self, uri: str, node_limit=None, level_limit=None, ctx=None):
         self.tree_calls.append(uri)
@@ -619,6 +627,70 @@ async def test_backup_restore_contract(temp_ovpack_path: Path, request_ctx: Requ
         "viking://user/alice/sessions/sess_1/.meta.json",
     ]
     assert fake_fs.tree_calls == ["viking://resources", "viking://user"]
+
+
+class FakeInitializedVikingFS(FakeVikingFS):
+    """Simulates a freshly initialized server: resources + user roots exist and
+    rm() rejects deleting the protected viking://user / viking://agent containers,
+    mirroring VikingFS._ensure_supported_delete_namespace.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.rm_calls: list[str] = []
+        # Pre-existing children under the protected user root.
+        self._children: dict[str, list[dict[str, object]]] = {
+            "viking://resources": [
+                {"uri": "viking://resources/old.md", "isDir": False},
+            ],
+            "viking://user": [
+                {"uri": "viking://user/old-user", "isDir": True},
+                {"uri": "viking://user/legacy-session", "isDir": False},
+            ],
+        }
+
+    async def ls(self, uri: str, ctx=None):
+        if uri in self._children:
+            return list(self._children[uri])
+        raise NotFoundError(uri, "file")
+
+    async def rm(self, uri: str, recursive: bool = False, ctx=None):
+        if uri in {"viking://user", "viking://agent", "viking://"}:
+            raise PermissionDeniedError(
+                f"Deleting {uri} is not supported",
+                resource=uri,
+            )
+        self.rm_calls.append(uri)
+        return {"estimated_deleted_count": 0}
+
+
+@pytest.mark.asyncio
+async def test_restore_overwrite_clears_protected_user_root(
+    temp_ovpack_path: Path, request_ctx: RequestContext
+):
+    """overwrite mode must not try to rm() viking://user itself; it should clear
+    children so backup content can be restored into the initialized server.
+    Regression for #3875.
+    """
+    await backup_ovpack(
+        FakeBackupVikingFS(),
+        str(temp_ovpack_path),
+        ctx=request_ctx,
+    )
+
+    fake_fs = FakeInitializedVikingFS()
+    assert (
+        await restore_ovpack(fake_fs, str(temp_ovpack_path), request_ctx, on_conflict="overwrite")
+        == "viking://"
+    )
+    assert "viking://user" not in fake_fs.rm_calls
+    assert "viking://user/old-user" in fake_fs.rm_calls
+    assert "viking://user/legacy-session" in fake_fs.rm_calls
+    assert "viking://resources" in fake_fs.rm_calls
+    assert fake_fs.written_files == [
+        "viking://resources/README.md",
+        "viking://user/alice/sessions/sess_1/.meta.json",
+    ]
 
 
 @pytest.mark.asyncio

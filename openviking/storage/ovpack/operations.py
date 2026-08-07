@@ -116,9 +116,52 @@ async def _ensure_parent_exists(viking_fs, parent: str, ctx: RequestContext) -> 
         await viking_fs.mkdir(parent, ctx=ctx)
 
 
+_PROTECTED_SCOPE_ROOTS = frozenset({"viking://user", "viking://agent"})
+
+
+def _is_protected_scope_root(root_uri: str) -> bool:
+    return root_uri.rstrip("/") in _PROTECTED_SCOPE_ROOTS
+
+
+async def _clear_protected_root_children(viking_fs, root_uri: str, ctx: RequestContext) -> None:
+    """Clear the children of a protected scope root without deleting the root itself.
+
+    viking://user and viking://agent are namespace containers that VikingFS
+    forbids removing directly; restore-overwrite must wipe their contents so
+    the backup can repopulate them, while keeping the container in place for
+    the server's public-scope invariants.
+    """
+    ls_fn = getattr(viking_fs, "ls", None)
+    if ls_fn is None:
+        logger.warning(f"[ovpack] Cannot clear protected root without ls(): {root_uri}")
+        return
+    try:
+        entries = await ls_fn(root_uri, ctx=ctx)
+    except NotFoundError:
+        return
+    except FileNotFoundError:
+        return
+    for entry in entries or []:
+        child_uri = entry.get("uri") if isinstance(entry, dict) else None
+        if not child_uri:
+            continue
+        if not hasattr(viking_fs, "rm"):
+            logger.warning(f"[ovpack] Cannot remove protected-root child without rm(): {child_uri}")
+            continue
+        try:
+            await viking_fs.rm(child_uri, recursive=True, ctx=ctx)
+        except NotFoundError:
+            continue
+        except FileNotFoundError:
+            continue
+
+
 async def _remove_existing_root(viking_fs, root_uri: str, ctx: RequestContext) -> None:
     if not hasattr(viking_fs, "rm"):
         logger.warning(f"[ovpack] Cannot remove existing resource without rm(): {root_uri}")
+        return
+    if _is_protected_scope_root(root_uri):
+        await _clear_protected_root_children(viking_fs, root_uri, ctx=ctx)
         return
     try:
         await viking_fs.rm(root_uri, recursive=True, ctx=ctx)
