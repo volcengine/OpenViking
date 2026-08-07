@@ -1663,9 +1663,12 @@ class MarkdownParser(BaseParser):
         }
 
     def _estimate_token_count(self, content: str) -> int:
-        # CJK characters (Chinese, Japanese, Korean): ~0.7 token per char
-        # Other characters (including Latin, Arabic, Cyrillic, etc.): ~0.3 token per char
-        # This provides better coverage for multilingual documents
+        # CJK characters (Chinese, Japanese, Korean): 1.0 token per char
+        # Aligned with openviking.utils.embedding_input.estimate_embedding_input_tokens
+        # so that the Parser's section-size guard and the Embedder's capacity limit use
+        # the same budget. The old coefficient of 0.7 caused the Parser to allow chunks
+        # that exceeded the embedding model's physical batch size (-b) for CJK-dense text.
+        # Other characters: ~0.25 token per char (matching embedding_input.py).
         cjk_chars = len(re.findall(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]", content))
         other_chars = len(re.findall(r"[^\s]", content)) - cjk_chars
-        return int(cjk_chars * 0.7 + other_chars * 0.3)
+        return int(cjk_chars * 1.0 + other_chars * 0.25)

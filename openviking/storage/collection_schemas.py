@@ -648,7 +648,16 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                             pass
 
                         if error_class == ERROR_CLASS_INPUT_TOO_LARGE:
-                            logger.error(error_msg)
+                            # Input exceeds the embedding model's physical batch size.
+                            # The root fix is in the Parser layer (CJK token estimation).
+                            # Do NOT silently truncate here — that would store a partial
+                            # vector without any indication of data loss. Fail explicitly
+                            # so the task is visible and can be fixed by re-parsing.
+                            logger.error(
+                                "[CollectionSchemas] Input too large for embedder — "
+                                "re-parse this resource to split it into smaller chunks: %s",
+                                error_msg,
+                            )
                             self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
                             request_failed_message = error_msg
                             report_error_args = (error_msg, data)
