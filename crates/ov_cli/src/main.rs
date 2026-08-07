@@ -5022,6 +5022,10 @@ mod tests {
             extra_headers: None,
             profile: false,
             gateway_token: None,
+            auth_mode: None,
+            ldap_username: None,
+            ldap_password: None,
+            oidc_token: None,
         };
 
         let ctx = CliContext::from_config(
@@ -5062,6 +5066,10 @@ mod tests {
             extra_headers: None,
             profile: false,
             gateway_token: None,
+            auth_mode: None,
+            ldap_username: None,
+            ldap_password: None,
+            oidc_token: None,
         };
 
         let ctx = CliContext::from_config(
@@ -5100,6 +5108,10 @@ mod tests {
             upload: Default::default(),
             extra_headers: None,
             gateway_token: None,
+            auth_mode: None,
+            ldap_username: None,
+            ldap_password: None,
+            oidc_token: None,
         };
 
         // Without sudo: use api_key
