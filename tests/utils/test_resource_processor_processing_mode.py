@@ -421,6 +421,125 @@ async def test_vectors_only_deletes_sync_removed_detail_vectors(monkeypatch, ctx
 
 
 @pytest.mark.asyncio
+async def test_vectors_only_unchanged_preexisting_target_skips_all_vectorization(monkeypatch, ctx):
+    """Regression test for #2383.
+
+    When vectors_only refresh runs against an already-existing target and
+    _sync_topdown_recursive reports zero added/updated/deleted files,
+    no vectorize_file calls should be made (previously the code called
+    _vectorize_resource_files on the entire target root, re-embedding
+    every unchanged file).
+    """
+    from openviking.storage.queuefs.semantic_processor import DiffResult
+
+    viking_fs = SimpleNamespace(
+        _async_agfs=SimpleNamespace(pathlock_release=AsyncMock()),
+        delete_temp=AsyncMock(),
+    )
+    vectorize_file = AsyncMock()
+    sync = AsyncMock(
+        return_value=DiffResult(
+            added_files=[],
+            updated_files=[],
+            deleted_files=[],
+            added_dirs=[],
+            deleted_dirs=[],
+        )
+    )
+    monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: viking_fs)
+    monkeypatch.setattr("openviking.utils.resource_processor.rewrite_image_uris", AsyncMock())
+    monkeypatch.setattr("openviking.utils.resource_processor.vectorize_file", vectorize_file)
+    monkeypatch.setattr("openviking.utils.resource_processor.SemanticProcessor", Mock())
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.SemanticProcessor.return_value._sync_topdown_recursive",
+        sync,
+    )
+    processor = ResourceProcessor(_FakeVikingDB())
+    processor._delete_removed_resource_vectors = AsyncMock()
+    lock = {"lease_ref": "lock-1"}
+
+    await processor.finish_prepared_resource(
+        {
+            "root_uri": "viking://resources/demo",
+            "temp_uri": "viking://temp/demo",
+            "temp_dir_path": "viking://temp/demo",
+            "source_committed": False,
+            "target_preexisting": True,
+        },
+        ctx=ctx,
+        resource_lock=lock,
+        build_index=True,
+        processing_mode="vectors_only",
+    )
+
+    vectorize_file.assert_not_awaited()
+    processor._delete_removed_resource_vectors.assert_not_awaited()
+    viking_fs._async_agfs.pathlock_release.assert_awaited_once_with(lock)
+
+
+@pytest.mark.asyncio
+async def test_vectors_only_partial_change_preexisting_target_vectorizes_only_changed(monkeypatch, ctx):
+    """Only added/updated files should be vectorized after incremental sync.
+
+    Unchanged files must not be re-embedded.
+    """
+    from openviking.storage.queuefs.semantic_processor import DiffResult
+
+    viking_fs = SimpleNamespace(
+        _async_agfs=SimpleNamespace(pathlock_release=AsyncMock()),
+        delete_temp=AsyncMock(),
+    )
+    vectorize_file = AsyncMock()
+    sync = AsyncMock(
+        return_value=DiffResult(
+            added_files=["viking://resources/demo/new.md"],
+            updated_files=["viking://resources/demo/changed.md"],
+            deleted_files=["viking://resources/demo/gone.md"],
+            added_dirs=[],
+            deleted_dirs=[],
+        )
+    )
+    monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: viking_fs)
+    monkeypatch.setattr("openviking.utils.resource_processor.rewrite_image_uris", AsyncMock())
+    monkeypatch.setattr("openviking.utils.resource_processor.vectorize_file", vectorize_file)
+    monkeypatch.setattr("openviking.utils.resource_processor.SemanticProcessor", Mock())
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.SemanticProcessor.return_value._sync_topdown_recursive",
+        sync,
+    )
+    processor = ResourceProcessor(_FakeVikingDB())
+    processor._delete_removed_resource_vectors = AsyncMock()
+    lock = {"lease_ref": "lock-1"}
+
+    await processor.finish_prepared_resource(
+        {
+            "root_uri": "viking://resources/demo",
+            "temp_uri": "viking://temp/demo",
+            "temp_dir_path": "viking://temp/demo",
+            "source_committed": False,
+            "target_preexisting": True,
+        },
+        ctx=ctx,
+        resource_lock=lock,
+        build_index=True,
+        processing_mode="vectors_only",
+    )
+
+    assert vectorize_file.await_count == 2
+    vectorized_paths = {c.kwargs["file_path"] for c in vectorize_file.await_args_list}
+    assert vectorized_paths == {
+        "viking://resources/demo/new.md",
+        "viking://resources/demo/changed.md",
+    }
+    processor._delete_removed_resource_vectors.assert_awaited_once_with(
+        files=["viking://resources/demo/gone.md"],
+        dirs=[],
+        ctx=ctx,
+    )
+    viking_fs._async_agfs.pathlock_release.assert_awaited_once_with(lock)
+
+
+@pytest.mark.asyncio
 async def test_delete_removed_resource_vectors_deletes_detail_records(ctx):
     vikingdb = _RecordingVikingDB()
     processor = ResourceProcessor(vikingdb)

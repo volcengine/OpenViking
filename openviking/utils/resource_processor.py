@@ -534,6 +534,7 @@ class ResourceProcessor:
             try:
                 sync_deleted_files: list[str] = []
                 sync_deleted_dirs: list[str] = []
+                sync_changed_files: Optional[list[str]] = None
                 if not should_summarize and temp_uri and not source_committed:
                     viking_fs = get_viking_fs()
                     if vectors_only and target_preexisting and not root_is_file:
@@ -545,6 +546,9 @@ class ResourceProcessor:
                         )
                         sync_deleted_files = list(getattr(diff, "deleted_files", []))
                         sync_deleted_dirs = list(getattr(diff, "deleted_dirs", []))
+                        sync_changed_files = list(getattr(diff, "added_files", [])) + list(
+                            getattr(diff, "updated_files", [])
+                        )
                     else:
                         await viking_fs.persist_temp_tree(
                             temp_uri,
@@ -580,9 +584,15 @@ class ResourceProcessor:
                             root_uri, ctx=ctx, ingest_options=ingest_options
                         )
                     elif vectors_only:
-                        await self._vectorize_resource_files(
-                            root_uri, ctx=ctx, ingest_options=ingest_options
-                        )
+                        if target_preexisting and sync_changed_files is not None:
+                            for file_uri in dict.fromkeys(sync_changed_files):
+                                await self._vectorize_resource_file(
+                                    file_uri, ctx=ctx, ingest_options=ingest_options
+                                )
+                        else:
+                            await self._vectorize_resource_files(
+                                root_uri, ctx=ctx, ingest_options=ingest_options
+                            )
             finally:
                 await get_viking_fs()._async_agfs.pathlock_release(resource_lock)
         elif should_refresh_file_parent:
