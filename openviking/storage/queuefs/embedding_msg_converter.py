@@ -16,6 +16,21 @@ from openviking_cli.utils import get_logger
 logger = get_logger(__name__)
 
 
+def _current_backend_uses_content_field() -> bool:
+    """Return whether the configured vector backend needs full content in queue data."""
+    try:
+        from openviking.storage.vectordb_adapters.factory import backend_uses_content_field
+        from openviking_cli.utils.config import get_openviking_config
+
+        config = get_openviking_config()
+        vectordb_config = getattr(getattr(config, "storage", None), "vectordb", None)
+        if vectordb_config is None:
+            return False
+        return backend_uses_content_field(vectordb_config)
+    except Exception:
+        return False
+
+
 class EmbeddingMsgConverter:
     """Converter for Context objects to EmbeddingMsg."""
 
@@ -71,7 +86,7 @@ class EmbeddingMsgConverter:
         # Store full content in content field for bm25 full-text search.
         # Use full_text (raw file content) when available; fall back to vectorization_text.
         full_content = context.vectorize.full_text or vectorization_text
-        context_data["content"] = full_content
+        context_data["content"] = full_content if _current_backend_uses_content_field() else ""
 
         if vectorization_images:
             # Multimodal message: combine text (if any) and image references into the
