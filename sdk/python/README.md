@@ -186,10 +186,13 @@ result = client.create_session(
 )
 client.update_session_config(
     "demo-session",
+    auto_commit_policy={"message_count_threshold": 25},
     memory_extraction_config={
         "events": {"tags": ["team=search", "channel=app"]}
     },
 )
+# Explicit None disables automatic commits; omitting the argument leaves it unchanged.
+client.update_session_config("demo-session", auto_commit_policy=None)
 client.session("demo-session").commit(event_tags=["team=search", "channel=web"])
 # Use event_tags=[] to skip the session defaults for one commit.
 print(result)

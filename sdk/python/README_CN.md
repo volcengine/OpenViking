@@ -183,10 +183,13 @@ result = client.create_session(
 )
 client.update_session_config(
     "demo-session",
+    auto_commit_policy={"message_count_threshold": 25},
     memory_extraction_config={
         "events": {"tags": ["team=search", "channel=app"]}
     },
 )
+# 显式传 None 会禁用自动 commit；省略参数则保持不变。
+client.update_session_config("demo-session", auto_commit_policy=None)
 client.session("demo-session").commit(event_tags=["team=search", "channel=web"])
 # 单次 commit 传 event_tags=[] 可显式跳过 session 默认 tags。
 print(result)

@@ -352,6 +352,7 @@ class UpdateSessionConfigRequest(BaseModel):
     """
 
     memory_extraction_config: Optional[MemoryExtractionConfigRequest] = None
+    auto_commit_policy: Optional[AutoCommitPolicyRequest] = None
     telemetry: TelemetryRequest = False
 
     model_config = {"extra": "forbid"}
@@ -365,8 +366,8 @@ async def update_session_config(
 ):
     """Update mutable session config (event-memory default tags).
 
-    Takes effect on the next commit. ``auto_commit_policy`` is immutable after
-    creation and is not editable here.
+    Takes effect on subsequent message writes, idle scans, and commits.
+    ``auto_commit_policy=null`` disables automatic commits.
     """
     from openviking_cli.exceptions import NotFoundError
 
@@ -374,13 +375,24 @@ async def update_session_config(
     event_tags = _event_tags_from_extraction_config(
         request.memory_extraction_config
     )
+    update_auto_commit_policy = "auto_commit_policy" in request.model_fields_set
+    auto_commit_policy = (
+        request.auto_commit_policy.model_dump(exclude_none=True)
+        if request.auto_commit_policy is not None
+        else None
+    )
 
     async def _update() -> dict[str, Any]:
         session = await service.sessions.update_config(
-            session_id, _ctx, event_tags=event_tags
+            session_id,
+            _ctx,
+            event_tags=event_tags,
+            auto_commit_policy=auto_commit_policy,
+            update_auto_commit_policy=update_auto_commit_policy,
         )
         return {
             "session_id": session.session_id,
+            "auto_commit_policy": service.sessions.effective_auto_commit_policy(session),
             "memory_extraction_config": service.sessions.effective_memory_extraction_config(
                 session
             ),

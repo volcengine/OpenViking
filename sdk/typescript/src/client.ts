@@ -576,14 +576,17 @@ export class OpenVikingClient {
     sessionId: string,
     options: UpdateSessionConfigOptions,
   ): Promise<JsonObject> {
+    const body = compact({
+      memory_extraction_config: options.memoryExtractionConfig,
+      telemetry: options.telemetry,
+    });
+    if ("autoCommitPolicy" in options)
+      body.auto_commit_policy = options.autoCommitPolicy ?? null;
     return this.request(
       "PATCH",
       `/api/v1/sessions/${pathPart(sessionId)}/config`,
       {
-        body: compact({
-          memory_extraction_config: options.memoryExtractionConfig,
-          telemetry: options.telemetry,
-        }),
+        body,
       },
     );
   }

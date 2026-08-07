@@ -27,7 +27,7 @@ from openviking.telemetry.execution import (
 from openviking.utils.image_search import normalize_client_image_input
 from openviking.utils.search_filters import SearchContextTypeInput, merge_search_filter
 from openviking.utils.tags import build_search_tags_filter
-from openviking_cli.client.base import BaseClient
+from openviking_cli.client.base import SESSION_CONFIG_UNSET, BaseClient
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import run_async
@@ -922,20 +922,33 @@ class LocalClient(BaseClient):
         self,
         session_id: str,
         *,
-        memory_extraction_config: Dict[str, Any],
+        memory_extraction_config: Optional[Dict[str, Any]] = None,
+        auto_commit_policy: Any = SESSION_CONFIG_UNSET,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Update mutable session memory extraction settings."""
-        event_tags = memory_extraction_config.get("events", {}).get("tags")
+        event_tags = (
+            memory_extraction_config.get("events", {}).get("tags")
+            if memory_extraction_config is not None
+            else None
+        )
+        update_auto_commit_policy = auto_commit_policy is not SESSION_CONFIG_UNSET
 
         async def _update() -> Dict[str, Any]:
             session = await self._service.sessions.update_config(
                 session_id,
                 self._ctx,
                 event_tags=event_tags,
+                auto_commit_policy=(
+                    auto_commit_policy if update_auto_commit_policy else None
+                ),
+                update_auto_commit_policy=update_auto_commit_policy,
             )
             return {
                 "session_id": session.session_id,
+                "auto_commit_policy": (
+                    self._service.sessions.effective_auto_commit_policy(session)
+                ),
                 "memory_extraction_config": (
                     self._service.sessions.effective_memory_extraction_config(session)
                 ),

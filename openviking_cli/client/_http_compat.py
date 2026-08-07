@@ -36,6 +36,8 @@ from openviking_cli.exceptions import (
 )
 from openviking_cli.utils.async_utils import run_async
 
+_SESSION_CONFIG_UNSET = object()
+
 ERROR_CODE_TO_EXCEPTION = {
     "INVALID_ARGUMENT": InvalidArgumentError,
     "INVALID_URI": InvalidURIError,
@@ -202,6 +204,29 @@ class AsyncHTTPClient(import_openviking_sdk().AsyncHTTPClient):
         )
         return self._handle_response_data(response).get("result", {})
 
+    async def update_session_config(
+        self,
+        session_id: str,
+        *,
+        memory_extraction_config: Dict[str, Any] | None = None,
+        auto_commit_policy: Any = _SESSION_CONFIG_UNSET,
+        telemetry: Any = False,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {}
+        if memory_extraction_config is not None:
+            payload["memory_extraction_config"] = memory_extraction_config
+        if auto_commit_policy is not _SESSION_CONFIG_UNSET:
+            payload["auto_commit_policy"] = auto_commit_policy
+        if telemetry is not False:
+            payload["telemetry"] = telemetry
+        session_path = self._path_segment(session_id)
+        response = await self._request(
+            "PATCH",
+            f"/api/v1/sessions/{session_path}/config",
+            json=payload,
+        )
+        return self._handle_response_data(response).get("result", {})
+
     async def commit_session(
         self,
         session_id: str,
@@ -269,6 +294,22 @@ class SyncHTTPClient(import_openviking_sdk().SyncHTTPClient):
                 source_message_ids=source_message_ids,
             )
         )
+
+    def update_session_config(
+        self,
+        session_id: str,
+        *,
+        memory_extraction_config: Dict[str, Any] | None = None,
+        auto_commit_policy: Any = _SESSION_CONFIG_UNSET,
+        telemetry: Any = False,
+    ) -> Dict[str, Any]:
+        kwargs: Dict[str, Any] = {
+            "memory_extraction_config": memory_extraction_config,
+            "telemetry": telemetry,
+        }
+        if auto_commit_policy is not _SESSION_CONFIG_UNSET:
+            kwargs["auto_commit_policy"] = auto_commit_policy
+        return run_async(self._async_client.update_session_config(session_id, **kwargs))
 
     def commit_session(
         self,

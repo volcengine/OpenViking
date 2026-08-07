@@ -162,7 +162,8 @@ export interface MemoryExtractionConfig {
 }
 /** Mutable session configuration. */
 export interface UpdateSessionConfigOptions {
-  memoryExtractionConfig: MemoryExtractionConfig;
+  memoryExtractionConfig?: MemoryExtractionConfig;
+  autoCommitPolicy?: JsonObject | null;
   telemetry?: unknown;
 }
 /** Background task filters. */

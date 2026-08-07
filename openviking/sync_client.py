@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 from openviking.async_client import AsyncOpenViking
 from openviking.telemetry import TelemetryRequest
 from openviking.utils.search_filters import SearchContextTypeInput
+from openviking_cli.client.base import SESSION_CONFIG_UNSET
 from openviking_cli.utils import run_async
 
 
@@ -90,17 +91,18 @@ class SyncOpenViking:
         self,
         session_id: str,
         *,
-        memory_extraction_config: Dict[str, Any],
+        memory_extraction_config: Optional[Dict[str, Any]] = None,
+        auto_commit_policy: Any = SESSION_CONFIG_UNSET,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Update mutable session memory extraction settings."""
-        return run_async(
-            self._async_client.update_session_config(
-                session_id,
-                memory_extraction_config=memory_extraction_config,
-                telemetry=telemetry,
-            )
-        )
+        kwargs: Dict[str, Any] = {
+            "memory_extraction_config": memory_extraction_config,
+            "telemetry": telemetry,
+        }
+        if auto_commit_policy is not SESSION_CONFIG_UNSET:
+            kwargs["auto_commit_policy"] = auto_commit_policy
+        return run_async(self._async_client.update_session_config(session_id, **kwargs))
 
     def get_session_context(self, session_id: str, token_budget: int = 128_000) -> Dict[str, Any]:
         """Get assembled session context."""

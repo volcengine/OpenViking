@@ -312,7 +312,10 @@ describe("OpenVikingClient", () => {
     };
 
     await client.createSession({ sessionId: "tagged", memoryExtractionConfig });
-    await client.updateSessionConfig("tagged", { memoryExtractionConfig });
+    await client.updateSessionConfig("tagged", {
+      memoryExtractionConfig,
+      autoCommitPolicy: { message_count_threshold: 25 },
+    });
     await client.commitSession("tagged", 0, undefined, []);
 
     expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
@@ -321,10 +324,16 @@ describe("OpenVikingClient", () => {
     });
     expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toEqual({
       memory_extraction_config: memoryExtractionConfig,
+      auto_commit_policy: { message_count_threshold: 25 },
     });
     expect(JSON.parse(String(fetcher.mock.calls[2]![1]?.body))).toEqual({
       keep_recent_count: 0,
       extraction_metadata: { event: { tags: [] } },
+    });
+
+    await client.updateSessionConfig("tagged", { autoCommitPolicy: null });
+    expect(JSON.parse(String(fetcher.mock.calls[3]![1]?.body))).toEqual({
+      auto_commit_policy: null,
     });
   });
 

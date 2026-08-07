@@ -478,8 +478,8 @@ class SessionMeta:
     retained_message_token_budget: int = 0
     min_raw_tail_steps: int = 1
     memory_policy: Optional[Dict[str, Any]] = None
-    # Automatic-commit policy, set once at session creation and immutable after.
-    # None keeps auto-commit disabled; a dict enables it with the stored bounds.
+    # Automatic-commit policy. None keeps auto-commit disabled; a dict enables
+    # it with the stored bounds. Session config PATCH may update it.
     auto_commit_policy: Optional[Dict[str, Any]] = None
     # Timestamp of the most recent add_message, used by the idle scan to decide
     # whether an idle-timeout commit is due.
@@ -782,8 +782,17 @@ class Session:
             lease_ref=lease_ref,
         )
 
-    async def update_event_search_tags(self, event_search_tags: List[str]) -> None:
-        """Update event-memory default tags without overwriting concurrent meta changes."""
+    async def update_config(
+        self,
+        *,
+        event_search_tags: Optional[List[str]] = None,
+        auto_commit_policy: Optional[Dict[str, Any]] = None,
+        update_auto_commit_policy: bool = False,
+    ) -> None:
+        """Update mutable session config without overwriting concurrent meta changes."""
+        update_auto_commit_policy = (
+            update_auto_commit_policy or auto_commit_policy is not None
+        )
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
         lease = await self._viking_fs._async_agfs.pathlock_acquire_tree(
             session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
@@ -798,10 +807,22 @@ class Session:
             except Exception as exc:
                 if not _is_storage_not_found(exc):
                     raise
-            self._meta.event_search_tags = list(event_search_tags)
+            if event_search_tags is not None:
+                self._meta.event_search_tags = list(event_search_tags)
+            if update_auto_commit_policy:
+                if auto_commit_policy is None:
+                    self._meta.auto_commit_policy = None
+                else:
+                    existing = dict(self._meta.auto_commit_policy or {})
+                    existing.update(auto_commit_policy)
+                    self._meta.auto_commit_policy = AutoCommitPolicy.from_dict(existing).to_dict()
             await self._save_meta(lease_ref=lease)
         finally:
             await self._viking_fs._async_agfs.pathlock_release(lease)
+
+    async def update_event_search_tags(self, event_search_tags: List[str]) -> None:
+        """Update event-memory default tags."""
+        await self.update_config(event_search_tags=event_search_tags)
 
     @property
     def messages(self) -> List[Message]:

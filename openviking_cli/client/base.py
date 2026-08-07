@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional, Union
 from openviking.telemetry import TelemetryRequest
 from openviking.utils.search_filters import SearchContextTypeInput
 
+SESSION_CONFIG_UNSET = object()
+
 
 class BaseClient(ABC):
     """Abstract base class for OpenViking clients.
@@ -366,7 +368,8 @@ class BaseClient(ABC):
         self,
         session_id: str,
         *,
-        memory_extraction_config: Dict[str, Any],
+        memory_extraction_config: Optional[Dict[str, Any]] = None,
+        auto_commit_policy: Any = SESSION_CONFIG_UNSET,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Update mutable session memory extraction settings."""

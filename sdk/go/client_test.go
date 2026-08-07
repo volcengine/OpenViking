@@ -1365,6 +1365,7 @@ func TestSessionAPIsSendEventMemoryTags(t *testing.T) {
 	}
 	if _, err := client.UpdateSessionConfig(context.Background(), "tagged", &UpdateSessionConfigOptions{
 		MemoryExtractionConfig: config,
+		AutoCommitPolicy:       Map(map[string]any{"message_count_threshold": 25}),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1385,10 +1386,35 @@ func TestSessionAPIsSendEventMemoryTags(t *testing.T) {
 		requests[1]["path"] != "/api/v1/sessions/tagged/config" {
 		t.Fatalf("patch request = %#v", requests[1])
 	}
+	patchBody := requests[1]["body"].(map[string]any)
+	if policy, ok := patchBody["auto_commit_policy"].(map[string]any); !ok ||
+		policy["message_count_threshold"] != float64(25) {
+		t.Fatalf("patch auto_commit_policy = %#v", patchBody["auto_commit_policy"])
+	}
 	commitBody := requests[2]["body"].(map[string]any)
 	metadata := commitBody["extraction_metadata"].(map[string]any)
 	event := metadata["event"].(map[string]any)
 	if tags, ok := event["tags"].([]any); !ok || len(tags) != 0 {
 		t.Fatalf("commit event tags = %#v", event["tags"])
+	}
+}
+
+func TestUpdateSessionConfigCanDisableAutoCommit(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		value, ok := body["auto_commit_policy"]
+		if !ok || value != nil {
+			t.Fatalf("auto_commit_policy = %#v, present = %v", value, ok)
+		}
+		writeOK(t, w, map[string]any{"auto_commit_policy": nil})
+	}))
+	defer closeServer()
+
+	if _, err := client.UpdateSessionConfig(
+		context.Background(),
+		"tagged",
+		&UpdateSessionConfigOptions{AutoCommitPolicy: Map(nil)},
+	); err != nil {
+		t.Fatal(err)
 	}
 }

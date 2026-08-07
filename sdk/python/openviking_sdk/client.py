@@ -65,6 +65,7 @@ ERROR_CODE_TO_EXCEPTION = {
 
 GATEWAY_MARKER_HEADER = "X-VikingBot-Gateway"
 GATEWAY_TOKEN_HEADER = "X-Gateway-Token"
+_SESSION_CONFIG_UNSET = object()
 
 
 
@@ -1366,12 +1367,15 @@ class AsyncHTTPClient:
         self,
         session_id: str,
         *,
-        memory_extraction_config: Dict[str, Any],
+        memory_extraction_config: Optional[Dict[str, Any]] = None,
+        auto_commit_policy: Any = _SESSION_CONFIG_UNSET,
         telemetry: Any = False,
     ) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {
-            "memory_extraction_config": memory_extraction_config,
-        }
+        payload: Dict[str, Any] = {}
+        if memory_extraction_config is not None:
+            payload["memory_extraction_config"] = memory_extraction_config
+        if auto_commit_policy is not _SESSION_CONFIG_UNSET:
+            payload["auto_commit_policy"] = auto_commit_policy
         if telemetry is not False:
             payload["telemetry"] = telemetry
         session_path = self._path_segment(session_id)
@@ -2378,16 +2382,17 @@ class SyncHTTPClient:
         self,
         session_id: str,
         *,
-        memory_extraction_config: Dict[str, Any],
+        memory_extraction_config: Optional[Dict[str, Any]] = None,
+        auto_commit_policy: Any = _SESSION_CONFIG_UNSET,
         telemetry: Any = False,
     ) -> Dict[str, Any]:
-        return run_async(
-            self._async_client.update_session_config(
-                session_id,
-                memory_extraction_config=memory_extraction_config,
-                telemetry=telemetry,
-            )
-        )
+        kwargs: Dict[str, Any] = {
+            "memory_extraction_config": memory_extraction_config,
+            "telemetry": telemetry,
+        }
+        if auto_commit_policy is not _SESSION_CONFIG_UNSET:
+            kwargs["auto_commit_policy"] = auto_commit_policy
+        return run_async(self._async_client.update_session_config(session_id, **kwargs))
 
     def get_session_context(self, session_id: str, token_budget: int = 128_000) -> Dict[str, Any]:
         return run_async(self._async_client.get_session_context(session_id, token_budget))

@@ -413,19 +413,53 @@ pub async fn set_session_config(
     session_id: &str,
     event_tags: &[String],
     no_event_tags: bool,
+    auto_commit_policy_json: Option<&str>,
+    no_auto_commit: bool,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     let path = format!("/api/v1/sessions/{}/config", url_encode(session_id));
-    let tags = if no_event_tags { &[][..] } else { event_tags };
-    let body = json!({
-        "memory_extraction_config": {
-            "events": {"tags": tags}
-        }
-    });
+    let body = session_config_body(
+        event_tags,
+        no_event_tags,
+        auto_commit_policy_json,
+        no_auto_commit,
+    )?;
     let response: serde_json::Value = client.patch(&path, &body, &[]).await?;
     output_success(&response, output_format, compact);
     Ok(())
+}
+
+fn session_config_body(
+    event_tags: &[String],
+    no_event_tags: bool,
+    auto_commit_policy_json: Option<&str>,
+    no_auto_commit: bool,
+) -> Result<Value> {
+    let mut body = json!({});
+    let object = body
+        .as_object_mut()
+        .expect("session config request body must be an object");
+    if no_event_tags || !event_tags.is_empty() {
+        let tags = if no_event_tags { &[][..] } else { event_tags };
+        object.insert(
+            "memory_extraction_config".to_string(),
+            json!({"events": {"tags": tags}}),
+        );
+    }
+    if no_auto_commit {
+        object.insert("auto_commit_policy".to_string(), Value::Null);
+    } else if let Some(raw) = auto_commit_policy_json {
+        let policy = serde_json::from_str::<Value>(raw)
+            .map_err(|error| Error::Client(format!("invalid auto-commit policy JSON: {error}")))?;
+        if !policy.is_object() {
+            return Err(Error::Client(
+                "--auto-commit-policy-json must be a JSON object".to_string(),
+            ));
+        }
+        object.insert("auto_commit_policy".to_string(), policy);
+    }
+    Ok(body)
 }
 
 fn event_tags_body(event_tags: Option<&[String]>) -> Value {
@@ -502,6 +536,7 @@ fn url_encode(s: &str) -> String {
 mod tests {
     use super::{
         create_session_body, event_tags_body, parse_messages, render_session_get_for_table,
+        session_config_body,
     };
     use crate::error::Error;
     use serde_json::json;
@@ -538,6 +573,24 @@ mod tests {
         assert_eq!(
             event_tags_body(Some(&[])),
             json!({"extraction_metadata": {"event": {"tags": []}}})
+        );
+
+        assert_eq!(
+            session_config_body(
+                &["channel=app".to_string()],
+                false,
+                Some(r#"{"message_count_threshold":25}"#),
+                false,
+            )
+            .expect("combined config body"),
+            json!({
+                "memory_extraction_config": {"events": {"tags": ["channel=app"]}},
+                "auto_commit_policy": {"message_count_threshold": 25}
+            })
+        );
+        assert_eq!(
+            session_config_body(&[], false, None, true).expect("disable config body"),
+            json!({"auto_commit_policy": null})
         );
     }
 

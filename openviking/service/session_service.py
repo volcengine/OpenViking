@@ -222,7 +222,7 @@ class SessionService:
                        If None, creates a new session with auto-generated ID.
             memory_policy: Optional default extraction policy for future commits.
             auto_commit_policy: Optional automatic-commit policy overrides. Missing
-                fields fall back to the recommended defaults. Immutable after creation.
+                fields fall back to the recommended defaults.
             event_tags: Optional default custom scalar tags for event memories
                 (``config.memory_extraction_config.events.tags``). Normalized to
                 canonical ``key=value`` form; ``None`` leaves no session default.
@@ -494,18 +494,27 @@ class SessionService:
         ctx: RequestContext,
         *,
         event_tags: Optional[List[str]] = None,
+        auto_commit_policy: Optional[Dict[str, Any]] = None,
+        update_auto_commit_policy: bool = False,
     ) -> Session:
         """Update the mutable parts of a session's config.
 
-        Only fields explicitly provided (not ``None``) are changed. ``event_tags``
-        follows three-state semantics: ``None`` leaves the default untouched,
-        ``[]`` clears it, and a non-empty list replaces it. Takes effect on the
-        next commit.
+        Only fields explicitly provided are changed. ``event_tags`` uses
+        ``None`` for no change and ``[]`` to clear. ``auto_commit_policy`` is
+        merged field-by-field when ``update_auto_commit_policy`` is true; a
+        policy value of ``None`` disables automatic commits.
         """
         self._ensure_initialized()
         session = await self.get(session_id, ctx)
-        if event_tags is not None:
-            await session.update_event_search_tags(normalize_search_tags(event_tags))
+        normalized_event_tags = (
+            normalize_search_tags(event_tags) if event_tags is not None else None
+        )
+        if normalized_event_tags is not None or update_auto_commit_policy:
+            await session.update_config(
+                event_search_tags=normalized_event_tags,
+                auto_commit_policy=auto_commit_policy,
+                update_auto_commit_policy=update_auto_commit_policy,
+            )
         return session
 
     async def maybe_schedule_auto_commit(

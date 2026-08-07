@@ -18,9 +18,11 @@ def test_legacy_base_client_subclass_without_git_diff_remains_instantiable():
 def test_base_client_session_signatures_include_event_tag_configuration():
     create_params = inspect.signature(BaseClient.create_session).parameters
     commit_params = inspect.signature(BaseClient.commit_session).parameters
+    update_params = inspect.signature(BaseClient.update_session_config).parameters
 
     assert "memory_extraction_config" in create_params
     assert "event_tags" in commit_params
+    assert "auto_commit_policy" in update_params
 
 
 @pytest.mark.asyncio

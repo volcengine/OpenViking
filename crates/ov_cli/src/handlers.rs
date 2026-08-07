@@ -593,12 +593,16 @@ pub async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()>
                 session_id,
                 event_tags,
                 no_event_tags,
+                auto_commit_policy_json,
+                no_auto_commit,
             } => {
                 commands::session::set_session_config(
                     &client,
                     &session_id,
                     &event_tags,
                     no_event_tags,
+                    auto_commit_policy_json.as_deref(),
+                    no_auto_commit,
                     ctx.output_format,
                     ctx.compact,
                 )

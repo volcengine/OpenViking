@@ -44,10 +44,12 @@ await client.createSession({
   },
 });
 await client.updateSessionConfig("s1", {
+  autoCommitPolicy: { message_count_threshold: 25 },
   memoryExtractionConfig: {
     events: { tags: ["team=search", "channel=app"] },
   },
 });
+await client.updateSessionConfig("s1", { autoCommitPolicy: null });
 await client.commitSession("s1", 0, undefined, ["team=search", "channel=web"]);
 await client.commitSession("s1", 0, undefined, []);
 ```

@@ -256,6 +256,7 @@ type GetSessionOptions struct {
 // UpdateSessionConfigOptions controls UpdateSessionConfig.
 type UpdateSessionConfigOptions struct {
 	MemoryExtractionConfig map[string]any
+	AutoCommitPolicy       *map[string]any
 	Telemetry              any
 }
 

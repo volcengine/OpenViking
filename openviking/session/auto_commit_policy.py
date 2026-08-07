@@ -4,8 +4,8 @@
 
 Sessions without a stored policy keep automatic commits disabled. When a policy
 object is present, missing fields fall back to the recommended defaults below.
-The policy is set once at session creation and inspected via session GET; it is
-immutable afterwards, so there is no per-message or patch handling here.
+The policy can be set at session creation or updated through the session config
+API; message writes and idle scans read the persisted effective policy.
 """
 
 from __future__ import annotations

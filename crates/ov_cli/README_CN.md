@@ -163,6 +163,8 @@ ov grep "openviking" --uri viking://resources
 ```bash
 ov session new --session-id s1 --event-tags team=search,channel=web
 ov session config set s1 --event-tags team=search,channel=app
+ov session config set s1 --auto-commit-policy-json '{"message_count_threshold":25}'
+ov session config set s1 --no-auto-commit
 ov session commit s1 --event-tags team=search,channel=web
 ov session commit s1 --no-event-tags
 ```

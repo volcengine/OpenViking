@@ -49,6 +49,9 @@ func (c *Client) UpdateSessionConfig(ctx context.Context, sessionID string, opts
 	}
 	payload := map[string]any{}
 	setAny(payload, "memory_extraction_config", opts.MemoryExtractionConfig)
+	if opts.AutoCommitPolicy != nil {
+		payload["auto_commit_policy"] = *opts.AutoCommitPolicy
+	}
 	setAny(payload, "telemetry", opts.Telemetry)
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPatch, "/api/v1/sessions/"+url.PathEscape(sessionID)+"/config", nil, payload, &result)

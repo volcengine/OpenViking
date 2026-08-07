@@ -1456,17 +1456,44 @@ enum SessionConfigCommands {
             long = "event-tags",
             value_name = "key=value",
             value_delimiter = ',',
-            required_unless_present = "no_event_tags",
+            required_unless_present_any = [
+                "no_event_tags",
+                "auto_commit_policy_json",
+                "no_auto_commit"
+            ],
             conflicts_with = "no_event_tags"
         )]
         event_tags: Vec<String>,
         /// Clear the session's default event-memory tags
         #[arg(
             long = "no-event-tags",
-            required_unless_present = "event_tags",
+            required_unless_present_any = [
+                "event_tags",
+                "auto_commit_policy_json",
+                "no_auto_commit"
+            ],
             conflicts_with = "event_tags"
         )]
         no_event_tags: bool,
+        /// Auto-commit policy fields as a JSON object
+        #[arg(
+            long = "auto-commit-policy-json",
+            value_name = "json",
+            required_unless_present_any = ["event_tags", "no_event_tags", "no_auto_commit"],
+            conflicts_with = "no_auto_commit"
+        )]
+        auto_commit_policy_json: Option<String>,
+        /// Disable automatic commits for this session
+        #[arg(
+            long = "no-auto-commit",
+            required_unless_present_any = [
+                "event_tags",
+                "no_event_tags",
+                "auto_commit_policy_json"
+            ],
+            conflicts_with = "auto_commit_policy_json"
+        )]
+        no_auto_commit: bool,
     },
 }
 
@@ -3809,12 +3836,16 @@ mod tests {
                                 session_id,
                                 event_tags,
                                 no_event_tags,
+                                auto_commit_policy_json,
+                                no_auto_commit,
                             },
                     },
             } => {
                 assert_eq!(session_id, "s1");
                 assert_eq!(event_tags, vec!["channel=app"]);
                 assert!(!no_event_tags);
+                assert!(auto_commit_policy_json.is_none());
+                assert!(!no_auto_commit);
             }
             _ => panic!("expected session config set"),
         }
@@ -3850,6 +3881,51 @@ mod tests {
             .is_err()
         );
         assert!(Cli::try_parse_from(["ov", "session", "config", "set", "s1"]).is_err());
+
+        let policy = Cli::try_parse_from([
+            "ov",
+            "session",
+            "config",
+            "set",
+            "s1",
+            "--auto-commit-policy-json",
+            r#"{"message_count_threshold":25}"#,
+        ])
+        .expect("session auto-commit policy should parse");
+        match policy.command {
+            Commands::Session {
+                action:
+                    SessionCommands::Config {
+                        action:
+                            SessionConfigCommands::Set {
+                                auto_commit_policy_json,
+                                no_auto_commit,
+                                ..
+                            },
+                    },
+            } => {
+                assert_eq!(
+                    auto_commit_policy_json.as_deref(),
+                    Some(r#"{"message_count_threshold":25}"#)
+                );
+                assert!(!no_auto_commit);
+            }
+            _ => panic!("expected session config set"),
+        }
+
+        assert!(
+            Cli::try_parse_from([
+                "ov",
+                "session",
+                "config",
+                "set",
+                "s1",
+                "--auto-commit-policy-json",
+                "{}",
+                "--no-auto-commit",
+            ])
+            .is_err()
+        );
     }
 
     #[test]
