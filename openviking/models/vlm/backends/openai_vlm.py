@@ -216,6 +216,55 @@ class OpenAIVLM(VLMBase):
             )
         return message.content or ""
 
+    @staticmethod
+    def _extract_from_chunk(chunk) -> str:
+        """Extract text content from a single streaming chunk."""
+        choices = getattr(chunk, "choices", None) or []
+        if not choices:
+            return ""
+        delta = getattr(choices[0], "delta", None)
+        if delta is None:
+            return ""
+        return getattr(delta, "content", None) or ""
+
+    def _process_streaming_response(self, chunks) -> str:
+        """Concatenate streaming chunks and record token usage from the final chunk."""
+        parts: List[str] = []
+        usage_seen = None
+        for chunk in chunks:
+            content = self._extract_from_chunk(chunk)
+            if content:
+                parts.append(content)
+            if not usage_seen and getattr(chunk, "usage", None):
+                usage_seen = chunk.usage
+        if usage_seen:
+            self.update_token_usage(
+                model_name=self.model or "gpt-4o-mini",
+                provider=self.provider,
+                prompt_tokens=getattr(usage_seen, "prompt_tokens", 0) or 0,
+                completion_tokens=getattr(usage_seen, "completion_tokens", 0) or 0,
+            )
+        return "".join(parts)
+
+    async def _process_streaming_response_async(self, chunks) -> str:
+        """Async counterpart of _process_streaming_response."""
+        parts: List[str] = []
+        usage_seen = None
+        async for chunk in chunks:
+            content = self._extract_from_chunk(chunk)
+            if content:
+                parts.append(content)
+            if not usage_seen and getattr(chunk, "usage", None):
+                usage_seen = chunk.usage
+        if usage_seen:
+            self.update_token_usage(
+                model_name=self.model or "gpt-4o-mini",
+                provider=self.provider,
+                prompt_tokens=getattr(usage_seen, "prompt_tokens", 0) or 0,
+                completion_tokens=getattr(usage_seen, "completion_tokens", 0) or 0,
+            )
+        return "".join(parts)
+
     def _build_text_kwargs(
         self,
         prompt: str = "",
@@ -242,6 +291,8 @@ class OpenAIVLM(VLMBase):
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
+        else:
+            kwargs["stream"] = bool(self.stream)
         return kwargs
 
     def _build_vision_kwargs(
@@ -280,14 +331,22 @@ class OpenAIVLM(VLMBase):
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
+        else:
+            kwargs["stream"] = bool(self.stream)
         return kwargs
 
     def _extract_completion_content(self, response, elapsed: float) -> str:
+        if self.stream:
+            content = self._process_streaming_response(response)
+            return self._clean_response(content)
         self._update_token_usage_from_response(response, duration_seconds=elapsed)
         content = self._extract_content_from_response(response)
         return self._clean_response(content)
 
     async def _extract_completion_content_async(self, response, elapsed: float) -> str:
+        if self.stream:
+            content = await self._process_streaming_response_async(response)
+            return self._clean_response(content)
         self._update_token_usage_from_response(response, duration_seconds=elapsed)
         content = self._extract_content_from_response(response)
         return self._clean_response(content)
