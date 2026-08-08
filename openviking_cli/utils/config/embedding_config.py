@@ -317,7 +317,7 @@ class EmbeddingModelConfig(BaseModel):
             ]:
                 if value and value.upper() not in _GEMINI_TASK_TYPES:
                     raise ValueError(
-                        f"{label}: invalid {field_name} '{value}' for Gemini. "
+                        f"{label}: Invalid {field_name} '{value}' for Gemini. "
                         f"Valid task_types: {', '.join(sorted(_GEMINI_TASK_TYPES))}"
                     )
 
@@ -881,6 +881,7 @@ class EmbeddingConfig(BaseModel):
                 lambda cfg: {
                     "model_name": cfg.model,
                     "api_key": cfg.api_key,
+                    "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
                     "config": dict(runtime_config),
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
