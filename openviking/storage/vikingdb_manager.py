@@ -505,7 +505,8 @@ class VikingDBManagerProxy:
         self,
         uri: str,
         new_uri: str,
-    ) -> bool:
+    ) -> Optional[bool]:
+        """Return True when remapped, None when absent, or False on invalid records."""
         return await self._manager.update_uri_mapping(
             self._ctx,
             uri=uri,
