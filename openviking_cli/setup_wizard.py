@@ -785,6 +785,7 @@ class LocalGGUFPreset:
 
 LOCAL_GGUF_PRESETS: list[LocalGGUFPreset] = [
     LocalGGUFPreset("BGE-small-zh v1.5 (f16)", "bge-small-zh-v1.5-f16", 512, "~24 MB"),
+    LocalGGUFPreset("BGE-small-en v1.5 (f16)", "bge-small-en-v1.5-f16", 384, "~65 MB"),
 ]
 
 
