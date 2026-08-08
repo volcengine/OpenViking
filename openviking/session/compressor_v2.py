@@ -9,6 +9,7 @@ Maintains the service-facing compressor interface.
 
 import asyncio
 import json
+from contextlib import nullcontext
 from datetime import datetime
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
@@ -76,6 +77,122 @@ def _log_memory_lock_retry(
         return now
 
     return last_warning_at
+
+
+class _LockRefresher:
+    """Background refresh of a pathlock lease held across LLM extraction.
+
+    **Motivation** (re-implementation of PR #3581 for the post-Rust AGFS lock API):
+
+    The v2 compressor has two orchestrator phases (long-term memories + session
+    skills / execution memories) that hold a pathlock lease for the memory
+    schema directory while making N successive LLM calls. Each LLM call is
+    open-ended (network latency, VLM image encoding, tool use, etc.) and a
+    batch can easily run for 2--10 minutes. The underlying pathlock tokens are
+    considered stale after ``lock_expire_secs`` (default 300s in the Rust
+    manager). Once a lease is stale, another process can successfully remove
+    the token and re-acquire the same locks, after which the original
+    extractor's ``updater.apply_operations()`` writes will fail with a lock
+    conflict and the batch is lost.
+
+    The removed Python ``OwnedLockLease`` wrapper from the old
+    ``openviking/storage/transaction/path_lock.py`` solved this by exposing a
+    ``refresh_lock()`` method that the compressor wrapped in an ``asyncio``
+    background task. After PR #3602 replaced that file with the Rust
+    ``ragfs/src/lock/manager.rs`` implementation, the refresh surface moved to
+    ``viking_fs._async_agfs.pathlock_refresh(lease)`` and the Python wrapper
+    class was deleted. The compressor was never migrated, so from PR #3602
+    until this commit, long-running extractions held leases with NO periodic
+    refresh, exposing them to the exact stale-token race described above.
+
+    **How to use**::
+
+        lease = await agfs.pathlock_acquire_exact_tree_batch(...)
+        async with _LockRefresher(viking_fs, lease, refresh_period_s) as refresh_handle:
+            # ... minutes of LLM orchestrator work ...
+            updater.apply_operations(..., transaction_handle=refresh_handle.lease)
+        # On __aexit__ the refresh task is cancelled before caller releases the lease.
+
+    ``refresh_period_s`` defaults to 90s, which is safely inside the default
+    300s ``lock_expire_secs`` window (gives us 2-3 refreshes before a token
+    would otherwise become stale). Pass ``None`` and the constructor derives
+    ``lock_expire_secs * 0.3`` from ``get_openviking_config()`` if available,
+    falling back to 90s.
+    """
+
+    __slots__ = ("agfs", "lease", "period_s", "_task", "_stopped", "_phase_label")
+
+    def __init__(
+        self,
+        viking_fs: VikingFS,
+        lease,
+        refresh_period_s: Optional[float] = None,
+        phase_label: str = "",
+    ) -> None:
+        agfs = getattr(viking_fs, "_async_agfs", None)
+        if agfs is None:
+            raise RuntimeError("_LockRefresher requires VikingFS._async_agfs")
+        self.agfs = agfs
+        self.lease = lease
+        period = refresh_period_s
+        if period is None or period <= 0:
+            try:
+                cfg = get_openviking_config()
+                expire = float(
+                    getattr(getattr(cfg, "storage", None), "lock_expire_seconds", 0.0)
+                    or getattr(getattr(cfg, "memory", None), "v2_lock_expire_seconds", 0.0)
+                    or 0.0
+                )
+                period = expire * 0.3 if expire > 0 else None
+            except Exception:  # noqa: BLE001 — never raise from config read, fall back
+                period = None
+            if period is None or period <= 0:
+                period = 90.0
+        self.period_s = float(period)
+        self._task: Optional[asyncio.Task] = None
+        self._stopped = False
+        self._phase_label = phase_label
+
+    async def _refresh_loop(self) -> None:
+        prefix = f"[{self._phase_label}] " if self._phase_label else ""
+        while not self._stopped:
+            try:
+                await asyncio.sleep(self.period_s)
+                if self._stopped:
+                    return
+                await self.agfs.pathlock_refresh(self.lease)
+                logger.debug(
+                    "%sRefreshed memory schema lock lease (period=%.1fs)",
+                    prefix, self.period_s,
+                )
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:  # noqa: BLE001 — never let a refresh failure kill orchestrator
+                logger.warning(
+                    "%sLock lease background refresh failed (continuing): %s",
+                    prefix, exc,
+                )
+
+    async def __aenter__(self) -> "_LockRefresher":
+        if not self._stopped and self._task is None:
+            self._task = asyncio.create_task(
+                self._refresh_loop(), name="ov-compressor-lock-refresh",
+            )
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        self._stopped = True
+        task = self._task
+        self._task = None
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:  # noqa: BLE001
+                prefix = f"[{self._phase_label}] " if self._phase_label else ""
+                logger.debug("%sLock refresher task exited with: %s", prefix, exc)
 
 
 def _render_memory_schema_locks(
@@ -376,93 +493,105 @@ class SessionCompressorV2:
 
             orchestrator._transaction_handle = transaction_handle  # 传递给 ExtractLoop
 
-            # Run ReAct orchestrator
-            operations, tools_used = await orchestrator.run()
-
-            if operations is None:
-                tracer.info("No memory operations generated")
-                result = MemoryUpdateResult()
-            else:
-                updater = self._get_or_create_updater(registry, transaction_handle)
-
-                # Apply operations with isolation_handler
-                result = await updater.apply_operations(
-                    operations,
-                    ctx,
-                    extract_context=extract_context,
-                    isolation_handler=isolation_handler,
-                )
-
-                tracer.info(
-                    f"Applied memory operations: written={len(result.written_uris)}, "
-                    f"edited={len(result.edited_uris)}, deleted={len(result.deleted_uris)}, "
-                    f"errors={len(result.errors)}"
-                )
-
-            # Write memory_diff.json to archive directory
-            if archive_uri and viking_fs:
-                if operations is None:
-                    memory_diff = self._empty_memory_diff(archive_uri)
-                else:
-                    memory_diff = await self._build_memory_diff(
-                        result=result,
-                        operations=operations,
-                        viking_fs=viking_fs,
-                        ctx=ctx,
-                        archive_uri=archive_uri,
-                    )
-                await viking_fs.write_file(
-                    uri=f"{archive_uri}/memory_diff.json",
-                    content=json.dumps(memory_diff, ensure_ascii=False, indent=4),
-                    ctx=ctx,
-                )
-                logger.info(f"Wrote memory_diff.json to {archive_uri}")
-
-            # Report telemetry stats.
-            telemetry = get_current_telemetry()
-            telemetry.set(
-                "memory.extract.candidates.total",
-                len(result.written_uris) + len(result.edited_uris),
+            # Background-refresh the pathlock lease while the orchestrator /
+            # updater run. The lock tokens become stale after
+            # lock_expire_secs (default 300s); a long-running VLM extract can
+            # easily exceed that. Without refresh a concurrent extractor may
+            # win the same locks and our apply_operations then loses the
+            # race. Skip when has_agfs is false (no lock lease acquired).
+            refresh_ctx = (
+                _LockRefresher(viking_fs, lease)
+                if has_agfs and lease is not None
+                else nullcontext()
             )
-            telemetry.set("memory.extract.created", len(result.written_uris))
-            telemetry.set("memory.extract.merged", len(result.edited_uris))
-            telemetry.set("memory.extract.deleted", len(result.deleted_uris))
-            telemetry.set("memory.extract.skipped", len(result.errors))
+            async with refresh_ctx:  # noqa: SIM117 — async with stacking less readable here
+                # Run ReAct orchestrator
+                operations, tools_used = await orchestrator.run()
 
-            # Build Context objects for stats in session.py
-            contexts: List[Context] = []
+                if operations is None:
+                    tracer.info("No memory operations generated")
+                    result = MemoryUpdateResult()
+                else:
+                    updater = self._get_or_create_updater(registry, transaction_handle)
 
-            # Written memories
-            for uri in result.written_uris:
-                contexts.append(
-                    Context(
-                        uri=uri,
-                        category="memory_write",
-                        context_type="memory",
+                    # Apply operations with isolation_handler
+                    result = await updater.apply_operations(
+                        operations,
+                        ctx,
+                        extract_context=extract_context,
+                        isolation_handler=isolation_handler,
                     )
-                )
 
-            # Edited memories
-            for uri in result.edited_uris:
-                contexts.append(
-                    Context(
-                        uri=uri,
-                        category="memory_edit",
-                        context_type="memory",
+                    tracer.info(
+                        f"Applied memory operations: written={len(result.written_uris)}, "
+                        f"edited={len(result.edited_uris)}, deleted={len(result.deleted_uris)}, "
+                        f"errors={len(result.errors)}"
                     )
-                )
 
-            # Deleted memories
-            for uri in result.deleted_uris:
-                contexts.append(
-                    Context(
-                        uri=uri,
-                        category="memory_delete",
-                        context_type="memory",
+                # Write memory_diff.json to archive directory
+                if archive_uri and viking_fs:
+                    if operations is None:
+                        memory_diff = self._empty_memory_diff(archive_uri)
+                    else:
+                        memory_diff = await self._build_memory_diff(
+                            result=result,
+                            operations=operations,
+                            viking_fs=viking_fs,
+                            ctx=ctx,
+                            archive_uri=archive_uri,
+                        )
+                    await viking_fs.write_file(
+                        uri=f"{archive_uri}/memory_diff.json",
+                        content=json.dumps(memory_diff, ensure_ascii=False, indent=4),
+                        ctx=ctx,
                     )
-                )
+                    logger.info(f"Wrote memory_diff.json to {archive_uri}")
 
-            return contexts
+                # Report telemetry stats.
+                telemetry = get_current_telemetry()
+                telemetry.set(
+                    "memory.extract.candidates.total",
+                    len(result.written_uris) + len(result.edited_uris),
+                )
+                telemetry.set("memory.extract.created", len(result.written_uris))
+                telemetry.set("memory.extract.merged", len(result.edited_uris))
+                telemetry.set("memory.extract.deleted", len(result.deleted_uris))
+                telemetry.set("memory.extract.skipped", len(result.errors))
+
+                # Build Context objects for stats in session.py
+                contexts: List[Context] = []
+
+                # Written memories
+                for uri in result.written_uris:
+                    contexts.append(
+                        Context(
+                            uri=uri,
+                            category="memory_write",
+                            context_type="memory",
+                        )
+                    )
+
+                # Edited memories
+                for uri in result.edited_uris:
+                    contexts.append(
+                        Context(
+                            uri=uri,
+                            category="memory_edit",
+                            context_type="memory",
+                        )
+                    )
+
+                # Deleted memories
+                for uri in result.deleted_uris:
+                    contexts.append(
+                        Context(
+                            uri=uri,
+                            category="memory_delete",
+                            context_type="memory",
+                        )
+                    )
+
+                return contexts
 
         except Exception as e:
             logger.error(f"Failed to extract memories with v2: {e}", exc_info=True)
@@ -817,99 +946,110 @@ class SessionCompressorV2:
 
             provider._transaction_handle = transaction_handle
             orchestrator._transaction_handle = transaction_handle
-            operations, _ = await orchestrator.run()
 
-            if operations is None:
-                tracer.info(f"[{phase_label}] No memory operations generated")
-                return [], [], [], {}, []
-
-            # Log raw LLM operations before applying.
-            _op_items = [
-                f"{op.memory_type}(uris={op.uris!r})"
-                for op in getattr(operations, "upsert_operations", [])
-            ]
-            _delete_uris_raw = [dc.uri for dc in getattr(operations, "delete_file_contents", [])]
-            tracer.info(
-                f"[{phase_label}] LLM operations: ops={_op_items}, delete_uris={_delete_uris_raw}"
+            # Mirror the same stale-lease protection used for long-term
+            # memories (see the comment next to _LockRefresher). This phase
+            # often runs tool-calling + apply_operation loops that can take
+            # several minutes, also past the default 300s stale window.
+            refresh_ctx = (
+                _LockRefresher(viking_fs, lease, phase_label=phase_label)
+                if has_agfs and lease is not None
+                else nullcontext()
             )
+            async with refresh_ctx:  # noqa: SIM117
+                operations, _ = await orchestrator.run()
 
-            # Resolve supersedes fields (name-based Replace): find old experience URI,
-            # queue for deletion, and return per-URI inheritance map so only the
-            # superseding experience inherits the old source_trajectories.
-            inheritance_map = await self._resolve_supersedes(operations, ctx, viking_fs, provider)
+                if operations is None:
+                    tracer.info(f"[{phase_label}] No memory operations generated")
+                    return [], [], [], {}, []
 
-            memory_operations, skill_operations, unsupported_skill_deletes = (
-                self._split_operations_by_memory_type(operations)
-            )
-            if unsupported_skill_deletes:
-                logger.warning(
-                    "[%s] Ignoring unsupported session skill deletes: %s",
-                    phase_label,
-                    unsupported_skill_deletes,
-                )
-
-            memory_result = MemoryUpdateResult()
-            if (
-                memory_operations.upsert_operations
-                or memory_operations.delete_file_contents
-                or memory_operations.errors
-            ):
-                registry = provider._get_registry()
-                updater = self._get_or_create_updater(registry, transaction_handle)
-                memory_result = await updater.apply_operations(
-                    memory_operations,
-                    ctx,
-                    extract_context=extract_context,
-                    isolation_handler=isolation_handler,
-                )
-
-            tracer.info(
-                f"[{phase_label}] Applied memory ops: written={len(memory_result.written_uris)}, "
-                f"edited={len(memory_result.edited_uris)}, deleted={len(memory_result.deleted_uris)}, "
-                f"errors={len(memory_result.errors)}"
-            )
-
-            if post_apply:
-                await post_apply(memory_result, inheritance_map, transaction_handle)
-
-            skill_results: List[Dict[str, Any]] = []
-            if skill_operations.upsert_operations:
-                if not self.skill_processor:
-                    raise RuntimeError("SkillProcessor is required for session skill extraction")
-                skill_operations = dedup_session_skill_operations(skill_operations)
-                skill_updater = SkillOperationUpdater(
-                    registry=provider._get_registry(),
-                    skill_processor=self.skill_processor,
-                    viking_fs=viking_fs,
-                )
-                skill_result = await skill_updater.apply_operations(skill_operations, ctx)
+                # Log raw LLM operations before applying.
+                _op_items = [
+                    f"{op.memory_type}(uris={op.uris!r})"
+                    for op in getattr(operations, "upsert_operations", [])
+                ]
+                _delete_uris_raw = [dc.uri for dc in getattr(operations, "delete_file_contents", [])]
                 tracer.info(
-                    f"[{phase_label}] Applied session skill ops: written={len(skill_result.written_uris)}, "
-                    f"edited={len(skill_result.edited_uris)}, errors={len(skill_result.errors)}"
+                    f"[{phase_label}] LLM operations: ops={_op_items}, delete_uris={_delete_uris_raw}"
                 )
-                if skill_result.errors:
+
+                # Resolve supersedes fields (name-based Replace): find old experience URI,
+                # queue for deletion, and return per-URI inheritance map so only the
+                # superseding experience inherits the old source_trajectories.
+                inheritance_map = await self._resolve_supersedes(operations, ctx, viking_fs, provider)
+
+                memory_operations, skill_operations, unsupported_skill_deletes = (
+                    self._split_operations_by_memory_type(operations)
+                )
+                if unsupported_skill_deletes:
                     logger.warning(
-                        "[%s] Session skill extraction completed with %d errors",
+                        "[%s] Ignoring unsupported session skill deletes: %s",
                         phase_label,
-                        len(skill_result.errors),
+                        unsupported_skill_deletes,
                     )
-                skill_results = list(skill_result.operation_results)
 
-            contexts: List[Context] = []
-            for uri in memory_result.written_uris:
-                contexts.append(Context(uri=uri, category="memory_write", context_type="memory"))
-            for uri in memory_result.edited_uris:
-                contexts.append(Context(uri=uri, category="memory_edit", context_type="memory"))
-            for uri in memory_result.deleted_uris:
-                contexts.append(Context(uri=uri, category="memory_delete", context_type="memory"))
+                memory_result = MemoryUpdateResult()
+                if (
+                    memory_operations.upsert_operations
+                    or memory_operations.delete_file_contents
+                    or memory_operations.errors
+                ):
+                    registry = provider._get_registry()
+                    updater = self._get_or_create_updater(registry, transaction_handle)
+                    memory_result = await updater.apply_operations(
+                        memory_operations,
+                        ctx,
+                        extract_context=extract_context,
+                        isolation_handler=isolation_handler,
+                    )
 
-            return (
-                list(memory_result.written_uris),
-                list(memory_result.edited_uris),
-                contexts,
-                inheritance_map,
-                skill_results,
-            )
+                tracer.info(
+                    f"[{phase_label}] Applied memory ops: written={len(memory_result.written_uris)}, "
+                    f"edited={len(memory_result.edited_uris)}, deleted={len(memory_result.deleted_uris)}, "
+                    f"errors={len(memory_result.errors)}"
+                )
+
+                if post_apply:
+                    await post_apply(memory_result, inheritance_map, transaction_handle)
+
+                skill_results: List[Dict[str, Any]] = []
+                if skill_operations.upsert_operations:
+                    if not self.skill_processor:
+                        raise RuntimeError("SkillProcessor is required for session skill extraction")
+                    skill_operations = dedup_session_skill_operations(skill_operations)
+                    skill_updater = SkillOperationUpdater(
+                        registry=provider._get_registry(),
+                        skill_processor=self.skill_processor,
+                        viking_fs=viking_fs,
+                    )
+                    skill_result = await skill_updater.apply_operations(skill_operations, ctx)
+                    tracer.info(
+                        f"[{phase_label}] Applied session skill ops: written={len(skill_result.written_uris)}, "
+                        f"edited={len(skill_result.edited_uris)}, errors={len(skill_result.errors)}"
+                    )
+                    if skill_result.errors:
+                        logger.warning(
+                            "[%s] Session skill extraction completed with %d errors",
+                            phase_label,
+                            len(skill_result.errors),
+                        )
+                    skill_results = list(skill_result.operation_results)
+
+                contexts: List[Context] = []
+                for uri in memory_result.written_uris:
+                    contexts.append(Context(uri=uri, category="memory_write", context_type="memory"))
+                for uri in memory_result.edited_uris:
+                    contexts.append(Context(uri=uri, category="memory_edit", context_type="memory"))
+                for uri in memory_result.deleted_uris:
+                    contexts.append(Context(uri=uri, category="memory_delete", context_type="memory"))
+
+                return (
+                    list(memory_result.written_uris),
+                    list(memory_result.edited_uris),
+                    contexts,
+                    inheritance_map,
+                    skill_results,
+                )
         except Exception as e:
             logger.error(f"[{phase_label}] Failed to extract: {e}", exc_info=True)
             if strict_extract_errors:
