@@ -6,21 +6,23 @@ OpenViking provides multiple retrieval methods, including simple vector similari
 
 | Aspect | find | search |
 |--------|------|--------|
-| Intent Analysis | No | Yes |
-| Session Context | No | Yes |
-| Query Expansion | No | Yes |
+| Intent Analysis | No | With non-empty session context |
+| Session Context | No | Optional |
+| Query Expansion | No | With non-empty session context |
 | Default Limit | 10 | 10 |
-| Use Case | Simple queries | Conversational search |
+| Use Case | Simple queries | Conversational or direct search |
 
 ## Retrieval Pipeline
 
 The core retrieval pipeline is as follows:
 
 ```
-Query → Intent Analysis (search only) → Vector Search (L0) → Rerank (L1) → Results
+Query → [Intent Analysis + Query Expansion, only with non-empty session context]
+      → Vector Search (L0) → Rerank (L1) → Results
 ```
 
-1. **Intent Analysis** (search only): Understand query intent, expand queries
+1. **Intent Analysis and Query Expansion** (`search()` with non-empty session context only):
+   Understand query intent and expand queries
 2. **Vector Search**: Find candidates using embeddings
 3. **Rerank**: Re-score using content for better accuracy
 4. **Results**: Return top-k contexts
@@ -362,18 +364,20 @@ openviking find "red poster style" --image ./poster.png --uri "viking://resource
 
 ### search()
 
-Intelligent retrieval with session context and intent analysis.
+Retrieval with optional session-aware intent analysis.
 
 #### 1. API Implementation Introduction
 
-The `search()` method adds session context understanding and intent analysis capability on top of `find()`. It better understands user query intent based on conversation history, performs query expansion, and provides more relevant search results.
+For text retrieval, `search()` uses conversation history to analyze intent and expand the query
+only when the supplied session has non-empty context. Without non-empty session context,
+`search()` executes the supplied query directly and returns no query plan.
 
 **Processing Pipeline**:
-1. Load session context (if session_id is provided)
-2. Analyze query intent, understand actual needs combined with conversation history
-3. Expand queries to improve recall rate
-4. Execute same hierarchical retrieval pipeline as `find()`
-5. Return search results with query plan
+1. Load session context if `session` or `session_id` is provided
+2. With non-empty session context, analyze intent, expand the query, and create a query plan;
+   otherwise, use the supplied query directly
+3. Execute the same hierarchical retrieval pipeline as `find()`
+4. Return search results, including a query plan only when intent analysis ran
 
 **Code Entry Points**:
 - `openviking_cli/client/sync_http.py:SyncHTTPClient.search()` - Python SDK entry (HTTP)
@@ -428,7 +432,10 @@ curl -X POST http://localhost:1933/api/v1/search/search \
     }'
 ```
 
-**Search without Session (Still Performs Intent Analysis)**
+**Search without Session**
+
+Without `session` or `session_id`, `search()` executes the supplied query directly, skips intent
+analysis and query expansion, and returns no query plan.
 
 ```bash
 curl -X POST http://localhost:1933/api/v1/search/search \
@@ -488,7 +495,7 @@ for ctx in results.resources:
 
 ```python
 # search can also be used without session
-# It still performs intent analysis on the query
+# It executes the supplied query directly without intent analysis
 results = client.search(
     "how to implement OAuth 2.0 authorization code flow"
 )
@@ -535,7 +542,7 @@ openviking search "best practices" --context-type skill
 # Search with time filter
 openviking search "watch vs scheduled" --after 2026-03-15 --before 2026-03-20
 
-# Search without session (still performs intent analysis)
+# Search without session (direct retrieval)
 openviking search "how to implement OAuth 2.0 authorization code flow"
 
 # Limit to specific level(s) (L0 only)

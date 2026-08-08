@@ -6,21 +6,21 @@ OpenViking 提供多种检索方法，包括简单的向量相似度搜索、带
 
 | 方面 | find | search |
 |------|------|--------|
-| 意图分析 | 否 | 是 |
-| 会话上下文 | 否 | 是 |
-| 查询扩展 | 否 | 是 |
+| 意图分析 | 否 | 有非空会话上下文时 |
+| 会话上下文 | 否 | 可选 |
+| 查询扩展 | 否 | 有非空会话上下文时 |
 | 默认结果数 | 10 | 10 |
-| 使用场景 | 简单查询 | 对话式搜索 |
+| 使用场景 | 简单查询 | 对话式或直接搜索 |
 
 ## 检索流程
 
 检索的核心流程如下：
 
 ```
-查询 → 意图分析（仅search）→ 向量搜索（L0）→ 重排序（L1）→ 结果
+查询 → [意图分析和查询扩展，仅有非空会话上下文时] → 向量搜索（L0）→ 重排序（L1）→ 结果
 ```
 
-1. **意图分析**（仅 search）：理解查询意图，扩展查询
+1. **意图分析和查询扩展**（仅有非空会话上下文的 `search()`）：理解查询意图并扩展查询
 2. **向量搜索**：使用 Embedding 查找候选项
 3. **重排序**：使用内容重新评分以提高准确性
 4. **结果**：返回 top-k 上下文
@@ -363,18 +363,18 @@ openviking find "红色海报风格" --image ./poster.png --uri "viking://resour
 
 ### search()
 
-带会话上下文和意图分析的智能检索。
+支持可选会话上下文和意图分析的检索。
 
 #### 1. API 实现介绍
 
-`search()` 方法在 `find()` 的基础上增加了会话上下文理解和意图分析能力。它可以根据历史对话更好地理解用户查询意图，执行查询扩展，提供更相关的搜索结果。
+对于文本检索，仅当传入的会话包含非空上下文时，`search()` 才会根据历史对话分析意图并扩展查询。
+没有非空会话上下文时，`search()` 会直接执行传入的查询，且不返回查询计划。
 
 **处理流程**：
-1. 加载会话上下文（如果提供了 session_id）
-2. 分析查询意图，结合对话历史理解真实需求
-3. 扩展查询以提高召回率
-4. 执行与 `find()` 相同的分层检索流程
-5. 返回带查询计划的搜索结果
+1. 提供 `session` 或 `session_id` 时加载会话上下文
+2. 存在非空会话上下文时，分析意图、扩展查询并创建查询计划；否则直接使用传入的查询
+3. 执行与 `find()` 相同的分层检索流程
+4. 返回搜索结果；仅当执行过意图分析时才包含查询计划
 
 **代码入口**：
 - `openviking_cli/client/sync_http.py:SyncHTTPClient.search()` - Python SDK 入口（HTTP）
@@ -430,7 +430,10 @@ curl -X POST http://localhost:1933/api/v1/search/search \
     }'
 ```
 
-**不带会话的搜索（仍会进行意图分析）**
+**不带会话的搜索**
+
+未提供 `session` 或 `session_id` 时，`search()` 会直接执行传入的查询，跳过意图分析和查询扩展，
+且不返回查询计划。
 
 ```bash
 curl -X POST http://localhost:1933/api/v1/search/search \
@@ -490,7 +493,7 @@ for ctx in results.resources:
 
 ```python
 # search 也可以在没有会话的情况下使用
-# 它仍然会对查询进行意图分析
+# 它会直接执行传入的查询，不进行意图分析
 results = client.search(
     "how to implement OAuth 2.0 authorization code flow"
 )
@@ -537,7 +540,7 @@ openviking search "best practices" --context-type skill
 # 带时间过滤的搜索
 openviking search "watch vs scheduled" --after 2026-03-15 --before 2026-03-20
 
-# 不带会话的搜索（仍进行意图分析）
+# 不带会话的搜索（直接检索）
 openviking search "how to implement OAuth 2.0 authorization code flow"
 
 # 限定层级范围（仅 L0）
