@@ -6,6 +6,7 @@ import {
   createConnectionRoleProbeKey,
   resolveSwitchedIdentity,
   resolveConnectionRoleProbeState,
+  resolveHealthRole,
   resolveInitialApiKey,
   shouldRedirectToLoginOnApiError,
   synchronizeConnectionRuntime,
@@ -300,6 +301,29 @@ describe('resolveConnectionRoleProbeState', () => {
       role: 'unknown',
       shouldProbe: true,
     })
+  })
+})
+
+describe('resolveHealthRole', () => {
+  it('returns root for dev servers even when /health omits the role field', () => {
+    expect(resolveHealthRole({ auth_mode: 'dev' })).toBe('root')
+  })
+
+  it('prefers dev auth_mode over an unexpected role value', () => {
+    expect(resolveHealthRole({ auth_mode: 'dev', role: 'Role.ROOT' })).toBe(
+      'root',
+    )
+  })
+
+  it('echoes the resolved role for non-dev servers', () => {
+    expect(resolveHealthRole({ auth_mode: 'api_key', role: 'admin' })).toBe(
+      'admin',
+    )
+  })
+
+  it('falls back to unknown when the role is missing or invalid', () => {
+    expect(resolveHealthRole({ auth_mode: 'api_key' })).toBe('unknown')
+    expect(resolveHealthRole({ role: 'Role.ROOT' })).toBe('unknown')
   })
 })
 
