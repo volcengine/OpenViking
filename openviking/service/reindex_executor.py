@@ -41,6 +41,7 @@ from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, OpenV
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.config import get_openviking_config
+from openviking_cli.utils.config.embedding_config import SUMMARY_TEXT_SOURCES
 
 logger = get_logger(__name__)
 
@@ -1052,20 +1053,17 @@ class ReindexExecutor:
             parent_uri = VikingURI(file_uri).parent.uri
             summary = await self._best_file_summary(file_uri, ctx=ctx)
             vector_text = await self._best_resource_file_vector_text(file_uri, summary, ctx=ctx)
-            if not vector_text:
+            if vector_text == "":
                 counters.unsupported_records += 1
                 counters.warnings.append(f"No vector source found for {file_uri}")
                 continue
-            abstract = self._prefer_non_empty(summary, vector_text)
-            # Read full file content for BM25 content field (not embedding-truncated)
-            full_text = await self._safe_read_text(file_uri, ctx=ctx) or vector_text
+            abstract = self._prefer_non_empty(summary, vector_text or "")
             try:
                 await self._upsert_context(
                     uri=file_uri,
                     parent_uri=parent_uri,
                     abstract=abstract,
                     vector_text=vector_text,
-                    full_text=full_text,
                     is_leaf=True,
                     context_type=context_type_for_uri(file_uri),
                     level=ContextLevel.DETAIL,
@@ -1607,8 +1605,7 @@ class ReindexExecutor:
         uri: str,
         summary: str,
         ctx: RequestContext,
-    ) -> str:
-        text_source = getattr(get_openviking_config().embedding, "text_source", "summary_first")
+    ) -> Optional[str]:
         existing = await self._fetch_existing_record(
             uri=uri,
             level=2,
@@ -1618,14 +1615,10 @@ class ReindexExecutor:
         content_type = get_resource_content_type(uri.rsplit("/", 1)[-1])
 
         if content_type == ResourceContentType.TEXT:
-            content = await self._safe_read_text(uri, ctx=ctx)
-            if text_source in {"summary_first", "summary_only"} and summary:
+            text_source = get_openviking_config().embedding.text_source
+            if text_source in SUMMARY_TEXT_SOURCES and summary:
                 return summary
-            if content:
-                return self._truncate_embedding_text(content)
-            if summary:
-                return summary
-            return fallback
+            return None
 
         if summary:
             return summary
@@ -1637,8 +1630,7 @@ class ReindexExecutor:
         uri: str,
         parent_uri: str,
         abstract: str,
-        vector_text: str,
-        full_text: str = "",
+        vector_text: Optional[str],
         is_leaf: bool,
         context_type: str,
         level: ContextLevel,
@@ -1669,7 +1661,7 @@ class ReindexExecutor:
             owner_space=owner_space_for_uri(uri, owner_ctx),
             meta=merged_meta,
         )
-        context.set_vectorize(Vectorize(text=vector_text, full_text=full_text or vector_text))
+        context.set_vectorize(Vectorize(text=vector_text))
         msg = EmbeddingMsgConverter.from_context(context)
         if msg is None:
             raise OpenVikingError(
@@ -1726,14 +1718,6 @@ class ReindexExecutor:
 
     def _is_hidden_meta_file(self, uri: str) -> bool:
         return uri.endswith("/.abstract.md") or uri.endswith("/.overview.md")
-
-    def _truncate_embedding_text(self, value: str) -> str:
-        max_input_chars = int(
-            getattr(get_openviking_config().embedding, "max_input_chars", 1000) or 1000
-        )
-        if len(value) <= max_input_chars:
-            return value
-        return value[:max_input_chars] + "\n...(truncated for embedding)"
 
     async def _safe_read_text(self, uri: str, *, ctx: RequestContext) -> str:
         viking_fs = get_viking_fs()

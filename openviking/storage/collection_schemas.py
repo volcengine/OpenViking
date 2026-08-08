@@ -16,7 +16,8 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from openviking.models.embedder.base import EmbedResult, embed_compat
+from openviking.core.context import ContextType, ResourceContentType
+from openviking.models.embedder.base import EmbeddingInput, EmbedResult, embed_compat
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.errors import (
     CollectionNotFoundError,
@@ -26,6 +27,7 @@ from openviking.storage.errors import (
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.viking_vector_index_backend import (
+    VIKINGDB_CONTENT_MAX_SIZE,
     VikingVectorIndexBackend,
     normalize_upsert_options,
 )
@@ -538,6 +540,105 @@ class TextEmbeddingHandler(DequeueHandlerBase):
     ) -> str:
         return f"{message} ({cls._embedding_msg_log_context(embedding_msg)})"
 
+    @staticmethod
+    async def _materialize_input(
+        embedding_msg: EmbeddingMsg,
+        ctx: RequestContext,
+    ) -> EmbeddingInput:
+        from openviking.storage.viking_fs import get_viking_fs
+        from openviking.utils.embedding_utils import (
+            _build_image_data_uri,
+            _coerce_text_file_content,
+        )
+
+        if embedding_msg.message is None:
+            viking_fs = get_viking_fs()
+            source_uri = embedding_msg.context_data["uri"]
+            try:
+                source_content = _coerce_text_file_content(
+                    await viking_fs.read_file(source_uri, ctx=ctx)
+                )
+            except Exception as source_err:
+                logger.warning(
+                    "Failed to materialize embedding input for %s: %s",
+                    source_uri,
+                    source_err,
+                )
+                source_content = ""
+            return source_content or embedding_msg.context_data["abstract"]
+
+        if isinstance(embedding_msg.message, str):
+            return embedding_msg.message
+
+        viking_fs = get_viking_fs()
+        materialized_parts = []
+        for part in embedding_msg.message:
+            if part["type"] == "image_url" and part["image_url"]["url"].startswith("viking://"):
+                image_uri = part["image_url"]["url"]
+                data_uri = await _build_image_data_uri(
+                    image_uri,
+                    image_uri.rsplit("/", 1)[-1],
+                    viking_fs,
+                    ctx,
+                )
+                if data_uri:
+                    materialized_parts.append({"type": "image_url", "image_url": {"url": data_uri}})
+            else:
+                materialized_parts.append(part)
+        return materialized_parts
+
+    @staticmethod
+    async def _materialize_content(
+        embedding_msg: EmbeddingMsg,
+        ctx: RequestContext,
+    ) -> str:
+        inserted_data = embedding_msg.context_data
+        if (
+            inserted_data.get("is_leaf")
+            and inserted_data.get("context_type")
+            in (ContextType.RESOURCE.value, ContextType.SKILL.value)
+        ):
+            from openviking.storage.viking_fs import get_viking_fs
+            from openviking.utils.embedding_utils import (
+                _coerce_text_file_content,
+                _decode_text_bytes,
+                _resolve_resource_content_type,
+            )
+
+            viking_fs = get_viking_fs()
+            source_uri = inserted_data["uri"]
+            source_name = source_uri.rsplit("/", 1)[-1]
+            source_type = await _resolve_resource_content_type(
+                source_uri,
+                source_name,
+                viking_fs,
+                ctx,
+            )
+            if source_type in (None, ResourceContentType.TEXT):
+                try:
+                    if source_type == ResourceContentType.TEXT:
+                        source_content = _coerce_text_file_content(
+                            await viking_fs.read_file(source_uri, ctx=ctx)
+                        )
+                    else:
+                        source_content = _decode_text_bytes(
+                            await viking_fs.read_file_bytes(source_uri, ctx=ctx)
+                        )
+                except Exception as source_err:
+                    logger.warning(
+                        "Failed to materialize full-text content for %s: %s",
+                        source_uri,
+                        source_err,
+                    )
+                else:
+                    return source_content[:VIKINGDB_CONTENT_MAX_SIZE]
+
+        return (
+            embedding_msg.message[:VIKINGDB_CONTENT_MAX_SIZE]
+            if isinstance(embedding_msg.message, str)
+            else inserted_data["abstract"][:VIKINGDB_CONTENT_MAX_SIZE]
+        )
+
     async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """Process dequeued message and add embedding vector(s)."""
         if not data:
@@ -553,6 +654,9 @@ class TextEmbeddingHandler(DequeueHandlerBase):
             # Parse EmbeddingMsg from data
             embedding_msg = EmbeddingMsg.from_dict(queue_data)
             inserted_data = embedding_msg.context_data
+            account_id = inserted_data.get("account_id", "default")
+            user = UserIdentifier(account_id=account_id, user_id="default")
+            ctx = RequestContext(user=user, role=Role.ROOT)
             collector = resolve_telemetry(embedding_msg.telemetry_id)
             telemetry_ctx = bind_telemetry(collector) if collector is not None else nullcontext()
 
@@ -564,8 +668,10 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     report_success = True
                     return None
 
-                # Process string (text) or list (multimodal) messages
-                if not isinstance(embedding_msg.message, (str, list)):
+                # None is a deferred text input backed by context_data["uri"].
+                if embedding_msg.message is not None and not isinstance(
+                    embedding_msg.message, (str, list)
+                ):
                     logger.debug(
                         f"Skipping unsupported message type: {type(embedding_msg.message)}"
                     )
@@ -581,7 +687,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     self._breaker_open_suppressed_count = 0
                 except CircuitBreakerOpen:
                     self._log_breaker_open_reenqueue_summary()
-                    if getattr(self._vikingdb, "has_queue_manager", False):
+                    if self._vikingdb.has_queue_manager:
                         wait = self._circuit_breaker.retry_after
                         if wait > 0:
                             await asyncio.sleep(wait)
@@ -614,13 +720,27 @@ class TextEmbeddingHandler(DequeueHandlerBase):
 
                 # Generate embedding vector(s)
                 if self._embedder:
+                    embedding_input = await self._materialize_input(
+                        embedding_msg,
+                        ctx,
+                    )
                     try:
                         import time as _time
 
                         _embed_t0 = _time.monotonic()
+                        embedding_input = self._embedder.prepare_embedding_input(embedding_input)
+                        if not embedding_input:
+                            logger.warning(
+                                "No embedding input available for %s", inserted_data.get("uri")
+                            )
+                            self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
+                            self._record_request_success(embedding_msg)
+                            report_success = True
+                            return None
                         result: EmbedResult = await embed_compat(
-                            self._embedder, embedding_msg.message, is_query=False
+                            self._embedder, embedding_input, is_query=False
                         )
+                        del embedding_input
                         _embed_elapsed = _time.monotonic() - _embed_t0
                         try:
                             from openviking.metrics.datasources import EmbeddingEventDataSource
@@ -632,6 +752,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         except Exception:
                             pass
                     except Exception as embed_err:
+                        del embedding_input
                         error_msg = self._embedding_error_msg(
                             embedding_msg,
                             f"Failed to generate embedding: {embed_err}",
@@ -678,7 +799,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         # Transient or unknown — re-enqueue for retry
                         logger.warning(error_msg)
                         self._circuit_breaker.record_failure(embed_err)
-                        if getattr(self._vikingdb, "has_queue_manager", False):
+                        if self._vikingdb.has_queue_manager:
                             try:
                                 await self._vikingdb.enqueue_embedding_msg(embedding_msg)
                                 self._merge_request_stats(
@@ -761,11 +882,11 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         id_seed = f"{account_id}:{seed_uri}"
                         inserted_data["id"] = hashlib.md5(id_seed.encode("utf-8")).hexdigest()
 
-                    user = UserIdentifier(
-                        account_id=account_id,
-                        user_id="default",
-                    )
-                    ctx = RequestContext(user=user, role=Role.ROOT)
+                    if self._vikingdb.uses_content_field:
+                        inserted_data["content"] = await self._materialize_content(
+                            embedding_msg,
+                            ctx,
+                        )
                     result = await self._vikingdb.upsert(
                         inserted_data,
                         ctx=ctx,

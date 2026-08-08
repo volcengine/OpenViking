@@ -8,7 +8,8 @@ from uuid import uuid4
 
 @dataclass
 class EmbeddingMsg:
-    message: Union[str, List[Dict[str, Any]]]
+    # None defers input materialization to the canonical URI in context_data.
+    message: Optional[Union[str, List[Dict[str, Any]]]]
     context_data: Dict[str, Any]
     id: str = field(default_factory=lambda: str(uuid4()))
     telemetry_id: str = ""
@@ -16,7 +17,7 @@ class EmbeddingMsg:
 
     def __init__(
         self,
-        message: Union[str, List[Dict[str, Any]]],
+        message: Optional[Union[str, List[Dict[str, Any]]]],
         context_data: Dict[str, Any],
         telemetry_id: str = "",
         semantic_msg_id: Optional[str] = None,

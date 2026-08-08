@@ -361,9 +361,9 @@ async def test_reindex_upsert_uses_uri_owner_for_user_scoped_records(monkeypatch
     )
 
     data = captured["msg"].context_data
-    assert data["user"]["user_id"] == "bob"
     assert data["owner_user_id"] == "bob"
-    assert data["owner_space"] == "bob"
+    assert "user" not in data
+    assert "owner_space" not in data
     assert captured["lookup_ctx"].user.user_id == "bob"
 
 

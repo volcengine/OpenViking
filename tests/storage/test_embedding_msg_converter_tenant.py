@@ -45,15 +45,17 @@ def test_embedding_msg_converter_backfills_account_and_owner_fields(
         expected_owner_user_id(user) if callable(expected_owner_user_id) else expected_owner_user_id
     )
     assert msg.context_data["owner_user_id"] == expected_user
+    assert "content" not in msg.context_data
 
 
-def test_embedding_msg_converter_preserves_full_content_without_vikingdb_truncation():
-    full_content = "x" * (1024 * 1024 + 17)
+def test_embedding_msg_converter_keeps_content_out_of_queue_metadata():
     context = Context(uri="viking://resources/large.txt", abstract="short embedding text")
-    context.set_vectorize(Vectorize(text="short embedding text", full_text=full_content))
+    context.meta["unused"] = "not index data"
+    context.set_vectorize(Vectorize(text="short embedding text"))
 
     msg = EmbeddingMsgConverter.from_context(context)
 
     assert msg is not None
     assert msg.message == "short embedding text"
-    assert msg.context_data["content"] == full_content
+    assert "content" not in msg.context_data
+    assert "meta" not in msg.context_data
