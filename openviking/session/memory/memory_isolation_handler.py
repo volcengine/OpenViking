@@ -10,6 +10,7 @@ from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryTypeSchema, ResolvedOperation
 from openviking.session.memory.memory_updater import ExtractContext
 from openviking.session.memory.utils.uri import generate_uri, render_template
+from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -174,12 +175,31 @@ class MemoryIsolationHandler:
             return []
 
         target_ids = []
+        has_self_owned_messages = False
         for msg_group in getattr(msg_range, "elements", []) or []:
             for msg in msg_group:
-                target_id = self._message_target_id(msg)
-                if target_id:
-                    target_ids.append(target_id)
-        return list(dict.fromkeys(target_ids))
+                raw_peer_id = getattr(msg, "peer_id", None)
+                peer_id = safe_peer_id(raw_peer_id)
+                role = getattr(msg, "role", None)
+                if raw_peer_id in (None, ""):
+                    if self.allow_self:
+                        target_ids.append(_SELF_PEER_ID)
+                        if role == "user":
+                            has_self_owned_messages = True
+                else:
+                    if self._can_write_peer(peer_id):
+                        target_ids.append(peer_id)
+                        if role == "user":
+                            has_self_owned_messages = True
+        result = list(dict.fromkeys(target_ids))
+        if result and not has_self_owned_messages:
+            tracer.warning(
+                "Event range has no self-owned (user-role) messages; persisting with "
+                "available peer/assistant targets only. ranges=%s targets=%s",
+                ranges,
+                result,
+            )
+        return result
 
     def _resolve_operation_target_id(self, raw_peer_id: Any) -> Optional[str]:
         peer_id = safe_peer_id(raw_peer_id)
