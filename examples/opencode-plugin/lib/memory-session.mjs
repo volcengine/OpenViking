@@ -30,16 +30,117 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   const statePath = path.join(pluginRoot, "openviking-session-state.json")
   const oldSessionMapPath = path.join(pluginRoot, "openviking-session-map.json")
   let saveTimer = null
+  let flushTimer = null
+  let periodicFlushRunning = false
+  let periodicFlushPromise = null
+  let shuttingDown = false
+  let savePromise = Promise.resolve()
+  let saveCounter = 0
 
   async function init() {
     if (config.autoCapture) await migrateLegacySessionMap()
     await loadState()
+    await sweepStaleTempFiles()
     const health = await fetchJSON(config, "/health", {}, { timeoutMs: 5000 })
     if (health.ok) {
       await replayPending(
         (endpoint, init = {}, options = {}) => fetchJSON(config, endpoint, init, options),
         (stage, data) => log("DEBUG", "pending", stage, data),
       )
+    }
+    startPeriodicFlush()
+  }
+
+  function startPeriodicFlush() {
+    if (!config.autoCapture) return
+    if (shuttingDown) return
+    const intervalMs = Number(config.periodicFlushIntervalMs) > 0 ? config.periodicFlushIntervalMs : 60000
+    if (flushTimer) clearInterval(flushTimer)
+    flushTimer = setInterval(() => {
+      // A tick may have been queued just before flushAll's clearInterval; skip it
+      // during teardown so a periodic flush cannot start concurrently with flushAll.
+      if (shuttingDown) return
+      runPeriodicFlush().catch((error) => {
+        log("ERROR", "session", "Periodic flush failed", { error: error?.message })
+      })
+    }, intervalMs)
+    if (typeof flushTimer.unref === "function") flushTimer.unref()
+    log("INFO", "session", "Periodic flush timer started", { intervalMs })
+  }
+
+  async function runPeriodicFlush() {
+    if (periodicFlushRunning) return
+    periodicFlushRunning = true
+    const done = (async () => {
+      try {
+        for (const [opencodeSessionId, state] of sessions.entries()) {
+          let hasPending = false
+          for (const message of state.messages.values()) {
+            if (!message.captured) {
+              hasPending = true
+              break
+            }
+          }
+          if (hasPending) {
+            await flushSession(opencodeSessionId, { commit: false, reason: "periodic" })
+          }
+        }
+      } finally {
+        periodicFlushRunning = false
+      }
+    })()
+    periodicFlushPromise = done
+    return done
+  }
+
+  async function sweepStaleTempFiles() {
+    // saveState writes to a unique temp file (`${statePath}.${pid}.${n}.tmp`) then
+    // renames it onto statePath. A crash between writeFile and rename leaves an
+    // orphan temp behind; sweep them on startup so they don't accumulate forever.
+    // We parse the PID from the filename and skip files whose PID is still alive
+    // to avoid removing a concurrent process's in-flight temp — but only if the
+    // file is recent, so a recycled PID can't shield an orphan temp forever.
+    const RECENT_TEMP_MS = 10 * 60 * 1000
+    try {
+      const dir = path.dirname(statePath)
+      const base = path.basename(statePath)
+      const entries = await fs.promises.readdir(dir)
+      for (const name of entries) {
+        if (name.startsWith(`${base}.`) && name.endsWith(".tmp")) {
+          const fullPath = path.join(dir, name)
+          const match = name.match(/\.(\d+)\.\d+\.tmp$/)
+          if (match) {
+            let alive = false
+            try {
+              process.kill(Number(match[1]), 0) // probe: process is alive
+              alive = true
+            } catch (err) {
+              // EPERM (or other non-ESRCH) — process may be alive (possibly a
+              // different OS user); treat as alive to be safe. ESRCH — dead.
+              alive = err?.code !== "ESRCH"
+            }
+            if (alive) {
+              // A live PID may still be writing this temp. Only skip it while it
+              // is recent; a stale temp under a recycled PID is reclaimed below.
+              let recent = true
+              try {
+                const stat = await fs.promises.stat(fullPath)
+                recent = Date.now() - stat.mtimeMs < RECENT_TEMP_MS
+              } catch {
+                recent = false // vanished/unreadable — fall through to unlink
+              }
+              if (recent) continue
+            }
+          }
+          try {
+            await fs.promises.unlink(fullPath)
+          } catch {
+            // best effort; ignore files removed by a concurrent process
+          }
+        }
+      }
+    } catch (error) {
+      log("DEBUG", "persistence", "Temp sweep skipped", { error: error?.message })
     }
   }
 
@@ -67,17 +168,34 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   }
 
   async function saveState() {
+    // Serialize saves within this process. The debounced saveTimer, flushSession
+    // and runPeriodicFlush can all call saveState concurrently; without chaining,
+    // two writes to the same temp path could interleave and corrupt the file that
+    // then gets renamed onto the real state path.
+    const run = savePromise.then(runSaveState, runSaveState)
+    savePromise = run.catch(() => {})
+    return run
+  }
+
+  async function runSaveState() {
+    const tempPath = `${statePath}.${process.pid}.${saveCounter++}.tmp`
     try {
       const persisted = {}
       for (const [opencodeSessionId, state] of sessions.entries()) {
         persisted[opencodeSessionId] = serializeSessionState(state)
       }
-      const tempPath = `${statePath}.tmp`
       await fs.promises.writeFile(tempPath, JSON.stringify({ version: 2, sessions: persisted, lastSaved: Date.now() }, null, 2), "utf8")
       await fs.promises.rename(tempPath, statePath)
       log("DEBUG", "persistence", "Session state saved", { count: sessions.size })
     } catch (error) {
       log("ERROR", "persistence", "Failed to save session state", { error: error?.message })
+      // Best-effort cleanup so a failed rename does not leave an orphan temp file.
+      try {
+        await fs.promises.unlink(tempPath)
+      } catch {}
+      // Rethrow so callers awaiting saveState() can observe persistent failures
+      // (e.g. ENOSPC/EACCES). Fire-and-forget callers already attach a .catch.
+      throw error
     }
   }
 
@@ -245,36 +363,75 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     debouncedSaveState()
   }
 
-  async function flushAll({ commit = false } = {}) {
+  async function flushAll({ commit = false, shutdown = false } = {}) {
+    if (shutdown) shuttingDown = true
     if (saveTimer) {
       clearTimeout(saveTimer)
       saveTimer = null
+    }
+    if (flushTimer) {
+      clearInterval(flushTimer)
+      flushTimer = null
+    }
+    // Drain any in-flight periodic flush so it cannot interleave with the loop
+    // below and make commit ordering nondeterministic at teardown.
+    if (periodicFlushPromise) {
+      try {
+        await periodicFlushPromise
+      } catch {
+        // periodic flush errors are already logged at their source
+      }
     }
     for (const sessionId of sessions.keys()) {
       await flushSession(sessionId, { commit, reason: "flushAll" })
     }
     await saveState()
+    // If this was not a shutdown, keep periodic flushing alive.
+    if (!shutdown) startPeriodicFlush()
   }
 
-  async function flushSession(opencodeSessionId, { commit = false, reason = "manual" } = {}) {
+  async function flushSession(opencodeSessionId, { commit = false, reason = "manual", skipThreshold = false } = {}) {
     if (!opencodeSessionId) return false
     const state = sessions.get(opencodeSessionId)
     if (!state) return false
 
-    const added = await flushPendingMessages(opencodeSessionId, state)
-    if (commit && config.autoCapture) {
-      await commitOvSession(state.ovSessionId, { force: true, reason })
-    } else if (added > 0) {
-      await maybeCommitByThreshold(state)
+    // Serialize overlapping flushes on the same session. flushPendingMessages
+    // only marks messages captured=true after the network send resolves, so two
+    // concurrent flushes (periodic timer + session.idle, or a slow flush the
+    // timer did not await) would read the same captured=false batch and send it
+    // twice. Chaining on state.flushing forces them to run one-after-another,
+    // so each subsequent flush re-reads the post-send captured state.
+    const run = async () => {
+      const added = await flushPendingMessages(opencodeSessionId, state)
+      if (commit && config.autoCapture) {
+        await commitOvSession(state.ovSessionId, { force: true, reason })
+      } else if (added > 0 && !skipThreshold) {
+        await maybeCommitByThreshold(state)
+      }
+      await saveState()
+      return true
     }
-    await saveState()
-    return true
+
+    const previous = state.flushing || Promise.resolve()
+    const current = previous.then(run, run)
+    // Store the same promise the next flush will chain on. Swallow the rejection
+    // on the gate branch (callers still observe it via `current`) so a failed run
+    // does not become an unhandled rejection when nothing chains onto it. We do
+    // NOT reset state.flushing afterwards: chaining on an already-settled promise
+    // is effectively free, and an auto-reset opens a window where a rapidly queued
+    // flush sees `undefined` and starts in parallel instead of serializing.
+    state.flushing = current.catch(() => {})
+    return current
   }
 
   async function commitSession(sessionId, opencodeSessionId, abortSignal) {
     if (opencodeSessionId) {
-      const state = sessions.get(opencodeSessionId)
-      if (state) await flushPendingMessages(opencodeSessionId, state)
+      // Route through flushSession so the send goes through the same
+      // per-session serialization gate. Calling flushPendingMessages directly
+      // would bypass state.flushing and could double-send a batch that a
+      // concurrent periodic/idle flush is already sending. skipThreshold avoids
+      // a redundant threshold commit here since we force-commit right below.
+      await flushSession(opencodeSessionId, { commit: false, reason: "tool", skipThreshold: true })
     }
     return commitOvSession(sessionId, { force: true, abortSignal, reason: "tool" })
   }
