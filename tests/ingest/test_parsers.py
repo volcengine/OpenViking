@@ -65,6 +65,9 @@ def test_claude_code(tmp_path):
     src = ClaudeCodeSource(_cfg(root), fallback_user="tester")
     ref, msgs, _ = _read_all(src)
     assert ref.native_session_id == "sess-1"
+    # started_at is the first *timestamped* record, skipping the leading
+    # non-timestamped "queue-operation" header -> `backfill --since` is honored.
+    assert ref.started_at == "2026-06-01T00:00:00Z"
     assert [(m.role, m.text) for m in msgs] == [("user", "hello there"), ("assistant", "hi!")]
     assert msgs[1].peer_id == "claude_code__claude-opus-4-8"
     assert msgs[0].peer_id == "tester"  # no git repo -> configured fallback
@@ -165,9 +168,50 @@ def test_openclaw_assistant_model(tmp_path):
         ],
     )
     src = OpenClawSource(_cfg(root, user_field="sender"), fallback_user="tester")
-    _, msgs, _ = _read_all(src)
+    ref, msgs, _ = _read_all(src)
+    # started_at is the first *timestamped* record, skipping the leading
+    # non-timestamped "session" record -> `backfill --since` is honored.
+    assert ref.started_at == "2026-06-01T00:00:00Z"
     assert [(m.role, m.text) for m in msgs] == [("user", "run it"), ("assistant", "ok")]
     assert msgs[1].peer_id == "openclaw__ark__doubao-x"
+
+
+def test_started_at_skips_non_string_and_missing_timestamp(tmp_path):
+    """started_at only accepts a non-empty *string* timestamp, skipping records
+    with a missing or non-string one, so a malformed log can't make started_at a
+    non-str (which would crash the `--since` string comparison)."""
+    root = tmp_path / "projects"
+    _write_jsonl(
+        root / "slug" / "sess-2.jsonl",
+        [
+            {"type": "summary"},  # no timestamp -> skipped
+            {"type": "user", "timestamp": 1717200000},  # non-string -> skipped
+            {
+                "type": "user",
+                "timestamp": "2026-06-02T00:00:00Z",
+                "message": {"role": "user", "content": "hi"},
+            },
+        ],
+    )
+    src = ClaudeCodeSource(_cfg(root), fallback_user="tester")
+    ref = next(iter(src.discover_sessions()))
+    assert ref.started_at == "2026-06-02T00:00:00Z"
+
+
+def test_started_at_none_when_no_string_timestamp(tmp_path):
+    """No usable string timestamp -> started_at stays None (every-session-included
+    fallback preserved, no crash)."""
+    root = tmp_path / "agents"
+    _write_jsonl(
+        root / "main" / "sessions" / "oc2.jsonl",
+        [
+            {"type": "session", "id": "oc2"},  # no timestamp
+            {"type": "message", "timestamp": {"iso": "x"}},  # non-string -> ignored
+        ],
+    )
+    src = OpenClawSource(_cfg(root, user_field="sender"), fallback_user="tester")
+    ref = next(iter(src.discover_sessions()))
+    assert ref.started_at is None
 
 
 def test_opencode_text_from_part_table(tmp_path):
