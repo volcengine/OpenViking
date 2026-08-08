@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Configuration for recursive HTML crawling."""
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Optional
+
+from openviking.utils.network_guard import RequestValidator
 
 
 @dataclass
@@ -22,11 +23,13 @@ class CrawlConfig:
     retry_times: int = 2
     max_links_per_page: int = 500
     max_html_bytes: int = 10 * 1024 * 1024
-    request_validator: Optional[Callable[[str], None]] = None
+    request_validator: Optional[RequestValidator] = None
 
     def __post_init__(self) -> None:
         if self.depth < -1:
-            raise ValueError("depth must be >= -1 (use -1 for unlimited) for recursive web crawling.")
+            raise ValueError(
+                "depth must be >= -1 (use -1 for unlimited) for recursive web crawling."
+            )
         if self.max_pages < 1 and self.max_pages != -1:
             raise ValueError("max_pages must be -1 (unlimited) or >= 1 for recursive web crawling.")
         if self.concurrency < 1:

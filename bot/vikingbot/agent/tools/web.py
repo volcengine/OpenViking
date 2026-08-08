@@ -9,6 +9,11 @@ from urllib.parse import urlparse
 
 import httpx
 
+from openviking.utils.network_guard import (
+    build_httpx_request_validation_hooks,
+    build_httpx_secure_transport,
+    ensure_public_remote_target,
+)
 from vikingbot.agent.tools.base import Tool
 
 if TYPE_CHECKING:
@@ -96,18 +101,28 @@ class WebFetchTool(Tool):
         maxChars: int | None = None,
         **kwargs: Any,
     ) -> str:
-        from readability import Document
-
         max_chars = maxChars or self.max_chars
 
         # Validate URL before fetching
         is_valid, error_msg = _validate_url(url)
         if not is_valid:
             return json.dumps({"error": f"URL validation failed: {error_msg}", "url": url})
+        try:
+            ensure_public_remote_target(url)
+        except Exception as exc:
+            return json.dumps({"error": f"URL validation failed: {exc}", "url": url})
 
         try:
+            from readability import Document
+
+            event_hooks = build_httpx_request_validation_hooks(ensure_public_remote_target)
             async with httpx.AsyncClient(
-                follow_redirects=True, max_redirects=MAX_REDIRECTS, timeout=30.0
+                follow_redirects=True,
+                max_redirects=MAX_REDIRECTS,
+                timeout=30.0,
+                event_hooks=event_hooks,
+                transport=build_httpx_secure_transport(ensure_public_remote_target),
+                trust_env=False,
             ) as client:
                 r = await client.get(url, headers={"User-Agent": USER_AGENT})
                 r.raise_for_status()

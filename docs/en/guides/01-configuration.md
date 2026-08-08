@@ -854,33 +854,42 @@ Configuration for Feishu/Lark cloud document parsing. See [Resources](../api/02-
 
 Code skeleton extraction is built into the code summary pipeline and has no parser-level configuration. OpenViking first uses maintained `tags.scm` queries when one exists for the language; if no corresponding `tags.scm` exists, it uses `tree-sitter-language-pack.process()`; when the current extraction route produces no useful skeleton, it invokes `semantic.code_summary` as fallback.
 
-The remaining `code` configuration fields are for remote code resource network guards and code-hosting allowlists. See [Code Skeleton Extraction](../concepts/06-extraction.md#code-skeleton-extraction) for the extraction route.
+The remaining `code` configuration fields identify code-hosting platforms and enable their
+provider-specific URL handling. See [Code Skeleton Extraction](../concepts/06-extraction.md#code-skeleton-extraction) for the extraction route.
 
 #### Remote resource network guard
 
-When ingesting a resource from a URL, OpenViking rejects loopback, link-local, private, and other non-public destinations, plus any host not on the code-hosting allowlist, raising `PermissionDeniedError`. To ingest code from self-hosted GitHub Enterprise / GitLab / Azure DevOps, add the host to the matching allowlist under `code`:
+When ingesting a resource from a URL, OpenViking resolves and validates the destination before
+connecting. Unresolved hosts and any host that resolves to a loopback, link-local, private, or
+other non-public address are rejected with `PermissionDeniedError`.
+
+The domain lists under `code` select provider-specific URL handling; they do not bypass this
+network check. Add a public self-hosted GitHub Enterprise / GitLab / Azure DevOps hostname to the
+matching list so OpenViking recognizes the platform:
 
 | Field | Type | Description | Default |
 |-------|------|-------------|---------|
-| `github_domains` | list[str] | Allowed GitHub hosts (add your GitHub Enterprise host here) | `["github.com", "www.github.com"]` |
-| `gitlab_domains` | list[str] | Allowed GitLab hosts (add your self-hosted GitLab host here) | `["gitlab.com", "www.gitlab.com"]` |
-| `azure_devops_domains` | list[str] | Allowed Azure DevOps hosts | `["dev.azure.com", "ssh.dev.azure.com", "vs-ssh.visualstudio.com"]` |
-| `code_hosting_domains` | list[str] | Allowed generic code-hosting hosts | `["github.com", "gitlab.com", "gitcode.com", "gitee.com", "bitbucket.org", "codeberg.org", "gitea.com", "atomgit.com", "git.sr.ht"]` |
+| `github_domains` | list[str] | GitHub hosts recognized for GitHub-specific URL handling | `["github.com", "www.github.com"]` |
+| `gitlab_domains` | list[str] | GitLab hosts recognized for GitLab-specific URL handling | `["gitlab.com", "www.gitlab.com"]` |
+| `azure_devops_domains` | list[str] | Azure DevOps hosts recognized for platform-specific URL handling | `["dev.azure.com", "ssh.dev.azure.com", "vs-ssh.visualstudio.com"]` |
+| `code_hosting_domains` | list[str] | Other hosts recognized as code-hosting services | `["github.com", "gitlab.com", "gitcode.com", "gitee.com", "bitbucket.org", "codeberg.org", "gitea.com", "atomgit.com", "git.sr.ht"]` |
 
-To ingest from private/internal network addresses (e.g. an internal mirror), set the top-level `allow_private_networks` to `true` (disabled by default, so only public addresses are allowed):
+To ingest from a private or internal address, set the top-level `allow_private_networks` to `true`
+and, for a self-hosted code platform, add its hostname to the matching `code` list. This option is
+disabled by default because it permits remote-resource requests to private network destinations:
 
 ```json
 {
-  "allow_private_networks": false,
+  "allow_private_networks": true,
   "code": {
     "github_domains": ["github.com", "github.example.com"]
   }
 }
 ```
 
-Use `github_domains`, `gitlab_domains`, or `azure_devops_domains` when the host
-needs those platform-specific URL semantics. Add other Git hosts to
-`code_hosting_domains`.
+Use `github_domains`, `gitlab_domains`, or `azure_devops_domains` when the host needs those
+platform-specific URL semantics. Add other Git hosts to `code_hosting_domains`. These lists never
+authorize private network access by themselves.
 
 ### rerank
 
