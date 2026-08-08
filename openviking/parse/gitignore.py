@@ -41,10 +41,17 @@ def _transform_gitignore_line(line: str, base_rel: str) -> str:
         return raw
 
     scoped = pattern
+    # A trailing "/" only marks a directory-only match in gitignore semantics;
+    # it does not anchor the pattern. Only a separator at the start or middle of
+    # the pattern anchors it to the .gitignore's own directory. Ignore a lone
+    # trailing slash when deciding whether the pattern contains such a separator,
+    # so a directory idiom like "build/" in a nested .gitignore keeps matching at
+    # any depth below base_rel (mirroring `git check-ignore`).
+    core = scoped[:-1] if scoped.endswith("/") else scoped
     if scoped.startswith("/"):
         scoped = scoped.lstrip("/")
         scoped = f"{base_rel}/{scoped}" if scoped else base_rel
-    elif "/" in scoped:
+    elif "/" in core:
         scoped = f"{base_rel}/{scoped}"
     else:
         scoped = f"{base_rel}/**/{scoped}" if scoped else base_rel
