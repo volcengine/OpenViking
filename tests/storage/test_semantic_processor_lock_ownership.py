@@ -25,7 +25,7 @@ class _FakeVikingFS:
 
     async def exists(self, uri, ctx=None):
         del uri, ctx
-        return False
+        return True
 
     async def ls(self, uri, node_limit=None, ctx=None):
         del uri, node_limit, ctx
