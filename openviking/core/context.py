@@ -40,8 +40,8 @@ class ContextLevel(int, Enum):
 
 
 class Vectorize:
-    text: str = ""
-    full_text: str = ""  # Full content for BM25 (not embedding-truncated)
+    # None means the embedding worker should materialize the canonical resource URI.
+    text: Optional[str] = ""
     # images: list of image references (data URIs or URLs) for multimodal embedding
     images: List[str] = []
     # video: str = ""
@@ -49,12 +49,10 @@ class Vectorize:
 
     def __init__(
         self,
-        text: str = "",
-        full_text: str = "",
+        text: Optional[str] = "",
         images: Optional[List[str]] = None,
     ):
         self.text = text
-        self.full_text = full_text
         self.images = list(images) if images else []
 
 
@@ -151,7 +149,7 @@ class Context:
     def set_vectorize(self, vectorize: Vectorize):
         self.vectorize = vectorize
 
-    def get_vectorization_text(self) -> str:
+    def get_vectorization_text(self) -> Optional[str]:
         """Get text for vectorization."""
         return self.vectorize.text
 

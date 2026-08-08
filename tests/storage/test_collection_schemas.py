@@ -22,20 +22,20 @@ from openviking.storage.errors import EmbeddingRebuildRequiredError
 from openviking.storage.expr import Eq
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.vectordb import engine as vectordb_engine
+from openviking.storage.vectordb.collection.result import UpsertDataResult
+from openviking.storage.vectordb.collection.vikingdb_collection import VikingDBCollection
 from openviking.storage.vectordb.collection.volcengine_api_key_collection import (
     VolcengineApiKeyCollection,
 )
-from openviking.storage.vectordb.collection.vikingdb_collection import VikingDBCollection
 from openviking.storage.vectordb.collection.volcengine_collection import VolcengineCollection
-from openviking.storage.vectordb.collection.result import UpsertDataResult
 from openviking.storage.vectordb_adapters.base import (
     VIKINGDB_TEXT_FIELD_BYTE_LIMIT,
     _truncate_text_field,
 )
 from openviking.storage.vectordb_adapters.local_adapter import LocalCollectionAdapter
 from openviking.storage.viking_vector_index_backend import (
-    UpsertOptions,
     VIKINGDB_CONTENT_MAX_SIZE,
+    UpsertOptions,
     VikingVectorIndexBackend,
     _SingleAccountBackend,
 )
@@ -387,6 +387,8 @@ async def test_embedding_auth_error_fails_terminally_without_reenqueue(monkeypat
 @pytest.mark.asyncio
 async def test_embedding_handler_treats_shutdown_write_lock_as_success(monkeypatch):
     class _ClosingDuringUpsertVikingDB:
+        uses_content_field = False
+
         def __init__(self):
             self.is_closing = False
             self.calls = 0
@@ -426,6 +428,7 @@ async def test_embedding_handler_treats_shutdown_write_lock_as_success(monkeypat
 async def test_embedding_handler_propagates_account_id_on_success(monkeypatch):
     class _DummyVikingDB:
         is_closing = False
+        uses_content_field = False
 
         async def upsert(self, _data, *, ctx, options=UpsertOptions()):
             return None
@@ -488,6 +491,7 @@ async def test_embedding_handler_propagates_account_id_on_error(monkeypatch):
 async def test_embedding_handler_truncates_queue_input_before_embed(monkeypatch):
     class _CapturingVikingDB:
         is_closing = False
+        uses_content_field = False
 
         async def upsert(self, _data, *, ctx, options=UpsertOptions()):
             return "rec-1"
@@ -571,28 +575,43 @@ async def test_embedding_handler_drops_input_too_large_without_requeue(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_embedding_handler_preserves_parent_uri_for_backend_upsert_logic(monkeypatch):
+async def test_embedding_handler_materializes_deferred_input_before_upsert(monkeypatch):
     captured = {}
 
     class _CapturingVikingDB:
         is_closing = False
-        mode = "local"
+        uses_content_field = True
 
         async def upsert(self, data, *, ctx, options=UpsertOptions()):
             assert options.partial_update is True
             captured["data"] = dict(data)
             return "rec-1"
 
+    class _FakeFS:
+        calls = 0
+
+        async def read_file(self, uri, *, ctx):
+            self.calls += 1
+            assert uri == "viking://resources/sample.md"
+            assert ctx.account_id == "default"
+            return "full content"
+
     embedder = _DummyEmbedder()
     monkeypatch.setattr(
         "openviking_cli.utils.config.get_openviking_config",
         lambda: _DummyConfig(embedder),
     )
+    fs = _FakeFS()
+    monkeypatch.setattr("openviking.storage.viking_fs.get_viking_fs", lambda: fs)
 
     handler = TextEmbeddingHandler(_CapturingVikingDB())
     payload = _build_queue_payload()
     queue_data = json.loads(payload["data"])
+    queue_data["message"] = None
+    queue_data["context_data"]["uri"] = "viking://resources/sample.md"
     queue_data["context_data"]["parent_uri"] = "viking://resources"
+    queue_data["context_data"]["is_leaf"] = True
+    queue_data["context_data"]["context_type"] = "resource"
     payload["data"] = json.dumps(queue_data)
 
     result = await handler.on_dequeue(payload)
@@ -600,6 +619,8 @@ async def test_embedding_handler_preserves_parent_uri_for_backend_upsert_logic(m
     assert result is not None
     assert "data" in captured
     assert captured["data"]["parent_uri"] == "viking://resources"
+    assert captured["data"]["content"] == "full content"
+    assert fs.calls == 2
 
 
 @pytest.mark.asyncio
@@ -607,6 +628,7 @@ async def test_embedding_handler_marks_success_only_after_tracker_completion(mon
     class _CapturingVikingDB:
         is_closing = False
         mode = "local"
+        uses_content_field = False
 
         async def upsert(self, _data, *, ctx, options=UpsertOptions()):
             assert options.partial_update is True

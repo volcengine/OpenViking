@@ -405,7 +405,7 @@ class TestGenerateTextSummaryOutputLanguage:
             assert _verify_content_language(result["summary"], expected_lang), (
                 f"{file_name}: Content language mismatch. Expected {expected_lang}, got: {result['summary']}"
             )
-            assert result["content"] == content
+            assert "content" not in result
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

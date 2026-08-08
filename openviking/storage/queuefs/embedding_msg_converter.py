@@ -26,7 +26,7 @@ class EmbeddingMsgConverter:
         """
         vectorization_text = context.get_vectorization_text()
         vectorization_images = context.get_vectorization_images()
-        if not vectorization_text and not vectorization_images:
+        if vectorization_text == "" and not vectorization_images:
             return None
 
         context_data = context.to_dict()
@@ -50,12 +50,9 @@ class EmbeddingMsgConverter:
 
         # Derive level field for hierarchical retrieval.
         uri = context_data.get("uri", "")
-        context_level = getattr(context, "level", None)
-        if context_level is not None:
-            resolved_level = context_level
-        elif context_data.get("level") is not None:
-            resolved_level = context_data.get("level")
-        elif isinstance(context.meta, dict) and context.meta.get("level") is not None:
+        if context.level is not None:
+            resolved_level = context.level
+        elif context.meta.get("level") is not None:
             resolved_level = context.meta.get("level")
         elif uri.endswith("/.abstract.md"):
             resolved_level = ContextLevel.ABSTRACT
@@ -68,10 +65,18 @@ class EmbeddingMsgConverter:
             resolved_level = int(resolved_level.value)
         context_data["level"] = int(resolved_level)
 
-        # Store full content in content field for bm25 full-text search.
-        # Use full_text (raw file content) when available; fall back to vectorization_text.
-        full_content = context.vectorize.full_text or vectorization_text
-        context_data["content"] = full_content
+        for field in (
+            "id",
+            "temp_uri",
+            "category",
+            "meta",
+            "related_uri",
+            "session_id",
+            "user",
+            "owner_space",
+            "vector",
+        ):
+            context_data.pop(field, None)
 
         if vectorization_images:
             # Multimodal message: combine text (if any) and image references into the

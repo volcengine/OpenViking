@@ -790,6 +790,10 @@ class VikingVectorIndexBackend:
     def mode(self) -> str:
         return self._get_default_backend()._mode
 
+    @property
+    def uses_content_field(self) -> bool:
+        return self._shared_adapter.USE_CONTENT_FIELD
+
     # =========================================================================
     # 内部辅助方法
     # =========================================================================

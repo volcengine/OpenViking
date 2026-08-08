@@ -23,6 +23,7 @@ def test_embedding_msg_roundtrip_preserves_id_for_request_wait_tracker():
         restored = EmbeddingMsg.from_dict(msg.to_dict())
 
         assert restored.id == msg.id
+        assert restored.message == msg.message
         tracker.mark_embedding_done(telemetry_id, restored.id)
         assert tracker.is_complete(telemetry_id)
     finally:
