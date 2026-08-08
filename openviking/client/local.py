@@ -27,7 +27,7 @@ from openviking.telemetry.execution import (
 from openviking.utils.image_search import normalize_client_image_input
 from openviking.utils.search_filters import SearchContextTypeInput, merge_search_filter
 from openviking.utils.tags import build_search_tags_filter
-from openviking_cli.client.base import BaseClient
+from openviking_cli.client.base import SESSION_CONFIG_UNSET, BaseClient
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import run_async
@@ -844,7 +844,8 @@ class LocalClient(BaseClient):
         session_id: Optional[str] = None,
         telemetry: TelemetryRequest = False,
         memory_policy: Optional[Dict[str, Any]] = None,
-        auto_commit_policy: Optional[Dict[str, Any]] = None,
+        auto_commit_policy: Any = SESSION_CONFIG_UNSET,
+        memory_extraction_config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create a new session.
 
@@ -853,11 +854,23 @@ class LocalClient(BaseClient):
                        If None, creates a new session with auto-generated ID.
             memory_policy: Optional default extraction policy for future commits.
             auto_commit_policy: Optional automatic-commit policy overrides.
+            memory_extraction_config: Optional memory extraction settings.
         """
+        events_config = (
+            memory_extraction_config.get("events") if memory_extraction_config is not None else None
+        )
+        event_tags = events_config.get("tags") if events_config is not None else None
+        update_auto_commit_policy = auto_commit_policy is not SESSION_CONFIG_UNSET
         execution = await run_with_telemetry(
             operation="session.create",
             telemetry=telemetry,
-            fn=lambda: self._create_session_impl(session_id, memory_policy, auto_commit_policy),
+            fn=lambda: self._create_session_impl(
+                session_id,
+                memory_policy,
+                auto_commit_policy if update_auto_commit_policy else None,
+                update_auto_commit_policy,
+                event_tags,
+            ),
         )
         return attach_telemetry_payload(
             execution.result,
@@ -869,6 +882,8 @@ class LocalClient(BaseClient):
         session_id: Optional[str],
         memory_policy: Optional[Dict[str, Any]],
         auto_commit_policy: Optional[Dict[str, Any]] = None,
+        update_auto_commit_policy: bool = False,
+        event_tags: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         await self._service.initialize_user_directories(self._ctx)
         session = await self._service.sessions.create(
@@ -876,12 +891,17 @@ class LocalClient(BaseClient):
             session_id,
             memory_policy=memory_policy,
             auto_commit_policy=auto_commit_policy,
+            update_auto_commit_policy=update_auto_commit_policy,
+            event_tags=event_tags,
         )
         return {
             "session_id": session.session_id,
             "uri": session.uri,
             "user": session.user.to_dict(),
             "auto_commit_policy": self._service.sessions.effective_auto_commit_policy(session),
+            "memory_extraction_config": (
+                self._service.sessions.effective_memory_extraction_config(session)
+            ),
         }
 
     async def list_sessions(self) -> List[Any]:
@@ -895,7 +915,51 @@ class LocalClient(BaseClient):
         result["uri"] = session.uri
         result["user"] = session.user.to_dict()
         result["auto_commit_policy"] = self._service.sessions.effective_auto_commit_policy(session)
+        result.pop("event_search_tags", None)
+        result["memory_extraction_config"] = (
+            self._service.sessions.effective_memory_extraction_config(session)
+        )
         return result
+
+    async def update_session_config(
+        self,
+        session_id: str,
+        *,
+        memory_extraction_config: Optional[Dict[str, Any]] = None,
+        auto_commit_policy: Any = SESSION_CONFIG_UNSET,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Update mutable session memory extraction settings."""
+        events_config = (
+            memory_extraction_config.get("events") if memory_extraction_config is not None else None
+        )
+        event_tags = events_config.get("tags") if events_config is not None else None
+        update_auto_commit_policy = auto_commit_policy is not SESSION_CONFIG_UNSET
+
+        async def _update() -> Dict[str, Any]:
+            session = await self._service.sessions.update_config(
+                session_id,
+                self._ctx,
+                event_tags=event_tags,
+                auto_commit_policy=(auto_commit_policy if update_auto_commit_policy else None),
+                update_auto_commit_policy=update_auto_commit_policy,
+            )
+            return {
+                "session_id": session.session_id,
+                "auto_commit_policy": (
+                    self._service.sessions.effective_auto_commit_policy(session)
+                ),
+                "memory_extraction_config": (
+                    self._service.sessions.effective_memory_extraction_config(session)
+                ),
+            }
+
+        execution = await run_with_telemetry(
+            operation="session.update_config",
+            telemetry=telemetry,
+            fn=_update,
+        )
+        return attach_telemetry_payload(execution.result, execution.telemetry)
 
     async def get_session_context(
         self, session_id: str, token_budget: int = 128_000
@@ -925,6 +989,7 @@ class LocalClient(BaseClient):
         keep_recent_turn_count: Optional[int] = None,
         retained_message_token_budget: Optional[int] = None,
         min_raw_tail_steps: Optional[int] = None,
+        event_tags: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
         commit_kwargs: Dict[str, Any] = {"keep_recent_count": keep_recent_count}
@@ -937,6 +1002,8 @@ class LocalClient(BaseClient):
         commit_kwargs.update(
             {key: value for key, value in optional_retention.items() if value is not None}
         )
+        if event_tags is not None:
+            commit_kwargs["event_tags"] = event_tags
         execution = await run_with_telemetry(
             operation="session.commit",
             telemetry=telemetry,

@@ -15,7 +15,7 @@ from openviking.client import LocalClient, Session
 from openviking.service.debug_service import SystemStatus
 from openviking.telemetry import TelemetryRequest
 from openviking.utils.search_filters import SearchContextTypeInput
-from openviking_cli.client.base import BaseClient
+from openviking_cli.client.base import SESSION_CONFIG_UNSET, BaseClient
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 
@@ -140,7 +140,8 @@ class AsyncOpenViking:
         session_id: Optional[str] = None,
         telemetry: TelemetryRequest = False,
         memory_policy: Optional[Dict[str, Any]] = None,
-        auto_commit_policy: Optional[Dict[str, Any]] = None,
+        auto_commit_policy: Any = SESSION_CONFIG_UNSET,
+        memory_extraction_config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create a new session.
 
@@ -149,14 +150,17 @@ class AsyncOpenViking:
                        If None, creates a new session with auto-generated ID.
             memory_policy: Optional default extraction policy for future commits.
             auto_commit_policy: Optional automatic-commit policy overrides.
+            memory_extraction_config: Optional memory extraction settings.
         """
         await self._ensure_initialized()
-        return await self._client.create_session(
-            session_id,
-            telemetry=telemetry,
-            memory_policy=memory_policy,
-            auto_commit_policy=auto_commit_policy,
-        )
+        kwargs: Dict[str, Any] = {
+            "telemetry": telemetry,
+            "memory_policy": memory_policy,
+            "memory_extraction_config": memory_extraction_config,
+        }
+        if auto_commit_policy is not SESSION_CONFIG_UNSET:
+            kwargs["auto_commit_policy"] = auto_commit_policy
+        return await self._client.create_session(session_id, **kwargs)
 
     async def list_sessions(self) -> List[Any]:
         """List all sessions."""
@@ -167,6 +171,24 @@ class AsyncOpenViking:
         """Get session details."""
         await self._ensure_initialized()
         return await self._client.get_session(session_id, auto_create=auto_create)
+
+    async def update_session_config(
+        self,
+        session_id: str,
+        *,
+        memory_extraction_config: Optional[Dict[str, Any]] = None,
+        auto_commit_policy: Any = SESSION_CONFIG_UNSET,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Update mutable session memory extraction settings."""
+        await self._ensure_initialized()
+        kwargs: Dict[str, Any] = {
+            "memory_extraction_config": memory_extraction_config,
+            "telemetry": telemetry,
+        }
+        if auto_commit_policy is not SESSION_CONFIG_UNSET:
+            kwargs["auto_commit_policy"] = auto_commit_policy
+        return await self._client.update_session_config(session_id, **kwargs)
 
     async def get_session_context(
         self, session_id: str, token_budget: int = 128_000
@@ -255,6 +277,7 @@ class AsyncOpenViking:
         keep_recent_turn_count: int | None = None,
         retained_message_token_budget: int | None = None,
         min_raw_tail_steps: int | None = None,
+        event_tags: list[str] | None = None,
     ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
         await self._ensure_initialized()
@@ -268,6 +291,8 @@ class AsyncOpenViking:
             }.items()
             if value is not None
         }
+        if event_tags is not None:
+            optional_retention["event_tags"] = event_tags
         return await self._client.commit_session(
             session_id,
             telemetry=telemetry,

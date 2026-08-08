@@ -115,6 +115,7 @@ class Session:
         keep_recent_turn_count: Optional[int] = None,
         retained_message_token_budget: Optional[int] = None,
         min_raw_tail_steps: Optional[int] = None,
+        event_tags: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Commit the session (archive messages and extract memories).
 
@@ -132,6 +133,8 @@ class Session:
             "min_raw_tail_steps": min_raw_tail_steps,
         }
         kwargs.update({key: value for key, value in optional.items() if value is not None})
+        if event_tags is not None:
+            kwargs["event_tags"] = event_tags
         return await self._client.commit_session(self.session_id, **kwargs)
 
     async def commit_async(
@@ -143,6 +146,7 @@ class Session:
         keep_recent_turn_count: Optional[int] = None,
         retained_message_token_budget: Optional[int] = None,
         min_raw_tail_steps: Optional[int] = None,
+        event_tags: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Commit the session asynchronously (archive messages and extract memories).
            Used in viking bot for committing.
@@ -157,6 +161,7 @@ class Session:
             keep_recent_turn_count=keep_recent_turn_count,
             retained_message_token_budget=retained_message_token_budget,
             min_raw_tail_steps=min_raw_tail_steps,
+            event_tags=event_tags,
         )
 
     async def delete(self) -> None:
