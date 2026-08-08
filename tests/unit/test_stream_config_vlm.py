@@ -400,6 +400,82 @@ class TestVLMConfigStream:
         assert config.max_retries == 3
         assert config._build_vlm_config_dict()["max_retries"] == 3
 
+    def test_vlm_config_prefers_default_provider_when_provider_unset(self):
+        """default_provider 应优先于 providers 的遍历顺序。"""
+        from openviking_cli.utils.config.vlm_config import VLMConfig
+
+        config = VLMConfig(
+            model="gpt-4o",
+            default_provider="openai",
+            providers={
+                "litellm": {
+                    "api_key": "sk-litellm",
+                    "api_base": "https://litellm.example/v1",
+                },
+                "openai": {
+                    "api_key": "sk-openai",
+                    "api_base": "https://api.openai.com/v1",
+                },
+            },
+        )
+
+        provider_config, provider_name = config.get_provider_config()
+        result = config._build_vlm_config_dict()
+
+        assert provider_name == "openai"
+        assert provider_config == config.providers["openai"]
+        assert result["provider"] == "openai"
+        assert result["api_key"] == "sk-openai"
+
+    def test_vlm_config_explicit_provider_overrides_default_provider(self):
+        """显式 provider 仍应高于 default_provider。"""
+        from openviking_cli.utils.config.vlm_config import VLMConfig
+
+        config = VLMConfig(
+            model="gpt-4o",
+            provider="litellm",
+            default_provider="openai",
+            providers={
+                "litellm": {
+                    "api_key": "sk-litellm",
+                },
+                "openai": {
+                    "api_key": "sk-openai",
+                },
+            },
+        )
+
+        provider_config, provider_name = config.get_provider_config()
+
+        assert provider_name == "litellm"
+        assert provider_config == config.providers["litellm"]
+
+    def test_vlm_config_falls_back_when_default_provider_missing_or_unusable(self):
+        """default_provider 无效时应回退到第一个可用 provider。"""
+        from openviking_cli.utils.config.vlm_config import VLMConfig
+
+        config = VLMConfig(
+            model="gpt-4o",
+            default_provider="openai",
+            providers={
+                "openai": {
+                    "api_key": "",
+                },
+                "litellm": {
+                    "api_key": "sk-litellm",
+                    "api_base": "https://litellm.example/v1",
+                },
+            },
+        )
+
+        provider_config, provider_name = config.get_provider_config()
+        result = config._build_vlm_config_dict()
+
+        assert provider_name == "litellm"
+        assert provider_config == config.providers["litellm"]
+        assert result["provider"] == "litellm"
+        assert result["api_key"] == "sk-litellm"
+
 
 class TestStreamingResponseProcessing:
     """Test streaming response processing logic."""
