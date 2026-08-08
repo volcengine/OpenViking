@@ -34,6 +34,11 @@ import {
   makeFetchJSON,
 } from "./lib/ov-session.mjs";
 import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
+import {
+  compactToolInputForPart,
+  compactToolInputForProse,
+  TOOL_INPUT_POLICIES,
+} from "./lib/compact-tool-input.mjs";
 import { readJsonState, writeJsonState } from "./lib/state.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
 import { sendSessionMessages } from "./shared/batch-send.mjs";
@@ -244,6 +249,12 @@ function formatToolInput(value) {
   }
 }
 
+// ─── Tool input compaction ──────────────────────────────────────────────────
+//
+// PULLED from ./lib/compact-tool-input.mjs (shared with subagent-stop.mjs).
+// compactToolInputForProse → string (for inline text `[tool: X]\n...`)
+// compactToolInputForPart  → object (for structured parts; server expects Dict)
+
 function truncateToolResult(s) {
   if (TOOL_RESULT_MAX_CHARS <= 0) return null; // drop
   if (typeof s !== "string") s = String(s ?? "");
@@ -321,12 +332,22 @@ function buildParts(content, toolNameById) {
     if (block.type === "text" && typeof block.text === "string") {
       if (block.text.trim()) out.push({ type: "text", text: block.text });
     } else if (block.type === "tool_use" && typeof block.name === "string") {
+      // Structured parts: tool_input MUST be an object (server expects
+      // Optional[Dict[str, Any]]). compactToolInputForPart returns an object
+      // (key fields only for summary-mode tools; full input for others).
+      // Compaction respects cfg.toolInputCompaction.
+      const rawInput = block.input && typeof block.input === "object" ? block.input : undefined;
+      const useCompaction = cfg ? cfg.toolInputCompaction !== false : true;
+      const tool_input = rawInput
+        ? (useCompaction
+            ? compactToolInputForPart(block.name, block.input)
+            : block.input)
+        : undefined;
       out.push({
         type: "tool",
         tool_id: typeof block.id === "string" ? block.id : undefined,
         tool_name: block.name,
-        tool_input:
-          block.input && typeof block.input === "object" ? block.input : undefined,
+        tool_input,
         tool_status: "running",
       });
     } else if (block.type === "tool_result") {
@@ -371,7 +392,12 @@ function extractAllTurns(messages) {
             parts.push(block.text);
           } else if (block.type === "tool_use" && typeof block.name === "string") {
             toolNames.push(block.name);
-            parts.push(`[tool: ${block.name}]\n${formatToolInput(block.input)}`);
+            const maxChars = cfg?.toolInputMaxChars || 0;
+            const useCompaction = cfg ? cfg.toolInputCompaction !== false : true;
+            const inputText = useCompaction
+              ? compactToolInputForProse(block.name, block.input, maxChars)
+              : formatToolInput(block.input);
+            parts.push(`[tool: ${block.name}]\n${inputText}`);
           } else if (block.type === "tool_result") {
             const resultText = extractToolResultText(block.content);
             const truncated = resultText ? truncateToolResult(resultText) : null;
