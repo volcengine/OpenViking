@@ -292,6 +292,31 @@ def _detect_latin_language(text: str, fallback_language: str) -> str:
     return "en"
 
 
+_HEX_TOKEN_RE = re.compile(r"[0-9a-f]{8,}", re.IGNORECASE)
+
+
+def _strip_hash_like_tokens(text: str) -> str:
+    """Remove hash / UUID / message-id fragments before language detection.
+
+    Bot integrations (e.g. IM channel adapters) often inject metadata such as
+    ``[message_id: om_x100b6eb5f06fc8acb29491741d6eb30]`` or open IDs like
+    ``ou_a56ad44f6de54e96b53508d5e3cff3cb`` into user message content. These
+    hex runs are pure latin characters from the detector's point of view, but
+    their 2-letter substrings ("de", "do", "da", ...) collide with European
+    stopwords used by :func:`_detect_latin_language`, biasing detection toward
+    Portuguese / French / Spanish even when the actual user content is
+    Chinese, Japanese, Korean, etc.
+
+    Stripping any run of 8+ hexadecimal characters removes UUIDs (32),
+    message_ids (~32), short SHA prefixes (\u22658), etc., while leaving regular
+    English / Latin words intact (no real word is 8+ chars and uses only
+    ``[0-9a-f]``).
+    """
+    if not text:
+        return text
+    return _HEX_TOKEN_RE.sub(" ", text)
+
+
 def _detect_language_from_text(user_text: str, fallback_language: str) -> str:
     """Internal shared helper to detect dominant language from text."""
     fallback = (fallback_language or "en").strip() or "en"
@@ -299,6 +324,8 @@ def _detect_language_from_text(user_text: str, fallback_language: str) -> str:
 
     if not user_text:
         return fallback
+
+    user_text = _strip_hash_like_tokens(user_text)
 
     counts = {
         "zh-CN": len(re.findall(r"[\u4e00-\u9fff]", user_text)),
