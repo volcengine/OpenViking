@@ -3,6 +3,8 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from openviking.storage.queuefs import semantic_processor as semantic_processor_module
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 
@@ -151,3 +153,121 @@ def test_abstract_truncation_accepts_sentence_period_after_number(monkeypatch):
     _, abstract = processor._enforce_size_limits("# README\n\nBody", abstract)
 
     assert abstract == "This import check was generated at 16:55."
+
+
+@pytest.mark.parametrize(
+    ("text", "max_chars", "expected"),
+    [
+        pytest.param(
+            "1. **Some Directory**\n\n"
+            "This directory contains a detailed collection of onboarding documents",
+            80,
+            "1. **Some Directory**\n\nThis directory contains a detailed collection of...",
+            id="numbered-list-marker",
+        ),
+        pytest.param(
+            "a. **Setup**\n\n"
+            "Follow the onboarding guide to configure semantic retrieval for every workspace",
+            60,
+            "a. **Setup**\n\nFollow the onboarding guide to configure...",
+            id="lettered-list-marker",
+        ),
+        pytest.param(
+            "1.2. **Setup**\n\n"
+            "Follow the onboarding guide to configure semantic retrieval for every workspace",
+            62,
+            "1.2. **Setup**\n\nFollow the onboarding guide to configure...",
+            id="hierarchical-numbered-list-marker",
+        ),
+        pytest.param(
+            "Version 3.14 is stable. Additional compatibility details follow.",
+            35,
+            "Version 3.14 is stable.",
+            id="decimal",
+        ),
+        pytest.param(
+            "Dr. Smith explains semantic retrieval across every indexed workspace without setup",
+            50,
+            "Dr. Smith explains semantic retrieval across...",
+            id="title-abbreviation",
+        ),
+        pytest.param(
+            "Use e.g. semantic tags to improve retrieval across every indexed workspace",
+            45,
+            "Use e.g. semantic tags to improve...",
+            id="latin-abbreviation",
+        ),
+        pytest.param(
+            "第一句说明检索能力。第二句包含更多细节，需要截断。",
+            12,
+            "第一句说明检索能力。",
+            id="cjk-punctuation",
+        ),
+        pytest.param(
+            "First paragraph has no terminal punctuation\n\n"
+            "Second paragraph continues with details",
+            55,
+            "First paragraph has no terminal punctuation",
+            id="paragraph-boundary",
+        ),
+        pytest.param(
+            "# Overview\n\n"
+            "This opening sentence contains enough detail to exceed the configured limit "
+            "before it finally ends. Another sentence follows.",
+            45,
+            "# Overview\n\n"
+            "This opening sentence contains enough detail to exceed the configured limit "
+            "before it finally ends.",
+            id="long-first-sentence-after-heading",
+        ),
+        pytest.param(
+            "OK. Additional explanation follows.",
+            10,
+            "OK.",
+            id="short-complete-sentence",
+        ),
+        pytest.param("abcdefghij", 4, "a...", id="short-fragment-fallback"),
+    ],
+)
+def test_truncation_uses_meaningful_boundaries(text, max_chars, expected):
+    processor = SemanticProcessor()
+
+    assert processor._truncate_generated_text(text, max_chars) == expected
+
+
+@pytest.mark.parametrize(
+    ("max_chars", "expected"),
+    [
+        pytest.param(-1, "abcdef", id="negative-disabled"),
+        pytest.param(0, "abcdef", id="disabled"),
+        pytest.param(1, "a", id="one-character"),
+        pytest.param(2, "ab", id="two-characters"),
+        pytest.param(3, "abc", id="three-characters"),
+    ],
+)
+def test_truncation_handles_tiny_limits(max_chars, expected):
+    processor = SemanticProcessor()
+
+    assert processor._truncate_generated_text("abcdef", max_chars) == expected
+
+
+def test_normalize_overview_does_not_collapse_abstract_to_numbered_marker(monkeypatch):
+    _patch_semantic_limits(monkeypatch)
+    processor = SemanticProcessor()
+    generated = (
+        "# Some Directory\n\n"
+        "1. **Some Directory**\n\n"
+        + "This directory contains a detailed collection of onboarding documents "
+        * 8
+        + "\n\n"
+        "## Quick Navigation\n\n"
+        "- Read the onboarding guide"
+    )
+
+    overview, abstract = processor._normalize_overview_generation(generated)
+
+    assert overview == generated
+    assert abstract.startswith("1. **Some Directory**\nThis directory contains")
+    assert abstract.endswith("...")
+    assert abstract != "1."
+    assert len(abstract) <= 256
