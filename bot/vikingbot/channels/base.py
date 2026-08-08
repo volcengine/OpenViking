@@ -126,11 +126,14 @@ class BaseChannel(ABC):
         """
         allow_list = getattr(self.config, "allow_from", [])
 
-        # If no allow list, allow everyone
+        # Fail closed when no allowlist is configured. Operators who
+        # intentionally expose a channel to every sender can opt in with "*".
         if not allow_list:
-            return True
+            return False
 
         sender_str = str(sender_id)
+        if "*" in allow_list:
+            return True
         if sender_str in allow_list:
             return True
         if "|" in sender_str:
@@ -138,6 +141,20 @@ class BaseChannel(ABC):
                 if part and part in allow_list:
                     return True
         return False
+
+    def _is_message_allowed(
+        self,
+        sender_id: str,
+        chat_id: str,
+        metadata: dict[str, Any] | None,
+    ) -> bool:
+        """Apply the channel's authorization policy for one inbound message.
+
+        Most channels use the sender-only ``allow_from`` policy. Channels with
+        platform-specific scopes can override this private hook without
+        changing the public ``is_allowed(sender_id)`` contract.
+        """
+        return self.is_allowed(sender_id)
 
     async def _handle_message(
         self,
@@ -163,10 +180,10 @@ class BaseChannel(ABC):
             media: Optional list of media URLs.
             metadata: Optional channel-specific metadata.
         """
-        if not self.is_allowed(sender_id):
+        if not self._is_message_allowed(sender_id, chat_id, metadata):
             logger.warning(
                 f"Access denied for sender {sender_id} on channel {self.name}. "
-                f"Add them to allowFrom list in config to grant access."
+                "Update the channel authorization policy to grant access."
             )
             return
 

@@ -96,7 +96,7 @@ class SlackDMConfig(BaseModel):
     """Slack DM policy configuration."""
 
     enabled: bool = True
-    policy: str = "open"  # "open" or "allowlist"
+    policy: str = "allowlist"  # "open" or "allowlist"
     allow_from: list[str] = Field(default_factory=list)  # Allowed Slack user IDs
 
 
@@ -246,8 +246,9 @@ class SlackChannelConfig(BaseChannelConfig):
     bot_token: str = ""
     app_token: str = ""
     user_token_read_only: bool = True
-    group_policy: str = "mention"
+    group_policy: str = "allowlist"
     group_allow_from: list[str] = Field(default_factory=list)
+    group_sender_allow_from: list[str] = Field(default_factory=list)
     dm: SlackDMConfig = Field(default_factory=SlackDMConfig)
 
     def channel_id(self) -> str:
@@ -377,6 +378,15 @@ class ChannelsConfig(BaseModel):
             config["group_policy"] = config.pop("groupPolicy")
         if "groupAllowFrom" in config and "group_allow_from" not in config:
             config["group_allow_from"] = config.pop("groupAllowFrom")
+        if "groupSenderAllowFrom" in config and "group_sender_allow_from" not in config:
+            config["group_sender_allow_from"] = config.pop("groupSenderAllowFrom")
+        dm_config = config.get("dm")
+        if (
+            isinstance(dm_config, dict)
+            and "allowFrom" in dm_config
+            and "allow_from" not in dm_config
+        ):
+            dm_config["allow_from"] = dm_config.pop("allowFrom")
 
         if channel_type == ChannelType.TELEGRAM:
             return TelegramChannelConfig(**config)
@@ -699,6 +709,8 @@ class WebToolsConfig(BaseModel):
 class ExecToolConfig(BaseModel):
     """Shell exec tool configuration."""
 
+    enabled: bool = False
+    allow_direct: bool = False
     timeout: int = 60
 
 
