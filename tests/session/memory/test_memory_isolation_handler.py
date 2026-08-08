@@ -900,3 +900,106 @@ class TestCalculateMemoryUris:
         assert uris == []
         assert "peer_id" not in operation.memory_fields
         mock_generate_uri.assert_not_called()
+
+
+class TestPeerOwnerMessageRoleExpansion:
+    """Verify the fix for issue #3171: Extract VLM tools blocked by Role.USER peer isolation.
+
+    MemoryIsolationHandler used to accept only role=="user" messages as valid
+    "peer owner" inputs. When the ExtractLoop VLM orchestrator produced a
+    peer-tagged memory draft via an assistant- or tool-role sideband
+    (ToolPart follow-ups, assistant reply attribution), the peer_id was
+    silently dropped and the resulting write fell back to self-scope or was
+    skipped entirely. We now accept any non-sentinel role so VLM tool flows
+    keep their peer attribution.
+    """
+
+    def test_is_peer_owner_message_accepts_all_speaker_roles(self):
+        roles_accepted = ["user", "assistant", "tool", "peer", "USER", "Assistant", "ToolCall"]
+        for role in roles_accepted:
+            msg = create_message(role=role, content="x", peer_id=None)
+            assert MemoryIsolationHandler._is_peer_owner_message(msg) is True, (
+                f"Expected role {role!r} to pass _is_peer_owner_message()"
+            )
+
+    def test_is_peer_owner_message_rejects_sentinel_and_empty_roles(self):
+        roles_rejected = [
+            "system",
+            "developer",
+            "",
+            None,
+            "SYSTEM",
+            "Developer",
+            "none",
+            "NONE",
+        ]
+        for role in roles_rejected:
+            msg = MagicMock()
+            msg.role = role
+            # Test through getattr behavior, matching the implementation's
+            # defensive str(None) / empty fallback.
+            assert MemoryIsolationHandler._is_peer_owner_message(msg) is False, (
+                f"Expected role {role!r} to be rejected by _is_peer_owner_message()"
+            )
+
+    def test_message_target_id_preserves_assistant_peer_tag(self):
+        """Reproduce #3171 failure case: assistant tool output tagged with peer_id.
+
+        Before the fix, the ``peer_id + _is_peer_owner_message + _can_write_peer``
+        chain would reject assistant/tool-role messages, causing the target to
+        collapse to self or None even though the caller's allowed_peer_ids
+        contained the peer and the message explicitly carried it.
+        """
+        peer = "web/visitor/alice"
+        handler = MemoryIsolationHandler(
+            ctx=create_ctx(),
+            extract_context=create_mock_extract_context([]),
+            allow_self=True,
+            allowed_peer_ids={peer},
+        )
+        assert handler.allow_peer is True, "sanity: allow_peer resolves True here"
+
+        for role in ("assistant", "tool", "peer", "user"):
+            msg = create_message(role=role, content="peer-tagged output", peer_id=peer)
+            target = handler._message_target_id(msg)
+            assert target == peer, (
+                f"role={role!r} with peer_id={peer!r} should target the peer, "
+                f"got {target!r}"
+            )
+
+    def test_message_target_id_still_skips_system_messages_with_peer_id(self):
+        peer = "web/visitor/alice"
+        handler = MemoryIsolationHandler(
+            ctx=create_ctx(),
+            extract_context=create_mock_extract_context([]),
+            allow_self=False,
+            allowed_peer_ids={peer},
+        )
+        # A system prompt accidentally tagged with a peer_id must not leak into
+        # peer-scoped memory.
+        msg = create_message(role="system", content="sys-prompt", peer_id=peer)
+        target = handler._message_target_id(msg)
+        assert target is None, (
+            "system role + peer_id should not produce a valid peer target_id, "
+            f"got {target!r}"
+        )
+
+    def test_unique_peer_target_id_in_messages_counts_assistant_tool_user(self):
+        """Regression covering the other caller of _is_peer_owner_message."""
+        peer = "u/bob"
+        msgs = [
+            create_message("assistant", "ok", peer_id=peer),
+            create_message("tool", "result", peer_id=peer),
+            create_message("user", "hi", peer_id=peer),
+            create_message("system", "sys", peer_id=peer),
+            create_message("user", "no peer"),
+        ]
+        handler = MemoryIsolationHandler(
+            ctx=create_ctx(),
+            extract_context=create_mock_extract_context(msgs),
+            allowed_peer_ids={peer},
+        )
+        found = handler._unique_peer_target_id_in_messages()
+        assert found == peer, (
+            f"Expected assistant+tool+user trio to resolve to peer {peer!r}, got {found!r}"
+        )
