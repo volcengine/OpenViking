@@ -1,6 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { createServer } from "node:http"
+import fs from "node:fs"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -211,5 +212,75 @@ test("assistant messages are captured even when finish is not stop", async () =>
       assert.match(body.messages[0].content, /Partial assistant output/)
       await manager.flushAll({ commit: false })
     })
+  })
+})
+
+test("concurrent saves never race the shared state file (#3877)", async (t) => {
+  // Widen the race window: concurrent saveState() calls share the same
+  // `${statePath}.tmp` temp file. A slow writeFile keeps the shared .tmp
+  // alive while a second writer arrives, and a slow rename lets a second
+  // rename observe the file already moved — the exact ENOENT from #3877.
+  const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+  const origWriteFile = fs.promises.writeFile
+  const origRename = fs.promises.rename
+  let raceDetected = false
+
+  t.mock.method(fs.promises, "writeFile", async (...args) => {
+    await delay(20)
+    return origWriteFile.call(fs.promises, ...args)
+  })
+  t.mock.method(fs.promises, "rename", async (from, to) => {
+    await delay(5)
+    if (!fs.existsSync(from)) {
+      // The shared .tmp was already moved by another concurrent save.
+      raceDetected = true
+      const err = new Error(
+        `ENOENT: no such file or directory, rename '${from}' -> '${to}'`,
+      )
+      err.code = "ENOENT"
+      throw err
+    }
+    return origRename.call(fs.promises, from, to)
+  })
+
+  await withTempDir("ov-oc-session-", async (dir) => {
+    const manager = createMemorySessionManager({
+      // autoCapture=false keeps the test fully offline (flushSession skips
+      // the network); the endpoint is unreachable so health probes fail fast.
+      config: { ...baseConfig("http://127.0.0.1:1"), autoCapture: false },
+      pluginRoot: dir,
+    })
+
+    await manager.handleEvent({ type: "session.created", properties: { info: { id: "sess-a" } } })
+    await manager.handleEvent({ type: "session.created", properties: { info: { id: "sess-b" } } })
+    await manager.handleEvent({ type: "session.created", properties: { info: { id: "sess-c" } } })
+
+    // Fire several flushAll() calls concurrently — each one calls saveState()
+    // against the same shared `.tmp` file, racing the debounced saves above.
+    const racing = Promise.all([
+      manager.flushAll(),
+      manager.flushAll(),
+      manager.flushAll(),
+    ])
+
+    // Mutate in-memory state while the racing saves are in flight: with the
+    // race, whichever rename runs first moves the shared .tmp away and the
+    // others fail with ENOENT, leaving a stale snapshot on disk. With
+    // serialized saves the final save is the newest snapshot.
+    await delay(30)
+    await manager.handleEvent({ type: "session.created", properties: { info: { id: "sess-d" } } })
+    await racing
+    await manager.flushAll() // final serialized save, includes sess-d
+
+    const statePath = join(dir, "openviking-session-state.json")
+    const data = JSON.parse(await fs.promises.readFile(statePath, "utf8"))
+    assert.equal(data.version, 2)
+    assert.deepEqual(
+      Object.keys(data.sessions).sort(),
+      ["sess-a", "sess-b", "sess-c", "sess-d"],
+    )
+    // Core assertion: concurrent saves must never race each other off the
+    // shared `.tmp` file. With serialized saves no ENOENT can occur.
+    assert.equal(raceDetected, false)
   })
 })
