@@ -5,6 +5,7 @@
 from typing import Any, Dict, List, Optional
 
 import volcenginesdkarkruntime
+from openviking_cli.utils.logger import default_logger as logger
 
 from openviking.models.embedder.base import (
     DenseEmbedderBase,
@@ -15,12 +16,37 @@ from openviking.models.embedder.base import (
     extract_text_from_content,
     truncate_and_normalize,
 )
+from openviking.models.network import (
+    create_optional_async_httpx_client,
+    create_optional_sync_httpx_client,
+)
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
-from openviking_cli.utils.logger import default_logger as logger
 
 VOLCENGINE_CLIENT_REQUEST_ID_HEADER = "X-Client-Request-Id"
 VOLCENGINE_CLIENT_REQUEST_ID = "ToB-direct,OpenViking_Service,openviking-service_cn-beijing"
+
+
+def _create_sync_ark(kwargs: Dict[str, Any]):
+    client_kwargs = dict(kwargs)
+    http_client = create_optional_sync_httpx_client(
+        client_kwargs.get("base_url"),
+        timeout=60.0,
+    )
+    if http_client is not None:
+        client_kwargs["http_client"] = http_client
+    return volcenginesdkarkruntime.Ark(**client_kwargs)
+
+
+def _create_async_ark(kwargs: Dict[str, Any]):
+    client_kwargs = dict(kwargs)
+    http_client = create_optional_async_httpx_client(
+        client_kwargs.get("base_url"),
+        timeout=60.0,
+    )
+    if http_client is not None:
+        client_kwargs["http_client"] = http_client
+    return volcenginesdkarkruntime.AsyncArk(**client_kwargs)
 
 
 def _build_volcengine_headers(extra_headers: Optional[Dict[str, str]]) -> Dict[str, str]:
@@ -122,7 +148,7 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
         ark_kwargs = {"api_key": self.api_key}
         if self.api_base:
             ark_kwargs["base_url"] = self.api_base
-        self.client = volcenginesdkarkruntime.Ark(**ark_kwargs)
+        self.client = _create_sync_ark(ark_kwargs)
         self._ark_kwargs = ark_kwargs
         self._async_client_cache = LoopScopedAsyncClientCache()
 
@@ -223,7 +249,7 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
 
     def _get_async_client(self):
         return self._async_client_cache.get(
-            lambda: volcenginesdkarkruntime.AsyncArk(**self._ark_kwargs)
+            lambda: _create_async_ark(self._ark_kwargs)
         )
 
     async def embed_async(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
@@ -304,7 +330,7 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
         ark_kwargs = {"api_key": self.api_key}
         if self.api_base:
             ark_kwargs["base_url"] = self.api_base
-        self.client = volcenginesdkarkruntime.Ark(**ark_kwargs)
+        self.client = _create_sync_ark(ark_kwargs)
         self._ark_kwargs = ark_kwargs
         self._async_client_cache = LoopScopedAsyncClientCache()
 
@@ -376,7 +402,7 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
 
     def _get_async_client(self):
         return self._async_client_cache.get(
-            lambda: volcenginesdkarkruntime.AsyncArk(**self._ark_kwargs)
+            lambda: _create_async_ark(self._ark_kwargs)
         )
 
     async def embed_async(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
@@ -453,7 +479,7 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
         ark_kwargs = {"api_key": self.api_key}
         if self.api_base:
             ark_kwargs["base_url"] = self.api_base
-        self.client = volcenginesdkarkruntime.Ark(**ark_kwargs)
+        self.client = _create_sync_ark(ark_kwargs)
         self._ark_kwargs = ark_kwargs
         self._async_client_cache = LoopScopedAsyncClientCache()
         self._dimension = dimension or 2048
@@ -536,7 +562,7 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
 
     def _get_async_client(self):
         return self._async_client_cache.get(
-            lambda: volcenginesdkarkruntime.AsyncArk(**self._ark_kwargs)
+            lambda: _create_async_ark(self._ark_kwargs)
         )
 
     async def embed_async(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:

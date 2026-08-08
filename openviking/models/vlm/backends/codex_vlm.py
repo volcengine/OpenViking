@@ -22,6 +22,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any, Dict
 
+from openviking.models.network import create_optional_sync_httpx_client
+
 try:
     import openai
 except ImportError:
@@ -55,6 +57,13 @@ class CodexVLM(OpenAIVLM):
             self.extra_headers,
             self.timeout,
         )
+        http_client = create_optional_sync_httpx_client(
+            api_base,
+            client_cls=openai.DefaultHttpxClient,
+            timeout=self.timeout,
+        )
+        if http_client is not None:
+            kwargs["http_client"] = http_client
         return openai.OpenAI(**kwargs)
 
     def _get_or_create_sync_responses_client(self):

@@ -6,12 +6,17 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 import requests
+from openviking_cli.utils.logger import default_logger as logger
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
+from openviking.models.network import (
+    create_model_requests_session,
+    create_optional_async_httpx_client,
+    is_model_network_endpoint,
+)
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
-from openviking_cli.utils.logger import default_logger as logger
 
 
 class MinimaxDenseEmbedder(DenseEmbedderBase):
@@ -92,13 +97,20 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
 
     def _create_session(self) -> requests.Session:
         """Create a requests session with retry logic"""
-        session = requests.Session()
         retry_strategy = Retry(
             total=self.max_retries,
             backoff_factor=0.5,
             status_forcelist=[429, 500, 502, 503, 504],
             allowed_methods=["POST"],
         )
+        if is_model_network_endpoint(self.api_base):
+            return create_model_requests_session(
+                self.api_base,
+                retry=retry_strategy,
+                mount_retry=True,
+            )
+
+        session = requests.Session()
         adapter = HTTPAdapter(max_retries=retry_strategy)
         session.mount("https://", adapter)
         session.mount("http://", adapter)
@@ -172,7 +184,10 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
         }
 
     async def _call_api_async(self, texts: List[str], is_query: bool = False) -> List[List[float]]:
-        client = self._async_client_cache.get(lambda: httpx.AsyncClient(timeout=60.0))
+        client = self._async_client_cache.get(
+            lambda: create_optional_async_httpx_client(self.api_base, timeout=60.0)
+            or httpx.AsyncClient(timeout=60.0)
+        )
 
         try:
             response = await client.post(

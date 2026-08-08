@@ -10,10 +10,18 @@ for asymmetric retrieval.
 from typing import Any, Dict, List, Optional
 
 import httpx
-
-from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult, truncate_and_normalize
-from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking_cli.utils import get_logger
+
+from openviking.models.embedder.base import (
+    DenseEmbedderBase,
+    EmbedResult,
+    truncate_and_normalize,
+)
+from openviking.models.network import (
+    create_optional_async_httpx_client,
+    create_optional_sync_httpx_client,
+)
+from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 
 logger = get_logger(__name__)
 
@@ -83,13 +91,17 @@ class CohereDenseEmbedder(DenseEmbedderBase):
             and dimension is not None
             and dimension < self._native_dimension
         )
-        self._client = httpx.Client(
+        self._client_kwargs = dict(
             base_url=self.api_base,
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
             },
             timeout=60.0,
+        )
+        self._client = (
+            create_optional_sync_httpx_client(self.api_base, **self._client_kwargs)
+            or httpx.Client(**self._client_kwargs)
         )
         self._async_client_cache = LoopScopedAsyncClientCache()
 
@@ -112,14 +124,11 @@ class CohereDenseEmbedder(DenseEmbedderBase):
 
     async def _call_api_async(self, texts: List[str], input_type: str) -> List[List[float]]:
         client = self._async_client_cache.get(
-            lambda: httpx.AsyncClient(
-                base_url=self.api_base,
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                timeout=60.0,
+            lambda: create_optional_async_httpx_client(
+                self.api_base,
+                **self._client_kwargs,
             )
+            or httpx.AsyncClient(**self._client_kwargs)
         )
         resp = await client.post("/v2/embed", json=self._build_payload(texts, input_type))
         resp.raise_for_status()
