@@ -253,6 +253,7 @@ Env var overrides for tuning without rebuilding:
 | `OPENVIKING_RECALL_COMPRESS` | `1` | set `0` / `off` to skip `codex exec` compression |
 | `OPENVIKING_RECALL_COMPRESS_MODEL` | unset | custom first-choice compressor model; `off` disables compression |
 | `OPENVIKING_RECALL_COMPRESS_THINKING` | unset | custom `model_reasoning_effort`; `default` means omit override; alias `OPENVIKING_RECALL_COMPRESS_REASONING_EFFORT` |
+| `OPENVIKING_RECALL_COMPRESS_BASE_URL` | unset | custom API base URL for the nested `codex exec` compressor |
 | `OPENVIKING_RECALL_COMPRESS_DETECT_ON_STARTUP` | `1` | recreate/cache compressor profile during every `SessionStart` |
 | `OPENVIKING_RECALL_COMPRESS_DETECT_TIMEOUT_MS` | `15000` | per-candidate compressor probe timeout |
 | `OPENVIKING_RECALL_COMPRESS_DETECT_TTL_MS` | `604800000` (7 days) | cache TTL used by `UserPromptSubmit` reads |
@@ -284,6 +285,20 @@ both:
 ```bash
 codex -m <model> -c 'model_reasoning_effort="low"' exec ...
 ```
+
+The compressor runs with `--ignore-user-config`, so it does not inherit the
+main Codex process's provider table. When
+`OPENVIKING_RECALL_COMPRESS_BASE_URL` is set, the plugin adds an isolated
+provider for the nested request:
+
+```bash
+-c 'model_provider="openviking_compressor"' \
+-c 'model_providers.openviking_compressor.name="openviking_compressor"' \
+-c 'model_providers.openviking_compressor.base_url="<url>"'
+```
+
+The selected model and thinking effort remain profile data; the base URL is
+runtime configuration and is supplied when the command is built.
 
 `thinking=default` omits the `model_reasoning_effort` override. This is
 important for model families whose default effort is tuned by Codex.
