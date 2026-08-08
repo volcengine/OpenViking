@@ -178,6 +178,8 @@ class WatchManager:
         self._tasks: Dict[str, WatchTask] = {}
         self._uri_to_task: Dict[tuple[str, str], str] = {}
         self._lock = asyncio.Lock()
+        self._move_condition = asyncio.Condition(self._lock)
+        self._moving_resource_prefixes: set[tuple[str, str, str]] = set()
         self._viking_fs = viking_fs
         self._initialized = False
 
@@ -382,6 +384,26 @@ class WatchManager:
 
         return True
 
+    def _resource_move_overlaps_unlocked(self, account_id: str, *uris: Optional[str]) -> bool:
+        for move_account_id, old_uri, new_uri in self._moving_resource_prefixes:
+            if move_account_id != account_id:
+                continue
+            for uri in uris:
+                if uri and (
+                    _uri_matches_prefix(uri, old_uri)
+                    or _uri_matches_prefix(old_uri, uri)
+                    or _uri_matches_prefix(uri, new_uri)
+                    or _uri_matches_prefix(new_uri, uri)
+                ):
+                    return True
+        return False
+
+    async def _wait_for_resource_moves_unlocked(
+        self, account_id: str, *uris: Optional[str]
+    ) -> None:
+        while self._resource_move_overlaps_unlocked(account_id, *uris):
+            await self._move_condition.wait()
+
     async def create_task(
         self,
         path: str,
@@ -425,6 +447,7 @@ class WatchManager:
             raise ValueError("watch_interval must be > 0")
 
         async with self._lock:
+            await self._wait_for_resource_moves_unlocked(account_id, to_uri)
             if self._check_uri_conflict(to_uri, account_id=account_id):
                 raise ConflictError(
                     f"Target URI '{to_uri}' is already used by another task",
@@ -510,6 +533,15 @@ class WatchManager:
             if not task:
                 raise ValueError(f"Task {task_id} not found")
 
+            if not self._check_permission(task, account_id, user_id, role):
+                raise PermissionDeniedError(
+                    f"User {account_id}/{user_id} does not have permission to update task {task_id}"
+                )
+
+            await self._wait_for_resource_moves_unlocked(task.account_id, task.to_uri, to_uri)
+            task = self._tasks.get(task_id)
+            if not task:
+                raise ValueError(f"Task {task_id} not found")
             if not self._check_permission(task, account_id, user_id, role):
                 raise PermissionDeniedError(
                     f"User {account_id}/{user_id} does not have permission to update task {task_id}"
@@ -633,61 +665,105 @@ class WatchManager:
         rollback_resource: Optional[Callable[[], Awaitable[None]]] = None,
         account_id: str = "default",
     ) -> List[WatchTask]:
-        """Move a resource and keep watch-task target URIs in sync under one lock."""
+        """Move a resource without holding the watch-task lock during filesystem I/O."""
+        move_key = (account_id, old_uri.rstrip("/"), new_uri.rstrip("/"))
         async with self._lock:
-            plan = self._plan_move_tasks_under_uri_unlocked(old_uri, new_uri, account_id)
-            move_result = move_resource()
-            if inspect.isawaitable(move_result):
-                await move_result
-            if not plan:
-                return []
+            await self._wait_for_resource_moves_unlocked(account_id, old_uri, new_uri)
+            self._plan_move_tasks_under_uri_unlocked(old_uri, new_uri, account_id)
+            self._moving_resource_prefixes.add(move_key)
 
-            original_targets = {
-                task_id: (task.to_uri, task.parent_uri)
-                for task_id, task in self._tasks.items()
-                if task_id in plan
-            }
-            original_uri_to_task = dict(self._uri_to_task)
-
+        async def run_move_transaction() -> List[WatchTask]:
             try:
-                for task_id in plan:
-                    task = self._tasks[task_id]
-                    if task.to_uri:
-                        self._uri_to_task.pop((account_id, task.to_uri), None)
+                move_result = move_resource()
+                if inspect.isawaitable(move_result):
+                    await move_result
 
-                updated: List[WatchTask] = []
-                for task_id, target_uri in plan.items():
-                    task = self._tasks[task_id]
-                    old_parent = _parent_uri(task.to_uri or "")
-                    task.to_uri = target_uri
-                    if task.parent_uri is not None and task.parent_uri == old_parent:
-                        task.parent_uri = _parent_uri(target_uri)
-                    self._uri_to_task[(account_id, target_uri)] = task_id
-                    updated.append(task)
+                try:
+                    async with self._lock:
+                        plan = self._plan_move_tasks_under_uri_unlocked(
+                            old_uri, new_uri, account_id
+                        )
+                        if not plan:
+                            return []
 
-                await self._save_tasks()
-                logger.info(
-                    f"[WatchManager] Rewrote {len(updated)} watch task target URI(s) "
-                    f"under {old_uri} to {new_uri}"
-                )
-                return updated
+                        original_targets = {
+                            task_id: (task.to_uri, task.parent_uri)
+                            for task_id, task in self._tasks.items()
+                            if task_id in plan
+                        }
+                        original_uri_to_task = dict(self._uri_to_task)
+
+                        try:
+                            for task_id in plan:
+                                task = self._tasks[task_id]
+                                if task.to_uri:
+                                    self._uri_to_task.pop((account_id, task.to_uri), None)
+
+                            updated: List[WatchTask] = []
+                            for task_id, target_uri in plan.items():
+                                task = self._tasks[task_id]
+                                old_parent = _parent_uri(task.to_uri or "")
+                                task.to_uri = target_uri
+                                if task.parent_uri is not None and task.parent_uri == old_parent:
+                                    task.parent_uri = _parent_uri(target_uri)
+                                self._uri_to_task[(account_id, target_uri)] = task_id
+                                updated.append(task)
+
+                            await self._save_tasks()
+                            logger.info(
+                                f"[WatchManager] Rewrote {len(updated)} watch task target URI(s) "
+                                f"under {old_uri} to {new_uri}"
+                            )
+                            return updated
+                        except Exception:
+                            for task_id, (
+                                original_to_uri,
+                                original_parent_uri,
+                            ) in original_targets.items():
+                                task = self._tasks[task_id]
+                                task.to_uri = original_to_uri
+                                task.parent_uri = original_parent_uri
+                            self._uri_to_task = original_uri_to_task
+                            raise
+                except Exception:
+                    if rollback_resource is not None:
+                        rollback_result = rollback_resource()
+                        if inspect.isawaitable(rollback_result):
+                            await rollback_result
+                    raise
+            finally:
+                async with self._lock:
+                    self._moving_resource_prefixes.discard(move_key)
+                    self._move_condition.notify_all()
+
+        transaction_task = asyncio.create_task(run_move_transaction())
+        try:
+            return await asyncio.shield(transaction_task)
+        except asyncio.CancelledError:
+            while not transaction_task.done():
+                try:
+                    await asyncio.shield(transaction_task)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            try:
+                transaction_task.result()
+            except asyncio.CancelledError:
+                pass
             except Exception:
-                for task_id, (original_to_uri, original_parent_uri) in original_targets.items():
-                    task = self._tasks[task_id]
-                    task.to_uri = original_to_uri
-                    task.parent_uri = original_parent_uri
-                self._uri_to_task = original_uri_to_task
-                if rollback_resource is not None:
-                    rollback_result = rollback_resource()
-                    if inspect.isawaitable(rollback_result):
-                        await rollback_result
-                raise
+                logger.error(
+                    "[WatchManager] Resource move transaction failed while caller was cancelled",
+                    exc_info=True,
+                )
+            raise
 
     async def deactivate_tasks_under_uri_internal(
         self, uri: str, account_id: str = "default"
     ) -> List[WatchTask]:
         """Deactivate watch tasks whose target URI is deleted."""
         async with self._lock:
+            await self._wait_for_resource_moves_unlocked(account_id, uri)
             matched = [
                 task
                 for task in self._tasks.values()
@@ -770,6 +846,15 @@ class WatchManager:
             if not self._check_permission(task, account_id, user_id, role):
                 return None
 
+            await self._wait_for_resource_moves_unlocked(task.account_id, task.to_uri)
+
+            task = self._tasks.get(task_id)
+            if not task:
+                return None
+
+            if not self._check_permission(task, account_id, user_id, role):
+                return None
+
             return task
 
     async def get_all_tasks(
@@ -819,6 +904,7 @@ class WatchManager:
             WatchTask if found and accessible, None otherwise
         """
         async with self._lock:
+            await self._wait_for_resource_moves_unlocked(account_id, to_uri)
             task_id = self._uri_to_task.get((account_id, to_uri))
             if not task_id:
                 return None
@@ -874,6 +960,9 @@ class WatchManager:
                 if account_id and task.account_id != account_id:
                     continue
 
+                if self._resource_move_overlaps_unlocked(task.account_id, task.to_uri):
+                    continue
+
                 if task.next_execution_time and task.next_execution_time <= now:
                     due_tasks.append(task)
 
@@ -886,6 +975,8 @@ class WatchManager:
                 if not task.is_active:
                     continue
                 if account_id and task.account_id != account_id:
+                    continue
+                if self._resource_move_overlaps_unlocked(task.account_id, task.to_uri):
                     continue
                 if task.next_execution_time is None:
                     continue
