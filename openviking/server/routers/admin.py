@@ -49,6 +49,14 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
+# Strong refs for in-flight fire-and-forget legacy-migration tasks. Python
+# asyncio only keeps weak references to tasks created via asyncio.create_task,
+# so a task without an external strong reference can be garbage-collected
+# mid-execution and silently aborted — leaving the task-tracker entry stuck
+# "in progress" forever. Mirrors the pattern in
+# openviking/server/routers/watches.py.
+_BACKGROUND_MIGRATION_TASKS: set[asyncio.Task] = set()
+
 
 class CreateAccountRequest(BaseModel):
     account_id: str
@@ -313,7 +321,7 @@ async def migrate_legacy_data(
         account_id=SYSTEM_TASK_ACCOUNT_ID,
         user_id=SYSTEM_TASK_USER_ID,
     )
-    asyncio.create_task(
+    task_tracker_task = asyncio.create_task(
         _run_legacy_migration_task(
             task.task_id,
             migration,
@@ -322,6 +330,8 @@ async def migrate_legacy_data(
             user_id=SYSTEM_TASK_USER_ID,
         )
     )
+    _BACKGROUND_MIGRATION_TASKS.add(task_tracker_task)
+    task_tracker_task.add_done_callback(_BACKGROUND_MIGRATION_TASKS.discard)
     return Response(status="ok", result={"task_id": task.task_id})
 
 
