@@ -119,6 +119,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
         self,
         model_name: str = "gemini-embedding-2-preview",
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
         dimension: Optional[int] = None,
         task_type: Optional[str] = None,
         query_param: Optional[str] = None,
@@ -136,20 +137,52 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
             )
         if dimension is not None and not (1 <= dimension <= 3072):
             raise ValueError(f"dimension must be between 1 and 3072, got {dimension}")
+
+        # When a custom api_base is configured we bypass the google-genai
+        # SDK's batching dispatch (which still hardcodes the
+        # `:batchEmbedContents` RPC in pinned google-genai==1.68.0 even for
+        # single-item calls) and POST the single-item `:embedContent` RPC
+        # directly using httpx. Gateways exposed via #3484 typically only
+        # implement the non-batched endpoint.
+        self._custom_api_base: Optional[str] = None
+        self._api_key: str = api_key
+        self._custom_http_client: Optional[Any] = None
+        self._custom_http_client_async: Optional[Any] = None
+
+        if api_base:
+            logger.warning(
+                "Gemini embedder using custom api_base: %s (single-request :embedContent path)",
+                api_base,
+            )
+            self._custom_api_base = api_base.rstrip("/")
+            import httpx
+
+            self._custom_http_client = httpx.Client(timeout=60.0)
+            self._custom_http_client_async = httpx.AsyncClient(timeout=60.0)
+
+        http_options = None
         if _HTTP_RETRY_AVAILABLE:
-            self.client = genai.Client(
-                api_key=api_key,
-                http_options=HttpOptions(
-                    retry_options=HttpRetryOptions(
-                        attempts=max(self.max_retries + 1, 1),
-                        initial_delay=0.5,
-                        max_delay=8.0,
-                        exp_base=2.0,
-                    )
+            http_options = HttpOptions(
+                base_url=api_base,
+                retry_options=HttpRetryOptions(
+                    attempts=max(self.max_retries + 1, 1),
+                    initial_delay=0.5,
+                    max_delay=8.0,
+                    exp_base=2.0,
                 ),
             )
+            self.client = genai.Client(
+                api_key=api_key,
+                http_options=http_options,
+            )
         else:
-            self.client = genai.Client(api_key=api_key)
+            if api_base:
+                self.client = genai.Client(
+                    api_key=api_key,
+                    http_options=HttpOptions(base_url=api_base),
+                )
+            else:
+                self.client = genai.Client(api_key=api_key)
         self.task_type = task_type
         self.query_param = query_param
         self.document_param = document_param
@@ -192,6 +225,125 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
             f"task_type={self.task_type!r})"
         )
 
+    def _build_custom_body(
+        self,
+        *,
+        text: str,
+        task_type: Optional[str],
+        title: Optional[str],
+    ) -> Dict[str, Any]:
+        """Build the request body for the direct `:embedContent` REST RPC."""
+        body: Dict[str, Any] = {
+            "model": f"models/{self.model_name}",
+            "content": {
+                "parts": [{"text": text}],
+            },
+        }
+        config: Dict[str, Any] = {"outputDimensionality": self._dimension}
+        if task_type:
+            config["taskType"] = task_type.upper()
+        if title:
+            config["title"] = title
+        body["config"] = config
+        return body
+
+    @staticmethod
+    def _parse_custom_response(body: Any, dimension: int) -> EmbedResult:
+        """Parse a JSON response from the direct `:embedContent` REST RPC."""
+        try:
+            embedding = body["embedding"]
+            values = list(embedding["values"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError(
+                f"Malformed response from custom Gemini embed gateway: missing embedding.values. Keys={list(body.keys()) if isinstance(body, dict) else 'n/a'}"
+            ) from exc
+        vector = truncate_and_normalize(values, dimension)
+        return EmbedResult(dense_vector=vector)
+
+    def _call_custom_sync(
+        self,
+        *,
+        text: str,
+        task_type: Optional[str],
+        title: Optional[str],
+    ) -> EmbedResult:
+        """POST the single-item :embedContent RPC directly to a custom gateway."""
+        import httpx
+
+        assert self._custom_api_base is not None
+        assert self._custom_http_client is not None
+        url = (
+            f"{self._custom_api_base}/v1beta/models/"
+            f"{self.model_name}:embedContent"
+        )
+        payload = self._build_custom_body(
+            text=text, task_type=task_type, title=title
+        )
+        try:
+            resp = self._custom_http_client.post(
+                url,
+                json=payload,
+                headers={
+                    "x-goog-api-key": self._api_key,
+                    "content-type": "application/json",
+                },
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Custom Gemini embed gateway request failed: {exc}"
+            ) from exc
+        if resp.status_code >= 400:
+            msg = f"Custom Gemini embed gateway returned HTTP {resp.status_code}"
+            try:
+                err_body = resp.json()
+                detail = err_body.get("error", {}).get("message") or str(err_body)
+                msg += f": {detail}"
+            except Exception:
+                pass
+            raise RuntimeError(msg)
+        return self._parse_custom_response(resp.json(), self._dimension)
+
+    async def _call_custom_async(
+        self,
+        *,
+        text: str,
+        task_type: Optional[str],
+        title: Optional[str],
+    ) -> EmbedResult:
+        """POST the single-item :embedContent RPC directly to a custom gateway (async)."""
+        assert self._custom_api_base is not None
+        assert self._custom_http_client_async is not None
+        url = (
+            f"{self._custom_api_base}/v1beta/models/"
+            f"{self.model_name}:embedContent"
+        )
+        payload = self._build_custom_body(
+            text=text, task_type=task_type, title=title
+        )
+        try:
+            resp = await self._custom_http_client_async.post(
+                url,
+                json=payload,
+                headers={
+                    "x-goog-api-key": self._api_key,
+                    "content-type": "application/json",
+                },
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Custom Gemini embed gateway async request failed: {exc}"
+            ) from exc
+        if resp.status_code >= 400:
+            msg = f"Custom Gemini embed gateway returned HTTP {resp.status_code}"
+            try:
+                err_body = resp.json()
+                detail = err_body.get("error", {}).get("message") or str(err_body)
+                msg += f": {detail}"
+            except Exception:
+                pass
+            raise RuntimeError(msg)
+        return self._parse_custom_response(resp.json(), self._dimension)
+
     def embed(
         self,
         text: str,
@@ -205,15 +357,25 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
             return EmbedResult(dense_vector=[0.0] * self._dimension)
         task_type = self._resolve_task_type(is_query=is_query, task_type=task_type)
 
-        # SDK accepts plain str; converts to REST Parts format internally.
-        def _call() -> EmbedResult:
-            result = self.client.models.embed_content(
-                model=self.model_name,
-                contents=text,
-                config=self._build_config(task_type=task_type, title=title),
-            )
-            vector = truncate_and_normalize(list(result.embeddings[0].values), self._dimension)
-            return EmbedResult(dense_vector=vector)
+        if self._custom_api_base is not None:
+            # Custom gateway path: POST the single-item :embedContent RPC
+            # directly, bypassing google-genai SDK's Models._embed_content
+            # dispatch which still hardcodes :batchEmbedContents in
+            # google-genai==1.68.0.
+            def _call() -> EmbedResult:
+                return self._call_custom_sync(
+                    text=text, task_type=task_type, title=title
+                )
+        else:
+            # SDK accepts plain str; converts to REST Parts format internally.
+            def _call() -> EmbedResult:
+                result = self.client.models.embed_content(
+                    model=self.model_name,
+                    contents=text,
+                    config=self._build_config(task_type=task_type, title=title),
+                )
+                vector = truncate_and_normalize(list(result.embeddings[0].values), self._dimension)
+                return EmbedResult(dense_vector=vector)
 
         try:
             result = (
@@ -251,14 +413,20 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
 
         task_type = self._resolve_task_type(is_query=is_query, task_type=task_type)
 
-        async def _call() -> EmbedResult:
-            result = await self.client.aio.models.embed_content(
-                model=self.model_name,
-                contents=text,
-                config=self._build_config(task_type=task_type, title=title),
-            )
-            vector = truncate_and_normalize(list(result.embeddings[0].values), self._dimension)
-            return EmbedResult(dense_vector=vector)
+        if self._custom_api_base is not None:
+            async def _call() -> EmbedResult:
+                return await self._call_custom_async(
+                    text=text, task_type=task_type, title=title
+                )
+        else:
+            async def _call() -> EmbedResult:
+                result = await self.client.aio.models.embed_content(
+                    model=self.model_name,
+                    contents=text,
+                    config=self._build_config(task_type=task_type, title=title),
+                )
+                vector = truncate_and_normalize(list(result.embeddings[0].values), self._dimension)
+                return EmbedResult(dense_vector=vector)
 
         try:
             result = await self._run_with_async_retry(
@@ -281,6 +449,16 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
         return self._dimension
 
     def close(self):
+        for attr in (
+            "_custom_http_client",
+            "_custom_http_client_async",
+        ):
+            client = getattr(self, attr, None)
+            if client is not None and hasattr(client, "close"):
+                try:
+                    client.close()
+                except Exception:
+                    pass
         if hasattr(self.client, "_http_client"):
             try:
                 self.client._http_client.close()

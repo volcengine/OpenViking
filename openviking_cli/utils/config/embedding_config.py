@@ -881,6 +881,7 @@ class EmbeddingConfig(BaseModel):
                 lambda cfg: {
                     "model_name": cfg.model,
                     "api_key": cfg.api_key,
+                    "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
                     "config": dict(runtime_config),
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
