@@ -109,7 +109,7 @@ export function loadConfig(extensionDir: string): OVConfig {
     apiKey: creds.apiKey,
     account: creds.account,
     user: creds.user,
-    peerId: creds.peerId,
+    peerId: creds.peerId || (typeof file.peerId === "string" ? file.peerId : DEFAULT_CONFIG.peerId),
     userAgent: buildUserAgent("pi", EXTENSION_VERSION),
     recallLimitConfigured: Object.prototype.hasOwnProperty.call(file, "recallLimit"),
     recallQueryExpansionConfigured: Object.prototype.hasOwnProperty.call(file, "recallQueryExpansion"),
