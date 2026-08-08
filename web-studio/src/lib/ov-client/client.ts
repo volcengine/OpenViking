@@ -191,8 +191,14 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
       setOptionalHeader(headers, 'X-API-Key', apiKey)
     }
     if (connection.identityHeaders) {
-      setOptionalHeader(headers, 'X-OpenViking-Account', connection.accountId)
-      setOptionalHeader(headers, 'X-OpenViking-User', connection.userId)
+      const preservesRequestedIdentity =
+        resolvePathname(config.url) === '/health' &&
+        Boolean(readHeader(headers, 'X-OpenViking-Account')?.trim()) &&
+        Boolean(readHeader(headers, 'X-OpenViking-User')?.trim())
+      if (!preservesRequestedIdentity) {
+        setOptionalHeader(headers, 'X-OpenViking-Account', connection.accountId)
+        setOptionalHeader(headers, 'X-OpenViking-User', connection.userId)
+      }
     } else {
       headers.delete('X-OpenViking-Account')
       headers.delete('X-OpenViking-User')

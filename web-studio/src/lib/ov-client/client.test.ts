@@ -115,3 +115,102 @@ describe('createOvClient API key selection', () => {
     )
   })
 })
+
+describe('createOvClient trusted identity selection', () => {
+  it('preserves explicit identity headers used to probe a target identity', async () => {
+    const { client, requests } = createRecordingClient()
+    client.setConnection({
+      accountId: 'active-account',
+      identityHeaders: true,
+      userId: 'active-user',
+    })
+
+    await client.instance.get('/health', {
+      headers: {
+        'X-OpenViking-Account': 'target-account',
+        'X-OpenViking-User': 'target-user',
+      },
+    })
+
+    expect(readRequestHeader(requests[0], 'X-OpenViking-Account')).toBe(
+      'target-account',
+    )
+    expect(readRequestHeader(requests[0], 'X-OpenViking-User')).toBe(
+      'target-user',
+    )
+  })
+
+  it('keeps the active identity on ordinary trusted requests', async () => {
+    const { client, requests } = createRecordingClient()
+    client.setConnection({
+      accountId: 'active-account',
+      identityHeaders: true,
+      userId: 'active-user',
+    })
+
+    await client.instance.get('/api/v1/resources', {
+      headers: {
+        'X-OpenViking-Account': 'target-account',
+        'X-OpenViking-User': 'target-user',
+      },
+    })
+
+    expect(readRequestHeader(requests[0], 'X-OpenViking-Account')).toBe(
+      'active-account',
+    )
+    expect(readRequestHeader(requests[0], 'X-OpenViking-User')).toBe(
+      'active-user',
+    )
+  })
+
+  it('falls back atomically when a health probe identity is incomplete', async () => {
+    const { client, requests } = createRecordingClient()
+    client.setConnection({
+      accountId: 'active-account',
+      identityHeaders: true,
+      userId: 'active-user',
+    })
+
+    await client.instance.get('/health', {
+      headers: {
+        'X-OpenViking-Account': 'target-account',
+        'X-OpenViking-User': ' ',
+      },
+    })
+    await client.instance.get('/health', {
+      headers: {
+        'X-OpenViking-Account': ' ',
+        'X-OpenViking-User': 'target-user',
+      },
+    })
+    await client.instance.get('/health')
+
+    for (const request of requests) {
+      expect(readRequestHeader(request, 'X-OpenViking-Account')).toBe(
+        'active-account',
+      )
+      expect(readRequestHeader(request, 'X-OpenViking-User')).toBe(
+        'active-user',
+      )
+    }
+  })
+
+  it('strips explicit identity headers outside trusted mode', async () => {
+    const { client, requests } = createRecordingClient()
+    client.setConnection({
+      accountId: 'active-account',
+      identityHeaders: false,
+      userId: 'active-user',
+    })
+
+    await client.instance.get('/health', {
+      headers: {
+        'X-OpenViking-Account': 'target-account',
+        'X-OpenViking-User': 'target-user',
+      },
+    })
+
+    expect(readRequestHeader(requests[0], 'X-OpenViking-Account')).toBe('')
+    expect(readRequestHeader(requests[0], 'X-OpenViking-User')).toBe('')
+  })
+})
