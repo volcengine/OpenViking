@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-from openviking.core.context import Context, ContextType, Vectorize
+from openviking.core.context import Context, ContextLevel, ContextType, Vectorize
 from openviking.core.mcp_converter import is_mcp_format, mcp_to_skill
 from openviking.core.namespace import canonical_user_root, user_space_fragment
 from openviking.core.skill_loader import SkillLoader
@@ -238,6 +238,7 @@ class SkillProcessor:
             await self._index_skill(
                 context=context,
                 skill_dir_uri=skill_dir_uri,
+                skill_content=skill_dict.get("content", ""),
             )
             telemetry.set(
                 "skill.index.duration_ms", round((time.perf_counter() - index_start) * 1000, 3)
@@ -578,14 +579,43 @@ class SkillProcessor:
             else:
                 await viking_fs.write_file_bytes(aux_uri, file_bytes, ctx=ctx)
 
-    async def _index_skill(self, context: Context, skill_dir_uri: str):
-        """Write skill directory vector via async queue as L0."""
-        context.uri = skill_dir_uri
-        context.is_leaf = False
-        context.level = 0
+    async def _index_skill(
+        self,
+        context: Context,
+        skill_dir_uri: str,
+        skill_content: str = "",
+    ):
+        await self._enqueue_skill_embedding(
+            context, skill_dir_uri, ContextLevel.ABSTRACT, context.abstract
+        )
+        if skill_content:
+            await self._enqueue_skill_embedding(
+                context, skill_dir_uri, ContextLevel.OVERVIEW, skill_content
+            )
 
-        context.set_vectorize(Vectorize(text=context.abstract))
-        embedding_msg = EmbeddingMsgConverter.from_context(context)
+    async def _enqueue_skill_embedding(
+        self,
+        context: Context,
+        skill_dir_uri: str,
+        level: ContextLevel,
+        text: str,
+    ):
+        emb_context = Context(
+            uri=skill_dir_uri,
+            parent_uri=context.parent_uri,
+            is_leaf=False,
+            abstract=context.abstract,
+            context_type=context.context_type,
+            level=level,
+            created_at=context.created_at,
+            updated_at=context.updated_at,
+            user=context.user,
+            account_id=context.account_id,
+            owner_space=context.owner_space,
+            meta=context.meta,
+        )
+        emb_context.set_vectorize(Vectorize(text=text, full_text=text))
+        embedding_msg = EmbeddingMsgConverter.from_context(emb_context)
         if embedding_msg:
             if embedding_msg.telemetry_id:
                 get_request_wait_tracker().register_embedding_root(
