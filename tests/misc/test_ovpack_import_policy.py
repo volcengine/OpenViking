@@ -54,6 +54,33 @@ class FakeVikingFS:
         raise FileNotFoundError(uri)
 
 
+class FakeInitializedRestoreVikingFS(FakeVikingFS):
+    """Model the public roots and protected user namespace of an initialized server."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.removed: list[str] = []
+        self.children = {
+            "viking://resources": [{"uri": "viking://resources/old.md"}],
+            "viking://user": [{"uri": "viking://user/old-user"}],
+        }
+
+    async def ls(self, uri: str, show_all_hidden: bool = False, ctx=None):
+        if uri in self.children:
+            return list(self.children[uri])
+        raise NotFoundError(uri, "file")
+
+    async def mkdir(self, uri: str, exist_ok: bool = False, ctx=None):
+        assert uri != "viking://user"
+        await super().mkdir(uri, exist_ok=exist_ok, ctx=ctx)
+
+    async def rm(self, uri: str, recursive: bool = False, ctx=None):
+        assert uri != "viking://user"
+        self.removed.append(uri)
+        for entries in self.children.values():
+            entries[:] = [entry for entry in entries if entry["uri"] != uri]
+
+
 class FakeExportVikingFS:
     def __init__(self) -> None:
         self.binary_files = {
@@ -619,6 +646,30 @@ async def test_backup_restore_contract(temp_ovpack_path: Path, request_ctx: Requ
         "viking://user/alice/sessions/sess_1/.meta.json",
     ]
     assert fake_fs.tree_calls == ["viking://resources", "viking://user"]
+
+
+@pytest.mark.asyncio
+async def test_backup_restore_overwrites_initialized_protected_scope(
+    temp_ovpack_path: Path, request_ctx: RequestContext
+):
+    await backup_ovpack(FakeBackupVikingFS(), str(temp_ovpack_path), ctx=request_ctx)
+    fake_fs = FakeInitializedRestoreVikingFS()
+
+    assert (
+        await restore_ovpack(
+            fake_fs,
+            str(temp_ovpack_path),
+            request_ctx,
+            on_conflict="overwrite",
+        )
+        == "viking://"
+    )
+    assert fake_fs.removed == ["viking://resources", "viking://user/old-user"]
+    assert "viking://user" not in fake_fs.created_dirs
+    assert fake_fs.written_files == [
+        "viking://resources/README.md",
+        "viking://user/alice/sessions/sess_1/.meta.json",
+    ]
 
 
 @pytest.mark.asyncio
