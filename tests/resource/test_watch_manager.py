@@ -789,3 +789,107 @@ class TestWatchManagerConcurrency:
 
         final_task = await watch_manager.get_task(task.task_id)
         assert final_task is not None
+
+
+class TestDatetimeTimezoneCompatibility:
+    """Verify the fix for issue #3268: tz-aware vs naive datetimes must interoperate safely.
+
+    Previous code mixed ``datetime.now()`` (naive local) with tasks loaded
+    from JSON ISO strings that could carry timezone info. Any comparison or
+    subtraction raised ``TypeError: can't subtract offset-naive and
+    offset-aware datetimes`` and broke due-task detection and scheduler
+    sleep scheduling.
+    """
+
+    def test_helpers_as_utc_aware(self):
+        from datetime import timezone as tz
+
+        from openviking.resource.watch_manager import _as_utc, _utc_now
+
+        now_utc = _utc_now()
+        assert now_utc.tzinfo is not None, "_utc_now() must return a timezone-aware datetime"
+        assert now_utc.tzinfo.utcoffset(now_utc) == timedelta(0)
+
+        naive = datetime(2026, 7, 28, 12, 0, 0)
+        aware_local = datetime(2026, 7, 28, 12, 0, 0, tzinfo=tz(timedelta(hours=8)))
+        aware_utc = datetime(2026, 7, 28, 12, 0, 0, tzinfo=tz.utc)
+
+        utc_from_naive = _as_utc(naive)
+        assert utc_from_naive.tzinfo is not None
+        assert utc_from_naive.tzinfo.utcoffset(utc_from_naive) == timedelta(0)
+
+        utc_from_utc = _as_utc(aware_utc)
+        assert utc_from_utc.hour == 12 and utc_from_utc.minute == 0
+
+        utc_from_local = _as_utc(aware_local)
+        assert utc_from_local.tzinfo.utcoffset(utc_from_local) == timedelta(0)
+        assert utc_from_local.hour == 4  # 12 +08:00 shifted to UTC
+
+        assert _as_utc(None) is None
+
+    def test_watchtask_from_dict_mixes_tz_safely(self):
+        """Tasks deserialised from storage must produce comparable datetimes.
+
+        This reproduces #3268: a task persisted with a Z suffix
+        (tz-aware) and then compared to a task created in memory
+        (naive local on the previous default_factory) used to raise
+        TypeError during ``next_execution_time <= now``.
+        """
+        import random
+
+        from openviking.resource.watch_manager import WatchTask
+
+        random_id = f"task-tz-{random.randint(1, 10**9)}"
+
+        iso_aware = "2026-07-28T12:00:00+00:00"
+        iso_naive_legacy = "2026-07-28T11:00:00"
+        task_from_aware = WatchTask.from_dict(
+            {
+                "task_id": f"{random_id}-aware",
+                "path": "viking://resources/a",
+                "to_uri": "viking://memories/a",
+                "watch_interval": 15,
+                "created_at": iso_aware,
+                "last_execution_time": iso_naive_legacy,
+                "next_execution_time": "2026-07-28T12:05:00Z",
+            }
+        )
+        # Every datetime field should be normalized to UTC-aware so when the
+        # live scheduler reads the task from storage we never compare naive
+        # against aware (TypeError: can't subtract offset-naive and
+        # offset-aware datetimes — issue #3268). The downstream comparison
+        # points are get_due_tasks (next <= now) and the scheduler loop
+        # delta = (next - now).total_seconds().
+        for field_name in ("created_at", "last_execution_time", "next_execution_time"):
+            value = getattr(task_from_aware, field_name)
+            assert value is None or value.tzinfo is not None, (
+                f"{field_name} must be timezone-aware after from_dict(), got {value!r}"
+            )
+            assert value.tzinfo.utcoffset(value) == timedelta(0), (
+                f"{field_name} should be in UTC after from_dict()"
+            )
+
+        # calculate_next_execution_time must also return UTC-aware output,
+        # regardless of the mix of base times we fed in.
+        next_run = task_from_aware.calculate_next_execution_time()
+        assert next_run.tzinfo is not None
+        assert next_run.tzinfo.utcoffset(next_run) == timedelta(0)
+
+        # Due-task comparison must not raise TypeError with UTC now used inside
+        # of _utc_now() (UTC-aware, as_utc-normalised next_execution_time
+        # from WatchTask.from_dict() compared in get_due_tasks (which calls
+        # _as_utc() internal) — we ensure the ordering was preserved
+        # from the raw ISO deltas provided: 11:00 -> 12:05 -> 15min interval.
+        assert next_run.hour == 11 and next_run.minute == 15, next_run
+
+    def test_default_factory_produces_utc_aware_created_at(self):
+        from openviking.resource.watch_manager import WatchTask
+
+        minimal = WatchTask(
+            task_id="t-factory",
+            path="viking://resources/x",
+            to_uri="viking://memories/x",
+            watch_interval=5,
+        )
+        assert minimal.created_at.tzinfo is not None
+        assert minimal.created_at.tzinfo.utcoffset(minimal.created_at) == timedelta(0)
