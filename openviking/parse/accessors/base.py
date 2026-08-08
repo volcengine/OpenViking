@@ -11,7 +11,7 @@ import shutil
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Union
+from typing import Any, Dict, List, Literal, Optional, Set, Union
 
 
 class SourceType:
@@ -32,6 +32,9 @@ class SourceType:
 
     FEISHU = "feishu"
     """Feishu/Lark document (from FeishuAccessor)."""
+
+    EMAIL = "email"
+    """Email mailbox over IMAP (from EmailAccessor)."""
 
 
 @dataclass
@@ -93,6 +96,54 @@ class LocalResource:
         self.cleanup()
 
 
+@dataclass
+class ConnectionStatus:
+    """Result of a credential/connection check. Never raised, always returned."""
+
+    success: bool
+    message: str = ""
+
+
+@dataclass
+class AccessError:
+    """A non-fatal error captured during an access run.
+
+    ``transient`` errors are safe to retry by the framework; ``permanent``
+    errors should be isolated (logged and skipped) without retry.
+    """
+
+    doc_id: Optional[str]
+    """Related document id, or None for a source-level error."""
+
+    kind: Literal["transient", "permanent"] = "permanent"
+    message: str = ""
+
+
+@dataclass
+class AccessResult:
+    """Extended result of an access run for standard-capable accessors.
+
+    Wraps the classic :class:`LocalResource` and carries the optional sync
+    metadata defined by the accessor standard. Accessors that don't need
+    incremental sync or mirror semantics keep returning ``LocalResource``.
+    """
+
+    resource: LocalResource
+    """Local directory/file with the fetched data (same as the classic return)."""
+
+    cursor: Optional[Dict[str, Any]] = None
+    """Incremental cursor. Opaque to the framework: persisted as-is and passed
+    back unchanged on the next run. None means the run has no cursor to save."""
+
+    doc_ids: Optional[Set[str]] = None
+    """Complete set of doc ids seen in a *full* sync, used for orphan cleanup.
+    Must be None on incremental (or otherwise partial) runs — the framework
+    never deletes based on a partial view."""
+
+    errors: List[AccessError] = field(default_factory=list)
+    """Per-document errors that did not abort the run."""
+
+
 class DataAccessor(ABC):
     """
     Abstract base class for data accessors.
@@ -102,6 +153,12 @@ class DataAccessor(ABC):
     - Fetching the data from the source to a local path
     - Providing metadata about the source
     - Cleaning up temporary resources when done
+
+    Standard optional capabilities (all opt-in, see ``auth_spec``/``check``):
+    accessors that support them declare auth via JSON Schema, accept a
+    ``cursor`` kwarg in ``access()`` for incremental sync, report progress via
+    a ``progress`` callback kwarg, and return :class:`AccessResult` instead of
+    :class:`LocalResource`.
     """
 
     @abstractmethod
@@ -121,18 +178,43 @@ class DataAccessor(ABC):
         pass
 
     @abstractmethod
-    async def access(self, source: Union[str, Path], **kwargs) -> LocalResource:
+    async def access(self, source: Union[str, Path], **kwargs) -> Union[LocalResource, AccessResult]:
         """
         Fetch the source and make it available locally.
 
         Args:
             source: Source string (URL, path, etc.) or Path object
-            **kwargs: Additional accessor-specific arguments
+            **kwargs: Additional accessor-specific arguments. Standard-capable
+                accessors also accept ``cursor`` (dict from the previous run,
+                None on first/full sync) and ``progress`` (callable taking
+                ``done``/``total`` keyword arguments).
 
         Returns:
-            LocalResource pointing to the locally available data
+            LocalResource pointing to the locally available data, or an
+            AccessResult wrapping it for accessors that implement the
+            standard sync capabilities (cursor / doc_ids / errors)
         """
         pass
+
+    def auth_spec(self) -> Optional[Dict[str, Any]]:
+        """
+        Declare the credentials this accessor needs as a JSON Schema.
+
+        Returns None (default) when the source needs no authentication. When a
+        schema is returned, the framework takes over credential storage and
+        passes the resolved credentials to ``access()`` via the ``auth`` kwarg.
+        """
+        return None
+
+    def check(self, auth: Dict[str, Any]) -> ConnectionStatus:
+        """
+        Validate credentials against the source without syncing.
+
+        Must not raise: failures are wrapped into the returned
+        ConnectionStatus. The default accepts anything, matching accessors
+        that declare no auth.
+        """
+        return ConnectionStatus(success=True)
 
     @property
     @abstractmethod
