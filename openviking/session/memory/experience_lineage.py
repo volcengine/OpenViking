@@ -4,29 +4,30 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any, Iterable
 
-from openviking.core.namespace import canonicalize_uri, uri_parts
+from openviking.core.experience import (
+    is_experience_uri_for_user,
+    load_tool_output_mapping,
+    normalize_experience_tool_name,
+)
+from openviking.core.namespace import canonicalize_uri
 from openviking.message import Message, ToolPart
 from openviking.server.identity import RequestContext
 from openviking.utils.tags import normalize_search_tag
 
-_EXPERIENCE_SIDECAR_FILENAMES = {".abstract.md", ".overview.md", ".relations.json"}
 TRAJECTORY_OUTCOMES = ("success", "failure", "partial", "unknown", "unfinished")
 
-
-def is_experience_uri_for_user(uri: str, user_id: str) -> bool:
-    """Return whether ``uri`` identifies an Experience owned by ``user_id``."""
-    if not uri or "?" in uri or "#" in uri:
-        return False
-    parts = uri_parts(uri)
-    if len(parts) < 5 or parts[:4] != ["user", user_id, "memories", "experiences"]:
-        return False
-    relative_parts = parts[4:]
-    if any(not segment or segment in {".", ".."} for segment in relative_parts):
-        return False
-    return relative_parts[-1] not in _EXPERIENCE_SIDECAR_FILENAMES
+__all__ = [
+    "TRAJECTORY_OUTCOMES",
+    "canonical_experience_uri",
+    "collect_read_experience_uris",
+    "experience_source_tag",
+    "experience_source_tags",
+    "is_experience_uri_for_user",
+    "normalize_trajectory_outcome",
+    "trajectory_outcome_tag",
+]
 
 
 def canonical_experience_uri(uri: str, ctx: RequestContext) -> str | None:
@@ -112,12 +113,15 @@ def collect_read_experience_uris(
         for part in message.parts:
             if not isinstance(part, ToolPart):
                 continue
-            if part.tool_name != "read_experience" or part.tool_status != "completed":
+            if (
+                normalize_experience_tool_name(part.tool_name) != "read_experience"
+                or part.tool_status != "completed"
+            ):
                 continue
             tool_input = part.tool_input if isinstance(part.tool_input, dict) else {}
             if not tool_input and part.tool_id:
                 tool_input = tool_inputs.get((part.tool_id, part.tool_name), {})
-            output = _load_mapping(part.tool_output)
+            output = load_tool_output_mapping(part.tool_output)
             uri = tool_input.get("uri") or output.get("uri")
             canonical_uri = canonical_experience_uri(str(uri or ""), ctx)
             if not canonical_uri or canonical_uri in seen:
@@ -125,15 +129,3 @@ def collect_read_experience_uris(
             seen.add(canonical_uri)
             result.append(canonical_uri)
     return result
-
-
-def _load_mapping(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    if isinstance(value, str) and value.strip():
-        try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
-    return {}

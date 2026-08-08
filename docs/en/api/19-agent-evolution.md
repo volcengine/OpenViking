@@ -108,6 +108,39 @@ curl -X GET "http://localhost:1933/api/v1/agent-evolution/experiences/outcomes?e
 
 The response always includes `success`, `failure`, `partial`, `unknown`, and `unfinished`. Trajectories created by older versions and not yet re-indexed do not carry outcome tags and are therefore excluded.
 
+## MCP tool contract
+
+Both queries above are fed by the MCP tools the agent actually calls during a session. The tools are served by the server's `/mcp` endpoint, so every harness connected to OpenViking MCP gets them without any plugin-side implementation.
+
+After a session is committed, the server attributes usage from the recorded tool calls: each result in a `search_experience` output becomes one `memory.recalled` event, each successful `read_experience` becomes one `memory.injected` event and tags the trajectory with its source Experience. The tool names and JSON payload shapes are therefore a fixed contract — changing them zeroes out the statistics. Attribution strips the namespace prefix a harness adds to MCP tools (for example `mcp__openviking__`), so bare and prefixed names both count.
+
+### `search_experience`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `query` | string | Required. The task or situation to search for. |
+| `limit` | integer | Optional. Clamped to `[1, 20]`, defaults to `5`. |
+
+The search is pinned to the current user's `viking://user/<user>/memories/experiences/` and applies no score threshold.
+
+```json
+{"results": [{"uri": "viking://user/alice/memories/experiences/no-order-exchange.md", "title": "no-order-exchange", "score": 0.61, "snippet": "The customer wants an exchange without an order number..."}]}
+```
+
+Every `uri` is canonical and owned by the current user; internal files such as `.abstract.md`, `.overview.md`, and `.relations.json` never appear. `snippet` is truncated to 120 characters.
+
+### `read_experience`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `uri` | string | Required. A canonical URI returned by `search_experience`, owned by the current user. |
+
+```json
+{"uri": "viking://user/alice/memories/experiences/no-order-exchange.md", "content": "## Situation\n..."}
+```
+
+A non-canonical URI (for example one carrying a `?` or `#` suffix), another user's URI, or a non-Experience URI raises a tool error rather than returning an empty result — a failed call must not be counted as an injection.
+
 ## Related Documentation
 
 - [Sessions](05-sessions.md) - Commit sessions and generate Agent Evolution memories

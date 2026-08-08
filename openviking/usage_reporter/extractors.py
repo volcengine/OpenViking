@@ -4,16 +4,18 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from typing import Any, Iterable, Protocol
 
+from openviking.core.experience import (
+    is_experience_uri_for_user,
+    load_tool_output_mapping,
+    normalize_experience_tool_name,
+)
 from openviking.message import Message, ToolPart
 from openviking.utils.time_utils import format_iso8601, parse_iso_datetime
 
 from .models import UsageContext, UsageEvent, utc_now_iso
-
-_EXPERIENCE_SIDECAR_FILENAMES = {".abstract.md", ".overview.md", ".relations.json"}
 
 
 class UsageExtractor(Protocol):
@@ -25,29 +27,6 @@ class UsageExtractor(Protocol):
         messages: list[Message],
         context: UsageContext,
     ) -> list[UsageEvent]: ...
-
-
-def _load_mapping(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    if isinstance(value, str) and value.strip():
-        try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
-    return {}
-
-
-def _is_experience_uri(uri: str, context: UsageContext) -> bool:
-    prefix = f"viking://user/{context.user_id}/memories/experiences/"
-    if not uri.startswith(prefix) or "?" in uri or "#" in uri:
-        return False
-    relative = uri.removeprefix(prefix)
-    segments = relative.split("/")
-    if not relative or any(not segment or segment in {".", ".."} for segment in segments):
-        return False
-    return segments[-1] not in _EXPERIENCE_SIDECAR_FILENAMES
 
 
 def _event_time(message: Message) -> str:
@@ -93,7 +72,8 @@ class MemoryUsageExtractor:
                     continue
                 if part.tool_status != "completed":
                     continue
-                if part.tool_name == "search_experience":
+                tool_name = normalize_experience_tool_name(part.tool_name)
+                if tool_name == "search_experience":
                     events.extend(
                         self._extract_search_events(
                             part,
@@ -101,7 +81,7 @@ class MemoryUsageExtractor:
                             message=message,
                         )
                     )
-                elif part.tool_name == "read_experience":
+                elif tool_name == "read_experience":
                     event = self._extract_read_event(
                         part,
                         context=context,
@@ -119,7 +99,7 @@ class MemoryUsageExtractor:
         context: UsageContext,
         message: Message,
     ) -> Iterable[UsageEvent]:
-        output = _load_mapping(part.tool_output)
+        output = load_tool_output_mapping(part.tool_output)
         results = output.get("results", [])
         if not isinstance(results, list):
             return []
@@ -129,7 +109,7 @@ class MemoryUsageExtractor:
             if not isinstance(result, dict):
                 continue
             uri = str(result.get("uri") or "").strip()
-            if not uri or not _is_experience_uri(uri, context):
+            if not uri or not is_experience_uri_for_user(uri, context.user_id):
                 continue
             events.append(
                 self._build_event(
@@ -153,9 +133,9 @@ class MemoryUsageExtractor:
         tool_input = part.tool_input if isinstance(part.tool_input, dict) else {}
         if not tool_input:
             tool_input = fallback_input
-        output = _load_mapping(part.tool_output)
+        output = load_tool_output_mapping(part.tool_output)
         uri = str(tool_input.get("uri") or output.get("uri") or "").strip()
-        if not uri or not _is_experience_uri(uri, context):
+        if not uri or not is_experience_uri_for_user(uri, context.user_id):
             return None
         return self._build_event(
             event_type="memory.injected",

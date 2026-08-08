@@ -108,6 +108,39 @@ curl -X GET "http://localhost:1933/api/v1/agent-evolution/experiences/outcomes?e
 
 结果固定包含 `success`、`failure`、`partial`、`unknown` 和 `unfinished`。旧版创建且尚未重新索引的 Trajectory 没有 outcome 标签，因此不会计入分布。
 
+## MCP 工具契约
+
+上面两个查询接口的数据来自 Agent 在会话中实际调用的 MCP 工具。工具由服务端 `/mcp` 端点统一提供，所有接入 OpenViking MCP 的 harness 都能直接使用，无需插件侧再实现。
+
+会话 commit 后，服务端按记录下来的工具调用做归因：`search_experience` 输出里的每条结果产出一个 `memory.recalled` 事件，每次成功的 `read_experience` 产出一个 `memory.injected` 事件，并把该 Experience 写成 Trajectory 的来源标签。因此**工具名和 JSON 输出格式是固定契约**，改动会直接让统计归零。归因时会剥离 harness 给 MCP 工具加的命名空间前缀（如 `mcp__openviking__`），所以裸名和带前缀名都能正确计数。
+
+### `search_experience`
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `query` | string | 必填。要检索的任务或场景描述。 |
+| `limit` | integer | 可选。取值裁剪到 `[1, 20]`，默认 `5`。 |
+
+检索范围固定为当前用户的 `viking://user/<user>/memories/experiences/`，不设分数阈值。
+
+```json
+{"results": [{"uri": "viking://user/alice/memories/experiences/no-order-exchange.md", "title": "no-order-exchange", "score": 0.61, "snippet": "用户未提供订单号但要求换货……"}]}
+```
+
+`uri` 是规范形式且归当前用户所有，`.abstract.md` / `.overview.md` / `.relations.json` 等内部文件不会出现在结果里。`snippet` 截断到 120 字符。
+
+### `read_experience`
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `uri` | string | 必填。`search_experience` 返回的规范 URI，必须归当前用户所有。 |
+
+```json
+{"uri": "viking://user/alice/memories/experiences/no-order-exchange.md", "content": "## Situation\n……"}
+```
+
+传入非规范形式（例如带 `?`/`#` 后缀）、跨用户或非 Experience 的 URI 会返回工具错误而非空结果——错误调用不会被计成一次注入。
+
 ## 相关文档
 
 - [会话](05-sessions.md) - 提交会话并生成 Agent Evolution 记忆

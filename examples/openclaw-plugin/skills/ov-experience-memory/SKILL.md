@@ -5,7 +5,7 @@ description: >
   experiences with search_experience, read selected experiences with
   read_experience, and leave standard tool parts in the committed session so
   OpenViking can report recall and injection usage.
-version: 2026.7.9
+version: 2026.8.7
 tags:
   - openviking
   - experience-memory
@@ -29,9 +29,16 @@ The agent runtime must expose two tools with these exact names:
 - `search_experience`
 - `read_experience`
 
-OpenViking usage reporting recognizes only completed tool parts with these exact
-tool names. Calls to generic `find`, `search`, `read`, `ov_search`, or `ov_read`
-do not count as experience recall or injection events.
+Both are served by the OpenViking server's MCP endpoint, so any runtime
+connected to an up-to-date OpenViking server already has them. If neither tool
+is listed, the connected server predates them — upgrading the server is the
+fix; the plugin ships no local fallback. A harness that namespaces MCP tools
+(for example Claude Code's `mcp__openviking__search_experience`) is fine —
+usage reporting strips the namespace prefix.
+
+OpenViking usage reporting recognizes only completed tool parts with these tool
+names. Calls to generic `find`, `search`, `read`, `ov_search`, or `ov_read` do
+not count as experience recall or injection events.
 
 ## Tool: search_experience
 
@@ -64,12 +71,14 @@ Output schema:
 
 Implementation:
 
-The runtime tool calls OpenViking `POST /api/v1/search/find` with `target_uri`
-fixed to the current-user shorthand `viking://user/memories/experiences/`.
-Callers provide only `query` and optional `limit`; they cannot override or pass
-`target_uri`. OpenViking resolves the fixed shorthand against the authenticated
-request user. Return only canonical experience memory URIs for that user; never
-hardcode `default` or another user ID.
+The server pins the search to the authenticated user's
+`viking://user/<current_user_id>/memories/experiences/` and applies no score
+threshold. Callers provide only `query` and optional `limit` (clamped to
+`[1, 20]`, default `5`); they cannot pass or override `target_uri`. Every
+returned `uri` is canonical and owned by the current user — never construct one
+with a hardcoded `default` or another user ID. Internal sidecar files
+(`.abstract.md`, `.overview.md`, `.relations.json`) never appear in results, and
+`snippet` is truncated to 120 characters.
 
 Usage reporting:
 
@@ -100,10 +109,12 @@ Output schema:
 
 Implementation:
 
-Call OpenViking `GET /api/v1/content/read?uri=<encoded_uri>` for the selected
-experience URI. Always pass the canonical URI returned by `search_experience`;
-do not construct a URI with a hardcoded user ID. The returned content should be
-inserted into the prompt as operational guidance, not as user profile facts.
+Always pass the canonical URI exactly as `search_experience` returned it. The
+server rejects anything else — another user's URI, a sidecar file, or an aliased
+form carrying a `?` or `#` suffix — with a tool error rather than an empty
+result, so a rejected call is never counted as an injection. The returned
+content should be inserted into the prompt as operational guidance, not as user
+profile facts.
 
 Usage reporting:
 

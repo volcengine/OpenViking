@@ -27,6 +27,7 @@ const PLUGIN_NAME = "openviking-memory";
 const REAL_MCP_TOOLS = [
   "find", "search", "recall", "read", "list", "remember", "add_resource",
   "list_watches", "cancel_watch", "grep", "glob", "forget", "health",
+  "search_experience", "read_experience",
 ];
 const LEGACY_TOOL_NAMES = ["openviking_recall", "openviking_store", "openviking_forget", "openviking_health"];
 
@@ -180,10 +181,12 @@ test(".mcp.json starts the stdio MCP proxy from the plugin root", () => {
   execFileSync("node", ["--check", join(pluginDir, "servers", "mcp-proxy.mjs")], { stdio: "pipe" });
 });
 
-test("Codex MCP entrypoint wires the Experience tool provider", () => {
+test("Codex MCP entrypoint proxies every tool to the server", () => {
   const entrypoint = readFileSync(join(pluginDir, "servers", "mcp-proxy.mjs"), "utf-8");
-  assert.match(entrypoint, /createExperienceToolProvider/);
-  assert.match(entrypoint, /localToolProvider/);
+  assert.ok(
+    !entrypoint.includes("localToolProvider"),
+    "the Experience tools are served by the server MCP endpoint, not shimmed locally",
+  );
 });
 
 test("canonical MCP tool list matches server registrations", () => {
