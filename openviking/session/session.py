@@ -4042,8 +4042,29 @@ class Session:
                 ) from exc
         return messages
 
+    _HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+")
+    _SEPARATOR_RE = re.compile(r"^\s{0,3}(?:-{3,}|={3,}|\*{3,})\s*$")
+    _BULLET_PREFIX_RE = re.compile(r"^\s*(?:[-*+]|\d+\.|\d+\))\s+")
+
     def _extract_abstract_from_summary(self, summary: str) -> str:
-        """Extract one-sentence overview from structured summary."""
+        """Extract a meaningful abstract from a structured Markdown summary.
+
+        Explicitly skips:
+          - Markdown headings (# / ## / ...) so files like Working Memory
+            that start with a session/section title no longer write that
+            title into the archive `.abstract.md` (issue #3136).
+          - Horizontal rules / separators.
+          - Blank lines.
+
+        Precedence:
+          1. A legacy `**Label**:` bold-keyed colon line (first occurrence).
+          2. The first substantive non-heading line, stripping any bullet
+             prefix from list items and truncating to ~200 characters
+             with an ellipsis marker.
+          3. Empty string when no substantive content is present,
+             preserving the legacy empty-summary behaviour so downstream
+             writers emit `.abstract.md` deterministically.
+        """
         if not summary:
             return ""
 
@@ -4051,8 +4072,30 @@ class Session:
         if match:
             return match.group(1).strip()
 
-        first_line = summary.split("\n")[0].strip()
-        return first_line if first_line else ""
+        for raw_line in summary.splitlines():
+            line = raw_line.rstrip()
+            stripped = line.lstrip()
+            if not stripped:
+                continue
+            if self._HEADING_RE.match(line):
+                continue
+            if self._SEPARATOR_RE.match(line):
+                continue
+
+            bullet = self._BULLET_PREFIX_RE.match(line)
+            if bullet:
+                content = line[bullet.end():].strip()
+            else:
+                content = stripped
+
+            if not content:
+                continue
+
+            if len(content) > 200:
+                content = content[:200].rstrip() + "…"
+            return content
+
+        return ""
 
     @staticmethod
     def _format_message_for_wm(m: Message) -> str:

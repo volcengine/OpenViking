@@ -120,3 +120,92 @@ class TestSessionExists:
     ):
         """session_exists() should return True for a session that has messages."""
         assert await client.session_exists(session_with_messages.session_id) is True
+
+
+class TestExtractAbstractFromSummary:
+    """Regression coverage for Session._extract_abstract_from_summary (issue #3136)."""
+
+    @staticmethod
+    def _session() -> "Session":
+        """Return a bare Session shell sufficient for calling the pure helper."""
+        from openviking.session.session import Session as _S
+
+        return _S.__new__(_S)
+
+    def test_skips_markdown_heading_only_summary(self):
+        """Must not write '# Working Memory' as the archive abstract (issue #3136)."""
+        s = self._session()
+        summary = "# Working Memory\n\n- User likes reading sci-fi books"
+        abstract = s._extract_abstract_from_summary(summary)
+        assert "# Working Memory" not in abstract
+        assert "sci-fi" in abstract
+
+    def test_skips_deep_headings_and_separators(self):
+        """## Heading, ### subheading, --- separators should all be skipped."""
+        s = self._session()
+        summary = (
+            "## Session Title\n"
+            "---\n"
+            "### Subsection\n"
+            "***\n"
+            "- First bullet about project planning\n"
+            "- Second bullet\n"
+        )
+        abstract = s._extract_abstract_from_summary(summary)
+        assert "Session Title" not in abstract
+        assert "Subsection" not in abstract
+        assert "project planning" in abstract
+
+    def test_preserves_legacy_bold_keyed_label(self):
+        """A `**Label**:` line should still win when present (backwards compat)."""
+        s = self._session()
+        summary = (
+            "# Should be skipped\n"
+            "**Executive Summary**: User researches memory systems for LLM agents\n"
+        )
+        abstract = s._extract_abstract_from_summary(summary)
+        assert "Executive Summary" not in abstract
+        assert "memory systems" in abstract
+        assert "User researches memory systems for LLM agents" == abstract
+
+    def test_returns_empty_when_only_headings_and_whitespace(self):
+        """Degrade to empty string rather than leaking a title heading."""
+        s = self._session()
+        summary = "# Heading\n## Subheading\n\n  \n---\n\n"
+        assert s._extract_abstract_from_summary(summary) == ""
+        assert s._extract_abstract_from_summary("") == ""
+        assert s._extract_abstract_from_summary("     \n\n") == ""
+
+    def test_short_plain_body_kept_unchanged(self):
+        """A valid short paragraph (no heading/bullet) should be preserved."""
+        s = self._session()
+        summary = "The user investigated 3 retrieval strategies and prefers hybrid search."
+        assert s._extract_abstract_from_summary(summary) == summary
+
+    def test_bullet_without_heading_returns_first_item(self):
+        """Standalone numbered / dashed lists should drop the bullet prefix."""
+        s = self._session()
+        dashed = "- Drafted proposal for memory deduplication\n- Second item"
+        numbered = "1. Drafted proposal for memory deduplication\n2. Second"
+        for src in (dashed, numbered):
+            abs_val = s._extract_abstract_from_summary(src)
+            assert abs_val.startswith("Drafted proposal for memory deduplication"), abs_val
+            assert not abs_val.startswith("- ") and not abs_val.startswith("1. ")
+
+    def test_long_line_truncated_with_ellipsis(self):
+        """Lines longer than 200 chars should be truncated with ellipsis."""
+        s = self._session()
+        long_word = "abcdefghij" * 25  # 250 chars
+        result = s._extract_abstract_from_summary(long_word)
+        assert len(result) == 201  # 200 chars + ellipsis
+        assert result.endswith("…")
+        assert not result.startswith("#")
+
+    def test_atx_headings_with_leading_whitespace_still_skipped(self):
+        """Up to 3 leading spaces before '#' still count as ATX headings per CommonMark."""
+        s = self._session()
+        summary = "   #  Padded heading\n\nReal content after padding"
+        abstract = s._extract_abstract_from_summary(summary)
+        assert "Padded heading" not in abstract
+        assert "Real content after padding" == abstract
+
