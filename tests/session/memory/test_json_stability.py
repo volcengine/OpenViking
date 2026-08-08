@@ -206,6 +206,31 @@ class TestParseJsonWithStability:
         assert data.reasonning == "test"
         assert data.count == 42
 
+    def test_rejects_nonempty_object_without_any_expected_field(self):
+        """Pseudo tool calls must not become successful empty operations."""
+        content = '{"tool_call_name":"search","args":{"query":"Melanie pottery"}}'
+
+        data, error = parse_json_with_stability(
+            content,
+            model_class=self.TestModel,
+            expected_fields=["reasonning", "count", "tags"],
+        )
+
+        assert data is None
+        assert error == "No recognized fields in non-empty JSON object"
+
+    def test_keeps_explicit_empty_object_for_operations_compatibility(self):
+        """An explicit empty object remains a valid no-operations response."""
+        data, error = parse_json_with_stability(
+            "{}",
+            model_class=self.TestModel,
+            expected_fields=["reasonning", "count", "tags"],
+        )
+
+        assert error is None
+        assert data.reasonning == ""
+        assert data.tags == []
+
     def test_returns_raw_dict_when_no_model_class(self):
         """Test returns dict when no model_class is provided."""
         content = '{"reasonning": "test"}'

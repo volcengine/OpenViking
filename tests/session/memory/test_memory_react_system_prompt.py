@@ -4,29 +4,58 @@
 Test that provider instruction correctly instructs LLM.
 """
 
+from types import SimpleNamespace
+
 from openviking.message import ImagePart, Message, TextPart, ToolPart
 from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
 from openviking.session.memory.vision_message_normalizer import IMAGE_DESCRIPTION_PROMPT
 
 
+def _provider_with_prefetch_mode(monkeypatch, *, eager_prefetch: bool):
+    config = SimpleNamespace(
+        memory=SimpleNamespace(
+            eager_prefetch=eager_prefetch,
+            prefetch_search_topn=5,
+            link_enabled=False,
+        )
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.session_extract_context_provider.get_openviking_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.utils.resolve_output_language",
+        lambda _text: "en",
+    )
+    return SessionExtractContextProvider(messages=[])
+
+
 class TestProviderInstruction:
     """Test the provider instruction contains correct instructions."""
 
-    def test_instruction_contains_read_before_edit_instructions(self):
-        """Test that instruction explicitly tells LLM to read files before editing."""
-        # Create provider with mock messages
-        mock_messages = []
-        provider = SessionExtractContextProvider(messages=mock_messages)
+    def test_eager_prefetch_instruction_says_no_tools_are_available(self, monkeypatch):
+        provider = _provider_with_prefetch_mode(monkeypatch, eager_prefetch=True)
 
         instruction = provider.instruction()
 
-        # Check for critical instructions
+        assert "No tools are available" in instruction
+        assert "available tools (read/search)" not in instruction
+        assert "ONLY read and search tools are available" not in instruction
+
+    def test_on_demand_instruction_exposes_only_read_tool(self, monkeypatch):
+        """Non-eager extraction may read listed URIs, but cannot search or write."""
+        provider = _provider_with_prefetch_mode(monkeypatch, eager_prefetch=False)
+
+        instruction = provider.instruction()
+
+        assert "ONLY the read tool is available" in instruction
+        assert "search and write are not available" in instruction
         assert (
             "Before editing ANY existing memory file, you MUST first read its complete content"
             in instruction
         )
         assert (
-            "ONLY read URIs that are explicitly listed in ls/search tool results, returned by previous tool calls"
+            "ONLY read URIs that are explicitly listed in pre-fetched search results, returned by previous tool calls"
             in instruction
         )
 
@@ -232,8 +261,6 @@ class TestSessionConversationToolFiltering:
 
         assert provider._detect_language() == "zh-CN"
 
-
-
     async def test_prepare_extraction_messages_replaces_image_part_with_vlm_description(self):
         class FakeVisionVLM:
             def __init__(self):
@@ -340,6 +367,7 @@ class TestSessionConversationToolFiltering:
         assert len(messages) == 1
         assert any(isinstance(part, ImagePart) for part in messages[0].parts)
         assert provider.messages is not messages
+
 
 def test_session_provider_empty_messages_still_uses_environment_fallback(monkeypatch):
     monkeypatch.setenv("TZ", "Asia/Shanghai")
