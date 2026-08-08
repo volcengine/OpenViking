@@ -318,6 +318,7 @@ class SemanticProcessor(DequeueHandlerBase):
         """Process dequeued SemanticMsg, recursively process all subdirectories."""
         msg: Optional[SemanticMsg] = None
         collector = None
+        probe_token: int | None = None
         try:
             import json
 
@@ -341,7 +342,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 return None
             # Circuit breaker: if API is known-broken, re-enqueue and wait
             try:
-                self._circuit_breaker.check()
+                probe_token = self._circuit_breaker.check()
             except CircuitBreakerOpen:
                 logger.warning(
                     f"Circuit breaker is open, re-enqueueing semantic message: {msg.uri}"
@@ -462,7 +463,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     self._merge_request_stats(msg.telemetry_id, processed=1)
                     logger.info(f"Completed semantic generation for: {msg.uri}")
                     self.report_success()
-                    self._circuit_breaker.record_success()
+                    self._circuit_breaker.record_success(probe_token)
                     return None
                 finally:
                     reset_root_observability_context(root_context_token)
@@ -475,6 +476,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     e,
                     exc_info=True,
                 )
+                self._circuit_breaker.record_ignored(probe_token)
                 if msg is not None:
                     await self._requeue_semantic_msg_after_error(msg, data, e)
                 else:
@@ -498,7 +500,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     f"Permanent API error processing semantic message, dropping: {e}",
                     exc_info=True,
                 )
-                self._circuit_breaker.record_failure(e)
+                self._circuit_breaker.record_failure(e, probe_token)
                 if msg is not None:
                     self._merge_request_stats(msg.telemetry_id, error_count=1)
                     get_request_wait_tracker().mark_semantic_failed(
@@ -511,12 +513,14 @@ class SemanticProcessor(DequeueHandlerBase):
                     f"Transient API error processing semantic message, re-enqueueing: {e}",
                     exc_info=True,
                 )
-                self._circuit_breaker.record_failure(e)
+                self._circuit_breaker.record_failure(e, probe_token)
                 if msg is not None:
                     await self._requeue_semantic_msg_after_error(msg, data, e)
                 else:
                     self.report_error(str(e), data)
             return None
+        finally:
+            self._circuit_breaker.record_ignored(probe_token)
 
     async def on_cancelled(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """Release a queued semantic lock before cancelled work is ACKed."""
