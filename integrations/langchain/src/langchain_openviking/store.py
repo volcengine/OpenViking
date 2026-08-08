@@ -71,7 +71,6 @@ class OpenVikingStore(BaseStore):
         user: str | None = None,
         user_id: str | None = None,
         actor_peer_id: str | None = None,
-        path: str | None = None,
         root_uri: str = "viking://user/memories/langgraph_store",
         index: bool | list[str] | None = None,
         wait: bool = True,
@@ -90,7 +89,6 @@ class OpenVikingStore(BaseStore):
             user=user,
             user_id=user_id,
             actor_peer_id=actor_peer_id,
-            path=path,
             auto_initialize=auto_initialize,
         )
         self.root_uri: str = root_uri.rstrip("/")

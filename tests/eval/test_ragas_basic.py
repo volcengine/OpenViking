@@ -11,7 +11,6 @@ from openviking.eval.ragas.generator import DatasetGenerator
 from openviking.eval.ragas.pipeline import RAGQueryPipeline
 from openviking.eval.ragas.types import EvalDataset, EvalSample
 from openviking.eval.recorder.async_writer import AsyncRecordWriter
-from openviking_cli.retrieve.types import ContextType, FindResult, MatchedContext
 
 
 def test_eval_types():
@@ -34,9 +33,9 @@ def test_generator_initialization():
 
 
 def test_pipeline_initialization():
-    pipeline = RAGQueryPipeline(config_path="./test.conf", data_path="./test_data/test_ragas")
+    pipeline = RAGQueryPipeline(config_path="./test.conf", server_url="http://openviking.test")
     assert pipeline.config_path == "./test.conf"
-    assert pipeline.data_path == "./test_data/test_ragas"
+    assert pipeline.server_url == "http://openviking.test"
     assert pipeline._client is None
 
 
@@ -58,26 +57,24 @@ def test_async_record_writer_drains_records_before_stop_sentinel():
     assert flushed == [{"id": 1}, {"id": 2}]
 
 
-def test_pipeline_query_consumes_find_result_and_generates_answer():
+def test_pipeline_query_consumes_http_result_and_generates_answer():
     class Client:
         def search(self, **kwargs):
-            return FindResult(
-                memories=[
-                    MatchedContext(
-                        uri="viking://user/memories/profile.md",
-                        context_type=ContextType.MEMORY,
-                        overview="Profile overview",
-                    )
+            return {
+                "memories": [
+                    {
+                        "uri": "viking://user/memories/profile.md",
+                        "overview": "Profile overview",
+                    }
                 ],
-                resources=[
-                    MatchedContext(
-                        uri="viking://resources/guide.md",
-                        context_type=ContextType.RESOURCE,
-                        abstract="Guide abstract",
-                    )
+                "resources": [
+                    {
+                        "uri": "viking://resources/guide.md",
+                        "abstract": "Guide abstract",
+                    }
                 ],
-                skills=[],
-            )
+                "skills": [],
+            }
 
     class LLM:
         def get_completion(self, prompt):

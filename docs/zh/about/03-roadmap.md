@@ -64,7 +64,7 @@
 - HTTP Server（FastAPI）
 - 内置 MCP 端点
 - Python HTTP Client
-- 客户端抽象层（LocalClient / HTTPClient）
+- Python HTTP Client SDK
 - Web 控制台
 
 ### CLI

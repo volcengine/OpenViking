@@ -41,7 +41,6 @@ finally:
 ```
 
 外部传入的 client 仍由调用方管理。通过 `url=` 创建的 client 由适配器管理。
-`path=` 嵌入模式需要另外安装完整的 `openviking` 包。
 
 完整 `openviking` 包会继续保留原有的
 `openviking.integrations.langchain` 导入路径，并转发到本包，方便现有应用平滑迁移。

@@ -1,7 +1,6 @@
-import openviking as ov
+from openviking_sdk import SyncHTTPClient
 
-client = ov.OpenViking(path="./data")
-# client = ov.SyncHTTPClient(url="http://localhost:1933")  # HTTP mode: connect to OpenViking Server
+client = SyncHTTPClient(url="http://localhost:1933")
 
 try:
     client.initialize()
@@ -27,8 +26,8 @@ try:
 
     results = client.find("what is openviking", target_uri=root_uri)  # Semantic search
     print("Search results:")
-    for r in results.resources:
-        print(f"  {r.uri} (score: {r.score:.4f})")
+    for result in results.get("resources", []):
+        print(f"  {result['uri']} (score: {result.get('score', 0.0):.4f})")
 
     client.close()
 

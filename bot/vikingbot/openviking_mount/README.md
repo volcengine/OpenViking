@@ -24,7 +24,7 @@ from pathlib import Path
 # 创建挂载配置
 config = MountConfig(
     mount_point=Path("./my_openviking_mount"),
-    openviking_data_path=Path("./my_openviking_data"),
+    openviking_data_path=Path("./my_openviking_cache"),
     scope=MountScope.RESOURCES,
     auto_init=True,
     read_only=False
@@ -65,13 +65,13 @@ manager = get_mount_manager()
 # 创建资源挂载
 mount = manager.create_resources_mount(
     mount_id="my_resources",
-    openviking_data_path=Path("./ov_data")
+    openviking_data_path=Path("./ov_cache")
 )
 
 # 为会话创建挂载
 session_mount = manager.create_session_mount(
     session_id="session_123",
-    openviking_data_path=Path("./ov_data")
+    openviking_data_path=Path("./ov_cache")
 )
 
 # 列出所有挂载
@@ -112,7 +112,7 @@ vikingbot/openviking_mount/
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `mount_point` | `Path` | 必填 | 挂载点路径 |
-| `openviking_data_path` | `Path` | 必填 | OpenViking 数据存储路径 |
+| `openviking_data_path` | `Path` | 必填 | FUSE 本地缓存路径 |
 | `session_id` | `Optional[str]` | `None` | 会话 ID（session 作用域时需要） |
 | `scope` | `MountScope` | `RESOURCES` | 挂载作用域 |
 | `auto_init` | `bool` | `True` | 是否自动初始化 |

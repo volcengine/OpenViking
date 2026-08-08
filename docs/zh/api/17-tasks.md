@@ -242,7 +242,7 @@ ov task cancel uuid-xxx
 
 **代码入口**：
 - `openviking/server/routers/tasks.py:list_tasks()` - HTTP 路由
-- `openviking_cli/client/base.py:BaseClient.list_tasks()` - Python SDK
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.list_tasks()` - Python SDK
 
 #### 2. 接口和参数说明
 

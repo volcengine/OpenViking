@@ -5,16 +5,16 @@
 
 import asyncio
 
-from openviking import AsyncOpenViking
 from openviking.message import TextPart
 
 
 class TestCommitRace:
     """Test concurrent commit safety."""
 
-    async def test_concurrent_commit_no_duplicate(self, client: AsyncOpenViking):
+    async def test_concurrent_commit_no_duplicate(self, client):
         """Two concurrent commits on the same session: only one should archive."""
-        session = client.session(session_id="race_test_dedup")
+        session = client(session_id="race_test_dedup")
+        await session.ensure_exists()
         session.add_message("user", [TextPart("Hello")])
         session.add_message("assistant", [TextPart("Hi there")])
 
@@ -34,11 +34,12 @@ class TestCommitRace:
 
     async def test_message_added_during_commit_not_lost(
         self,
-        client: AsyncOpenViking,
+        client,
         monkeypatch,
     ):
         """Messages added while commit is running should not be lost."""
-        session = client.session(session_id="race_test_msg_safety")
+        session = client(session_id="race_test_msg_safety")
+        await session.ensure_exists()
         session.add_message("user", [TextPart("Original message")])
 
         # Use an Event for deterministic synchronization instead of sleeps

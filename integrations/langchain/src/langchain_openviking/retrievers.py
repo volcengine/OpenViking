@@ -74,7 +74,6 @@ class OpenVikingRetriever(BaseRetriever):
     user: str | None = None
     user_id: str | None = None
     actor_peer_id: str | None = None
-    path: str | None = None
     timeout: float = 60.0
     extra_headers: dict[str, str] | None = None
     auto_initialize: bool = True
@@ -132,7 +131,6 @@ class OpenVikingRetriever(BaseRetriever):
                     user=self.user,
                     user_id=self.user_id,
                     actor_peer_id=self.actor_peer_id,
-                    path=self.path,
                     timeout=self.timeout,
                     extra_headers=self.extra_headers,
                     auto_initialize=self.auto_initialize,
@@ -149,8 +147,6 @@ class OpenVikingRetriever(BaseRetriever):
         whose method calls support recovery. Direct attributes on that handle
         are best-effort during recovery; use ``await handle.get()`` only to read
         raw properties immediately because recovery may replace that snapshot.
-        Embedded ``path=`` connections return an adapter-owned synchronous
-        client whose calls are dispatched through a worker thread.
         """
 
         self._raise_if_closed()
@@ -164,13 +160,11 @@ class OpenVikingRetriever(BaseRetriever):
                 user=self.user,
                 user_id=self.user_id,
                 actor_peer_id=self.actor_peer_id,
-                path=self.path,
                 timeout=self.timeout,
                 extra_headers=self.extra_headers,
                 auto_initialize=self.auto_initialize,
             ),
             client_cache=self._async_clients,
-            embedded_client_factory=self._get_client,
         )
         self._raise_if_closed()
         return client

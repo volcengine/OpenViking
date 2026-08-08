@@ -4,69 +4,23 @@ This page covers how to connect to OpenViking and the conventions shared across 
 
 ## Connection Modes
 
-OpenViking supports two usage modes: **Embedded Mode** (direct Python API calls) and **Client-Server Mode** (via HTTP API).
-
-This API documentation primarily focuses on the HTTP API usage in **Client-Server Mode**. Embedded mode is available but will not be covered separately in subsequent documentation.
+OpenViking clients connect to an OpenViking Server over HTTP.
 
 | Mode | Use Case | Description |
 |------|----------|-------------|
-| **Embedded** | Local development, single process | Runs locally with local data storage |
 | **HTTP** | Connect to OpenViking Server | Connects to a remote server via HTTP API |
 | **CLI** | Shell scripting, agent tool-use | Connects to server via CLI commands |
 
-### Embedded Mode (Brief Overview)
-
-Embedded mode allows direct OpenViking API calls within a Python process without starting a separate server process.
-
-```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-```
-
-Embedded mode uses `ov.conf` to configure embedding, vlm, storage, and other modules. Default configuration path: `~/.openviking/ov.conf`. You can also specify the path via environment variable:
-
-```bash
-export OPENVIKING_CONFIG_FILE=/path/to/ov.conf
-```
-
-Minimal configuration example:
-
-```json
-{
-  "embedding": {
-    "dense": {
-      "api_base": "<api-endpoint>",
-      "api_key": "<your-api-key>",
-      "provider": "<volcengine|openai|jina|...>",
-      "dimension": 1024,
-      "model": "<model-name>"
-    }
-  },
-  "vlm": {
-    "api_base": "<api-endpoint>",
-    "api_key": "<your-api-key>",
-    "provider": "<volcengine|openai|openai-codex|kimi|glm>",
-    "model": "<model-name>"
-  }
-}
-```
-
-For `provider: "openai-codex"`, `vlm.api_key` is optional once Codex OAuth is available through `openviking-server init`.
-
-For full configuration options and provider-specific examples, see the [Configuration Guide](../guides/01-configuration.md).
-
-### Client-Server Mode (Main Focus)
+### Client-Server Mode
 
 Client-Server mode connects to an OpenViking server via HTTP API, supporting multi-tenancy, remote access, and other features. See the deployment documentation for how to start the OpenViking server.
 
 #### Python SDK Client
 
 ```python
-import openviking as ov
+from openviking_sdk import SyncHTTPClient
 
-client = ov.SyncHTTPClient(
+client = SyncHTTPClient(
     url="http://localhost:1933",
     api_key="your-key",
     timeout=120.0,
@@ -107,7 +61,7 @@ For normal `api_key` deployments, `APIKey` is enough because the server derives
 tenant identity from the key. Set `Account` and `User` only for trusted
 deployments or gateways that explicitly forward tenant identity.
 
-It does not implement Python embedded mode or legacy `agent_id` compatibility.
+It does not implement legacy `agent_id` compatibility.
 See [`sdk/go/README.md`](../../../sdk/go/README.md) for package-level examples.
 
 #### JavaScript/TypeScript SDK Client
@@ -228,19 +182,6 @@ openviking -o json ls viking://resources/
 ```
 
 ## Lifecycle
-
-### Embedded Mode
-
-```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
-# ... use client ...
-
-client.close()
-```
 
 ### Client-Server Mode
 

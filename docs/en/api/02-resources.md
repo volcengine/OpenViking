@@ -151,8 +151,7 @@ This endpoint is the core entry point for resource management, supporting adding
 8. Set up scheduled update task if `watch_interval` is specified
 
 **Code Entry Points**:
-- `openviking/client/local.py:LocalClient.add_resource` - SDK entry (embedded)
-- `openviking_cli/client/http.py:AsyncHTTPClient.add_resource` - SDK entry (HTTP)
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.add_resource` - Python SDK entry
 - `openviking/server/routers/resources.py:add_resource` - HTTP router
 - `openviking/service/resource_service.py` - Core service implementation
 - `crates/ov_cli/src/handlers.rs:handle_add_resource` - CLI handler
@@ -308,14 +307,9 @@ curl -X POST http://localhost:1933/api/v1/resources \
 **Python SDK**
 
 ```python
-import openviking as ov
+from openviking_sdk import SyncHTTPClient
 
-# Using embedded mode
-client = ov.OpenViking(path="./data")
-client.initialize()
-
-# Or using HTTP client
-client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 # Add local file

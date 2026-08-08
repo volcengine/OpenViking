@@ -679,7 +679,7 @@ def initialize_openviking_config(
 
     Args:
         user: UserIdentifier for session management
-        path: Local storage path (workspace) for embedded mode
+        path: Optional local workspace override for the service
 
     Returns:
         Configured OpenVikingConfig instance
@@ -697,7 +697,7 @@ def initialize_openviking_config(
 
     # Configure storage based on provided parameters
     if path:
-        # Embedded mode: local storage
+        # Explicit local workspace override
         config.storage.agfs.backend = config.storage.agfs.backend or "local"
         config.storage.vectordb.backend = config.storage.vectordb.backend or "local"
         # Resolve and update workspace + dependent paths (model_validator won't

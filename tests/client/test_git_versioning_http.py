@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """End-to-end parity tests for client.snapshot.* over HTTP.
 
-These exercise the AsyncHTTPClient.snapshot namespace surface that mirrors
-the LocalClient.snapshot surface covered by tests/client/test_git_versioning.py,
-routed through AsyncHTTPClient -> real FastAPI server (via httpx
+These exercise the AsyncHTTPClient.snapshot namespace surface, routed through
+AsyncHTTPClient -> real FastAPI server (via httpx
 ASGITransport) -> real OpenVikingService -> real VikingFS.
 
 The full stack is genuine: real httpx response parsing, real envelope

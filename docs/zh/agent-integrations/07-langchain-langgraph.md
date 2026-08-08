@@ -2,7 +2,7 @@
 
 把 OpenViking 接入你的 LangChain 或 LangGraph Agent 作为上下文后端。独立集成包提供
 retriever、chat history、context wrapper、agent tools、LangGraph store 和 middleware，
-可连接 HTTP 服务或嵌入式 OpenViking。
+统一连接 OpenViking HTTP 服务。
 
 ## 安装
 
@@ -26,9 +26,8 @@ tools = create_openviking_tools(
 )
 ```
 
-同时省略 `url` 和 `path` 时，适配器会使用 OpenViking CLI 配置中的 HTTP 连接信息。传入
-`path` 时，通过 OpenViking 同步 client 使用嵌入式 workspace，该模式还需要安装完整的
-`openviking` 包。Embedding 和 VLM 在 OpenViking 侧配置，不在你的应用中。
+省略 `url` 时，适配器会使用 OpenViking CLI 配置中的 HTTP 连接信息。Embedding 和 VLM
+在 OpenViking 侧配置，不在你的应用中。
 
 ### 异步应用
 
@@ -44,13 +43,12 @@ result = await chain.ainvoke(
 )
 ```
 
-异步适配器支持三种 client 模式：
+异步适配器支持两种 client 模式：
 
 | 配置 | 异步接口 | 所有权 |
 |------|----------|--------|
 | `client=` 或 `async_client=` | 原样返回注入的 client | 调用方 |
-| `url=`，或同时省略 `url` 和 `path` | 每个 event loop 一个支持恢复的 HTTP handle | Adapter |
-| `path=` | 在 worker thread 中调用同步嵌入式 client | Adapter |
+| `url=`，或省略 | 每个 event loop 一个支持恢复的 HTTP handle | Adapter |
 
 长期运行的应用可以初始化一个由调用方管理的异步 client，并在同一 event loop
 内的多个适配器之间复用：
@@ -71,12 +69,6 @@ finally:
 注入的异步 client 会绑定到初始化它的 event loop。不要跨 event loop 共享同一个
 注入异步 client；应为每个 loop 分别创建并管理 client。注入的同步 client 仍可安全地
 用于异步 adapter 方法，因为调用会在 worker thread 中执行。
-
-`path=` 嵌入式 adapter 使用同步 fallback 是有意设计：`SyncOpenViking` 会让有状态的
-嵌入式引擎保持在 OpenViking 的共享后台 loop 上，同时不阻塞应用 event loop。若要使用
-原生嵌入式异步方法，请自行创建并初始化 `AsyncOpenViking`，通过 `async_client=` 注入，
-在同一个 event loop 中使用，并由调用方自行关闭。每个进程同时只能运行一个嵌入式
-workspace；切换 workspace 前应先关闭或 reset 当前 client。
 
 `OpenVikingChatMessageHistory` 提供 `aget_messages()`、`aadd_messages()` 和
 `aclear()`；`OpenVikingSessionRecorder` 提供 `arecord()`、`aflush()` 和
@@ -187,7 +179,7 @@ middleware = OpenVikingContextMiddleware(
 凭证决定。因此，多用户应用必须先选择绑定对应用户凭证的 client，再调用 middleware。
 Actor peer 只能从已经认证、由服务端控制的 runtime 字段中解析；不要信任 model state
 或客户端可控的 configurable 值。运行时 actor-peer 解析仅支持 HTTP-backed
-middleware，不支持 embedded `path=` client。注入的自定义 client 必须设置
+middleware。注入的自定义 client 必须设置
 `supports_request_actor_peer = True`，并遵循 `openviking_sdk` 的 actor-peer
 作用域。在已有环境中启用该能力前，应同时升级 `openviking-sdk` 和 `openviking`。
 

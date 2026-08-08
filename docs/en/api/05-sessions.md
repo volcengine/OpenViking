@@ -33,7 +33,7 @@ Create a new session. Sessions are containers for conversations, storing message
 - `openviking/session/session.py:Session.__init__()` - Core Session class
 - `openviking/session/auto_commit_policy.py:AutoCommitPolicy` - Auto-commit policy defaults and validation
 - `openviking/server/routers/sessions.py:create_session()` - HTTP route
-- `openviking_cli/client/base.py:BaseClient.create_session()` - Python SDK
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.create_session()` - Python SDK
 - `crates/ov_cli/src/commands/session.rs:new_session()` - CLI command
 
 #### 2. Interface and Parameter Description
@@ -175,7 +175,7 @@ List all sessions for the current user. Returns session IDs and URI info for fur
 
 **Code Entries:**
 - `openviking/server/routers/sessions.py:list_sessions()` - HTTP route
-- `openviking_cli/client/base.py:BaseClient.list_sessions()` - Python SDK
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.list_sessions()` - Python SDK
 - `crates/ov_cli/src/commands/session.rs:list_sessions()` - CLI command
 
 #### 2. Interface and Parameter Description
@@ -273,7 +273,7 @@ Get session details including metadata, message statistics, commit history, etc.
 **Code Entries:**
 - `openviking/session/session.py:Session.load()` - Session loading
 - `openviking/server/routers/sessions.py:get_session()` - HTTP route
-- `openviking_cli/client/base.py:BaseClient.get_session()` - Python SDK
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.get_session()` - Python SDK
 - `crates/ov_cli/src/commands/session.rs:get_session()` - CLI command
 
 #### 2. Interface and Parameter Description
@@ -568,7 +568,7 @@ Get the assembled session context used for LLM context building. This endpoint r
 **Code Entries:**
 - `openviking/session/session.py:Session.get_session_context()` - Core implementation
 - `openviking/server/routers/sessions.py:get_session_context()` - HTTP route
-- `openviking_cli/client/base.py:BaseClient.get_session_context()` - Python SDK
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.get_session_context()` - Python SDK
 - `crates/ov_cli/src/commands/session.rs:get_session_context()` - CLI command
 
 #### 2. Interface and Parameter Description
@@ -677,7 +677,7 @@ Get the full contents of one completed archive for a session. This endpoint is t
 **Code Entries:**
 - `openviking/session/session.py:Session.get_session_archive()` - Core implementation
 - `openviking/server/routers/sessions.py:get_session_archive()` - HTTP route
-- `openviking_cli/client/base.py:BaseClient.get_session_archive()` - Python SDK
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.get_session_archive()` - Python SDK
 - `crates/ov_cli/src/commands/session.rs:get_session_archive()` - CLI command
 
 #### 2. Interface and Parameter Description
@@ -792,7 +792,7 @@ Delete a session and all its data, including messages, archive history, memories
 
 **Code Entries:**
 - `openviking/server/routers/sessions.py:delete_session()` - HTTP route
-- `openviking_cli/client/base.py:BaseClient.delete_session()` - Python SDK
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.delete_session()` - Python SDK
 - `crates/ov_cli/src/commands/session.rs:delete_session()` - CLI command
 
 #### 2. Interface and Parameter Description
@@ -876,7 +876,7 @@ Add a message to the session. Supports two modes: simple text mode and Parts mod
 **Code Entries:**
 - `openviking/session/session.py:Session.add_message()` - Core implementation
 - `openviking/server/routers/sessions.py:add_message()` - HTTP route
-- `openviking_cli/client/base.py:BaseClient.add_message()` - Python SDK
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.add_message()` - Python SDK
 - `crates/ov_cli/src/commands/session.rs:add_message()` - CLI command
 
 #### 2. Interface and Parameter Description
@@ -1081,7 +1081,7 @@ Add multiple messages to a session in a single request. Suitable for scenarios t
 **Code Entry Points**:
 - `openviking/session/session.py:Session.add_messages()` - Core implementation
 - `openviking/server/routers/sessions.py:batch_add_messages()` - HTTP route
-- `openviking_cli/client/base.py:BaseClient.batch_add_messages()` - Python SDK
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.batch_add_messages()` - Python SDK
 - `crates/ov_cli/src/commands/session.rs:add_messages()` - CLI command
 
 #### 2. Interface and Parameter Description
@@ -1264,7 +1264,7 @@ Commit a session. Message archiving (Phase 1) completes immediately. Summary gen
 **Code Entries:**
 - `openviking/session/session.py:Session.commit_async()` - Core implementation
 - `openviking/server/routers/sessions.py:commit_session()` - HTTP route
-- `openviking_cli/client/base.py:BaseClient.commit_session()` - Python SDK
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.commit_session()` - Python SDK
 - `crates/ov_cli/src/commands/session.rs:commit_session()` - CLI command
 
 #### 2. Interface and Parameter Description

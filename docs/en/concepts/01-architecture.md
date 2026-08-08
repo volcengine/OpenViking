@@ -120,19 +120,7 @@ Messages → Compress → Archive → Memory Extraction → Storage
 4. **Memory Extraction**: Extract memories from messages according to the memory policy and MemoryType schemas
 5. **Storage**: Write to AGFS + vector index
 
-## Deployment Modes
-
-### Embedded Mode
-
-For local development and single-process applications:
-
-```python
-client = OpenViking(path="./data")
-```
-
-- Auto-starts AGFS subprocess
-- Uses local vector index
-- Singleton pattern
+## Deployment Mode
 
 ### HTTP Mode
 

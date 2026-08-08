@@ -36,7 +36,7 @@ curl http://localhost:1933/health
 
 ### Overall system status
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK**
 
 ```python
 status = client.get_status()
@@ -89,7 +89,7 @@ curl http://localhost:1933/api/v1/observer/queue \
 
 ### Quick health check
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK**
 
 ```python
 if client.is_healthy():
