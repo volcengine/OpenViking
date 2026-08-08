@@ -381,6 +381,7 @@ const contextEnginePlugin = {
     registerOpenVikingLifecycleHooks({
       api,
       rememberSessionAgentId,
+      toOVSessionId: openClawSessionToOvStorageId,
       isBypassedSession,
       verboseRoutingInfo,
       getContextEngine,

@@ -18,6 +18,7 @@ import {
   afterTurnOpenVikingSession,
   compactOpenVikingSession,
   commitOpenVikingSession,
+  type CommitOpenVikingSessionOptions,
 } from "./services/context-lifecycle-service.js";
 
 type ContextEngineInfo = {
@@ -100,7 +101,7 @@ export type ContextEngineWithCommit = ContextEngine & {
     sessionId: string;
     sessionKey?: string;
     runtimeContext?: Record<string, unknown>;
-  }) => Promise<boolean>;
+  }, options?: CommitOpenVikingSessionOptions) => Promise<boolean>;
 };
 
 type Logger = {
@@ -274,12 +275,13 @@ export function createMemoryOpenVikingContextEngine(params: {
     sessionId: string;
     sessionKey?: string;
     runtimeContext?: Record<string, unknown>;
-  }): Promise<boolean> {
+  }, commitOptions?: CommitOpenVikingSessionOptions): Promise<boolean> {
     const { sessionId } = params;
     const { sessionKey } = resolveSessionIdentity(params);
     return commitOpenVikingSession({
       sessionId,
       sessionKey,
+      commitOptions,
       getClient,
       logger,
       rememberSessionAgentId,

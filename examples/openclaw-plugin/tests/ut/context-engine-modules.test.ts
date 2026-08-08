@@ -174,6 +174,31 @@ describe("context-engine lifecycle service seam", () => {
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("memories=5"));
   });
 
+  it("forwards non-blocking full-archive options for lifecycle finalization", async () => {
+    const client = {
+      commitSession: vi.fn().mockResolvedValue({
+        status: "accepted",
+        archived: true,
+        task_id: "task-finalize",
+      }),
+    };
+
+    const ok = await commitOpenVikingSession({
+      sessionId: "session-finalize",
+      sessionKey: "agent:main:main",
+      getClient: vi.fn().mockResolvedValue(client),
+      logger: { info: vi.fn(), warn: vi.fn() },
+      isBypassedSession: () => false,
+      commitOptions: { wait: false, keepRecentCount: 0 },
+    });
+
+    expect(ok).toBe(true);
+    expect(client.commitSession).toHaveBeenCalledWith(
+      openClawSessionToOvStorageId("session-finalize", "agent:main:main"),
+      { wait: false, keepRecentCount: 0 },
+    );
+  });
+
   it("compacts an OpenViking session behind the lifecycle service seam", async () => {
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const client = {
