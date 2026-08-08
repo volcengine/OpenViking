@@ -1545,3 +1545,37 @@ async def test_set_tags_does_not_return_write_queue_fields(monkeypatch):
     assert "semantic_status" not in result
     assert "vector_status" not in result
     assert "queue_status" not in result
+
+
+@pytest.mark.asyncio
+async def test_collect_directory_tag_targets_excludes_search_tags_sidecar(service):
+    """Regression: .search_tags.json must never appear in tag-target enumeration.
+
+    The sidecar holds internal control metadata and must not be treated as user
+    content, even when show_all_hidden=True is used in the tree traversal.
+    """
+    ctx = RequestContext(user=service.user, role=Role.USER)
+    resource_root = "viking://resources/test-sidecar-regression"
+
+    # Set up a resource directory with a sidecar file and normal content.
+    await service.viking_fs.write_file(
+        f"{resource_root}/.search_tags.json", '{"env": "test"}', ctx=ctx
+    )
+    await service.viking_fs.write_file(f"{resource_root}/readme.txt", "hello world", ctx=ctx)
+    await service.viking_fs.write_file(f"{resource_root}/.overview.md", "overview content", ctx=ctx)
+
+    coordinator = ContentWriteCoordinator(viking_fs=service.viking_fs)
+    targets = await coordinator._collect_directory_tag_targets(
+        uri=resource_root,
+        recursive=True,
+        ctx=ctx,
+    )
+
+    uris = [t["uri"] for t in targets]
+    assert f"{resource_root}/readme.txt" in uris, "user content must be included"
+    assert not any(u.endswith(".search_tags.json") for u in uris), (
+        ".search_tags.json must not appear in tag targets"
+    )
+    assert not any(u.endswith(".overview.md") for u in uris), (
+        ".overview.md must not appear in tag targets"
+    )

@@ -44,6 +44,9 @@ from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
+# Hidden meta files that should never be indexed as user content.
+SEARCH_TAGS_SIDECAR_FILENAME = ".search_tags.json"
+
 REINDEX_TASK_TYPE = "admin_reindex"
 PRUNE_ORPHAN_CANDIDATE_LIMIT = 100000
 PRUNE_OUTPUT_FIELDS = ["id", "uri", "level", "context_type", "account_id", "owner_user_id"]
@@ -1725,7 +1728,11 @@ class ReindexExecutor:
         return str(record.get("abstract") or "")
 
     def _is_hidden_meta_file(self, uri: str) -> bool:
-        return uri.endswith("/.abstract.md") or uri.endswith("/.overview.md")
+        return (
+            uri.endswith("/.abstract.md")
+            or uri.endswith("/.overview.md")
+            or uri.endswith(f"/{SEARCH_TAGS_SIDECAR_FILENAME}")
+        )
 
     def _truncate_embedding_text(self, value: str) -> str:
         max_input_chars = int(
