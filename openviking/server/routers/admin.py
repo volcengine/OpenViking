@@ -34,7 +34,6 @@ from openviking.service.task_store import (
 from openviking.service.task_tracker import (
     get_task_tracker,
 )
-from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.exceptions import (
     FailedPreconditionError,
     InvalidArgumentError,
@@ -341,26 +340,15 @@ async def delete_account(
         role=Role.ROOT,
     )
 
-    # Cascade: remove AGFS data for the account
-    viking_fs = get_viking_fs()
-    account_prefixes = [
-        "viking://user/",
-        "viking://resources/",
-    ]
-    for prefix in account_prefixes:
-        try:
-            await viking_fs.rm(prefix, recursive=True, ctx=cleanup_ctx)
-        except Exception as e:
-            logger.warning(f"AGFS cleanup for {prefix} in account {account_id}: {e}")
-
-    # Cascade: remove VectorDB records for the account
-    try:
-        storage = viking_fs._get_vector_store()
-        if storage:
-            deleted = await storage.delete_account_data(account_id)
-            logger.info(f"VectorDB cascade delete for account {account_id}: {deleted} records")
-    except Exception as e:
-        logger.warning(f"VectorDB cleanup for account {account_id}: {e}")
+    # Remove all account-owned storage before revoking its credentials. Cleanup
+    # errors intentionally abort the request so orphaned data is not hidden
+    # behind a successful response and the operation can be retried.
+    service = get_service()
+    viking_fs = service.viking_fs
+    if viking_fs is None:
+        raise FailedPreconditionError("OpenViking service is not initialized.")
+    cleanup_result = await viking_fs.delete_account_data(ctx=cleanup_ctx)
+    logger.info("Account storage cleanup for %s: %s", account_id, cleanup_result)
 
     # Finally delete the account metadata
     await manager.delete_account(account_id)

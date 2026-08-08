@@ -709,6 +709,75 @@ class VikingFS:
             if lease_ref is None:
                 await self._async_agfs.pathlock_release(lease)
 
+    async def delete_account_data(self, *, ctx: RequestContext) -> Dict[str, Any]:
+        """Delete all filesystem and vector-index data owned by an account.
+
+        Account roots are deliberately not removable through :meth:`rm`, whose
+        URI-facing safety checks protect callers from erasing an entire tenant.
+        Administrative account teardown uses this explicit root-only operation
+        instead.  The account is resolved exclusively from ``ctx`` so the
+        filesystem path and vector-index filter cannot target different tenants.
+
+        The operation is idempotent.  A missing filesystem root still triggers
+        vector cleanup so a previously interrupted deletion can be retried.
+        """
+        from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+
+        if ctx.role != Role.ROOT:
+            raise PermissionDeniedError("Only ROOT can delete account storage.")
+
+        account_id = ctx.account_id
+        account_path = self._uri_to_path("viking://", ctx=ctx)
+        vector_store = self._get_vector_store()
+
+        try:
+            lease = await self._async_agfs.pathlock_acquire_tree(account_path)
+        except LockAcquisitionError as exc:
+            raise ResourceBusyError(
+                f"Account storage is busy and cannot be deleted: {account_id}",
+                uri=account_path,
+            ) from exc
+
+        try:
+            deleted_vector_records = 0
+            if vector_store is not None:
+                deleted_vector_records = await vector_store.delete_account_data(
+                    account_id,
+                    ctx=ctx,
+                )
+
+            try:
+                stat = await self._async_agfs.stat(account_path)
+            except Exception as exc:
+                if is_not_found_error(exc):
+                    return {
+                        "deleted_filesystem": False,
+                        "deleted_vector_records": deleted_vector_records,
+                    }
+                mapped = map_exception(exc, resource=account_path)
+                if mapped is not None:
+                    raise mapped from exc
+                raise
+
+            if isinstance(stat, dict) and not stat.get("isDir", False):
+                raise FailedPreconditionError(
+                    f"Account storage root is not a directory: {account_path}",
+                    details={"resource": account_path},
+                )
+
+            await self._async_agfs.rm(
+                account_path,
+                recursive=True,
+                fs_ctx=self._pathlock_fs_ctx(ctx, lease),
+            )
+        finally:
+            await self._async_agfs.pathlock_release(lease)
+
+        return {
+            "deleted_filesystem": True,
+            "deleted_vector_records": deleted_vector_records,
+        }
+
     async def mv(
         self,
         old_uri: str,

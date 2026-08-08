@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from openviking.pyagfs.exceptions import AGFSInvalidOperationError
+from openviking.pyagfs.exceptions import AGFSInvalidOperationError, AGFSNotFoundError
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import PermissionDeniedError
@@ -32,6 +32,13 @@ def _user_ctx(account_id: str = "acct1", user_id: str = "alice") -> RequestConte
     return RequestContext(
         user=UserIdentifier(account_id=account_id, user_id=user_id),
         role=Role.USER,
+    )
+
+
+def _root_ctx(account_id: str = "acct1") -> RequestContext:
+    return RequestContext(
+        user=UserIdentifier(account_id=account_id, user_id="system"),
+        role=Role.ROOT,
     )
 
 
@@ -166,6 +173,83 @@ class TestVikingFSURITraversalGuard:
         fs._delete_from_vector_store.assert_not_called()
         fs.agfs.stat.assert_not_called()
         fs.agfs.rm.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_delete_account_data_removes_physical_root_and_vectors(self) -> None:
+        fs = _make_viking_fs()
+        fs.agfs.stat = AsyncMock(return_value={"isDir": True})
+        fs.agfs.pathlock_acquire_tree = AsyncMock(return_value={"lease_ref": "account-lock"})
+        fs.agfs.pathlock_release = AsyncMock()
+        vector_store = MagicMock()
+        vector_store.delete_account_data = AsyncMock(return_value=7)
+        fs.vector_store = vector_store
+        ctx = _root_ctx("tenant-a")
+
+        result = await fs.delete_account_data(ctx=ctx)
+
+        assert result == {
+            "deleted_filesystem": True,
+            "deleted_vector_records": 7,
+        }
+        vector_store.delete_account_data.assert_awaited_once_with("tenant-a", ctx=ctx)
+        fs.agfs.stat.assert_awaited_once_with("/local/tenant-a")
+        fs.agfs.pathlock_acquire_tree.assert_awaited_once_with("/local/tenant-a")
+        fs.agfs.rm.assert_awaited_once_with(
+            "/local/tenant-a",
+            recursive=True,
+            fs_ctx={"account_id": "tenant-a", "lease_ref": "account-lock"},
+        )
+        fs.agfs.pathlock_release.assert_awaited_once_with({"lease_ref": "account-lock"})
+
+    @pytest.mark.asyncio
+    async def test_delete_account_data_requires_root_role(self) -> None:
+        fs = _make_viking_fs()
+
+        with pytest.raises(PermissionDeniedError, match="Only ROOT"):
+            await fs.delete_account_data(ctx=_user_ctx())
+
+        fs.agfs.stat.assert_not_called()
+        fs.agfs.rm.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_delete_account_data_cleans_orphan_vectors_when_root_is_missing(self) -> None:
+        fs = _make_viking_fs()
+        fs.agfs.stat = AsyncMock(side_effect=AGFSNotFoundError("/local/tenant-a"))
+        fs.agfs.pathlock_acquire_tree = AsyncMock(return_value={"lease_ref": "account-lock"})
+        fs.agfs.pathlock_release = AsyncMock()
+        vector_store = MagicMock()
+        vector_store.delete_account_data = AsyncMock(return_value=3)
+        fs.vector_store = vector_store
+        ctx = _root_ctx("tenant-a")
+
+        result = await fs.delete_account_data(ctx=ctx)
+
+        assert result == {
+            "deleted_filesystem": False,
+            "deleted_vector_records": 3,
+        }
+        vector_store.delete_account_data.assert_awaited_once_with("tenant-a", ctx=ctx)
+        fs.agfs.rm.assert_not_called()
+        fs.agfs.pathlock_release.assert_awaited_once_with({"lease_ref": "account-lock"})
+
+    @pytest.mark.asyncio
+    async def test_delete_account_data_releases_lock_when_vector_cleanup_fails(self) -> None:
+        fs = _make_viking_fs()
+        fs.agfs.pathlock_acquire_tree = AsyncMock(return_value={"lease_ref": "account-lock"})
+        fs.agfs.pathlock_release = AsyncMock()
+        vector_store = MagicMock()
+        vector_store.delete_account_data = AsyncMock(
+            side_effect=RuntimeError("vector cleanup failed")
+        )
+        fs.vector_store = vector_store
+        ctx = _root_ctx("tenant-a")
+
+        with pytest.raises(RuntimeError, match="vector cleanup failed"):
+            await fs.delete_account_data(ctx=ctx)
+
+        fs.agfs.stat.assert_not_called()
+        fs.agfs.rm.assert_not_called()
+        fs.agfs.pathlock_release.assert_awaited_once_with({"lease_ref": "account-lock"})
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
