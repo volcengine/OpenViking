@@ -273,6 +273,7 @@ class TestHTTPAccessorPriorityRouting:
         assert accessor is not None
         assert accessor.__class__.__name__ == "HTTPAccessor"
 
+
 class TestHTTPAccessorRawUrlConversion:
     """Tests for HTTPAccessor._convert_to_raw_url (GitHub/GitLab blob -> raw)."""
 
@@ -298,6 +299,32 @@ class TestHTTPAccessorRawUrlConversion:
             "https://raw.githubusercontent.com/user/repo/feature/branch/src/components/Button.tsx"
         )
         assert accessor._convert_to_raw_url(blob_deep) == expected_deep
+
+    @pytest.mark.parametrize(
+        ("blob_url", "expected"),
+        [
+            (
+                "https://github.com:443/owner/repo/blob/main/readme.md",
+                "https://raw.githubusercontent.com/owner/repo/main/readme.md",
+            ),
+            (
+                "https://GitHub.com/owner/repo/blob/main/readme.md",
+                "https://raw.githubusercontent.com/owner/repo/main/readme.md",
+            ),
+            (
+                "https://gitlab.com:443/group/repo/-/blob/main/readme.md",
+                "https://gitlab.com:443/group/repo/-/raw/main/readme.md",
+            ),
+            (
+                "https://GitLab.com/group/repo/-/blob/main/readme.md",
+                "https://GitLab.com/group/repo/-/raw/main/readme.md",
+            ),
+        ],
+    )
+    def test_blob_conversion_normalizes_host(
+        self, accessor: HTTPAccessor, blob_url: str, expected: str
+    ) -> None:
+        assert accessor._convert_to_raw_url(blob_url) == expected
 
     def test_github_non_blob_urls(self, accessor: HTTPAccessor) -> None:
         repo_root = "https://github.com/volcengine/OpenViking"
