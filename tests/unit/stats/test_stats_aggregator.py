@@ -7,7 +7,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from openviking.storage.stats_aggregator import StatsAggregator, _parse_datetime
+from openviking.storage.stats_aggregator import (
+    StatsAggregator,
+    _category_from_uri,
+    _parse_datetime,
+)
 
 
 @pytest.fixture
@@ -132,6 +136,128 @@ class TestStatsAggregator:
 
         assert result["by_category"]["cases"] == 0
         assert result["total_memories"] == 0
+
+    @pytest.mark.asyncio
+    async def test_profile_uri_is_counted(self, aggregator, mock_vikingdb, mock_ctx):
+        """profile.md lives directly under /memories and still counts as profile."""
+        now = datetime.now(timezone.utc)
+        mock_vikingdb.query = AsyncMock(
+            return_value=[
+                {
+                    "uri": "viking://user/default/memories/profile.md",
+                    "context_type": "memory",
+                    "active_count": 1,
+                    "updated_at": now.isoformat(),
+                    "created_at": now.isoformat(),
+                }
+            ]
+        )
+
+        result = await aggregator.get_memory_stats(mock_ctx)
+
+        assert result["by_category"]["profile"] == 1
+        assert result["total_memories"] == 1
+
+    @pytest.mark.asyncio
+    async def test_filesystem_fallback_when_vector_records_missing(self, aggregator, mock_vikingdb, mock_ctx, monkeypatch):
+        """Filesystem scan should supplement stats when VikingDB has no memory leaf records."""
+        mock_vikingdb.query = AsyncMock(return_value=[])
+
+        fake_fs = MagicMock()
+        fake_fs.ls = AsyncMock(
+            side_effect=lambda uri, show_all_hidden=False, ctx=None: {
+                "viking://user/default/memories": [
+                    {"name": "preferences", "isDir": True, "uri": "viking://user/default/memories/preferences"},
+                    {"name": "profile.md", "isDir": False, "uri": "viking://user/default/memories/profile.md"},
+                ],
+                "viking://user/default/memories/preferences": [
+                    {"name": "mem_a.md", "isDir": False, "uri": "viking://user/default/memories/preferences/mem_a.md"},
+                    {"name": ".overview.md", "isDir": False, "uri": "viking://user/default/memories/preferences/.overview.md"},
+                ],
+                "viking://agent/8e1f7e6e4d1d/memories": [],
+            }.get(uri, [])
+        )
+        fake_fs.read_file = AsyncMock(return_value="")
+        fake_fs.stat = AsyncMock(
+            return_value={"modTime": "2026-04-07T00:00:00+00:00"}
+        )
+        monkeypatch.setattr("openviking.storage.stats_aggregator.get_viking_fs", lambda: fake_fs)
+        mock_ctx.user = MagicMock()
+        mock_ctx.user.user_space_name.return_value = "default"
+        mock_ctx.user.agent_space_name.return_value = "8e1f7e6e4d1d"
+
+        result = await aggregator.get_memory_stats(mock_ctx)
+
+        assert result["by_category"]["preferences"] == 1
+        assert result["by_category"]["profile"] == 1
+        assert result["total_memories"] == 2
+
+    @pytest.mark.asyncio
+    async def test_filesystem_fallback_supplements_partial_vector_results(
+        self, aggregator, mock_vikingdb, mock_ctx, monkeypatch
+    ):
+        """Filesystem scan should backfill memories that are missing from VikingDB."""
+        now = datetime.now(timezone.utc).isoformat()
+        mock_vikingdb.query = AsyncMock(
+            return_value=[
+                {
+                    "uri": "viking://user/default/memories/profile.md",
+                    "context_type": "memory",
+                    "active_count": 1,
+                    "updated_at": now,
+                    "created_at": now,
+                }
+            ]
+        )
+
+        fake_fs = MagicMock()
+        fake_fs.ls = AsyncMock(
+            side_effect=lambda uri, show_all_hidden=False, ctx=None: {
+                "viking://user/default/memories": [
+                    {
+                        "name": "preferences",
+                        "isDir": True,
+                        "uri": "viking://user/default/memories/preferences",
+                    },
+                    {
+                        "name": "profile.md",
+                        "isDir": False,
+                        "uri": "viking://user/default/memories/profile.md",
+                    },
+                ],
+                "viking://user/default/memories/preferences": [
+                    {
+                        "name": "mem_a.md",
+                        "isDir": False,
+                        "uri": "viking://user/default/memories/preferences/mem_a.md",
+                    },
+                ],
+                "viking://agent/8e1f7e6e4d1d/memories": [],
+            }.get(uri, [])
+        )
+        fake_fs.read_file = AsyncMock(return_value="")
+        fake_fs.stat = AsyncMock(return_value={"modTime": "2026-04-07T00:00:00+00:00"})
+        monkeypatch.setattr("openviking.storage.stats_aggregator.get_viking_fs", lambda: fake_fs)
+        mock_ctx.user = MagicMock()
+        mock_ctx.user.user_space_name.return_value = "default"
+        mock_ctx.user.agent_space_name.return_value = "8e1f7e6e4d1d"
+
+        result = await aggregator.get_memory_stats(mock_ctx)
+
+        assert result["by_category"]["profile"] == 1
+        assert result["by_category"]["preferences"] == 1
+        assert result["total_memories"] == 2
+
+
+class TestCategoryFromUri:
+    def test_profile_file(self):
+        assert _category_from_uri("viking://user/default/memories/profile.md") == "profile"
+
+    def test_category_directory(self):
+        assert _category_from_uri("viking://user/default/memories/preferences/mem_x.md") == "preferences"
+
+    def test_unknown(self):
+        assert _category_from_uri("viking://resources/docs/readme.md") is None
 
 
 class TestParseDatetime:
