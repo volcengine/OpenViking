@@ -350,6 +350,7 @@ export class OpenVikingClient {
         until: options.until,
         time_field: options.timeField,
         level: options.level,
+        include_provenance: options.includeProvenance,
         tags: options.tags,
       }),
     });

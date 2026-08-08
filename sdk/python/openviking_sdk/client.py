@@ -1233,6 +1233,11 @@ class AsyncHTTPClient:
         tags: Optional[List[str]] = None,
         telemetry: Any = False,
         image: Any = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
+        level: Optional[List[int]] = None,
+        include_provenance: Optional[bool] = None,
     ) -> Dict[str, Any]:
         actual_limit = node_limit if node_limit is not None else limit
         payload = {
@@ -1244,6 +1249,11 @@ class AsyncHTTPClient:
             "filter": filter,
             "context_type": self._normalize_context_type(context_type),
             "tags": tags,
+            "since": since,
+            "until": until,
+            "time_field": time_field,
+            "level": level,
+            "include_provenance": include_provenance,
             "telemetry": telemetry,
         }
         payload = self._compact_request_body(payload)
@@ -1264,6 +1274,11 @@ class AsyncHTTPClient:
         tags: Optional[List[str]] = None,
         telemetry: Any = False,
         image: Any = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
+        level: Optional[List[int]] = None,
+        include_provenance: Optional[bool] = None,
     ) -> Dict[str, Any]:
         actual_limit = node_limit if node_limit is not None else limit
         sid = session_id or (session.session_id if session else None)
@@ -1277,6 +1292,11 @@ class AsyncHTTPClient:
             "filter": filter,
             "context_type": self._normalize_context_type(context_type),
             "tags": tags,
+            "since": since,
+            "until": until,
+            "time_field": time_field,
+            "level": level,
+            "include_provenance": include_provenance,
             "telemetry": telemetry,
         }
         payload = self._compact_request_body(payload)
@@ -2261,6 +2281,11 @@ class SyncHTTPClient:
         tags: Optional[List[str]] = None,
         telemetry: Any = False,
         image: Any = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
+        level: Optional[List[int]] = None,
+        include_provenance: Optional[bool] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.find(
@@ -2274,6 +2299,11 @@ class SyncHTTPClient:
                 tags=tags,
                 telemetry=telemetry,
                 image=image,
+                since=since,
+                until=until,
+                time_field=time_field,
+                level=level,
+                include_provenance=include_provenance,
             )
         )
 
@@ -2291,6 +2321,11 @@ class SyncHTTPClient:
         tags: Optional[List[str]] = None,
         telemetry: Any = False,
         image: Any = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
+        level: Optional[List[int]] = None,
+        include_provenance: Optional[bool] = None,
     ) -> Dict[str, Any]:
         actual_session_id = session_id
         if actual_session_id is None and session is not None:
@@ -2308,6 +2343,11 @@ class SyncHTTPClient:
                 tags=tags,
                 telemetry=telemetry,
                 image=image,
+                since=since,
+                until=until,
+                time_field=time_field,
+                level=level,
+                include_provenance=include_provenance,
             )
         )
 
