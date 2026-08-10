@@ -204,6 +204,7 @@ class DirectoryParser(BaseParser):
                         warnings,
                         preserve_structure=preserve_structure,
                         import_root=str(source_path),
+                        split_content=kwargs.get("split_content", True),
                     )
 
                 if ok:
@@ -358,6 +359,7 @@ class DirectoryParser(BaseParser):
         warnings: List[str],
         preserve_structure: bool = True,
         import_root: Optional[str] = None,
+        split_content: bool = True,
     ) -> bool:
         """Process one file into the VikingFS directory temp.
 
@@ -388,6 +390,8 @@ class DirectoryParser(BaseParser):
                     # an md may reference shared images outside its own directory
                     # (e.g. ../images/x.gif) that still live inside the import.
                     allowed_media_dirs=[Path(import_root)] if import_root else None,
+                    split_content=split_content,
+                    flatten_single_output=bool(not split_content and preserve_structure),
                 )
                 if sub_result.temp_dir_path:
                     if preserve_structure:
@@ -399,6 +403,7 @@ class DirectoryParser(BaseParser):
                         viking_fs,
                         sub_result.temp_dir_path,
                         dest,
+                        flatten_single_output=bool(not split_content and preserve_structure),
                     )
                 return True
             except Exception as exc:
@@ -466,15 +471,77 @@ class DirectoryParser(BaseParser):
         viking_fs: Any,
         src_temp_uri: str,
         dest_uri: str,
+        *,
+        flatten_single_output: bool = False,
     ) -> None:
         """Move all content from a parser's temp directory into *dest_uri*.
 
         After the move the source temp is deleted. Hidden files stay filtered,
         except the sidecars in :data:`_MERGE_SIDECAR_ALLOWLIST` that downstream
         steps depend on (e.g. ``.image_mappings.json`` for the post-commit
-        image rewrite).
+        image rewrite). In no-split directory imports, a wrapper containing one
+        standalone file is promoted into ``dest_uri``; wrappers with additional
+        files, directories, sidecars, or destination-name conflicts are retained.
         """
         entries = await viking_fs.ls(src_temp_uri, show_all_hidden=True, node_limit=LS_ALL_NODES)
+        merge_entries = [
+            entry
+            for entry in entries
+            if entry.get("name") not in ("", ".", "..")
+            and (
+                DirectoryParser._is_dir_entry(entry)
+                or not entry.get("name", "").startswith(".")
+                or entry.get("name") in _MERGE_SIDECAR_ALLOWLIST
+            )
+        ]
+        if flatten_single_output and len(merge_entries) == 1:
+            wrapper = merge_entries[0]
+            if DirectoryParser._is_dir_entry(wrapper):
+                wrapper_uri = wrapper.get(
+                    "uri",
+                    f"{src_temp_uri.rstrip('/')}/{wrapper['name']}",
+                )
+                wrapper_entries = await viking_fs.ls(
+                    wrapper_uri,
+                    show_all_hidden=True,
+                    node_limit=LS_ALL_NODES,
+                )
+                payloads = [
+                    entry
+                    for entry in wrapper_entries
+                    if entry.get("name") not in ("", ".", "..")
+                    and (
+                        not entry.get("name", "").startswith(".")
+                        or entry.get("name") in _MERGE_SIDECAR_ALLOWLIST
+                    )
+                ]
+                if len(payloads) == 1 and not DirectoryParser._is_dir_entry(payloads[0]):
+                    payload = payloads[0]
+                    await viking_fs.mkdir(dest_uri, exist_ok=True)
+                    destination_entries = await viking_fs.ls(
+                        dest_uri,
+                        show_all_hidden=True,
+                        node_limit=LS_ALL_NODES,
+                    )
+                    destination_names = {
+                        entry.get("name")
+                        for entry in destination_entries
+                        if entry.get("name") not in ("", ".", "..")
+                    }
+                    if payload.get("name") not in destination_names:
+                        src = payload.get(
+                            "uri",
+                            f"{wrapper_uri.rstrip('/')}/{payload['name']}",
+                        )
+                        await viking_fs.move_file(
+                            src,
+                            f"{dest_uri.rstrip('/')}/{payload['name']}",
+                        )
+                        try:
+                            await viking_fs.delete_temp(src_temp_uri)
+                        except Exception:
+                            pass
+                        return
         for entry in entries:
             name = entry.get("name", "")
             if not name or name in (".", ".."):

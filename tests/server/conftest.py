@@ -17,7 +17,6 @@ import pytest
 import pytest_asyncio
 import uvicorn
 
-from openviking import AsyncOpenViking
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
@@ -101,7 +100,6 @@ def _install_session_commit_queue_fallback(service: OpenVikingService, monkeypat
             ctx = RequestContext(
                 user=UserIdentifier.from_dict(msg.user),
                 role=Role.USER,
-                actor_peer_id=msg.actor_peer_id,
             )
             queued_session = service.sessions.session(
                 ctx,
@@ -166,7 +164,7 @@ def upload_temp_dir(temp_dir: Path, monkeypatch) -> Path:
 
 @pytest_asyncio.fixture(scope="function")
 async def service(temp_dir: Path, monkeypatch):
-    """Create and initialize an OpenVikingService in embedded mode."""
+    """Create and initialize an OpenVikingService for in-process API tests."""
     fake_embedder_cls = _install_fake_embedder(monkeypatch)
     _install_fake_vlm(monkeypatch)
     svc = OpenVikingService(
@@ -229,7 +227,6 @@ async def client_with_resource(client, service, sample_markdown_file):
 @pytest_asyncio.fixture(scope="function")
 async def running_server(temp_dir: Path, monkeypatch):
     """Start a real uvicorn server in a background thread."""
-    await AsyncOpenViking.reset()
     fake_embedder_cls = _install_fake_embedder(monkeypatch)
     _install_fake_vlm(monkeypatch)
 
@@ -290,4 +287,3 @@ async def running_server(temp_dir: Path, monkeypatch):
     server.should_exit = True
     thread.join(timeout=5)
     await svc.close()
-    await AsyncOpenViking.reset()

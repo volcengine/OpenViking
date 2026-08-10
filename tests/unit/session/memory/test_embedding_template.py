@@ -8,8 +8,10 @@ import pytest
 
 from openviking.prompts.manager import PromptManager
 from openviking.session.memory.dataclass import MemoryField, MemoryFile
+from openviking.session.memory.experience_lineage import experience_source_tag
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.memory_updater import MemoryUpdater, MemoryUpdateResult
+from openviking.session.memory.merge_op import MergeOp
 from openviking.session.memory.merge_op.base import FieldType
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
@@ -49,6 +51,13 @@ class TestEmbeddingTemplateYamlParsing:
     def test_trajectories_exposes_retrieval_anchor_template(self):
         schema = self.registry.get("trajectories")
         assert schema.embedding_template == "{{ trajectory_name }}\n\n{{ retrieval_anchor }}"
+
+    def test_trajectories_exposes_immutable_task_query(self):
+        schema = self.registry.get("trajectories")
+        fields = {field.name: field for field in schema.fields}
+
+        assert "task_query" in fields
+        assert fields["task_query"].merge_op == MergeOp.IMMUTABLE
 
 
 class TestContentTemplateRendering:
@@ -92,6 +101,53 @@ class TestContentTemplateRendering:
 
 
 class TestEmbeddingTextConstruction:
+    @pytest.mark.asyncio
+    async def test_trajectory_vectorization_adds_source_experience_search_tags(self):
+        registry = MemoryTypeRegistry(load_schemas=False)
+        memory_dir = PromptManager._get_bundled_templates_dir() / "memory"
+        registry.load_from_yaml(str(memory_dir / "trajectories.yaml"))
+        experience_uri = "viking://user/alice/memories/experiences/exchange.md"
+        trajectory_uri = "viking://user/alice/memories/trajectories/exchange.md"
+        updater = MemoryUpdater(registry=registry, vikingdb=Mock())
+        updater._viking_fs = Mock()
+        updater._viking_fs.read_file = AsyncMock(
+            return_value=MemoryFileUtils.write(
+                MemoryFile(
+                    uri=trajectory_uri,
+                    memory_type="trajectories",
+                    content="# exchange\nbody",
+                    extra_fields={
+                        "trajectory_name": "exchange",
+                        "retrieval_anchor": "Stage: final",
+                    },
+                )
+            )
+        )
+        updater._vikingdb.enqueue_embedding_msg = AsyncMock(return_value=True)
+        result = MemoryUpdateResult()
+        result.add_written(trajectory_uri)
+        ctx = SimpleNamespace(user=None, account_id="default")
+
+        with patch.object(EmbeddingMsgConverter, "from_context") as mock_from_context:
+            mock_from_context.side_effect = lambda context: SimpleNamespace(
+                telemetry_id=None,
+                id="msg-1",
+                message=context.get_vectorization_text(),
+                context_data={},
+            )
+            await updater._vectorize_memories(
+                result,
+                ctx,
+                uri_memory_type_map={trajectory_uri: "trajectories"},
+                search_tags_by_uri={
+                    trajectory_uri: [experience_source_tag(experience_uri)],
+                },
+            )
+
+        embedding_msg = updater._vikingdb.enqueue_embedding_msg.await_args.args[0]
+        assert embedding_msg.context_data["search_tags"] == [experience_source_tag(experience_uri)]
+        assert embedding_msg.context_data["_upsert_options"] == {"search_tag_mode": "append"}
+
     @pytest.mark.asyncio
     async def test_logs_final_embedding_text_before_vectorization(self):
         registry = MemoryTypeRegistry(load_schemas=False)

@@ -59,8 +59,8 @@ Configure `root_api_key` in `~/.openviking/ovcli.conf`:
 
 ### get_agent_evolution_status
 
-Return the live instance-wide Agent Evolution switch and the configured default
-account ID. The endpoint is ROOT-only.
+Return the effective Agent Evolution switch for the caller's account. ROOT
+operates on the configured default account; ADMIN operates on its own account.
 
 **HTTP API**
 
@@ -86,8 +86,36 @@ curl http://localhost:1933/api/v1/admin/agent-evolution \
 }
 ```
 
-`enabled` is read from the live `server.agent_evolution.enabled` value used by
-session commits. `account_id` is the deployment's configured default account.
+`enabled` is the account override from
+`/local/{account_id}/_system/setting.json`, or
+`server.agent_evolution.enabled` when no override exists. Session commits read
+this effective value without restarting the server.
+
+The existing update endpoint name is unchanged:
+
+```http
+PUT /api/v1/admin/agent-evolution
+Content-Type: application/json
+
+{"enabled": true}
+```
+
+### account_settings
+
+ROOT can manage any account and ADMIN can manage only its own account. The
+generic settings endpoint accepts only explicitly allowlisted fields; currently
+only `agent_evolution.enabled` is writable.
+
+```http
+GET /api/v1/admin/accounts/{account_id}/settings
+PATCH /api/v1/admin/accounts/{account_id}/settings
+Content-Type: application/json
+
+{"agent_evolution": {"enabled": true}}
+```
+
+Before an existing setting is replaced, it is backed up to
+`/local/{account_id}/_system/setting.backup.json`.
 
 ---
 

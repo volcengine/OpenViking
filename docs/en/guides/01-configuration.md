@@ -13,7 +13,7 @@ openviking-server doctor
 
 ## Configuration File
 
-Create `~/.openviking/ov.conf` in your project directory:
+Create `~/.openviking/ov.conf` in your home configuration directory:
 
 ```json
 {
@@ -610,7 +610,14 @@ Vision Language Model for semantic extraction (L0/L1 generation).
     "api_key": "your-api-key",
     "model": "doubao-seed-2-0-lite-260428",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-    "max_retries": 3
+    "max_retries": 3,
+    "media": {
+      "enabled": true,
+      "max_concurrent": 2,
+      "file_processing_timeout": 1800,
+      "file_poll_interval": 3,
+      "video_fps": 1.0
+    }
   }
 }
 ```
@@ -634,6 +641,12 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 | `extra_headers` | object | Custom HTTP headers for compatible HTTP providers. `kimi` also accepts header overrides, but already injects the required subscription headers by default |
 | `extra_request_body` | object | Extra JSON body fields for OpenAI-compatible completion requests, useful for provider-specific options such as Ollama `{"think": false}` |
 | `stream` | bool | Enable streaming mode (for OpenAI-compatible providers, default: `false`) |
+| `media` | object | Audio/video runtime controls. Media understanding reuses this VLM's provider, model, credentials, client, timeout, retry, headers, output-token limit, failover, and token accounting |
+| `media.enabled` | bool | Enable audio/video understanding (default: `false`) |
+| `media.max_concurrent` | int | Maximum concurrent audio/video calls (default: `2`) |
+| `media.file_processing_timeout` | float | Maximum provider-side preprocessing wait in seconds (default: `1800`) |
+| `media.file_poll_interval` | float | Provider-side preprocessing poll interval in seconds (default: `3`) |
+| `media.video_fps` | float | Video frame sampling rate when supported by the provider, from `0.2` through `5.0` (default: `1.0`) |
 
 `vlm.max_retries` only applies to transient errors such as `429`, `5xx`, timeouts, and connection failures. Permanent authentication, authorization, and billing errors are not retried automatically. The backoff strategy is exponential backoff with jitter, starting at `0.5s` and capped at `8s`.
 
@@ -727,6 +740,52 @@ For OpenAI-compatible providers that return SSE (Server-Sent Events) format resp
 ```
 
 > **Note**: The OpenAI SDK requires `stream=true` to properly parse SSE responses. When using providers that force SSE format, you must set this option to `true`.
+
+**Audio/video understanding**
+
+Audio and video understanding is an optional capability of the configured VLM. It uses the same provider, model, credentials, client, request timeout, retries, headers, maximum output tokens, failover chain, and token accounting as other VLM calls. Enable it with the nested `vlm.media` controls; there is no separate media model configuration.
+
+```json
+{
+  "vlm": {
+    "provider": "volcengine",
+    "api_key": "${VOLCENGINE_API_KEY}",
+    "model": "${VOLCENGINE_MODEL}",
+    "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+    "timeout": 1200,
+    "max_retries": 3,
+    "max_tokens": 4096,
+    "media": {
+      "enabled": true,
+      "file_processing_timeout": 1800,
+      "file_poll_interval": 3,
+      "max_concurrent": 2,
+      "video_fps": 1.0
+    }
+  }
+}
+```
+
+The VLM `model` value is the corresponding Ark model endpoint ID. `video_fps` applies only to video and controls the frame sampling rate sent to Ark.
+
+The recommended starting models for audio and video understanding are `doubao-seed-2-0-lite-260428` and `doubao-seed-2-0-mini-260428`. These are recommended examples, not an exhaustive compatibility list; Ark continues to update its models and input capabilities. See Ark's official [video input capability list](https://console.volcengine.com/ark/region:cn-beijing/docs/82379/1330310?lang=zh#ff5ef604) and [audio input capability list](https://console.volcengine.com/ark/region:cn-beijing/docs/82379/1330310?lang=zh#9619c0ba) for other supported models. If `model` is an `ep-*` inference endpoint ID, verify that its underlying foundation model supports the corresponding media input. OpenViking does not validate audio or video model capabilities while loading configuration.
+
+**Ingestible and understandable formats**
+
+| Type | Stored by the existing parser | Understood by Ark in this release |
+|------|-------------------------------|-----------------------------------|
+| Audio | MP3, WAV, OGG, FLAC, AAC, M4A, OPUS, AC3 | MP3, WAV, AAC, M4A |
+| Video | MP4, AVI, MOV, MKV, WEBM, FLV, WMV, TS | MP4, AVI, MOV |
+
+Formats outside the understanding column continue to follow the existing parser and storage behavior; OpenViking does not transcode them or send them to the understanding model. When such a file is recognized as an audio or video leaf, an empty media summary is indexed using its filename.
+
+For a supported file, OpenViking uploads the media to the Ark Files API without explicitly setting `expire_at`, so file retention follows Ark's default policy. After processing completes, OpenViking references the file's `file_id` from the Responses API with response storage disabled, then attempts to delete the Ark file under a short cleanup deadline. Remote deletion is best-effort and does not replace an otherwise successful result if cleanup fails; a file whose deletion fails or times out continues to follow Ark's default retention policy. Local temporary files are removed independently even when remote cleanup fails or is cancelled.
+
+- A successful summary for a directory containing exactly one audio or video file becomes that directory's L1 directly, with L0 derived through the existing semantic path. No second generic VLM summarization is performed.
+- Media in a mixed directory contributes its summary to the existing generic VLM aggregation.
+- Disabled media understanding, an unsupported understanding format, or a final model failure yields an empty media summary. Generic directory L0/L1 generation keeps its existing behavior, while a recognized audio or video leaf uses its filename for the DETAIL vector and BM25 content. Provider errors and media-understanding status text are not written to the media summary or leaf index.
+
+Media processing sends file content to the configured external provider. Disabled response storage and best-effort deletion reduce unintended retention but do not replace the provider's own privacy and retention controls; uploaded files do not receive an explicit expiration time, so their retention period is determined by Ark's default policy. Ark Files storage/processing and Responses model tokens can incur provider charges, so review your provider's privacy, retention, and billing terms before enabling this feature. See the official Volcengine Ark documentation for [audio understanding](https://docs.volcengine.com/docs/82379/2377589?lang=zh) and [video understanding](https://docs.volcengine.com/docs/82379/1895586?lang=zh).
 
 ### query_planner
 
@@ -888,7 +947,9 @@ Retrieval ranking configuration for final search scores.
 {
   "retrieval": {
     "hotness_alpha": 0.0,
-    "score_propagation_alpha": 1.0
+    "score_propagation_alpha": 1.0,
+    "recall_intent_timeout_s": 5.0,
+    "recall_rewrite_timeout_s": 30.0
   }
 }
 ```
@@ -899,6 +960,15 @@ Retrieval ranking configuration for final search scores.
 | `score_propagation_alpha` | float | Weight for each child result's own score when blending with its parent score during hierarchical retrieval. `1.0` ignores the parent score (semantic similarity only); `0.5` is an equal blend with the parent score; `0.0` uses only the parent score. Valid range: `0.0` to `1.0`. | `1.0` |
 
 Keep `hotness_alpha` at `0.0` when you need scores to reflect pure vector similarity. Set it above `0.0` only when frequently accessed or recently updated contexts should receive a ranking boost.
+
+The `mode="context"` assembly face on `/search` uses two timeout fuses:
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `recall_intent_timeout_s` | float | Timeout for session-aware query expansion; on timeout the original user query is used | `5.0` |
+| `recall_rewrite_timeout_s` | float | Timeout for the digest rewrite; on timeout `digest` is empty and `rendered` is returned as usual | `30.0` |
+
+Both LLM steps are strictly opt-in: expansion needs a `session_id`, the rewrite needs `rewrite`. Either one failing degrades gracefully and never blocks recall.
 
 ### grep
 
@@ -918,7 +988,7 @@ Grep engine configuration for content pattern search. These settings are server-
 | `engine` | str | Search engine mode: `"auto"` uses VikingDB BM25 recall when available and falls back to local filesystem search; `"fs"` forces local filesystem search only. | `"auto"` |
 | `switch_to_remote_threshold` | int | L2 record count threshold to switch to VikingDB BM25 recall. When the number of L2 files under the search scope reaches this threshold, VikingDB BM25 is used for phase-1 recall; otherwise local filesystem search is used. Set to `0` to always use VikingDB BM25. Must be ≥ 0. | `10000` |
 
-For VikingDB / Volcengine FullText grep, OpenViking writes a `content` text field for BM25 recall. The source context keeps the full content, while the vector-store write payload truncates this field to **1 MB** at the final adapter boundary to stay within backend payload limits. Only VikingDB-backed backends use `content`; on all other backends (`local`, `cuvs`, `qdrant`, `opengauss`, `http`) the field is not written.
+For VikingDB / Volcengine FullText grep, OpenViking writes a `content` text field for BM25 recall. The source context keeps the full content, while the vector-store write payload truncates this field to **1 MB** at the final adapter boundary to stay within backend payload limits. Only VikingDB-backed backends use `content`; on all other backends (`local`, `cuvs`, `http`) the field is not written.
 
 ### storage
 
@@ -1059,6 +1129,7 @@ Notes:
 - QueueFS defaults to `sqlite` even if the main AGFS storage backend is `local`, `s3`, or `memory`.
 - `mode=shared` keeps the historical global queue namespace at `/queue`; `mode=worker` isolates each worker under `/queue/worker-<index|pid>`.
 - `db_path` is only used when QueueFS backend is `sqlite` or `sqlite3`.
+- Redis backend runs three bounded `recover_stale` sweeps in a dedicated startup recovery thread at startup, 30 seconds, and 60 seconds to cover the heartbeat-expiry window after a container restart; it does not run long-lived periodic recovery.
 - If both `storage.agfs.queuefs.db_path` and legacy `storage.agfs.queue_db_path` are set, `storage.agfs.queuefs.db_path` wins.
 - If QueueFS backend is `memory`, any `db_path` or legacy `queue_db_path` is ignored.
 
@@ -1108,6 +1179,59 @@ Legacy compatibility example:
   }
 }
 ```
+
+##### Session Auto Commit Configuration
+
+`memory.session_auto_commit` controls server-wide automatic session commit behavior.
+
+```json
+{
+  "memory": {
+    "session_auto_commit": {
+      "default_enabled": false,
+      "idle_enabled": false,
+      "check_interval_seconds": 60.0,
+      "scan_batch_size": 16,
+      "scan_batch_pause_seconds": 0.0
+    }
+  }
+}
+```
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `default_enabled` | bool | Enables auto commit by default for newly created sessions that do not explicitly provide `auto_commit_policy`. When `false`, those sessions keep auto commit disabled | `false` |
+| `idle_enabled` | bool | Enables the server-side idle-timeout auto-commit scheduler. When disabled, the idle scheduler is not started. Token- and message-count immediate triggering still works | `false` |
+| `check_interval_seconds` | float | Poll interval for the idle scheduler in seconds. Must be greater than `0` | `60.0` |
+| `scan_batch_size` | int | Maximum number of session meta files read concurrently in each idle scan batch. Must be greater than `0` | `16` |
+| `scan_batch_pause_seconds` | float | Optional pause between idle scan batches, in seconds. Use this to reduce storage pressure during large scans | `0.0` |
+
+Notes:
+
+- `memory.session_auto_commit` is a server-wide control surface, not a per-session business policy.
+- Per-session auto-commit behavior is configured through the session-level `auto_commit_policy` (see the table below). It is set only when creating a session (`POST /api/v1/sessions` with a top-level `auto_commit_policy` field) and viewed via `GET /api/v1/sessions/{session_id}`; runtime config PATCH is not supported.
+- When `default_enabled=false`, sessions created without `auto_commit_policy` keep auto commit disabled and return `auto_commit_policy: null`. Providing `{}` or any policy field explicitly enables auto commit for that session and fills missing fields from the defaults below.
+- When `default_enabled=true`, sessions created without `auto_commit_policy` get the default policy below.
+- When `idle_enabled=false`:
+  - `SessionAutoCommitScheduler` is not started
+- When `idle_enabled=true`:
+  - `SessionAutoCommitScheduler` wakes up periodically and scans session `.meta.json` files under AGFS `/local/{account}/user/{user}/sessions`
+  - It does not perform a dedicated startup recovery sweep; idle detection happens only on periodic scans
+- Token- and message-count auto commit run inline after message writes, do not depend on the scheduler, and are unaffected by this switch.
+
+###### Per-session Auto Commit Policy
+
+When a session carries an `auto_commit_policy`, any field you omit falls back to the recommended default below. Sessions without a stored policy keep auto commit disabled. Values are clamped into `[0, max]`, and unknown keys are rejected with `InvalidArgumentError`. See [Sessions API](../api/05-sessions.md#create_session) for how to set and view it.
+
+| Field | Type | Default | Max | Description |
+|-------|------|---------|-----|-------------|
+| `pending_token_threshold` | int | 10000 | 50000 | When uncommitted pending tokens exceed this value (strictly greater-than), an auto commit is triggered after a message write. |
+| `message_count_threshold` | int | 50 | 500 | When the uncommitted live message count exceeds this value (strictly greater-than), an auto commit is triggered after a message write. |
+| `idle_timeout_seconds` | int | 86400 | 604800 | After this many idle seconds, a session with uncommitted content becomes eligible for the server-side idle scheduler. Idle-timeout commits archive the full backlog and ignore `keep_recent_count`. |
+| `keep_recent_count` | int | 2 | 500 | Number of recent live messages to keep (not archived) on a threshold-triggered auto commit. Idle-timeout commits ignore this and commit everything. |
+| `min_commit_interval_seconds` | int | 0 | 604800 | Minimum seconds between two automatic commits (throttle). |
+
+Code entry: `openviking/session/auto_commit_policy.py:AutoCommitPolicy`.
 
 
 ##### S3 Backend Configuration
@@ -1227,7 +1351,7 @@ Vector database storage configuration
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `backend` | str | VectorDB backend type: 'local' (file-based), 'http' (remote service), 'volcengine' (cloud VikingDB), 'vikingdb' (private deployment), 'cuvs' (local storage + GPU dense search), 'qdrant', or 'opengauss' | "local" |
+| `backend` | str | VectorDB backend type: 'local' (file-based), 'http' (remote service), 'volcengine' (cloud VikingDB), 'vikingdb' (private deployment), or 'cuvs' (local storage + GPU dense search) | "local" |
 | `name` | str | VectorDB collection name | "context" |
 | `url` | str | Remote service URL for 'http' type (e.g., 'http://localhost:5000') | null |
 | `project_name` | str | Project name (alias project) | "default" |
@@ -1237,8 +1361,6 @@ Vector database storage configuration
 | `volcengine` | object | 'volcengine' type VikingDB configuration | - |
 | `vikingdb` | object | 'vikingdb' type private deployment configuration | - |
 | `cuvs` | object | NVIDIA cuVS configuration for the 'cuvs' backend and the opt-in memory-aware auto mode on 'local'; see the [cuVS guide](./16-cuvs.md) | - |
-| `qdrant` | object | 'qdrant' type Qdrant configuration | - |
-| `opengauss` | object | 'opengauss' native vector backend configuration | - |
 
 Default local mode
 ```
@@ -1272,47 +1394,13 @@ Supports cloud-deployed VikingDB on Volcengine
 ```
 </details>
 
-<details>
-<summary><b>openGauss</b></summary>
-
-Requires an openGauss server with native `vector` support and a remote-capable database user.
-Install the optional driver with `pip install "openviking[opengauss]"`.
-In the official container, the initial `omm` user may be restricted for remote login; create a normal user for OpenViking if needed.
-
-```json
-{
-  "storage": {
-    "vectordb": {
-      "name": "context",
-      "backend": "opengauss",
-      "project": "default",
-      "distance_metric": "cosine",
-      "dimension": 1024,
-      "opengauss": {
-        "host": "127.0.0.1",
-        "port": 5432,
-        "user": "openviking",
-        "password": "your-password",
-        "db_name": "postgres",
-        "schema": "public",
-        "mode": "standalone"
-      }
-    }
-  }
-}
-```
-
-Set `mode` to `"distributed"` for openGauss distributed deployments; OpenViking will attempt to mark metadata tables as reference tables and distribute collection tables by `id`.
-</details>
-
-
 ## Config Files
 
 OpenViking uses two config files:
 
 | File | Purpose | Default Path |
 |------|---------|-------------|
-| `ov.conf` | SDK embedded mode + server config | `~/.openviking/ov.conf` |
+| `ov.conf` | OpenViking Server configuration | `~/.openviking/ov.conf` |
 | `ovcli.conf` | HTTP client and CLI connection to remote server | `~/.openviking/ovcli.conf` |
 
 When config files are at the default path, OpenViking loads them automatically — no additional setup needed.
@@ -1350,7 +1438,7 @@ openviking-server --config /path/to/ov.conf
 
 ### ov.conf
 
-The config sections documented above (embedding, vlm, rerank, retrieval, grep, storage) all belong to `ov.conf`. SDK embedded mode and server share this file.
+The config sections documented above (embedding, vlm, rerank, retrieval, grep, storage) all belong to the server's `ov.conf`.
 
 For memory-related settings, add a `memory` section in `ov.conf`:
 
@@ -1369,6 +1457,7 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 | `extraction_enabled` | Whether session commit runs long-term memory extraction. | `true` |
 | `session_skill_extraction_enabled` | Whether session commit also extracts reusable skills into the current user's skill directory. | `false` |
 | `link_enabled` | Whether memory extraction writes and resolves memory links. | `false` |
+| `session_auto_commit` | Server-wide automatic session commit controls. This belongs under `memory`, not under `server`; see [Session Auto Commit Configuration](#session-auto-commit-configuration). | See section above |
 
 ### ovcli.conf
 
@@ -1402,7 +1491,7 @@ Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI t
 | `upload.ignore_dirs` | Default directory ignore list for `add-resource` (CSV) | `null` |
 | `upload.include` | Default include patterns for `add-resource` (CSV) | `null` |
 | `upload.exclude` | Default exclude patterns for `add-resource` (CSV) | `null` |
-| `upload.mode` | Temporary upload backend: `"local"` (per-instance disk) or `"shared"` (distributed shared store, required when consumer requests can land on a different server instance than the upload). Per-call override via `OPENVIKING_UPLOAD_MODE`. | `null` (server's `temp_upload.default_mode`, which itself defaults to `"local"`) |
+| `upload.mode` | Python HTTP-client temporary upload backend: `"local"` (per-instance disk) or `"shared"` (distributed shared store). The Rust `ov` CLI does not read this field; set `OPENVIKING_UPLOAD_MODE=shared` for shared uploads. | `null` (server's `temp_upload.default_mode`, which itself defaults to `"local"`) |
 
 Local directory uploads respect `.gitignore` files (root and nested). `ignore_dirs/include/exclude` apply on top of that.
 
@@ -1522,7 +1611,7 @@ For startup and deployment details see [Deployment](./03-deployment.md), for aut
 
 ## storage.transaction Section
 
-`storage.transaction` is deprecated and kept only for legacy compatibility. Use `storage.agfs.pathlock` for active PathLock configuration. When legacy fields are still present, OpenViking logs a warning at runtime; `lock_timeout` and `lock_expire` are automatically mapped when the new fields are unset, while `redo_recovery_enabled` is ignored.
+`storage.transaction` is deprecated and kept only for legacy compatibility. Use `storage.agfs.pathlock` only for active PathLock expiry configuration. When legacy fields are still present, OpenViking logs a warning at runtime; `lock_timeout` is deprecated and ignored, `lock_expire` is automatically mapped when the new field is unset, and `redo_recovery_enabled` is ignored.
 
 Recommended configuration:
 
@@ -1531,8 +1620,7 @@ Recommended configuration:
   "storage": {
     "agfs": {
       "pathlock": {
-        "lock_timeout_secs": 5.0,
-        "lock_expire_secs": 1800.0
+        "lock_expire_secs": 30.0
       }
     }
   }
@@ -1545,8 +1633,7 @@ Legacy compatibility form (not recommended for new deployments):
 {
   "storage": {
     "transaction": {
-      "lock_timeout": 5.0,
-      "lock_expire": 1800.0
+      "lock_expire": 30.0
     }
   }
 }
@@ -1554,8 +1641,8 @@ Legacy compatibility form (not recommended for new deployments):
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `lock_timeout` | float | Deprecated. Use `storage.agfs.pathlock.lock_timeout_secs`. Automatically mapped when the new field is unset. | `0.0` |
-| `lock_expire` | float | Deprecated. Use `storage.agfs.pathlock.lock_expire_secs`. Automatically mapped when the new field is unset. | `1800.0` |
+| `lock_timeout` | float | Deprecated and ignored. Runtime wait timeout is fixed at `0.0`. | `0.0` |
+| `lock_expire` | float | Deprecated. Use `storage.agfs.pathlock.lock_expire_secs`. Automatically mapped when the new field is unset. | `30.0` |
 | `redo_recovery_enabled` | bool | Deprecated and ignored. Session commit phase-2 recovery now resumes from the persistent `session_commit` queue. | `true` |
 
 For details on the lock mechanism, see [Path Locks and Crash Recovery](../concepts/09-transaction.md).
@@ -1736,7 +1823,6 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
       "timeout": 10
     },
     "transaction": {
-      "lock_timeout": 0.0,
       "lock_expire": 300.0
     },
     "vectordb": {

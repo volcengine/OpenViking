@@ -516,6 +516,14 @@ class OpenAPIChannel(BaseChannel):
             if storage_key not in channel._sessions:
                 raise HTTPException(status_code=404, detail="Session not found")
 
+            channel._ensure_no_pending(channel._pending, storage_key)
+            session_key = SessionKey(
+                type="cli",
+                channel_id=channel.config.channel_id(),
+                chat_id=storage_key,
+            )
+            channel._advance_session_generation(scope, session_id)
+            channel._session_manager.delete(session_key)
             del channel._sessions[storage_key]
             return {"deleted": True}
 
@@ -1102,9 +1110,43 @@ class OpenAPIChannel(BaseChannel):
             )
         return self._principal_scope(f"openviking:{account_id}:{user_id}")
 
+    def _scoped_session_id(self, principal_scope: str, session_id: str) -> str:
+        """Resolve the durable storage key for one public session ID."""
+        base = f"{principal_scope}:{session_id}"
+        generation_path = self._session_generation_path(base)
+        try:
+            raw_generation = generation_path.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            return base
+        try:
+            generation = uuid.UUID(raw_generation).hex
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Invalid OpenAPI session generation marker: {generation_path}"
+            ) from exc
+        return f"{base}:{generation}"
+
+    def _advance_session_generation(self, principal_scope: str, session_id: str) -> None:
+        """Atomically rotate storage before deleting the current session history."""
+        base = f"{principal_scope}:{session_id}"
+        generation_path = self._session_generation_path(base)
+        generation_path.parent.mkdir(parents=True, exist_ok=True)
+        generation = uuid.uuid4().hex
+        temp_path = generation_path.with_name(f".{generation_path.name}.{generation}.tmp")
+        try:
+            temp_path.write_text(generation, encoding="utf-8")
+            temp_path.replace(generation_path)
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+    def _session_generation_path(self, base: str) -> Path:
+        digest = hashlib.sha256(base.encode("utf-8")).hexdigest()
+        return self._session_manager.sessions_dir / ".openapi-session-generations" / f"{digest}.txt"
+
     @staticmethod
-    def _scoped_session_id(principal_scope: str, session_id: str) -> str:
-        return f"{principal_scope}:{session_id}"
+    def _ensure_no_pending(pending: Dict[str, PendingResponse], storage_key: str) -> None:
+        if storage_key in pending:
+            raise HTTPException(status_code=409, detail="Session already has a request in progress")
 
     async def _gateway_health(self, request: Request) -> dict[str, Any]:
         from vikingbot import __version__
@@ -1275,6 +1317,7 @@ class OpenAPIChannel(BaseChannel):
         session_id = request.session_id or str(uuid.uuid4())
         storage_key = self._scoped_session_id(request._principal_scope, session_id)
         user_id = self._request_user_id(request)
+        self._ensure_no_pending(self._pending, storage_key)
 
         # Create session if new
         if storage_key not in self._sessions:
@@ -1304,11 +1347,7 @@ class OpenAPIChannel(BaseChannel):
                 chat_id=storage_key,
             )
 
-            # Build content with context if provided
             content = self._request_content(request)
-            if request.context:
-                # Context is handled separately by session manager
-                pass
 
             # Create and publish inbound message
             msg = InboundMessage(
@@ -1355,6 +1394,7 @@ class OpenAPIChannel(BaseChannel):
         session_id = request.session_id or str(uuid.uuid4())
         storage_key = self._scoped_session_id(request._principal_scope, session_id)
         user_id = self._request_user_id(request)
+        self._ensure_no_pending(self._pending, storage_key)
 
         # Create session if new
         if storage_key not in self._sessions:
@@ -1428,6 +1468,7 @@ class OpenAPIChannel(BaseChannel):
         session_id = request.session_id or str(uuid.uuid4())
         storage_key = self._scoped_session_id(request._principal_scope, session_id)
         user_id = self._request_user_id(request)
+        self._ensure_no_pending(self._bot_pending[channel_id], storage_key)
 
         # Ensure channel has session storage
         if channel_id not in self._bot_sessions:
@@ -1461,11 +1502,7 @@ class OpenAPIChannel(BaseChannel):
                 chat_id=storage_key,
             )
 
-            # Build content with context if provided
             content = self._request_content(request)
-            if request.context:
-                # Context is handled separately by session manager
-                pass
 
             # Create and publish inbound message
             msg = InboundMessage(
@@ -1516,6 +1553,7 @@ class OpenAPIChannel(BaseChannel):
         session_id = request.session_id or str(uuid.uuid4())
         storage_key = self._scoped_session_id(request._principal_scope, session_id)
         user_id = self._request_user_id(request)
+        self._ensure_no_pending(self._bot_pending[channel_id], storage_key)
 
         # Ensure channel has session storage
         if channel_id not in self._bot_sessions:

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Optional
 from openviking.parse.accessors.base import LocalResource, SourceType
 from openviking.parse.accessors.mime_types import IANA_MEDIA_TYPE_TO_EXTENSION
 from openviking.parse.base import ParseResult
+from openviking.parse.mode import ParseMode, normalize_parse_mode
 from openviking.parse.parsers.constants import (
     CODE_EXTENSIONS,
     DOCUMENTATION_EXTENSIONS,
@@ -174,6 +175,7 @@ class UnifiedResourceProcessor:
         instruction: str = "",
         allow_local_path_resolution: bool = True,
         prepared_resource: Optional[LocalResource] = None,
+        parse_mode: ParseMode | str = ParseMode.DEFAULT,
         **kwargs,
     ) -> ParseResult:
         """Process any source (file/URL/content) with two-layer architecture.
@@ -186,15 +188,25 @@ class UnifiedResourceProcessor:
         - Directories needed for TreeBuilder are preserved via ParseResult.temp_dir_path
         """
 
+        mode = normalize_parse_mode(parse_mode)
+
         # First check if source is raw content (not URL/path)
         is_potential_path = (
             allow_local_path_resolution and len(source) <= 1024 and "\n" not in source
         )
         if not is_potential_path and not self._is_url(source):
             # Treat as raw content
-            return await parse(source, instruction=instruction)
+            return await parse(
+                source,
+                instruction=instruction,
+                split_content=mode is ParseMode.DEFAULT,
+            )
 
-        if prepared_resource is None and self._has_prepared_understanding_response(kwargs):
+        if (
+            mode is ParseMode.DEFAULT
+            and prepared_resource is None
+            and self._has_prepared_understanding_response(kwargs)
+        ):
             parse_kwargs = dict(kwargs)
             parse_kwargs["instruction"] = instruction
             parse_kwargs["vlm_processor"] = self._get_vlm_processor()
@@ -212,7 +224,11 @@ class UnifiedResourceProcessor:
                 parse_kwargs["resource_name"] = _smart_stem(explicit_name)
             return await self._get_parser_router().parse(source, **parse_kwargs)
 
-        if prepared_resource is None and self.should_use_understanding_directly(source, **kwargs):
+        if (
+            mode is ParseMode.DEFAULT
+            and prepared_resource is None
+            and self.should_use_understanding_directly(source, **kwargs)
+        ):
             parse_kwargs = dict(kwargs)
             parse_kwargs["instruction"] = instruction
             parse_kwargs["vlm_processor"] = self._get_vlm_processor()
@@ -241,8 +257,6 @@ class UnifiedResourceProcessor:
             # Phase 2: Parser - parse the local resource
             parse_kwargs = dict(kwargs)
             parse_kwargs["instruction"] = instruction
-            parse_kwargs["vlm_processor"] = self._get_vlm_processor()
-            parse_kwargs["storage"] = self.storage
             parse_kwargs["_source_meta"] = local_resource.meta
             parse_kwargs["resolved_extension"] = kwargs.get(
                 "resolved_extension"
@@ -272,6 +286,12 @@ class UnifiedResourceProcessor:
                         parse_kwargs.setdefault("source_name", original_filename)
                     else:
                         parse_kwargs.setdefault("resource_name", _smart_stem(local_resource.path))
+
+            if mode is ParseMode.NO_SPLIT:
+                parse_kwargs["split_content"] = False
+
+            parse_kwargs["vlm_processor"] = self._get_vlm_processor()
+            parse_kwargs["storage"] = self.storage
 
             # If it's a directory, use DirectoryParser which will delegate to CodeRepositoryParser if it's a git repo
             if local_resource.path.is_dir():

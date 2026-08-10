@@ -13,8 +13,10 @@ from typing import TYPE_CHECKING, Any, Optional
 from openviking.core.directories import DirectoryInitializer
 from openviking.core.namespace import canonicalize_uri
 from openviking.privacy import UserPrivacyConfigService
+from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
 from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.server.identity import RequestContext, Role
+from openviking.service.agent_evolution_service import AgentEvolutionService
 from openviking.service.debug_service import DebugService
 from openviking.service.fs_service import FSService
 from openviking.service.pack_service import PackService
@@ -22,6 +24,7 @@ from openviking.service.relation_service import RelationService
 from openviking.service.resource_memory_link_service import ResourceMemoryLinkService
 from openviking.service.resource_service import ResourceService
 from openviking.service.search_service import SearchService
+from openviking.service.session_auto_commit import SessionAutoCommitScheduler
 from openviking.service.session_service import SessionService
 from openviking.service.task_tracker import get_task_tracker, set_task_tracker
 from openviking.session import create_session_compressor
@@ -43,6 +46,7 @@ from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import OPENVIKING_ENABLE_RECORDER_ENV, get_openviking_config
 from openviking_cli.utils.config.git_config import GitConfig
+from openviking_cli.utils.config.memory_config import SessionAutoCommitConfig
 from openviking_cli.utils.config.open_viking_config import initialize_openviking_config
 from openviking_cli.utils.config.storage_config import StorageConfig
 
@@ -89,14 +93,18 @@ class OpenVikingService:
         self._session_compressor: Optional["SessionCompressorV2"] = None
 
         self._directory_initializer: Optional[DirectoryInitializer] = None
+        self._uri_mutation_coordinator = UriMutationCoordinator()
         self._watch_scheduler: Optional[WatchScheduler] = None
+        self._session_auto_commit_scheduler: Optional[SessionAutoCommitScheduler] = None
         self._encryptor: Optional[Any] = None
         self._privacy_config_service: Optional[UserPrivacyConfigService] = None
         self._data_dir_lock_acquired = False
         self._data_dir_lock_path: Optional[str] = None
 
         # Sub-services
-        self._fs_service = FSService()
+        self._fs_service = FSService(
+            uri_mutation_coordinator=self._uri_mutation_coordinator,
+        )
         self._relation_service = RelationService()
         self._pack_service = PackService()
         self._search_service = SearchService()
@@ -104,6 +112,7 @@ class OpenVikingService:
         self._resource_service = ResourceService()
         self._session_service = SessionService()
         self._debug_service = DebugService()
+        self._agent_evolution_service = AgentEvolutionService()
 
         # State
         self._initialized = False
@@ -120,9 +129,9 @@ class OpenVikingService:
         # Initialize storage
         self._init_storage(
             config.storage,
-            config.embedding.max_concurrent,
-            config.vlm.max_concurrent,
-            config.parsers.max_concurrent_parse,
+            max_concurrent_embedding=config.embedding.max_concurrent,
+            max_concurrent_semantic=config.vlm.max_concurrent,
+            max_concurrent_parse=config.parsers.max_concurrent_parse,
             binding_config=binding_config,
             git_config=config.git,
         )
@@ -137,7 +146,7 @@ class OpenVikingService:
         self,
         config: StorageConfig,
         max_concurrent_embedding: int = 10,
-        max_concurrent_semantic: int = 32,
+        max_concurrent_semantic: int = 64,
         max_concurrent_parse: int = 4,
         binding_config: Any = None,
         *,
@@ -280,6 +289,11 @@ class OpenVikingService:
         """Get DebugService instance."""
         return self._debug_service
 
+    @property
+    def agent_evolution(self) -> AgentEvolutionService:
+        """Get Agent Evolution query service."""
+        return self._agent_evolution_service
+
     async def initialize(self) -> None:
         """Initialize OpenViking storage and indexes."""
         if self._initialized:
@@ -291,9 +305,9 @@ class OpenVikingService:
         if self._vikingdb_manager is None:
             self._init_storage(
                 self._config.storage,
-                self._config.embedding.max_concurrent,
-                self._config.vlm.max_concurrent,
-                self._config.parsers.max_concurrent_parse,
+                max_concurrent_embedding=self._config.embedding.max_concurrent,
+                max_concurrent_semantic=self._config.vlm.max_concurrent,
+                max_concurrent_parse=self._config.parsers.max_concurrent_parse,
                 binding_config=self._build_ragfs_binding_config(),
                 git_config=self._config.git,
             )
@@ -368,6 +382,7 @@ class OpenVikingService:
         self._watch_scheduler = WatchScheduler(
             resource_service=self._resource_service,
             viking_fs=self._viking_fs,
+            uri_mutation_coordinator=self._uri_mutation_coordinator,
         )
 
         # Wire up sub-services
@@ -377,6 +392,7 @@ class OpenVikingService:
             privacy_config_service=self._privacy_config_service,
             resource_memory_link_service=self._resource_memory_link_service,
             watch_scheduler=self._watch_scheduler,
+            uri_mutation_coordinator=self._uri_mutation_coordinator,
         )
         self._relation_service.set_viking_fs(self._viking_fs)
         self._pack_service.set_dependencies(
@@ -402,10 +418,28 @@ class OpenVikingService:
             viking_fs=self._viking_fs,
             session_service=self._session_service,
         )
+        try:
+            session_auto_commit_config = get_openviking_config().memory.session_auto_commit
+        except Exception:
+            session_auto_commit_config = SessionAutoCommitConfig()
+        self._session_service.set_session_auto_commit_config(session_auto_commit_config)
+        if session_auto_commit_config.idle_enabled:
+            self._session_auto_commit_scheduler = SessionAutoCommitScheduler(
+                self._session_service,
+                session_auto_commit_config,
+                check_interval=session_auto_commit_config.check_interval_seconds,
+            )
+            await self._session_auto_commit_scheduler.start()
+        else:
+            self._session_auto_commit_scheduler = None
         self._debug_service.set_dependencies(
             vikingdb=self._vikingdb_manager,
             config=self._config,
             agfs_client=self._agfs_client,
+        )
+        self._agent_evolution_service.set_dependencies(
+            vikingdb=self._vikingdb_manager,
+            viking_fs=self._viking_fs,
         )
 
         if self._queue_manager:
@@ -433,22 +467,15 @@ class OpenVikingService:
             )
             await self._queue_manager.prepare_task_tracking(get_task_tracker())
 
-        # Do not let watches produce queue work while task ownership is being
-        # rebuilt from QueueFS. Consumers start only after the scheduler is ready.
-        await self._watch_scheduler.start()
-        logger.info("WatchScheduler started")
+        if self._config.enable_watch_scheduler:
+            await self._watch_scheduler.start()
+            logger.info("WatchScheduler started")
+        else:
+            logger.info("WatchScheduler disabled by config (enable_watch_scheduler=false)")
 
         if self._queue_manager:
             self._queue_manager.start()
             logger.info("QueueManager workers started")
-
-        # Register as the process-wide service so flows that resolve the
-        # service via the dependency global (e.g. background reindex tasks
-        # triggered by git restore) work in embedded mode, not just under the
-        # HTTP server which calls set_service() during bootstrap.
-        from openviking.server.dependencies import set_service
-
-        set_service(self)
 
         self._initialized = True
         logger.info("OpenVikingService initialized")
@@ -461,6 +488,11 @@ class OpenVikingService:
             await self._watch_scheduler.stop()
             self._watch_scheduler = None
             logger.info("WatchScheduler stopped")
+
+        if self._session_auto_commit_scheduler:
+            await self._session_auto_commit_scheduler.stop()
+            self._session_auto_commit_scheduler = None
+            logger.info("SessionAutoCommitScheduler stopped")
 
         if self._queue_manager:
             await asyncio.to_thread(self._queue_manager.stop)

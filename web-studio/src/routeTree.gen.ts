@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as WatchesRouteRouteImport } from './routes/watches/route'
 import { Route as UsersRouteRouteImport } from './routes/users/route'
 import { Route as TasksRouteRouteImport } from './routes/tasks/route'
 import { Route as SkillsRouteRouteImport } from './routes/skills/route'
@@ -24,6 +25,11 @@ import { Route as SessionsIndexRouteImport } from './routes/sessions/index'
 import { Route as OauthVerifyRouteImport } from './routes/oauth/verify'
 import { Route as OauthConsentRouteImport } from './routes/oauth/consent'
 
+const WatchesRouteRoute = WatchesRouteRouteImport.update({
+  id: '/watches',
+  path: '/watches',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const UsersRouteRoute = UsersRouteRouteImport.update({
   id: '/users',
   path: '/users',
@@ -107,6 +113,7 @@ export interface FileRoutesByFullPath {
   '/skills': typeof SkillsRouteRoute
   '/tasks': typeof TasksRouteRoute
   '/users': typeof UsersRouteRoute
+  '/watches': typeof WatchesRouteRoute
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/verify': typeof OauthVerifyRoute
   '/sessions/': typeof SessionsIndexRoute
@@ -122,6 +129,7 @@ export interface FileRoutesByTo {
   '/skills': typeof SkillsRouteRoute
   '/tasks': typeof TasksRouteRoute
   '/users': typeof UsersRouteRoute
+  '/watches': typeof WatchesRouteRoute
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/verify': typeof OauthVerifyRoute
   '/sessions': typeof SessionsIndexRoute
@@ -139,6 +147,7 @@ export interface FileRoutesById {
   '/skills': typeof SkillsRouteRoute
   '/tasks': typeof TasksRouteRoute
   '/users': typeof UsersRouteRoute
+  '/watches': typeof WatchesRouteRoute
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/verify': typeof OauthVerifyRoute
   '/sessions/': typeof SessionsIndexRoute
@@ -157,6 +166,7 @@ export interface FileRouteTypes {
     | '/skills'
     | '/tasks'
     | '/users'
+    | '/watches'
     | '/oauth/consent'
     | '/oauth/verify'
     | '/sessions/'
@@ -172,6 +182,7 @@ export interface FileRouteTypes {
     | '/skills'
     | '/tasks'
     | '/users'
+    | '/watches'
     | '/oauth/consent'
     | '/oauth/verify'
     | '/sessions'
@@ -188,6 +199,7 @@ export interface FileRouteTypes {
     | '/skills'
     | '/tasks'
     | '/users'
+    | '/watches'
     | '/oauth/consent'
     | '/oauth/verify'
     | '/sessions/'
@@ -205,12 +217,20 @@ export interface RootRouteChildren {
   SkillsRouteRoute: typeof SkillsRouteRoute
   TasksRouteRoute: typeof TasksRouteRoute
   UsersRouteRoute: typeof UsersRouteRoute
+  WatchesRouteRoute: typeof WatchesRouteRoute
   OauthConsentRoute: typeof OauthConsentRoute
   OauthVerifyRoute: typeof OauthVerifyRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/watches': {
+      id: '/watches'
+      path: '/watches'
+      fullPath: '/watches'
+      preLoaderRoute: typeof WatchesRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/users': {
       id: '/users'
       path: '/users'
@@ -336,6 +356,7 @@ const rootRouteChildren: RootRouteChildren = {
   SkillsRouteRoute: SkillsRouteRoute,
   TasksRouteRoute: TasksRouteRoute,
   UsersRouteRoute: UsersRouteRoute,
+  WatchesRouteRoute: WatchesRouteRoute,
   OauthConsentRoute: OauthConsentRoute,
   OauthVerifyRoute: OauthVerifyRoute,
 }

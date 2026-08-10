@@ -180,17 +180,17 @@ class ObserverService:
         waiting = snapshot.get("waiting_locks", 0)
         stale = snapshot.get("stale_locks_removed", 0)
         conflicts = snapshot.get("conflicts", [])
-        has_errors = bool(conflicts) or stale > 0
         lines = [
             f"Active locks: {active}",
             f"Waiting locks: {waiting}",
             f"Stale locks removed: {stale}",
             f"Conflicts: {len(conflicts)}",
         ]
+        # Conflicts and stale removals are retained diagnostics, not current failures.
         return ComponentStatus(
             name="lock",
-            is_healthy=not has_errors,
-            has_errors=has_errors,
+            is_healthy=True,
+            has_errors=False,
             status="\n".join(lines),
         )
 

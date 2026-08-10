@@ -143,11 +143,16 @@ By default the plugin derives a peer from the workspace path using Claude's proj
 | Env Var                                | Default      | Description                                                              |
 |----------------------------------------|--------------|--------------------------------------------------------------------------|
 | `OPENVIKING_AUTO_RECALL`               | `true`       | Enable auto-recall on every user prompt                                  |
-| `OPENVIKING_RECALL_LIMIT`              | `6`          | Max memories to inject per turn                                          |
-| `OPENVIKING_RECALL_TOKEN_BUDGET`       | `2000`       | Token budget for inline content; over-budget items degrade to URI hints  |
+| `OPENVIKING_RECALL_LIMIT`              | `10`         | Legacy quota-scaling input; converted to six coding quotas, not a final cap |
+| `OPENVIKING_RECALL_TOKEN_BUDGET`       | `2000`       | Inline token budget for the final raw-find fallback only                 |
 | `OPENVIKING_RECALL_MAX_CONTENT_CHARS`  | `500`        | Per-item content cap                                                     |
 | `OPENVIKING_RECALL_PREFER_ABSTRACT`    | `true`       | Prefer abstract over full body when available                            |
 | `OPENVIKING_RECALL_PEER_SCOPE`          | `all`        | `all` can recall other project memories with a score penalty; `actor` only sees global plus the current project |
+| `OPENVIKING_RECALL_MAX_TOKENS`         | `1600`       | Token budget for the server-assembled context block (independent of local compression limits) |
+| `OPENVIKING_RECALL_DEDUP_TURNS`        | `5`          | Cross-turn cooldown: URIs served in the last N turns are skipped          |
+| `OPENVIKING_RECALL_QUERY_EXPANSION`    | `auto`       | `auto` lets the server widen short prompts using session context; `off` disables it |
+| `OPENVIKING_RECALL_COMPRESS`           | `auto`       | Digest compression: `off`, `client` (host CLI), `server`, or `auto` (local first, server fallback) |
+| `OPENVIKING_RECALL_COMPRESS_MAX_BULLETS` | `6`        | Digest bullet ceiling                                                     |
 | `OPENVIKING_SCORE_THRESHOLD`           | `0.35`       | Min relevance score (0–1)                                                |
 | `OPENVIKING_MIN_QUERY_LENGTH`          | `3`          | Skip recall for very short queries                                       |
 
@@ -212,6 +217,31 @@ OPENVIKING_BYPASS_SESSION=1 claude
 
 When bypass is active, every hook approves immediately without contacting OpenViking.
 
+### Plugin settings in `ovcli.conf`
+
+Client-side tuning belongs in `~/.openviking/ovcli.conf` under a `plugin` section. Shared keys apply to every harness; a per-harness object overrides them:
+
+```json
+{
+  "url": "http://127.0.0.1:1933",
+  "plugin": {
+    "recallCompress": "auto"
+  }
+}
+```
+
+Resolution order: env vars → `plugin.claude_code` → `plugin` → the legacy `claude_code` block in `ov.conf` → built-in defaults.
+The plugin omits server-owned Context defaults such as `limit=10`, `max_tokens=1600`,
+and `query_expansion="auto"` unless you explicitly override them.
+An explicit legacy `recallLimit` is converted to per-category coding quotas,
+not enforced as a final result cap. Values from 1 through 5 therefore produce
+an effective total quota of 6, one retrieval slot for each coding domain. New
+direct API integrations should configure `quotas` instead.
+
+### Digest compression
+
+`recallCompress` decides where the digest is produced and defaults to `auto`. `client` always compresses locally through `claude -p` (Sonnet with low effort by default — Haiku ignores the effort knob, so its latency is unbounded), keeping the token cost on your own subscription. `server` asks OpenViking for the digest. `auto` prefers local and falls back to the server when no healthy host CLI is found. Compressor execution or output-validation failures fall back to the uncompressed context block; an exact `NO_RELEVANT_MEMORY` response from either compressor is a successful empty result and injects nothing. The compressor subprocess runs with all OpenViking hooks disabled so it cannot recurse. The former `OPENVIKING_RECALL_REWRITE` environment variable and `recallRewrite` config key remain supported as lower-priority compatibility aliases.
+
 ### Legacy `claude_code` block in `ov.conf`
 
 Earlier plugin versions configured tuning fields under a `claude_code` block in `~/.openviking/ov.conf`. That still works for backward compatibility — every env var above has a camelCase counterpart (`OPENVIKING_RECALL_LIMIT` → `claude_code.recallLimit`, `OPENVIKING_BYPASS_SESSION_PATTERNS` → `claude_code.bypassSessionPatterns` as a JSON array, etc.). Env vars take priority. New deployments should prefer env vars and shell rc — server config files shouldn't carry per-developer-machine tuning.
@@ -223,7 +253,7 @@ Defaults in `hooks/hooks.json`:
 | Hook                | Timeout | Notes                                                                                                  |
 |---------------------|---------|--------------------------------------------------------------------------------------------------------|
 | `SessionStart`      | `120s`  | Generous because resume/compact may pull a large archive overview                                      |
-| `UserPromptSubmit`  | `8s`    | Auto-recall must stay fast so prompt submission never feels blocked                                    |
+| `UserPromptSubmit`  | `60s`   | Allows the default local compressor to finish; its own timeout remains shorter so the hook can degrade safely |
 | `Stop`              | `45s`   | Auto-capture parses transcript + pushes turns; async detach makes the user-perceived time near-zero    |
 | `PreCompact`        | `30s`   | Synchronous commit before Claude Code mutates the transcript                                           |
 | `SessionEnd`        | `30s`   | Final commit; async-detached                                                                           |

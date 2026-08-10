@@ -23,6 +23,9 @@ ragfs = { path = "../ragfs", features = ["cache"] }
 ragfs-cache-redis = { path = "../ragfs-cache-redis", optional = true }
 pyo3 = { version = "0.27", features = ["abi3", "abi3-py310"] }
 tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
 serde_json = "1.0"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"

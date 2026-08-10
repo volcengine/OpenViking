@@ -31,8 +31,9 @@ Create a new session. Sessions are containers for conversations, storing message
 
 **Code Entries:**
 - `openviking/session/session.py:Session.__init__()` - Core Session class
+- `openviking/session/auto_commit_policy.py:AutoCommitPolicy` - Auto-commit policy defaults and validation
 - `openviking/server/routers/sessions.py:create_session()` - HTTP route
-- `openviking_cli/client/base.py:BaseClient.create_session()` - Python SDK
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.create_session()` - Python SDK
 - `crates/ov_cli/src/commands/session.rs:new_session()` - CLI command
 
 #### 2. Interface and Parameter Description
@@ -42,7 +43,20 @@ Create a new session. Sessions are containers for conversations, storing message
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | session_id | str | No | None | Session ID. Creates new session with auto-generated ID if None |
-| memory_policy | object | No | None | Default memory extraction policy for the session. Optional `self` and `peer` switches control write targets, optional `working_memory.enabled=false` skips archive summaries, and optional top-level `memory_types` limits extraction to specific enabled memory schemas. When `memory_types` is omitted or `null`, all enabled memory schemas are allowed. Invalid shapes or unknown memory types are rejected with `InvalidArgumentError`. |
+| memory_policy | object | No | None | Default memory extraction policy for the session. Optional `self` and `peer` switches control write targets, optional `working_memory.enabled=false` skips archive summaries, and optional top-level `memory_types` limits extraction to specific enabled memory schemas. Use JSON booleans for every `enabled` value. Legacy boolean-like values remain accepted temporarily (including string `"false"`, which is parsed as false) but emit a deprecation warning. When `memory_types` is omitted or `null`, all enabled memory schemas are allowed. Invalid shapes or unknown memory types are rejected with `InvalidArgumentError`. |
+| auto_commit_policy | object | No | None | Optional auto-commit policy (see table below). Any provided fields are validated, clamped to their bounds, and merged over the defaults; the effective policy is returned in the response `result.auto_commit_policy` and persisted into session metadata. If no policy is provided, auto commit is disabled unless `memory.session_auto_commit.default_enabled=true`. The policy is immutable after creation. |
+
+`auto_commit_policy` fields (all optional; omitted fields fall back to the defaults when a policy is present):
+
+| Field | Type | Default | Max | Description |
+|-------|------|---------|-----|-------------|
+| `pending_token_threshold` | int | 10000 | 50000 | When uncommitted pending tokens exceed this value (strictly greater-than), an auto commit is triggered after a message write. |
+| `message_count_threshold` | int | 50 | 500 | When the uncommitted live message count exceeds this value (strictly greater-than), an auto commit is triggered after a message write. |
+| `idle_timeout_seconds` | int | 86400 | 604800 | After this many idle seconds, a session with uncommitted content becomes eligible for the server-side idle scheduler. An idle-timeout commit archives the full backlog and ignores `keep_recent_count`. |
+| `keep_recent_count` | int | 2 | 500 | Number of recent live messages to keep (not archived) on a threshold-triggered auto commit. Idle-timeout commits ignore this and commit everything. |
+| `min_commit_interval_seconds` | int | 0 | 604800 | Minimum seconds between two automatic commits (throttle). |
+
+All fields have a minimum of `0` and are clamped into `[0, max]`. Unknown keys are rejected with `InvalidArgumentError`.
 
 #### 3. Usage Examples
 
@@ -63,6 +77,20 @@ curl -X POST http://localhost:1933/api/v1/sessions \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
   -d '{"session_id": "my-custom-session-id"}'
+
+# Create new session with a custom auto-commit policy
+curl -X POST http://localhost:1933/api/v1/sessions \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "auto_commit_policy": {
+      "pending_token_threshold": 8000,
+      "message_count_threshold": 40,
+      "idle_timeout_seconds": 600,
+      "keep_recent_count": 10,
+      "min_commit_interval_seconds": 0
+    }
+  }'
 ```
 
 **Python SDK**
@@ -80,6 +108,18 @@ print(f"Session ID: {result['session_id']}")
 # Create new session with specified ID
 result = await client.create_session(session_id="my-custom-session-id")
 print(f"Session ID: {result['session_id']}")
+
+# Create new session with a custom auto-commit policy
+result = await client.create_session(
+    auto_commit_policy={
+        "pending_token_threshold": 8000,
+        "message_count_threshold": 40,
+        "idle_timeout_seconds": 600,
+        "keep_recent_count": 10,
+        "min_commit_interval_seconds": 0,
+    }
+)
+print(result["auto_commit_policy"])
 ```
 
 **TypeScript SDK**
@@ -118,7 +158,8 @@ ov session new
     "user": {
       "account_id": "default",
       "user_id": "alice"
-    }
+    },
+    "auto_commit_policy": null
   },
   "time": 0.1
 }
@@ -134,7 +175,7 @@ List all sessions for the current user. Returns session IDs and URI info for fur
 
 **Code Entries:**
 - `openviking/server/routers/sessions.py:list_sessions()` - HTTP route
-- `openviking_cli/client/base.py:BaseClient.list_sessions()` - Python SDK
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.list_sessions()` - Python SDK
 - `crates/ov_cli/src/commands/session.rs:list_sessions()` - CLI command
 
 #### 2. Interface and Parameter Description
@@ -227,11 +268,12 @@ Get session details including metadata, message statistics, commit history, etc.
 - `commit_count`: Number of successful commits
 - `memories_extracted`: Count statistics of extracted memories by category
 - `last_commit_at`: Time of last commit
+- `auto_commit_policy`: Effective auto-commit policy with defaults filled in; `null` when not enabled
 
 **Code Entries:**
 - `openviking/session/session.py:Session.load()` - Session loading
 - `openviking/server/routers/sessions.py:get_session()` - HTTP route
-- `openviking_cli/client/base.py:BaseClient.get_session()` - Python SDK
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.get_session()` - Python SDK
 - `crates/ov_cli/src/commands/session.rs:get_session()` - CLI command
 
 #### 2. Interface and Parameter Description
@@ -343,10 +385,26 @@ ov session get a1b2c3d4
       "account_id": "default",
       "user_id": "alice"
     },
-    "pending_tokens": 450
+    "pending_tokens": 450,
+    "auto_commit_policy": {
+      "pending_token_threshold": 10000,
+      "message_count_threshold": 50,
+      "idle_timeout_seconds": 86400,
+      "keep_recent_count": 2,
+      "min_commit_interval_seconds": 0
+    }
   }
 }
 ```
+
+---
+
+### Updating Session Config
+
+The auto-commit policy is immutable after creation. Set `auto_commit_policy` when
+creating the session, then use `GET /api/v1/sessions/{session_id}` to inspect the
+effective config. Runtime session-config updates are not exposed by the Sessions
+API.
 
 ---
 
@@ -510,7 +568,7 @@ Get the assembled session context used for LLM context building. This endpoint r
 **Code Entries:**
 - `openviking/session/session.py:Session.get_session_context()` - Core implementation
 - `openviking/server/routers/sessions.py:get_session_context()` - HTTP route
-- `openviking_cli/client/base.py:BaseClient.get_session_context()` - Python SDK
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.get_session_context()` - Python SDK
 - `crates/ov_cli/src/commands/session.rs:get_session_context()` - CLI command
 
 #### 2. Interface and Parameter Description
@@ -619,7 +677,7 @@ Get the full contents of one completed archive for a session. This endpoint is t
 **Code Entries:**
 - `openviking/session/session.py:Session.get_session_archive()` - Core implementation
 - `openviking/server/routers/sessions.py:get_session_archive()` - HTTP route
-- `openviking_cli/client/base.py:BaseClient.get_session_archive()` - Python SDK
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.get_session_archive()` - Python SDK
 - `crates/ov_cli/src/commands/session.rs:get_session_archive()` - CLI command
 
 #### 2. Interface and Parameter Description
@@ -734,7 +792,7 @@ Delete a session and all its data, including messages, archive history, memories
 
 **Code Entries:**
 - `openviking/server/routers/sessions.py:delete_session()` - HTTP route
-- `openviking_cli/client/base.py:BaseClient.delete_session()` - Python SDK
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.delete_session()` - Python SDK
 - `crates/ov_cli/src/commands/session.rs:delete_session()` - CLI command
 
 #### 2. Interface and Parameter Description
@@ -818,7 +876,7 @@ Add a message to the session. Supports two modes: simple text mode and Parts mod
 **Code Entries:**
 - `openviking/session/session.py:Session.add_message()` - Core implementation
 - `openviking/server/routers/sessions.py:add_message()` - HTTP route
-- `openviking_cli/client/base.py:BaseClient.add_message()` - Python SDK
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.add_message()` - Python SDK
 - `crates/ov_cli/src/commands/session.rs:add_message()` - CLI command
 
 #### 2. Interface and Parameter Description
@@ -1023,7 +1081,7 @@ Add multiple messages to a session in a single request. Suitable for scenarios t
 **Code Entry Points**:
 - `openviking/session/session.py:Session.add_messages()` - Core implementation
 - `openviking/server/routers/sessions.py:batch_add_messages()` - HTTP route
-- `openviking_cli/client/base.py:BaseClient.batch_add_messages()` - Python SDK
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.batch_add_messages()` - Python SDK
 - `crates/ov_cli/src/commands/session.rs:add_messages()` - CLI command
 
 #### 2. Interface and Parameter Description
@@ -1206,7 +1264,7 @@ Commit a session. Message archiving (Phase 1) completes immediately. Summary gen
 **Code Entries:**
 - `openviking/session/session.py:Session.commit_async()` - Core implementation
 - `openviking/server/routers/sessions.py:commit_session()` - HTTP route
-- `openviking_cli/client/base.py:BaseClient.commit_session()` - Python SDK
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.commit_session()` - Python SDK
 - `crates/ov_cli/src/commands/session.rs:commit_session()` - CLI command
 
 #### 2. Interface and Parameter Description

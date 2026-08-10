@@ -43,6 +43,7 @@ class AddResourceMsg:
     defer_target_resolution: bool = False
     understanding_response_id: Optional[str] = None
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
+    parse_mode: str = "default"
     tags: Optional[list[str]] = None
     tag_mode: str = "replace"
 
@@ -124,6 +125,7 @@ class AddResourceMsg:
                 else None
             ),
             processing_mode=data.get("processing_mode", DEFAULT_PROCESSING_MODE),
+            parse_mode=str(data.get("parse_mode") or "default"),
             tags=(
                 list(data["tags"])
                 if isinstance(data.get("tags"), list)

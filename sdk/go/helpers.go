@@ -75,6 +75,11 @@ func Float64(v float64) *float64 {
 	return &v
 }
 
+// Map returns a map pointer for request fields that distinguish null from omitted.
+func Map(v map[string]any) *map[string]any {
+	return &v
+}
+
 func queryBool(values url.Values, key string, value bool) {
 	values.Set(key, strconv.FormatBool(value))
 }

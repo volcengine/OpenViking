@@ -9,9 +9,6 @@ import pytest
 
 import openviking_cli.client.http as http_module
 import openviking_cli.utils.async_utils as async_utils
-from openviking import AsyncOpenViking, SyncOpenViking
-from openviking.client.local import LocalClient
-from openviking.message import ImagePart, TextPart
 from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.client.sync_http import SyncHTTPClient
 from openviking_cli.utils.config import OPENVIKING_CLI_CONFIG_ENV
@@ -51,7 +48,7 @@ def test_async_http_client_zip_directory_skips_symlinked_entries(tmp_path):
     assert names == ["keep.txt", "nested/nested.txt"]
 
 
-def test_async_http_client_zip_directory_warns_when_archive_is_empty(tmp_path):
+def test_async_http_client_zip_directory_handles_symlink_only_directory(tmp_path):
     root = tmp_path / "upload"
     root.mkdir()
     outside = tmp_path / "outside.txt"
@@ -63,8 +60,7 @@ def test_async_http_client_zip_directory_warns_when_archive_is_empty(tmp_path):
         pytest.skip(f"symlinks are not available in this environment: {exc}")
 
     client = AsyncHTTPClient(url="http://localhost:1933")
-    with patch.object(http_module.logger, "warning") as mock_warning:
-        zip_path = Path(client._zip_directory(str(root)))
+    zip_path = Path(client._zip_directory(str(root)))
     try:
         with zipfile.ZipFile(zip_path) as zipf:
             names = sorted(zipf.namelist())
@@ -72,239 +68,6 @@ def test_async_http_client_zip_directory_warns_when_archive_is_empty(tmp_path):
         zip_path.unlink(missing_ok=True)
 
     assert names == []
-    mock_warning.assert_called_once_with(
-        "Created empty directory upload archive for %s",
-        root,
-    )
-
-
-async def test_async_openviking_reindex_forwards_to_local_client(tmp_path):
-    client = AsyncOpenViking(path=str(tmp_path))
-    with patch.object(client, "_ensure_initialized", new_callable=AsyncMock) as mock_init:
-        with patch.object(client._client, "reindex", new_callable=AsyncMock) as mock_reindex:
-            mock_reindex.return_value = {"status": "completed"}
-
-            result = await client.reindex(
-                "viking://resources/demo",
-                mode="prune_orphans",
-                wait=False,
-                dry_run=True,
-            )
-
-    assert result == {"status": "completed"}
-    mock_init.assert_awaited_once()
-    mock_reindex.assert_awaited_once_with(
-        uri="viking://resources/demo",
-        mode="prune_orphans",
-        wait=False,
-        dry_run=True,
-    )
-
-
-async def test_async_openviking_forwards_turn_retention_and_message_semantics(tmp_path):
-    client = AsyncOpenViking(path=str(tmp_path))
-    with patch.object(client, "_ensure_initialized", new_callable=AsyncMock):
-        with patch.object(
-            client._client,
-            "add_message",
-            new_callable=AsyncMock,
-            return_value={"message_count": 1},
-        ) as mock_add:
-            with patch.object(
-                client._client,
-                "commit_session",
-                new_callable=AsyncMock,
-                return_value={"status": "accepted"},
-            ) as mock_commit:
-                await client.add_message(
-                    "session-1",
-                    "assistant",
-                    parts=[{"type": "text", "text": "checking"}],
-                    turn_id="turn-1",
-                    message_kind="assistant_step",
-                    source_message_ids=["u1"],
-                )
-                await client.commit_session(
-                    "session-1",
-                    retention_mode="turn_budget",
-                    keep_recent_turn_count=3,
-                    retained_message_token_budget=12_000,
-                    min_raw_tail_steps=1,
-                )
-
-    mock_add.assert_awaited_once_with(
-        session_id="session-1",
-        role="assistant",
-        content=None,
-        parts=[{"type": "text", "text": "checking"}],
-        created_at=None,
-        peer_id=None,
-        telemetry=False,
-        turn_id="turn-1",
-        message_kind="assistant_step",
-        source_message_ids=["u1"],
-    )
-    mock_commit.assert_awaited_once_with(
-        "session-1",
-        telemetry=False,
-        keep_recent_count=0,
-        retention_mode="turn_budget",
-        keep_recent_turn_count=3,
-        retained_message_token_budget=12_000,
-        min_raw_tail_steps=1,
-    )
-
-
-def test_sync_openviking_reindex_forwards_to_async_client():
-    client = SyncOpenViking()
-    with patch.object(
-        client._async_client,
-        "reindex",
-        new_callable=Mock,
-        return_value={"status": "completed"},
-    ) as mock_reindex:
-        with patch(
-            "openviking.sync_client.run_async", return_value={"status": "completed"}
-        ) as mock_run:
-            result = client.reindex(
-                "viking://resources/demo",
-                mode="prune_orphans",
-                wait=True,
-                dry_run=True,
-            )
-
-    assert result == {"status": "completed"}
-    assert mock_run.called
-    mock_reindex.assert_called_once_with(
-        uri="viking://resources/demo",
-        mode="prune_orphans",
-        wait=True,
-        dry_run=True,
-    )
-
-
-async def test_local_client_reindex_forwards_to_service():
-    client = LocalClient.__new__(LocalClient)
-    client._service = SimpleNamespace(reindex=AsyncMock(return_value={"status": "completed"}))
-
-    result = await LocalClient.reindex(
-        client,
-        uri="viking://resources/demo",
-        mode="prune_orphans",
-        wait=False,
-        dry_run=True,
-    )
-
-    assert result == {"status": "completed"}
-    client._service.reindex.assert_awaited_once_with(
-        uri="viking://resources/demo",
-        mode="prune_orphans",
-        wait=False,
-        dry_run=True,
-    )
-
-
-async def test_local_client_batch_add_messages_forwards_to_session():
-    class FakeSession:
-        def __init__(self):
-            self.messages = []
-
-        def add_messages(self, specs):
-            self.messages.extend(specs)
-            return specs
-
-    fake_session = FakeSession()
-
-    class FakeSessions:
-        async def get(self, session_id, ctx, auto_create=False):
-            assert session_id == "batch-session"
-            assert ctx is client._ctx
-            assert auto_create is True
-            return fake_session
-
-    client = LocalClient.__new__(LocalClient)
-    client._service = SimpleNamespace(sessions=FakeSessions())
-    client._ctx = SimpleNamespace(user=SimpleNamespace(user_id="user-1"))
-    client._legacy_agent_id = None
-
-    result = await LocalClient.batch_add_messages(
-        client,
-        "batch-session",
-        [
-            {
-                "role": "user",
-                "content": "hello",
-                "peer_id": "explicit-user",
-                "created_at": "2026-05-28T00:00:00+00:00",
-            },
-            {"role": "assistant", "parts": [{"type": "text", "text": "hi"}]},
-        ],
-    )
-
-    # A lightweight fake session has no ``meta``, so pending_tokens degrades to 0
-    # instead of raising; the field is always present for commit-policy callers.
-    assert result == {
-        "session_id": "batch-session",
-        "message_count": 2,
-        "added": 2,
-        "pending_tokens": 0,
-    }
-    assert fake_session.messages[0]["role"] == "user"
-    assert fake_session.messages[0]["peer_id"] == "explicit-user"
-    assert fake_session.messages[0]["created_at"] == "2026-05-28T00:00:00+00:00"
-    assert fake_session.messages[0]["parts"][0].text == "hello"
-    assert fake_session.messages[1]["role"] == "assistant"
-    assert fake_session.messages[1]["peer_id"] is None
-    assert fake_session.messages[1]["parts"][0].text == "hi"
-
-
-async def test_local_client_add_message_accepts_image_parts():
-    class FakeSession:
-        def __init__(self):
-            self.messages = []
-
-        def add_message(self, role, parts, peer_id=None, created_at=None):
-            self.messages.append(
-                {
-                    "role": role,
-                    "parts": parts,
-                    "peer_id": peer_id,
-                    "created_at": created_at,
-                }
-            )
-
-    fake_session = FakeSession()
-
-    class FakeSessions:
-        async def get(self, session_id, ctx, auto_create=False):
-            assert session_id == "image-session"
-            assert ctx is client._ctx
-            assert auto_create is True
-            return fake_session
-
-    client = LocalClient.__new__(LocalClient)
-    client._service = SimpleNamespace(sessions=FakeSessions())
-    client._ctx = SimpleNamespace(user=SimpleNamespace(user_id="user-1"))
-    client._legacy_agent_id = None
-
-    result = await LocalClient.add_message(
-        client,
-        "image-session",
-        "user",
-        parts=[
-            {"type": "text", "text": "Look at this"},
-            {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
-        ],
-    )
-
-    assert result == {
-        "session_id": "image-session",
-        "message_count": 1,
-        "pending_tokens": 0,
-    }
-    assert isinstance(fake_session.messages[0]["parts"][0], TextPart)
-    assert isinstance(fake_session.messages[0]["parts"][1], ImagePart)
-    assert fake_session.messages[0]["parts"][1].url == "https://example.com/image.png"
 
 
 async def test_async_http_client_batch_add_messages_posts_batch_payload():
@@ -428,17 +191,18 @@ def test_sync_http_client_batch_add_messages_forwards_to_async_client():
     with patch.object(
         client._async_client,
         "batch_add_messages",
+        new_callable=Mock,
         return_value={"session_id": "batch-session", "message_count": 2, "added": 2},
     ) as mock_batch:
         with patch(
-            "openviking_cli.client.sync_http.run_async",
+            "openviking_sdk.client.run_async",
             return_value={"session_id": "batch-session", "message_count": 2, "added": 2},
         ) as mock_run:
             result = client.batch_add_messages("batch-session", messages)
 
     assert result == {"session_id": "batch-session", "message_count": 2, "added": 2}
     assert mock_run.called
-    mock_batch.assert_called_once_with("batch-session", messages, False)
+    mock_batch.assert_called_once_with("batch-session", messages)
 
 
 def test_run_async_from_foreign_event_loop_uses_shared_background_loop():

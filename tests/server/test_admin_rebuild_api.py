@@ -1711,6 +1711,38 @@ async def test_reindex_resource_vector_text_uses_existing_record_for_non_text(mo
 
 
 @pytest.mark.asyncio
+async def test_reindex_resource_vector_text_summary_first_skips_content_read(monkeypatch):
+    from openviking.service.reindex_executor import ReindexExecutor
+
+    async def fail_if_content_read(self, uri, *, ctx):
+        raise AssertionError("summary_first should not read text content when summary exists")
+
+    async def fake_fetch_existing_record(self, *, uri, level, ctx):
+        return {"abstract": "existing fallback"}
+
+    monkeypatch.setattr(ReindexExecutor, "_safe_read_text", fail_if_content_read)
+    monkeypatch.setattr(ReindexExecutor, "_fetch_existing_record", fake_fetch_existing_record)
+    monkeypatch.setattr(
+        "openviking.service.reindex_executor.get_openviking_config",
+        lambda: type("Config", (), {"embedding": type("Embedding", (), {"text_source": "summary_first"})()})(),
+    )
+
+    service = ReindexExecutor()
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="alice"),
+        role=Role.ROOT,
+    )
+
+    vector_text = await service._best_resource_file_vector_text(
+        "viking://resources/demo/large.txt",
+        "summary for embedding",
+        ctx=ctx,
+    )
+
+    assert vector_text == "summary for embedding"
+
+
+@pytest.mark.asyncio
 async def test_reindex_file_summary_reads_existing_record_as_uri_owner(monkeypatch):
     from openviking.service.reindex_executor import ReindexExecutor
 

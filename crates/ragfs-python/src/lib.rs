@@ -7,12 +7,156 @@
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyType};
+use pyo3::wrap_pyfunction;
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::fs::OpenOptions;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
+use tracing::Level;
+use tracing_subscriber::fmt::writer::BoxMakeWriter;
+use tracing_appender::non_blocking::WorkerGuard;
 
 /// Cached reference to the Python `openviking.storage.errors.LockAcquisitionError` class,
 /// imported at module init so that native and Python code share the same exception type.
 static LOCK_ACQUISITION_ERROR_TYPE: OnceLock<Py<PyType>> = OnceLock::new();
+static RUST_TRACING_INIT_RESULT: OnceLock<Result<(), String>> = OnceLock::new();
+static RUST_TRACING_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
+static RUST_TRACING_FILE_STATE: OnceLock<TracingFileState> = OnceLock::new();
+
+#[derive(Clone)]
+struct SharedFileWriter {
+    file: Arc<Mutex<std::fs::File>>,
+}
+
+impl Write for SharedFileWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let mut file = self
+            .file
+            .lock()
+            .map_err(|_| io::Error::other("shared tracing log file lock poisoned"))?;
+        file.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        let mut file = self
+            .file
+            .lock()
+            .map_err(|_| io::Error::other("shared tracing log file lock poisoned"))?;
+        file.flush()
+    }
+}
+
+struct TracingFileState {
+    path: PathBuf,
+    file: Arc<Mutex<std::fs::File>>,
+}
+
+/// Open the configured Rust tracing log file.
+fn open_tracing_log_file(path: &Path) -> Result<std::fs::File, String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create Rust tracing log dir: {e}"))?;
+    }
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| format!("failed to open Rust tracing log file: {e}"))
+}
+
+/// Swap the shared Rust tracing file handle to the current active log file.
+fn replace_tracing_log_file(
+    shared: &Arc<Mutex<std::fs::File>>,
+    path: &Path,
+) -> Result<(), String> {
+    let new_file = open_tracing_log_file(path)?;
+    let mut file = shared
+        .lock()
+        .map_err(|_| "shared tracing log file lock poisoned".to_string())?;
+    *file = new_file;
+    Ok(())
+}
+
+/// Parse the configured OpenViking log level into a Rust tracing level.
+fn parse_tracing_level(log_level: &str) -> Result<Level, String> {
+    match log_level.to_ascii_uppercase().as_str() {
+        "TRACE" => Ok(Level::TRACE),
+        "DEBUG" => Ok(Level::DEBUG),
+        "INFO" => Ok(Level::INFO),
+        "WARN" | "WARNING" => Ok(Level::WARN),
+        "CRITICAL" => Ok(Level::ERROR),
+        "ERROR" => Ok(Level::ERROR),
+        other => Err(format!("unsupported Rust tracing level: {other}")),
+    }
+}
+
+/// Build the tracing writer from the configured OpenViking log output target.
+fn build_tracing_writer(log_output: &str) -> Result<(BoxMakeWriter, WorkerGuard), String> {
+    match log_output {
+        "stdout" => {
+            let (writer, guard) = tracing_appender::non_blocking(std::io::stdout());
+            Ok((BoxMakeWriter::new(writer), guard))
+        }
+        "stderr" => {
+            let (writer, guard) = tracing_appender::non_blocking(std::io::stderr());
+            Ok((BoxMakeWriter::new(writer), guard))
+        }
+        path => {
+            let path = Path::new(path);
+            let shared = Arc::new(Mutex::new(open_tracing_log_file(path)?));
+            let state = TracingFileState {
+                path: path.to_path_buf(),
+                file: shared.clone(),
+            };
+            RUST_TRACING_FILE_STATE
+                .set(state)
+                .map_err(|_| "Rust tracing file state already initialized".to_string())?;
+            let (writer, guard) = tracing_appender::non_blocking(SharedFileWriter { file: shared });
+            Ok((BoxMakeWriter::new(writer), guard))
+        }
+    }
+}
+
+/// Reopen the Rust tracing file writer after Python log rotation.
+fn reopen_tracing_file_impl() -> Result<(), String> {
+    let Some(state) = RUST_TRACING_FILE_STATE.get() else {
+        return Ok(());
+    };
+    replace_tracing_log_file(&state.file, &state.path)
+}
+
+/// Reopen the Rust tracing log file after Python rotates the active log file.
+#[pyfunction]
+fn reopen_tracing_file() -> PyResult<()> {
+    reopen_tracing_file_impl().map_err(PyRuntimeError::new_err)
+}
+
+/// Initialize Rust tracing once for the embedded ragfs binding process.
+fn init_tracing(log_level: &str, log_output: &str) -> PyResult<()> {
+    let result = RUST_TRACING_INIT_RESULT.get_or_init(|| {
+        let max_level = parse_tracing_level(log_level)?;
+        let (writer, guard) = build_tracing_writer(log_output)?;
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(max_level)
+            .with_target(true)
+            .with_file(true)
+            .with_line_number(true)
+            .with_ansi(false)
+            .with_writer(writer)
+            .finish();
+        tracing::subscriber::set_global_default(subscriber)
+            .map_err(|e| format!("failed to install Rust tracing subscriber: {e}"))?;
+        RUST_TRACING_GUARD
+            .set(guard)
+            .map_err(|_| "failed to retain Rust tracing worker guard".to_string())?;
+        Ok(())
+    });
+    result
+        .as_ref()
+        .map(|_| ())
+        .map_err(|err| PyRuntimeError::new_err(err.clone()))
+}
 
 /// Map a PathLockError to the appropriate Python exception.
 fn pathlock_err_to_py(err: PathLockError) -> PyErr {
@@ -20,7 +164,7 @@ fn pathlock_err_to_py(err: PathLockError) -> PyErr {
         PathLockError::Conflict { .. }
         | PathLockError::Timeout { .. }
         | PathLockError::HandoffFailed(_)
-        | PathLockError::Io(_) => {
+        | PathLockError::Busy { .. } => {
             #[allow(deprecated)]
             Python::with_gil(|py| {
                 let ty = LOCK_ACQUISITION_ERROR_TYPE
@@ -30,12 +174,13 @@ fn pathlock_err_to_py(err: PathLockError) -> PyErr {
             })
         }
         PathLockError::InvalidRequest(_) => PyValueError::new_err(err.to_string()),
-        _ => PyRuntimeError::new_err(err.to_string()),
+        PathLockError::Io(_) | PathLockError::InvalidToken(_) | PathLockError::Internal(_) => {
+            PyRuntimeError::new_err(err.to_string())
+        }
     }
 }
 use std::fs;
 use std::future::Future;
-use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
 
 /// Validate and convert a wait timeout from Python.
@@ -642,6 +787,7 @@ fn to_py_err(e: ragfs::core::Error) -> PyErr {
         ragfs::core::Error::Serialization(_) => new_py_err("AGFSSerializationError", msg),
         ragfs::core::Error::Network(_) => new_py_err("AGFSNetworkError", msg),
         ragfs::core::Error::Timeout(_) => new_py_err("AGFSTimeoutError", msg),
+        ragfs::core::Error::WouldBlock(_) => new_py_err("AGFSTimeoutError", msg),
         ragfs::core::Error::SyncWriteQuorum { .. } => new_py_err("AGFSInternalError", msg),
         ragfs::core::Error::ContextMissing(_) => new_py_err("AGFSInternalError", msg),
         ragfs::core::Error::Internal(_) => new_py_err("AGFSInternalError", msg),
@@ -1002,6 +1148,9 @@ fn extract_optional_owned_lease_ref(
 /// Convert a PathLockHandoffRef to a Python dict.
 fn handoff_ref_to_py_dict(py: Python<'_>, handoff: &PathLockHandoffRef) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new(py);
+    if let Some(lease_ref) = &handoff.lease_ref {
+        dict.set_item("lease_ref", lease_ref)?;
+    }
     dict.set_item("owner_id", &handoff.owner_id)?;
     dict.set_item("lock_paths", &handoff.lock_paths)?;
     let covered = PyList::empty(py);
@@ -1120,6 +1269,20 @@ impl RAGFSBindingClient {
         let mut runtime_cache_config = None;
         let mut inline_git_cfg: Option<ragfs::git::GitConfig> = None;
         if let Some(cfg) = config {
+            if let Some(log_obj) = cfg.get("log") {
+                let log_cfg: HashMap<String, Py<PyAny>> = log_obj.extract(py)?;
+                let log_level = log_cfg
+                    .get("level")
+                    .map(|value| value.extract::<String>(py))
+                    .transpose()?
+                    .unwrap_or_else(|| "INFO".to_string());
+                let log_output = log_cfg
+                    .get("output")
+                    .map(|value| value.extract::<String>(py))
+                    .transpose()?
+                    .unwrap_or_else(|| "stderr".to_string());
+                init_tracing(&log_level, &log_output)?;
+            }
             if let Some(enc_obj) = cfg.get("encryption") {
                 let enc: HashMap<String, Py<PyAny>> = enc_obj.extract(py)?;
                 let rk: Vec<u8> = enc
@@ -1167,7 +1330,7 @@ impl RAGFSBindingClient {
                     pl_value
                         .get("lock_expire_secs")
                         .and_then(|v| v.as_f64())
-                        .unwrap_or(1800.0),
+                        .unwrap_or(30.0),
                 )?;
                 let lock_timeout_secs = validate_timeout_secs(
                     pl_value
@@ -2445,7 +2608,13 @@ impl RAGFSBindingClient {
             })
             .transpose()?
             .unwrap_or_default();
+        let lease_ref: Option<String> = handoff_ref
+            .get("lease_ref")
+            .map(|v| v.extract(py))
+            .transpose()?
+            .filter(|s: &String| !s.is_empty());
         let handoff = PathLockHandoffRef {
+            lease_ref,
             owner_id,
             lock_paths,
             covered_paths,
@@ -2577,6 +2746,7 @@ impl RAGFSBindingClient {
 #[pymodule]
 fn ragfs_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RAGFSBindingClient>()?;
+    m.add_function(wrap_pyfunction!(reopen_tracing_file, m)?)?;
 
     // Import the Python business exception so native code raises the same type
     // that `openviking.storage.errors` defines, enabling `except LockAcquisitionError`.
@@ -2605,7 +2775,7 @@ mod tests {
     }
 
     #[test]
-    fn pathlock_io_error_maps_to_lock_acquisition_error() {
+    fn pathlock_io_error_maps_to_runtime_error() {
         Python::initialize();
         Python::attach(|py| {
             let errors_mod = py.import("openviking.storage.errors").unwrap();
@@ -2618,6 +2788,27 @@ mod tests {
 
             let error =
                 pathlock_err_to_py(PathLockError::Io("failed to create lock dir".to_string()));
+
+            assert!(error.is_instance_of::<PyRuntimeError>(py));
+        });
+    }
+
+    #[test]
+    fn pathlock_busy_error_maps_to_lock_acquisition_error() {
+        Python::initialize();
+        Python::attach(|py| {
+            let errors_mod = py.import("openviking.storage.errors").unwrap();
+            let lock_error_type: Py<PyType> = errors_mod
+                .getattr("LockAcquisitionError")
+                .unwrap()
+                .extract()
+                .unwrap();
+            let _ = LOCK_ACQUISITION_ERROR_TYPE.set(lock_error_type.clone_ref(py));
+
+            let error = pathlock_err_to_py(PathLockError::Busy {
+                lock_path: "/data/.path.ovlock".to_string(),
+                operation: "remove".to_string(),
+            });
 
             assert!(error.is_instance(py, lock_error_type.bind(py)));
         });
@@ -2642,6 +2833,42 @@ mod tests {
         });
 
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn parse_tracing_level_accepts_critical_as_error() {
+        assert_eq!(parse_tracing_level("CRITICAL").unwrap(), Level::ERROR);
+    }
+
+    #[test]
+    fn replace_tracing_log_file_switches_shared_writer_to_new_active_file() {
+        let active = std::env::temp_dir().join(format!(
+            "openviking-rust-tracing-active-{}.log",
+            std::process::id()
+        ));
+        let rotated = std::env::temp_dir().join(format!(
+            "openviking-rust-tracing-rotated-{}.log",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&active);
+        let _ = fs::remove_file(&rotated);
+
+        let shared = Arc::new(Mutex::new(open_tracing_log_file(&active).unwrap()));
+        let mut writer = SharedFileWriter { file: shared.clone() };
+        writer.write_all(b"before-rotate\n").unwrap();
+        writer.flush().unwrap();
+
+        fs::rename(&active, &rotated).unwrap();
+        replace_tracing_log_file(&shared, &active).unwrap();
+
+        writer.write_all(b"after-rotate\n").unwrap();
+        writer.flush().unwrap();
+
+        assert!(fs::read_to_string(&rotated).unwrap().contains("before-rotate"));
+        assert!(fs::read_to_string(&active).unwrap().contains("after-rotate"));
+
+        let _ = fs::remove_file(&active);
+        let _ = fs::remove_file(&rotated);
     }
 
     #[tokio::test]

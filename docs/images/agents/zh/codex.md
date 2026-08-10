@@ -1,4 +1,4 @@
-为 [Codex](https://developers.openai.com/codex) 提供持久化的跨会话（session）记忆。一次安装，即可实现：在用户每次输入前自动召回记忆，每轮对话结束后进行增量捕获，并在上下文压缩（compaction）前将记忆提交给抽取器。该插件还将 Codex 连接至 OpenViking 的 `/mcp` 端点，使模型能够直接调用 find、search、recall、remember 等工具来管理记忆。
+为 [Codex](https://developers.openai.com/codex) 提供持久化的跨会话（session）记忆。一次安装，即可实现：在会话开始时加载 OpenViking profile 与记忆索引，在用户每次输入前自动召回相关记忆，每轮对话结束后进行增量捕获，并在上下文压缩（compaction）前将记忆提交给抽取器。该插件还将 Codex 连接至 OpenViking 的 `/mcp` 端点，使模型能够直接调用 find、search、recall、remember 等工具来管理记忆。
 
 源码：[examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin) | [博客：动机与效果展示](https://blog.openviking.ai/post/openviking-coding-agent/)
 
@@ -37,12 +37,12 @@ codex              # 首次启动需执行 /hooks 进行一次安全审批
 
 ## 步骤 2：验证
 
-启动 `codex` 后，插件将在每次输入前自动召回记忆。将环境变量 `OPENVIKING_DEBUG` 设置为 `1`，可将事件日志输出至 `~/.openviking/logs/codex-hooks.log`。
+启动 `codex` 后，当前会话首次提交 prompt 时触发的 `SessionStart` 会加载 profile，之后插件将在每次输入前自动召回相关记忆。将环境变量 `OPENVIKING_DEBUG` 设置为 `1`，可将事件日志输出至 `~/.openviking/logs/codex-hooks.log`。
 
 
 ## 工作原理
 
-插件深入挂载于 Codex 的生命周期中：在用户每次输入前，它会检索 OpenViking 并注入相关记忆（`UserPromptSubmit`）；每轮对话结束后，将新对话追加到当前会话中（`Stop`）；在上下文压缩前，补齐并提交（commit）完整的对话记录（`PreCompact`），以确保记忆抽取器能够在完整的上下文环境中运行。此外，在启动新会话时，它还会自动清理上一次运行遗留的孤儿会话。
+插件深入挂载于 Codex 的生命周期中：在 `SessionStart`（`startup`、`clear` 或 `resume`）阶段，它会复用共享的 CJK-aware profile 构建逻辑，注入 `profile.md`，以及 `preferences/`、`entities/` 的 URI 和摘要索引；在用户每次输入前，它会检索 OpenViking 并注入相关记忆（`UserPromptSubmit`）；每轮对话结束后，将新对话追加到当前会话中（`Stop`）；在上下文压缩前，补齐并提交（commit）完整的对话记录（`PreCompact`），以确保记忆抽取器能够在完整的上下文环境中运行。此外，在启动新会话时，它还会自动清理上一次运行遗留的孤儿会话。恢复已有会话时，profile 还会与最新的 archive digest 合并注入。
 
 > **已知盲区**：Codex 在收到 `SIGTERM` 信号、用户按下 `Ctrl+C` 或输入 `/exit` 退出时，不会触发任何 hook。这些遗留的孤儿会话将在下一次触发 `SessionStart` 时，通过闲置 TTL（30 分钟）机制或活动窗口启发式算法进行回收清理。
 
@@ -55,9 +55,13 @@ codex              # 首次启动需执行 /hooks 进行一次安全审批
 |---------|--------|------|
 | `OPENVIKING_URL` / `OPENVIKING_BASE_URL` | — | 完整的服务器 URL |
 | `OPENVIKING_API_KEY` | — | API key（通过 `Authorization: Bearer` 发送） |
+| `OPENVIKING_NO_AUTO_INJECT` | `false` | 关闭会话启动阶段的固定 profile/背景注入，但不关闭逐 prompt 语义召回 |
+| `OPENVIKING_PROFILE_TOKEN_BUDGET` | `10000` | profile 及记忆索引共用的 CJK-aware token 预算 |
 | `OPENVIKING_CODEX_ACTIVE_WINDOW_MS` | `120000` | `SessionStart` 活动窗口阈值 |
 | `OPENVIKING_CODEX_IDLE_TTL_MS` | `1800000` | `SessionStart` 闲置 TTL 清理阈值 |
 | `OPENVIKING_DEBUG` | `false` | 将日志输出至 `~/.openviking/logs/codex-hooks.log` |
+
+如果更看重召回响应速度，请参阅[低延迟召回](https://docs.openviking.net/zh/agent-integrations/01-overview#低延迟召回)。
 
 关于更多参数调优（如 `OPENVIKING_RECALL_LIMIT`、`OPENVIKING_CAPTURE_ASSISTANT_TURNS` 等），请参阅 [插件 README](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md#tuning-the-plugin)。
 

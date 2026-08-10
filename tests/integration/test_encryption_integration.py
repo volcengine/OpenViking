@@ -14,7 +14,6 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-from openviking import AsyncOpenViking
 from openviking.crypto.config import bootstrap_encryption
 from openviking.crypto.encryptor import FileEncryptor
 from openviking.crypto.providers import LocalFileProvider
@@ -49,44 +48,6 @@ async def file_encryptor(tmp_path):
 
     provider = LocalFileProvider(key_file=str(key_file))
     return FileEncryptor(provider)
-
-
-@pytest_asyncio.fixture(scope="function")
-async def openviking_client_with_encryption(test_data_dir: Path, encryption_config):
-    """Fixture that provides an OpenViking client with encryption enabled"""
-    await AsyncOpenViking.reset()
-    OpenVikingConfigSingleton.reset_instance()
-
-    # Clean data directory
-    if test_data_dir.exists():
-        import shutil
-
-        shutil.rmtree(test_data_dir)
-    test_data_dir.mkdir(parents=True, exist_ok=True)
-
-    # Create config dict with encryption enabled
-    config_dict = {}
-    config_dict.update(encryption_config)
-    config_dict["storage"] = {
-        "workspace": str(test_data_dir / "workspace"),
-        "vectordb": {"name": "test", "backend": "local", "project": "default"},
-    }
-    config_dict["embedding"] = {
-        "dense": {"provider": "openai", "api_key": "fake", "model": "text-embedding-3-small"}
-    }
-    config_dict["vlm"] = {"provider": "openai", "api_key": "fake", "model": "gpt-4-vision-preview"}
-
-    # Initialize config singleton
-    OpenVikingConfigSingleton.initialize(config_dict=config_dict)
-
-    client = AsyncOpenViking(path=str(test_data_dir))
-    await client.initialize()
-
-    yield client
-
-    await client.close()
-    await AsyncOpenViking.reset()
-    OpenVikingConfigSingleton.reset_instance()
 
 
 class TestEncryptionBootstrap:
@@ -154,81 +115,32 @@ class TestFileEncryptorIntegration:
 
 
 class TestEncryptionDisabled:
-    """Tests for behavior when encryption is disabled"""
-
-    @pytest_asyncio.fixture(scope="function")
-    async def openviking_client_without_encryption(self, test_data_dir: Path):
-        """Fixture that provides an OpenViking client without encryption"""
-        await AsyncOpenViking.reset()
-        OpenVikingConfigSingleton.reset_instance()
-
-        if test_data_dir.exists():
-            import shutil
-
-            shutil.rmtree(test_data_dir)
-        test_data_dir.mkdir(parents=True, exist_ok=True)
-
-        # Create config dict with encryption disabled
-        config_dict = {
-            "encryption": {"enabled": False},
-            "storage": {
-                "workspace": str(test_data_dir / "workspace"),
-                "vectordb": {"name": "test", "backend": "local", "project": "default"},
-            },
-            "embedding": {
-                "dense": {
-                    "provider": "openai",
-                    "api_key": "fake",
-                    "model": "text-embedding-3-small",
-                }
-            },
-            "vlm": {"provider": "openai", "api_key": "fake", "model": "gpt-4-vision-preview"},
-        }
-
-        # Initialize config singleton
-        OpenVikingConfigSingleton.initialize(config_dict=config_dict)
-
-        client = AsyncOpenViking(path=str(test_data_dir))
-        await client.initialize()
-
-        yield client
-
-        await client.close()
-        await AsyncOpenViking.reset()
-        OpenVikingConfigSingleton.reset_instance()
+    """Normal resource I/O remains available when encryption is disabled."""
 
     async def test_read_write_without_encryption(
-        self, openviking_client_without_encryption: AsyncOpenViking, tmp_path: Path
+        self,
+        service: OpenVikingService,
+        request_context,
+        tmp_path: Path,
     ):
-        """Test normal file operations when encryption is disabled"""
-        client = openviking_client_without_encryption
-
         test_file = tmp_path / "normal_file.txt"
         test_content = "Normal content without encryption"
         test_file.write_text(test_content)
 
-        result = await client.add_resource(
-            path=str(test_file), reason="Normal operation test", wait=True
+        result = await service.resources._execute_resource_ingestion(
+            path=str(test_file),
+            ctx=request_context,
+            defer_post_processing=False,
+            reason="Normal operation test",
+            build_index=False,
         )
-        root_uri = result["root_uri"]
-
-        # Get tree structure to find the actual file
-        uris = await client.tree(root_uri)
-        assert len(uris) > 0
-
-        # Find the actual file (skip .abstract.md and .overview.md)
-        found = False
-        for data in uris:
-            if not data["isDir"]:
-                filename = data["name"]
-                # Skip auto-generated files
-                if filename not in [".abstract.md", ".overview.md"]:
-                    file_uri = data["uri"]
-                    content = await client.read(file_uri)
-                    assert content == test_content
-                    found = True
-                    break
-        assert found, "Could not find the test file"
+        entries = await service.fs.ls(result["root_uri"], ctx=request_context)
+        contents = [
+            await service.fs.read(data["uri"], ctx=request_context)
+            for data in entries
+            if not data["isDir"] and data["name"] not in {".abstract.md", ".overview.md"}
+        ]
+        assert test_content in contents
 
 
 class TestVikingFSEncryptionWithAccounts:
@@ -285,7 +197,6 @@ class TestVikingFSEncryptionWithAccounts:
         yield {"service": svc, "api_key_manager": api_key_manager, "test_data_dir": test_data_dir}
 
         await svc.close()
-        await AsyncOpenViking.reset()
         OpenVikingConfigSingleton.reset_instance()
 
     def _is_file_encrypted(self, file_path: Path) -> bool:

@@ -13,10 +13,9 @@ If you stay on 0.3.x, existing `agent_id`, `viking://agent/...`, and `viking://s
 
 If you upgrade to 0.4.0, you do not need to migrate data immediately. 0.4.0 keeps runtime compatibility so old data remains readable:
 
-- `agent_id` can still be configured temporarily. In current HTTP SDK clients it maps to request-level `actor_peer_id`; true legacy agent mode is selected only when requests send `X-OpenViking-Agent`.
+- `agent_id` can still be configured temporarily. In current HTTP SDK clients it maps to request-level `actor_peer_id`.
 - `viking://agent/...` can still read old agent data, but is read-only.
 - `viking://session/...` can still read old session data and merges with the new session view.
-- `find` / `search` read unmigrated legacy agent data only for true legacy requests that still send `X-OpenViking-Agent`; HTTP SDK `agent_id` now selects only the actor peer view.
 
 Recommended order:
 
@@ -81,10 +80,10 @@ The `viking://session` merged compatibility view is implemented on the server. U
 | `ov ls viking://session` | Supported for reads. It merges new and old sessions. |
 | Read `viking://session/<session_id>/...` | Supported. New path first, legacy path as fallback. |
 | Write `viking://session/...` | Not supported. New sessions are written to `viking://user/<user_id>/sessions/...`. |
-| `find` / `search` with HTTP SDK `agent_id` | Supported. It searches the selected actor peer view only; old agent data is searched only by true legacy requests that send `X-OpenViking-Agent`. |
+| `find` / `search` with HTTP SDK `agent_id` | Supported. It searches the selected actor peer view only and does not automatically search unmigrated agent data. |
 | `find` / `search` body `peer_id` | Not supported. Use `actor_peer_id` or `X-OpenViking-Actor-Peer` for the new peer view. |
 | Configure both `actor_peer_id` and `agent_id` | Not supported. The client/request fails. |
-| Explicit message `peer_id` while using HTTP SDK `agent_id` | Supported. The explicit message `peer_id` wins for that message; legacy fallback applies only when no message `peer_id` is provided. |
+| Explicit message `peer_id` while using HTTP SDK `agent_id` | Supported. The message uses the explicit `peer_id`; no identity is inferred from `agent_id` when it is omitted. |
 | `role_id` memory isolation | Not supported. It is ignored after upgrade. |
 
 ## Run Migration
@@ -277,20 +276,13 @@ viking://user/alice/sessions/sess-001/messages.jsonl
 
 ### find / search
 
-During the migration window, if you still need unmigrated old agent data, use a true legacy request path that sends `X-OpenViking-Agent`. Current HTTP SDK `agent_id` is an actor-peer alias and no longer makes `find` / `search` include old agent data:
-
-```json
-{
-  "query": "deployment notes",
-  "agent_id": "legacy-agent"
-}
-```
+`find` / `search` no longer accepts legacy agent identity fields and does not automatically include unmigrated agent data. Old `viking://agent/...` paths remain readable through content and filesystem APIs, but migrate them before using the new retrieval paths.
 
 After migration, when old agent data is no longer needed, move all clients to client/request-level `actor_peer_id`.
 
 ### Session Messages
 
-A legacy request without an explicit assistant-message `peer_id` can still fall back to its legacy agent id. Current HTTP SDK clients should not rely on `agent_id` for message attribution; use message `peer_id` when you need to identify the speaker.
+Session no longer derives message attribution from a legacy agent id. Use an explicit message `peer_id` whenever the speaker identity is required.
 
 ## Deferring Data Migration
 
@@ -298,7 +290,7 @@ It is acceptable as a short-term transition, with these limits:
 
 - Old agent/session data is readable, but legacy namespaces are not writable.
 - New sessions and new resources are written to the new namespace, so data can exist in both old and new paths for a while.
-- True legacy retrieval searches both old and new data when the request sends `X-OpenViking-Agent`; HTTP SDK `agent_id` and pure `actor_peer_id` do not search old `viking://agent` by default.
+- `find` / `search` does not search old `viking://agent` data by default.
 - In multi-user accounts, old sessions without clear owner metadata may be readable at runtime but will fail formal migration preflight.
 - Legacy directories and old vector records remain until cleanup.
 

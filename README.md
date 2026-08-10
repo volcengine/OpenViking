@@ -211,7 +211,6 @@ OpenViking welcomes collaboration with other open-source projects to build the c
 - [NoKV](https://github.com/NoKV-Lab/NoKV) - AI native distributed file system
 - [loopx](https://github.com/huangruiteng/loopx) - Lightweight loop engineering state kernel
 - [Hermes Agent](https://github.com/NousResearch/hermes-agent) - The agent that grows with you
-- [heima](https://github.com/litentry/heima) - Substrate-based EVM-compatible L1 chain
 
 Interested in joining our partner list? Please submit an issue to our community to apply.
 

@@ -547,7 +547,7 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Compare one file between two snapshots.",
             },
             HelpItem {
-                label: "ov snapshot restore viking://projects/acme <commit> --dry-run",
+                label: "ov snapshot restore <commit> viking://projects/acme --dry-run",
                 description: "Preview restoring a directory to a past snapshot.",
             },
         ],
@@ -585,11 +585,11 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         purpose: "Restore a project directory to a past snapshot via a forward commit.",
         examples: &[
             HelpItem {
-                label: "ov snapshot restore viking://projects/acme <commit> --dry-run",
+                label: "ov snapshot restore <commit> viking://projects/acme --dry-run",
                 description: "Preview which files would change.",
             },
             HelpItem {
-                label: "ov snapshot restore viking://projects/acme <commit> -m \"rollback\"",
+                label: "ov snapshot restore <commit> viking://projects/acme -m \"rollback\"",
                 description: "Apply the restore as a new commit.",
             },
         ],

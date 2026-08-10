@@ -68,13 +68,15 @@ Configuration priority: environment variables > `ovcli.conf` > `ov.conf` > built
 | Environment variable | Default | Description |
 |---------|--------|------|
 | `OPENVIKING_AUTO_RECALL` | `true` | Automatically recall before each user prompt |
-| `OPENVIKING_RECALL_LIMIT` | `6` | Maximum memories injected per turn |
-| `OPENVIKING_RECALL_TOKEN_BUDGET` | `2000` | Token budget for inline memory content |
+| `OPENVIKING_RECALL_LIMIT` | `10` | Legacy width override converted to per-category coding quotas |
+| `OPENVIKING_RECALL_TOKEN_BUDGET` | `2000` | Inline token budget for the final raw-find fallback |
 | `OPENVIKING_AUTO_CAPTURE` | `true` | Automatically capture after each turn |
 | `OPENVIKING_BYPASS_SESSION` | `false` | Skip all hooks for the current session |
 | `OPENVIKING_BYPASS_SESSION_PATTERNS` | `""` | CSV glob patterns for automatic bypass |
 | `OPENVIKING_MEMORY_ENABLED` | (auto) | Force enable or disable |
 | `OPENVIKING_DEBUG` | `false` | Write logs to `~/.openviking/logs/cc-hooks.log` |
+
+If recall latency matters most, see [Low-latency recall](https://docs.openviking.net/en/agent-integrations/01-overview#low-latency-recall).
 
 For multi-tenant deployments, set `OPENVIKING_ACCOUNT` and `OPENVIKING_USER`. See the [plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#configuration) for the full environment variable list.
 

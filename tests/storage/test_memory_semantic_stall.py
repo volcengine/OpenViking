@@ -196,8 +196,17 @@ async def test_memory_write_error_reports_error():
 
     fake_fs = MagicMock()
     fake_fs.ls = AsyncMock(return_value=[{"name": "file1.md", "isDir": False}])
+    fake_fs.read_file = AsyncMock(return_value="some content")
+    fake_fs.write_file = AsyncMock(side_effect=PermissionError("Permission denied"))
+    fake_fs._async_agfs.pathlock_acquire_exact_batch = AsyncMock(
+        return_value={"lease_ref": "test"}
+    )
+    fake_fs._async_agfs.pathlock_release = AsyncMock()
+    fake_fs._uri_to_path = MagicMock(
+        side_effect=lambda uri, ctx=None: f"/local/acc1/{uri.removeprefix('viking://')}"
+    )
 
-    msg = _make_msg(skip_vectorization=True)
+    msg = _make_msg()
     data = _build_data(msg)
 
     success_called = False
@@ -234,16 +243,6 @@ async def test_memory_write_error_reports_error():
             processor,
             "_generate_overview",
             new=AsyncMock(return_value="# Overview\ntest overview"),
-        ),
-        patch.object(
-            processor,
-            "_normalize_overview_generation",
-            return_value=("test overview", "test abstract"),
-        ),
-        patch.object(
-            processor,
-            "_write_memory_directory_semantics",
-            new=AsyncMock(side_effect=PermissionError("Permission denied")),
         ),
     ):
         await processor.on_dequeue(data)

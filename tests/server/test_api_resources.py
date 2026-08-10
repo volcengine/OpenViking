@@ -352,14 +352,18 @@ async def test_add_resource_business_error_uses_error_envelope(
     service,
     monkeypatch,
 ):
-    async def fake_add_resource(**kwargs):
+    async def fail_during_ingestion(**kwargs):
         return {
             "status": "error",
             "errors": ["Parse error: boom"],
             "source_path": kwargs["path"],
         }
 
-    monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
+    monkeypatch.setattr(
+        service.resources,
+        "_execute_resource_ingestion",
+        fail_during_ingestion,
+    )
 
     resp = await client.post(
         "/api/v1/resources",

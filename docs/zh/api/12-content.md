@@ -572,7 +572,6 @@ ov set-tags viking://resources/project/ \
 **认证**
 
 - HTTP 端点：在开启认证时要求 admin/root 角色。`api_key` 模式下，租户内容重建请使用 admin key；裸 root key 不能访问租户级数据。
-- Python embedded 模式：使用当前 service context
 - Python HTTP client / CLI：使用当前认证身份发起请求
 
 **参数**

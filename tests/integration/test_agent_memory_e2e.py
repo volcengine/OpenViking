@@ -33,8 +33,10 @@ from typing import Dict, Iterator, List, Tuple
 
 import pytest
 
-from openviking.client.local import LocalClient
+from openviking.message import TextPart
 from openviking.server.config import load_server_config
+from openviking.server.identity import RequestContext, Role
+from openviking.service.core import OpenVikingService
 from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
 from openviking.session.memory.utils import MemoryFileUtils
 from openviking.telemetry import tracer
@@ -143,10 +145,15 @@ CONV_B_FLIGHT_DUPLICATE_EXTRA: List[Tuple[str, str]] = [
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def _wait_for_task(client: LocalClient, task_id: str, timeout_s: int = 600) -> None:
+def _wait_for_task(
+    service: OpenVikingService,
+    ctx: RequestContext,
+    task_id: str,
+    timeout_s: int = 600,
+) -> None:
     deadline = time.time() + timeout_s
     while time.time() < deadline:
-        task = run_async(client.get_task(task_id)) or {}
+        task = run_async(service.sessions.get_commit_task(task_id, ctx)) or {}
         status = task.get("status") if isinstance(task, dict) else getattr(task, "status", None)
         if status in {"completed", "failed", "cancelled"}:
             if status != "completed":
@@ -156,25 +163,33 @@ def _wait_for_task(client: LocalClient, task_id: str, timeout_s: int = 600) -> N
     raise TimeoutError(f"Task timed out: {task_id}")
 
 
-def _run_conversation(client: LocalClient, turns: List[Tuple[str, str]]) -> None:
-    session = run_async(client.create_session())
-    session_id = session["session_id"]
+def _run_conversation(
+    service: OpenVikingService,
+    ctx: RequestContext,
+    turns: List[Tuple[str, str]],
+) -> None:
+    session = run_async(service.sessions.create(ctx))
+    session_id = session.session_id
     logger.info(f"  session_id = {session_id[:8]}...")
     for role, content in turns:
-        run_async(client.add_message(session_id=session_id, role=role, content=content))
+        run_async(session.add_message_async(role, [TextPart(content)]))
     logger.info(f"  Committing {len(turns)} messages...")
-    result = run_async(client.commit_session(session_id=session_id))
+    result = run_async(service.sessions.commit(session_id, ctx))
     task_id = (
         result.get("task_id") if isinstance(result, dict) else getattr(result, "task_id", None)
     )
     if task_id:
-        _wait_for_task(client, task_id)
+        _wait_for_task(service, ctx, task_id)
         logger.info(f"  Done (task {task_id[:8]})")
 
 
-def _list_non_overview_entries(client: LocalClient, uri: str) -> List[dict]:
+def _list_non_overview_entries(
+    service: OpenVikingService,
+    ctx: RequestContext,
+    uri: str,
+) -> List[dict]:
     try:
-        entries = run_async(client.ls(uri, simple=False)) or []
+        entries = run_async(service.fs.ls(uri, ctx=ctx, simple=False)) or []
     except Exception:
         return []
     _INTERNAL_SUFFIXES = (".overview.md", ".abstract.md")
@@ -194,14 +209,18 @@ def _entry_uri(entry: dict) -> str:
     return str(getattr(entry, "uri", ""))
 
 
-def _collect_source_trajectories(client: LocalClient, exp_entries: List[dict]) -> List[str]:
+def _collect_source_trajectories(
+    service: OpenVikingService,
+    ctx: RequestContext,
+    exp_entries: List[dict],
+) -> List[str]:
     """Collect traj URIs from experience forward links (exp→traj, derived_from)."""
     all_uris: List[str] = []
     for entry in exp_entries:
         exp_uri = _entry_uri(entry)
         if not exp_uri:
             continue
-        raw = run_async(client.read(exp_uri)) or ""
+        raw = run_async(service.fs.read(exp_uri, ctx=ctx)) or ""
         mf = MemoryFileUtils.read(raw) if raw else None
         if not mf:
             continue
@@ -219,23 +238,17 @@ def _collect_source_trajectories(client: LocalClient, exp_entries: List[dict]) -
 def local_test_env() -> Iterator[Dict[str, object]]:
     local_path = Path.cwd() / ".tmp_agent_memory_e2e" / uuid.uuid4().hex[:8]
     local_path.mkdir(parents=True, exist_ok=True)
-    try:
-        yield {
-            "path": str(local_path),
-            "account_id": "default",
-        }
-    finally:
-        pass
-        # shutil.rmtree(local_path, ignore_errors=True)
+    yield {"path": str(local_path), "account_id": "default"}
 
 
-def _build_client(env: Dict[str, object], user_id: str) -> LocalClient:
-    client = LocalClient(
-        path=str(env["path"]),
-        user=UserIdentifier(str(env["account_id"]), user_id),
-    )
-    run_async(client.initialize())
-    return client
+def _build_service(
+    env: Dict[str, object],
+    user_id: str,
+) -> tuple[OpenVikingService, RequestContext]:
+    user = UserIdentifier(str(env["account_id"]), user_id)
+    service = OpenVikingService(path=str(env["path"]), user=user)
+    run_async(service.initialize())
+    return service, RequestContext(user=user, role=Role.USER)
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
@@ -263,46 +276,48 @@ class TestAgentMemoryE2E:
         pytest.importorskip("opentelemetry")
         initialized = init_tracer_from_server_config(load_server_config())
         if initialized is None or not tracer.is_enabled():
-            pytest.fail(
-                "failed to initialize tracer; please check server.observability.traces"
-            )
+            pytest.fail("failed to initialize tracer; please check server.observability.traces")
 
         trajectories_dir = "viking://user/alice/memories/trajectories"
         experiences_dir = "viking://user/alice/memories/experiences"
 
-        client = None
+        service = None
         try:
             with tracer.start_as_current_span(
                 "tests.integration.test_trajectory_and_experience_extraction"
             ):
                 print(f"\n[TEST] trace_id: {tracer.get_trace_id()}")
-                client = _build_client(local_test_env, user_id="alice")
+                service, ctx = _build_service(local_test_env, user_id="alice")
 
                 logger.info("Round 1: flight booking duplicate (expect CREATE experience)")
-                _run_conversation(client, CONV_A_FLIGHT_DUPLICATE)
+                _run_conversation(service, ctx, CONV_A_FLIGHT_DUPLICATE)
 
-                traj_after_r1 = _list_non_overview_entries(client, trajectories_dir)
-                exp_after_r1 = _list_non_overview_entries(client, experiences_dir)
+                traj_after_r1 = _list_non_overview_entries(service, ctx, trajectories_dir)
+                exp_after_r1 = _list_non_overview_entries(service, ctx, experiences_dir)
                 assert traj_after_r1, "should have trajectory memories after round 1"
                 assert len(exp_after_r1) >= 1, (
                     "should have at least 1 experience after round 1 (CREATE path)"
                 )
 
                 logger.info("Round 2: booking conflict extra cases (expect EDIT experience)")
-                _run_conversation(client, CONV_B_FLIGHT_DUPLICATE_EXTRA)
+                _run_conversation(service, ctx, CONV_B_FLIGHT_DUPLICATE_EXTRA)
 
-                traj_after_r2 = _list_non_overview_entries(client, trajectories_dir)
-                exp_after_r2 = _list_non_overview_entries(client, experiences_dir)
+                traj_after_r2 = _list_non_overview_entries(service, ctx, trajectories_dir)
+                exp_after_r2 = _list_non_overview_entries(service, ctx, experiences_dir)
 
                 traj_uris_r2 = {_entry_uri(e) for e in traj_after_r2 if _entry_uri(e)}
-                source_trajectories = _collect_source_trajectories(client, exp_after_r2)
+                source_trajectories = _collect_source_trajectories(
+                    service,
+                    ctx,
+                    exp_after_r2,
+                )
                 assert source_trajectories, "experience metadata should include source_trajectories"
                 assert any(uri in traj_uris_r2 for uri in source_trajectories), (
                     "source_trajectories should reference extracted trajectories"
                 )
         finally:
-            if client is not None:
-                run_async(client.close())
+            if service is not None:
+                run_async(service.close())
             _flush_tracer_provider()
 
 

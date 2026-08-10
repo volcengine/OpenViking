@@ -21,6 +21,8 @@ from .semantic_queue import SemanticQueue
 
 logger = get_logger(__name__)
 
+DEFAULT_MAX_CONCURRENT_SESSION_COMMIT = 4
+
 # ========== Singleton Pattern ==========
 _instance: Optional["QueueManager"] = None
 
@@ -30,7 +32,7 @@ def init_queue_manager(
     timeout: int = 10,
     mount_point: str = "/queue",
     max_concurrent_embedding: int = 10,
-    max_concurrent_semantic: int = 32,
+    max_concurrent_semantic: int = 64,
     max_concurrent_parse: int = 4,
 ) -> "QueueManager":
     """Initialize QueueManager singleton.
@@ -82,7 +84,7 @@ class QueueManager:
         timeout: int = 10,
         mount_point: str = "/queue",
         max_concurrent_embedding: int = 10,
-        max_concurrent_semantic: int = 32,
+        max_concurrent_semantic: int = 64,
         max_concurrent_parse: int = 4,
     ):
         """Initialize QueueManager."""
@@ -167,12 +169,7 @@ class QueueManager:
             if thread.is_alive():
                 return
 
-        if queue.name == self.EMBEDDING:
-            max_concurrent = self._max_concurrent_embedding
-        elif queue.name in {self.EXTERNAL_PARSE, self.SESSION_COMMIT, self.ADD_RESOURCE}:
-            max_concurrent = self._max_concurrent_parse
-        else:
-            max_concurrent = self._max_concurrent_semantic
+        max_concurrent = self._max_concurrent_for_queue(queue.name)
         stop_event = threading.Event()
         self._queue_stop_events[queue.name] = stop_event
         thread = threading.Thread(
@@ -182,6 +179,16 @@ class QueueManager:
         )
         self._queue_threads[queue.name] = thread
         thread.start()
+
+    def _max_concurrent_for_queue(self, queue_name: str) -> int:
+        """Return the worker concurrency limit for a named queue."""
+        if queue_name == self.EMBEDDING:
+            return self._max_concurrent_embedding
+        if queue_name in {self.EXTERNAL_PARSE, self.ADD_RESOURCE}:
+            return self._max_concurrent_parse
+        if queue_name == self.SESSION_COMMIT:
+            return DEFAULT_MAX_CONCURRENT_SESSION_COMMIT
+        return self._max_concurrent_semantic
 
     def _queue_worker_loop(
         self, queue: NamedQueue, stop_event: threading.Event, max_concurrent: int = 1
@@ -205,9 +212,7 @@ class QueueManager:
                         if queue.has_dequeue_handler() and queue_size > 0:
                             data = loop.run_until_complete(queue.dequeue())
                             if data is not None:
-                                logger.debug(
-                                    f"[QueueManager] Dequeued message from {queue.name}: {data}"
-                                )
+                                logger.debug("[QueueManager] Dequeued message from %s", queue.name)
                         else:
                             stop_event.wait(self._poll_interval)
                     except Exception as e:

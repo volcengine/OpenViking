@@ -1,19 +1,5 @@
 #!/usr/bin/env python3
-"""Step 1 (Effectiveness): Import real code repos into OpenViking (with indexing).
-
-Imports the entire source directory as a single resource via
-SyncOpenViking.add_resource (wait=True, build_index=True, summarize=True).
-add_resource handles recursive traversal internally.
-
-After import, run step2_quality.py to evaluate retrieval quality.
-
-Prerequisites:
-  - Download code repos and place them under the source directory manually.
-
-Usage:
-  python3 step1_add_resource.py
-  python3 step1_add_resource.py --source ~/.openviking/data/benchmark/OpenViking-main
-"""
+"""Import real code repos through the Python HTTP SDK with indexing enabled."""
 
 from __future__ import annotations
 
@@ -21,7 +7,7 @@ import argparse
 import os
 import time
 
-from openviking.sync_client import SyncOpenViking
+from openviking_sdk import OpenVikingError, SyncHTTPClient
 
 DEFAULT_SOURCE = os.path.expanduser("~/.openviking/data/benchmark/OpenViking-main")
 BENCHMARK_PARENT = "viking://resources/benchmark/effectiveness"
@@ -53,22 +39,25 @@ def main():
     print("=" * 80)
     print(f"  Source:   {source}")
     print(f"  Parent:   {args.parent}")
-    print("  Indexing: ENABLED (build_index=True, summarize=True)")
+    print("  Processing: semantic_and_vectors")
     print()
 
-    client = SyncOpenViking()
+    client = SyncHTTPClient()
     client.initialize()
 
     t0 = time.monotonic()
     try:
+        try:
+            client.mkdir(args.parent)
+        except OpenVikingError as exc:
+            if exc.code != "ALREADY_EXISTS":
+                raise
         result = client.add_resource(
             path=source,
             parent=args.parent,
             reason="benchmark effectiveness",
             wait=True,
-            create_parent=True,
-            build_index=True,
-            summarize=True,
+            processing_mode="semantic_and_vectors",
         )
         elapsed = time.monotonic() - t0
         root_uri = result.get("root_uri", "?")
@@ -76,11 +65,11 @@ def main():
         print()
         print("Import completed successfully.")
         print("Next step: run step2_quality.py to evaluate retrieval quality")
-    except Exception as e:
+    except Exception as exc:
         elapsed = time.monotonic() - t0
-        print(f"FAILED ({elapsed:.1f}s): {e}")
-
-    client.close()
+        print(f"FAILED ({elapsed:.1f}s): {exc}")
+    finally:
+        client.close()
 
 
 if __name__ == "__main__":

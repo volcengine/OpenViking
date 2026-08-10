@@ -18,6 +18,11 @@ from openviking_cli.utils.config.config_loader import (
     require_config,
     resolve_config_path,
 )
+from openviking_cli.utils.config.open_viking_config import (
+    OpenVikingConfig,
+    ParserApiConfig,
+    ParserRuntimeConfig,
+)
 from openviking_cli.utils.config.parser_config import CodeHostingConfig
 
 
@@ -117,6 +122,33 @@ class TestRequireConfig:
         monkeypatch.delenv("TEST_MISSING_ENV", raising=False)
         with pytest.raises(FileNotFoundError, match="configuration file not found"):
             require_config(None, "TEST_MISSING_ENV", "nonexistent_file.conf", "test")
+
+
+def test_parser_max_concurrent_parse_defaults_to_four():
+    config = OpenVikingConfig.from_dict({})
+
+    assert config.parsers.max_concurrent_parse == 4
+
+
+def test_parser_max_concurrent_parse_accepts_positive_value():
+    config = OpenVikingConfig.from_dict({"parsers": {"max_concurrent_parse": 9}})
+
+    assert config.parsers.max_concurrent_parse == 9
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_parser_max_concurrent_parse_rejects_non_positive_value(value):
+    with pytest.raises(ValueError) as exc_info:
+        ParserRuntimeConfig(max_concurrent_parse=value)
+
+    assert exc_info.value.errors()[0]["type"] == "greater_than"
+
+
+def test_parser_api_rejects_worker_max_concurrent():
+    with pytest.raises(ValueError) as exc_info:
+        ParserApiConfig(max_concurrent=9)
+
+    assert exc_info.value.errors()[0]["type"] == "extra_forbidden"
 
 
 def test_generic_code_hosting_domains_include_supported_platforms():

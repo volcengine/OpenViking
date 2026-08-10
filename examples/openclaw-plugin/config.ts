@@ -16,11 +16,11 @@ import { getEnv } from "./runtime-utils.js";
  *                     leading/trailing whitespace trimmed — convenient for
  *                     Kubernetes `secretKeyRef` mount volumes and
  *                     file-permission-only deployments.
- *   source: "exec" -> delegate to host `openclaw` secret resolver when the
- *                     runtime exposes it; today the plugin performs a
- *                     best-effort `provider + id` CLI exec call so that
- *                     1Password / Vault / gopass users can share OpenViking
- *                     credentials with their other providers.
+ *   source: "exec" -> NOT supported in the packaged plugin. Marketplace
+ *                     install scanners (OpenClaw/ArkClaw) block any plugin
+ *                     whose shipped code can spawn subprocesses, so the exec
+ *                     resolver was removed from this build; configuring it
+ *                     fails with a clear error pointing at env/file instead.
  */
 export type OpenVikingSecretRef =
   | { source: "env"; id: string }
@@ -127,8 +127,10 @@ export type MemoryOpenVikingConfig = {
 
 /** Runtime config after memoryOpenVikingConfigSchema.parse() has applied defaults. */
 export type ParsedMemoryOpenVikingConfig = Required<
-  Omit<MemoryOpenVikingConfig, "agentExperience" | "recallTargetTypes">
+  Omit<MemoryOpenVikingConfig, "agentExperience" | "recallTargetTypes" | "apiKey">
 > & {
+  /** parse() resolves SecretRef values, so the runtime shape is always a plain string. */
+  apiKey: string;
   agentExperience: Required<NonNullable<MemoryOpenVikingConfig["agentExperience"]>>;
   recallTargetTypes: Array<"resource" | "user" | "agent">;
 };
@@ -168,6 +170,8 @@ export const OPENVIKING_DEFAULT_ENABLED_TOOL_NAMES = [
   "ov_read",
   "ov_multi_read",
   "ov_list",
+  "search_experience",
+  "read_experience",
   "memory_recall",
   "ov_recall_trace",
   "memory_store",
@@ -188,6 +192,7 @@ export const OPENVIKING_TOOL_GROUPS: Record<string, readonly OpenVikingToolName[
   default: OPENVIKING_DEFAULT_ENABLED_TOOL_NAMES,
   memory: ["memory_recall", "memory_store", "memory_forget"],
   resource_query: ["ov_search", "ov_read", "ov_multi_read", "ov_list"],
+  experience: ["search_experience", "read_experience"],
   import: ["add_resource", "add_skill"],
   recall_trace: ["ov_recall_trace"],
   archive: ["ov_archive_search", "ov_archive_expand"],
@@ -227,13 +232,10 @@ function resolvePeerPrefix(configured: unknown): string {
  *     Missing / unreadable files propagate the original node error with an
  *     error prefix that names the OpenViking field, so the user knows which
  *     secretRef failed to load.
- *   * `exec`: shells out `<provider> <id>`. Providers commonly expose this
- *     shape (1Password CLI, gopass, HashiCorp Vault), which matches how
- *     OpenClaw's own `@transmitt0r/openclaw-plugin-onepassword` provider
- *     resolves `{source:"exec", provider:"onepassword", id:"..."}`. Exec is
- *     best-effort; failures surface with an error prefix so users can
- *     distinguish `provider not installed` from `provider configured but id
- *     missing`.
+ *   * `exec`: rejected with a "not supported" error. The subprocess-based
+ *     resolver was removed because marketplace install scanners block plugins
+ *     whose shipped code can spawn processes; wrap the secret-manager CLI
+ *     output into an env var or file instead (`OPENVIKING_API_KEY=$(op ...)`).
  */
 function resolveSecret(
   value: string | OpenVikingSecretRef | undefined | null,
@@ -244,7 +246,7 @@ function resolveSecret(
   if (!value || typeof value !== "object") {
     throw new Error(
       `OpenViking ${label} must be a plain string or a SecretRef object ` +
-        `({source:"env"|"file"|"exec", id})`,
+        `({source:"env"|"file", id})`,
     );
   }
   const obj = value as Record<string, unknown>;
@@ -275,39 +277,18 @@ function resolveSecret(
       }
     }
     case "exec": {
-      const provider = typeof (obj as Record<string, unknown>).provider === "string"
-        ? (obj as Record<string, unknown>).provider as string
-        : "";
-      if (!provider) {
-        throw new Error(
-          `OpenViking ${label} SecretRef exec source requires a "provider" field naming the secret-manager CLI on PATH`,
-        );
-      }
-      try {
-        // Avoid top-level `import "node:child_process"` — this branch is rare
-        // and keeping the require lazy makes startup marginally faster for
-        // the 95% of users who pick env/file.
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
-        const out = execFileSync(provider, [id], {
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "pipe"],
-          timeout: 15_000,
-          env: process.env,
-        }) as string;
-        return out.trim();
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        throw new Error(
-          `OpenViking ${label} SecretRef exec source: provider "${provider}" failed for id "${id}" (${msg})`,
-        );
-      }
+      throw new Error(
+        `OpenViking ${label} SecretRef exec source is not supported in the packaged plugin ` +
+          `(marketplace install scanners block subprocess execution). Export the secret to an ` +
+          `environment variable ({source:"env"}) or a file ({source:"file"}) instead, e.g. ` +
+          `OPENVIKING_API_KEY=$(op read ${id}).`,
+      );
     }
     default:
       throw new Error(
         `OpenViking ${label} SecretRef has unknown source "${String(
           (obj as Record<string, unknown>).source,
-        )}". Supported: "env" | "file" | "exec".`,
+        )}". Supported: "env" | "file".`,
       );
   }
 }
@@ -811,7 +792,7 @@ export const memoryOpenVikingConfigSchema = {
       placeholder: "${OPENVIKING_API_KEY}",
       help:
         "Optional API key for OpenViking server. Accepts a plain string, " +
-        "${ENV_VAR} interpolation, or a SecretRef object ({source: env/file/exec, id}). " +
+        "${ENV_VAR} interpolation, or a SecretRef object ({source: env/file, id}). " +
         "Prefer the SecretRef shapes so the key never sits as plaintext in openclaw.json.",
     },
     headers: {
@@ -970,7 +951,7 @@ export const memoryOpenVikingConfigSchema = {
     enabledTools: {
       label: "Enabled Tools",
       placeholder: "default",
-      help: "Agent-visible tool allowlist. Accepts tool names or groups: default, all, memory, resource_query, import, recall_trace, archive, tool_result. add_resource also requires enableAddResourceTool=true.",
+      help: "Agent-visible tool allowlist. Accepts tool names or groups: default, all, memory, resource_query, experience, import, recall_trace, archive, tool_result. add_resource also requires enableAddResourceTool=true.",
       advanced: true,
     },
     disabledTools: {

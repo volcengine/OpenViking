@@ -75,6 +75,12 @@ Credential environment variables:
 | `OPENVIKING_WORKSPACE_PEER` | Derive an actor peer from the current workspace by default; set `0` to disable |
 | `OPENVIKING_RECALL_PEER_SCOPE` | `all` recalls other project memories with a score penalty; `actor` only sees global plus the current project |
 
+Recall asks the server to assemble the context block in one request
+(`POST /api/v1/search/search` with `mode="context"`), so token budgeting, detail
+tiers and cross-turn dedup are shared with every other harness. Deployments
+without that endpoint fall back to `/api/v1/search/recall`, and that outcome is
+cached so only the first turn pays for the probe.
+
 API keys are sent as `Authorization: Bearer ...`. By default the extension derives a peer from the process workspace path using Claude's project-directory naming rule: every non-letter-or-digit character becomes `-`, with no path normalization. For example, `/Users/x/Dev/OpenViking` becomes `-Users-x-Dev-OpenViking`. The effective peer is sent as `X-OpenViking-Actor-Peer` and stored as `peer_id` on captured session messages. `OPENVIKING_PEER_ID` overrides the workspace-derived value.
 
 Recall defaults to the broad mode: global memory, the current workspace, and other workspace memories can all be recalled, with other workspaces penalized and rendered later. Set `OPENVIKING_RECALL_PEER_SCOPE=actor` for the isolation mode, which only sees global memory plus the current workspace. In deployments where one bot serves multiple real people, such as zouk, vikingbot, or AstrBot, use the isolation mode with an explicit actor peer so one person's memories are not recalled into another person's session.
@@ -105,9 +111,13 @@ All fields below live in `config.json`. Defaults are shown.
 | `recallTokenBudget`      | `2000`     | Token budget for inline recall content                                   |
 | `recallMaxContentChars`  | `500`      | Per-item content cap for search results                                  |
 | `recallPreferAbstract`   | `true`     | Prefer L0 abstract over L2 full body when available                      |
-| `recallLimit`            | `6`        | Max memories to inject per prompt                                        |
+| `recallLimit`            | `10`       | Legacy quota-scaling input converted to six coding quotas, not a final cap |
 | `scoreThreshold`         | `0.35`     | Min relevance score (0–1)                                                |
 | `minQueryLength`         | `3`        | Skip recall for queries shorter than N characters                        |
+
+Explicit `recallLimit` values from 1 through 5 produce an effective total
+quota of 6 because each coding category keeps one retrieval slot. Direct API
+integrations should configure category `quotas` when they need exact ceilings.
 
 ### Capture tuning
 

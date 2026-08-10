@@ -105,15 +105,15 @@ def test_pipeline_initialization():
 
     from openviking.eval.ragas.pipeline import RAGQueryPipeline
 
-    pipeline = RAGQueryPipeline(config_path="./test.conf", data_path="./test_data/test_ragas")
+    pipeline = RAGQueryPipeline(config_path="./test.conf", server_url="http://openviking.test")
 
     assert pipeline.config_path == "./test.conf"
-    assert pipeline.data_path == "./test_data/test_ragas"
+    assert pipeline.server_url == "http://openviking.test"
     assert pipeline._client is None
 
     print("  ✅ RAGQueryPipeline initialized successfully")
     print(f"  ✅ Config path: {pipeline.config_path}")
-    print(f"  ✅ Data path: {pipeline.data_path}")
+    print(f"  ✅ Server URL: {pipeline.server_url}")
 
 
 def test_question_loader():

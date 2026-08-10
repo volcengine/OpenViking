@@ -190,6 +190,17 @@ impl FilesystemPathLockProvider {
             }
         }
     }
+
+    /// Map filesystem CAS failures into pathlock busy vs. fatal I/O outcomes.
+    fn map_cas_error(operation: &str, lock_path: &str, error: crate::core::Error) -> PathLockError {
+        match error {
+            crate::core::Error::WouldBlock(message) => PathLockError::Busy {
+                lock_path: lock_path.to_string(),
+                operation: format!("{operation} CAS ({message})"),
+            },
+            other => PathLockError::Io(format!("{operation} CAS failed: {other}")),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -255,6 +266,16 @@ mod tests {
         assert_eq!(token.time_ns, 123);
         assert_eq!(token.lock_type, crate::lock::PathLockKind::Exact);
     }
+
+    #[test]
+    fn compare_and_remove_would_block_maps_to_busy() {
+        let err = FilesystemPathLockProvider::map_cas_error(
+            "remove",
+            "/data/.path.ovlock",
+            Error::WouldBlock("lock would block".to_string()),
+        );
+        assert!(matches!(err, PathLockError::Busy { .. }));
+    }
 }
 
 #[async_trait]
@@ -279,11 +300,7 @@ impl PathLockProvider for FilesystemPathLockProvider {
                                 .fs
                                 .compare_and_remove(lock_path, &data)
                                 .await
-                                .map_err(|e| {
-                                    PathLockError::Io(format!(
-                                        "legacy encrypted lock cleanup failed: {e}"
-                                    ))
-                                })?
+                                .map_err(|e| Self::map_cas_error("legacy encrypted lock cleanup", lock_path, e))?
                             {
                                 return Ok(None);
                             }
@@ -335,7 +352,7 @@ impl PathLockProvider for FilesystemPathLockProvider {
         self.fs
             .compare_and_write(lock_path, expected.as_bytes(), replacement.as_bytes())
             .await
-            .map_err(|e| PathLockError::Io(format!("token CAS failed: {e}")))
+            .map_err(|e| Self::map_cas_error("compare_and_write", lock_path, e))
     }
 
     async fn refresh_token(
@@ -360,7 +377,7 @@ impl PathLockProvider for FilesystemPathLockProvider {
         self.fs
             .compare_and_write(lock_path, &raw, encoded.as_bytes())
             .await
-            .map_err(|e| PathLockError::Io(format!("refresh CAS failed: {e}")))
+            .map_err(|e| Self::map_cas_error("refresh", lock_path, e))
     }
 
     async fn remove_token(&self, lock_path: &str, owner_id: &str) -> PathLockResult<bool> {
@@ -374,7 +391,7 @@ impl PathLockProvider for FilesystemPathLockProvider {
         self.fs
             .compare_and_remove(lock_path, &raw)
             .await
-            .map_err(|e| PathLockError::Io(format!("remove CAS failed: {e}")))
+            .map_err(|e| Self::map_cas_error("remove", lock_path, e))
     }
 
     async fn scan_descendant_locks(&self, root: &str) -> PathLockResult<Vec<String>> {

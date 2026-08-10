@@ -136,7 +136,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 **处理流程**：
 1. 识别并校验资源来源（URL 或上传的临时文件）
 2. 解析目标 URI
-3. 调用对应 Parser 解析内容
+3. 调用对应格式 Parser；`args.parse_mode` 控制转换后的 Markdown 正文是否允许拆分
 4. 构建目录树并写入 AGFS
 5. 按 `processing_mode` 执行入库后的处理：`semantic_and_vectors` 生成语义产物和向量；`vectors_only` 跳过语义理解，只提交文件向量化
 6. `wait=true` 时等待语义处理/向量化完成；`wait=false` 时返回 `task_id` 用于队列跟踪
@@ -144,8 +144,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 8. 如指定 `--watch-interval`，设置定时更新任务
 
 **代码入口**：
-- `openviking/client/local.py:LocalClient.add_resource` - SDK 入口（嵌入式）
-- `openviking_cli/client/http.py:AsyncHTTPClient.add_resource` - SDK 入口（HTTP）
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.add_resource` - Python SDK 入口
 - `openviking/server/routers/resources.py:add_resource` - HTTP 路由
 - `openviking/service/resource_service.py` - 核心服务实现
 - `crates/ov_cli/src/handlers.rs:handle_add_resource` - CLI 处理
@@ -171,7 +170,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 | exclude | string | 否 | None | 排除的文件模式（glob） |
 | directly_upload_media | bool | 否 | True | 是否直接上传媒体文件 |
 | preserve_structure | bool | 否 | None | 是否保留目录结构 |
-| args | object | 否 | `{}` | 传给特定 parser/accessor 的导入参数。例如 `args.site=true/false` 强制/禁用整站（sitemap/RSS）导入，`args.max_pages` 等可覆盖 `webfeed` 配置；递归网页爬虫支持 `args.depth`、`args.max_pages`、`args.include_paths`、`args.exclude_paths`、`args.allow_external_links`、`args.skip_download_links`；飞书用户 token 导入传 `args.feishu_access_token`。`path`、`to`、`watch_interval`、`include`、`exclude` 等 `add_resource` 核心字段不能放入 `args` |
+| args | object | 否 | `{}` | 传给特定 parser/accessor 的导入参数。`args.parse_mode` 支持 `default`（保持现有拆分行为）和 `no_split`（正常解析并将每个源文档正文保存为一个 Markdown 文件）。例如 `args.site=true/false` 强制/禁用整站（sitemap/RSS）导入，`args.max_pages` 等可覆盖 `webfeed` 配置；递归网页爬虫支持 `args.depth`、`args.max_pages`、`args.include_paths`、`args.exclude_paths`、`args.allow_external_links`、`args.skip_download_links`；飞书用户 token 导入传 `args.feishu_access_token`。`path`、`to`、`watch_interval`、`include`、`exclude` 等 `add_resource` 核心字段不能放入 `args` |
 | watch_interval | float | 否 | 0 | 定时更新间隔（分钟）。>0 为 URL/sitemap/RSS 等可重新读取的来源创建任务；通过 `temp_file_id` 上传的内容是一次性快照，变化后需重新添加。≤0 取消任务；显式 `to` 优先，否则绑定本次导入的 `root_uri` |
 | processing_mode | string | 否 | `semantic_and_vectors` | 入库后的处理模式。`semantic_and_vectors` 是默认流程：生成语义产物（`.abstract.md`、`.overview.md`）并生成向量。`vectors_only` 跳过语义理解/VLM 总结，只对当前资源文件生成向量 |
 | tags | string[] | 否 | None | 导入时写入向量检索记录的显式检索标签，格式必须是 `k=v`，例如 `["team=search", "env=test"]`。搜索接口可用同名 `tags` 参数过滤召回 |
@@ -198,6 +197,9 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 - 飞书/Lark 用户 token watch 需要 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET`，或 `ov.conf` 中的 `feishu.app_id` 和 `feishu.app_secret`。飞书 refresh token 绑定签发它的应用，因此传入的用户 token 必须来自 OpenViking 当前配置的同一个飞书应用。
 - Watch task 的 token 状态保存在内部控制文件 `viking://resources/.watch_tasks.json` 中，不会出现在 watch API/MCP/CLI 返回里。若启用了 VikingFS 文件加密，该控制文件会静态加密；否则服务端控制文件中会包含明文 token 状态。
 - 本地目录输入会遵循 `.gitignore`（根目录和子目录，标准 Git 语义）；`ignore_dirs`、`include`、`exclude` 会在此基础上进一步过滤。
+- `args.parse_mode=no_split` 仍调用正常的格式 Parser。PDF、Word、PowerPoint、HTML 等受支持文档会转换为 Markdown，但跳过按标题、段落和长度拆分。目录导入会对每个受支持文档分别应用该规则，并继续遵循 `.gitignore`、筛选参数和 `preserve_structure`。
+- 对单文件输入使用 `no_split` 时，如果解析结果恰好只有一个可见文件且未指定 `to`，该文件会直接放到解析出的父目录下（例如 `guide.md` 写入 `viking://resources/guide.md`），不会创建同名上层目录，也不会生成目录级 `.abstract.md` / `.overview.md`。如果解析结果还包含图片等其他可见文件，则保留上层目录。显式指定的 `to` 始终作为最终 URI 原样保留。
+- `no_split` 只改变 Markdown 正文的存储布局，不改变语义处理、文件向量化和内部 embedding 分块。Markdown 相对链接会按同一个 no-split 输出布局解析，不会再指向仅拆分模式存在的路径。如果配置的 Understanding 解析器无法保证单一 Markdown 正文，接口会明确返回不支持该模式的错误。
 - 如果要直接创建或更新纯文本内容，请使用 [content/write](03-filesystem.md#write)，不要使用 `add_resource`。资源导入和内容写入后都会自动刷新语义与 embedding。
 
 #### 3. 使用示例
@@ -310,14 +312,9 @@ curl -X POST http://localhost:1933/api/v1/resources \
 **Python SDK**
 
 ```python
-import openviking as ov
+from openviking_sdk import SyncHTTPClient
 
-# 使用嵌入式模式（以后不再推荐和详细介绍）
-client = ov.OpenViking(path="./data")
-client.initialize()
-
-# 使用 HTTP 客户端模式
-client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 ## 添加本地文件
@@ -326,6 +323,12 @@ result = client.add_resource(
     reason="User guide documentation"
 )
 print(f"Added: {result['root_uri']}")
+
+## 正常解析并转换为 Markdown，但每个文档正文不拆分
+result = client.add_resource(
+    "./documents",
+    args={"parse_mode": "no_split"},
+)
 
 ## 从 URL 添加到指定位置
 result = client.add_resource(
@@ -395,6 +398,7 @@ client.add_resource(
 const task = await client.addResource("https://example.com/docs", {
   to: "viking://resources/docs/",
   wait: true,
+  args: { parse_mode: "no_split" },
 });
 console.log(task);
 ```
@@ -405,6 +409,7 @@ console.log(task);
 result, err := client.AddResource(ctx, "./documents/guide.md", &openviking.AddResourceOptions{
     Reason: "User guide documentation",
     Wait:   true,
+    Args:   map[string]any{"parse_mode": "no_split"},
 })
 if err != nil {
     return err
@@ -417,6 +422,9 @@ fmt.Println(result["root_uri"])
 ```bash
 # 添加本地文件
 ov add-resource ./documents/guide.md --reason "User guide"
+
+# 正常解析，每个源文档只生成一个 Markdown 正文
+ov add-resource ./documents --args parse_mode:no_split
 
 # 从 URL 添加
 ov add-resource https://example.com/guide.md --to viking://resources/guide.md

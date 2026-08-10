@@ -73,6 +73,10 @@ pub struct BorrowedPathLockLease {
 /// Serializable handoff payload for cross-queue / cross-worker lock transfer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PathLockHandoffRef {
+    /// Original lease reference, used to locate the same-process registry entry.
+    /// Optional only for backward compatibility with historic queue payloads.
+    #[serde(default)]
+    pub lease_ref: Option<String>,
     /// Owner identity (preserved across handoff).
     pub owner_id: String,
     /// Lock-file paths held.
@@ -83,7 +87,7 @@ pub struct PathLockHandoffRef {
 }
 
 /// A single lock request for batch acquire.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PathLockRequest {
     /// Target path.
     pub path: String,
@@ -173,6 +177,15 @@ pub enum PathLockError {
     Timeout {
         /// Elapsed time in milliseconds.
         elapsed_ms: u64,
+    },
+
+    /// Lock token mutation is temporarily blocked and should be retried.
+    #[error("lock busy at '{lock_path}' during {operation}")]
+    Busy {
+        /// Lock path whose token mutation is temporarily blocked.
+        lock_path: String,
+        /// Mutation operation being attempted.
+        operation: String,
     },
 
     /// I/O error during lock operation.

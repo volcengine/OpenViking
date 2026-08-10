@@ -17,6 +17,7 @@ from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.routers.content import SetTagsRequest
 from openviking.server.routers.content import set_tags as content_set_tags
+from openviking.storage.expr import And, Eq, In
 from openviking.storage.vikingdb_manager import VikingDBManagerProxy
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
@@ -35,14 +36,22 @@ def _clean_memory_attrs(raw: str) -> dict[str, Any]:
     return attrs
 
 
-async def _tags_attr(service: Any, uri: str, ctx: RequestContext) -> list[str]:
+async def _tags_attr(
+    service: Any, uri: str, ctx: RequestContext, *, is_dir: bool
+) -> list[str]:
     vikingdb_manager = getattr(service, "vikingdb_manager", None)
     if not vikingdb_manager:
         return []
 
+    # Tags are written per level (see ContentWriteCoordinator.set_tags): a
+    # directory carries them on its L0/L1 summary records, while a file carries
+    # them on its L2 content record. Mirror that here so the exact node's tags
+    # are read back instead of unrelated records. Eq("uri", ...) compiles to an
+    # exact path match (-d=0), avoiding prefix/subtree matches over the path field.
+    levels = [0, 1] if is_dir else [2]
     proxy = VikingDBManagerProxy(vikingdb_manager, ctx)
     records = await proxy.filter(
-        filter={"op": "must", "field": "uri", "conds": [uri]},
+        filter=And([Eq("uri", uri), In("level", levels)]),
         limit=10,
         output_fields=_ATTR_INDEX_FIELDS,
     )
@@ -181,7 +190,9 @@ async def attrs(
             "uri": canonical_uri,
             "context_type": context_type_for_uri(canonical_uri),
             "attrs": {
-                "tags": await _tags_attr(service, canonical_uri, _ctx),
+                "tags": await _tags_attr(
+                    service, canonical_uri, _ctx, is_dir=stat_result.get("isDir", False)
+                ),
             },
         }
         if result["context_type"] == "memory" and not stat_result.get("isDir", False):

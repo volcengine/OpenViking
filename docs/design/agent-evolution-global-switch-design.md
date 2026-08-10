@@ -36,9 +36,9 @@ The default is `false`.
 defaults such as add targets. Agent Evolution is no longer part of active
 `UserConfig` resolution.
 
-This setting belongs to the HTTP server deployment surface. Embedded/local SDK
-clients do not load `ServerConfig`, so they preserve the historical enabled
-behavior instead of becoming permanently unable to produce Agent memory.
+This setting belongs to the HTTP server deployment surface. A directly
+constructed `SessionService` retains its enabled default for internal service
+callers that do not load `ServerConfig`.
 
 ## Commit Behavior
 
@@ -76,7 +76,6 @@ Remove the user-level management surfaces introduced by the current branch:
 - `GET /api/v1/user-settings/memory`
 - `PATCH /api/v1/user-settings/memory`
 - Python SDK memory-setting methods
-- Embedded client memory-setting methods
 - `ov user-settings memory`
 - `ov user-settings set-memory`
 - Agent Evolution fields accepted during account or user creation
@@ -87,8 +86,8 @@ override the deployment-level setting.
 ## Compatibility
 
 - Existing experiences remain readable and searchable.
-- Embedded/local SDK clients preserve their historical enabled behavior because
-  they do not have the HTTP server configuration surface.
+- Directly constructed services preserve their enabled default because they do
+  not have the HTTP server configuration surface.
 - Existing user config files containing `agent_evolution` continue to parse,
   preventing an upgrade from breaking users that already wrote the branch-era
   configuration.
