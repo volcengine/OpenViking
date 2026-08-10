@@ -82,7 +82,11 @@
             },
         },
     },
-    "queue_workers": {"external_parse": {"max_concurrent": 4}},
+    "queue_workers": {
+        "external_parse": {"max_concurrent": 4},
+        "add_resource": {"max_concurrent": 4},
+        "session_commit": {"max_concurrent": 4},
+    },
     "embedding": {
         "dense": {
             "model": "doubao-embedding-vision-251215",
@@ -218,7 +222,6 @@
         "rotation_interval": "midnight",
     },
     "parsers": {
-        "max_concurrent_parse": 4,
         "pdf": {
             "strategy": "auto",
             "max_content_length": 100000,

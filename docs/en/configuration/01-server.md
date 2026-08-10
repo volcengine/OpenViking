@@ -208,6 +208,18 @@ Remote backends also require endpoint, bucket/collection, credentials, and timeo
 
 This setting controls queue-job concurrency. It is separate from `vlm.media.max_concurrent`, which limits audio/video VLM calls, and does not limit individual Understanding API HTTP requests.
 
+### `queue_workers.add_resource`
+
+| Field | Type | Default | Description |
+|---|---|---:|---|
+| `max_concurrent` | integer | `4` | Number of complete AddResource jobs consumed concurrently; must be greater than `0`; requires a server restart after changes |
+
+### `queue_workers.session_commit`
+
+| Field | Type | Default | Description |
+|---|---|---:|---|
+| `max_concurrent` | integer | `4` | Number of SessionCommit jobs consumed concurrently; must be greater than `0`; requires a server restart after changes |
+
 ## HTTP Server Settings
 
 ```json
@@ -313,7 +325,6 @@ Parsers live under `parsers`:
 ```json
 {
   "parsers": {
-    "max_concurrent_parse": 4,
     "pdf": {},
     "code": {
       "code_summary_mode": "ast",
@@ -342,7 +353,6 @@ Parsers live under `parsers`:
 
 | Setting | Purpose |
 |---|---|
-| `max_concurrent_parse` | Maximum concurrency for parse-related queue tasks; defaults to `4` |
 | `pdf` | PDF text, image, and layout parsing |
 | `code` | Repository file types, ignore rules, and network safety |
 | `image` | Image understanding and OCR |

@@ -26,9 +26,13 @@ def test_service_passes_queue_worker_concurrency_to_storage(monkeypatch) -> None
             dimension=1024,
             get_embedder=lambda: embedder,
         ),
-        vlm=SimpleNamespace(max_concurrent=64),
-        parsers=SimpleNamespace(max_concurrent_parse=9),
+        vlm=SimpleNamespace(max_concurrent=32),
         parser_api=SimpleNamespace(),
+        queue_workers=SimpleNamespace(
+            external_parse=SimpleNamespace(max_concurrent=9),
+            add_resource=SimpleNamespace(max_concurrent=7),
+            session_commit=SimpleNamespace(max_concurrent=5),
+        ),
         git=object(),
     )
 
@@ -50,7 +54,9 @@ def test_service_passes_queue_worker_concurrency_to_storage(monkeypatch) -> None
 
     OpenVikingService()
 
-    assert storage_calls[0][1]["max_concurrent_parse"] == 9
+    assert storage_calls[0][1]["max_concurrent_external_parse"] == 9
+    assert storage_calls[0][1]["max_concurrent_add_resource"] == 7
+    assert storage_calls[0][1]["max_concurrent_session_commit"] == 5
 
 
 def _service_with_fs(stat_result: dict) -> tuple[OpenVikingService, AsyncMock]:

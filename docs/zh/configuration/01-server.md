@@ -208,6 +208,18 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 
 该配置控制队列作业并发，不等同于 `vlm.media.max_concurrent` 的音视频 VLM 调用并发，也不限制 Understanding API 的单独 HTTP 请求数。
 
+### `queue_workers.add_resource`
+
+| 字段 | 类型 | 默认值 | 说明 |
+|---|---|---:|---|
+| `max_concurrent` | integer | `4` | 同时消费的完整 AddResource 作业数，必须大于 `0`；修改后需重启服务 |
+
+### `queue_workers.session_commit`
+
+| 字段 | 类型 | 默认值 | 说明 |
+|---|---|---:|---|
+| `max_concurrent` | integer | `4` | 同时消费的 SessionCommit 作业数，必须大于 `0`；修改后需重启服务 |
+
 ## HTTP 服务配置
 
 ```json
@@ -313,7 +325,6 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
 ```json
 {
   "parsers": {
-    "max_concurrent_parse": 4,
     "pdf": {},
     "code": {
       "code_summary_mode": "ast",
@@ -342,7 +353,6 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
 
 | 配置项 | 作用 |
 |---|---|
-| `max_concurrent_parse` | 解析相关队列任务的最大并发数，默认 `4` |
 | `pdf` | PDF 文本、图片和版面解析 |
 | `code` | 代码仓库文件类型、忽略规则和安全限制 |
 | `image` | 图片理解和 OCR |

@@ -131,7 +131,9 @@ class OpenVikingService:
             config.storage,
             max_concurrent_embedding=config.embedding.max_concurrent,
             max_concurrent_semantic=config.vlm.max_concurrent,
-            max_concurrent_parse=config.parsers.max_concurrent_parse,
+            max_concurrent_external_parse=config.queue_workers.external_parse.max_concurrent,
+            max_concurrent_add_resource=config.queue_workers.add_resource.max_concurrent,
+            max_concurrent_session_commit=config.queue_workers.session_commit.max_concurrent,
             binding_config=binding_config,
             git_config=config.git,
         )
@@ -146,8 +148,10 @@ class OpenVikingService:
         self,
         config: StorageConfig,
         max_concurrent_embedding: int = 10,
-        max_concurrent_semantic: int = 64,
-        max_concurrent_parse: int = 4,
+        max_concurrent_semantic: int = 32,
+        max_concurrent_external_parse: int = 4,
+        max_concurrent_add_resource: int = 4,
+        max_concurrent_session_commit: int = 4,
         binding_config: Any = None,
         *,
         git_config: Optional[GitConfig] = None,
@@ -168,7 +172,9 @@ class OpenVikingService:
                 mount_point=queue_mount_point,
                 max_concurrent_embedding=max_concurrent_embedding,
                 max_concurrent_semantic=max_concurrent_semantic,
-                max_concurrent_parse=max_concurrent_parse,
+                max_concurrent_external_parse=max_concurrent_external_parse,
+                max_concurrent_add_resource=max_concurrent_add_resource,
+                max_concurrent_session_commit=max_concurrent_session_commit,
             )
         else:
             logger.warning("RAGFS client not initialized, skipping queue manager")
@@ -307,7 +313,15 @@ class OpenVikingService:
                 self._config.storage,
                 max_concurrent_embedding=self._config.embedding.max_concurrent,
                 max_concurrent_semantic=self._config.vlm.max_concurrent,
-                max_concurrent_parse=self._config.parsers.max_concurrent_parse,
+                max_concurrent_external_parse=(
+                    self._config.queue_workers.external_parse.max_concurrent
+                ),
+                max_concurrent_add_resource=(
+                    self._config.queue_workers.add_resource.max_concurrent
+                ),
+                max_concurrent_session_commit=(
+                    self._config.queue_workers.session_commit.max_concurrent
+                ),
                 binding_config=self._build_ragfs_binding_config(),
                 git_config=self._config.git,
             )

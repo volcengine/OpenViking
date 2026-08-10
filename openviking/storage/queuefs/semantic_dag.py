@@ -599,9 +599,9 @@ class SemanticDagExecutor:
 
         if self._closed:
             return
-        try:
-            if need_vectorize and not self._skip_vectorization:
-                use_summary = self._is_code_repo and bool(summary_dict.get("summary"))
+        if need_vectorize and not self._skip_vectorization:
+            use_summary = self._is_code_repo and bool(summary_dict.get("summary"))
+            try:
                 await self._processor._vectorize_single_file(
                     parent_uri=parent_uri,
                     context_type=self._context_type,
@@ -611,8 +611,14 @@ class SemanticDagExecutor:
                     use_summary=use_summary,
                     ingest_options=self._ingest_options,
                 )
-        except Exception as e:
-            logger.error(f"Failed to schedule vectorization for {file_path}: {e}", exc_info=True)
+            except Exception as e:
+                logger.error(
+                    "Failed to schedule vectorization for %s: %s",
+                    file_path,
+                    e,
+                    exc_info=True,
+                )
+                raise
         await self._on_file_done(
             parent_uri,
             file_path,
@@ -785,8 +791,11 @@ class SemanticDagExecutor:
             except Exception:
                 logger.info(f"[SemanticDag] {dir_uri} write failed, skipping")
 
-            try:
-                if need_vectorize and not self._skip_vectorization:
+        except Exception as e:
+            logger.error(f"Failed to generate overview for {dir_uri}: {e}", exc_info=True)
+        else:
+            if need_vectorize and not self._skip_vectorization:
+                try:
                     await self._processor._vectorize_directory(
                         dir_uri,
                         context_type=self._context_type,
@@ -795,11 +804,14 @@ class SemanticDagExecutor:
                         ctx=self._ctx,
                         ingest_options=self._ingest_options,
                     )
-            except Exception as e:
-                logger.error(f"Failed to schedule vectorization for {dir_uri}: {e}", exc_info=True)
-
-        except Exception as e:
-            logger.error(f"Failed to generate overview for {dir_uri}: {e}", exc_info=True)
+                except Exception as e:
+                    logger.error(
+                        "Failed to schedule vectorization for %s: %s",
+                        dir_uri,
+                        e,
+                        exc_info=True,
+                    )
+                    raise
         finally:
             self._stats.done_nodes += 1
             self._stats.in_progress_nodes = max(0, self._stats.in_progress_nodes - 1)

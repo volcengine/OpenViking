@@ -18,12 +18,9 @@ from openviking_cli.utils.config.config_loader import (
     require_config,
     resolve_config_path,
 )
-from openviking_cli.utils.config.open_viking_config import (
-    OpenVikingConfig,
-    ParserApiConfig,
-    ParserRuntimeConfig,
-)
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfig, ParserApiConfig
 from openviking_cli.utils.config.parser_config import CodeHostingConfig
+from openviking_cli.utils.config.queue_worker_config import QueueWorkersConfig
 
 
 class TestResolveConfigPath:
@@ -124,22 +121,34 @@ class TestRequireConfig:
             require_config(None, "TEST_MISSING_ENV", "nonexistent_file.conf", "test")
 
 
-def test_parser_max_concurrent_parse_defaults_to_four():
+def test_queue_worker_concurrency_defaults_to_four():
     config = OpenVikingConfig.from_dict({})
 
-    assert config.parsers.max_concurrent_parse == 4
+    assert config.queue_workers.external_parse.max_concurrent == 4
+    assert config.queue_workers.add_resource.max_concurrent == 4
+    assert config.queue_workers.session_commit.max_concurrent == 4
 
 
-def test_parser_max_concurrent_parse_accepts_positive_value():
-    config = OpenVikingConfig.from_dict({"parsers": {"max_concurrent_parse": 9}})
+def test_queue_worker_concurrency_accepts_separate_values():
+    config = OpenVikingConfig.from_dict(
+        {
+            "queue_workers": {
+                "external_parse": {"max_concurrent": 9},
+                "add_resource": {"max_concurrent": 7},
+                "session_commit": {"max_concurrent": 5},
+            }
+        }
+    )
 
-    assert config.parsers.max_concurrent_parse == 9
+    assert config.queue_workers.external_parse.max_concurrent == 9
+    assert config.queue_workers.add_resource.max_concurrent == 7
+    assert config.queue_workers.session_commit.max_concurrent == 5
 
 
 @pytest.mark.parametrize("value", [0, -1])
-def test_parser_max_concurrent_parse_rejects_non_positive_value(value):
+def test_queue_worker_concurrency_rejects_non_positive_value(value):
     with pytest.raises(ValueError) as exc_info:
-        ParserRuntimeConfig(max_concurrent_parse=value)
+        QueueWorkersConfig(add_resource={"max_concurrent": value})
 
     assert exc_info.value.errors()[0]["type"] == "greater_than"
 
