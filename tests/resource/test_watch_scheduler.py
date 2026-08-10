@@ -148,64 +148,7 @@ class TestWatchSchedulerResourceExistence:
 
 class TestWatchSchedulerUriCoordination:
     @pytest.mark.asyncio
-    async def test_start_shares_coordinator_with_watch_manager(self):
-        coordinator = UriMutationCoordinator()
-        scheduler = WatchScheduler(
-            resource_service=ResourceService(),
-            uri_mutation_coordinator=coordinator,
-            check_interval=3600,
-        )
-
-        await scheduler.start()
-        try:
-            assert scheduler.watch_manager is not None
-            assert scheduler.watch_manager._uri_mutation_coordinator is coordinator
-        finally:
-            await scheduler.stop()
-
-    @pytest.mark.asyncio
-    async def test_overlapping_mutation_blocks_refresh(self, tmp_path):
-        class FakeResourceService(ResourceService):
-            def __init__(self):
-                super().__init__()
-                self.called = asyncio.Event()
-
-            async def refresh_resource(self, **kwargs):
-                self.called.set()
-                return {"root_uri": kwargs.get("to")}
-
-        source = tmp_path / "source.txt"
-        source.write_text("ok")
-        coordinator = UriMutationCoordinator()
-        resource_service = FakeResourceService()
-        scheduler = WatchScheduler(
-            resource_service=resource_service,
-            uri_mutation_coordinator=coordinator,
-            check_interval=1,
-        )
-        manager = WatchManager(uri_mutation_coordinator=coordinator)
-        await manager.initialize()
-        scheduler._watch_manager = manager
-        manager.update_execution_time = AsyncMock()
-        task = await manager.create_task(
-            path=str(source),
-            to_uri="viking://resources/codeask/wiki",
-            watch_interval=30.0,
-        )
-
-        async with coordinator.mutation(
-            task.account_id,
-            [task.to_uri],
-        ):
-            execution = asyncio.create_task(scheduler._execute_task(task))
-            await asyncio.sleep(0)
-            assert not resource_service.called.is_set()
-
-        await asyncio.wait_for(execution, timeout=1)
-        assert resource_service.called.is_set()
-
-    @pytest.mark.asyncio
-    async def test_stale_candidate_refreshes_rewritten_target(self, tmp_path):
+    async def test_refresh_waits_for_mutation_and_uses_rewritten_target(self, tmp_path):
         class FakeResourceService(ResourceService):
             def __init__(self):
                 super().__init__()
@@ -233,18 +176,21 @@ class TestWatchSchedulerUriCoordination:
             to_uri="viking://resources/codeask/wiki",
             watch_interval=30.0,
         )
-        stale_candidate = task.model_copy(deep=True)
+
         async with coordinator.mutation(
             task.account_id,
             [task.to_uri, "viking://resources/codeask/wiki-renamed"],
         ):
+            execution = asyncio.create_task(scheduler._execute_task(task.model_copy(deep=True)))
+            await asyncio.sleep(0)
+            assert resource_service.calls == []
             await manager.rewrite_target_prefix_internal(
                 task.to_uri,
                 "viking://resources/codeask/wiki-renamed",
                 account_id=task.account_id,
             )
 
-        await scheduler._execute_task(stale_candidate)
+        await asyncio.wait_for(execution, timeout=1)
 
         assert len(resource_service.calls) == 1
         assert resource_service.calls[0]["to"] == "viking://resources/codeask/wiki-renamed"

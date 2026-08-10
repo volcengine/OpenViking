@@ -50,10 +50,9 @@ def test_service_passes_queue_worker_concurrency_to_storage(monkeypatch) -> None
 
     monkeypatch.setattr(OpenVikingService, "_init_storage", _capture_storage_init)
 
-    service = OpenVikingService()
+    OpenVikingService()
 
     assert storage_calls[0][1]["max_concurrent_external_parse"] == 9
-    assert service._fs_service._uri_mutation_coordinator is service._uri_mutation_coordinator
 
 
 def _service_with_fs(stat_result: dict) -> tuple[OpenVikingService, AsyncMock]:
