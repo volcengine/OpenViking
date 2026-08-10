@@ -1209,7 +1209,7 @@ Legacy compatibility example:
 Notes:
 
 - `memory.session_auto_commit` is a server-wide control surface, not a per-session business policy.
-- Per-session auto-commit behavior is configured through the session-level `auto_commit_policy` (see the table below). It is set only when creating a session (`POST /api/v1/sessions` with a top-level `auto_commit_policy` field) and viewed via `GET /api/v1/sessions/{session_id}`; runtime config PATCH is not supported.
+- Per-session auto-commit behavior is configured through the session-level `auto_commit_policy` (see the table below). Set it when creating a session with `POST /api/v1/sessions`, or partially update it through `PATCH /api/v1/sessions/{session_id}/config`. Omitting `auto_commit_policy` from a PATCH preserves it; sending `null` disables automatic commits. Use `GET /api/v1/sessions/{session_id}` to inspect the effective policy.
 - When `default_enabled=false`, sessions created without `auto_commit_policy` keep auto commit disabled and return `auto_commit_policy: null`. Providing `{}` or any policy field explicitly enables auto commit for that session and fills missing fields from the defaults below.
 - When `default_enabled=true`, sessions created without `auto_commit_policy` get the default policy below.
 - When `idle_enabled=false`:

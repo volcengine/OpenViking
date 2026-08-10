@@ -400,6 +400,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/api/v1/sessions` | Create a session |
 | GET | `/api/v1/sessions` | List sessions |
 | GET | `/api/v1/sessions/{session_id}` | Get a session |
+| PATCH | `/api/v1/sessions/{session_id}/config` | Update mutable session configuration |
 | GET | `/api/v1/sessions/{session_id}/tool-results` | List tool results |
 | GET | `/api/v1/sessions/{session_id}/tool-results/{tool_result_id}` | Read a tool result |
 | GET | `/api/v1/sessions/{session_id}/tool-results/{tool_result_id}/search` | Search within a tool result |

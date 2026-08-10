@@ -395,6 +395,7 @@ JSON 输出 - 错误：
 | POST | `/api/v1/sessions` | 创建会话 |
 | GET | `/api/v1/sessions` | 列出会话 |
 | GET | `/api/v1/sessions/{session_id}` | 获取会话 |
+| PATCH | `/api/v1/sessions/{session_id}/config` | 更新可变的会话配置 |
 | GET | `/api/v1/sessions/{session_id}/tool-results` | 列出工具结果 |
 | GET | `/api/v1/sessions/{session_id}/tool-results/{tool_result_id}` | 读取工具结果 |
 | GET | `/api/v1/sessions/{session_id}/tool-results/{tool_result_id}/search` | 在工具结果内搜索 |

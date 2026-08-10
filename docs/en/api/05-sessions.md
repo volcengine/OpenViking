@@ -44,7 +44,7 @@ Create a new session. Sessions are containers for conversations, storing message
 |-----------|------|----------|---------|-------------|
 | session_id | str | No | None | Session ID. Creates new session with auto-generated ID if None |
 | memory_policy | object | No | None | Default memory extraction policy for the session. Optional `self` and `peer` switches control write targets, optional `working_memory.enabled=false` skips archive summaries, and optional top-level `memory_types` limits extraction to specific enabled memory schemas. Use JSON booleans for every `enabled` value. Legacy boolean-like values remain accepted temporarily (including string `"false"`, which is parsed as false) but emit a deprecation warning. When `memory_types` is omitted or `null`, all enabled memory schemas are allowed. Invalid shapes or unknown memory types are rejected with `InvalidArgumentError`. |
-| auto_commit_policy | object | No | None | Optional auto-commit policy (see table below). Any provided fields are validated, clamped to their bounds, and merged over the defaults; the effective policy is returned in the response `result.auto_commit_policy` and persisted into session metadata. If no policy is provided, auto commit is disabled unless `memory.session_auto_commit.default_enabled=true`. The policy is immutable after creation. |
+| auto_commit_policy | object | No | None | Optional auto-commit policy (see table below). Any provided fields are validated, clamped to their bounds, and merged over the defaults; the effective policy is returned in the response `result.auto_commit_policy` and persisted into session metadata. If no policy is provided, auto commit is disabled unless `memory.session_auto_commit.default_enabled=true`. The policy can later be partially updated or disabled through `update_session_config()`. |
 
 `auto_commit_policy` fields (all optional; omitted fields fall back to the defaults when a policy is present):
 
@@ -399,12 +399,141 @@ ov session get a1b2c3d4
 
 ---
 
-### Updating Session Config
+### update_session_config()
 
-The auto-commit policy is immutable after creation. Set `auto_commit_policy` when
-creating the session, then use `GET /api/v1/sessions/{session_id}` to inspect the
-effective config. Runtime session-config updates are not exposed by the Sessions
-API.
+#### 1. API Implementation Introduction
+
+Partially update the mutable configuration of an existing session. Changes take
+effect on subsequent message writes, idle scans, and commits. Only the
+`/api/v1/sessions/{session_id}/config` subpath accepts `PATCH`; the base
+`/api/v1/sessions/{session_id}` endpoint does not.
+
+**Code Entry Points**:
+- `openviking/server/routers/sessions.py:update_session_config()` - HTTP route
+- `openviking/service/session_service.py:SessionService.update_config()` - Config validation and update
+- `sdk/python/openviking_sdk/client.py:update_session_config()` - Python SDK
+- `sdk/typescript/src/client.ts:updateSessionConfig()` - TypeScript SDK
+- `sdk/go/sessions.go:UpdateSessionConfig()` - Go SDK
+- `crates/ov_cli/src/commands/session.rs:set_session_config()` - CLI command
+
+#### 2. Interface and Parameter Description
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| session_id | string | Yes | - | Session ID in the URL path |
+| memory_extraction_config | object | No | Omitted | Mutable extraction settings. Currently supports `events.tags`, an array of strict `key=value` strings. Omit it to preserve the current tags; pass `events.tags=[]` to clear them. Tags are trimmed, lowercased, and deduplicated. |
+| auto_commit_policy | object or null | No | Omitted | An object merges only the supplied policy fields into the current policy, with the same validation, clamping, defaults, and bounds documented under `create_session()`. Pass `null` to disable automatic commits; omit the field to leave the policy unchanged. Individual policy fields cannot be `null`. |
+| telemetry | boolean or object | No | `false` | Set to `true`, or pass `{"summary": true}`, to include the operation telemetry summary in the response. `false` omits it. |
+
+An empty request object is a valid no-op and returns the effective configuration.
+Unknown request fields are rejected. The response always returns the effective
+policy with defaults filled in, or `null` when automatic commits are disabled.
+
+#### 3. Usage Examples
+
+**HTTP API**
+
+```http
+PATCH /api/v1/sessions/{session_id}/config
+```
+
+```bash
+# Merge one policy field and replace the default event-memory tags
+curl -X PATCH http://localhost:1933/api/v1/sessions/a1b2c3d4/config \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "memory_extraction_config": {
+      "events": {"tags": ["team=search", "channel=app"]}
+    },
+    "auto_commit_policy": {"message_count_threshold": 25},
+    "telemetry": true
+  }'
+
+# Disable automatic commits without changing event-memory tags
+curl -X PATCH http://localhost:1933/api/v1/sessions/a1b2c3d4/config \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{"auto_commit_policy": null}'
+```
+
+**Python SDK**
+
+```python
+result = client.update_session_config(
+    "a1b2c3d4",
+    memory_extraction_config={
+        "events": {"tags": ["team=search", "channel=app"]}
+    },
+    auto_commit_policy={"message_count_threshold": 25},
+)
+```
+
+**TypeScript SDK**
+
+```typescript
+const result = await client.updateSessionConfig("a1b2c3d4", {
+  memoryExtractionConfig: {
+    events: { tags: ["team=search", "channel=app"] },
+  },
+  autoCommitPolicy: { message_count_threshold: 25 },
+});
+```
+
+**Go SDK**
+
+```go
+policy := map[string]any{"message_count_threshold": 25}
+result, err := client.UpdateSessionConfig(ctx, "a1b2c3d4", &openviking.UpdateSessionConfigOptions{
+    MemoryExtractionConfig: map[string]any{
+        "events": map[string]any{"tags": []string{"team=search", "channel=app"}},
+    },
+    AutoCommitPolicy: &policy,
+})
+```
+
+**CLI**
+
+```bash
+ov session config set a1b2c3d4 \
+  --event-tags team=search,channel=app \
+  --auto-commit-policy-json '{"message_count_threshold":25}'
+
+# Clear the default tags, or disable automatic commits
+ov session config set a1b2c3d4 --no-event-tags
+ov session config set a1b2c3d4 --no-auto-commit
+```
+
+**Response example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "session_id": "a1b2c3d4",
+    "auto_commit_policy": {
+      "pending_token_threshold": 10000,
+      "message_count_threshold": 25,
+      "idle_timeout_seconds": 86400,
+      "keep_recent_count": 2,
+      "min_commit_interval_seconds": 0
+    },
+    "memory_extraction_config": {
+      "events": {
+        "tags": ["team=search", "channel=app"]
+      }
+    }
+  },
+  "telemetry": {
+    "id": "tm_xxx",
+    "summary": {
+      "operation": "session.update_config",
+      "status": "ok",
+      "duration_ms": 4.2
+    }
+  }
+}
+```
 
 ---
 

@@ -44,7 +44,7 @@ Session API 按认证用户作用域访问会话，并返回 canonical user sess
 |------|------|------|--------|------|
 | session_id | str | 否 | None | 会话 ID。如果为 None，则创建一个自动生成 ID 的新会话 |
 | memory_policy | object | 否 | None | 会话默认的记忆抽取策略。可选的 `self` 和 `peer` 开关控制写入目标；可选的 `working_memory.enabled=false` 跳过 archive summary；可选的顶层 `memory_types` 将抽取限制为指定的 enabled memory schema。所有 `enabled` 值都应使用 JSON 布尔值。旧版 boolean-like 值暂时仍兼容（字符串 `"false"` 会正确解析为 false），但会产生弃用警告。未传或为 `null` 时允许所有 enabled memory schema。非法结构或未知 memory type 会以 `InvalidArgumentError` 拒绝。 |
-| auto_commit_policy | object | 否 | None | 可选的自动 commit 策略（见下表）。传入的字段会被校验并 clamp 到取值范围，然后合并到默认值之上；最终生效的策略会在响应的 `result.auto_commit_policy` 中返回，并持久化到 session meta。未传 policy 时 auto commit 关闭，除非 `memory.session_auto_commit.default_enabled=true`。该策略创建后不可变。 |
+| auto_commit_policy | object | 否 | None | 可选的自动 commit 策略（见下表）。传入的字段会被校验并 clamp 到取值范围，然后合并到默认值之上；最终生效的策略会在响应的 `result.auto_commit_policy` 中返回，并持久化到 session meta。未传 policy 时 auto commit 关闭，除非 `memory.session_auto_commit.default_enabled=true`。之后可通过 `update_session_config()` 部分更新或禁用该策略。 |
 
 `auto_commit_policy` 字段（均为可选；存在 policy 时，未传字段回退到默认值）：
 
@@ -399,11 +399,139 @@ ov session get a1b2c3d4
 
 ---
 
-### 更新 Session 配置
+### update_session_config()
 
-自动 commit 策略创建后不可变。请在创建 session 时设置
-`auto_commit_policy`，之后通过 `GET /api/v1/sessions/{session_id}` 查看生效配置。
-Sessions API 不提供运行期 session 配置更新接口。
+#### 1. API 实现介绍
+
+部分更新已有 session 的可变配置。修改会在后续消息写入、idle 扫描和 commit
+中生效。只有 `/api/v1/sessions/{session_id}/config` 子路径接受 `PATCH`；基础
+`/api/v1/sessions/{session_id}` 端点不支持该方法。
+
+**代码入口**：
+- `openviking/server/routers/sessions.py:update_session_config()` - HTTP 路由
+- `openviking/service/session_service.py:SessionService.update_config()` - 配置校验与更新
+- `sdk/python/openviking_sdk/client.py:update_session_config()` - Python SDK
+- `sdk/typescript/src/client.ts:updateSessionConfig()` - TypeScript SDK
+- `sdk/go/sessions.go:UpdateSessionConfig()` - Go SDK
+- `crates/ov_cli/src/commands/session.rs:set_session_config()` - CLI 命令
+
+#### 2. 接口和参数说明
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| session_id | string | 是 | - | URL 路径中的 session ID |
+| memory_extraction_config | object | 否 | 未传 | 可变的抽取配置。目前支持 `events.tags`，其值为严格 `key=value` 字符串数组。省略时保留现有 tags；传 `events.tags=[]` 时清空。系统会 trim、转为小写并去重。 |
+| auto_commit_policy | object 或 null | 否 | 未传 | object 只把已提供的策略字段合并到现有策略中，并沿用 `create_session()` 记录的校验、clamp、默认值和上限。传 `null` 禁用自动 commit；省略该字段则保持策略不变。策略内部的单个字段不能为 `null`。 |
+| telemetry | boolean 或 object | 否 | `false` | 传 `true` 或 `{"summary": true}` 时在响应中包含本次操作的 telemetry summary；`false` 时省略。 |
+
+空请求对象是合法的 no-op，并会返回当前生效配置。未知请求字段会被拒绝。
+响应始终返回补齐默认值后的生效策略；自动 commit 已禁用时返回 `null`。
+
+#### 3. 使用示例
+
+**HTTP API**
+
+```http
+PATCH /api/v1/sessions/{session_id}/config
+```
+
+```bash
+# 合并一个策略字段，并替换事件记忆的默认 tags
+curl -X PATCH http://localhost:1933/api/v1/sessions/a1b2c3d4/config \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "memory_extraction_config": {
+      "events": {"tags": ["team=search", "channel=app"]}
+    },
+    "auto_commit_policy": {"message_count_threshold": 25},
+    "telemetry": true
+  }'
+
+# 禁用自动 commit，同时不修改事件记忆 tags
+curl -X PATCH http://localhost:1933/api/v1/sessions/a1b2c3d4/config \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{"auto_commit_policy": null}'
+```
+
+**Python SDK**
+
+```python
+result = client.update_session_config(
+    "a1b2c3d4",
+    memory_extraction_config={
+        "events": {"tags": ["team=search", "channel=app"]}
+    },
+    auto_commit_policy={"message_count_threshold": 25},
+)
+```
+
+**TypeScript SDK**
+
+```typescript
+const result = await client.updateSessionConfig("a1b2c3d4", {
+  memoryExtractionConfig: {
+    events: { tags: ["team=search", "channel=app"] },
+  },
+  autoCommitPolicy: { message_count_threshold: 25 },
+});
+```
+
+**Go SDK**
+
+```go
+policy := map[string]any{"message_count_threshold": 25}
+result, err := client.UpdateSessionConfig(ctx, "a1b2c3d4", &openviking.UpdateSessionConfigOptions{
+    MemoryExtractionConfig: map[string]any{
+        "events": map[string]any{"tags": []string{"team=search", "channel=app"}},
+    },
+    AutoCommitPolicy: &policy,
+})
+```
+
+**CLI**
+
+```bash
+ov session config set a1b2c3d4 \
+  --event-tags team=search,channel=app \
+  --auto-commit-policy-json '{"message_count_threshold":25}'
+
+# 清空默认 tags，或禁用自动 commit
+ov session config set a1b2c3d4 --no-event-tags
+ov session config set a1b2c3d4 --no-auto-commit
+```
+
+**响应示例**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "session_id": "a1b2c3d4",
+    "auto_commit_policy": {
+      "pending_token_threshold": 10000,
+      "message_count_threshold": 25,
+      "idle_timeout_seconds": 86400,
+      "keep_recent_count": 2,
+      "min_commit_interval_seconds": 0
+    },
+    "memory_extraction_config": {
+      "events": {
+        "tags": ["team=search", "channel=app"]
+      }
+    }
+  },
+  "telemetry": {
+    "id": "tm_xxx",
+    "summary": {
+      "operation": "session.update_config",
+      "status": "ok",
+      "duration_ms": 4.2
+    }
+  }
+}
+```
 
 ---
 
