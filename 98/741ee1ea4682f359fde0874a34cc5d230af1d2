@@ -1,0 +1,27 @@
+openviking/prompts/templates/semantic/document_summary.yaml
+  s_234d4581ba6778::t_87276ae9403ea4 42-43,45-47,53
+openviking/prompts/templates/semantic/file_summary.yaml
+  s_234d4581ba6778::t_8ca1b6cdb17375 38-39,41-43
+openviking/prompts/templates/semantic/overview_generation.yaml
+  s_234d4581ba6778::t_2184d17f733fca 53-57,66-67
+tests/storage/test_semantic_processor_language.py
+  s_234d4581ba6778::t_1975f958bdd05e 236,239-245
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "98741ee1ea4682f359fde0874a34cc5d230af1d2",
+  "prompts": {},
+  "sessions": {
+    "s_234d4581ba6778": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe9b2-3322-76b1-a5c9-4087a1e0e50e",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
