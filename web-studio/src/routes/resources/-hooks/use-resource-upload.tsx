@@ -9,11 +9,16 @@ import {
   postResourcesTempUpload,
 } from '#/lib/ov-client'
 import { parseUploadError } from '../-lib/upload'
+import {
+  isUploadStatusActive,
+  mergeServerTasks,
+  normalizeTaskList,
+} from '../-lib/resource-upload-tasks'
 import type {
   AddResourceResult,
   TempUploadResult,
 } from '@ov-server/api/v1/resources'
-import type { TaskListResult, TaskRecord } from '@ov-server/api/v1/tasks'
+import type { TaskListResult } from '@ov-server/api/v1/tasks'
 
 export type ResourceUploadTaskStatus =
   | 'cancelled'
@@ -62,6 +67,7 @@ export type UploadBatchParams = {
 export type RemoteStartParams = {
   url: string
   commonBody: Record<string, unknown>
+  onCompleted?: () => void
 }
 
 type ResourceUploadContextValue = {
@@ -142,158 +148,6 @@ function createRemoteTaskName(url: string): string {
   }
 }
 
-function isTaskRecord(value: unknown): value is TaskRecord {
-  return (
-    isRecord(value) &&
-    typeof value.task_id === 'string' &&
-    typeof value.task_type === 'string' &&
-    typeof value.status === 'string'
-  )
-}
-
-function normalizeTaskList(value: unknown): TaskListResult {
-  return Array.isArray(value) ? value.filter(isTaskRecord) : []
-}
-
-function isUploadStatusActive(status: ResourceUploadTaskStatus): boolean {
-  return (
-    status === 'pending' || status === 'uploading' || status === 'processing'
-  )
-}
-
-function toEpochMillis(value: unknown, fallback: number): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return fallback
-  }
-  return value > 10_000_000_000 ? Math.round(value) : Math.round(value * 1000)
-}
-
-function getResultString(record: TaskRecord, key: string): string | null {
-  const value = record.result?.[key]
-  return typeof value === 'string' && value.trim() ? value : null
-}
-
-function getTaskRootUri(record: TaskRecord): string | null {
-  if (typeof record.resource_id === 'string' && record.resource_id.trim()) {
-    return record.resource_id
-  }
-  return getResultString(record, 'root_uri')
-}
-
-function getNameFromUri(uri: string): string {
-  const normalized = uri.replace(/\/+$/, '')
-  const parts = normalized.split('/').filter(Boolean)
-  return parts[parts.length - 1] || uri
-}
-
-function getServerTaskName(record: TaskRecord): string {
-  const sourceName = getResultString(record, 'source_name')
-  if (sourceName) {
-    return sourceName
-  }
-
-  const rootUri = getTaskRootUri(record)
-  if (rootUri) {
-    return getNameFromUri(rootUri)
-  }
-
-  return record.task_id
-}
-
-function toUploadStatus(
-  status: TaskRecord['status'],
-): ResourceUploadTaskStatus {
-  if (status === 'completed') {
-    return 'success'
-  }
-  if (status === 'failed') {
-    return 'failed'
-  }
-  if (status === 'cancelled') {
-    return 'cancelled'
-  }
-  return 'processing'
-}
-
-function mergeServerTask(
-  record: TaskRecord,
-  existing?: ResourceUploadTask,
-): ResourceUploadTask {
-  const status = toUploadStatus(record.status)
-  const rootUri = getTaskRootUri(record) ?? existing?.rootUri ?? null
-  const createdAt =
-    existing?.createdAt ?? toEpochMillis(record.created_at, Date.now())
-  const updatedAt = toEpochMillis(record.updated_at, Date.now())
-  const fileName =
-    existing && existing.source !== 'server'
-      ? existing.fileName
-      : getServerTaskName(record)
-  const isFinished =
-    status === 'success' || status === 'failed' || status === 'cancelled'
-
-  return {
-    id: existing?.id ?? `server-${record.task_id}`,
-    source: existing?.source ?? 'server',
-    serverTaskId: record.task_id,
-    fileName,
-    fileSize: existing?.fileSize ?? null,
-    fileType: existing?.fileType ?? null,
-    status,
-    progress: status === 'success' ? 100 : null,
-    createdAt,
-    finishedAt: isFinished ? (existing?.finishedAt ?? updatedAt) : null,
-    errorCode:
-      status === 'failed'
-        ? (existing?.errorCode ?? 'SERVER_TASK_FAILED')
-        : null,
-    errorMessage:
-      status === 'failed'
-        ? record.error || existing?.errorMessage || 'Processing failed'
-        : status === 'cancelled'
-          ? record.error || 'Processing cancelled'
-          : null,
-    rootUri,
-  }
-}
-
-function mergeServerTasks(
-  previous: ResourceUploadTask[],
-  serverTasks: TaskRecord[],
-): ResourceUploadTask[] {
-  const previousByServerId = new Map<string, ResourceUploadTask>()
-  for (const task of previous) {
-    if (task.serverTaskId) {
-      previousByServerId.set(task.serverTaskId, task)
-    }
-  }
-
-  const serverTaskIds = new Set(serverTasks.map((task) => task.task_id))
-  const consumedLocalIds = new Set<string>()
-  const nextTasks = serverTasks.map((record) => {
-    const existing = previousByServerId.get(record.task_id)
-    if (existing) {
-      consumedLocalIds.add(existing.id)
-    }
-    return mergeServerTask(record, existing)
-  })
-
-  for (const task of previous) {
-    if (consumedLocalIds.has(task.id)) {
-      continue
-    }
-    if (
-      task.source === 'server' &&
-      task.serverTaskId &&
-      !serverTaskIds.has(task.serverTaskId)
-    ) {
-      continue
-    }
-    nextTasks.push(task)
-  }
-
-  return nextTasks
-}
-
 export function useResourceUpload(): ResourceUploadContextValue {
   const context = React.useContext(ResourceUploadContext)
   if (!context) {
@@ -316,6 +170,9 @@ export function ResourceUploadProvider({
   const remoteAbortRef = React.useRef<AbortController | null>(null)
   const refreshInFlightRef = React.useRef(false)
   const notifiedServerTaskIdsRef = React.useRef<Set<string>>(new Set())
+  const remoteCompletionCallbacksRef = React.useRef(
+    new Map<string, () => void>(),
+  )
   const uploadQueueRef = React.useRef<Promise<void>>(Promise.resolve())
 
   const updateTask = React.useCallback(
@@ -564,6 +421,12 @@ export function ResourceUploadProvider({
               : null
 
           if (serverTaskId) {
+            if (params.onCompleted) {
+              remoteCompletionCallbacksRef.current.set(
+                serverTaskId,
+                params.onCompleted,
+              )
+            }
             updateTask(taskId, (task) => ({
               ...task,
               serverTaskId,
@@ -582,6 +445,8 @@ export function ResourceUploadProvider({
             void refreshTasks({ notifyOnError: false, silent: true })
             return
           }
+
+          params.onCompleted?.()
 
           updateTask(taskId, (task) => ({
             ...task,
@@ -717,6 +582,26 @@ export function ResourceUploadProvider({
       )
     }
   }, [remoteState.phase, remoteState.taskId, tasks])
+
+  React.useEffect(() => {
+    for (const task of tasks) {
+      if (!task.serverTaskId || isUploadStatusActive(task.status)) {
+        continue
+      }
+
+      const onCompleted = remoteCompletionCallbacksRef.current.get(
+        task.serverTaskId,
+      )
+      if (!onCompleted) {
+        continue
+      }
+
+      remoteCompletionCallbacksRef.current.delete(task.serverTaskId)
+      if (task.status === 'success') {
+        onCompleted()
+      }
+    }
+  }, [tasks])
 
   React.useEffect(() => {
     for (const task of tasks) {
