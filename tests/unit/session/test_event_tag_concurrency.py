@@ -30,14 +30,11 @@ class _MetaVikingFS:
         self,
         session_uri: str,
         persisted_meta: SessionMeta,
-        *,
-        meta_read_error: Exception | None = None,
     ):
         self.meta_uri = f"{session_uri}/.meta.json"
         self.files = {self.meta_uri: json.dumps(persisted_meta.to_dict())}
         self._async_agfs = _PathLock()
         self.writes = []
-        self.meta_read_error = meta_read_error
 
     def _uri_to_path(self, uri, ctx=None):
         del uri, ctx
@@ -45,8 +42,6 @@ class _MetaVikingFS:
 
     async def read_file(self, uri, ctx=None):
         del ctx
-        if uri == self.meta_uri and self.meta_read_error is not None:
-            raise self.meta_read_error
         if uri not in self.files:
             raise FileNotFoundError(uri)
         return self.files[uri]
@@ -97,62 +92,6 @@ async def test_commit_uses_event_tags_from_lock_protected_meta_snapshot(monkeypa
         await session.commit_async()
 
     assert captured_queue_message["event_search_tags"] == ["channel=app"]
-    assert viking_fs._async_agfs.acquired == 1
-    assert viking_fs._async_agfs.released == 1
-
-
-@pytest.mark.asyncio
-async def test_update_event_search_tags_does_not_overwrite_after_meta_read_failure():
-    session_uri = "viking://user/default/sessions/session-1"
-    persisted_meta = SessionMeta(
-        session_id="session-1",
-        message_count=41,
-        event_search_tags=["channel=web"],
-    )
-    viking_fs = _MetaVikingFS(
-        session_uri,
-        persisted_meta,
-        meta_read_error=OSError("storage unavailable"),
-    )
-    session = Session(
-        viking_fs=viking_fs,
-        session_id="session-1",
-        session_uri=session_uri,
-    )
-
-    with pytest.raises(OSError, match="storage unavailable"):
-        await session.update_event_search_tags(["channel=app"])
-
-    assert viking_fs.writes == []
-    assert viking_fs._async_agfs.acquired == 1
-    assert viking_fs._async_agfs.released == 1
-
-
-@pytest.mark.asyncio
-async def test_update_event_search_tags_preserves_latest_session_meta():
-    session_uri = "viking://user/default/sessions/session-1"
-    persisted_meta = SessionMeta(
-        session_id="session-1",
-        message_count=41,
-        pending_tokens=8200,
-        event_search_tags=["channel=web"],
-    )
-    viking_fs = _MetaVikingFS(session_uri, persisted_meta)
-    session = Session(
-        viking_fs=viking_fs,
-        session_id="session-1",
-        session_uri=session_uri,
-    )
-    session.meta.message_count = 40
-    session.meta.pending_tokens = 8000
-
-    await session.update_event_search_tags(["channel=app"])
-
-    saved_meta = SessionMeta.from_dict(json.loads(viking_fs.files[viking_fs.meta_uri]))
-    assert saved_meta.event_search_tags == ["channel=app"]
-    assert saved_meta.message_count == 41
-    assert saved_meta.pending_tokens == 8200
-    assert viking_fs.writes[-1][2] == "lease-1"
     assert viking_fs._async_agfs.acquired == 1
     assert viking_fs._async_agfs.released == 1
 

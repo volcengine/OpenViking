@@ -153,53 +153,29 @@ async def test_async_http_client_sends_event_memory_tag_configuration():
         auto_commit_policy={"message_count_threshold": 25},
     )
     await client.commit_session("tagged-session", event_tags=[])
+    await client.update_session_config("tagged-session", auto_commit_policy=None)
+    await client.create_session("disabled-session", auto_commit_policy=None)
 
     assert fake_http.post.await_args_list[0].kwargs["json"] == {
         "session_id": "tagged-session",
         "memory_extraction_config": config,
     }
-    fake_http.patch.assert_awaited_once_with(
-        "/api/v1/sessions/tagged-session/config",
-        json={
-            "memory_extraction_config": config,
-            "auto_commit_policy": {"message_count_threshold": 25},
-        },
-    )
+    assert fake_http.patch.await_args_list[0].args == ("/api/v1/sessions/tagged-session/config",)
+    assert fake_http.patch.await_args_list[0].kwargs["json"] == {
+        "memory_extraction_config": config,
+        "auto_commit_policy": {"message_count_threshold": 25},
+    }
     assert fake_http.post.await_args_list[1].kwargs["json"] == {
         "keep_recent_count": 0,
         "telemetry": False,
         "extraction_metadata": {"event": {"tags": []}},
     }
-
-
-@pytest.mark.asyncio
-async def test_async_http_client_can_disable_auto_commit_policy():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(patch=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response_data = lambda _response: {"result": {"status": "ok"}}
-
-    await client.update_session_config("tagged-session", auto_commit_policy=None)
-
-    fake_http.patch.assert_awaited_once_with(
-        "/api/v1/sessions/tagged-session/config",
-        json={"auto_commit_policy": None},
-    )
-
-
-@pytest.mark.asyncio
-async def test_async_http_client_can_disable_auto_commit_policy_at_create():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response_data = lambda _response: {"result": {"status": "ok"}}
-
-    await client.create_session("tagged-session", auto_commit_policy=None)
-
-    fake_http.post.assert_awaited_once_with(
-        "/api/v1/sessions",
-        json={"session_id": "tagged-session", "auto_commit_policy": None},
-    )
+    assert fake_http.patch.await_args_list[1].args == ("/api/v1/sessions/tagged-session/config",)
+    assert fake_http.patch.await_args_list[1].kwargs["json"] == {"auto_commit_policy": None}
+    assert fake_http.post.await_args_list[2].kwargs["json"] == {
+        "session_id": "disabled-session",
+        "auto_commit_policy": None,
+    }
 
 
 @pytest.mark.asyncio

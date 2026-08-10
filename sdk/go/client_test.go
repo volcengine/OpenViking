@@ -1374,8 +1374,21 @@ func TestSessionAPIsSendEventMemoryTags(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := client.UpdateSessionConfig(
+		context.Background(),
+		"tagged",
+		&UpdateSessionConfigOptions{AutoCommitPolicy: Map(nil)},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.CreateSession(
+		context.Background(),
+		&CreateSessionOptions{DisableAutoCommit: true},
+	); err != nil {
+		t.Fatal(err)
+	}
 
-	if len(requests) != 3 {
+	if len(requests) != 5 {
 		t.Fatalf("requests = %#v", requests)
 	}
 	createBody := requests[0]["body"].(map[string]any)
@@ -1397,43 +1410,11 @@ func TestSessionAPIsSendEventMemoryTags(t *testing.T) {
 	if tags, ok := event["tags"].([]any); !ok || len(tags) != 0 {
 		t.Fatalf("commit event tags = %#v", event["tags"])
 	}
-}
-
-func TestUpdateSessionConfigCanDisableAutoCommit(t *testing.T) {
-	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body := readJSONBody(t, r)
+	for _, request := range requests[3:] {
+		body := request["body"].(map[string]any)
 		value, ok := body["auto_commit_policy"]
 		if !ok || value != nil {
 			t.Fatalf("auto_commit_policy = %#v, present = %v", value, ok)
 		}
-		writeOK(t, w, map[string]any{"auto_commit_policy": nil})
-	}))
-	defer closeServer()
-
-	if _, err := client.UpdateSessionConfig(
-		context.Background(),
-		"tagged",
-		&UpdateSessionConfigOptions{AutoCommitPolicy: Map(nil)},
-	); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestCreateSessionCanDisableAutoCommit(t *testing.T) {
-	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body := readJSONBody(t, r)
-		value, ok := body["auto_commit_policy"]
-		if !ok || value != nil {
-			t.Fatalf("auto_commit_policy = %#v, present = %v", value, ok)
-		}
-		writeOK(t, w, map[string]any{"auto_commit_policy": nil})
-	}))
-	defer closeServer()
-
-	if _, err := client.CreateSession(
-		context.Background(),
-		&CreateSessionOptions{DisableAutoCommit: true},
-	); err != nil {
-		t.Fatal(err)
 	}
 }
