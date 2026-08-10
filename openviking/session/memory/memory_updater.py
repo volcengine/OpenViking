@@ -71,6 +71,32 @@ class ChunkMeta:
     chunk_count: int
 
 
+def _collect_search_tags_by_uri(
+    operations: "ResolvedOperations",
+    caller_map: Optional[Dict[str, List[str]]] = None,
+) -> Dict[str, List[str]]:
+    """Build the per-URI transient search-tag map for vectorization.
+
+    Combines an explicit caller-supplied map (e.g. trajectory outcome tags)
+    with per-operation ``search_tags`` (e.g. event-memory custom scalars).
+    The caller map wins on conflicts; per-op tags fill any remaining URIs.
+    Operations with ``search_tags`` of ``None`` or ``[]`` contribute nothing.
+    """
+    result: Dict[str, List[str]] = {}
+    for op in getattr(operations, "upsert_operations", []) or []:
+        tags = getattr(op, "search_tags", None)
+        if not tags:
+            continue
+        for uri in op.uris or []:
+            if uri and uri not in result:
+                result[uri] = list(tags)
+    if caller_map:
+        for uri, tags in caller_map.items():
+            if uri:
+                result[uri] = list(tags)
+    return result
+
+
 async def write_stored_links(
     links: List[StoredLink],
     ctx: RequestContext,
@@ -921,12 +947,17 @@ class MemoryUpdater:
         for op in operations.upsert_operations:
             for uri in op.uris:
                 uri_memory_type_map[uri] = op.memory_type
+        # Merge caller-supplied transient tags with per-operation search_tags
+        # (e.g. event-memory custom scalars) so both reach vectorization.
+        effective_search_tags_by_uri = _collect_search_tags_by_uri(
+            operations, search_tags_by_uri
+        )
         await self._vectorize_memories(
             result,
             ctx,
             extract_context=extract_context,
             uri_memory_type_map=uri_memory_type_map,
-            search_tags_by_uri=search_tags_by_uri,
+            search_tags_by_uri=effective_search_tags_by_uri,
         )
 
         # Apply links to endpoint files not covered by upsert_operations

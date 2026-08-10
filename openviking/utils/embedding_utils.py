@@ -429,11 +429,13 @@ async def vectorize_directory_meta(
 
         if include_overview:
             # Vectorize L1: .overview.md (overview)
+            # Store the overview itself in the abstract scalar so Rerank sees
+            # L1 text instead of the L0 abstract (see 03-context-layers.md).
             context_overview = Context(
                 uri=uri,
                 parent_uri=parent_uri,
                 is_leaf=False,
-                abstract=abstract,
+                abstract=_truncate_abstract_bytes(overview),
                 context_type=context_type,
                 level=ContextLevel.OVERVIEW,
                 created_at=created_at,

@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional, Union
 from openviking.telemetry import TelemetryRequest
 from openviking.utils.search_filters import SearchContextTypeInput
 
+SESSION_CONFIG_UNSET = object()
+
 
 class BaseClient(ABC):
     """Abstract base class for OpenViking clients.
@@ -337,7 +339,8 @@ class BaseClient(ABC):
         session_id: Optional[str] = None,
         telemetry: TelemetryRequest = False,
         memory_policy: Optional[Dict[str, Any]] = None,
-        auto_commit_policy: Optional[Dict[str, Any]] = None,
+        auto_commit_policy: Any = SESSION_CONFIG_UNSET,
+        memory_extraction_config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create a new session.
 
@@ -347,6 +350,7 @@ class BaseClient(ABC):
             telemetry: Whether to attach operation telemetry data to the result.
             memory_policy: Optional default memory extraction policy.
             auto_commit_policy: Optional automatic-commit policy overrides.
+            memory_extraction_config: Optional per-memory-type extraction settings.
         """
         ...
 
@@ -359,6 +363,17 @@ class BaseClient(ABC):
     async def get_session(self, session_id: str, *, auto_create: bool = False) -> Dict[str, Any]:
         """Get session details."""
         ...
+
+    async def update_session_config(
+        self,
+        session_id: str,
+        *,
+        memory_extraction_config: Optional[Dict[str, Any]] = None,
+        auto_commit_policy: Any = SESSION_CONFIG_UNSET,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Update mutable session memory extraction settings."""
+        raise NotImplementedError
 
     @abstractmethod
     async def get_session_context(
@@ -388,6 +403,7 @@ class BaseClient(ABC):
         keep_recent_turn_count: int | None = None,
         retained_message_token_budget: int | None = None,
         min_raw_tail_steps: int | None = None,
+        event_tags: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories).
 
@@ -395,6 +411,7 @@ class BaseClient(ABC):
             session_id: Session ID
             telemetry: Whether to attach operation telemetry data to the result.
             keep_recent_count: Number of recent live messages to retain after commit.
+            event_tags: Optional per-commit event-memory tag override.
         """
         ...
 

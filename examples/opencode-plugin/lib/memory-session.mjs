@@ -30,6 +30,20 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   const statePath = path.join(pluginRoot, "openviking-session-state.json")
   const oldSessionMapPath = path.join(pluginRoot, "openviking-session-map.json")
   let saveTimer = null
+  // Serialize saves: concurrent saveState() calls (a debounced save racing
+  // with flushAll / flushSession / session deletion) all share the same
+  // `${statePath}.tmp` temp file, so one rename can fail with ENOENT after
+  // another already moved it. Chaining through a promise queue keeps at most
+  // one write+rename in flight. Each queued save re-serializes the in-memory
+  // `sessions` map at execution time, so the last save always persists the
+  // latest state.
+  let saveChain = Promise.resolve()
+
+  function enqueueSave() {
+    const run = saveChain.then(() => saveState())
+    saveChain = run.catch(() => {})
+    return run
+  }
 
   async function init() {
     if (config.autoCapture) await migrateLegacySessionMap()
@@ -84,7 +98,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   function debouncedSaveState() {
     if (saveTimer) clearTimeout(saveTimer)
     saveTimer = setTimeout(() => {
-      saveState().catch((error) => {
+      enqueueSave().catch((error) => {
         log("ERROR", "persistence", "Debounced save failed", { error: error?.message })
       })
     }, 300)
@@ -176,7 +190,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     if (!sessionId) return
     await flushSession(sessionId, { commit: true, reason: event.type })
     sessions.delete(sessionId)
-    await saveState()
+    await enqueueSave()
   }
 
   async function handleSessionError(event) {
@@ -253,7 +267,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     for (const sessionId of sessions.keys()) {
       await flushSession(sessionId, { commit, reason: "flushAll" })
     }
-    await saveState()
+    await enqueueSave()
   }
 
   async function flushSession(opencodeSessionId, { commit = false, reason = "manual" } = {}) {
@@ -267,7 +281,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     } else if (added > 0) {
       await maybeCommitByThreshold(state)
     }
-    await saveState()
+    await enqueueSave()
     return true
   }
 

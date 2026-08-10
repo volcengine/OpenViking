@@ -517,6 +517,51 @@ async def test_vectorize_directory_meta_appends_search_tags_by_level(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_vectorize_directory_meta_l1_abstract_is_overview(monkeypatch):
+    """L1 records must carry the overview in the abstract scalar so Rerank
+    sees L1 text instead of the L0 abstract."""
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("ignored"))
+
+    overview = "# Overview\n\n" + ("section detail. " * 50)
+    await embedding_utils.vectorize_directory_meta(
+        uri="viking://user/default/resources/demo",
+        abstract="demo abstract",
+        overview=overview,
+        ctx=DummyReq(),
+    )
+
+    assert len(queue.items) == 2
+    l0, l1 = queue.items
+    assert l0.context_data["level"] == 0
+    assert l0.context_data["abstract"] == "demo abstract"
+    assert l1.context_data["level"] == 1
+    assert l1.context_data["abstract"] == overview
+    assert l1.message == overview
+
+
+@pytest.mark.asyncio
+async def test_vectorize_directory_meta_l1_abstract_truncated(monkeypatch):
+    """Oversized overviews are capped below the scalar byte limit."""
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("ignored"))
+
+    oversized = "长" * 80_000
+    await embedding_utils.vectorize_directory_meta(
+        uri="viking://user/default/resources/demo",
+        abstract="demo abstract",
+        overview=oversized,
+        ctx=DummyReq(),
+    )
+
+    l1 = queue.items[1]
+    assert l1.context_data["level"] == 1
+    assert len(l1.context_data["abstract"].encode("utf-8")) <= 50_000
+
+
+@pytest.mark.asyncio
 async def test_vectorize_unknown_text_file_sniffs_non_utf8_raw_content(monkeypatch):
     queue = DummyQueue()
     raw_content = (

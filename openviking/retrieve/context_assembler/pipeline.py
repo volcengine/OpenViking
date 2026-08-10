@@ -40,10 +40,9 @@ async def _load_session(service: Any, ctx: RequestContext, session_id: Optional[
     if not session_id:
         return None
     try:
-        session = service.sessions.session(ctx, session_id)
+        session = await service.sessions.get(session_id, ctx, auto_create=True)
         if not await session.is_materialized():
             return None
-        await session.load()
         return session
     except Exception as exc:
         logger.info("Session %s unavailable for context assembly: %s", session_id, exc)

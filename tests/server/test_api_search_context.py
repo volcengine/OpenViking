@@ -324,7 +324,7 @@ async def test_context_mode_dedup_ledger_round_trips_through_agfs(
     assert second.json()["result"]["stats"]["dedup"]["cooled"] == 1
 
 
-async def test_context_mode_unknown_session_does_not_create_recall_ledger(
+async def test_context_mode_first_recall_materializes_session_and_records_ledger(
     client: httpx.AsyncClient,
     service,
     monkeypatch,
@@ -339,10 +339,74 @@ async def test_context_mode_unknown_session_does_not_create_recall_ledger(
 
     monkeypatch.setattr(service.search, "find", fake_find)
     session_id = "context-before-capture"
+    payload = {
+        "query": "recall before capture",
+        "mode": "context",
+        "session_id": session_id,
+        "dedup_turns": 3,
+        "query_expansion": "off",
+    }
+    first = await client.post(
+        "/api/v1/search/search",
+        json=payload,
+    )
+
+    assert first.status_code == 200
+    assert [entry["uri"] for entry in first.json()["result"]["entries"]] == [file_uri]
+    assert first.json()["result"]["stats"]["dedup"]["status"] == "new"
+
+    session_uri = f"viking://user/default/sessions/{session_id}"
+    ledger_uri = f"{session_uri}/.recall_log.json"
+    assert await service.viking_fs.exists(f"{session_uri}/messages.jsonl", ctx=ctx)
+    assert await service.viking_fs.exists(f"{session_uri}/.meta.json", ctx=ctx)
+    ledger = json.loads(await service.viking_fs.read_file(ledger_uri, ctx=ctx))
+    assert file_uri in ledger["entries"]
+
+    added = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"role": "user", "content": "first captured message"},
+    )
+    assert added.status_code == 200
+    messages = await service.viking_fs.read_file(f"{session_uri}/messages.jsonl", ctx=ctx)
+    assert "first captured message" in messages
+    persisted_ledger = json.loads(await service.viking_fs.read_file(ledger_uri, ctx=ctx))
+    assert file_uri in persisted_ledger["entries"]
+
+    second = await client.post("/api/v1/search/search", json=payload)
+    assert second.status_code == 200
+    assert second.json()["result"]["entries"] == []
+    assert second.json()["result"]["stats"]["dedup"]["cooled"] == 1
+
+
+async def test_context_mode_session_materialization_failure_stays_stateless(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+):
+    file_uri = "viking://user/default/memories/events/fail-open.md"
+    session_id = "context-materialization-failure"
+    ctx = RequestContext(user=UserIdentifier.the_default_user("default"), role=Role.ROOT)
+    session_uri = f"viking://user/default/sessions/{session_id}"
+    original_write_file = service.viking_fs.write_file
+    failed_once = False
+
+    async def fail_first_message_file(uri, content, **kwargs):
+        nonlocal failed_once
+        if uri == f"{session_uri}/messages.jsonl" and not failed_once:
+            failed_once = True
+            raise OSError("simulated session materialization failure")
+        return await original_write_file(uri, content, **kwargs)
+
+    async def fake_find(**kwargs):
+        del kwargs
+        return _FakeFindResult([_memory(file_uri, 0.7, "fail-open abstract")])
+
+    monkeypatch.setattr(service.viking_fs, "write_file", fail_first_message_file)
+    monkeypatch.setattr(service.search, "find", fake_find)
     response = await client.post(
         "/api/v1/search/search",
         json={
-            "query": "recall before capture",
+            "query": "recall despite session failure",
             "mode": "context",
             "session_id": session_id,
             "dedup_turns": 3,
@@ -353,7 +417,47 @@ async def test_context_mode_unknown_session_does_not_create_recall_ledger(
     assert response.status_code == 200
     assert [entry["uri"] for entry in response.json()["result"]["entries"]] == [file_uri]
     assert response.json()["result"]["stats"]["dedup"]["status"] == "off"
+    assert await service.viking_fs.exists(session_uri, ctx=ctx)
+    assert not await service.viking_fs.exists(f"{session_uri}/messages.jsonl", ctx=ctx)
+    assert not await service.viking_fs.exists(f"{session_uri}/.recall_log.json", ctx=ctx)
+
+    added = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"role": "user", "content": "capture repairs the partial session"},
+    )
+    assert added.status_code == 200
+    messages = await service.viking_fs.read_file(f"{session_uri}/messages.jsonl", ctx=ctx)
+    assert "capture repairs the partial session" in messages
+    assert not await service.viking_fs.exists(f"{session_uri}/.recall_log.json", ctx=ctx)
+
+
+async def test_context_mode_does_not_materialize_session_when_session_features_are_off(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+):
+    session_id = "context-with-session-features-off"
+    ctx = RequestContext(user=UserIdentifier.the_default_user("default"), role=Role.ROOT)
+
+    async def fake_find(**kwargs):
+        del kwargs
+        return _FakeFindResult()
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+    response = await client.post(
+        "/api/v1/search/search",
+        json={
+            "query": "stateless context request",
+            "mode": "context",
+            "session_id": session_id,
+            "dedup_turns": 0,
+            "query_expansion": "off",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["result"]["stats"]["dedup"]["status"] == "off"
     assert not await service.viking_fs.exists(
-        f"viking://user/default/sessions/{session_id}/.recall_log.json",
+        f"viking://user/default/sessions/{session_id}",
         ctx=ctx,
     )

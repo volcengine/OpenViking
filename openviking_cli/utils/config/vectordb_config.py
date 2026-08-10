@@ -50,32 +50,6 @@ class VikingDBConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-class QdrantConfig(BaseModel):
-    """Configuration for Qdrant backend."""
-
-    url: Optional[str] = Field(default=None, description="Qdrant service URL")
-    api_key: Optional[str] = Field(default=None, description="Optional Qdrant API key")
-    timeout_seconds: int = Field(default=10, description="HTTP timeout for Qdrant requests")
-    dense_vector_name: str = Field(
-        default="vector",
-        description="Named dense vector field in Qdrant collection.",
-    )
-    sparse_vector_name: str = Field(
-        default="sparse_vector",
-        description="Named sparse vector field in Qdrant collection.",
-    )
-    meta_collection_name: str = Field(
-        default="__openviking_meta",
-        description="Sidecar collection name for OpenViking metadata in Qdrant.",
-    )
-    enable_text_index: bool = Field(
-        default=True,
-        description="Whether to create text payload indexes for supported text fields.",
-    )
-
-    model_config = {"extra": "forbid"}
-
-
 class CuVSConfig(BaseModel):
     """Configuration for GPU dense-vector search through NVIDIA cuVS."""
 
@@ -214,56 +188,6 @@ class CuVSConfig(BaseModel):
         return self
 
 
-_OPENGAUSS_MODES = {"standalone", "distributed"}
-
-
-class OpenGaussConfig(BaseModel):
-    """Configuration for openGauss native vector backend."""
-
-    host: Optional[str] = Field(
-        default="127.0.0.1",
-        description="openGauss host address. Use the CN address when mode=distributed.",
-    )
-    port: int = Field(default=5432, description="openGauss port")
-    user: str = Field(default="omm", description="Database user")
-    password: str = Field(default="", description="Database password")
-    db_name: str = Field(default="postgres", description="Database name")
-    schema_name: str = Field(
-        default="public",
-        alias="schema",
-        description="Database schema for OpenViking tables",
-    )
-    mode: str = Field(
-        default="standalone",
-        description="openGauss deployment mode: 'standalone' or 'distributed'",
-    )
-    shard_count: int = Field(
-        default=32,
-        description="Shard count for create_distributed_table when mode=distributed",
-    )
-    connect_timeout: int = Field(default=10, description="Database connection timeout in seconds")
-    dense_vector_name: str = Field(default="vector", description="Dense vector column name")
-    sparse_vector_name: str = Field(
-        default="sparse_vector", description="Sparse vector JSON column name"
-    )
-
-    model_config = {"extra": "forbid", "populate_by_name": True}
-
-    @model_validator(mode="after")
-    def validate_mode(self):
-        self.schema_name = (self.schema_name or "public").strip()
-        if not self.schema_name:
-            raise ValueError("openGauss schema must not be empty")
-        self.mode = (self.mode or "standalone").strip().lower()
-        if self.mode not in _OPENGAUSS_MODES:
-            raise ValueError(
-                f"Invalid openGauss mode: '{self.mode}'. Must be one of: {sorted(_OPENGAUSS_MODES)}"
-            )
-        self.dense_vector_name = (self.dense_vector_name or "vector").strip()
-        self.sparse_vector_name = (self.sparse_vector_name or "sparse_vector").strip()
-        return self
-
-
 class VectorDBBackendConfig(BaseModel):
     """
     Configuration for VectorDB backend.
@@ -277,7 +201,7 @@ class VectorDBBackendConfig(BaseModel):
         description=(
             "VectorDB backend type: 'local', 'cuvs', 'http', "
             "'volcengine' (AK/SK signed or API key data-plane only), "
-            "'vikingdb' (private deployment), 'qdrant', or 'opengauss'"
+            "or 'vikingdb' (private deployment)"
         ),
     )
 
@@ -331,19 +255,9 @@ class VectorDBBackendConfig(BaseModel):
         description="VikingDB private deployment configuration for 'vikingdb' type",
     )
 
-    qdrant: Optional[QdrantConfig] = Field(
-        default_factory=QdrantConfig,
-        description="Qdrant configuration for 'qdrant' type",
-    )
-
     cuvs: Optional[CuVSConfig] = Field(
         default_factory=CuVSConfig,
         description="NVIDIA cuVS dense-vector search configuration for the 'cuvs' backend",
-    )
-
-    opengauss: Optional[OpenGaussConfig] = Field(
-        default_factory=OpenGaussConfig,
-        description="openGauss configuration for 'opengauss' type",
     )
 
     custom_params: Dict[str, Any] = Field(
@@ -362,8 +276,6 @@ class VectorDBBackendConfig(BaseModel):
             "http",
             "volcengine",
             "vikingdb",
-            "qdrant",
-            "opengauss",
         ]
 
         # Allow custom backend classes (containing dot) without standard validation
@@ -412,26 +324,5 @@ class VectorDBBackendConfig(BaseModel):
         elif self.backend == "vikingdb":
             if not self.vikingdb or not self.vikingdb.host:
                 raise ValueError("VectorDB vikingdb backend requires 'host' to be set")
-
-        elif self.backend == "qdrant":
-            qdrant_url = (
-                (self.qdrant.url if self.qdrant else None)
-                or self.url
-                or self.custom_params.get("url")
-            )
-            if not qdrant_url:
-                raise ValueError("VectorDB qdrant backend requires 'qdrant.url' or 'url' to be set")
-            if self.qdrant is None:
-                self.qdrant = QdrantConfig()
-            self.qdrant.url = str(qdrant_url).strip().rstrip("/")
-            if self.url:
-                self.url = self.url.strip().rstrip("/")
-
-        elif self.backend == "opengauss":
-            if self.opengauss is None:
-                self.opengauss = OpenGaussConfig()
-            if not self.opengauss.host:
-                raise ValueError("VectorDB opengauss backend requires 'opengauss.host' to be set")
-            self.opengauss.host = self.opengauss.host.strip()
 
         return self
