@@ -664,13 +664,15 @@ class Session:
         # Restore compression_index (scan history directory)
         try:
             history_items = await self._viking_fs.ls(f"{self._session_uri}/history", ctx=self.ctx)
-            archives = [
-                item["name"] for item in history_items if item["name"].startswith("archive_")
+            archive_indices = [
+                int(match.group(1))
+                for item in history_items
+                if (match := re.fullmatch(r"archive_(\d+)", item["name"]))
             ]
-            if archives:
-                max_index = max(int(a.split("_")[1]) for a in archives)
+            if archive_indices:
+                max_index = max(archive_indices)
                 self._compression.compression_index = max_index
-                self._stats.compression_count = len(archives)
+                self._stats.compression_count = len(archive_indices)
                 logger.debug(f"Restored compression_index: {max_index}")
         except Exception as exc:
             if not _is_storage_not_found(exc):

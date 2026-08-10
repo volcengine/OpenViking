@@ -67,6 +67,21 @@ class TestSessionLoad:
         # Nonexistent session should be empty after loading
         assert len(session.messages) == 0
 
+    async def test_load_ignores_non_archive_history_entries(self, client: AsyncOpenViking):
+        session = client.session(session_id="archive_name_validation_test")
+        for name in ("archive_001", "archive_002", "archive_001.bak.20260628"):
+            await session._viking_fs.mkdir(
+                f"{session.uri}/history/{name}",
+                exist_ok=True,
+                ctx=session.ctx,
+            )
+
+        loaded = client.session(session_id=session.session_id)
+        await loaded.load()
+
+        assert loaded.compression.compression_index == 2
+        assert loaded.stats.compression_count == 2
+
     async def test_session_properties(self, session: Session):
         """Test session properties"""
         assert hasattr(session, "uri")
