@@ -32,7 +32,6 @@ from openviking.storage.vectordb_adapters.base import (
     VIKINGDB_TEXT_FIELD_BYTE_LIMIT,
     _truncate_text_field,
 )
-from openviking.storage.vectordb_adapters.factory import backend_uses_content_field
 from openviking.storage.vectordb_adapters.local_adapter import LocalCollectionAdapter
 from openviking.storage.viking_vector_index_backend import (
     UpsertOptions,
@@ -389,6 +388,8 @@ async def test_embedding_auth_error_fails_terminally_without_reenqueue(monkeypat
 @pytest.mark.asyncio
 async def test_embedding_handler_treats_shutdown_write_lock_as_success(monkeypatch):
     class _ClosingDuringUpsertVikingDB:
+        uses_content_field = False
+
         def __init__(self):
             self.is_closing = False
             self.calls = 0
@@ -450,41 +451,7 @@ async def test_embedding_handler_propagates_account_id_on_success(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_embedding_handler_materializes_deferred_content_ref(monkeypatch):
-    class _DummyVikingDB:
-        is_closing = False
-
-    class _FakeFS:
-        async def read_file(self, uri, *, ctx):
-            assert uri == "viking://resources/large.txt"
-            assert ctx.account_id == "default"
-            return "full text from fs"
-
-    embedder = _DummyEmbedder()
-    monkeypatch.setattr(
-        "openviking_cli.utils.config.get_openviking_config",
-        lambda: _DummyConfig(embedder),
-    )
-    monkeypatch.setattr("openviking.storage.viking_fs.get_viking_fs", lambda: _FakeFS())
-
-    handler = TextEmbeddingHandler(_DummyVikingDB())
-    inserted_data = {
-        "content": "",
-        "abstract": "abstract fallback",
-        "_content_ref_uri": "viking://resources/large.txt",
-        "_content_ref_kind": "viking_file",
-    }
-    ctx = RequestContext(user=UserIdentifier("default", "default"), role=Role.ROOT)
-
-    await handler._materialize_content_for_upsert(inserted_data, ctx=ctx)
-
-    assert inserted_data["content"] == "full text from fs"
-    assert "_content_ref_uri" not in inserted_data
-    assert "_content_ref_kind" not in inserted_data
-
-
-@pytest.mark.asyncio
-async def test_embedding_handler_materialize_content_ref_falls_back(monkeypatch):
+async def test_embedding_handler_materialize_content_read_failure_is_not_hidden(monkeypatch):
     class _DummyVikingDB:
         is_closing = False
 
@@ -498,34 +465,24 @@ async def test_embedding_handler_materialize_content_ref_falls_back(monkeypatch)
         lambda: _DummyConfig(embedder),
     )
     monkeypatch.setattr("openviking.storage.viking_fs.get_viking_fs", lambda: _BrokenFS())
-    warnings = []
-    monkeypatch.setattr(
-        "openviking.storage.collection_schemas.logger.warning",
-        lambda message, *args: warnings.append((message, args)),
-    )
-
     handler = TextEmbeddingHandler(_DummyVikingDB())
-    inserted_data = {
-        "content": "stale queued content should not be used",
-        "abstract": "abstract fallback",
-        "_content_ref_uri": "viking://resources/missing.txt",
-        "_content_ref_kind": "viking_file",
-    }
+    msg = EmbeddingMsg(
+        "embedding text",
+        {
+            "uri": "viking://resources/missing.txt",
+            "abstract": "abstract fallback",
+            "is_leaf": True,
+            "context_type": "resource",
+        },
+    )
     ctx = RequestContext(user=UserIdentifier("default", "default"), role=Role.ROOT)
 
-    await handler._materialize_content_for_upsert(inserted_data, ctx=ctx)
-
-    assert inserted_data["content"] == "abstract fallback"
-    assert "_content_ref_uri" not in inserted_data
-    assert "_content_ref_kind" not in inserted_data
-    assert warnings
-    assert "Failed to read original file content" in warnings[0][0]
-    assert "writing abstract to the content field for this record instead" in warnings[0][0]
-    assert warnings[0][1][0] == "viking://resources/missing.txt"
+    with pytest.raises(FileNotFoundError):
+        await handler._materialize_content(msg, ctx)
 
 
 @pytest.mark.asyncio
-async def test_embedding_handler_materialize_content_without_ref_keeps_inline(monkeypatch):
+async def test_embedding_handler_materialize_content_keeps_inline(monkeypatch):
     class _DummyVikingDB:
         is_closing = False
 
@@ -536,12 +493,15 @@ async def test_embedding_handler_materialize_content_without_ref_keeps_inline(mo
     )
 
     handler = TextEmbeddingHandler(_DummyVikingDB())
-    inserted_data = {"content": "already inline", "abstract": "abstract fallback"}
+    msg = EmbeddingMsg(
+        "already inline",
+        {"abstract": "abstract fallback", "is_leaf": False},
+    )
     ctx = RequestContext(user=UserIdentifier("default", "default"), role=Role.ROOT)
 
-    await handler._materialize_content_for_upsert(inserted_data, ctx=ctx)
+    content = await handler._materialize_content(msg, ctx)
 
-    assert inserted_data == {"content": "already inline", "abstract": "abstract fallback"}
+    assert content == "already inline"
 
 
 @pytest.mark.asyncio
@@ -674,6 +634,7 @@ async def test_embedding_handler_preserves_parent_uri_for_backend_upsert_logic(m
     class _CapturingVikingDB:
         is_closing = False
         mode = "local"
+        uses_content_field = False
 
         async def upsert(self, data, *, ctx, options=UpsertOptions()):
             assert options.partial_update is True
@@ -704,6 +665,7 @@ async def test_embedding_handler_marks_success_only_after_tracker_completion(mon
     class _CapturingVikingDB:
         is_closing = False
         mode = "local"
+        uses_content_field = False
 
         async def upsert(self, _data, *, ctx, options=UpsertOptions()):
             assert options.partial_update is True
@@ -1173,24 +1135,6 @@ async def test_single_account_backend_truncates_content_only_at_vector_write():
     assert source_data["content"] == full_content
     assert VIKINGDB_CONTENT_MAX_SIZE == 1024 * 1024
     assert captured["data"]["content"] == full_content[:VIKINGDB_CONTENT_MAX_SIZE]
-
-
-@pytest.mark.parametrize(
-    ("backend", "expected"),
-    [
-        ("local", False),
-        ("cuvs", False),
-        ("http", False),
-        ("qdrant", False),
-        ("opengauss", False),
-        ("volcengine", True),
-        ("vikingdb", True),
-    ],
-)
-def test_backend_content_field_capability_matches_adapter_flag(backend, expected):
-    config = SimpleNamespace(backend=backend)
-
-    assert backend_uses_content_field(config) is expected
 
 
 @pytest.mark.asyncio

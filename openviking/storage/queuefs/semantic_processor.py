@@ -1078,10 +1078,8 @@ class SemanticProcessor(DequeueHandlerBase):
 
             content = _decode_text_bytes(content)
 
-        full_content = content or ""
-
         def result(summary: str) -> Dict[str, Any]:
-            return {"name": file_name, "summary": summary, "content": full_content}
+            return {"name": file_name, "summary": summary}
 
         config = get_openviking_config()
 
@@ -1153,8 +1151,7 @@ class SemanticProcessor(DequeueHandlerBase):
             file_path: File path
 
         Returns:
-            {"name": file_name, "summary": summary_content}; text files also carry
-            decoded "content" so vectorization can avoid re-reading the same file.
+            {"name": file_name, "summary": summary_content}
         """
         file_name = file_path.split("/")[-1]
         llm_sem = llm_sem or asyncio.Semaphore(self.max_concurrent_llm)

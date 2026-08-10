@@ -212,9 +212,7 @@ class QueueManager:
                         if queue.has_dequeue_handler() and queue_size > 0:
                             data = loop.run_until_complete(queue.dequeue())
                             if data is not None:
-                                logger.debug(
-                                    f"[QueueManager] Dequeued message from {queue.name}: {data}"
-                                )
+                                logger.debug("[QueueManager] Dequeued message from %s", queue.name)
                         else:
                             stop_event.wait(self._poll_interval)
                     except Exception as e:
