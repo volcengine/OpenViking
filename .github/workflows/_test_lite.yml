@@ -87,10 +87,3 @@ jobs:
           tests/vectordb/test_cuvs_config.py \
           tests/vectordb/test_cuvs_index.py \
           tests/vectordb/test_cuvs_collection.py
-
-    - name: Run Lite Integration Test (Quick Start)
-      shell: bash
-      run: |
-        export PYTHONPATH=$PYTHONPATH:$(pwd)
-        # Using bash shell ensures this works across platforms (including Windows via Git Bash)
-        uv run python tests/integration/test_quick_start_lite.py

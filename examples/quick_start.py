@@ -1,3 +1,15 @@
+"""Quick start for the OpenViking Python HTTP SDK.
+
+Run these commands first:
+
+    openviking-server init
+    openviking-server
+
+Then, in another terminal:
+
+    python examples/quick_start.py
+"""
+
 from openviking_sdk import SyncHTTPClient
 
 client = SyncHTTPClient(url="http://localhost:1933")

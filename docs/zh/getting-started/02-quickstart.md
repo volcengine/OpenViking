@@ -152,6 +152,21 @@ openviking-server doctor
 export OPENVIKING_CONFIG_FILE=/path/to/your/ov.conf
 ```
 
+## 启动本地服务
+
+首次在本地运行时，完成初始化并启动服务：
+
+```bash
+openviking-server init
+openviking-server
+```
+
+保持服务运行，然后打开另一个终端执行下面的 Python SDK 示例。
+如果使用自定义配置路径，通过 `openviking-server --config /path/to/ov.conf` 启动。
+
+默认本地模式不需要 API Key；连接启用鉴权的 Server 时，先设置
+`OPENVIKING_API_KEY`。
+
 ## 运行第一个示例
 
 ### 创建 Python 脚本
@@ -161,8 +176,8 @@ export OPENVIKING_CONFIG_FILE=/path/to/your/ov.conf
 ```python
 from openviking_sdk import SyncHTTPClient
 
-# 连接 OpenViking Server
-client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+# 连接本地 OpenViking Server
+client = SyncHTTPClient(url="http://localhost:1933")
 
 try:
     # 检查连接
