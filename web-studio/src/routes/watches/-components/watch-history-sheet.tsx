@@ -19,9 +19,12 @@ import {
   SheetHeader,
   SheetTitle,
 } from '#/components/ui/sheet'
-import { normalizeTaskStatus } from '#/routes/tasks/-lib/task-record'
-import type { TaskRecord } from '#/routes/tasks/-lib/task-record'
-import { getTaskDate } from '#/routes/tasks/-lib/task-time'
+import {
+  getTaskDate,
+  isActiveTaskStatus,
+  normalizeTaskStatus,
+} from '#/routes/tasks/task-model'
+import type { TaskRecord } from '#/routes/tasks/task-model'
 
 import { fetchWatchProcessingHistory } from '../-lib/api'
 import type { WatchTask } from '../-lib/api'
@@ -46,7 +49,9 @@ export function WatchHistorySheet({
     queryFn: () => fetchWatchProcessingHistory(watch?.toUri || ''),
     queryKey: ['watch-processing-history', identityScopeKey, watch?.toUri],
     refetchInterval: (query) =>
-      query.state.data?.some((task) => isActiveTask(task)) ? 3_000 : false,
+      query.state.data?.some((task) => isActiveTaskStatus(task.status))
+        ? 3_000
+        : false,
   })
   const tasks = historyQuery.data ?? []
 
@@ -196,11 +201,6 @@ function HistoryState({
       {children}
     </div>
   )
-}
-
-function isActiveTask(task: TaskRecord): boolean {
-  const status = normalizeTaskStatus(task.status)
-  return status === 'pending' || status === 'running' || status === 'cancelling'
 }
 
 function formatTaskTime(

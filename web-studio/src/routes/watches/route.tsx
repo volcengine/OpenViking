@@ -2,8 +2,6 @@ import * as React from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createFileRoute } from '@tanstack/react-router'
 import {
-  CirclePauseIcon,
-  CirclePlayIcon,
   Clock3Icon,
   EllipsisIcon,
   HistoryIcon,
@@ -26,7 +24,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '#/components/ui/alert-dialog'
-import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
 import { Card } from '#/components/ui/card'
 import {
@@ -42,8 +39,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '#/components/ui/dropdown-menu'
-import { Input } from '#/components/ui/input'
-import { Label } from '#/components/ui/label'
 import {
   Table,
   TableBody,
@@ -52,11 +47,14 @@ import {
   TableHeader,
   TableRow,
 } from '#/components/ui/table'
+import { Switch } from '#/components/ui/switch'
 import { useAppConnection } from '#/hooks/use-app-connection'
-import { parsePositiveMinutes } from '#/lib/watch-interval'
-import { AddResourceForm } from '#/routes/resources/-components/add-resource-page'
-import { ResourceUploadProvider } from '#/routes/resources/-hooks/use-resource-upload'
+import {
+  AddResourceForm,
+  ResourceUploadProvider,
+} from '#/routes/resources/resource-upload'
 
+import { EditWatchDialog } from './-components/edit-watch-dialog'
 import { WatchHistorySheet } from './-components/watch-history-sheet'
 import {
   deleteWatch,
@@ -68,14 +66,12 @@ import {
 import type { UpdateWatchInput, WatchTask } from './-lib/api'
 import {
   getWatchRefetchInterval,
-  hasActiveWatchProcessing,
-  hasCompletedWatchSync,
+  hasCompletedTriggeredWatchSync,
   hasDiscoveredWatch,
   normalizeWatchUri,
 } from './-lib/watch-discovery'
 
 const WATCH_DISCOVERY_TIMEOUT_MS = 60_000
-const WATCH_SYNC_TIMEOUT_MS = 60_000
 
 type PendingWatch = {
   expiresAt: number
@@ -84,9 +80,9 @@ type PendingWatch = {
 }
 
 type PendingWatchSync = {
-  expiresAt: number
+  baselineTaskIds: string[] | null
   identityScopeKey: string
-  previousExecutionTime: string | null
+  syncId: number
   taskId: string
   toUri: string
 }
@@ -103,7 +99,7 @@ function WatchesRoute() {
   )
 }
 
-function WatchManagementPage() {
+export function WatchManagementPage() {
   const { i18n, t } = useTranslation('watchesPage')
   const { identityScopeKey } = useAppConnection()
   const queryClient = useQueryClient()
@@ -133,16 +129,21 @@ function WatchManagementPage() {
   })
   const watches = watchesQuery.data ?? []
   const syncTasksQuery = useQuery({
-    enabled: pendingSync?.identityScopeKey === identityScopeKey,
+    enabled:
+      pendingSync?.identityScopeKey === identityScopeKey &&
+      pendingSync.baselineTaskIds !== null,
     queryFn: () => fetchWatchProcessingHistory(pendingSync?.toUri ?? ''),
     queryKey: [
       'watch-sync-progress',
       identityScopeKey,
       pendingSync?.taskId,
-      pendingSync?.expiresAt,
+      pendingSync?.syncId,
     ],
     refetchInterval:
-      pendingSync?.identityScopeKey === identityScopeKey ? 1_000 : false,
+      pendingSync?.identityScopeKey === identityScopeKey &&
+      pendingSync.baselineTaskIds !== null
+        ? 1_000
+        : false,
   })
 
   const refreshWatches = React.useCallback(async () => {
@@ -230,28 +231,15 @@ function WatchManagementPage() {
       syncTasksQuery.isFetched &&
       !syncTasksQuery.isFetching &&
       !syncTasksQuery.isError &&
-      !hasActiveWatchProcessing(syncTasksQuery.data ?? []) &&
-      hasCompletedWatchSync(
-        watches,
-        pendingSync.taskId,
-        pendingSync.previousExecutionTime,
+      pendingSync.baselineTaskIds !== null &&
+      hasCompletedTriggeredWatchSync(
+        syncTasksQuery.data ?? [],
+        pendingSync.baselineTaskIds,
       )
     ) {
       setPendingSync(null)
     }
-  }, [identityScopeKey, pendingSync, syncTasksQuery, watches])
-
-  React.useEffect(() => {
-    if (!pendingSync) return undefined
-    const timeout = window.setTimeout(
-      () =>
-        setPendingSync((current) =>
-          current?.expiresAt === pendingSync.expiresAt ? null : current,
-        ),
-      Math.max(0, pendingSync.expiresAt - Date.now()),
-    )
-    return () => window.clearTimeout(timeout)
-  }, [pendingSync])
+  }, [identityScopeKey, pendingSync, syncTasksQuery])
 
   const updateMutation = useMutation({
     mutationFn: ({
@@ -271,15 +259,31 @@ function WatchManagementPage() {
   const triggerMutation = useMutation({
     mutationFn: ({ taskId }: { taskId: string; toUri: string }) =>
       triggerWatch(taskId),
-    onMutate: ({ taskId, toUri }) => {
-      const watch = watches.find((item) => item.taskId === taskId)
+    onMutate: async ({ taskId, toUri }) => {
+      const syncId = Date.now()
       setPendingSync({
-        expiresAt: Date.now() + WATCH_SYNC_TIMEOUT_MS,
+        baselineTaskIds: null,
         identityScopeKey,
-        previousExecutionTime: watch?.lastExecutionTime ?? null,
+        syncId,
         taskId,
         toUri,
       })
+      try {
+        const baselineTasks = await fetchWatchProcessingHistory(toUri)
+        setPendingSync((current) =>
+          current?.syncId === syncId
+            ? {
+                ...current,
+                baselineTaskIds: baselineTasks.flatMap((task) =>
+                  task.task_id ? [task.task_id] : [],
+                ),
+              }
+            : current,
+        )
+      } catch {
+        // Keep syncing until timeout when processing history is unavailable.
+        // The trigger request should still proceed.
+      }
     },
     onSuccess: async () => {
       await Promise.all([
@@ -434,24 +438,31 @@ function WatchManagementPage() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <Badge
-                        variant="outline"
-                        className={
-                          watch.isActive
-                            ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
-                            : 'bg-muted/40 text-muted-foreground'
-                        }
-                      >
-                        <span
-                          aria-hidden="true"
-                          className={
+                      <div className="flex items-center gap-2">
+                        <Switch
+                          size="sm"
+                          checked={watch.isActive}
+                          disabled={updateMutation.isPending}
+                          aria-label={t(
                             watch.isActive
-                              ? 'size-1.5 rounded-full bg-emerald-500'
-                              : 'size-1.5 rounded-full bg-muted-foreground/60'
+                              ? 'actions.disable'
+                              : 'actions.enable',
+                          )}
+                          onCheckedChange={(checked) =>
+                            updateMutation.mutate({
+                              input: { isActive: checked },
+                              taskId: watch.taskId,
+                            })
                           }
                         />
-                        {t(watch.isActive ? 'status.active' : 'status.paused')}
-                      </Badge>
+                        <span className="text-xs text-muted-foreground">
+                          {t(
+                            watch.isActive
+                              ? 'status.active'
+                              : 'status.disabled',
+                          )}
+                        </span>
+                      </div>
                     </TableCell>
                     <TableCell>
                       {formatInterval(watch.watchInterval, t)}
@@ -469,7 +480,9 @@ function WatchManagementPage() {
                             isSyncing ? 'actions.syncing' : 'actions.trigger',
                           )}
                           disabled={
-                            triggerMutation.isPending || pendingSync !== null
+                            !watch.isActive ||
+                            triggerMutation.isPending ||
+                            pendingSync !== null
                           }
                           onClick={() =>
                             triggerMutation.mutate({
@@ -481,24 +494,6 @@ function WatchManagementPage() {
                           <RotateCwIcon
                             className={isSyncing ? 'animate-spin' : undefined}
                           />
-                        </ActionButton>
-                        <ActionButton
-                          label={t(
-                            watch.isActive ? 'actions.pause' : 'actions.resume',
-                          )}
-                          disabled={updateMutation.isPending}
-                          onClick={() =>
-                            updateMutation.mutate({
-                              input: { isActive: !watch.isActive },
-                              taskId: watch.taskId,
-                            })
-                          }
-                        >
-                          {watch.isActive ? (
-                            <CirclePauseIcon />
-                          ) : (
-                            <CirclePlayIcon />
-                          )}
                         </ActionButton>
                         <DropdownMenu>
                           <DropdownMenuTrigger
@@ -592,10 +587,10 @@ function WatchManagementPage() {
         watch={editingWatch}
         pending={updateMutation.isPending}
         onOpenChange={(open) => !open && setEditingWatch(null)}
-        onSubmit={(watchInterval) => {
+        onSubmit={(input) => {
           if (!editingWatch) return
           updateMutation.mutate({
-            input: { watchInterval },
+            input,
             taskId: editingWatch.taskId,
           })
         }}
@@ -633,73 +628,6 @@ function WatchManagementPage() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
-  )
-}
-
-function EditWatchDialog({
-  onOpenChange,
-  onSubmit,
-  pending,
-  watch,
-}: {
-  onOpenChange: (open: boolean) => void
-  onSubmit: (watchInterval: number) => void
-  pending: boolean
-  watch: WatchTask | null
-}) {
-  const { t } = useTranslation('watchesPage')
-  const [value, setValue] = React.useState('')
-
-  React.useEffect(() => {
-    setValue(watch ? String(watch.watchInterval) : '')
-  }, [watch])
-
-  const interval = parsePositiveMinutes(value)
-
-  return (
-    <Dialog open={Boolean(watch)} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{t('editDialog.title')}</DialogTitle>
-          <DialogDescription className="break-all font-mono text-xs">
-            {watch?.toUri}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-2">
-          <Label htmlFor="watch-edit-interval">
-            {t('editDialog.interval')}
-          </Label>
-          <Input
-            id="watch-edit-interval"
-            type="number"
-            min="1"
-            step="1"
-            value={value}
-            onChange={(event) => setValue(event.target.value)}
-          />
-          <p className="text-xs text-muted-foreground">
-            {t('editDialog.intervalHint')}
-          </p>
-        </div>
-        <div className="flex justify-end gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            disabled={pending}
-            onClick={() => onOpenChange(false)}
-          >
-            {t('cancel')}
-          </Button>
-          <Button
-            type="button"
-            disabled={interval === null || pending}
-            onClick={() => interval !== null && onSubmit(interval)}
-          >
-            {t('save')}
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
   )
 }
 

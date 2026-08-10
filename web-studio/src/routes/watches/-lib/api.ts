@@ -1,6 +1,6 @@
 import { getOvResult, getTasks, ovClient } from '#/lib/ov-client'
-import { normalizeTasks } from '#/routes/tasks/-lib/task-record'
-import type { TaskRecord } from '#/routes/tasks/-lib/task-record'
+import { normalizeTasks } from '#/routes/tasks/task-model'
+import type { TaskRecord } from '#/routes/tasks/task-model'
 
 export type WatchTask = {
   createdAt: string | null

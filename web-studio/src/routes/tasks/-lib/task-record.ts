@@ -51,6 +51,15 @@ export function normalizeTaskStatus(status: string | undefined): TaskStatus {
   return 'unknown'
 }
 
+export function isActiveTaskStatus(status: string | undefined): boolean {
+  const normalized = normalizeTaskStatus(status)
+  return (
+    normalized === 'pending' ||
+    normalized === 'running' ||
+    normalized === 'cancelling'
+  )
+}
+
 export function hasTaskResult(result: unknown): boolean {
   if (result === null || result === undefined) {
     return false

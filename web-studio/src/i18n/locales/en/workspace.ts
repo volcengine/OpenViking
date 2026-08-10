@@ -239,7 +239,7 @@ const workspace = {
     empty: 'No scheduled syncs',
     emptyDescription:
       'Add a remote resource and enable scheduled sync to get started.',
-    never: 'Never',
+    never: 'Not synced yet',
     cancel: 'Cancel',
     save: 'Save',
     creation: {
@@ -252,22 +252,22 @@ const workspace = {
       source: 'Source',
       status: 'Status',
       interval: 'Interval',
-      lastRun: 'Last run',
-      nextRun: 'Next run',
+      lastRun: 'Last sync',
+      nextRun: 'Next sync',
       actions: 'Actions',
     },
     status: {
       active: 'Enabled',
-      paused: 'Paused',
+      disabled: 'Disabled',
     },
     actions: {
       trigger: 'Sync now',
       syncing: 'Syncing...',
-      pause: 'Pause',
-      resume: 'Resume',
+      disable: 'Disable',
+      enable: 'Enable',
       more: 'More',
       history: 'Processing history',
-      edit: 'Edit interval',
+      edit: 'Edit',
       delete: 'Delete',
     },
     interval: {
@@ -284,9 +284,14 @@ const workspace = {
         'Add a remote resource and configure how often OpenViking checks for updates.',
     },
     editDialog: {
-      title: 'Edit sync interval',
+      title: 'Edit scheduled sync',
       interval: 'Interval (minutes)',
-      intervalHint: 'Enter a positive number of minutes.',
+      intervalHint: 'For example, 60 for hourly or 1440 for daily.',
+      reason: 'Reason (optional)',
+      reasonPlaceholder: 'Why should this resource stay synchronized?',
+      instruction: 'Processing instruction (optional)',
+      instructionPlaceholder:
+        'Special processing instructions for this resource.',
     },
     deleteDialog: {
       title: 'Delete scheduled sync?',

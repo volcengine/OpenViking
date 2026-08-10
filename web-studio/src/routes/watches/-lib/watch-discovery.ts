@@ -1,6 +1,6 @@
 import type { WatchTask } from './api'
-import { normalizeTaskStatus } from '#/routes/tasks/-lib/task-record'
-import type { TaskRecord } from '#/routes/tasks/-lib/task-record'
+import { isActiveTaskStatus } from '#/routes/tasks/task-model'
+import type { TaskRecord } from '#/routes/tasks/task-model'
 
 export const WATCH_DISCOVERY_INTERVAL_MS = 1_000
 
@@ -24,20 +24,24 @@ export function hasDiscoveredWatch(
   )
 }
 
-export function hasCompletedWatchSync(
-  watches: WatchTask[],
-  taskId: string,
-  previousExecutionTime: string | null,
-): boolean {
-  const watch = watches.find((item) => item.taskId === taskId)
-  return Boolean(watch && watch.lastExecutionTime !== previousExecutionTime)
+export function hasActiveWatchProcessing(tasks: TaskRecord[]): boolean {
+  return tasks.some((task) => isActiveTaskStatus(task.status))
 }
 
-export function hasActiveWatchProcessing(tasks: TaskRecord[]): boolean {
-  return tasks.some((task) => {
-    const status = normalizeTaskStatus(task.status)
-    return (
-      status === 'pending' || status === 'running' || status === 'cancelling'
-    )
-  })
+export function hasCompletedTriggeredWatchSync(
+  tasks: TaskRecord[],
+  baselineTaskIds: string[],
+): boolean {
+  const baseline = new Set(baselineTaskIds)
+  const triggeredTasks = tasks.filter(
+    (task) => task.task_id && !baseline.has(task.task_id),
+  )
+  if (triggeredTasks.length === 0) return false
+  if (hasActiveWatchProcessing(triggeredTasks)) return false
+  return triggeredTasks.every(
+    (task) =>
+      task.status === 'completed' ||
+      task.status === 'failed' ||
+      task.status === 'cancelled',
+  )
 }

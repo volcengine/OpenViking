@@ -4,7 +4,7 @@ import type { WatchTask } from './api'
 import {
   getWatchRefetchInterval,
   hasActiveWatchProcessing,
-  hasCompletedWatchSync,
+  hasCompletedTriggeredWatchSync,
   hasDiscoveredWatch,
   normalizeWatchUri,
   WATCH_DISCOVERY_INTERVAL_MS,
@@ -44,19 +44,30 @@ describe('watch discovery', () => {
     )
   })
 
-  it('detects completion when the watch execution time changes', () => {
-    expect(hasCompletedWatchSync([watch], watch.taskId, null)).toBe(false)
-    expect(
-      hasCompletedWatchSync(
-        [{ ...watch, lastExecutionTime: '2026-08-10T01:00:00Z' }],
-        watch.taskId,
-        null,
-      ),
-    ).toBe(true)
-  })
-
   it('keeps the syncing state while resource processing is active', () => {
     expect(hasActiveWatchProcessing([{ status: 'running' }])).toBe(true)
     expect(hasActiveWatchProcessing([{ status: 'completed' }])).toBe(false)
+  })
+
+  it('finishes only after a newly triggered processing task is terminal', () => {
+    const baselineTaskIds = ['existing-task']
+    expect(
+      hasCompletedTriggeredWatchSync(
+        [{ status: 'completed', task_id: 'existing-task' }],
+        baselineTaskIds,
+      ),
+    ).toBe(false)
+    expect(
+      hasCompletedTriggeredWatchSync(
+        [{ status: 'running', task_id: 'triggered-task' }],
+        baselineTaskIds,
+      ),
+    ).toBe(false)
+    expect(
+      hasCompletedTriggeredWatchSync(
+        [{ status: 'completed', task_id: 'triggered-task' }],
+        baselineTaskIds,
+      ),
+    ).toBe(true)
   })
 })
