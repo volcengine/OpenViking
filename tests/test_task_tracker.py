@@ -61,6 +61,7 @@ class _FakeAgfs:
     def __init__(self):
         self.files = {}
         self.dirs = {"/", "/local"}
+        self.fail_rm = False
 
     def mkdir(self, path: str, mode: str = "755"):
         self.dirs.add(path.rstrip("/") or "/")
@@ -100,6 +101,12 @@ class _FakeAgfs:
                 if name and "/" not in file_path[len(prefix) + 1 :]:
                     children[name] = {"name": name, "path": f"{prefix}/{name}", "is_dir": False}
         return list(children.values())
+
+    def rm(self, path: str, recursive: bool = False, force: bool = False):
+        if self.fail_rm:
+            raise OSError("simulated delete failure")
+        self.files.pop(path, None)
+        return {"message": "removed", "recursive": recursive, "force": force}
 
 
 class _FakeAgfsExistingDir(_FakeAgfs):
@@ -397,10 +404,33 @@ async def test_evict_expired_completed(tracker: TaskTracker):
     t = await tracker.create("session_commit", **_owner_kwargs())
     await tracker.start(t.task_id)
     await tracker.complete(t.task_id, {})
+    assert await tracker._store.get(t.task_id, **_owner_kwargs()) is not None
     # Simulate old timestamp (access internal state; get() returns defensive copies)
     tracker._tasks[t.task_id].updated_at = time.time() - tracker.TTL_COMPLETED - 1
     await tracker._evict_expired()
     assert await tracker.get(t.task_id) is None
+    assert await tracker._store.get(t.task_id, **_owner_kwargs()) is None
+
+
+async def test_evict_keeps_cached_task_when_persistent_delete_fails():
+    agfs = _FakeAgfs()
+    tracker = TaskTracker(store=PersistentTaskStore(agfs))
+    t = await tracker.create("session_commit", **_owner_kwargs())
+    await tracker.start(t.task_id)
+    await tracker.complete(t.task_id, {})
+    tracker._tasks[t.task_id].updated_at = time.time() - tracker.TTL_COMPLETED - 1
+    agfs.fail_rm = True
+
+    await tracker._evict_expired()
+
+    assert await tracker.get(t.task_id) is not None
+    assert await tracker._store.get(t.task_id, **_owner_kwargs()) is not None
+
+    agfs.fail_rm = False
+    await tracker._evict_expired()
+
+    assert await tracker.get(t.task_id) is None
+    assert await tracker._store.get(t.task_id, **_owner_kwargs()) is None
 
 
 async def test_evict_keeps_recent_completed(tracker: TaskTracker):

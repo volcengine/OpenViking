@@ -263,27 +263,65 @@ class TaskTracker:
     async def _evict_expired_on_owner(self) -> None:
         now = time.time()
         with self._lock:
-            expired_ids = []
-            for tid, t in self._tasks.items():
-                if (
-                    t.status in (TaskStatus.COMPLETED, TaskStatus.CANCELLED)
-                    and (now - t.updated_at) > self.TTL_COMPLETED
-                ):
-                    expired_ids.append(tid)
-                elif t.status == TaskStatus.FAILED and (now - t.updated_at) > self.TTL_FAILED:
-                    expired_ids.append(tid)
+            expired_ids = [
+                task_id for task_id, task in self._tasks.items() if self._is_expired(task, now)
+            ]
 
-            for tid in expired_ids:
-                self._tasks.pop(tid, None)
+        evicted_count = 0
+        for task_id in expired_ids:
+            evicted_count += await self._delete_expired_task_on_owner(task_id, now)
 
+        with self._lock:
             if len(self._tasks) > self.MAX_TASKS:
                 sorted_tasks = sorted(self._tasks.items(), key=lambda x: x[1].created_at)
                 excess = len(self._tasks) - self.MAX_TASKS
                 for tid, _ in sorted_tasks[:excess]:
                     self._tasks.pop(tid, None)
 
-        if expired_ids:
-            logger.debug("[TaskTracker] Evicted %d expired tasks", len(expired_ids))
+        if evicted_count:
+            logger.debug("[TaskTracker] Evicted %d expired tasks", evicted_count)
+
+    def _is_expired(self, task: TaskRecord, now: float) -> bool:
+        age = now - task.updated_at
+        if task.status in (TaskStatus.COMPLETED, TaskStatus.CANCELLED):
+            return age > self.TTL_COMPLETED
+        return task.status == TaskStatus.FAILED and age > self.TTL_FAILED
+
+    async def _delete_expired_task_on_owner(self, task_id: str, now: float) -> bool:
+        async with self._task_locks.acquire(task_id):
+            task = self._cached_task(task_id)
+            if task is None or not self._is_expired(task, now):
+                return False
+            account_id = task.account_id
+            user_id = task.user_id
+            if not account_id or not user_id:
+                logger.warning(
+                    "[TaskTracker] Cannot delete expired ownerless task %s",
+                    task_id,
+                )
+                return False
+            try:
+                await self._store_io.run(
+                    "delete",
+                    lambda: run_to_completion(
+                        lambda: self._store.delete(
+                            task_id,
+                            account_id=account_id,
+                            user_id=user_id,
+                        )
+                    ),
+                )
+            except Exception:
+                logger.warning(
+                    "[TaskTracker] Failed to delete expired task %s",
+                    task_id,
+                    exc_info=True,
+                )
+                return False
+
+            with self._lock:
+                self._tasks.pop(task_id, None)
+            return True
 
     @staticmethod
     def _matches_owner(
