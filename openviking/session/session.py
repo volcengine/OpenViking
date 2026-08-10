@@ -1691,12 +1691,25 @@ class Session:
         return dict(phase1) if isinstance(phase1, dict) else {}
 
     async def _ensure_phase1_ready(self, archive_uri: str) -> bool:
-        """Verify or recover a queued Phase 1 before Phase 2 consumes it.
+        """Verify a queued Phase 1 before Phase 2 consumes it.
 
-        New commits enqueue while holding the session lock and before rewriting
-        root messages. A consumer therefore acquires the same lock, then either
-        observes ``phase1.status=ready`` in archive metadata or
-        deterministically reconciles a process crash from the persisted intent.
+        Phase 1 holds the session lock for its entire duration (from persisting
+        the intent through publishing the ready marker).  A consumer acquires
+        the same lock and re-reads the marker.  If the status is still
+        ``preparing`` while the lock is held, the Phase 1 process that created
+        this archive must have died — a live Phase 1 would be holding the lock
+        and the consumer could not have acquired it.  Marking the archive as
+        failed is therefore always safe: the failed archive's messages are
+        rolled forward by the next successful Phase 2 via the replay mechanism.
+
+        The previous implementation attempted to detect whether the root rewrite
+        had already been applied (``phase1_applied`` heuristic) and recover in
+        that case.  That heuristic can produce a false positive when a later
+        commit's Phase 1 rewrites the root with an identical message split,
+        which causes ``_ensure_phase1_ready`` to mark the ghost archive as
+        ``ready`` even though no Phase 2 job was ever enqueued for it.  The
+        result is a permanent ``pending`` state that blocks
+        ``_wait_for_previous_archive_done`` indefinitely.
         """
         marker = await self._read_phase1_meta(archive_uri)
         if not marker:
@@ -1719,70 +1732,19 @@ class Session:
             if await self._archive_file_exists(archive_uri, ".failed.json"):
                 return False
 
-            try:
-                if not marker:
-                    raise ValueError("Phase 1 metadata is missing")
-                retained_ids = marker.get("retained_message_ids")
-                archived_ids = marker.get("archived_message_ids")
-                if not isinstance(retained_ids, list) or not isinstance(archived_ids, list):
-                    raise ValueError("Phase 1 metadata has invalid message ID lists")
-                retained_ids = [item for item in retained_ids if isinstance(item, str)]
-                archived_ids = [item for item in archived_ids if isinstance(item, str)]
-                live_messages = await self._read_live_messages_strict()
-            except Exception as exc:
-                await self._write_failed_marker(
-                    archive_uri,
-                    stage="phase1_recovery",
-                    error=f"Cannot verify Phase 1 state: {exc}",
-                    lease_ref=lease,
-                )
-                return False
-
-            live_ids = [message.id for message in live_messages]
-            archived_only_ids = set(archived_ids) - set(retained_ids)
-            phase1_applied = live_ids[
-                : len(retained_ids)
-            ] == retained_ids and not archived_only_ids.intersection(live_ids)
-            if not phase1_applied:
-                await self._write_failed_marker(
-                    archive_uri,
-                    stage="phase1_recovery",
-                    error="Root rewrite was not durably completed before process interruption",
-                    lease_ref=lease,
-                )
-                return False
-
-            # Root is authoritative and proves the rewrite completed. Reconcile
-            # metadata that may have been interrupted immediately afterwards.
-            try:
-                meta_content = await self._viking_fs.read_file(
-                    f"{self._session_uri}/.meta.json",
-                    ctx=self.ctx,
-                )
-                self._meta = SessionMeta.from_dict(json.loads(meta_content))
-            except Exception:
-                pass
-            self._messages = live_messages
-            self._remember_retention_policy(
-                keep_recent_count=max(0, int(marker.get("keep_recent_count", 0) or 0)),
-                retention_mode=str(marker.get("retention_mode", "") or "") or None,
-                keep_recent_turn_count=max(0, int(marker.get("keep_recent_turn_count", 0) or 0)),
-                retained_message_token_budget=max(
-                    0, int(marker.get("retained_message_token_budget", 0) or 0)
-                ),
-                min_raw_tail_steps=max(0, int(marker.get("min_raw_tail_steps", 1) or 0)),
+            # Holding the session lock while the status is not "ready" proves
+            # the Phase 1 process died before completing.  Fail the archive so
+            # that its messages are replayed by the next Phase 2.
+            await self._write_failed_marker(
+                archive_uri,
+                stage="phase1_recovery",
+                error="Phase 1 did not complete before process interruption",
+                lease_ref=lease,
             )
-            self._meta.message_count = len(live_messages)
-            self._meta.commit_count = max(
-                self._meta.commit_count,
-                self._archive_index_from_uri(archive_uri),
+            logger.warning(
+                "Marked incomplete Phase 1 as failed (process interrupted): %s", archive_uri
             )
-            self._meta.last_commit_at = get_current_timestamp()
-            self._rebuild_pending_tokens()
-            await self._save_meta(lease_ref=lease)
-            await self._write_phase1_ready_marker(archive_uri, lease_ref=lease)
-            logger.warning("Recovered interrupted Session Phase 1: %s", archive_uri)
-            return True
+            return False
         finally:
             await self._viking_fs._async_agfs.pathlock_release(lease)
 
