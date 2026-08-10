@@ -413,10 +413,12 @@ const workspace = {
       addUser: '新增 user',
       cancel: '取消',
       changeRole: '修改 {{user}} 的角色',
+      confirmDeleteAccount: '永久删除 Account',
       confirmRemoveUser: '删除用户',
       confirmRoleChange: '确认修改',
       copy: '复制',
       currentIdentity: '当前身份',
+      deleteAccount: '删除 Account',
       refresh: '刷新',
       regenerate: '重新生成',
       removeUser: '删除 {{user}}',
@@ -492,6 +494,13 @@ const workspace = {
         description:
           '将 {{account}} / {{user}} 的角色修改为 {{role}}。新的权限会立即生效。',
         title: '修改用户角色？',
+      },
+      deleteAccount: {
+        confirmHint: 'Account 名称必须完全一致。',
+        confirmLabel: '请输入 {{account}} 以确认',
+        description:
+          '此操作将永久删除 {{account}}，包括其中的用户、资源、记忆和向量数据，且无法撤销。',
+        title: '删除这个 Account？',
       },
       regenerate: {
         description:
@@ -603,6 +612,9 @@ const workspace = {
     },
     toast: {
       accountCreated: 'Account 已创建',
+      accountDeleted: '{{account}} 已删除',
+      accountDeletedRecoveryFailed:
+        'Account 已删除，但无法加载剩余 Account 列表：{{error}}',
       connectionSaved: '连接已保存',
       copyFailed: '复制失败',
       copied: '已复制',

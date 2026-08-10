@@ -432,10 +432,12 @@ const workspace = {
       addUser: 'Add user',
       cancel: 'Cancel',
       changeRole: 'Change the role for {{user}}',
+      confirmDeleteAccount: 'Delete account permanently',
       confirmRemoveUser: 'Delete user',
       confirmRoleChange: 'Confirm change',
       copy: 'Copy',
       currentIdentity: 'Current identity',
+      deleteAccount: 'Delete account',
       refresh: 'Refresh',
       regenerate: 'Regenerate',
       removeUser: 'Delete {{user}}',
@@ -514,6 +516,13 @@ const workspace = {
         description:
           'Change the role for {{account}} / {{user}} to {{role}}. The new permissions take effect immediately.',
         title: 'Change user role?',
+      },
+      deleteAccount: {
+        confirmHint: 'The account name must match exactly.',
+        confirmLabel: 'Enter {{account}} to confirm',
+        description:
+          'This permanently deletes {{account}}, including its users, resources, memories, and vector data. This action cannot be undone.',
+        title: 'Delete this account?',
       },
       regenerate: {
         description:
@@ -628,6 +637,9 @@ const workspace = {
     },
     toast: {
       accountCreated: 'Account created',
+      accountDeleted: '{{account}} deleted',
+      accountDeletedRecoveryFailed:
+        'The account was deleted, but the remaining account list could not be loaded: {{error}}',
       connectionSaved: 'Connection saved',
       copyFailed: 'Copy failed',
       copied: 'Copied',
