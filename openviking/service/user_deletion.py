@@ -24,7 +24,7 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 TASK_TYPE = "user_delete"
-_CANCEL_WAIT_SECONDS = 30.0
+_CANCEL_WAIT_SECONDS = 10 * 60
 _ACTIVE_TASK_STATUSES = (
     TaskStatus.PENDING,
     TaskStatus.RUNNING,
