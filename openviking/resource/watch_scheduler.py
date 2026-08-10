@@ -17,6 +17,10 @@ from openviking.resource.feishu_watch_auth import (
     feishu_auth_state_needs_refresh,
     is_feishu_auth_state,
 )
+from openviking.resource.git_watch_auth import (
+    git_http_auth_config_from_state,
+    is_git_http_auth_state,
+)
 from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
 from openviking.resource.watch_manager import WatchManager
 from openviking.server.error_mapping import is_not_found_error
@@ -318,6 +322,11 @@ class WatchScheduler:
                                 )
                             else:
                                 raise
+                    elif is_git_http_auth_state(auth_state):
+                        processor_kwargs["auth_config"] = git_http_auth_config_from_state(
+                            auth_state,
+                            task.path,
+                        )
 
                 if not should_deactivate:
                     result = await self._resource_service.refresh_resource(

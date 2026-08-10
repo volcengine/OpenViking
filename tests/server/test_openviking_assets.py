@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for server-side OpenViking Assets configuration resolution."""
 
+import asyncio
 import hashlib
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
@@ -326,6 +328,65 @@ async def test_git_preflight_uses_process_local_auth_without_secret_in_argv(monk
         if key.startswith("GIT_CONFIG_VALUE_")
     )
     assert captured["env"]["GIT_TERMINAL_PROMPT"] == "0"
+
+
+@pytest.mark.parametrize(
+    "repo_url",
+    [
+        "http://github.com/org/private.git",
+        "https://user:embedded-token@github.com/org/private.git",
+    ],
+)
+async def test_git_preflight_rejects_unsafe_token_urls_before_spawn(monkeypatch, repo_url):
+    exec_mock = AsyncMock()
+    monkeypatch.setattr("asyncio.create_subprocess_exec", exec_mock)
+
+    with pytest.raises(InvalidArgumentError):
+        await preflight_git_repository(
+            asset_name="private",
+            repo_url=repo_url,
+            token="secret-token",
+        )
+
+    exec_mock.assert_not_awaited()
+
+
+async def test_git_preflight_cancellation_kills_and_reaps_authenticated_process(monkeypatch):
+    process = Mock()
+    process.communicate = AsyncMock(side_effect=asyncio.CancelledError)
+    process.kill = Mock()
+    process.wait = AsyncMock()
+
+    async def fake_exec(*_args, **_kwargs):
+        return process
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
+
+    with pytest.raises(asyncio.CancelledError):
+        await preflight_git_repository(
+            asset_name="private",
+            repo_url="https://github.com/org/private.git",
+            token="secret-token",
+        )
+
+    process.kill.assert_called_once_with()
+    process.wait.assert_awaited_once_with()
+
+
+async def test_git_preflight_preserves_ssh_username(monkeypatch):
+    captured = {}
+
+    async def fake_exec(*args, **_kwargs):
+        captured["args"] = args
+        return _GitProcess(0)
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
+    repo_url = "ssh://git@github.com/org/private.git"
+
+    result = await preflight_git_repository(asset_name="private", repo_url=repo_url)
+
+    assert result["accessible"] is True
+    assert repo_url in captured["args"]
 
 
 async def test_git_preflight_accepts_commit_and_checks_repository_head(monkeypatch):

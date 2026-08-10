@@ -587,9 +587,10 @@ async def add_resource(
             with ``to`` and not supported when ``add_type`` is set.
         tags: Optional explicit k=v retrieval tags to apply after ingestion.
         tag_mode: Tag update mode, "replace" or "append". Defaults to "replace".
-        args: Parser-specific options, e.g. {"feishu_access_token": "..."} for Feishu imports,
-            {"site": true} for whole-site ingestion, or {"parse_mode": "no_split"}
-            to keep each parsed document body in one file.
+        args: Parser-specific options, e.g. {"auth_config": {"token": "..."}}
+            for native HTTPS Git imports and watches, {"feishu_access_token": "..."}
+            for Feishu imports, {"site": true} for whole-site ingestion, or
+            {"parse_mode": "no_split"} to keep each parsed document body in one file.
     """
     from openviking.server.local_input_guard import require_remote_resource_source
 

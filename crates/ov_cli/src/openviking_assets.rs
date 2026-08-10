@@ -23,9 +23,28 @@ use crate::output::OutputFormat;
 pub const STATE_PROTOCOL: &str = "openviking-assets-state/1";
 const DEFAULT_CATALOG_FILENAME: &str = "catalog.yaml";
 const CREDENTIALS_ENV: &str = "OPENVIKING_ASSETS_CREDENTIALS_FILE";
+const NATIVE_AUTH_REQUEST_TIMEOUT_SECONDS: f64 = 300.0;
 
 fn client_err(msg: impl Into<String>) -> Error {
     Error::Client(msg.into())
+}
+
+fn manifest_request_timeout(
+    wait: bool,
+    requested_timeout: Option<f64>,
+    configured_timeout: f64,
+    has_native_auth: bool,
+) -> f64 {
+    let default_timeout = if has_native_auth {
+        NATIVE_AUTH_REQUEST_TIMEOUT_SECONDS
+    } else if wait {
+        60.0
+    } else {
+        20.0
+    };
+    requested_timeout
+        .unwrap_or(default_timeout)
+        .max(configured_timeout)
 }
 
 // The server owns OpenViking Assets syntax parsing and semantic validation.
@@ -429,6 +448,80 @@ fn git_auth_config(args: Option<&Map<String, Value>>) -> Option<Value> {
     }
 }
 
+/// Shape resolved Manifest credentials for the selected Git ingestion path.
+///
+/// External connectors keep their historical flat `username` / `token`
+/// contract. The native Git accessor accepts the same credentials under
+/// `args.auth_config`; source selectors remain top-level parser arguments.
+fn git_submit_args(
+    external_connector: bool,
+    args: Option<Map<String, Value>>,
+) -> Option<Map<String, Value>> {
+    if external_connector {
+        return args;
+    }
+
+    let mut args = args?;
+    let mut auth = Map::new();
+    for key in ["username", "token"] {
+        if let Some(value) = args.remove(key) {
+            auth.insert(key.to_string(), value);
+        }
+    }
+    if !auth.is_empty() {
+        args.insert("auth_config".to_string(), Value::Object(auth));
+    }
+    Some(args)
+}
+
+fn validate_native_git_auth(
+    asset: &ResolvedAsset,
+    args: &Map<String, Value>,
+    _watch_interval: f64,
+    external_connector: bool,
+) -> Result<()> {
+    if external_connector {
+        return Ok(());
+    }
+    if args.keys().any(|key| key != "username" && key != "token") {
+        return Err(client_err(format!(
+            "asset '{}' native Git credentials contain unsupported fields; only username and token are allowed",
+            asset.name
+        )));
+    }
+    if args.is_empty() && asset.auth_ref.is_none() {
+        return Ok(());
+    }
+
+    let token_valid = args
+        .get("token")
+        .and_then(Value::as_str)
+        .is_some_and(|token| !token.trim().is_empty());
+    if !token_valid {
+        return Err(client_err(format!(
+            "asset '{}' native Git credentials require a non-empty string token",
+            asset.name
+        )));
+    }
+    if args.get("username").is_some_and(|username| {
+        username
+            .as_str()
+            .is_none_or(|value| value.trim().is_empty())
+    }) {
+        return Err(client_err(format!(
+            "asset '{}' native Git username must be a non-empty string",
+            asset.name
+        )));
+    }
+    if !asset.repo_url.to_ascii_lowercase().starts_with("https://") {
+        return Err(client_err(format!(
+            "asset '{}' token authentication requires an HTTPS Git URL",
+            asset.name
+        )));
+    }
+    Ok(())
+}
+
 /// Preflight and then apply (or dry-run) a resolved manifest.
 ///
 /// Every source is checked before the first mutation. A preflight failure
@@ -502,6 +595,12 @@ pub async fn apply_manifest_core<S: Submitter>(
             Some(auth_ref) => resolve_auth_ref(auth_ref, &credentials, credentials_file)?,
             None => Map::new(),
         };
+        validate_native_git_auth(
+            asset,
+            &args,
+            options.watch_interval.unwrap_or(asset.watch_interval),
+            options.external_connector,
+        )?;
         credential_args.insert(asset.name.clone(), args);
     }
 
@@ -736,6 +835,7 @@ impl Submitter for HttpSubmitter {
         watch_interval: f64,
         args: Option<Map<String, Value>>,
     ) -> Result<Value> {
+        let args = git_submit_args(self.external_connector, args);
         self.client
             .add_resource(
                 &asset.repo_url,
@@ -926,11 +1026,8 @@ pub async fn handle_manifest_apply(
         })
         .transpose()?;
 
-    let effective_timeout = if options.wait {
-        timeout.unwrap_or(60.0).max(ctx.config.timeout)
-    } else {
-        ctx.config.timeout.max(20.0)
-    };
+    let effective_timeout =
+        manifest_request_timeout(options.wait, timeout, ctx.config.timeout, false);
     let client = ctx.get_client_with_timeout(Some(effective_timeout));
     let mut request = json!({
         "manifest_yaml": manifest_yaml,
@@ -943,6 +1040,11 @@ pub async fn handle_manifest_apply(
     let resolved: ResolveResponse = client
         .post("/api/v1/openviking-assets/resolve", &request)
         .await?;
+    let has_native_auth =
+        !options.external_connector && resolved.assets.iter().any(|asset| asset.auth_ref.is_some());
+    let effective_timeout =
+        manifest_request_timeout(options.wait, timeout, ctx.config.timeout, has_native_auth);
+    let client = ctx.get_client_with_timeout(Some(effective_timeout));
 
     let json_mode = matches!(ctx.output_format, OutputFormat::Json);
     let mut emit = |event: Value| {
@@ -1008,6 +1110,20 @@ mod tests {
     }
 
     #[test]
+    fn native_auth_requests_get_a_long_default_and_honor_explicit_timeout() {
+        assert_eq!(manifest_request_timeout(false, None, 60.0, false), 60.0);
+        assert_eq!(manifest_request_timeout(false, None, 60.0, true), 300.0);
+        assert_eq!(
+            manifest_request_timeout(false, Some(900.0), 60.0, true),
+            900.0
+        );
+        assert_eq!(
+            manifest_request_timeout(false, Some(120.0), 180.0, true),
+            180.0
+        );
+    }
+
+    #[test]
     fn build_args_uses_manifest_commit_as_authoritative_selector() {
         let (_dir, _manifest, _catalog, mut assets) = workspace();
         assets[0].branch = None;
@@ -1031,6 +1147,105 @@ mod tests {
         );
         assert!(!args.contains_key("branch"));
         assert!(!args.contains_key("ref"));
+    }
+
+    #[test]
+    fn native_git_submit_nests_credentials_but_keeps_source_selector_flat() {
+        let args = json!({
+            "username": "oauth2",
+            "token": "sekrit",
+            "branch": "main",
+        })
+        .as_object()
+        .cloned();
+
+        let args = git_submit_args(false, args).unwrap();
+
+        assert_eq!(
+            args["auth_config"],
+            json!({"username": "oauth2", "token": "sekrit"})
+        );
+        assert_eq!(args["branch"], json!("main"));
+        assert!(!args.contains_key("username"));
+        assert!(!args.contains_key("token"));
+    }
+
+    #[test]
+    fn git_preflight_keeps_auth_config_separate_from_source_selector() {
+        let args = json!({
+            "username": "oauth2",
+            "token": "sekrit",
+            "branch": "main",
+        })
+        .as_object()
+        .cloned();
+
+        assert_eq!(
+            git_auth_config(args.as_ref()),
+            Some(json!({"username": "oauth2", "token": "sekrit"}))
+        );
+    }
+
+    #[test]
+    fn external_git_submit_keeps_connector_credentials_flat() {
+        let args = json!({
+            "username": "oauth2",
+            "token": "sekrit",
+            "commit": "deadbeef",
+        })
+        .as_object()
+        .cloned();
+
+        let args = git_submit_args(true, args).unwrap();
+
+        assert_eq!(args["username"], json!("oauth2"));
+        assert_eq!(args["token"], json!("sekrit"));
+        assert_eq!(args["commit"], json!("deadbeef"));
+        assert!(!args.contains_key("auth_config"));
+    }
+
+    #[test]
+    fn native_git_auth_validation_matches_server_contract() {
+        let (_dir, _manifest, _catalog, mut assets) = workspace();
+        let username_only = json!({"username": "oauth2"}).as_object().unwrap().clone();
+        assert!(
+            validate_native_git_auth(&assets[0], &username_only, 0.0, false)
+                .unwrap_err()
+                .to_string()
+                .contains("token")
+        );
+
+        let token = json!({"token": "sekrit"}).as_object().unwrap().clone();
+        assets[0].repo_url = "git@github.com:org/alpha.git".into();
+        assert!(
+            validate_native_git_auth(&assets[0], &token, 0.0, false)
+                .unwrap_err()
+                .to_string()
+                .contains("HTTPS")
+        );
+
+        assets[0].repo_url = "http://github.com/org/alpha.git".into();
+        assert!(
+            validate_native_git_auth(&assets[0], &token, 0.0, false)
+                .unwrap_err()
+                .to_string()
+                .contains("HTTPS")
+        );
+
+        let unknown = json!({"password": "must-not-persist"})
+            .as_object()
+            .unwrap()
+            .clone();
+        assert!(
+            validate_native_git_auth(&assets[0], &unknown, 0.0, false)
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported")
+        );
+
+        assets[0].repo_url = "https://github.com/org/alpha.git".into();
+        assert!(validate_native_git_auth(&assets[0], &token, 30.0, false).is_ok());
+        assert!(validate_native_git_auth(&assets[0], &token, 30.0, true).is_ok());
     }
 
     #[test]
@@ -1530,6 +1745,105 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn native_auth_watch_is_preflighted_and_submitted() {
+        let (dir, manifest, catalog, mut assets) = workspace();
+        assets[1].auth_ref = Some("team-git".into());
+        let creds = write(
+            dir.path(),
+            "creds.yaml",
+            "credentials:\n  team-git:\n    token: sekrit\n",
+        );
+        let submitter = FakeSubmitter::new(vec![]);
+        let mut emit = |_event: Value| {};
+
+        let summary = apply_manifest_core(
+            &manifest,
+            &catalog,
+            &assets,
+            &creds,
+            &run_opts(),
+            &submitter,
+            &mut emit,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(summary.succeeded, ["alpha", "beta", "gamma"]);
+        let preflight_calls = submitter.preflight_calls.lock().unwrap();
+        let beta_preflight = preflight_calls
+            .iter()
+            .find(|call| call.0 == "beta")
+            .unwrap();
+        assert_eq!(beta_preflight.1.as_ref().unwrap()["token"], json!("sekrit"));
+        drop(preflight_calls);
+        let calls = submitter.calls.lock().unwrap();
+        let beta_submit = calls.iter().find(|call| call.0 == "beta").unwrap();
+        assert_eq!(beta_submit.2, 30.0);
+        assert_eq!(beta_submit.3.as_ref().unwrap()["token"], json!("sekrit"));
+        assert!(state_path_for(&manifest).exists());
+    }
+
+    #[tokio::test]
+    async fn native_unknown_credential_field_aborts_before_preflight_or_submission() {
+        let (dir, manifest, catalog, mut assets) = workspace();
+        assets[1].auth_ref = Some("team-git".into());
+        let creds = write(
+            dir.path(),
+            "creds.yaml",
+            "credentials:\n  team-git:\n    password: must-not-persist\n",
+        );
+        let submitter = FakeSubmitter::new(vec![]);
+        let mut emit = |_event: Value| {};
+
+        let err = apply_manifest_core(
+            &manifest,
+            &catalog,
+            &assets,
+            &creds,
+            &run_opts(),
+            &submitter,
+            &mut emit,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains("unsupported"), "{err}");
+        assert!(!err.to_string().contains("must-not-persist"), "{err}");
+        assert!(submitter.preflight_calls.lock().unwrap().is_empty());
+        assert!(submitter.calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn native_empty_credential_alias_aborts_before_preflight_or_submission() {
+        for credentials_yaml in [
+            "credentials:\n  team-git: {}\n",
+            "credentials:\n  team-git:\n",
+        ] {
+            let (dir, manifest, catalog, mut assets) = workspace();
+            assets[1].auth_ref = Some("team-git".into());
+            let creds = write(dir.path(), "creds.yaml", credentials_yaml);
+            let submitter = FakeSubmitter::new(vec![]);
+            let mut emit = |_event: Value| {};
+
+            let err = apply_manifest_core(
+                &manifest,
+                &catalog,
+                &assets,
+                &creds,
+                &run_opts(),
+                &submitter,
+                &mut emit,
+            )
+            .await
+            .unwrap_err();
+
+            assert!(err.to_string().contains("token"), "{err}");
+            assert!(submitter.preflight_calls.lock().unwrap().is_empty());
+            assert!(submitter.calls.lock().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
     async fn orphan_reported_but_kept() {
         let (dir, manifest, catalog, assets) = workspace();
         let creds = dir.path().join("no-creds.yaml");
@@ -1564,6 +1878,7 @@ mod tests {
     async fn auth_ref_precheck_and_merge() {
         let (dir, manifest, catalog, mut assets) = workspace();
         assets[0].auth_ref = Some("team-git".into());
+        assets[0].watch_interval = 0.0;
 
         // Missing alias fails before anything is submitted.
         let submitter = FakeSubmitter::new(vec![]);

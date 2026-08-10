@@ -56,7 +56,10 @@ class AddResourceRequest(BaseModel):
         exclude: Glob pattern for files to exclude during parsing.
         directly_upload_media: Whether to directly upload media files. Default is True.
         preserve_structure: Whether to preserve directory structure when adding directories.
-        args: Parser-specific import options. For Feishu one-time user-token imports,
+        args: Parser-specific import options. Native HTTPS Git imports accept
+            {"auth_config": {"username": "oauth2", "token": "..."}}; when
+            watch_interval > 0 the credentials are stored in private watch state.
+            For Feishu one-time user-token imports,
             pass {"feishu_access_token": "..."}. For Feishu user-token watches,
             pass {"feishu_access_token": "...", "feishu_refresh_token": "..."}.
         watch_interval: Watch interval in minutes for automatic resource monitoring.

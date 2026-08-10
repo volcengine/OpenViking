@@ -374,7 +374,7 @@ enum Commands {
         /// Wait until processing is complete
         #[arg(long, help_heading = "Common options")]
         wait: bool,
-        /// Wait timeout in seconds (only used with --wait)
+        /// Request timeout in seconds. Used with --wait and by Manifest private Git imports
         #[arg(
             long,
             value_parser = config::parse_positive_timeout,

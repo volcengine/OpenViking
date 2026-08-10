@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import asyncio
-import base64
+import contextlib
 import hashlib
 import math
 import os
@@ -19,6 +19,11 @@ from openviking.core.namespace import classify_uri, uri_parts
 from openviking.core.uri_validation import validate_content_target_uri, validate_viking_uri
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import require_remote_resource_source
+from openviking.utils.git_auth import (
+    GitHttpAuthConfig,
+    build_git_http_auth_env,
+    reject_git_url_userinfo,
+)
 from openviking_cli.exceptions import (
     DeadlineExceededError,
     InvalidArgumentError,
@@ -276,6 +281,7 @@ async def preflight_git_repository(
 ) -> dict[str, Any]:
     """Verify that the server can read a Git source without cloning or creating a task."""
 
+    reject_git_url_userinfo(repo_url)
     _validate_clone_url(repo_url, asset_name)
     repo_url = require_remote_resource_source(repo_url)
     if timeout <= 0 or not math.isfinite(timeout):
@@ -295,9 +301,9 @@ async def preflight_git_repository(
 
     normalized_token = token or ""
     normalized_username = (username or ("oauth2" if normalized_token else "")).strip()
-    if normalized_token and not repo_url.strip().lower().startswith(("http://", "https://")):
+    if normalized_token and not repo_url.strip().lower().startswith("https://"):
         raise InvalidArgumentError(
-            f"asset '{asset_name}': token authentication requires an HTTP(S) Git URL"
+            f"asset '{asset_name}': token authentication requires an HTTPS Git URL"
         )
     if normalized_token and not normalized_username:
         raise InvalidArgumentError(
@@ -311,9 +317,11 @@ async def preflight_git_repository(
     if normalized_token:
         # An explicit auth_ref must be authoritative: disable credential-helper
         # fallback and pass HTTP Basic auth through process-local config.
-        _append_git_process_config(env, "credential.helper", "")
-        encoded = base64.b64encode(f"{normalized_username}:{normalized_token}".encode()).decode()
-        _append_git_process_config(env, "http.extraHeader", f"Authorization: Basic {encoded}")
+        env = build_git_http_auth_env(
+            GitHttpAuthConfig(username=normalized_username, token=normalized_token),
+            repo_url,
+            base_env=env,
+        )
     elif normalized_username:
         _append_git_process_config(env, "credential.username", normalized_username)
 
@@ -348,6 +356,12 @@ async def preflight_git_repository(
         process.kill()
         await process.communicate()
         raise DeadlineExceededError("Git repository permission preflight", timeout) from exc
+    except BaseException:
+        with contextlib.suppress(ProcessLookupError):
+            process.kill()
+        with contextlib.suppress(Exception):
+            await asyncio.shield(process.wait())
+        raise
 
     locator = normalize_repo_url(repo_url)
     if process.returncode == 0:

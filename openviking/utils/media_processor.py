@@ -256,6 +256,9 @@ class UnifiedResourceProcessor:
         try:
             # Phase 2: Parser - parse the local resource
             parse_kwargs = dict(kwargs)
+            # Source credentials are consumed by the accessor. Never forward
+            # them into parser kwargs, parse results, or later queue payloads.
+            parse_kwargs.pop("auth_config", None)
             parse_kwargs["instruction"] = instruction
             parse_kwargs["_source_meta"] = local_resource.meta
             parse_kwargs["resolved_extension"] = kwargs.get(

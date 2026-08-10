@@ -27,6 +27,7 @@ from openviking.resource.feishu_watch_auth import (
     create_feishu_auth_state,
     load_feishu_app_credentials,
 )
+from openviking.resource.git_watch_auth import create_git_http_auth_state
 from openviking.resource.processing_mode import (
     DEFAULT_PROCESSING_MODE,
     ProcessingMode,
@@ -50,6 +51,7 @@ from openviking.telemetry.resource_summary import (
     build_queue_status_payload,
 )
 from openviking.utils import is_git_repo_url, parse_code_hosting_url
+from openviking.utils.git_auth import parse_git_http_auth_config, reject_git_url_userinfo
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.media_processor import _smart_stem
 from openviking.utils.network_guard import ensure_public_remote_target
@@ -192,6 +194,12 @@ class ResourceService:
     def _sanitize_watch_processor_kwargs(self, processor_kwargs: Dict[str, Any]) -> Dict[str, Any]:
         sanitized: Dict[str, Any] = {}
         for key, value in processor_kwargs.items():
+            if key in {
+                "auth_config",
+                FEISHU_ACCESS_TOKEN_ARG,
+                FEISHU_REFRESH_TOKEN_ARG,
+            }:
+                continue
             try:
                 json.dumps(value, ensure_ascii=False)
             except TypeError:
@@ -287,8 +295,6 @@ class ResourceService:
                     )
                 try:
                     sanitized = self._sanitize_watch_processor_kwargs(processor_kwargs)
-                    if watch_auth_state is not None:
-                        sanitized.pop(FEISHU_ACCESS_TOKEN_ARG, None)
                     await self._handle_watch_task_creation(
                         path=path,
                         to_uri=watch_to,
@@ -342,9 +348,7 @@ class ResourceService:
         try:
             parse_mode = normalize_parse_mode(raw_parse_mode)
         except InvalidArgumentError as exc:
-            raise InvalidArgumentError(
-                str(exc).replace("parse_mode", "args.parse_mode")
-            ) from exc
+            raise InvalidArgumentError(str(exc).replace("parse_mode", "args.parse_mode")) from exc
         token = normalized.get(FEISHU_ACCESS_TOKEN_ARG)
         refresh_token = normalized.pop(FEISHU_REFRESH_TOKEN_ARG, None)
         watch_auth_state = None
@@ -612,6 +616,13 @@ class ResourceService:
             else normalized_args.parse_mode
         )
         kwargs.update(normalized_args.processor_kwargs)
+        reject_git_url_userinfo(path)
+        if "auth_config" in kwargs:
+            raise InvalidArgumentError(
+                "args.auth_config cannot be used with enqueue_git_add_resource because "
+                "native Git credentials must be consumed before durable queue submission. "
+                "Call add_resource instead."
+            )
         from openviking.connector.routing import credential_arg_names
 
         credential_args = credential_arg_names("git", kwargs)
@@ -971,6 +982,9 @@ class ResourceService:
             else normalized_args.parse_mode
         )
         kwargs.update(normalized_args.processor_kwargs)
+        git_repo_source = is_git_repo_url(path)
+        if git_repo_source:
+            reject_git_url_userinfo(path)
         if watch_interval > 0 and kwargs.get("temp_file_id"):
             # Fail fast, before any ingestion: an uploaded source is a one-time
             # snapshot, so a watch on it can never observe the live source (see the
@@ -1023,28 +1037,73 @@ class ResourceService:
                 **kwargs,
             )
 
-        if is_git_repo_url(path):
-            result = await self.enqueue_git_add_resource(
-                path=path,
-                ctx=ctx,
-                to=to,
-                to_is_directory=to_is_directory,
-                parent=parent,
-                reason=reason,
-                instruction=instruction,
-                timeout=timeout,
-                build_index=build_index,
-                summarize=summarize,
-                processing_mode=processing_mode,
-                parse_mode=mode,
-                watch_interval=watch_interval,
-                manage_watch=manage_watch,
-                tags=tags,
-                tag_mode=tag_mode,
-                allow_local_path_resolution=allow_local_path_resolution,
-                enforce_public_remote_targets=enforce_public_remote_targets,
-                **kwargs,
-            )
+        if git_repo_source:
+            if "auth_config" in kwargs:
+                git_auth = parse_git_http_auth_config(
+                    kwargs["auth_config"],
+                    path,
+                )
+                if git_auth is None:
+                    raise InvalidArgumentError("args.auth_config must be an object.")
+
+                watch_auth_state = normalized_args.watch_auth_state
+                if watch_interval > 0:
+                    watch_auth_state = create_git_http_auth_state(git_auth, path)
+
+                # The native Git queue is durable, so credentials must be consumed
+                # before crossing that boundary. Fetch and parse in this request;
+                # _execute_resource_ingestion only queues the credential-free
+                # prepared post-processing payload when defer_post_processing=True.
+                request_local_kwargs = dict(kwargs)
+                request_local_kwargs["auth_config"] = {
+                    "username": git_auth.username,
+                    "token": git_auth.token,
+                }
+                result = await self._execute_resource_ingestion(
+                    path=path,
+                    ctx=ctx,
+                    to=to,
+                    to_is_directory=to_is_directory,
+                    parent=parent,
+                    reason=reason,
+                    instruction=instruction,
+                    defer_post_processing=True,
+                    timeout=timeout,
+                    build_index=build_index,
+                    summarize=summarize,
+                    processing_mode=processing_mode,
+                    parse_mode=mode,
+                    watch_interval=watch_interval,
+                    manage_watch=manage_watch,
+                    tags=tags,
+                    tag_mode=tag_mode,
+                    allow_local_path_resolution=allow_local_path_resolution,
+                    enforce_public_remote_targets=enforce_public_remote_targets,
+                    watch_auth_state=watch_auth_state,
+                    **request_local_kwargs,
+                )
+            else:
+                result = await self.enqueue_git_add_resource(
+                    path=path,
+                    ctx=ctx,
+                    to=to,
+                    to_is_directory=to_is_directory,
+                    parent=parent,
+                    reason=reason,
+                    instruction=instruction,
+                    timeout=timeout,
+                    build_index=build_index,
+                    summarize=summarize,
+                    processing_mode=processing_mode,
+                    parse_mode=mode,
+                    watch_interval=watch_interval,
+                    manage_watch=manage_watch,
+                    tags=tags,
+                    tag_mode=tag_mode,
+                    allow_local_path_resolution=allow_local_path_resolution,
+                    enforce_public_remote_targets=enforce_public_remote_targets,
+                    **kwargs,
+                )
         else:
             result = await self._execute_resource_ingestion(
                 path=path,
