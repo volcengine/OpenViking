@@ -587,6 +587,44 @@ pub async fn apply_manifest_core<S: Submitter>(
         existing_state_ids.push(existing_state_id);
     }
 
+    // A target may come from the Manifest, an existing State entry, or the
+    // external-Connector fallback. Validate the completed plan rather than
+    // only the declarative `to` fields so two assets can never overwrite the
+    // same resource during one apply.
+    let mut claimed_targets = BTreeMap::<String, String>::new();
+    for (index, target) in target_uris.iter().enumerate() {
+        let Some(target) = target else {
+            continue;
+        };
+        let normalized = target.trim_end_matches('/').to_string();
+        if let Some(previous) =
+            claimed_targets.insert(normalized.clone(), assets[index].name.clone())
+        {
+            return Err(client_err(format!(
+                "assets '{}' and '{}' both resolve to target '{}'",
+                previous, assets[index].name, normalized
+            )));
+        }
+    }
+
+    // State adoption represents ownership transfer after a selector change.
+    // One old entry cannot be transferred to two current assets, even if a
+    // malformed State entry has no resource_uri for the target check above.
+    let mut claimed_state_entries = BTreeMap::<String, String>::new();
+    for (index, state_id) in existing_state_ids.iter().enumerate() {
+        let Some(state_id) = state_id else {
+            continue;
+        };
+        if let Some(previous) =
+            claimed_state_entries.insert(state_id.clone(), assets[index].name.clone())
+        {
+            return Err(client_err(format!(
+                "assets '{}' and '{}' both claim State entry '{}'",
+                previous, assets[index].name, state_id
+            )));
+        }
+    }
+
     // Pre-flight: every declared auth_ref must resolve before anything is submitted.
     let credentials = load_credentials(credentials_file)?;
     let mut credential_args: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
@@ -1652,6 +1690,53 @@ mod tests {
         let state = load_state(&manifest).unwrap();
         assert!(!state.assets.contains_key(&previous_id));
         assert!(state.assets.contains_key("alpha-dev-id"));
+    }
+
+    #[tokio::test]
+    async fn inherited_and_declared_target_collision_aborts_before_preflight() {
+        let (dir, manifest, catalog, assets) = workspace();
+        let creds = dir.path().join("no-creds.yaml");
+        let submitter = FakeSubmitter::new(vec![]);
+        run(
+            &manifest,
+            &catalog,
+            &assets,
+            &creds,
+            &run_opts(),
+            &submitter,
+        )
+        .await;
+
+        let state_path = state_path_for(&manifest);
+        let original_state = std::fs::read_to_string(&state_path).unwrap();
+
+        let mut inherited = assets[0].clone();
+        inherited.to = None;
+        let mut declared = assets[1].clone();
+        declared.asset_id = "beta-at-alpha-target".into();
+        declared.to = Some("viking://resources/repos/alpha/".into());
+        let selected = vec![inherited, declared];
+        let submitter = FakeSubmitter::new(vec![]);
+        let mut emit = |_event: Value| {};
+        let err = apply_manifest_core(
+            &manifest,
+            &catalog,
+            &selected,
+            &creds,
+            &run_opts(),
+            &submitter,
+            &mut emit,
+        )
+        .await
+        .unwrap_err();
+
+        let message = err.to_string();
+        assert!(message.contains("alpha"), "{message}");
+        assert!(message.contains("beta"), "{message}");
+        assert!(message.contains("both resolve to target"), "{message}");
+        assert!(submitter.preflight_calls.lock().unwrap().is_empty());
+        assert!(submitter.calls.lock().unwrap().is_empty());
+        assert_eq!(std::fs::read_to_string(state_path).unwrap(), original_state);
     }
 
     #[tokio::test]

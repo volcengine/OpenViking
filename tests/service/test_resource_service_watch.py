@@ -535,7 +535,7 @@ class TestWatchTaskConflict:
     async def test_conflict_when_active_task_exists(
         self, resource_service: ResourceService, request_context: RequestContext
     ):
-        """Test that ConflictError is raised when an active task already exists."""
+        """A different source cannot replace an active watch."""
         to_uri = "viking://resources/conflict_test"
 
         await resource_service.add_resource(
@@ -555,6 +555,43 @@ class TestWatchTaskConflict:
 
         assert "already being monitored" in str(exc_info.value)
         assert to_uri in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_same_source_updates_active_task(
+        self, resource_service: ResourceService, request_context: RequestContext
+    ):
+        """Re-applying one source updates its active watch instead of conflicting."""
+        to_uri = "viking://resources/idempotent_watch"
+        source = "/test/same-path"
+
+        await resource_service.add_resource(
+            path=source,
+            ctx=request_context,
+            to=to_uri,
+            reason="Original reason",
+            watch_interval=30.0,
+            args={"branch": "main"},
+        )
+        original = await get_task_by_uri(resource_service, to_uri, request_context)
+        assert original is not None
+
+        await resource_service.add_resource(
+            path=source,
+            ctx=request_context,
+            to=to_uri,
+            reason="Updated reason",
+            watch_interval=45.0,
+            args={"branch": "release"},
+        )
+
+        updated = await get_task_by_uri(resource_service, to_uri, request_context)
+        assert updated is not None
+        assert updated.task_id == original.task_id
+        assert updated.path == source
+        assert updated.reason == "Updated reason"
+        assert updated.watch_interval == 45.0
+        assert updated.processor_kwargs == {"branch": "release"}
+        assert updated.is_active is True
 
     @pytest.mark.asyncio
     async def test_conflict_does_not_create_async_task(

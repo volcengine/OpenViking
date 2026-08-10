@@ -957,9 +957,9 @@ class ResourceService:
                 - watch_interval < 0: Same as watch_interval = 0, cancels any existing watch task.
                 Default is 0 (no monitoring).
 
-                Note: If the target URI already has an active watch task, a ConflictError will be
-                raised. You must first cancel the existing watch (set watch_interval <= 0) before
-                creating a new one.
+                Note: Re-adding the same source to the same target updates its active watch
+                task in place. A different source targeting an active watch raises
+                ConflictError; cancel that watch first with watch_interval <= 0.
             enforce_public_remote_targets: When True, reject non-public remote hosts and
                 validate each outbound HTTP request URL during fetch.
             args: Parser/accessor-specific options forwarded to the processing chain.
@@ -969,7 +969,7 @@ class ResourceService:
             Processing result containing 'root_uri' and other metadata
 
         Raises:
-            ConflictError: If the target URI already has an active watch task
+            ConflictError: If a different source targets an active watch task
             InvalidArgumentError: If the URI scope is not 'resources'
         """
         self._ensure_initialized()
@@ -1655,7 +1655,7 @@ class ResourceService:
             ctx: Request context with user identity
 
         Raises:
-            ConflictError: If target URI is already used by another active task
+            ConflictError: If target URI is actively watched from a different source
         """
         watch_manager = self._get_watch_manager()
         if not watch_manager:
@@ -1668,12 +1668,13 @@ class ResourceService:
             role=str(ctx.role),
         )
         if existing_task:
-            if existing_task.is_active:
+            if existing_task.is_active and existing_task.path != path:
                 raise ConflictError(
                     f"Target URI '{to_uri}' is already being monitored by task {existing_task.task_id}. "
                     f"Please cancel the existing task first.",
                     resource=to_uri,
                 )
+            was_active = existing_task.is_active
             await watch_manager.update_task(
                 task_id=existing_task.task_id,
                 account_id=ctx.account_id,
@@ -1694,7 +1695,8 @@ class ResourceService:
                 is_active=True,
             )
             logger.info(
-                f"[ResourceService] Reactivated and updated watch task {existing_task.task_id} for {to_uri}"
+                f"[ResourceService] {'Updated active' if was_active else 'Reactivated and updated'} "
+                f"watch task {existing_task.task_id} for {to_uri}"
             )
         else:
             task = await watch_manager.create_task(

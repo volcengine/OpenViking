@@ -70,9 +70,9 @@ class AddResourceRequest(BaseModel):
             - watch_interval < 0: Same as watch_interval = 0, cancels any existing watch task.
             Default is 0 (no monitoring).
 
-            Note: If the target URI already has an active watch task, a ConflictError will be
-            raised. You must first cancel the existing watch (set watch_interval <= 0) before
-            creating a new one.
+            Note: Re-adding the same source to the same target updates its active watch task.
+            A different source targeting an active watch raises ConflictError; cancel that
+            watch first with watch_interval <= 0.
     """
 
     model_config = ConfigDict(extra="forbid")
