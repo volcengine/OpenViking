@@ -1,0 +1,23 @@
+openviking/session/session.py
+  s_b5e555664dcec3::t_13bf18f816a356 667-670,672-673,675
+tests/session/test_session_lifecycle.py
+  s_b5e555664dcec3::t_d0c258af613f49 70-84
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "dfaa9657f11563b4fe099e2f279be3a10623090f",
+  "prompts": {},
+  "sessions": {
+    "s_b5e555664dcec3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019feab2-0b20-7dd1-a27d-5773206aaa4a",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
