@@ -76,6 +76,17 @@ def extract_text_from_content(content: "EmbeddingInput") -> str:
     return "\n".join(p for p in text_parts if p)
 
 
+async def embed_prepared(
+    embedder: "EmbedderBase", content: "EmbeddingInput", *, is_query: bool = False
+) -> "EmbedResult":
+    """Call an embedder with input already guarded for that embedder."""
+    from openviking.telemetry import bind_telemetry_stage
+
+    stage = "embed_query" if is_query else "embed_resource"
+    with bind_telemetry_stage(stage):
+        return await embedder.embed_async(content, is_query=is_query)
+
+
 async def embed_compat(
     embedder: "EmbedderBase", content: "EmbeddingInput", *, is_query: bool = False
 ) -> "EmbedResult":
@@ -86,12 +97,9 @@ async def embed_compat(
     embedders that do not support images, so all embedders can be called the same
     way.
     """
-    from openviking.telemetry import bind_telemetry_stage
-
-    stage = "embed_query" if is_query else "embed_resource"
     embedding_input = embedder.prepare_embedding_input(content)
-    with bind_telemetry_stage(stage):
-        return await embedder.embed_async(embedding_input, is_query=is_query)
+    del content
+    return await embed_prepared(embedder, embedding_input, is_query=is_query)
 
 
 def truncate_and_normalize(embedding: List[float], dimension: Optional[int]) -> List[float]:

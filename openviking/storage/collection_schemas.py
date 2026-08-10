@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from openviking.core.context import ContextType, ResourceContentType
-from openviking.models.embedder.base import EmbeddingInput, EmbedResult, embed_compat
+from openviking.models.embedder.base import EmbeddingInput, EmbedResult, embed_prepared
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.errors import (
     CollectionNotFoundError,
@@ -737,7 +737,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                             self._record_request_success(embedding_msg)
                             report_success = True
                             return None
-                        result: EmbedResult = await embed_compat(
+                        result: EmbedResult = await embed_prepared(
                             self._embedder, embedding_input, is_query=False
                         )
                         del embedding_input

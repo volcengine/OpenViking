@@ -50,7 +50,6 @@ def test_embedding_msg_converter_backfills_account_and_owner_fields(
 
 def test_embedding_msg_converter_keeps_content_out_of_queue_metadata():
     context = Context(uri="viking://resources/large.txt", abstract="short embedding text")
-    context.meta["unused"] = "not index data"
     context.set_vectorize(Vectorize(text="short embedding text"))
 
     msg = EmbeddingMsgConverter.from_context(context)
@@ -58,4 +57,3 @@ def test_embedding_msg_converter_keeps_content_out_of_queue_metadata():
     assert msg is not None
     assert msg.message == "short embedding text"
     assert "content" not in msg.context_data
-    assert "meta" not in msg.context_data

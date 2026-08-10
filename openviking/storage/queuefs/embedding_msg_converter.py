@@ -65,19 +65,6 @@ class EmbeddingMsgConverter:
             resolved_level = int(resolved_level.value)
         context_data["level"] = int(resolved_level)
 
-        for field in (
-            "id",
-            "temp_uri",
-            "category",
-            "meta",
-            "related_uri",
-            "session_id",
-            "user",
-            "owner_space",
-            "vector",
-        ):
-            context_data.pop(field, None)
-
         if vectorization_images:
             # Multimodal message: combine text (if any) and image references into the
             # multimodal embedding input format. Image-aware embedders consume this list;
