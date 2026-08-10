@@ -17,6 +17,7 @@ class DummyQueue:
 
     async def enqueue(self, msg):
         self.items.append(msg)
+        return "queue-message-id"
 
 
 class DummyQueueWithId(DummyQueue):

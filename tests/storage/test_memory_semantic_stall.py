@@ -7,6 +7,7 @@ Ensures that _process_memory_directory() error paths propagate exceptions
 so that on_dequeue() always calls report_success() or report_error().
 """
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -206,7 +207,7 @@ async def test_memory_write_error_reports_error():
         side_effect=lambda uri, ctx=None: f"/local/acc1/{uri.removeprefix('viking://')}"
     )
 
-    msg = _make_msg()
+    msg = _make_msg(skip_vectorization=True)
     data = _build_data(msg)
 
     success_called = False
@@ -233,6 +234,15 @@ async def test_memory_write_error_reports_error():
         patch(
             "openviking.storage.queuefs.semantic_processor.resolve_telemetry",
             return_value=None,
+        ),
+        patch(
+            "openviking.storage.queuefs.semantic_processor.get_openviking_config",
+            return_value=SimpleNamespace(
+                semantic=SimpleNamespace(
+                    overview_max_chars=100_000,
+                    abstract_max_chars=10_000,
+                )
+            ),
         ),
         patch.object(
             processor,
