@@ -11,8 +11,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
+from openviking.utils.circuit_breaker import CircuitBreaker
 
 
 def _make_msg(uri="viking://user/memories", context_type="memory", **kwargs):
@@ -183,6 +185,47 @@ async def test_memory_ls_transient_error_requeues():
     assert success_called, "report_success() must fire after successful re-enqueue"
     assert not error_called, "report_error() must NOT fire for transient errors"
     reenqueue_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_lock_error_releases_half_open_probe():
+    processor = SemanticProcessor()
+    processor._circuit_breaker = CircuitBreaker(failure_threshold=1, reset_timeout=0)
+    processor._circuit_breaker.record_failure(RuntimeError("500 Internal Server Error"))
+    probe_state_during_requeue = []
+
+    async def requeue(*_args):
+        probe_state_during_requeue.append(
+            (
+                processor._circuit_breaker._state,
+                processor._circuit_breaker._probe_started_at,
+            )
+        )
+
+    requeue_mock = AsyncMock(side_effect=requeue)
+    msg = _make_msg()
+
+    with (
+        patch(
+            "openviking.storage.queuefs.semantic_processor.resolve_telemetry",
+            return_value=None,
+        ),
+        patch(
+            "openviking.storage.queuefs.semantic_processor.SemanticLockScope.resolve",
+            new=AsyncMock(side_effect=LockAcquisitionError("busy")),
+        ),
+        patch.object(
+            processor,
+            "_requeue_semantic_msg_after_error",
+            new=requeue_mock,
+        ),
+    ):
+        await processor.on_dequeue(_build_data(msg))
+
+    requeue_mock.assert_awaited_once()
+    assert probe_state_during_requeue == [("HALF_OPEN", 0)]
+    assert processor._circuit_breaker._state == "HALF_OPEN"
+    assert processor._circuit_breaker._probe_started_at == 0
 
 
 @pytest.mark.asyncio
