@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from typing import Optional
 
@@ -13,6 +14,9 @@ from openviking.server.api_keys import APIKeyManager
 from openviking.server.auth.plugin import AuthPlugin
 from openviking.server.identity import ResolvedIdentity, Role
 from openviking_cli.exceptions import PermissionDeniedError, UnauthenticatedError
+from openviking_cli.utils import get_logger
+
+_watch_logger = get_logger(__name__)
 
 _API_KEY_ROOT_ALLOWED_PATHS = {
     "/api/v1/system/status",
@@ -56,6 +60,10 @@ class ApiKeyAuthPlugin(AuthPlugin):
     """
 
     auth_mode = "api_key"
+
+    def __init__(self) -> None:
+        # Background key-store poll task; None when the watcher is disabled.
+        self._watch_task: Optional[asyncio.Task] = None
 
     async def resolve_identity(
         self,
@@ -203,6 +211,58 @@ class ApiKeyAuthPlugin(AuthPlugin):
         )
         await api_key_manager.load()
         app.state.api_key_manager = api_key_manager
+
+        # Read replicas never rewrite the store, so poll for writer-side changes.
+        if getattr(config, "api_key_watch_enabled", False):
+            interval = getattr(config, "api_key_watch_interval_seconds", 30.0)
+            self._watch_task = asyncio.create_task(self._watch_key_store(api_key_manager, interval))
+            _watch_logger.info("API key store watcher started (interval=%.1fs)", interval)
+
+    async def shutdown(self) -> None:
+        """Cancel the background key-store watcher, if running."""
+        if self._watch_task is None:
+            return
+        self._watch_task.cancel()
+        try:
+            await self._watch_task
+        except asyncio.CancelledError:
+            pass
+        except Exception:  # noqa: BLE001
+            _watch_logger.warning("API key store watcher exited with error", exc_info=True)
+        finally:
+            self._watch_task = None
+
+    @staticmethod
+    async def _watch_key_store(api_key_manager: APIKeyManager, interval: float) -> None:
+        """Poll the key store and reload on signature change; errors are swallowed to survive."""
+        # Guard against a misconfigured non-positive interval spinning hot.
+        interval = interval if interval and interval > 0 else 30.0
+        try:
+            last_signature = await api_key_manager.compute_store_signature()
+        except Exception:  # noqa: BLE001
+            _watch_logger.warning(
+                "Initial key-store signature failed; watcher will retry", exc_info=True
+            )
+            last_signature = None
+
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                signature = await api_key_manager.compute_store_signature()
+            except Exception:  # noqa: BLE001
+                _watch_logger.debug("Key-store signature check failed", exc_info=True)
+                continue
+
+            if signature == last_signature:
+                continue
+
+            try:
+                await api_key_manager.reload()
+                last_signature = signature
+                _watch_logger.info("API key store change detected; in-memory index reloaded")
+            except Exception:  # noqa: BLE001
+                # Keep last_signature unchanged so we retry the reload next tick.
+                _watch_logger.warning("API key store reload failed; will retry", exc_info=True)
 
     def get_request_context_checks(
         self,

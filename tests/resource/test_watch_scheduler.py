@@ -141,3 +141,4 @@ class TestWatchSchedulerResourceExistence:
 
         assert resource_service.calls
         assert resource_service.calls[0]["processing_mode"] == "vectors_only"
+        assert resource_service.calls[0]["enforce_public_remote_targets"] is True

@@ -151,13 +151,25 @@ ov grep "openviking" --uri viking://resources
 
 ### Session 与记忆
 
-- `session new` - 创建 session。
+- `session new` - 创建 session，并可设置事件记忆默认 tags 和自动提交策略。
 - `session list` - 列出 sessions。
 - `session get` - 查看 session 详情。
 - `session get-session-context` - 获取合并后的 session 上下文。
 - `session add-message` / `session add-messages` - 向 session 添加消息。
-- `session commit` - 归档消息并抽取记忆。
+- `session config set` - 更新 session 的可变配置。
+- `session commit` - 归档消息并抽取记忆，可覆盖本次事件 tags。
 - `add-memory` - 一次性创建 session、添加消息并提交，实验特性。
+
+```bash
+ov session new --session-id s1 --event-tags team=search,channel=web \
+  --auto-commit-policy-json '{"message_count_threshold":25}'
+ov session new --session-id s2 --no-auto-commit
+ov session config set s1 --event-tags team=search,channel=app
+ov session config set s1 --auto-commit-policy-json '{"message_count_threshold":25}'
+ov session config set s1 --no-auto-commit
+ov session commit s1 --event-tags team=search,channel=web
+ov session commit s1 --no-event-tags
+```
 
 ### 交互式工具
 

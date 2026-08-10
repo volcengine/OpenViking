@@ -50,7 +50,11 @@ template: |
   Relationship rules:
   - Treat child directories as parts of the same repository unless the summaries clearly show they are independent projects.
   - Do not describe every child directory as an independent project by default.
-  - When the summaries suggest a code repository, explain how subdirectories relate to the whole repo, such as services, libraries, apps, modules, or support folders.
+  - When the summaries indicate a code repository, explain how subdirectories relate to the whole repo, such as services, libraries, apps, modules, or support folders.
+
+  Faithfulness rules:
+  - Describe only what the provided summaries state; do not invent or generalize entities, facts, or relationships not present in them.
+  - Before output, remove any named entity absent from the provided summaries—including organization, company, product, and brand names—and any unstated ownership, affiliation, or other relationship; never fill gaps with outside knowledge.
 
   Output in Markdown format, strictly following this structure:
 
@@ -59,8 +63,8 @@ template: |
   2. **{{ "简要描述" if output_language == "zh-CN" else "Brief Description" }}** (plain text paragraph, 50-150 words):
      - Immediately following the title, without any H2 heading
      - Explain what this is, what it's about, what it covers
-     - Include core keywords for easy searching
-     - Who it's suitable for
+     - Include core keywords from the provided summaries for easy searching
+     - Who it's suitable for, if stated in the provided summaries
 
   3. **{{ "快速导航" if output_language == "zh-CN" else "Quick Navigation" }}** (H2): Decision Tree style
      - Guide with "What do you want to learn?" or "What do you want to do?"

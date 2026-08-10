@@ -92,6 +92,7 @@ Example configuration:
 ```json
 {
   "enabled": true,
+  "mcp": { "enabled": true },
   "timeoutMs": 30000,
   "repoContext": { "enabled": true, "cacheTtlMs": 60000 },
   "autoRecall": {
@@ -125,6 +126,20 @@ API keys are resolved from environment variables or `~/.openviking/ovcli.conf` a
 `OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, and `OPENVIKING_PEER_ID` take precedence over the corresponding values in `openviking-config.json`.
 
 For advanced setups, use `OPENVIKING_PLUGIN_CONFIG` to point to another configuration file path.
+
+### Hook-only mode
+
+If another MCP server already exposes OpenViking, set the bundled MCP registration to `false` while
+keeping this plugin's lifecycle hooks active:
+
+```json
+{
+  "mcp": { "enabled": false }
+}
+```
+
+Repository context, automatic recall, message capture, and lifecycle commits remain enabled. This
+does not add or overwrite OpenCode's `mcp.openviking` entry.
 
 ## Verify
 

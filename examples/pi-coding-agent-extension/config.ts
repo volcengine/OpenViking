@@ -1,5 +1,6 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { buildUserAgent, resolveOpenVikingCredentials } from "./shared/credentials.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
@@ -85,6 +86,10 @@ const DEFAULT_CONFIG: OVConfig = {
   bypassPatterns: [],
   logLevel: "error",
 };
+
+export function loadConfigFromModuleUrl(moduleUrl: string): OVConfig {
+  return loadConfig(dirname(fileURLToPath(moduleUrl)));
+}
 
 export function loadConfig(extensionDir: string): OVConfig {
   const configPath = join(extensionDir, "config.json");

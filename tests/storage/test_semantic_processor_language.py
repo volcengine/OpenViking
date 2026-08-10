@@ -233,9 +233,16 @@ class TestOverviewGenerationFlow:
             in prompt
         )
         assert (
-            "- When the summaries suggest a code repository, explain how subdirectories relate to the whole repo, such as services, libraries, apps, modules, or support folders."
+            "- When the summaries indicate a code repository, explain how subdirectories relate to the whole repo, such as services, libraries, apps, modules, or support folders."
             in prompt
         )
+        assert (
+            "- Describe only what the provided summaries state; do not invent or generalize entities, facts, or relationships not present in them."
+            in prompt
+        )
+        assert "Before output, remove any named entity absent from the provided summaries" in prompt
+        assert "never fill gaps with outside knowledge" in prompt
+        assert "Who it's suitable for, if stated in the provided summaries" in prompt
 
     def test_chinese_overview_uses_localized_headings(self):
         prompt = render_prompt(

@@ -290,6 +290,11 @@ class ServerConfig(BaseModel):
     bot_api_url: str = "http://localhost:18790"  # Vikingbot OpenAPIChannel URL (default port)
     encryption_enabled: bool = False  # Whether file-level AES encryption is enabled
     api_key_hashing_enabled: bool = False  # Whether API key Argon2id hashing is enabled (default: false, rely on file encryption)
+    # When true, poll the shared key store and reload the in-memory index on change so
+    # read replicas pick up writer-side user add/rotate/remove. Default off (single writer).
+    api_key_watch_enabled: bool = False
+    # Poll interval; each check only stats registry files and reads fully on change.
+    api_key_watch_interval_seconds: float = 30.0
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     usage_reporter: UsageReporterConfig = Field(default_factory=UsageReporterConfig)
     # Public-facing base URL emitted in MCP-issued upload instructions. See

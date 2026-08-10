@@ -640,9 +640,7 @@ async def test_create_session_uses_default_policy_when_server_default_enabled(
     client: httpx.AsyncClient,
     service,
 ):
-    service.sessions.set_session_auto_commit_config(
-        SessionAutoCommitConfig(default_enabled=True)
-    )
+    service.sessions.set_session_auto_commit_config(SessionAutoCommitConfig(default_enabled=True))
 
     resp = await client.post("/api/v1/sessions", json={})
     assert resp.status_code == 200
@@ -655,13 +653,36 @@ async def test_create_session_uses_default_policy_when_server_default_enabled(
     }
 
 
+async def test_create_session_can_disable_server_default_auto_commit(
+    client: httpx.AsyncClient,
+    service,
+):
+    service.sessions.set_session_auto_commit_config(SessionAutoCommitConfig(default_enabled=True))
+
+    resp = await client.post(
+        "/api/v1/sessions",
+        json={"auto_commit_policy": None},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["result"]["auto_commit_policy"] is None
+
+
+async def test_auto_commit_policy_rejects_null_fields(client: httpx.AsyncClient):
+    resp = await client.post(
+        "/api/v1/sessions",
+        json={"auto_commit_policy": {"message_count_threshold": None}},
+    )
+
+    assert resp.status_code == 400
+    assert "auto_commit_policy=null" in resp.json()["error"]["message"]
+
+
 async def test_auto_created_session_uses_default_policy_when_server_default_enabled(
     client: httpx.AsyncClient,
     service,
 ):
-    service.sessions.set_session_auto_commit_config(
-        SessionAutoCommitConfig(default_enabled=True)
-    )
+    service.sessions.set_session_auto_commit_config(SessionAutoCommitConfig(default_enabled=True))
     session_id = "auto-created-default-policy"
 
     add_resp = await client.post(
@@ -1313,9 +1334,7 @@ async def test_get_session_context_endpoint_returns_trimmed_latest_archive_and_m
     assert result["stats"]["failedArchives"] == 0
 
     # Budget fitting is a virtual view and must not mutate the durable live row.
-    full_resp = await client.get(
-        f"/api/v1/sessions/{session_id}/context?token_budget=128000"
-    )
+    full_resp = await client.get(f"/api/v1/sessions/{session_id}/context?token_budget=128000")
     full_result = full_resp.json()["result"]
     assert len(full_result["messages"]) == 1
     assert full_result["messages"][0]["role"] == "assistant"

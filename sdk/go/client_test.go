@@ -1341,3 +1341,80 @@ func TestGrepOmitsLevelLimitWhenUnset(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSessionAPIsSendEventMemoryTags(t *testing.T) {
+	var requests []map[string]any
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, map[string]any{
+			"method": r.Method,
+			"path":   r.URL.Path,
+			"body":   readJSONBody(t, r),
+		})
+		writeOK(t, w, map[string]any{"status": "ok"})
+	}))
+	defer closeServer()
+
+	config := map[string]any{
+		"events": map[string]any{"tags": []string{"team=search", "channel=web"}},
+	}
+	if _, err := client.CreateSession(context.Background(), &CreateSessionOptions{
+		SessionID:              "tagged",
+		MemoryExtractionConfig: config,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.UpdateSessionConfig(context.Background(), "tagged", &UpdateSessionConfigOptions{
+		MemoryExtractionConfig: config,
+		AutoCommitPolicy:       Map(map[string]any{"message_count_threshold": 25}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.CommitSession(context.Background(), "tagged", &CommitSessionOptions{
+		EventTags: []string{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.UpdateSessionConfig(
+		context.Background(),
+		"tagged",
+		&UpdateSessionConfigOptions{AutoCommitPolicy: Map(nil)},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.CreateSession(
+		context.Background(),
+		&CreateSessionOptions{DisableAutoCommit: true},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(requests) != 5 {
+		t.Fatalf("requests = %#v", requests)
+	}
+	createBody := requests[0]["body"].(map[string]any)
+	if _, ok := createBody["memory_extraction_config"]; !ok {
+		t.Fatalf("create body = %#v", createBody)
+	}
+	if requests[1]["method"] != http.MethodPatch ||
+		requests[1]["path"] != "/api/v1/sessions/tagged/config" {
+		t.Fatalf("patch request = %#v", requests[1])
+	}
+	patchBody := requests[1]["body"].(map[string]any)
+	if policy, ok := patchBody["auto_commit_policy"].(map[string]any); !ok ||
+		policy["message_count_threshold"] != float64(25) {
+		t.Fatalf("patch auto_commit_policy = %#v", patchBody["auto_commit_policy"])
+	}
+	commitBody := requests[2]["body"].(map[string]any)
+	metadata := commitBody["extraction_metadata"].(map[string]any)
+	event := metadata["event"].(map[string]any)
+	if tags, ok := event["tags"].([]any); !ok || len(tags) != 0 {
+		t.Fatalf("commit event tags = %#v", event["tags"])
+	}
+	for _, request := range requests[3:] {
+		body := request["body"].(map[string]any)
+		value, ok := body["auto_commit_policy"]
+		if !ok || value != nil {
+			t.Fatalf("auto_commit_policy = %#v, present = %v", value, ok)
+		}
+	}
+}

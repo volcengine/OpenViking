@@ -213,6 +213,10 @@ class _PyBytesRow:
                 for item in value:
                     bytes_item = item.encode("utf-8")
                     bytes_item_len = len(bytes_item)
+                    if bytes_item_len > STRING_MAX_UINT16_LENGTH:
+                        raise ValueError(
+                            f"string element in list field '{field_meta.name}' exceeds 65535 bytes"
+                        )
                     var_fmt_list.append("H")
                     var_val_list.append(bytes_item_len)
                     var_fmt_list.append(f"{bytes_item_len}s")

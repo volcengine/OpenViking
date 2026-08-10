@@ -988,7 +988,7 @@ Grep engine configuration for content pattern search. These settings are server-
 | `engine` | str | Search engine mode: `"auto"` uses VikingDB BM25 recall when available and falls back to local filesystem search; `"fs"` forces local filesystem search only. | `"auto"` |
 | `switch_to_remote_threshold` | int | L2 record count threshold to switch to VikingDB BM25 recall. When the number of L2 files under the search scope reaches this threshold, VikingDB BM25 is used for phase-1 recall; otherwise local filesystem search is used. Set to `0` to always use VikingDB BM25. Must be ≥ 0. | `10000` |
 
-For VikingDB / Volcengine FullText grep, OpenViking writes a `content` text field for BM25 recall. The source context keeps the full content, while the vector-store write payload truncates this field to **1 MB** at the final adapter boundary to stay within backend payload limits. Only VikingDB-backed backends use `content`; on all other backends (`local`, `cuvs`, `qdrant`, `opengauss`, `http`) the field is not written.
+For VikingDB / Volcengine FullText grep, OpenViking writes a `content` text field for BM25 recall. The source context keeps the full content, while the vector-store write payload truncates this field to **1 MB** at the final adapter boundary to stay within backend payload limits. Only VikingDB-backed backends use `content`; on all other backends (`local`, `cuvs`, `http`) the field is not written.
 
 ### storage
 
@@ -1351,7 +1351,7 @@ Vector database storage configuration
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `backend` | str | VectorDB backend type: 'local' (file-based), 'http' (remote service), 'volcengine' (cloud VikingDB), 'vikingdb' (private deployment), 'cuvs' (local storage + GPU dense search), 'qdrant', or 'opengauss' | "local" |
+| `backend` | str | VectorDB backend type: 'local' (file-based), 'http' (remote service), 'volcengine' (cloud VikingDB), 'vikingdb' (private deployment), or 'cuvs' (local storage + GPU dense search) | "local" |
 | `name` | str | VectorDB collection name | "context" |
 | `url` | str | Remote service URL for 'http' type (e.g., 'http://localhost:5000') | null |
 | `project_name` | str | Project name (alias project) | "default" |
@@ -1361,8 +1361,6 @@ Vector database storage configuration
 | `volcengine` | object | 'volcengine' type VikingDB configuration | - |
 | `vikingdb` | object | 'vikingdb' type private deployment configuration | - |
 | `cuvs` | object | NVIDIA cuVS configuration for the 'cuvs' backend and the opt-in memory-aware auto mode on 'local'; see the [cuVS guide](./16-cuvs.md) | - |
-| `qdrant` | object | 'qdrant' type Qdrant configuration | - |
-| `opengauss` | object | 'opengauss' native vector backend configuration | - |
 
 Default local mode
 ```
@@ -1395,40 +1393,6 @@ Supports cloud-deployed VikingDB on Volcengine
 }
 ```
 </details>
-
-<details>
-<summary><b>openGauss</b></summary>
-
-Requires an openGauss server with native `vector` support and a remote-capable database user.
-Install the optional driver with `pip install "openviking[opengauss]"`.
-In the official container, the initial `omm` user may be restricted for remote login; create a normal user for OpenViking if needed.
-
-```json
-{
-  "storage": {
-    "vectordb": {
-      "name": "context",
-      "backend": "opengauss",
-      "project": "default",
-      "distance_metric": "cosine",
-      "dimension": 1024,
-      "opengauss": {
-        "host": "127.0.0.1",
-        "port": 5432,
-        "user": "openviking",
-        "password": "your-password",
-        "db_name": "postgres",
-        "schema": "public",
-        "mode": "standalone"
-      }
-    }
-  }
-}
-```
-
-Set `mode` to `"distributed"` for openGauss distributed deployments; OpenViking will attempt to mark metadata tables as reference tables and distribute collection tables by `id`.
-</details>
-
 
 ## Config Files
 
@@ -1647,7 +1611,7 @@ For startup and deployment details see [Deployment](./03-deployment.md), for aut
 
 ## storage.transaction Section
 
-`storage.transaction` is deprecated and kept only for legacy compatibility. Use `storage.agfs.pathlock` for active PathLock configuration. When legacy fields are still present, OpenViking logs a warning at runtime; `lock_timeout` and `lock_expire` are automatically mapped when the new fields are unset, while `redo_recovery_enabled` is ignored.
+`storage.transaction` is deprecated and kept only for legacy compatibility. Use `storage.agfs.pathlock` only for active PathLock expiry configuration. When legacy fields are still present, OpenViking logs a warning at runtime; `lock_timeout` is deprecated and ignored, `lock_expire` is automatically mapped when the new field is unset, and `redo_recovery_enabled` is ignored.
 
 Recommended configuration:
 
@@ -1656,8 +1620,7 @@ Recommended configuration:
   "storage": {
     "agfs": {
       "pathlock": {
-        "lock_timeout_secs": 5.0,
-        "lock_expire_secs": 1800.0
+        "lock_expire_secs": 30.0
       }
     }
   }
@@ -1670,8 +1633,7 @@ Legacy compatibility form (not recommended for new deployments):
 {
   "storage": {
     "transaction": {
-      "lock_timeout": 5.0,
-      "lock_expire": 1800.0
+      "lock_expire": 30.0
     }
   }
 }
@@ -1679,8 +1641,8 @@ Legacy compatibility form (not recommended for new deployments):
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `lock_timeout` | float | Deprecated. Use `storage.agfs.pathlock.lock_timeout_secs`. Automatically mapped when the new field is unset. | `0.0` |
-| `lock_expire` | float | Deprecated. Use `storage.agfs.pathlock.lock_expire_secs`. Automatically mapped when the new field is unset. | `1800.0` |
+| `lock_timeout` | float | Deprecated and ignored. Runtime wait timeout is fixed at `0.0`. | `0.0` |
+| `lock_expire` | float | Deprecated. Use `storage.agfs.pathlock.lock_expire_secs`. Automatically mapped when the new field is unset. | `30.0` |
 | `redo_recovery_enabled` | bool | Deprecated and ignored. Session commit phase-2 recovery now resumes from the persistent `session_commit` queue. | `true` |
 
 For details on the lock mechanism, see [Path Locks and Crash Recovery](../concepts/09-transaction.md).
@@ -1861,7 +1823,6 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
       "timeout": 10
     },
     "transaction": {
-      "lock_timeout": 0.0,
       "lock_expire": 300.0
     },
     "vectordb": {

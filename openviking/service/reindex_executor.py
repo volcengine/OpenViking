@@ -36,7 +36,7 @@ from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.embedding_input import truncate_embedding_input
-from openviking.utils.embedding_utils import get_resource_content_type
+from openviking.utils.embedding_utils import _truncate_abstract_bytes, get_resource_content_type
 from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, OpenVikingError
 from openviking_cli.session.user_id import UserIdentifier
@@ -1036,7 +1036,8 @@ class ReindexExecutor:
                     await self._upsert_context(
                         uri=directory_uri,
                         parent_uri=VikingURI(directory_uri).parent.uri,
-                        abstract=abstract,
+                        # L1 abstract scalar carries the overview for Rerank.
+                        abstract=_truncate_abstract_bytes(overview),
                         vector_text=overview,
                         is_leaf=False,
                         context_type=context_type_for_uri(directory_uri),
@@ -1104,6 +1105,10 @@ class ReindexExecutor:
             if not vector_text:
                 await self.delete_uri_level(uri=dir_uri, level=level, ctx=ctx)
                 return
+
+            # L1 abstract scalar carries the overview for Rerank.
+            if level == ContextLevel.OVERVIEW:
+                abstract = _truncate_abstract_bytes(vector_text)
 
             await self._upsert_context(
                 uri=dir_uri,
@@ -1356,7 +1361,8 @@ class ReindexExecutor:
                 await self._upsert_context(
                     uri=uri,
                     parent_uri=parent_uri,
-                    abstract=abstract,
+                    # L1 abstract scalar carries the overview for Rerank.
+                    abstract=_truncate_abstract_bytes(overview),
                     vector_text=overview,
                     is_leaf=False,
                     context_type=ContextType.SKILL.value,
@@ -1520,7 +1526,8 @@ class ReindexExecutor:
                     await self._upsert_context(
                         uri=directory_uri,
                         parent_uri=parent_uri,
-                        abstract=abstract,
+                        # L1 abstract scalar carries the overview for Rerank.
+                        abstract=_truncate_abstract_bytes(overview),
                         vector_text=overview,
                         is_leaf=False,
                         context_type=ContextType.MEMORY.value,

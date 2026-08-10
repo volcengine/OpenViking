@@ -3,6 +3,7 @@
 
 """Tests for multi-tenant authentication (openviking/server/auth.py)."""
 
+import asyncio
 import uuid
 
 import httpx
@@ -1467,3 +1468,95 @@ async def test_trusted_mode_admin_api_http_route_without_identity():
     assert response.json()["result"]["role"] == "root"
     assert response.json()["result"]["account_id"] == "trusted"
     assert response.json()["result"]["user_id"] == "trusted"
+
+
+# ---- API key store watcher (read-replica refresh) tests ----
+#
+# When server.api_key_watch_enabled is set, the api_key plugin starts a
+# background task that polls the shared key store and reloads the in-memory
+# index on change, so read replicas converge on writer-side user changes.
+
+
+class _FakeManager:
+    """Minimal APIKeyManager stand-in that records watcher interactions."""
+
+    def __init__(self, signatures):
+        # signatures: list of signatures returned on successive calls; the last
+        # value is repeated once exhausted.
+        self._signatures = list(signatures)
+        self.reload_calls = 0
+        self.signature_calls = 0
+
+    async def compute_store_signature(self):
+        self.signature_calls += 1
+        idx = min(self.signature_calls - 1, len(self._signatures) - 1)
+        return self._signatures[idx]
+
+    async def reload(self):
+        self.reload_calls += 1
+
+
+async def test_watcher_disabled_by_default(auth_service):
+    """No watch task should start when api_key_watch_enabled is unset."""
+    from openviking.server.auth.plugins import ApiKeyAuthPlugin
+
+    app = create_app(config=ServerConfig(root_api_key=ROOT_KEY), service=auth_service)
+    plugin = ApiKeyAuthPlugin()
+    config = ServerConfig(root_api_key=ROOT_KEY)
+    await plugin.initialize(app, auth_service, config)
+    try:
+        assert plugin._watch_task is None
+    finally:
+        await plugin.shutdown()
+
+
+async def test_watcher_reloads_on_signature_change(auth_service):
+    """The watcher reloads only when the store signature changes."""
+    from openviking.server.auth.plugins import ApiKeyAuthPlugin
+
+    manager = _FakeManager(signatures=[("sig-a",), ("sig-b",)])
+    task = asyncio.create_task(
+        ApiKeyAuthPlugin._watch_key_store(manager, interval=0.01)
+    )
+    try:
+        await asyncio.sleep(0.1)
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    # First signature is the baseline; the change to sig-b triggers a reload.
+    assert manager.reload_calls >= 1
+
+
+async def test_watcher_skips_reload_when_unchanged(auth_service):
+    """A stable signature must not trigger any reload."""
+    from openviking.server.auth.plugins import ApiKeyAuthPlugin
+
+    manager = _FakeManager(signatures=[("sig-stable",)])
+    task = asyncio.create_task(
+        ApiKeyAuthPlugin._watch_key_store(manager, interval=0.01)
+    )
+    try:
+        await asyncio.sleep(0.08)
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert manager.reload_calls == 0
+
+
+async def test_shutdown_cancels_watch_task(auth_service):
+    """shutdown() must cancel a running watch task and clear the handle."""
+    from openviking.server.auth.plugins import ApiKeyAuthPlugin
+
+    app = create_app(config=ServerConfig(root_api_key=ROOT_KEY), service=auth_service)
+    plugin = ApiKeyAuthPlugin()
+    config = ServerConfig(
+        root_api_key=ROOT_KEY,
+        api_key_watch_enabled=True,
+        api_key_watch_interval_seconds=0.01,
+    )
+    await plugin.initialize(app, auth_service, config)
+    assert plugin._watch_task is not None
+    await plugin.shutdown()
+    assert plugin._watch_task is None

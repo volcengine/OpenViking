@@ -175,7 +175,28 @@ from openviking_sdk import SyncHTTPClient
 
 client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
 client.initialize()
-result = client.create_session("demo-session")
+event_config = {
+    "events": {
+        "tags": ["team=search", "channel=web"],
+    }
+}
+result = client.create_session(
+    "demo-session",
+    memory_extraction_config=event_config,
+)
+# Explicit None disables a server-wide auto-commit default at creation time.
+client.create_session("manual-session", auto_commit_policy=None)
+client.update_session_config(
+    "demo-session",
+    auto_commit_policy={"message_count_threshold": 25},
+    memory_extraction_config={
+        "events": {"tags": ["team=search", "channel=app"]}
+    },
+)
+# Explicit None disables automatic commits; omitting the argument leaves it unchanged.
+client.update_session_config("demo-session", auto_commit_policy=None)
+client.session("demo-session").commit(event_tags=["team=search", "channel=web"])
+# Use event_tags=[] to skip the session defaults for one commit.
 print(result)
 ```
 

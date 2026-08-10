@@ -219,6 +219,7 @@ class _IdentityASGIMiddleware:
 mcp = FastMCP(
     "openviking",
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    stateless_http=True,
 )
 
 

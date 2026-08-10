@@ -125,6 +125,22 @@ class TestBytesRow(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "text.*exceeds 65535 bytes"):
             py_row.serialize({"text": text})
 
+    def test_oversized_list_string_element_serialization_raises(self):
+        # A list<string> element uses the same UINT16 length prefix as a scalar
+        # string, so it must reject >65535-byte elements with the same clean,
+        # field-attributed ValueError — not a raw struct.error from deep inside
+        # struct.pack_into.
+        py_schema = _PySchema(
+            [{"name": "tags", "data_type": _PyFieldType.list_string, "id": 0}]
+        )
+        py_row = _PyBytesRow(py_schema)
+        with self.assertRaisesRegex(ValueError, "tags.*exceeds 65535 bytes"):
+            py_row.serialize({"tags": ["x" * 65536, "ok"]})
+
+        # A list of in-bounds strings (including multibyte) still round-trips.
+        blob = py_row.serialize({"tags": ["hello", "世界"]})
+        self.assertEqual(py_row.deserialize_field(blob, "tags"), ["hello", "世界"])
+
     def test_binary_data(self):
         @serializable
         @dataclass

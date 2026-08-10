@@ -3,10 +3,11 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { loadConfig } from "../config.ts";
+import { pathToFileURL } from "node:url";
+import { loadConfig, loadConfigFromModuleUrl } from "../config.ts";
 
 async function withConfigFile(body, fn, env = {}) {
-  const dir = await mkdtemp(join(tmpdir(), "ov-pi-config-"));
+  const dir = await mkdtemp(join(tmpdir(), "ov-pi-config-用户-"));
   const oldEnv = {
     OPENVIKING_URL: process.env.OPENVIKING_URL,
     OPENVIKING_API_KEY: process.env.OPENVIKING_API_KEY,
@@ -36,7 +37,7 @@ async function withConfigFile(body, fn, env = {}) {
 
   try {
     await writeFile(join(dir, "config.json"), JSON.stringify(body), "utf8");
-    return await fn(loadConfig(dir));
+    return await fn(loadConfig(dir), dir);
   } finally {
     for (const [key, value] of Object.entries(oldEnv)) {
       if (value === undefined) delete process.env[key];
@@ -74,6 +75,18 @@ test("loadConfig maps nested takeover block", async () => {
     assert.equal(cfg.takeoverOverviewBudget, 1200);
     assert.equal(cfg.takeoverOverviewPollMs, 10);
     assert.equal(cfg.takeoverOverviewPollMax, 2);
+  });
+});
+
+test("loadConfigFromModuleUrl decodes Unicode paths", async () => {
+  await withConfigFile({
+    takeover: {
+      tokenThreshold: 2000,
+    },
+  }, (_cfg, dir) => {
+    const moduleUrl = pathToFileURL(join(dir, "index.ts")).href;
+    const cfg = loadConfigFromModuleUrl(moduleUrl);
+    assert.equal(cfg.takeoverTokenThreshold, 2000);
   });
 });
 

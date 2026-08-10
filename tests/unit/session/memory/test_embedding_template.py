@@ -11,6 +11,7 @@ from openviking.session.memory.dataclass import MemoryField, MemoryFile
 from openviking.session.memory.experience_lineage import experience_source_tag
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.memory_updater import MemoryUpdater, MemoryUpdateResult
+from openviking.session.memory.merge_op import MergeOp
 from openviking.session.memory.merge_op.base import FieldType
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
@@ -50,6 +51,13 @@ class TestEmbeddingTemplateYamlParsing:
     def test_trajectories_exposes_retrieval_anchor_template(self):
         schema = self.registry.get("trajectories")
         assert schema.embedding_template == "{{ trajectory_name }}\n\n{{ retrieval_anchor }}"
+
+    def test_trajectories_exposes_immutable_task_query(self):
+        schema = self.registry.get("trajectories")
+        fields = {field.name: field for field in schema.fields}
+
+        assert "task_query" in fields
+        assert fields["task_query"].merge_op == MergeOp.IMMUTABLE
 
 
 class TestContentTemplateRendering:

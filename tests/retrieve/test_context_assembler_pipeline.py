@@ -55,10 +55,15 @@ def _service(*, hits, bodies, session=None):
             raise FileNotFoundError(uri)
         return bodies[uri]
 
+    async def fake_get(session_id, ctx, *, auto_create=False):
+        del session_id, ctx
+        assert auto_create is True
+        return session
+
     return SimpleNamespace(
         search=SimpleNamespace(find=fake_find),
         fs=SimpleNamespace(read=fake_read),
-        sessions=SimpleNamespace(session=lambda ctx, session_id: session),
+        sessions=SimpleNamespace(get=fake_get),
         viking_fs=None,
     )
 
@@ -67,7 +72,10 @@ def _fake_session():
     async def load():
         return None
 
-    return SimpleNamespace(load=load)
+    async def is_materialized():
+        return True
+
+    return SimpleNamespace(load=load, is_materialized=is_materialized)
 
 
 def test_render_neutralizes_forged_memory_tags():
@@ -141,11 +149,17 @@ async def test_query_expansion_fans_out_planned_queries(monkeypatch):
         queries_seen.append(kwargs["query"])
         return _FakeFindResult()
 
+    async def fake_get(session_id, ctx, *, auto_create=False):
+        del ctx
+        assert session_id == "s1"
+        assert auto_create is True
+        return _fake_session()
+
     monkeypatch.setattr(pipeline_module, "expand_queries", fake_expand)
     service = SimpleNamespace(
         search=SimpleNamespace(find=fake_find),
         fs=SimpleNamespace(read=None),
-        sessions=SimpleNamespace(session=lambda ctx, sid: _fake_session()),
+        sessions=SimpleNamespace(get=fake_get),
         viking_fs=None,
     )
 
@@ -169,14 +183,14 @@ async def test_disabled_intent_does_not_load_session_or_expand_query():
         assert kwargs["query"] == "raw query"
         return _FakeFindResult()
 
-    def fail_session(*args):
-        del args
+    async def fail_get(*args, **kwargs):
+        del args, kwargs
         raise AssertionError("session must not be loaded when intent is disabled")
 
     service = SimpleNamespace(
         search=SimpleNamespace(find=fake_find, is_intent_enabled=lambda: False),
         fs=SimpleNamespace(read=None),
-        sessions=SimpleNamespace(session=fail_session),
+        sessions=SimpleNamespace(get=fail_get),
         viking_fs=None,
     )
 
