@@ -1148,6 +1148,9 @@ fn extract_optional_owned_lease_ref(
 /// Convert a PathLockHandoffRef to a Python dict.
 fn handoff_ref_to_py_dict(py: Python<'_>, handoff: &PathLockHandoffRef) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new(py);
+    if let Some(lease_ref) = &handoff.lease_ref {
+        dict.set_item("lease_ref", lease_ref)?;
+    }
     dict.set_item("owner_id", &handoff.owner_id)?;
     dict.set_item("lock_paths", &handoff.lock_paths)?;
     let covered = PyList::empty(py);
@@ -2605,7 +2608,13 @@ impl RAGFSBindingClient {
             })
             .transpose()?
             .unwrap_or_default();
+        let lease_ref: Option<String> = handoff_ref
+            .get("lease_ref")
+            .map(|v| v.extract(py))
+            .transpose()?
+            .filter(|s: &String| !s.is_empty());
         let handoff = PathLockHandoffRef {
+            lease_ref,
             owner_id,
             lock_paths,
             covered_paths,
