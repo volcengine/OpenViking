@@ -515,6 +515,13 @@ export function WatchManagementPage() {
                             className={isSyncing ? 'animate-spin' : undefined}
                           />
                         </ActionButton>
+                        <ActionButton
+                          label={t('actions.edit')}
+                          disabled={updateMutation.isPending}
+                          onClick={() => setEditingWatch(watch)}
+                        >
+                          <PencilIcon />
+                        </ActionButton>
                         <DropdownMenu>
                           <DropdownMenuTrigger
                             render={
@@ -537,13 +544,6 @@ export function WatchManagementPage() {
                             >
                               <HistoryIcon />
                               {t('actions.history')}
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              disabled={updateMutation.isPending}
-                              onClick={() => setEditingWatch(watch)}
-                            >
-                              <PencilIcon />
-                              {t('actions.edit')}
                             </DropdownMenuItem>
                             <DropdownMenuItem
                               variant="destructive"

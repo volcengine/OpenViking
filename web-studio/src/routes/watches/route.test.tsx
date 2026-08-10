@@ -128,6 +128,14 @@ afterEach(() => {
 })
 
 describe('WatchManagementPage', () => {
+  it('shows edit as a direct row action', async () => {
+    renderPage()
+
+    expect(
+      await screen.findByRole('button', { name: 'actions.edit' }),
+    ).toBeDefined()
+  })
+
   it('keeps Sync now disabled and labelled as syncing while processing is active', async () => {
     const existingTask = { status: 'completed', task_id: 'existing-task' }
     const runningTask = { status: 'running', task_id: 'triggered-task' }
