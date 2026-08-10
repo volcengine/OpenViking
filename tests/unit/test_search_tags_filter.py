@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 from openviking.server.routers.search import _resolve_search_filter
-from openviking.utils.tags import build_search_tags_filter
+from openviking.utils.tags import build_search_tags_filter, normalize_search_tags
 
 
 def test_search_tags_filter_keeps_single_tag_as_single_must():
@@ -21,6 +21,10 @@ def test_search_tags_filter_dedupes_before_building_and_filter():
             {"op": "must", "field": "search_tags", "conds": ["team=search"]},
         ],
     }
+
+
+def test_search_tags_duplicate_keys_keep_last_value():
+    assert normalize_search_tags(["channel=web", "channel=app"]) == ["channel=app"]
 
 
 def test_find_tags_filter_requires_all_tags():

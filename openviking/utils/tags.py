@@ -31,17 +31,14 @@ def normalize_search_tags(tags: Iterable[str] | None) -> list[str]:
     if not tags:
         return []
 
-    normalized: list[str] = []
-    seen: set[str] = set()
+    values_by_key: OrderedDict[str, str] = OrderedDict()
     for item in tags:
         if item is None:
             continue
         value = normalize_search_tag(item)
-        if value in seen:
-            continue
-        seen.add(value)
-        normalized.append(value)
-    return normalized
+        key, raw_value = value.split("=", 1)
+        values_by_key[key] = raw_value
+    return [f"{key}={value}" for key, value in values_by_key.items()]
 
 
 def build_search_tags_filter(tags: Iterable[str] | None) -> dict[str, Any] | None:
