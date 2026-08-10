@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+import pytest_asyncio
 
 import openviking_cli.client.http as http_module
 import openviking_cli.utils.async_utils as async_utils
@@ -21,6 +22,24 @@ from openviking_cli.utils.config import OPENVIKING_CLI_CONFIG_ENV
 def clear_ovcli_config(monkeypatch):
     monkeypatch.delenv(OPENVIKING_CLI_CONFIG_ENV, raising=False)
     monkeypatch.setattr(http_module, "load_ovcli_config", lambda: None, raising=False)
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _reset_singleton():
+    """Reset AsyncOpenViking singleton between tests.
+
+    The new path guard (#3546) prevents creating a second embedded workspace
+    while the singleton is live. This fixture ensures each test starts clean.
+    """
+    try:
+        await AsyncOpenViking.reset()
+    except Exception:
+        pass
+    yield
+    try:
+        await AsyncOpenViking.reset()
+    except Exception:
+        pass
 
 
 def test_async_http_client_zip_directory_skips_symlinked_entries(tmp_path):
