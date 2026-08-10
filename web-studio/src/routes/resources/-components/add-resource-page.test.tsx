@@ -59,7 +59,9 @@ describe('AddResourceForm watch options', () => {
         parent: 'viking://resources/',
         watch_interval: 60,
       }),
+      onAccepted: undefined,
       onCompleted: undefined,
+      onFailed: undefined,
       url: 'https://github.com/volcengine/OpenViking',
     })
   })

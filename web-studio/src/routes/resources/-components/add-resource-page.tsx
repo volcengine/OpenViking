@@ -34,6 +34,7 @@ import {
 import { cn } from '#/lib/utils'
 import { parsePositiveMinutes } from '#/lib/watch-interval'
 import { useResourceUpload } from '../-hooks/use-resource-upload'
+import type { RemoteStartResult } from '../-hooks/use-resource-upload'
 import {
   MAX_UPLOAD_FILES,
   MAX_UPLOAD_FILE_SIZE_BYTES,
@@ -72,12 +73,16 @@ async function detectFileType(file: File): Promise<string | null> {
 export function AddResourceForm({
   initialMode = 'upload',
   initialWatchEnabled = false,
+  onAccepted,
   onCompleted,
+  onFailed,
   onSubmitted,
 }: {
   initialMode?: Mode
   initialWatchEnabled?: boolean
+  onAccepted?: (result: RemoteStartResult) => void
   onCompleted?: () => void
+  onFailed?: () => void
   onSubmitted?: () => void
 } = {}) {
   const { t } = useTranslation('addResource')
@@ -221,7 +226,13 @@ export function AddResourceForm({
 
     const url = remoteUrl.trim()
     if (!url) return
-    startRemote({ url, commonBody: buildCommonBody(), onCompleted })
+    startRemote({
+      url,
+      commonBody: buildCommonBody(),
+      onAccepted,
+      onCompleted,
+      onFailed,
+    })
     onSubmitted?.()
   }
 

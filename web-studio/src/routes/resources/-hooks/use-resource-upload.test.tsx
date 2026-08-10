@@ -36,7 +36,18 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-function UploadHarness({ onCompleted }: { onCompleted: () => void }) {
+function UploadHarness({
+  onAccepted,
+  onCompleted,
+  onFailed,
+}: {
+  onAccepted: (result: {
+    rootUri: string | null
+    taskId: string | null
+  }) => void
+  onCompleted: () => void
+  onFailed?: () => void
+}) {
   const { refreshTasks, startRemote } = useResourceUpload()
 
   return (
@@ -47,7 +58,9 @@ function UploadHarness({ onCompleted }: { onCompleted: () => void }) {
         onClick={() =>
           startRemote({
             commonBody: { watch_interval: 60 },
+            onAccepted,
             onCompleted,
+            onFailed,
             url: 'https://github.com/volcengine/OpenViking',
           })
         }
@@ -62,7 +75,7 @@ function UploadHarness({ onCompleted }: { onCompleted: () => void }) {
 }
 
 describe('ResourceUploadProvider remote completion', () => {
-  it('waits for the background resource task before notifying completion', async () => {
+  it('notifies after submission and again after the background task completes', async () => {
     let taskStatus = 'processing'
     apiMocks.getTasks.mockImplementation(() => [
       {
@@ -79,11 +92,12 @@ describe('ResourceUploadProvider remote completion', () => {
       status: 'success',
       task_id: 'resource-task',
     })
+    const onAccepted = vi.fn()
     const onCompleted = vi.fn()
 
     render(
       <ResourceUploadProvider>
-        <UploadHarness onCompleted={onCompleted} />
+        <UploadHarness onAccepted={onAccepted} onCompleted={onCompleted} />
       </ResourceUploadProvider>,
     )
 
@@ -92,11 +106,48 @@ describe('ResourceUploadProvider remote completion', () => {
     await waitFor(() =>
       expect(apiMocks.getTasks.mock.calls.length).toBeGreaterThan(1),
     )
+    expect(onAccepted).toHaveBeenCalledWith({
+      rootUri: 'viking://resources/OpenViking',
+      taskId: 'resource-task',
+    })
     expect(onCompleted).not.toHaveBeenCalled()
 
     taskStatus = 'completed'
     fireEvent.click(screen.getByTestId('refresh'))
 
     await waitFor(() => expect(onCompleted).toHaveBeenCalledOnce())
+  })
+
+  it('notifies when the background task fails', async () => {
+    apiMocks.getTasks.mockResolvedValue([
+      {
+        created_at: 1,
+        error: 'Processing failed',
+        status: 'failed',
+        task_id: 'resource-task',
+        task_type: 'add_resource',
+        updated_at: 2,
+      },
+    ])
+    apiMocks.postResources.mockResolvedValue({
+      root_uri: 'viking://resources/OpenViking',
+      status: 'success',
+      task_id: 'resource-task',
+    })
+    const onFailed = vi.fn()
+
+    render(
+      <ResourceUploadProvider>
+        <UploadHarness
+          onAccepted={vi.fn()}
+          onCompleted={vi.fn()}
+          onFailed={onFailed}
+        />
+      </ResourceUploadProvider>,
+    )
+
+    fireEvent.click(screen.getByTestId('start'))
+
+    await waitFor(() => expect(onFailed).toHaveBeenCalledOnce())
   })
 })

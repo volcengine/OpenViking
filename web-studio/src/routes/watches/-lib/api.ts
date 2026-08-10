@@ -1,4 +1,6 @@
-import { getOvResult, ovClient } from '#/lib/ov-client'
+import { getOvResult, getTasks, ovClient } from '#/lib/ov-client'
+import { normalizeTasks } from '#/routes/tasks/-lib/task-record'
+import type { TaskRecord } from '#/routes/tasks/-lib/task-record'
 
 export type WatchTask = {
   createdAt: string | null
@@ -16,6 +18,13 @@ export type WatchTask = {
 type WatchListResult = {
   tasks?: unknown[]
   total?: number
+}
+
+export type UpdateWatchInput = {
+  instruction?: string
+  isActive?: boolean
+  reason?: string
+  watchInterval?: number
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -75,4 +84,55 @@ export async function fetchWatches(): Promise<WatchTask[]> {
     }),
   )
   return normalizeWatchList(result)
+}
+
+export async function fetchWatchProcessingHistory(
+  toUri: string,
+): Promise<TaskRecord[]> {
+  const result = await getOvResult<unknown>(
+    getTasks({
+      query: {
+        limit: 200,
+        resource_id: toUri,
+        task_type: 'add_resource',
+      },
+    }),
+  )
+  return normalizeTasks(result)
+}
+
+export async function updateWatch(
+  taskId: string,
+  input: UpdateWatchInput,
+): Promise<void> {
+  const body: Record<string, unknown> = {}
+  if (input.watchInterval !== undefined) {
+    body.watch_interval = input.watchInterval
+  }
+  if (input.isActive !== undefined) body.is_active = input.isActive
+  if (input.reason !== undefined) body.reason = input.reason
+  if (input.instruction !== undefined) body.instruction = input.instruction
+
+  await getOvResult(
+    ovClient.client.patch({
+      body,
+      url: `/api/v1/watches/${encodeURIComponent(taskId)}`,
+    }),
+  )
+}
+
+export async function triggerWatch(taskId: string): Promise<void> {
+  await getOvResult(
+    ovClient.client.post({
+      url: `/api/v1/watches/${encodeURIComponent(taskId)}/trigger`,
+    }),
+  )
+}
+
+export async function deleteWatch(taskId: string): Promise<void> {
+  await getOvResult(
+    ovClient.client.delete({
+      url: `/api/v1/watches/${encodeURIComponent(taskId)}`,
+    }),
+  )
 }

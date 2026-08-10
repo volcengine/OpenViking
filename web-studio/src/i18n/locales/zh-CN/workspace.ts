@@ -219,14 +219,21 @@ const workspace = {
   },
   watchesPage: {
     title: '定时同步',
-    description: '通过 Watch 任务定期检查远程资源更新，并集中查看同步计划。',
+    description: '通过 Watch 任务定期检查远程资源更新，并集中管理同步计划。',
     refresh: '刷新',
     add: '添加',
+    adding: '添加中...',
     loading: '正在加载定时同步...',
     loadFailed: '定时同步加载失败',
     empty: '暂无定时同步',
     emptyDescription: '添加远程资源并开启定时同步后，会在这里显示。',
     never: '从未执行',
+    cancel: '取消',
+    save: '保存',
+    creation: {
+      title: '正在创建定时同步',
+      description: '资源已提交到后台，列表会自动刷新，请稍候。',
+    },
     columns: {
       resource: '资源',
       source: '来源',
@@ -234,10 +241,21 @@ const workspace = {
       interval: '同步周期',
       lastRun: '上次执行',
       nextRun: '下次执行',
+      actions: '操作',
     },
     status: {
-      active: '运行中',
+      active: '已启用',
       paused: '已暂停',
+    },
+    actions: {
+      trigger: '立即同步',
+      syncing: '同步中...',
+      pause: '暂停',
+      resume: '恢复',
+      more: '更多',
+      history: '处理记录',
+      edit: '修改周期',
+      delete: '删除',
     },
     interval: {
       minutes_one: '每分钟',
@@ -250,6 +268,33 @@ const workspace = {
     addDialog: {
       title: '添加定时同步',
       description: '添加远程资源，并设置 OpenViking 检查更新的周期。',
+    },
+    editDialog: {
+      title: '修改同步周期',
+      interval: '同步周期（分钟）',
+      intervalHint: '请输入大于 0 的分钟数。',
+    },
+    deleteDialog: {
+      title: '删除定时同步？',
+      description: '资源 {{uri}} 会继续保留，但不会再自动同步更新。',
+    },
+    history: {
+      title: '处理记录',
+      description:
+        '按当前资源筛选后台处理任务，其中可能包含首次导入、手动处理和定时同步。',
+      loading: '正在加载处理记录...',
+      loadFailed: '处理记录加载失败',
+      empty: '暂无处理记录',
+      emptyDescription: '该资源暂时没有可查询的后台处理任务。',
+      stage: '处理阶段',
+    },
+    toast: {
+      creating: '正在创建定时同步，请稍候...',
+      created: '定时同步已添加',
+      createTimeout: '暂未查询到新任务，请稍后手动刷新',
+      updated: '定时同步已更新',
+      triggered: '同步任务已调度',
+      deleted: '定时同步已删除',
     },
   },
   accountSwitcher: {

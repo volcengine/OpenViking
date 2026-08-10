@@ -64,10 +64,17 @@ export type UploadBatchParams = {
   commonBody: Record<string, unknown>
 }
 
+export type RemoteStartResult = {
+  rootUri: string | null
+  taskId: string | null
+}
+
 export type RemoteStartParams = {
   url: string
   commonBody: Record<string, unknown>
+  onAccepted?: (result: RemoteStartResult) => void
   onCompleted?: () => void
+  onFailed?: () => void
 }
 
 type ResourceUploadContextValue = {
@@ -171,7 +178,7 @@ export function ResourceUploadProvider({
   const refreshInFlightRef = React.useRef(false)
   const notifiedServerTaskIdsRef = React.useRef<Set<string>>(new Set())
   const remoteCompletionCallbacksRef = React.useRef(
-    new Map<string, () => void>(),
+    new Map<string, { onCompleted?: () => void; onFailed?: () => void }>(),
   )
   const uploadQueueRef = React.useRef<Promise<void>>(Promise.resolve())
 
@@ -420,12 +427,14 @@ export function ResourceUploadProvider({
               ? result.task_id
               : null
 
+          params.onAccepted?.({ rootUri, taskId: serverTaskId })
+
           if (serverTaskId) {
-            if (params.onCompleted) {
-              remoteCompletionCallbacksRef.current.set(
-                serverTaskId,
-                params.onCompleted,
-              )
+            if (params.onCompleted || params.onFailed) {
+              remoteCompletionCallbacksRef.current.set(serverTaskId, {
+                onCompleted: params.onCompleted,
+                onFailed: params.onFailed,
+              })
             }
             updateTask(taskId, (task) => ({
               ...task,
@@ -466,6 +475,7 @@ export function ResourceUploadProvider({
           toast.success(params.url)
         } catch (error) {
           if (controller.signal.aborted) {
+            params.onFailed?.()
             updateTask(taskId, (task) => ({
               ...task,
               status: 'failed',
@@ -478,6 +488,7 @@ export function ResourceUploadProvider({
           }
           const message = getErrorMessage(error)
           const { errorCode, errorMessage } = parseUploadError(message)
+          params.onFailed?.()
 
           updateTask(taskId, (task) => ({
             ...task,
@@ -589,16 +600,18 @@ export function ResourceUploadProvider({
         continue
       }
 
-      const onCompleted = remoteCompletionCallbacksRef.current.get(
+      const callbacks = remoteCompletionCallbacksRef.current.get(
         task.serverTaskId,
       )
-      if (!onCompleted) {
+      if (!callbacks) {
         continue
       }
 
       remoteCompletionCallbacksRef.current.delete(task.serverTaskId)
       if (task.status === 'success') {
-        onCompleted()
+        callbacks.onCompleted?.()
+      } else {
+        callbacks.onFailed?.()
       }
     }
   }, [tasks])

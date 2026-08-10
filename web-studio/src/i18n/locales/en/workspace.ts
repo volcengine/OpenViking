@@ -230,15 +230,23 @@ const workspace = {
   watchesPage: {
     title: 'Scheduled Sync',
     description:
-      'Keep remote resources current with recurring Watch tasks and view their schedules.',
+      'Keep remote resources current with recurring Watch tasks and manage their schedules.',
     refresh: 'Refresh',
     add: 'Add',
+    adding: 'Adding...',
     loading: 'Loading scheduled syncs...',
     loadFailed: 'Could not load scheduled syncs',
     empty: 'No scheduled syncs',
     emptyDescription:
       'Add a remote resource and enable scheduled sync to get started.',
     never: 'Never',
+    cancel: 'Cancel',
+    save: 'Save',
+    creation: {
+      title: 'Creating scheduled sync',
+      description:
+        'The resource was submitted in the background. The list will refresh automatically.',
+    },
     columns: {
       resource: 'Resource',
       source: 'Source',
@@ -246,10 +254,21 @@ const workspace = {
       interval: 'Interval',
       lastRun: 'Last run',
       nextRun: 'Next run',
+      actions: 'Actions',
     },
     status: {
-      active: 'Active',
+      active: 'Enabled',
       paused: 'Paused',
+    },
+    actions: {
+      trigger: 'Sync now',
+      syncing: 'Syncing...',
+      pause: 'Pause',
+      resume: 'Resume',
+      more: 'More',
+      history: 'Processing history',
+      edit: 'Edit interval',
+      delete: 'Delete',
     },
     interval: {
       minutes_one: 'Every minute',
@@ -263,6 +282,35 @@ const workspace = {
       title: 'Add scheduled sync',
       description:
         'Add a remote resource and configure how often OpenViking checks for updates.',
+    },
+    editDialog: {
+      title: 'Edit sync interval',
+      interval: 'Interval (minutes)',
+      intervalHint: 'Enter a positive number of minutes.',
+    },
+    deleteDialog: {
+      title: 'Delete scheduled sync?',
+      description:
+        'The resource {{uri}} will remain available, but it will no longer update automatically.',
+    },
+    history: {
+      title: 'Processing history',
+      description:
+        'Background tasks filtered by this resource. Results may include the initial import, manual processing, and scheduled syncs.',
+      loading: 'Loading processing history...',
+      loadFailed: 'Could not load processing history',
+      empty: 'No processing history',
+      emptyDescription:
+        'No background processing tasks were found for this resource.',
+      stage: 'Stage',
+    },
+    toast: {
+      creating: 'Creating scheduled sync. Please wait...',
+      created: 'Scheduled sync added',
+      createTimeout: 'The new task is not visible yet. Refresh again shortly.',
+      updated: 'Scheduled sync updated',
+      triggered: 'Sync scheduled',
+      deleted: 'Scheduled sync deleted',
     },
   },
   accountSwitcher: {

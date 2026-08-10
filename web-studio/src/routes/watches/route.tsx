@@ -1,9 +1,31 @@
 import * as React from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createFileRoute } from '@tanstack/react-router'
-import { Clock3Icon, PlusIcon, RefreshCwIcon } from 'lucide-react'
+import {
+  CirclePauseIcon,
+  CirclePlayIcon,
+  Clock3Icon,
+  EllipsisIcon,
+  HistoryIcon,
+  PencilIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  RotateCwIcon,
+  Trash2Icon,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '#/components/ui/alert-dialog'
 import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
 import { Card } from '#/components/ui/card'
@@ -15,6 +37,14 @@ import {
   DialogTitle,
 } from '#/components/ui/dialog'
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '#/components/ui/dropdown-menu'
+import { Input } from '#/components/ui/input'
+import { Label } from '#/components/ui/label'
+import {
   Table,
   TableBody,
   TableCell,
@@ -23,10 +53,43 @@ import {
   TableRow,
 } from '#/components/ui/table'
 import { useAppConnection } from '#/hooks/use-app-connection'
+import { parsePositiveMinutes } from '#/lib/watch-interval'
 import { AddResourceForm } from '#/routes/resources/-components/add-resource-page'
 import { ResourceUploadProvider } from '#/routes/resources/-hooks/use-resource-upload'
 
-import { fetchWatches } from './-lib/api'
+import { WatchHistorySheet } from './-components/watch-history-sheet'
+import {
+  deleteWatch,
+  fetchWatchProcessingHistory,
+  fetchWatches,
+  triggerWatch,
+  updateWatch,
+} from './-lib/api'
+import type { UpdateWatchInput, WatchTask } from './-lib/api'
+import {
+  getWatchRefetchInterval,
+  hasActiveWatchProcessing,
+  hasCompletedWatchSync,
+  hasDiscoveredWatch,
+  normalizeWatchUri,
+} from './-lib/watch-discovery'
+
+const WATCH_DISCOVERY_TIMEOUT_MS = 60_000
+const WATCH_SYNC_TIMEOUT_MS = 60_000
+
+type PendingWatch = {
+  expiresAt: number
+  identityScopeKey: string
+  toUri: string
+}
+
+type PendingWatchSync = {
+  expiresAt: number
+  identityScopeKey: string
+  previousExecutionTime: string | null
+  taskId: string
+  toUri: string
+}
 
 export const Route = createFileRoute('/watches')({
   component: WatchesRoute,
@@ -45,18 +108,202 @@ function WatchManagementPage() {
   const { identityScopeKey } = useAppConnection()
   const queryClient = useQueryClient()
   const [addOpen, setAddOpen] = React.useState(false)
+  const [isCreatingWatch, setIsCreatingWatch] = React.useState(false)
+  const watchCreationPendingRef = React.useRef(false)
+  const watchCreationTargetRef = React.useRef<string | null>(null)
+  const watchCreationToastRef = React.useRef<string | number | null>(null)
+  const [pendingWatch, setPendingWatch] = React.useState<PendingWatch | null>(
+    null,
+  )
+  const [pendingSync, setPendingSync] = React.useState<PendingWatchSync | null>(
+    null,
+  )
+  const [editingWatch, setEditingWatch] = React.useState<WatchTask | null>(null)
+  const [deletingWatch, setDeletingWatch] = React.useState<WatchTask | null>(
+    null,
+  )
+  const [historyWatch, setHistoryWatch] = React.useState<WatchTask | null>(null)
   const watchesQuery = useQuery({
     queryFn: fetchWatches,
     queryKey: ['watches', identityScopeKey],
-    refetchInterval: 30_000,
+    refetchInterval: getWatchRefetchInterval(
+      pendingWatch?.identityScopeKey === identityScopeKey ||
+        pendingSync?.identityScopeKey === identityScopeKey,
+    ),
   })
   const watches = watchesQuery.data ?? []
+  const syncTasksQuery = useQuery({
+    enabled: pendingSync?.identityScopeKey === identityScopeKey,
+    queryFn: () => fetchWatchProcessingHistory(pendingSync?.toUri ?? ''),
+    queryKey: [
+      'watch-sync-progress',
+      identityScopeKey,
+      pendingSync?.taskId,
+      pendingSync?.expiresAt,
+    ],
+    refetchInterval:
+      pendingSync?.identityScopeKey === identityScopeKey ? 1_000 : false,
+  })
 
   const refreshWatches = React.useCallback(async () => {
     await queryClient.invalidateQueries({
       queryKey: ['watches', identityScopeKey],
     })
   }, [identityScopeKey, queryClient])
+
+  const beginWatchCreation = React.useCallback(() => {
+    watchCreationPendingRef.current = true
+    watchCreationTargetRef.current = null
+    setIsCreatingWatch(true)
+    watchCreationToastRef.current = toast.loading(t('toast.creating'))
+  }, [t])
+
+  const finishWatchCreation = React.useCallback(() => {
+    if (!watchCreationPendingRef.current) return
+    watchCreationPendingRef.current = false
+    watchCreationTargetRef.current = null
+    setIsCreatingWatch(false)
+    toast.success(t('toast.created'), {
+      id: watchCreationToastRef.current ?? undefined,
+    })
+    watchCreationToastRef.current = null
+  }, [t])
+
+  const failWatchCreation = React.useCallback(() => {
+    watchCreationPendingRef.current = false
+    watchCreationTargetRef.current = null
+    setIsCreatingWatch(false)
+    if (watchCreationToastRef.current !== null) {
+      toast.dismiss(watchCreationToastRef.current)
+      watchCreationToastRef.current = null
+    }
+  }, [])
+
+  const discoverWatch = React.useCallback(
+    ({ rootUri }: { rootUri: string | null }) => {
+      void refreshWatches()
+      if (!rootUri) return
+      watchCreationTargetRef.current = normalizeWatchUri(rootUri)
+      setPendingWatch({
+        expiresAt: Date.now() + WATCH_DISCOVERY_TIMEOUT_MS,
+        identityScopeKey,
+        toUri: normalizeWatchUri(rootUri),
+      })
+    },
+    [identityScopeKey, refreshWatches],
+  )
+
+  React.useEffect(() => {
+    if (
+      pendingWatch?.identityScopeKey === identityScopeKey &&
+      hasDiscoveredWatch(watches, pendingWatch.toUri)
+    ) {
+      finishWatchCreation()
+      setPendingWatch(null)
+    }
+  }, [finishWatchCreation, identityScopeKey, pendingWatch, watches])
+
+  React.useEffect(() => {
+    if (!pendingWatch) return undefined
+    const expiresAt = pendingWatch.expiresAt
+    const timeout = window.setTimeout(
+      () => {
+        watchCreationPendingRef.current = false
+        watchCreationTargetRef.current = null
+        setIsCreatingWatch(false)
+        toast.warning(t('toast.createTimeout'), {
+          id: watchCreationToastRef.current ?? undefined,
+        })
+        watchCreationToastRef.current = null
+        setPendingWatch((current) =>
+          current?.expiresAt === expiresAt ? null : current,
+        )
+      },
+      Math.max(0, pendingWatch.expiresAt - Date.now()),
+    )
+    return () => window.clearTimeout(timeout)
+  }, [pendingWatch, t])
+
+  React.useEffect(() => {
+    if (
+      pendingSync?.identityScopeKey === identityScopeKey &&
+      syncTasksQuery.isFetched &&
+      !syncTasksQuery.isFetching &&
+      !syncTasksQuery.isError &&
+      !hasActiveWatchProcessing(syncTasksQuery.data ?? []) &&
+      hasCompletedWatchSync(
+        watches,
+        pendingSync.taskId,
+        pendingSync.previousExecutionTime,
+      )
+    ) {
+      setPendingSync(null)
+    }
+  }, [identityScopeKey, pendingSync, syncTasksQuery, watches])
+
+  React.useEffect(() => {
+    if (!pendingSync) return undefined
+    const timeout = window.setTimeout(
+      () =>
+        setPendingSync((current) =>
+          current?.expiresAt === pendingSync.expiresAt ? null : current,
+        ),
+      Math.max(0, pendingSync.expiresAt - Date.now()),
+    )
+    return () => window.clearTimeout(timeout)
+  }, [pendingSync])
+
+  const updateMutation = useMutation({
+    mutationFn: ({
+      input,
+      taskId,
+    }: {
+      input: UpdateWatchInput
+      taskId: string
+    }) => updateWatch(taskId, input),
+    onSuccess: async () => {
+      await refreshWatches()
+      setEditingWatch(null)
+      toast.success(t('toast.updated'))
+    },
+    onError: (error) => toast.error(getErrorMessage(error)),
+  })
+  const triggerMutation = useMutation({
+    mutationFn: ({ taskId }: { taskId: string; toUri: string }) =>
+      triggerWatch(taskId),
+    onMutate: ({ taskId, toUri }) => {
+      const watch = watches.find((item) => item.taskId === taskId)
+      setPendingSync({
+        expiresAt: Date.now() + WATCH_SYNC_TIMEOUT_MS,
+        identityScopeKey,
+        previousExecutionTime: watch?.lastExecutionTime ?? null,
+        taskId,
+        toUri,
+      })
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        refreshWatches(),
+        queryClient.invalidateQueries({
+          queryKey: ['watch-sync-progress', identityScopeKey],
+        }),
+      ])
+      toast.success(t('toast.triggered'))
+    },
+    onError: (error) => {
+      setPendingSync(null)
+      toast.error(getErrorMessage(error))
+    },
+  })
+  const deleteMutation = useMutation({
+    mutationFn: deleteWatch,
+    onSuccess: async () => {
+      await refreshWatches()
+      setDeletingWatch(null)
+      toast.success(t('toast.deleted'))
+    },
+    onError: (error) => toast.error(getErrorMessage(error)),
+  })
 
   const formatTime = (value: string | null) => {
     if (!value) return t('never')
@@ -92,12 +339,33 @@ function WatchManagementPage() {
             />
             {t('refresh')}
           </Button>
-          <Button type="button" size="sm" onClick={() => setAddOpen(true)}>
+          <Button
+            type="button"
+            size="sm"
+            disabled={isCreatingWatch}
+            onClick={() => setAddOpen(true)}
+          >
             <PlusIcon />
-            {t('add')}
+            {t(isCreatingWatch ? 'adding' : 'add')}
           </Button>
         </div>
       </header>
+
+      {isCreatingWatch ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex items-start gap-3 rounded-xl border border-sky-500/25 bg-sky-500/10 px-4 py-3 text-sky-800 dark:text-sky-300"
+        >
+          <RefreshCwIcon className="mt-0.5 size-4 shrink-0 animate-spin" />
+          <div className="grid gap-0.5">
+            <p className="text-sm font-medium">{t('creation.title')}</p>
+            <p className="text-xs leading-5 text-sky-700/80 dark:text-sky-300/75">
+              {t('creation.description')}
+            </p>
+          </div>
+        </div>
+      ) : null}
 
       <Card className="overflow-hidden py-0">
         {watchesQuery.isLoading ? (
@@ -136,43 +404,147 @@ function WatchManagementPage() {
                 <TableHead className="min-w-40">
                   {t('columns.nextRun')}
                 </TableHead>
+                <TableHead className="min-w-40 text-right">
+                  {t('columns.actions')}
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {watches.map((watch) => (
-                <TableRow key={watch.taskId}>
-                  <TableCell>
-                    <div
-                      className="max-w-72 truncate font-mono text-xs"
-                      title={watch.toUri}
-                    >
-                      {watch.toUri}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <div
-                      className="max-w-64 truncate text-xs"
-                      title={watch.path}
-                    >
-                      {watch.path}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={watch.isActive ? 'secondary' : 'outline'}>
-                      {t(watch.isActive ? 'status.active' : 'status.paused')}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    {formatInterval(watch.watchInterval, t)}
-                  </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">
-                    {formatTime(watch.lastExecutionTime)}
-                  </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">
-                    {formatTime(watch.nextExecutionTime)}
-                  </TableCell>
-                </TableRow>
-              ))}
+              {watches.map((watch) => {
+                const isSyncing =
+                  pendingSync?.identityScopeKey === identityScopeKey &&
+                  pendingSync.taskId === watch.taskId
+
+                return (
+                  <TableRow key={watch.taskId}>
+                    <TableCell>
+                      <div
+                        className="max-w-72 truncate font-mono text-xs"
+                        title={watch.toUri}
+                      >
+                        {watch.toUri}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <div
+                        className="max-w-64 truncate text-xs"
+                        title={watch.path}
+                      >
+                        {watch.path}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        variant="outline"
+                        className={
+                          watch.isActive
+                            ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
+                            : 'bg-muted/40 text-muted-foreground'
+                        }
+                      >
+                        <span
+                          aria-hidden="true"
+                          className={
+                            watch.isActive
+                              ? 'size-1.5 rounded-full bg-emerald-500'
+                              : 'size-1.5 rounded-full bg-muted-foreground/60'
+                          }
+                        />
+                        {t(watch.isActive ? 'status.active' : 'status.paused')}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      {formatInterval(watch.watchInterval, t)}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {formatTime(watch.lastExecutionTime)}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {formatTime(watch.nextExecutionTime)}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap">
+                      <div className="flex flex-wrap justify-end gap-1">
+                        <ActionButton
+                          label={t(
+                            isSyncing ? 'actions.syncing' : 'actions.trigger',
+                          )}
+                          disabled={
+                            triggerMutation.isPending || pendingSync !== null
+                          }
+                          onClick={() =>
+                            triggerMutation.mutate({
+                              taskId: watch.taskId,
+                              toUri: watch.toUri,
+                            })
+                          }
+                        >
+                          <RotateCwIcon
+                            className={isSyncing ? 'animate-spin' : undefined}
+                          />
+                        </ActionButton>
+                        <ActionButton
+                          label={t(
+                            watch.isActive ? 'actions.pause' : 'actions.resume',
+                          )}
+                          disabled={updateMutation.isPending}
+                          onClick={() =>
+                            updateMutation.mutate({
+                              input: { isActive: !watch.isActive },
+                              taskId: watch.taskId,
+                            })
+                          }
+                        >
+                          {watch.isActive ? (
+                            <CirclePauseIcon />
+                          ) : (
+                            <CirclePlayIcon />
+                          )}
+                        </ActionButton>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger
+                            render={
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                className="h-8 px-2 text-xs"
+                                aria-label={t('actions.more')}
+                                title={t('actions.more')}
+                              />
+                            }
+                          >
+                            <EllipsisIcon />
+                            <span>{t('actions.more')}</span>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem
+                              onClick={() => setHistoryWatch(watch)}
+                            >
+                              <HistoryIcon />
+                              {t('actions.history')}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              disabled={updateMutation.isPending}
+                              onClick={() => setEditingWatch(watch)}
+                            >
+                              <PencilIcon />
+                              {t('actions.edit')}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              variant="destructive"
+                              disabled={deleteMutation.isPending}
+                              onClick={() => setDeletingWatch(watch)}
+                            >
+                              <Trash2Icon />
+                              {t('actions.delete')}
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
             </TableBody>
           </Table>
         )}
@@ -190,15 +562,172 @@ function WatchManagementPage() {
             <AddResourceForm
               initialMode="remote"
               initialWatchEnabled
-              onCompleted={() => void refreshWatches()}
+              onAccepted={discoverWatch}
+              onCompleted={() => {
+                void refreshWatches()
+                if (watchCreationTargetRef.current === null) {
+                  finishWatchCreation()
+                }
+              }}
+              onFailed={failWatchCreation}
               onSubmitted={() => {
+                beginWatchCreation()
                 setAddOpen(false)
               }}
             />
           </div>
         </DialogContent>
       </Dialog>
+
+      <WatchHistorySheet
+        identityScopeKey={identityScopeKey}
+        open={historyWatch !== null}
+        watch={historyWatch}
+        onOpenChange={(open) => {
+          if (!open) setHistoryWatch(null)
+        }}
+      />
+
+      <EditWatchDialog
+        watch={editingWatch}
+        pending={updateMutation.isPending}
+        onOpenChange={(open) => !open && setEditingWatch(null)}
+        onSubmit={(watchInterval) => {
+          if (!editingWatch) return
+          updateMutation.mutate({
+            input: { watchInterval },
+            taskId: editingWatch.taskId,
+          })
+        }}
+      />
+
+      <AlertDialog
+        open={Boolean(deletingWatch)}
+        onOpenChange={(open) => !open && setDeletingWatch(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('deleteDialog.title')}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('deleteDialog.description', {
+                uri: deletingWatch?.toUri ?? '',
+              })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteMutation.isPending}>
+              {t('cancel')}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deleteMutation.isPending}
+              onClick={(event) => {
+                event.preventDefault()
+                if (deletingWatch) {
+                  deleteMutation.mutate(deletingWatch.taskId)
+                }
+              }}
+            >
+              {t('actions.delete')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
+  )
+}
+
+function EditWatchDialog({
+  onOpenChange,
+  onSubmit,
+  pending,
+  watch,
+}: {
+  onOpenChange: (open: boolean) => void
+  onSubmit: (watchInterval: number) => void
+  pending: boolean
+  watch: WatchTask | null
+}) {
+  const { t } = useTranslation('watchesPage')
+  const [value, setValue] = React.useState('')
+
+  React.useEffect(() => {
+    setValue(watch ? String(watch.watchInterval) : '')
+  }, [watch])
+
+  const interval = parsePositiveMinutes(value)
+
+  return (
+    <Dialog open={Boolean(watch)} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t('editDialog.title')}</DialogTitle>
+          <DialogDescription className="break-all font-mono text-xs">
+            {watch?.toUri}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-2">
+          <Label htmlFor="watch-edit-interval">
+            {t('editDialog.interval')}
+          </Label>
+          <Input
+            id="watch-edit-interval"
+            type="number"
+            min="1"
+            step="1"
+            value={value}
+            onChange={(event) => setValue(event.target.value)}
+          />
+          <p className="text-xs text-muted-foreground">
+            {t('editDialog.intervalHint')}
+          </p>
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            disabled={pending}
+            onClick={() => onOpenChange(false)}
+          >
+            {t('cancel')}
+          </Button>
+          <Button
+            type="button"
+            disabled={interval === null || pending}
+            onClick={() => interval !== null && onSubmit(interval)}
+          >
+            {t('save')}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function ActionButton({
+  children,
+  disabled,
+  label,
+  onClick,
+}: {
+  children: React.ReactNode
+  disabled?: boolean
+  label: string
+  onClick: () => void
+}) {
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="ghost"
+      className="h-8 px-2 text-xs"
+      title={label}
+      aria-label={label}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      {children}
+      <span>{label}</span>
+    </Button>
   )
 }
 
