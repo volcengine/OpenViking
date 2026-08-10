@@ -526,7 +526,7 @@ async def aapply_commit_policy(
 
 
 def call_openviking(client: Any, method_name: str, /, **kwargs: Any) -> Any:
-    """Call a client method, filtering kwargs unsupported by local/HTTP variants."""
+    """Call a client method, filtering kwargs unsupported by client variants."""
 
     openviking_call = getattr(client, "_openviking_call", None)
     if callable(openviking_call):

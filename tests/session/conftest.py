@@ -104,20 +104,6 @@ async def session(
 
 
 @pytest_asyncio.fixture(scope="function")
-async def session_with_id(
-    client,
-    service: OpenVikingService,
-    request_context: RequestContext,
-) -> AsyncGenerator[Session, None]:
-    """Create Session with specified ID"""
-    session = await service.sessions.create(
-        request_context,
-        session_id="test_session_001",
-    )
-    yield session
-
-
-@pytest_asyncio.fixture(scope="function")
 async def session_with_messages(
     client,
     service: OpenVikingService,
