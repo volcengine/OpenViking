@@ -808,7 +808,9 @@ class TestMemoryUpdater:
         mock_viking_fs = MagicMock()
 
         async def mock_read_file(uri, **kwargs):
-            return store.get(uri)
+            if uri not in store:
+                raise FileNotFoundError(uri)
+            return store[uri]
 
         async def mock_write_file(uri, content, **kwargs):
             store[uri] = content
@@ -877,7 +879,9 @@ class TestMemoryUpdater:
         async def mock_read_file(uri, **kwargs):
             if uri == resource_uri:
                 raise AssertionError("resource target should not be read as a memory file")
-            return store.get(uri)
+            if uri not in store:
+                raise FileNotFoundError(uri)
+            return store[uri]
 
         async def mock_write_file(uri, content, **kwargs):
             if uri == resource_uri:
@@ -944,7 +948,9 @@ class TestMemoryUpdater:
         mock_viking_fs = MagicMock()
 
         async def mock_read_file(uri, **kwargs):
-            return store.get(uri)
+            if uri not in store:
+                raise FileNotFoundError(uri)
+            return store[uri]
 
         async def mock_write_file(uri, content, **kwargs):
             store[uri] = content
@@ -1014,7 +1020,9 @@ class TestMemoryUpdater:
         mock_viking_fs = MagicMock()
 
         async def mock_read_file(uri, **kwargs):
-            return store.get(uri)
+            if uri not in store:
+                raise FileNotFoundError(uri)
+            return store[uri]
 
         async def mock_write_file(uri, content, **kwargs):
             store[uri] = content
@@ -1286,7 +1294,9 @@ class TestConsecutivePatchesSameURI:
         mock_viking_fs = MagicMock()
 
         async def mock_read_file(uri, **kwargs):
-            return store.get(uri)
+            if uri not in store:
+                raise FileNotFoundError(uri)
+            return store[uri]
 
         async def mock_write_file(uri, content, **kwargs):
             store[uri] = content
@@ -1325,6 +1335,215 @@ class TestConsecutivePatchesSameURI:
         assert parsed["content"] == "Step B"
         assert parsed["version"] == 2
 
+    @staticmethod
+    def _registry():
+        schema = MemoryTypeSchema(
+            memory_type="preferences",
+            description="User preferences",
+            fields=[
+                MemoryField(
+                    name="topic",
+                    field_type=FieldType.STRING,
+                    merge_op=MergeOp.IMMUTABLE,
+                ),
+                MemoryField(
+                    name="content",
+                    field_type=FieldType.STRING,
+                    merge_op=MergeOp.REPLACE,
+                ),
+            ],
+        )
+        registry = MagicMock()
+        registry.get.return_value = schema
+        return registry
+
+    @pytest.mark.asyncio
+    async def test_no_op_keeps_version_but_retries_derived_state(self):
+        uri = "viking://user/default/memories/preferences/workflow.md"
+        old_file = MemoryFile(
+            uri=uri,
+            content="Prefers concise updates.",
+            extra_fields={
+                "topic": "workflow",
+                "version": 7,
+                "source_extraction_id": "old-extraction",
+                "last_update_trace_id": "old-trace",
+            },
+        )
+        original_raw = MemoryFileUtils.write(old_file)
+
+        mock_viking_fs = MagicMock()
+        mock_viking_fs.read_file = AsyncMock(return_value=original_raw)
+        mock_viking_fs.write_file = AsyncMock()
+
+        updater = MemoryUpdater(registry=self._registry(), vikingdb=MagicMock())
+        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+        updater._sync_resource_refs_for_result = AsyncMock()
+        updater._vectorize_memories = AsyncMock()
+        updater.generate_overview = AsyncMock()
+
+        operation = ResolvedOperation(
+            old_memory_file_content=old_file,
+            memory_fields={
+                "topic": "workflow",
+                "content": "Prefers concise updates.",
+            },
+            memory_type="preferences",
+            uris=[uri],
+            source=MemoryOperationSource(
+                extraction_id="new-extraction",
+                trace_id="new-trace",
+            ),
+            search_tags=["scope=important"],
+        )
+        operations = ResolvedOperations(
+            upsert_operations=[operation],
+            delete_file_contents=[],
+            errors=[],
+        )
+
+        ctx = MagicMock()
+        result = await updater.apply_operations(operations, ctx)
+
+        assert result.written_uris == []
+        assert result.edited_uris == []
+        mock_viking_fs.write_file.assert_not_awaited()
+        updater._sync_resource_refs_for_result.assert_awaited_once_with(
+            result,
+            ctx,
+            additional_uris={uri},
+            lease_ref=None,
+        )
+        assert updater._vectorize_memories.await_args.kwargs["additional_uris"] == {uri}
+        assert updater._vectorize_memories.await_args.kwargs["search_tags_by_uri"] == {
+            uri: ["scope=important"]
+        }
+        updater.generate_overview.assert_awaited_once()
+        assert updater.generate_overview.await_args.args[:2] == (
+            "preferences",
+            "viking://user/default/memories/preferences",
+        )
+        assert MemoryFileUtils.read(original_raw).extra_fields["version"] == 7
+
+    @pytest.mark.asyncio
+    async def test_real_content_change_writes_and_increments_version_once(self):
+        uri = "viking://user/default/memories/preferences/workflow.md"
+        old_file = MemoryFile(
+            uri=uri,
+            content="Prefers concise updates.",
+            extra_fields={"topic": "workflow", "version": 7},
+        )
+        original_raw = MemoryFileUtils.write(old_file)
+        written: list[str] = []
+
+        mock_viking_fs = MagicMock()
+        mock_viking_fs.read_file = AsyncMock(return_value=original_raw)
+
+        async def write_file(_uri, content, **_kwargs):
+            written.append(content)
+
+        mock_viking_fs.write_file = AsyncMock(side_effect=write_file)
+        updater = MemoryUpdater(registry=self._registry())
+        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+        operation = ResolvedOperation(
+            old_memory_file_content=old_file,
+            memory_fields={
+                "topic": "workflow",
+                "content": "Prefers detailed updates.",
+            },
+            memory_type="preferences",
+            uris=[uri],
+        )
+
+        changed_uris = await updater._apply_upsert(operation, MagicMock())
+
+        assert changed_uris == {uri}
+        assert len(written) == 1
+        parsed = MemoryFileUtils.read(written[0])
+        assert parsed.content == "Prefers detailed updates."
+        assert parsed.extra_fields["version"] == 8
+
+    @pytest.mark.asyncio
+    async def test_authoritative_permission_error_never_uses_prefetched_content(self):
+        uri = "viking://user/default/memories/preferences/workflow.md"
+        old_file = MemoryFile(
+            uri=uri,
+            content="Prefers concise updates.",
+            extra_fields={"topic": "workflow", "version": 7},
+        )
+        mock_viking_fs = MagicMock()
+        mock_viking_fs.read_file = AsyncMock(side_effect=PermissionError("denied"))
+        mock_viking_fs.write_file = AsyncMock()
+        updater = MemoryUpdater(registry=self._registry())
+        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+        operation = ResolvedOperation(
+            old_memory_file_content=old_file,
+            memory_fields={"topic": "workflow", "content": old_file.content},
+            memory_type="preferences",
+            uris=[uri],
+        )
+
+        with pytest.raises(PermissionError, match="denied"):
+            await updater._apply_upsert(operation, MagicMock())
+
+        mock_viking_fs.write_file.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_authoritative_not_found_for_prefetched_file_fails_closed(self):
+        uri = "viking://user/default/memories/preferences/workflow.md"
+        old_file = MemoryFile(
+            uri=uri,
+            content="Prefers concise updates.",
+            extra_fields={"topic": "workflow", "version": 7},
+        )
+        mock_viking_fs = MagicMock()
+        mock_viking_fs.read_file = AsyncMock(
+            side_effect=NotFoundError(uri, "memory")
+        )
+        mock_viking_fs.write_file = AsyncMock()
+        updater = MemoryUpdater(registry=self._registry())
+        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+        operation = ResolvedOperation(
+            old_memory_file_content=old_file,
+            memory_fields={"topic": "workflow", "content": old_file.content},
+            memory_type="preferences",
+            uris=[uri],
+        )
+
+        with pytest.raises(NotFoundError):
+            await updater._apply_upsert(operation, MagicMock())
+
+        mock_viking_fs.write_file.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_authoritative_not_found_for_new_file_still_creates_it(self):
+        uri = "viking://user/default/memories/preferences/workflow.md"
+        written: list[str] = []
+        mock_viking_fs = MagicMock()
+        mock_viking_fs.read_file = AsyncMock(side_effect=FileNotFoundError(uri))
+
+        async def write_file(_uri, content, **_kwargs):
+            written.append(content)
+
+        mock_viking_fs.write_file = AsyncMock(side_effect=write_file)
+        updater = MemoryUpdater(registry=self._registry())
+        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+        operation = ResolvedOperation(
+            old_memory_file_content=None,
+            memory_fields={
+                "topic": "workflow",
+                "content": "Prefers concise updates.",
+            },
+            memory_type="preferences",
+            uris=[uri],
+        )
+
+        changed_uris = await updater._apply_upsert(operation, MagicMock())
+
+        assert changed_uris == {uri}
+        assert len(written) == 1
+        assert MemoryFileUtils.read(written[0]).extra_fields["version"] == 1
+
     @pytest.mark.asyncio
     async def test_apply_upsert_strips_user_id_and_sets_version(self):
         memory_type = "notes"
@@ -1347,7 +1566,9 @@ class TestConsecutivePatchesSameURI:
         mock_viking_fs = MagicMock()
 
         async def mock_read_file(uri, **kwargs):
-            return store.get(uri)
+            if uri not in store:
+                raise FileNotFoundError(uri)
+            return store[uri]
 
         async def mock_write_file(uri, content, **kwargs):
             store[uri] = content
@@ -1392,11 +1613,18 @@ class TestConsecutivePatchesSameURI:
         registry = MemoryTypeRegistry()
         registry.register(schema)
 
-        store: dict[str, str] = {}
+        old_file = MemoryFile(
+            uri=uri,
+            content="Original body",
+            extra_fields={"title": "Original Title"},
+        )
+        store: dict[str, str] = {uri: MemoryFileUtils.write(old_file)}
         mock_viking_fs = MagicMock()
 
         async def mock_read_file(uri, **kwargs):
-            return store.get(uri)
+            if uri not in store:
+                raise FileNotFoundError(uri)
+            return store[uri]
 
         async def mock_write_file(uri, content, **kwargs):
             store[uri] = content
@@ -1427,11 +1655,7 @@ class TestConsecutivePatchesSameURI:
         monkeypatch.setattr("openviking.session.memory.memory_updater.tracer.info", trace_info)
 
         op = ResolvedOperation(
-            old_memory_file_content=MemoryFile(
-                uri=uri,
-                content="Original body",
-                extra_fields={"title": "Original Title"},
-            ),
+            old_memory_file_content=old_file,
             memory_fields={
                 "title": "Updated Title",
                 "content": StrPatch(blocks=[SearchReplaceBlock(search="old", replace="new")]),
@@ -1468,7 +1692,9 @@ class TestConsecutivePatchesSameURI:
         mock_viking_fs = MagicMock()
 
         async def mock_read_file(uri, **kwargs):
-            return store.get(uri)
+            if uri not in store:
+                raise FileNotFoundError(uri)
+            return store[uri]
 
         async def mock_write_file(uri, content, **kwargs):
             store[uri] = content
@@ -1539,7 +1765,9 @@ class TestConsecutivePatchesSameURI:
         mock_viking_fs = MagicMock()
 
         async def mock_read_file(uri, **kwargs):
-            return store.get(uri)
+            if uri not in store:
+                raise FileNotFoundError(uri)
+            return store[uri]
 
         async def mock_write_file(uri, content, **kwargs):
             store[uri] = content

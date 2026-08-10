@@ -69,6 +69,32 @@ async def test_commit_async_keeps_working_when_session_metrics_fail(
 
 
 @pytest.mark.asyncio
+async def test_commit_forwards_explicit_agent_evolution_requirement():
+    service = SessionService(viking_fs=Mock())
+    ctx = _make_ctx()
+    service.commit_async = AsyncMock(return_value={"status": "queued"})
+
+    result = await service.commit(
+        "sess-1",
+        ctx,
+        require_agent_evolution_enabled=True,
+    )
+
+    assert result == {"status": "queued"}
+    service.commit_async.assert_awaited_once_with(
+        "sess-1",
+        ctx,
+        keep_recent_count=0,
+        require_agent_evolution_enabled=True,
+        retention_mode=None,
+        keep_recent_turn_count=None,
+        retained_message_token_budget=None,
+        min_raw_tail_steps=None,
+        event_tags=None,
+    )
+
+
+@pytest.mark.asyncio
 async def test_sessions_returns_empty_and_logs_when_storage_listing_fails(
     monkeypatch: pytest.MonkeyPatch,
 ):

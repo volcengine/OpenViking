@@ -521,6 +521,82 @@ async def test_store_skips_empty_message_content(service, monkeypatch):
     service.sessions.commit_async.assert_awaited_once()
 
 
+async def test_store_preferences_constrains_memory_policy(service, monkeypatch):
+    class FakeSession:
+        add_message_async = AsyncMock()
+
+    fake_session = FakeSession()
+    create = AsyncMock(return_value=fake_session)
+    get = AsyncMock()
+    commit = AsyncMock(return_value={"status": "accepted", "task_id": "task-123"})
+    monkeypatch.setattr(service.sessions, "create", create)
+    monkeypatch.setattr(service.sessions, "get", get)
+    monkeypatch.setattr(service.sessions, "commit_async", commit)
+
+    result = await remember(
+        messages=[StoreMessage(role="user", content="Prefer concise updates")],
+        memory_type="preferences",
+    )
+
+    get.assert_not_awaited()
+    create.assert_awaited_once()
+    assert create.await_args.args == (DEFAULT_CTX,)
+    session_id = create.await_args.kwargs["session_id"]
+    assert session_id.startswith("mcp-store-")
+    assert create.await_args.kwargs["memory_policy"] == {
+        "memory_types": ["preferences"]
+    }
+    commit.assert_awaited_once_with(session_id, DEFAULT_CTX)
+    assert "status=accepted" in result
+    assert "memory extraction queued" in result
+    assert "task_id=task-123" in result
+
+
+async def test_store_experiences_fails_when_agent_evolution_disabled(service, monkeypatch):
+    enabled = AsyncMock(return_value=False)
+    create = AsyncMock()
+    commit = AsyncMock()
+    monkeypatch.setattr(service.sessions, "get_agent_evolution_enabled", enabled)
+    monkeypatch.setattr(service.sessions, "create", create)
+    monkeypatch.setattr(service.sessions, "commit_async", commit)
+
+    with pytest.raises(FailedPreconditionError, match="Agent Evolution"):
+        await remember(
+            messages=[StoreMessage(role="user", content="Reusable operational lesson")],
+            memory_type="experiences",
+        )
+
+    enabled.assert_awaited_once_with(DEFAULT_CTX.account_id)
+    create.assert_not_awaited()
+    commit.assert_not_awaited()
+
+
+async def test_store_experiences_enables_training_dependencies(service, monkeypatch):
+    class FakeSession:
+        add_message_async = AsyncMock()
+
+    enabled = AsyncMock(return_value=True)
+    create = AsyncMock(return_value=FakeSession())
+    commit = AsyncMock()
+    monkeypatch.setattr(service.sessions, "get_agent_evolution_enabled", enabled)
+    monkeypatch.setattr(service.sessions, "create", create)
+    monkeypatch.setattr(service.sessions, "commit_async", commit)
+
+    await remember(
+        messages=[StoreMessage(role="user", content="Reusable operational lesson")],
+        memory_type="experiences",
+    )
+
+    assert create.await_args.kwargs["memory_policy"] == {
+        "memory_types": ["cases", "trajectories", "experiences"]
+    }
+    commit.assert_awaited_once_with(
+        create.await_args.kwargs["session_id"],
+        DEFAULT_CTX,
+        require_agent_evolution_enabled=True,
+    )
+
+
 # ---------------------------------------------------------------------------
 # add_resource tool
 # ---------------------------------------------------------------------------

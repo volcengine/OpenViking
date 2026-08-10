@@ -3,6 +3,7 @@ import logging
 import re
 from datetime import datetime
 from typing import Any, Dict, Optional
+from urllib.parse import urlsplit
 
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils.link_renderer import LinkRenderer
@@ -40,6 +41,119 @@ def bump_memory_version(memory_file: MemoryFile) -> None:
     memory_file.extra_fields["version"] = memory_version_from_fields(
         memory_file.extra_fields, default=1
     ) + 1
+
+
+_NON_SEMANTIC_MEMORY_FIELDS = {
+    "version",
+    "source_extraction_id",
+    "source_extraction_ids",
+    "last_update_trace_id",
+    # These isolation/serialization fields do not describe the memory itself.
+    "user_id",
+    "user_ids",
+    "_uri",
+    "memory_type",
+}
+
+
+def memory_type_from_uri(uri: str) -> Optional[str]:
+    """Return the memory type from a canonical OpenViking memory URI.
+
+    Locate the memory root from the namespace grammar instead of searching for
+    the first segment named ``memories``.  The latter is ambiguous when a user
+    ID or a deeper category is itself named ``memories``.
+    """
+    raw_uri = str(uri or "")
+    parsed = urlsplit(raw_uri)
+    if parsed.scheme and parsed.netloc:
+        parts = [parsed.netloc, *[part for part in parsed.path.split("/") if part]]
+    else:
+        parts = [part for part in raw_uri.split("/") if part]
+
+    memory_root_index: Optional[int] = None
+    if parts and parts[0] == "user":
+        # Canonical peer memory: user/<uid>/peers/<peer>/memories/<type>/...
+        if len(parts) > 5 and parts[2] == "peers" and parts[4] == "memories":
+            memory_root_index = 4
+        # Canonical user memory: user/<uid>/memories/<type>/...
+        elif len(parts) > 3 and parts[2] == "memories":
+            memory_root_index = 2
+        # Legacy peer memory without an explicit user ID.
+        elif len(parts) > 4 and parts[1] == "peers" and parts[3] == "memories":
+            memory_root_index = 3
+        # Legacy user memory: user/memories/<type>/...
+        elif len(parts) > 2 and parts[1] == "memories":
+            memory_root_index = 1
+    elif (
+        len(parts) > 3
+        and parts[0] == "agent"
+        and parts[2] == "memories"
+    ):
+        # Preserve the corresponding agent namespace accepted by VikingURI.
+        memory_root_index = 2
+
+    if memory_root_index is None or memory_root_index + 1 >= len(parts):
+        return None
+    memory_type = parts[memory_root_index + 1].removesuffix(".md")
+    return memory_type or None
+
+
+def _known_memory_types(memory_file: MemoryFile) -> set[str]:
+    """Collect explicit and URI-derived schema ownership signals.
+
+    Legacy memory files do not always serialize ``memory_type``.  Their URI is
+    still authoritative, so a missing explicit value must not turn every
+    otherwise-identical legacy update into a change.  Conversely, retaining
+    all available signals catches both a real type change and an inconsistent
+    file whose embedded type disagrees with its canonical path.
+    """
+    known = {
+        str(value)
+        for value in (
+            memory_file.memory_type,
+            (memory_file.extra_fields or {}).get("memory_type"),
+        )
+        if value
+    }
+    uri_memory_type = memory_type_from_uri(str(memory_file.uri or ""))
+    if uri_memory_type:
+        known.add(uri_memory_type)
+    return known
+
+
+def memory_files_semantically_equal(
+    before: Optional[MemoryFile], after: Optional[MemoryFile]
+) -> bool:
+    """Return whether two files carry the same user-visible memory.
+
+    Version and extraction provenance are write bookkeeping.  Comparing them
+    as content makes an otherwise identical extraction look like a real edit,
+    which in turn bumps the version, rewrites the vector, and regenerates the
+    overview.  Stored content is compared verbatim: ``plain_content`` strips
+    every relative Markdown target, including user-authored links that are not
+    represented by ``links`` metadata, and could therefore hide a real edit.
+    """
+    if before is None or after is None:
+        return False
+
+    def _semantic_fields(memory_file: MemoryFile) -> Dict[str, Any]:
+        return {
+            key: value
+            for key, value in dict(memory_file.extra_fields or {}).items()
+            if key not in _NON_SEMANTIC_MEMORY_FIELDS
+        }
+
+    before_memory_types = _known_memory_types(before)
+    after_memory_types = _known_memory_types(after)
+    same_memory_type = before_memory_types == after_memory_types
+
+    return (
+        same_memory_type
+        and before.content == after.content
+        and before.links == after.links
+        and before.backlinks == after.backlinks
+        and _semantic_fields(before) == _semantic_fields(after)
+    )
 
 
 def _serialize_datetime(obj: Any) -> Any:

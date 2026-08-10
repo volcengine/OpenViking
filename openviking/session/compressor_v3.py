@@ -51,7 +51,10 @@ from openviking.session.memory.streaming_memory_updater import (
     merge_link_lists,
 )
 from openviking.session.memory.utils.json_parser import JsonUtils
-from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.session.memory.utils.memory_file_utils import (
+    MemoryFileUtils,
+    memory_files_semantically_equal,
+)
 from openviking.session.memory.utils.uri import generate_uri
 from openviking.session.train import (
     Case,
@@ -1978,14 +1981,7 @@ def _applied_memory_diff(value: Any) -> dict[str, Any] | None:
 
 def _same_memory_file(before: Optional[MemoryFile], after: Optional[MemoryFile]) -> bool:
     """Return whether two parsed memory files represent the same stored memory."""
-    if before is None or after is None:
-        return False
-    # memory_type is commonly known from the operation/URI even when the raw
-    # memory file does not serialize it, so do not treat that metadata-only
-    # representation difference as a real file update.
-    return before.model_dump(exclude={"uri", "memory_type"}) == after.model_dump(
-        exclude={"uri", "memory_type"}
-    )
+    return memory_files_semantically_equal(before, after)
 
 
 def _v3_extraction_response(

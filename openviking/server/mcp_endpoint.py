@@ -46,6 +46,7 @@ from openviking.server.upload_token_store import upload_token_store
 from openviking.telemetry.span_models import update_root_span_identity
 from openviking.utils.search_filters import SearchContextTypeInput, merge_search_filter
 from openviking_cli.exceptions import (
+    FailedPreconditionError,
     InvalidArgumentError,
     PermissionDeniedError,
     UnauthenticatedError,
@@ -424,8 +425,18 @@ class StoreMessage(BaseModel):
 
 
 @mcp.tool()
-async def remember(messages: list[StoreMessage]) -> str:
-    """Store information into OpenViking long-term memory. Use when the user says 'remember this', shares preferences, important facts, or decisions worth persisting."""
+async def remember(
+    messages: list[StoreMessage],
+    memory_type: Optional[Literal["preferences", "experiences"]] = None,
+) -> str:
+    """Store information into OpenViking long-term memory.
+
+    ``memory_type`` is optional for backwards compatibility.  When supplied it
+    constrains extraction to that memory family.  Experience extraction needs
+    Agent Evolution because experiences are trained from cases and
+    trajectories; rejecting that request up front avoids silently storing the
+    same text as an unrelated user preference.
+    """
     import uuid
 
     from openviking.message.part import TextPart
@@ -433,7 +444,28 @@ async def remember(messages: list[StoreMessage]) -> str:
     service = get_service()
     ctx = _get_ctx()
     session_id = f"mcp-store-{uuid.uuid4().hex[:12]}"
-    session = await service.sessions.get(session_id, ctx, auto_create=True)
+    memory_policy = None
+    if memory_type == "preferences":
+        memory_policy = {"memory_types": ["preferences"]}
+    elif memory_type == "experiences":
+        if not await service.sessions.get_agent_evolution_enabled(ctx.account_id):
+            raise FailedPreconditionError(
+                "memory_type='experiences' requires Agent Evolution to be enabled"
+            )
+        # Experiences are produced by the Agent Evolution pipeline from cases
+        # and trajectories, so all three stages must remain eligible.
+        memory_policy = {
+            "memory_types": ["cases", "trajectories", "experiences"],
+        }
+
+    if memory_policy is None:
+        session = await service.sessions.get(session_id, ctx, auto_create=True)
+    else:
+        session = await service.sessions.create(
+            ctx,
+            session_id=session_id,
+            memory_policy=memory_policy,
+        )
     for msg in messages:
         if msg.content:
             add_async = getattr(session, "add_message_async", None)
@@ -441,8 +473,32 @@ async def remember(messages: list[StoreMessage]) -> str:
                 await add_async(msg.role, [TextPart(text=msg.content)])
             else:
                 session.add_message(msg.role, [TextPart(text=msg.content)])
-    await service.sessions.commit_async(session_id, ctx)
-    return f"Stored {len(messages)} message(s) and committed for memory extraction."
+    commit_kwargs = {}
+    if memory_type == "experiences":
+        # Session.commit_async re-reads the account switch for the authoritative
+        # commit snapshot. This closes the hot-config race between the early
+        # validation above and Phase 1 enqueue.
+        commit_kwargs["require_agent_evolution_enabled"] = True
+    commit_result = await service.sessions.commit_async(session_id, ctx, **commit_kwargs)
+
+    if isinstance(commit_result, dict):
+        status = str(commit_result.get("status") or "unknown")
+        task_id = commit_result.get("task_id")
+        if status == "accepted" and task_id:
+            return (
+                f"Stored {len(messages)} message(s). Commit status=accepted; "
+                f"memory extraction queued; task_id={task_id}."
+            )
+        reason = commit_result.get("reason")
+        reason_suffix = f"; reason={reason}" if reason else ""
+        return (
+            f"Stored {len(messages)} message(s). Commit status={status}; "
+            f"memory extraction not queued{reason_suffix}."
+        )
+
+    # Compatibility for custom SessionService implementations that still
+    # return no structured commit result.
+    return f"Stored {len(messages)} message(s). Commit request submitted."
 
 
 # -- add_resource ----------------------------------------------------------

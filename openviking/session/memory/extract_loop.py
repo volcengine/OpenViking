@@ -32,6 +32,7 @@ from openviking.session.memory.utils import (
     pretty_print_messages,
 )
 from openviking.session.memory.utils.json_parser import JsonUtils
+from openviking.session.memory.utils.memory_file_utils import memory_type_from_uri
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
 from openviking.telemetry import bind_telemetry_stage, tracer
 from openviking_cli.utils import get_logger
@@ -45,6 +46,38 @@ _CANNED_REFUSAL_RE = re.compile(
     r"(无法|不能|未能|不给|没有找到|未找到|can't|cannot|unable|won't|not able)",
     re.IGNORECASE,
 )
+
+_IMMUTABLE_IDENTITY_MISMATCH_PREFIX = "Immutable identity mismatch:"
+_INVALID_PAGE_ID_PREFIX = "Invalid page_id:"
+
+
+def _schema_identity_fields(schema: Any) -> set[str]:
+    """Return fields that determine an item's stable identity or URI.
+
+    ``IMMUTABLE`` is the explicit schema contract.  URI template fields are
+    identity-bearing as well even in older/custom schemas that accidentally
+    declared them ``REPLACE``: changing one while reusing an existing page_id
+    would make the metadata disagree with the already-bound URI.
+    """
+    fields = list(getattr(schema, "fields", []) or [])
+    schema_fields = {field.name for field in fields}
+    immutable_fields = {
+        field.name for field in fields if field.merge_op == MergeOp.IMMUTABLE
+    }
+    uri_template = (
+        f"{getattr(schema, 'directory', '') or ''}/"
+        f"{getattr(schema, 'filename_template', '') or ''}"
+    )
+    template_expressions = re.findall(r"\{\{(.*?)\}\}", uri_template, re.DOTALL)
+    template_fields = {
+        field_name
+        for field_name in schema_fields
+        if any(
+            re.search(rf"\b{re.escape(field_name)}\b", expression)
+            for expression in template_expressions
+        )
+    }
+    return immutable_fields | (template_fields & schema_fields)
 
 
 def _looks_like_canned_refusal(content: str) -> bool:
@@ -157,6 +190,7 @@ class ExtractLoop:
         # Reset format retry counter for each run
         self._format_retry_count = 0
         patch_repair_count = 0
+        immutable_identity_repair_count = 0
 
         # 从 provider 获取 schemas（内部自动加载 registry）
         schemas = self.context_provider.get_memory_schemas(self.ctx)
@@ -207,6 +241,7 @@ class ExtractLoop:
 - For existing items, use the page_id shown in read/search results.
 - For new items, assign a unique page_id >= 100.
 - When editing an existing item, reuse its existing page_id.
+- Reuse an existing page_id only when every immutable identity field (for example, topic or name) exactly matches that item. If the identity differs, create a separate item with a new page_id.
 - To delete an existing item, add an entry to `delete_ids` using its page_id.
 - For canonical merges, set `replacement_page_id` to the surviving page that should inherit the deleted page's existing links/backlinks; for pure deletes, set `replacement_page_id` to null.
 """
@@ -293,6 +328,36 @@ The final output of the model must strictly follow the JSON Schema format shown 
                         tracer.info(f"Extended max_iterations to {max_iterations} for refetch")
 
                     continue
+                memory_routing_errors = [
+                    error
+                    for error in final_operations.errors
+                    if error.startswith(
+                        (_IMMUTABLE_IDENTITY_MISMATCH_PREFIX, _INVALID_PAGE_ID_PREFIX)
+                    )
+                ]
+                if memory_routing_errors:
+                    if immutable_identity_repair_count == 0:
+                        immutable_identity_repair_count += 1
+                        max_iterations += 1
+                        self._disable_tools_for_iteration = True
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": self._build_immutable_identity_repair_instruction(
+                                    memory_routing_errors
+                                ),
+                            }
+                        )
+                        tracer.info(
+                            f"Extended max_iterations to {max_iterations} for immutable identity repair",
+                            console=True,
+                        )
+                        continue
+                    # A repeated identity conflict is unsafe to apply. Keep the
+                    # error on the operations object so MemoryUpdater rejects
+                    # the whole batch instead of writing mutable fields into a
+                    # memory with a different identity.
+                    break
                 patch_errors = self._validate_patch_operations(final_operations)
                 if patch_errors and patch_repair_count == 0:
                     patch_repair_count += 1
@@ -359,7 +424,8 @@ The final output of the model must strictly follow the JSON Schema format shown 
         tracer.info(f"final_operations={final_operations.model_dump_json(indent=4)}")
 
         # Resolve links after the loop completes using the URIs already bound in resolve_operations().
-        await self.finalize_operations(final_operations, raw_links)
+        if final_operations is not None and not final_operations.has_errors():
+            await self.finalize_operations(final_operations, raw_links)
 
         return final_operations, tools_used
 
@@ -371,8 +437,15 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
         role_scope = self._isolation_handler.get_read_scope()
         page_id_map = getattr(self._extract_context, "page_id_map", None)
+        new_page_ids: set[int] = set()
+        schemas = list(self.context_provider.get_memory_schemas(self.ctx))
+        deletable_memory_types = {
+            schema.memory_type
+            for schema in schemas
+            if getattr(schema, "operation_mode", "upsert") != "add_only"
+        }
 
-        for schema in self.context_provider.get_memory_schemas(self.ctx):
+        for schema in schemas:
             memory_type = schema.memory_type
             value = getattr(operations, memory_type, None)
             if value is None:
@@ -410,45 +483,127 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     page_id=page_id,
                 )
 
-                if page_id is not None and page_id_map is not None:
-                    resolved_uri = page_id_map.resolve(page_id)
+                if page_id is None:
+                    errors.append(
+                        f"{_INVALID_PAGE_ID_PREFIX} memory_type={memory_type} is missing page_id"
+                    )
+                else:
+                    resolved_uri = page_id_map.resolve(page_id) if page_id_map is not None else None
                     if resolved_uri:
-                        resolved_op.uris = [resolved_uri]
                         old_content = self.context_provider.read_file_contents.get(resolved_uri)
+                        uri_memory_type = memory_type_from_uri(resolved_uri)
+                        if uri_memory_type is None:
+                            errors.append(
+                                f"{_INVALID_PAGE_ID_PREFIX} page_id={page_id} is not bound "
+                                "to a canonical memory item"
+                            )
+                            upsert_operations.append(resolved_op)
+                            continue
+                        # Validate every available binding signal.  Trusting a
+                        # stale/inconsistent stored ``memory_type`` ahead of the
+                        # canonical URI path could otherwise let a page_id for
+                        # one schema overwrite a file owned by another schema.
+                        bound_memory_types = {
+                            value
+                            for value in (
+                                old_content.memory_type if old_content is not None else None,
+                                (
+                                    old_content.extra_fields.get("memory_type")
+                                    if old_content is not None
+                                    else None
+                                ),
+                                uri_memory_type,
+                            )
+                            if value
+                        }
+                        mismatched_memory_types = sorted(
+                            value for value in bound_memory_types if value != memory_type
+                        )
+                        if mismatched_memory_types:
+                            bound_summary = ",".join(mismatched_memory_types)
+                            errors.append(
+                                f"{_INVALID_PAGE_ID_PREFIX} page_id={page_id} is bound to "
+                                f"memory_type={bound_summary}, not {memory_type}"
+                            )
+                            upsert_operations.append(resolved_op)
+                            continue
+
+                        resolved_op.uris = [resolved_uri]
                         if old_content is not None:
                             resolved_op.old_memory_file_content = old_content
-                            immutable_fields = {
-                                field.name
-                                for field in schema.fields
-                                if field.merge_op != MergeOp.PATCH
-                            }
-                            for field_name in immutable_fields:
-                                if field_name in old_content.extra_fields:
-                                    resolved_op.memory_fields[field_name] = (
-                                        old_content.extra_fields[field_name]
+                            identity_fields = _schema_identity_fields(schema)
+                            for field_name in identity_fields:
+                                if field_name == "content":
+                                    current_value = old_content.plain_content()
+                                elif field_name in old_content.extra_fields:
+                                    current_value = old_content.extra_fields[field_name]
+                                else:
+                                    continue
+                                proposed_value = resolved_op.memory_fields.get(field_name)
+                                if (
+                                    field_name in resolved_op.memory_fields
+                                    and proposed_value != current_value
+                                ):
+                                    errors.append(
+                                        f"{_IMMUTABLE_IDENTITY_MISMATCH_PREFIX} "
+                                        f"memory_type={memory_type} field={field_name} "
+                                        f"page_id={page_id}; use a new page_id for a distinct identity"
                                     )
+                                # Always pin an existing item's identity value.
+                                # If there was a mismatch, the error above will
+                                # either trigger one repair round or fail closed.
+                                resolved_op.memory_fields[field_name] = current_value
+                    elif page_id < 100:
+                        errors.append(
+                            f"{_INVALID_PAGE_ID_PREFIX} unknown existing page_id={page_id}; "
+                            "new items must use a unique page_id >= 100"
+                        )
+                    elif page_id in new_page_ids:
+                        errors.append(
+                            f"{_INVALID_PAGE_ID_PREFIX} duplicate new page_id={page_id}; "
+                            "each new item must use a unique page_id >= 100"
+                        )
                     else:
+                        new_page_ids.add(page_id)
                         resolved_op.uris = self._isolation_handler.calculate_memory_uris(
                             memory_type_schema=schema,
                             operation=resolved_op,
                             extract_context=self._extract_context,
                         )
-                else:
-                    resolved_op.uris = self._isolation_handler.calculate_memory_uris(
-                        memory_type_schema=schema,
-                        operation=resolved_op,
-                        extract_context=self._extract_context,
-                    )
 
                 upsert_operations.append(resolved_op)
 
         delete_ids = self._normalize_delete_ids(getattr(operations, "delete_ids", []) or [])
         delete_replacements: dict[str, str] = {}
         for delete_id in delete_ids:
-            if delete_id.delete_page_id is None or page_id_map is None:
+            if delete_id.delete_page_id is None:
+                errors.append(f"{_INVALID_PAGE_ID_PREFIX} delete_page_id is missing")
+                continue
+            if page_id_map is None:
+                errors.append(
+                    f"{_INVALID_PAGE_ID_PREFIX} delete_page_id={delete_id.delete_page_id} "
+                    "cannot be resolved"
+                )
                 continue
             delete_uri = page_id_map.resolve(delete_id.delete_page_id)
             if not delete_uri:
+                errors.append(
+                    f"{_INVALID_PAGE_ID_PREFIX} unknown delete_page_id="
+                    f"{delete_id.delete_page_id}"
+                )
+                continue
+            delete_memory_type = memory_type_from_uri(delete_uri)
+            if delete_memory_type is None:
+                errors.append(
+                    f"{_INVALID_PAGE_ID_PREFIX} delete_page_id={delete_id.delete_page_id} "
+                    "is not bound to a canonical memory item"
+                )
+                continue
+            if delete_memory_type not in deletable_memory_types:
+                errors.append(
+                    f"{_INVALID_PAGE_ID_PREFIX} delete_page_id={delete_id.delete_page_id} "
+                    f"has memory_type={delete_memory_type}, which is not writable in this extraction"
+                )
                 continue
             old_content = self.context_provider.read_file_contents.get(delete_uri)
             if not old_content:
@@ -464,7 +619,26 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     if op.page_id == replacement_page_id and op.uris:
                         replacement_uri = op.uris[0]
                         break
-            if replacement_uri and replacement_uri != delete_uri:
+            if not replacement_uri:
+                errors.append(
+                    f"{_INVALID_PAGE_ID_PREFIX} replacement_page_id={replacement_page_id} "
+                    "does not identify a memory item"
+                )
+                continue
+            replacement_memory_type = memory_type_from_uri(replacement_uri)
+            if replacement_memory_type is None:
+                errors.append(
+                    f"{_INVALID_PAGE_ID_PREFIX} replacement_page_id={replacement_page_id} "
+                    "is not bound to a canonical memory item"
+                )
+                continue
+            if replacement_memory_type != delete_memory_type:
+                errors.append(
+                    f"{_INVALID_PAGE_ID_PREFIX} replacement_page_id={replacement_page_id} "
+                    f"has memory_type={replacement_memory_type}, not {delete_memory_type}"
+                )
+                continue
+            if replacement_uri != delete_uri:
                 delete_replacements[delete_uri] = replacement_uri
 
         raw_links = getattr(operations, "links", None) or []
@@ -847,6 +1021,20 @@ The final output of the model must strictly follow the JSON Schema format shown 
             "Regenerate the complete operations JSON, including previous successful operations and fixed failed operations. "
             "Output ONLY the complete JSON object matching the required schema.\n\n"
             f"Failed patch operations:\n{details}"
+        )
+
+    def _build_immutable_identity_repair_instruction(self, errors: List[str]) -> str:
+        details = json.dumps(errors, ensure_ascii=False, indent=2)
+        return (
+            "An operation used an invalid page_id or reused an existing page_id while changing an immutable identity field. "
+            "Immutable fields such as topic or name define which memory an item represents. "
+            "Reuse an existing page_id only when all immutable identity fields exactly match the existing item. "
+            "Existing page_ids must belong to the same memory type. "
+            "For a new item, assign a page_id >= 100 that is unique within the complete operations JSON. "
+            "If the information belongs to a different identity, create a separate item with a new page_id. "
+            "Regenerate the complete operations JSON, including all previous valid operations and the repaired operation. "
+            "Output ONLY the complete JSON object matching the required schema.\n\n"
+            f"Conflicts (values intentionally omitted):\n{details}"
         )
 
     async def _add_refetch_results_to_messages(

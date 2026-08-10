@@ -62,6 +62,52 @@ async def test_context_mode_returns_flat_entries_within_budget(
     assert result["stats"]["used_tokens"] <= 1200
 
 
+async def test_context_mode_filters_deprecated_experiences_from_raw_status(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+):
+    production_uri = "viking://user/default/memories/experiences/production.md"
+    deprecated_uri = "viking://user/default/memories/experiences/deprecated.md"
+
+    async def fake_find(**kwargs):
+        del kwargs
+        return _FakeFindResult(
+            [
+                _memory(production_uri, 0.8, "production experience"),
+                _memory(deprecated_uri, 0.9, "deprecated experience"),
+            ]
+        )
+
+    async def fake_read(uri, **kwargs):
+        del kwargs
+        status = "deprecated" if uri == deprecated_uri else "production"
+        return f'body\n\n<!-- MEMORY_FIELDS\n{{"status":"{status}"}}\n-->'
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+    monkeypatch.setattr(service.fs, "read", fake_read)
+    response = await client.post(
+        "/api/v1/search/search",
+        json={
+            "query": "safe experience",
+            "mode": "context",
+            "quotas": {"experiences": 2},
+            "peer_scope": "actor",
+        },
+    )
+
+    assert response.status_code == 200
+    result = response.json()["result"]
+    assert [entry["uri"] for entry in result["entries"]] == [production_uri]
+    assert result["stats"]["experience_lifecycle"] == {
+        "checked": 2,
+        "kept": 1,
+        "excluded": 1,
+        "read_errors": 0,
+        "excluded_by_status": {"deprecated": 1, "archived": 0},
+    }
+
+
 async def test_context_mode_quotas_use_category_ownership_roots(
     client: httpx.AsyncClient,
     service,

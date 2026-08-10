@@ -147,6 +147,60 @@ async def test_recall_endpoint_assembles_context_and_signals_deprecation(
     }
 
 
+async def test_recall_endpoint_filters_archived_experience_and_failed_raw_read(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+):
+    draft_uri = "viking://user/default/memories/experiences/draft.md"
+    archived_uri = "viking://user/default/memories/experiences/archived.md"
+    unreadable_uri = "viking://user/default/memories/experiences/unreadable.md"
+
+    async def fake_find(**kwargs):
+        del kwargs
+        return _FakeFindResult(
+            [
+                _memory(archived_uri, 0.9, "archived experience"),
+                _memory(unreadable_uri, 0.85, "unreadable experience"),
+                _memory(draft_uri, 0.8, "draft experience"),
+            ]
+        )
+
+    async def fake_read(uri, **kwargs):
+        del kwargs
+        if uri == unreadable_uri:
+            raise OSError("raw read unavailable")
+        status = "archived" if uri == archived_uri else "draft"
+        return f'body\n\n<!-- MEMORY_FIELDS\n{{"status":"{status}"}}\n-->'
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+    monkeypatch.setattr(service.fs, "read", fake_read)
+    response = await client.post(
+        "/api/v1/search/recall",
+        json={
+            "query": "safe experience",
+            "quotas": {
+                "events": 0,
+                "entities": 0,
+                "preferences": 0,
+                "experiences": 3,
+            },
+            "peer_scope": "actor",
+        },
+    )
+
+    assert response.status_code == 200
+    result = response.json()["result"]
+    assert [entry["uri"] for entry in result["entries"]] == [draft_uri]
+    assert result["stats"]["experience_lifecycle"] == {
+        "checked": 3,
+        "kept": 1,
+        "excluded": 2,
+        "read_errors": 1,
+        "excluded_by_status": {"deprecated": 0, "archived": 1},
+    }
+
+
 async def test_recall_excludes_profile_and_duplicate_hits(
     client: httpx.AsyncClient,
     service,

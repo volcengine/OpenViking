@@ -28,11 +28,25 @@ class PageIdMap:
         self._next_id: int = 1
         self._id_to_uri: Dict[int, str] = {}
         self._uri_to_id: Dict[str, int] = {}
+        self._existing_namespace_exhausted_warned = False
 
-    def get_page_id(self, uri: str) -> int:
-        """Register an existing page (from prefetch/read). Returns page_id in 1-99 range."""
+    def get_page_id(self, uri: str) -> Optional[int]:
+        """Register an existing page, returning ``None`` after IDs 1-99 are full.
+
+        Previously registered URIs keep their original ID even after the
+        existing-page namespace is exhausted.  Unseen URIs are left entirely
+        unregistered so IDs >=100 remain reserved for model-declared new pages.
+        """
         if uri in self._uri_to_id:
             return self._uri_to_id[uri]
+        if self._next_id >= 100:
+            if not self._existing_namespace_exhausted_warned:
+                logger.warning(
+                    "Existing-page ID namespace 1..99 is full; "
+                    "additional read results will omit page_id"
+                )
+                self._existing_namespace_exhausted_warned = True
+            return None
         page_id = self._next_id
         self._next_id += 1
         self._id_to_uri[page_id] = uri

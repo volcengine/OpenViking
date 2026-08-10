@@ -138,6 +138,75 @@ async def test_assembly_returns_readable_entries_within_budget():
     assert result.rendered.count("<memory ") == 3
 
 
+async def test_experience_lifecycle_reads_raw_status_and_fails_closed():
+    statuses = {
+        "draft": "draft",
+        "staging": "staging",
+        "production": "production",
+        "missing": None,
+        "deprecated": "deprecated",
+        "archived": "ARCHIVED",
+        "read-error": "production",
+        "empty-read": "production",
+        "malformed": "production",
+    }
+    hits = [
+        {
+            "uri": f"{USER_ROOT}/memories/experiences/{name}.md",
+            "score": 0.9 - index * 0.01,
+            "abstract": f"abstract {name}",
+        }
+        for index, name in enumerate(statuses)
+    ]
+    bodies = {
+        f"{USER_ROOT}/memories/experiences/{name}.md": (
+            f"body {name}"
+            if status is None
+            else (
+                f"body {name}\n\n<!-- MEMORY_FIELDS\n"
+                f'{{"status": "{status}", "version": 1}}\n-->'
+            )
+        )
+        for name, status in statuses.items()
+        if name != "read-error"
+    }
+    bodies[f"{USER_ROOT}/memories/experiences/empty-read.md"] = ""
+    bodies[f"{USER_ROOT}/memories/experiences/malformed.md"] = (
+        "body malformed\n\n<!-- MEMORY_FIELDS\n{not-json}\n-->"
+    )
+
+    result = await assemble_context(
+        service=_service(hits=hits, bodies=bodies),
+        ctx=_ctx(),
+        params=AssembleParams(
+            query="lifecycle",
+            quotas={"experiences": len(hits)},
+            peer_scope="actor",
+            max_tokens=1600,
+        ),
+    )
+
+    assert [entry.uri.rsplit("/", 1)[-1] for entry in result.entries] == [
+        "draft.md",
+        "staging.md",
+        "production.md",
+        "missing.md",
+    ]
+    assert [entry.text for entry in result.entries] == [
+        "body draft",
+        "body staging",
+        "body production",
+        "body missing",
+    ]
+    assert result.stats["experience_lifecycle"] == {
+        "checked": 9,
+        "kept": 4,
+        "excluded": 5,
+        "read_errors": 3,
+        "excluded_by_status": {"deprecated": 1, "archived": 1},
+    }
+
+
 async def test_query_expansion_fans_out_planned_queries(monkeypatch):
     queries_seen = []
 

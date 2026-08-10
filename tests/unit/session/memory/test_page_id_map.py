@@ -1,6 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+from unittest.mock import patch
+
 from openviking.session.memory.page_id_map import PageIdMap
 
 
@@ -57,3 +59,35 @@ class TestPageIdMap:
         assert pim.get_page_id("viking://profile.md") == existing_id
         assert pim.resolve(existing_id) == "viking://profile.md"
         assert pim.resolve(100) == "viking://profile.md"
+
+    def test_existing_page_namespace_stops_at_99_without_registering_overflow(self):
+        pim = PageIdMap()
+        uris = [f"viking://existing/{index}.md" for index in range(1, 101)]
+
+        assigned = [pim.get_page_id(uri) for uri in uris]
+
+        assert assigned[:99] == list(range(1, 100))
+        assert assigned[99] is None
+        assert pim.resolve(100) is None
+        assert uris[99] not in pim._uri_to_id
+
+    def test_existing_page_duplicate_keeps_id_after_namespace_is_full(self):
+        pim = PageIdMap()
+        uris = [f"viking://existing/{index}.md" for index in range(1, 100)]
+        for uri in uris:
+            pim.get_page_id(uri)
+
+        assert pim.get_page_id(uris[-1]) == 99
+        assert pim.get_page_id("viking://existing/overflow.md") is None
+        assert pim.get_page_id(uris[0]) == 1
+
+    def test_existing_page_namespace_overflow_warns_only_once(self):
+        pim = PageIdMap()
+        for index in range(1, 100):
+            pim.get_page_id(f"viking://existing/{index}.md")
+
+        with patch("openviking.session.memory.page_id_map.logger.warning") as warning:
+            assert pim.get_page_id("viking://existing/overflow-a.md") is None
+            assert pim.get_page_id("viking://existing/overflow-b.md") is None
+
+        warning.assert_called_once()

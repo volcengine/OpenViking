@@ -1791,6 +1791,7 @@ class Session:
         keep_recent_count: int = 0,
         *,
         memory_policy: Optional[Dict[str, Any]] = None,
+        require_agent_evolution_enabled: bool = False,
         retention_mode: Optional[str] = None,
         keep_recent_turn_count: Optional[int] = None,
         retained_message_token_budget: Optional[int] = None,
@@ -1801,6 +1802,7 @@ class Session:
             self.commit_async(
                 keep_recent_count=keep_recent_count,
                 memory_policy=memory_policy,
+                require_agent_evolution_enabled=require_agent_evolution_enabled,
                 retention_mode=retention_mode,
                 keep_recent_turn_count=keep_recent_turn_count,
                 retained_message_token_budget=retained_message_token_budget,
@@ -1814,6 +1816,7 @@ class Session:
         keep_recent_count: int = 0,
         *,
         memory_policy: Optional[Dict[str, Any]] = None,
+        require_agent_evolution_enabled: bool = False,
         retention_mode: Optional[str] = None,
         keep_recent_turn_count: Optional[int] = None,
         retained_message_token_budget: Optional[int] = None,
@@ -1837,6 +1840,10 @@ class Session:
                 behavior of archiving everything. The plugin's afterTurn path
                 typically passes its configured value (default 10); the compact
                 path passes ``0``.
+            require_agent_evolution_enabled: Reject the commit before Phase 1
+                when its authoritative Agent Evolution snapshot is disabled.
+                Used by explicitly typed experience writes so they never
+                degrade into a silently filtered commit.
             persist_keep_recent_count: When ``True`` (default), ``keep_recent_count``
                 is remembered in meta for subsequent add_message() accounting.
                 The idle full-commit path passes ``False`` with
@@ -1894,6 +1901,11 @@ class Session:
                 await provided_enabled
                 if inspect.isawaitable(provided_enabled)
                 else provided_enabled
+            )
+        if require_agent_evolution_enabled and not agent_evolution_enabled:
+            raise FailedPreconditionError(
+                "Agent Evolution was disabled before the commit snapshot; "
+                "experience extraction was not queued"
             )
         effective_policy = _apply_agent_evolution_setting(
             effective_policy,

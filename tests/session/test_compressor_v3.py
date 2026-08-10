@@ -17,6 +17,7 @@ from openviking.session.compressor_v3 import (
     _experience_root_uri,
     _experience_snapshot_provenance,
     _experience_trajectory_map,
+    _same_memory_file,
     _visible_experience_snapshot_uris,
 )
 from openviking.session.memory.dataclass import (
@@ -93,6 +94,74 @@ def test_factory_ignores_deprecated_memory_version():
         create_session_compressor(vikingdb=None, memory_version="unsupported"),
         SessionCompressorV3,
     )
+
+
+def test_same_memory_file_ignores_only_bookkeeping_metadata():
+    link = {
+        "from_uri": "viking://user/u/memories/preferences/workflow.md",
+        "to_uri": "viking://resources/guide",
+    }
+    before = MemoryFile(
+        uri="viking://user/u/memories/preferences/workflow.md",
+        content="Prefers concise updates.",
+        links=[link],
+        memory_type="preferences",
+        extra_fields={
+            "topic": "workflow",
+            "version": 3,
+            "source_extraction_id": "extract-old",
+            "source_extraction_ids": ["extract-old"],
+            "last_update_trace_id": "trace-old",
+        },
+    )
+    bookkeeping_only = before.model_copy(deep=True)
+    bookkeeping_only.extra_fields.update(
+        {
+            "version": 4,
+            "source_extraction_id": "extract-new",
+            "source_extraction_ids": ["extract-old", "extract-new"],
+            "last_update_trace_id": "trace-new",
+        }
+    )
+
+    assert _same_memory_file(before, bookkeeping_only) is True
+
+    memory_type_change = bookkeeping_only.model_copy(deep=True)
+    memory_type_change.memory_type = "entities"
+    assert _same_memory_file(before, memory_type_change) is False
+
+    # Legacy files may omit the serialized field.  Their canonical URI still
+    # supplies the same schema ownership and should not manufacture an update.
+    missing_explicit_memory_type = bookkeeping_only.model_copy(deep=True)
+    missing_explicit_memory_type.memory_type = None
+    assert _same_memory_file(before, missing_explicit_memory_type) is True
+
+    typed_without_uri = MemoryFile(content="same", memory_type="preferences")
+    untyped_without_uri = MemoryFile(content="same")
+    assert _same_memory_file(typed_without_uri, untyped_without_uri) is False
+
+    inconsistent_extra_memory_type = bookkeeping_only.model_copy(deep=True)
+    inconsistent_extra_memory_type.extra_fields["memory_type"] = "entities"
+    assert _same_memory_file(before, inconsistent_extra_memory_type) is False
+
+    content_change = bookkeeping_only.model_copy(deep=True)
+    content_change.content = "Prefers detailed updates."
+    assert _same_memory_file(before, content_change) is False
+
+    relative_link_target_change = bookkeeping_only.model_copy(deep=True)
+    relative_link_target_change.content = "Prefers [guide](./new-guide.md)."
+    before_with_user_link = before.model_copy(
+        update={"content": "Prefers [guide](./old-guide.md)."}, deep=True
+    )
+    assert _same_memory_file(before_with_user_link, relative_link_target_change) is False
+
+    link_change = bookkeeping_only.model_copy(deep=True)
+    link_change.links = []
+    assert _same_memory_file(before, link_change) is False
+
+    business_field_change = bookkeeping_only.model_copy(deep=True)
+    business_field_change.extra_fields["topic"] = "communication"
+    assert _same_memory_file(before, business_field_change) is False
 
 
 @pytest.mark.asyncio

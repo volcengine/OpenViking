@@ -138,7 +138,7 @@ Once connected, OpenViking exposes 13 tools:
 | `recall` | Type-quota recall assembled server-side into flat `<memory>` blocks that always carry their URI | `query`, `quotas` (optional), `max_chars`, `min_score`, `peer_scope`, `other_peer_penalty` (optional), `session_id` (optional), `detail` (optional), `max_tokens` (optional), `rewrite` (optional) |
 | `read` | Read one or more `viking://` URIs | `uris` (single string or array) |
 | `list` | List entries under a `viking://` directory | `uri`, `recursive` (optional) |
-| `remember` | Store messages into long-term memory (triggers extraction) | `messages` (list of `{role, content}`) |
+| `remember` | Store messages into long-term memory (triggers asynchronous extraction) | `messages` (list of `{role, content}`), `memory_type` (optional: `preferences` or `experiences`) |
 | `add_resource` | Add a local file or URL as a resource (local files trigger a progressive upload flow) | `path`, `temp_file_id` (optional), `description` (optional), `watch_interval` (optional, minutes — auto-refresh cadence for remote URLs), `processing_mode` (optional: `semantic_and_vectors` default, or `vectors_only` to skip VLM semantic understanding and only vectorize current files), `to` (optional, target `viking://resources/...` URI; if omitted when `watch_interval > 0`, the watch auto-binds to the resource's created URI), `args` (optional parser-specific options, including `{"parse_mode":"no_split"}` to parse each source document into one Markdown body, `{"feishu_access_token":"u-..."}` for one-time Feishu user-token imports, or `{"feishu_access_token":"u-...","feishu_refresh_token":"r-..."}` for Feishu user-token watches) |
 | `list_watches` | List watch tasks (auto-refresh subscriptions) visible to the current agent. Each entry shows target URI, refresh interval (minutes), active/paused status, and next scheduled execution time | none |
 | `cancel_watch` | Cancel (delete) a watch task by its target URI. To change the cadence or pause temporarily, cancel and re-add with a new `watch_interval` | `to_uri` (must match the watch task's `to` value, e.g. `viking://resources/...`) |
@@ -148,6 +148,19 @@ Once connected, OpenViking exposes 13 tools:
 | `health` | Check OpenViking service health | none |
 
 > **Note**: MCP exposes the minimum closure for watch management (`list_watches` + `cancel_watch`). Pause / resume / trigger and the unified `update` verb are intentionally not exposed here — use the REST `/api/v1/watches/*` endpoints or the `ov task watch` CLI for those operations.
+
+When `remember.memory_type` is omitted, extraction keeps the existing policy-driven
+behavior. Setting it to `preferences` constrains the one-shot session to Preference
+memory. Setting it to `experiences` enables the Case → Trajectory → Experience
+pipeline for that session and therefore requires Agent Evolution to be enabled;
+the tool fails explicitly when that prerequisite is disabled instead of silently
+storing the text as another memory type.
+
+Treat typed Experience writes as a trusted-author operation. `remember` accepts
+caller-supplied transcript messages; it does not cryptographically attest that
+the described tool calls or outcomes occurred. Untrusted applications should
+commit a server-recorded session instead of accepting arbitrary text as an
+Experience candidate.
 
 > Feishu/Lark imports without `args.feishu_access_token` keep the existing app/tenant-token behavior and can be watched. Feishu/Lark one-time user-token imports pass only `args.feishu_access_token`; Feishu/Lark user-token watches must also pass `args.feishu_refresh_token` and require the same Feishu app credentials configured on the OpenViking server.
 

@@ -8,11 +8,14 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from openviking import AsyncOpenViking
 from openviking.client.session import Session as ClientSession
 from openviking.message import TextPart
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
+from openviking_cli.exceptions import FailedPreconditionError
 
 
 async def _wait_for_task(task_id: str, timeout: float = 30.0) -> dict:
@@ -104,6 +107,23 @@ class TestCommit:
         assert "cases" not in call_kwargs["allowed_memory_types"]
         assert "trajectories" not in call_kwargs["allowed_memory_types"]
         assert "experiences" not in call_kwargs["allowed_memory_types"]
+
+    async def test_explicit_agent_evolution_requirement_fails_before_enqueue(
+        self, session_with_messages: Session
+    ):
+        session_with_messages._agent_evolution_enabled_provider = lambda: False
+        message_count = len(session_with_messages.messages)
+
+        with pytest.raises(FailedPreconditionError, match="not queued"):
+            await session_with_messages.commit_async(
+                memory_policy={
+                    "memory_types": ["cases", "trajectories", "experiences"]
+                },
+                require_agent_evolution_enabled=True,
+            )
+
+        # Failure happens before Phase 1 archives or removes live messages.
+        assert len(session_with_messages.messages) == message_count
 
     async def test_commit_uses_global_setting_and_enables_agent_memory(
         self, session_with_messages: Session

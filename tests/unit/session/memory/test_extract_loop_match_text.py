@@ -74,6 +74,9 @@ class TestResolveOperations:
         assert operation.old_memory_file_content is old_file
         assert operation.memory_fields["name"] == "Melanie"
         assert operation.memory_fields["content"] == "new content"
+        assert operations.errors[0].startswith("Immutable identity mismatch:")
+        assert "WrongName" not in operations.errors[0]
+        assert "Melanie" not in operations.errors[0]
         isolation_handler.calculate_memory_uris.assert_not_called()
 
     def test_unresolved_page_ids_are_ignored(self):

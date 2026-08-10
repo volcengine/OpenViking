@@ -368,6 +368,7 @@ class SessionService:
         ctx: RequestContext,
         keep_recent_count: int = 0,
         *,
+        require_agent_evolution_enabled: bool = False,
         retention_mode: Optional[str] = None,
         keep_recent_turn_count: Optional[int] = None,
         retained_message_token_budget: Optional[int] = None,
@@ -381,10 +382,16 @@ class SessionService:
         Args:
             session_id: Session ID to commit
             keep_recent_count: See :meth:`commit_async`.
+            require_agent_evolution_enabled: See :meth:`commit_async`.
 
         Returns:
             Commit result
         """
+        requirement_kwargs = (
+            {"require_agent_evolution_enabled": True}
+            if require_agent_evolution_enabled
+            else {}
+        )
         return await self.commit_async(
             session_id,
             ctx,
@@ -394,6 +401,7 @@ class SessionService:
             retained_message_token_budget=retained_message_token_budget,
             min_raw_tail_steps=min_raw_tail_steps,
             event_tags=event_tags,
+            **requirement_kwargs,
         )
 
     async def commit_async(
@@ -402,6 +410,7 @@ class SessionService:
         ctx: RequestContext,
         keep_recent_count: int = 0,
         *,
+        require_agent_evolution_enabled: bool = False,
         retention_mode: Optional[str] = None,
         keep_recent_turn_count: Optional[int] = None,
         retained_message_token_budget: Optional[int] = None,
@@ -417,6 +426,8 @@ class SessionService:
             session_id: Session ID to commit
             keep_recent_count: Number of most-recent messages to keep in the
                 live session after commit. ``0`` archives everything.
+            require_agent_evolution_enabled: Fail before enqueue when the
+                authoritative commit snapshot has Agent Evolution disabled.
 
         Returns:
             Commit result with keys: session_id, status, task_id,
@@ -425,6 +436,8 @@ class SessionService:
         self._ensure_initialized()
         session = await self.get(session_id, ctx)
         commit_kwargs: Dict[str, Any] = {"keep_recent_count": keep_recent_count}
+        if require_agent_evolution_enabled:
+            commit_kwargs["require_agent_evolution_enabled"] = True
         optional_retention = {
             "retention_mode": retention_mode,
             "keep_recent_turn_count": keep_recent_turn_count,

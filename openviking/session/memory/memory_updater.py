@@ -31,6 +31,8 @@ from openviking.session.memory.page_id_map import PageIdMap
 from openviking.session.memory.utils.memory_file_utils import (
     MemoryFileUtils,
     bump_memory_version,
+    memory_type_from_uri as parse_memory_type_from_uri,
+    memory_files_semantically_equal,
     next_memory_version,
 )
 from openviking.session.memory.utils.resource_refs import (
@@ -45,7 +47,7 @@ from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.tracer import get_trace_id
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import NotFoundError
-from openviking_cli.utils import VikingURI, get_logger
+from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
@@ -816,14 +818,7 @@ class MemoryUpdater:
 
     @staticmethod
     def memory_type_from_uri(uri: str) -> Optional[str]:
-        parts = [part for part in VikingURI(uri).full_path.split("/") if part]
-        try:
-            memories_idx = parts.index("memories")
-        except ValueError:
-            return None
-        if len(parts) <= memories_idx + 1:
-            return None
-        return parts[memories_idx + 1]
+        return parse_memory_type_from_uri(uri)
 
     @tracer()
     async def apply_operations(
@@ -871,22 +866,35 @@ class MemoryUpdater:
         # Distribute resolved_links to corresponding upsert operations
         self._distribute_links_to_operations(operations)
 
-        # Apply unified operations - _apply_edit returns True if edited, False if written
+        # Track every successfully processed target, including semantic no-ops.
+        # A no-op still protects a same-URI replacement from the batch's delete
+        # phase and remains an endpoint owned by the upsert phase.
+        successful_upsert_uris: set[str] = set()
+        semantic_noop_uris: set[str] = set()
+
         for resolved_op in applicable_upserts:
             try:
-                await self._apply_upsert(
+                changed_uris = await self._apply_upsert(
                     resolved_op,
                     ctx,
                     extract_context=extract_context,
                     lease_ref=self._transaction_handle,
                 )
-                # Add all uris to result (uris is List[str])
+                successful_upsert_uris.update(resolved_op.uris)
+                # Preserve compatibility with custom/test implementations of
+                # _apply_upsert that predate its changed-URI return value.
+                if not isinstance(changed_uris, set):
+                    changed_uris = set(resolved_op.uris)
+                else:
+                    semantic_noop_uris.update(set(resolved_op.uris) - changed_uris)
                 if resolved_op.is_edit():
                     for uri in resolved_op.uris:
-                        result.add_edited(uri)
+                        if uri in changed_uris:
+                            result.add_edited(uri)
                 else:
                     for uri in resolved_op.uris:
-                        result.add_written(uri)
+                        if uri in changed_uris:
+                            result.add_written(uri)
             except Exception as e:
                 tracer.error(
                     f"Failed to apply operation: op_type={type(resolved_op).__name__}, uris={resolved_op.uris}",
@@ -910,7 +918,7 @@ class MemoryUpdater:
         # Skip deletes whose URI was just written in the same batch — this happens when the
         # LLM issues a Replace with the same experience_name (delete old + create same-name new),
         # which is semantically an Update. Executing the delete would remove the just-written file.
-        upserted_uris = set(result.written_uris + result.edited_uris)
+        upserted_uris = set(successful_upsert_uris)
         upserted_uri_keys = {_same_batch_delete_conflict_key(uri) for uri in upserted_uris}
         for file_content in operations.delete_file_contents:
             delete_uri = file_content.uri
@@ -940,7 +948,12 @@ class MemoryUpdater:
                 tracer.error(f"Failed to delete memory {delete_uri}", e)
                 result.add_error(delete_uri, e)
 
-        await self._sync_resource_refs_for_result(result, ctx, lease_ref=self._transaction_handle)
+        await self._sync_resource_refs_for_result(
+            result,
+            ctx,
+            additional_uris=semantic_noop_uris,
+            lease_ref=self._transaction_handle,
+        )
 
         # Vectorize written and edited memories
         uri_memory_type_map = {}
@@ -952,13 +965,15 @@ class MemoryUpdater:
         effective_search_tags_by_uri = _collect_search_tags_by_uri(
             operations, search_tags_by_uri
         )
-        await self._vectorize_memories(
-            result,
-            ctx,
-            extract_context=extract_context,
-            uri_memory_type_map=uri_memory_type_map,
-            search_tags_by_uri=effective_search_tags_by_uri,
-        )
+        if result.written_uris or result.edited_uris or semantic_noop_uris:
+            await self._vectorize_memories(
+                result,
+                ctx,
+                extract_context=extract_context,
+                uri_memory_type_map=uri_memory_type_map,
+                search_tags_by_uri=effective_search_tags_by_uri,
+                additional_uris=semantic_noop_uris,
+            )
 
         # Apply links to endpoint files not covered by upsert_operations
         if operations.resolved_links:
@@ -967,6 +982,7 @@ class MemoryUpdater:
                 result,
                 ctx,
                 deleted_uris=set(result.deleted_uris),
+                upserted_uris=successful_upsert_uris,
                 lease_ref=self._transaction_handle,
             )
 
@@ -977,6 +993,11 @@ class MemoryUpdater:
         dirs = {}
         for operation in operations.upsert_operations:
             for uri_str in operation.uris:
+                # Derived overview writes have no durable completion marker.
+                # Retry them after a semantic no-op as well, so an earlier
+                # overview failure can recover without rewriting this memory.
+                if uri_str not in successful_upsert_uris:
+                    continue
                 dir_path = "/".join(uri_str.split("/")[:-1])
                 dirs[dir_path] = operation.memory_type
         for file_content in operations.delete_file_contents:
@@ -1002,12 +1023,18 @@ class MemoryUpdater:
         self,
         result: MemoryUpdateResult,
         ctx: RequestContext,
+        additional_uris: Optional[set[str]] = None,
         lease_ref: Any = None,
     ) -> None:
         """Synchronize resource refs for memory files touched by session extraction."""
         viking_fs = self._get_viking_fs()
         deleted_uris = set(result.deleted_uris)
-        for uri in dict.fromkeys(result.written_uris + result.edited_uris):
+        candidate_uris = [
+            *result.written_uris,
+            *result.edited_uris,
+            *(additional_uris or ()),
+        ]
+        for uri in dict.fromkeys(candidate_uris):
             if (
                 uri in deleted_uris
                 or uri.endswith("/.overview.md")
@@ -1037,27 +1064,36 @@ class MemoryUpdater:
         ctx: RequestContext,
         extract_context: Any = None,
         lease_ref: Any = None,
-    ):
-        """Apply upsert operation from a flat model."""
+    ) -> set[str]:
+        """Apply an upsert and return only URIs with semantic changes."""
         viking_fs = self._get_viking_fs()
 
         memory_type = resolved_op.memory_type
         schema = self._registry.get(memory_type)
+        changed_uris: set[str] = set()
         # Process each URI independently
         for uri in resolved_op.uris:
             # Always read from disk first to get the latest content,
             # so consecutive patches to the same URI see each other's changes.
-            old_content: Optional[MemoryFile] = None
+            prefetched_content = resolved_op.old_memory_file_content
             try:
                 content = await viking_fs.read_file(uri, ctx=ctx)
-                if content:
-                    old_content = MemoryFileUtils.read(content, uri=uri)
-            except Exception:
-                # File doesn't exist yet, that's okay
-                pass
-            # Fall back to pre-fetched content if disk read failed
-            if old_content is None:
-                old_content = resolved_op.old_memory_file_content
+            except (NotFoundError, FileNotFoundError):
+                # A missing authoritative file is valid only for an operation
+                # that was already classified as new.  If prefetch saw a file,
+                # a concurrent delete must fail closed instead of resurrecting
+                # stale content or reporting a false semantic no-op.
+                if prefetched_content is not None:
+                    raise
+                old_content: Optional[MemoryFile] = None
+            else:
+                if content is None:
+                    raise RuntimeError(
+                        f"Authoritative memory read returned no content for {uri}"
+                    )
+                # Empty files are still existing files and must not be
+                # mistaken for a missing/new target.
+                old_content = MemoryFileUtils.read(content, uri=uri)
 
             metadata: Dict[str, Any] = dict(resolved_op.memory_fields)
             source = getattr(resolved_op, "source", None)
@@ -1104,8 +1140,6 @@ class MemoryUpdater:
                     if key not in schema_field_names and key not in metadata and val is not None:
                         metadata[key] = val
 
-            metadata["version"] = next_memory_version(old_content)
-
             # Handle links/backlinks fields: merge with existing
             incoming_links_by_uri = getattr(resolved_op, "_incoming_links_by_uri", {})
             incoming_backlinks_by_uri = getattr(resolved_op, "_incoming_backlinks_by_uri", {})
@@ -1142,7 +1176,18 @@ class MemoryUpdater:
                 elif existing_backlinks:
                     metadata["backlinks"] = existing_backlinks
 
-            mf = MemoryFile.from_parsed(uri=uri, parsed=metadata)
+            mf = MemoryFile.from_parsed(uri=uri, parsed=dict(metadata))
+            candidate_content = MemoryFileUtils.write(
+                mf,
+                content_template=schema.content_template,
+                extract_context=extract_context,
+            )
+            candidate_file = MemoryFileUtils.read(candidate_content, uri=uri)
+            if memory_files_semantically_equal(old_content, candidate_file):
+                tracer.info(f"[memory_updater] Skipping semantic no-op upsert: uri={uri}")
+                continue
+
+            mf.extra_fields["version"] = next_memory_version(old_content)
             new_full_content = MemoryFileUtils.write(
                 mf,
                 content_template=schema.content_template,
@@ -1154,6 +1199,9 @@ class MemoryUpdater:
                 ctx=ctx,
                 lease_ref=lease_ref,
             )
+            changed_uris.add(uri)
+
+        return changed_uris
 
     def _distribute_links_to_operations(self, operations: ResolvedOperations) -> None:
         """Distribute resolved_links to corresponding upsert operations by URI.
@@ -1189,6 +1237,7 @@ class MemoryUpdater:
         result: MemoryUpdateResult,
         ctx: RequestContext,
         deleted_uris: Optional[set[str]] = None,
+        upserted_uris: Optional[set[str]] = None,
         lease_ref: Any = None,
     ) -> None:
         """Apply links to endpoint files that are NOT in the current upsert batch."""
@@ -1197,7 +1246,9 @@ class MemoryUpdater:
             return
         from openviking.core.namespace import context_type_for_uri
 
-        upserted_uris = set(result.written_uris + result.edited_uris)
+        upserted_uris = set(upserted_uris or ()) | set(
+            result.written_uris + result.edited_uris
+        )
         non_memory_endpoints = {
             uri
             for link in resolved_links
@@ -1325,6 +1376,7 @@ class MemoryUpdater:
         extract_context: Any = None,
         uri_memory_type_map: Dict[str, str] = None,
         search_tags_by_uri: Dict[str, List[str]] = None,
+        additional_uris: Optional[set[str]] = None,
     ) -> int:
         """Vectorize written and edited memory files.
 
@@ -1334,6 +1386,8 @@ class MemoryUpdater:
             extract_context: Extract context for embedding template rendering
             uri_memory_type_map: Mapping from URI to memory_type
             search_tags_by_uri: Transient search tags to attach while indexing each URI
+            additional_uris: Semantic no-op URIs whose derived vector/tag
+                state still needs an idempotent repair attempt.
         """
         if not self._vikingdb:
             logger.debug("VikingDB not available, skipping vectorization")
@@ -1349,7 +1403,12 @@ class MemoryUpdater:
         # Also skip URIs that were deleted in the same batch
         uris_to_vectorize = []
         deleted_set = set(result.deleted_uris)
-        for uri in result.written_uris + result.edited_uris:
+        candidate_uris = [
+            *result.written_uris,
+            *result.edited_uris,
+            *(additional_uris or ()),
+        ]
+        for uri in dict.fromkeys(candidate_uris):
             if uri in deleted_set:
                 continue
             if not uri.endswith("/.overview.md") and not uri.endswith("/.abstract.md"):
