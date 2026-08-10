@@ -740,6 +740,53 @@ class TaskTracker:
             return await _poll()
         return await asyncio.wait_for(_poll(), timeout)
 
+    async def delete_user_tasks(self, account_id: str, user_id: str) -> int:
+        """Delete terminal task records for one user from storage and cache."""
+        self._validate_owner(account_id, user_id)
+        return await self._dispatcher.run(
+            lambda: self._delete_user_tasks_on_owner(account_id, user_id)
+        )
+
+    async def _delete_user_tasks_on_owner(self, account_id: str, user_id: str) -> int:
+        self._merge_loaded_tasks(await self._load_all_from_store(account_id, user_id))
+        tasks = [
+            task
+            for task in self._cache_snapshot()
+            if self._matches_owner(task, account_id, user_id)
+        ]
+        active = [task for task in tasks if task.status in _ACTIVE_STATUSES]
+        if active:
+            raise RuntimeError(
+                "Cannot delete active task records: "
+                + ", ".join(f"{task.task_id}({task.task_type})" for task in active)
+            )
+
+        deleted = 0
+        for task in tasks:
+            async with self._task_locks.acquire(task.task_id):
+                current = self._cached_task(task.task_id)
+                if current is None or not self._matches_owner(current, account_id, user_id):
+                    continue
+                if current.status in _ACTIVE_STATUSES or self._work_index.has_work(task.task_id):
+                    raise RuntimeError(
+                        f"Cannot delete active task record: {task.task_id}({task.task_type})"
+                    )
+                await self._store_io.run(
+                    "delete",
+                    lambda task_id=task.task_id: run_to_completion(
+                        lambda: self._store.delete(
+                            task_id,
+                            account_id=account_id,
+                            user_id=user_id,
+                        )
+                    ),
+                )
+                with self._lock:
+                    self._tasks.pop(task.task_id, None)
+                self._work_index.clear_failure(task.task_id)
+                deleted += 1
+        return deleted
+
     async def wait_for_descendants(self, task_id: str, current_work_id: str) -> None:
         """Wait on the same durable work index used by completion and cancellation."""
         while self._work_index.has_work(task_id, exclude_work_id=current_work_id):

@@ -286,6 +286,10 @@ class UserDeletionService:
         )
         steps: list[tuple[str, Callable[[], Awaitable[Any]]]] = [
             (
+                "task_records",
+                lambda: tracker.delete_user_tasks(target_account_id, target_user_id),
+            ),
+            (
                 "agfs",
                 lambda: self._service.viking_fs.rm(
                     canonical_user_root(cleanup_ctx),
