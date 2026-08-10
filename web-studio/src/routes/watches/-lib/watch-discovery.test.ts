@@ -6,6 +6,7 @@ import {
   hasActiveWatchProcessing,
   hasCompletedTriggeredWatchSync,
   hasDiscoveredWatch,
+  hasWatchExecutionAdvanced,
   normalizeWatchUri,
   WATCH_DISCOVERY_INTERVAL_MS,
 } from './watch-discovery'
@@ -68,6 +69,16 @@ describe('watch discovery', () => {
         [{ status: 'completed', task_id: 'triggered-task' }],
         baselineTaskIds,
       ),
+    ).toBe(true)
+  })
+
+  it('detects completion from a newer watch execution time', () => {
+    expect(hasWatchExecutionAdvanced(null, null)).toBe(false)
+    expect(
+      hasWatchExecutionAdvanced('2026-08-10T01:00:00Z', '2026-08-10T01:00:00Z'),
+    ).toBe(false)
+    expect(
+      hasWatchExecutionAdvanced('2026-08-10T01:01:00Z', '2026-08-10T01:00:00Z'),
     ).toBe(true)
   })
 })

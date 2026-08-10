@@ -68,6 +68,7 @@ import {
   getWatchRefetchInterval,
   hasCompletedTriggeredWatchSync,
   hasDiscoveredWatch,
+  hasWatchExecutionAdvanced,
   normalizeWatchUri,
 } from './-lib/watch-discovery'
 
@@ -80,6 +81,7 @@ type PendingWatch = {
 }
 
 type PendingWatchSync = {
+  baselineExecutionTime: string | null
   baselineTaskIds: string[] | null
   identityScopeKey: string
   syncId: number
@@ -226,8 +228,9 @@ export function WatchManagementPage() {
   }, [pendingWatch, t])
 
   React.useEffect(() => {
-    if (
-      pendingSync?.identityScopeKey === identityScopeKey &&
+    if (pendingSync?.identityScopeKey !== identityScopeKey) return
+
+    const historyShowsCompletion =
       syncTasksQuery.isFetched &&
       !syncTasksQuery.isFetching &&
       !syncTasksQuery.isError &&
@@ -236,10 +239,21 @@ export function WatchManagementPage() {
         syncTasksQuery.data ?? [],
         pendingSync.baselineTaskIds,
       )
-    ) {
+
+    const currentWatch = watches.find(
+      (watch) => watch.taskId === pendingSync.taskId,
+    )
+    const watchShowsCompletion =
+      pendingSync.baselineTaskIds === null &&
+      hasWatchExecutionAdvanced(
+        currentWatch?.lastExecutionTime ?? null,
+        pendingSync.baselineExecutionTime,
+      )
+
+    if (historyShowsCompletion || watchShowsCompletion) {
       setPendingSync(null)
     }
-  }, [identityScopeKey, pendingSync, syncTasksQuery])
+  }, [identityScopeKey, pendingSync, syncTasksQuery, watches])
 
   const updateMutation = useMutation({
     mutationFn: ({
@@ -257,11 +271,17 @@ export function WatchManagementPage() {
     onError: (error) => toast.error(getErrorMessage(error)),
   })
   const triggerMutation = useMutation({
-    mutationFn: ({ taskId }: { taskId: string; toUri: string }) =>
-      triggerWatch(taskId),
-    onMutate: async ({ taskId, toUri }) => {
+    mutationFn: ({
+      taskId,
+    }: {
+      baselineExecutionTime: string | null
+      taskId: string
+      toUri: string
+    }) => triggerWatch(taskId),
+    onMutate: async ({ baselineExecutionTime, taskId, toUri }) => {
       const syncId = Date.now()
       setPendingSync({
+        baselineExecutionTime,
         baselineTaskIds: null,
         identityScopeKey,
         syncId,
@@ -281,8 +301,7 @@ export function WatchManagementPage() {
             : current,
         )
       } catch {
-        // Keep syncing until timeout when processing history is unavailable.
-        // The trigger request should still proceed.
+        // Fall back to the Watch execution time while the trigger proceeds.
       }
     },
     onSuccess: async () => {
@@ -486,6 +505,7 @@ export function WatchManagementPage() {
                           }
                           onClick={() =>
                             triggerMutation.mutate({
+                              baselineExecutionTime: watch.lastExecutionTime,
                               taskId: watch.taskId,
                               toUri: watch.toUri,
                             })

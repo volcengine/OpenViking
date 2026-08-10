@@ -160,6 +160,33 @@ describe('WatchManagementPage', () => {
     ).toBeDefined()
   })
 
+  it('falls back to the watch execution time when the task baseline fails', async () => {
+    apiMocks.fetchWatchProcessingHistory.mockRejectedValueOnce(
+      new Error('history unavailable'),
+    )
+    const { queryClient } = renderPage()
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'actions.trigger' }),
+    )
+
+    expect(
+      await screen.findByRole('button', { name: 'actions.syncing' }),
+    ).toBeDefined()
+    expect(apiMocks.triggerWatch).toHaveBeenCalledWith(watch.taskId)
+
+    apiMocks.fetchWatches.mockResolvedValue([
+      { ...watch, lastExecutionTime: '2026-08-10T01:00:00Z' },
+    ])
+    await queryClient.invalidateQueries({
+      queryKey: ['watches', 'default/default'],
+    })
+
+    expect(
+      await screen.findByRole('button', { name: 'actions.trigger' }),
+    ).toBeDefined()
+  })
+
   it('updates the enabled state and reports mutation failures', async () => {
     apiMocks.updateWatch.mockRejectedValueOnce(new Error('update failed'))
     renderPage()

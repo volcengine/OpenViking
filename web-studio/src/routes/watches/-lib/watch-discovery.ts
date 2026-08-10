@@ -45,3 +45,18 @@ export function hasCompletedTriggeredWatchSync(
       task.status === 'cancelled',
   )
 }
+
+export function hasWatchExecutionAdvanced(
+  currentExecutionTime: string | null,
+  baselineExecutionTime: string | null,
+): boolean {
+  if (!currentExecutionTime) return false
+  if (!baselineExecutionTime) return true
+
+  const currentTime = Date.parse(currentExecutionTime)
+  const baselineTime = Date.parse(baselineExecutionTime)
+  if (Number.isFinite(currentTime) && Number.isFinite(baselineTime)) {
+    return currentTime > baselineTime
+  }
+  return currentExecutionTime !== baselineExecutionTime
+}
