@@ -234,20 +234,36 @@ async def test_register_user_in_nonexistent_account_raises(manager: APIKeyManage
         await manager.register_user("nonexistent", "bob", "user")
 
 
-async def test_remove_user(manager: APIKeyManager):
-    """Removing user should invalidate their key."""
+async def test_user_deletion_fence_revokes_key_and_rejects_stale_finish(
+    manager: APIKeyManager,
+):
     acct = _uid()
     await manager.create_account(acct, "alice")
     bob_key = await manager.register_user(acct, "bob", "user")
 
-    identity = manager.resolve(bob_key)
-    assert identity.user_id == "bob"
+    deletion, created = await manager.begin_user_deletion(
+        acct,
+        "bob",
+        task_id="delete-1",
+        owner_account_id=acct,
+        owner_user_id="alice",
+    )
 
-    await manager.remove_user(acct, "bob")
+    assert created is True
+    assert deletion["task_id"] == "delete-1"
+    assert manager.is_user_deleting(acct, "bob")
     with pytest.raises(UnauthenticatedError):
         manager.resolve(bob_key)
+    with pytest.raises(AlreadyExistsError):
+        await manager.register_user(acct, "bob", "user")
+    assert await manager.finish_user_deletion(acct, "bob", "stale") is False
+    assert manager.has_user(acct, "bob")
+    assert await manager.finish_user_deletion(acct, "bob", "delete-1") is True
+    assert not manager.has_user(acct, "bob")
 
-
+    new_key = await manager.register_user(acct, "bob", "user")
+    assert await manager.finish_user_deletion(acct, "bob", "delete-1") is False
+    assert manager.resolve(new_key).user_id == "bob"
 async def test_regenerate_key(manager: APIKeyManager):
     """Regenerating key should invalidate old key and return new valid key."""
     acct = _uid()
@@ -286,8 +302,14 @@ async def test_get_user_key_fingerprint_changes_on_rotation(manager: APIKeyManag
     assert fp2 is not None
     assert fp2 != fp1
 
-    # Removal → no fp at all.
-    await manager.remove_user(acct, "bob")
+    # Deletion fence immediately removes the fingerprint.
+    await manager.begin_user_deletion(
+        acct,
+        "bob",
+        task_id="delete-1",
+        owner_account_id=acct,
+        owner_user_id="alice",
+    )
     assert manager.get_user_key_fingerprint(acct, "bob") is None
 
 
@@ -941,7 +963,14 @@ async def test_reload_reflects_removed_user(manager_service):
     # Reader accepts bob at first.
     assert reader.resolve(user_key).user_id == "bob"
 
-    await writer.remove_user(acct, "bob")
+    await writer.begin_user_deletion(
+        acct,
+        "bob",
+        task_id="delete-1",
+        owner_account_id=acct,
+        owner_user_id="alice",
+    )
+    await writer.finish_user_deletion(acct, "bob", "delete-1")
     await reader.reload()
 
     with pytest.raises(UnauthenticatedError):

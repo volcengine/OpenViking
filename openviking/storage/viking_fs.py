@@ -317,6 +317,9 @@ class VikingFS:
     Uses Rust binding mode: Use RAGFSBindingClient to directly use RAGFS implementation
     """
 
+    def set_user_deletion_guard(self, guard: Optional[Callable[[str, str], bool]]) -> None:
+        self._user_deletion_guard = guard
+
     def __init__(
         self,
         agfs: Any,
@@ -343,6 +346,7 @@ class VikingFS:
             "vikingfs_bound_ctx", default=None
         )
         self._background_tasks: set = set()
+        self._user_deletion_guard: Optional[Callable[[str, str], bool]] = None
 
     @staticmethod
     def _default_ctx() -> RequestContext:
@@ -428,6 +432,7 @@ class VikingFS:
     def _ensure_mutable_access(self, uri: str, ctx: Optional[RequestContext]) -> None:
         self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
+        self._ensure_user_not_deleting(real_ctx)
         normalized_uri, _ = self._normalized_uri_parts(uri)
         if is_hidden_by_actor_peer_view(normalized_uri, real_ctx) or may_include_hidden_actor_peers(
             normalized_uri, real_ctx
@@ -443,6 +448,7 @@ class VikingFS:
     def _ensure_delete_access(self, uri: str, ctx: Optional[RequestContext]) -> None:
         self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
+        self._ensure_user_not_deleting(real_ctx)
         normalized_uri, _ = self._normalized_uri_parts(uri)
         if is_hidden_by_actor_peer_view(normalized_uri, real_ctx) or may_include_hidden_actor_peers(
             normalized_uri, real_ctx
@@ -454,6 +460,14 @@ class VikingFS:
                 "Temp root is read-only for non-root users",
                 resource=normalized_uri,
             )
+
+    def _ensure_user_not_deleting(self, ctx: RequestContext) -> None:
+        if (
+            ctx.role != Role.ROOT
+            and self._user_deletion_guard is not None
+            and self._user_deletion_guard(ctx.account_id, ctx.user.user_id)
+        ):
+            raise FailedPreconditionError("User deletion is in progress")
 
     def _ensure_supported_delete_namespace(self, normalized_uri: str) -> None:
         parts = [p for p in normalized_uri[len("viking://") :].strip("/").split("/") if p]

@@ -1375,6 +1375,20 @@ class VikingVectorIndexBackend:
         root_backend = self._get_root_backend()
         return await root_backend.delete_by_filter(Eq("account_id", account_id))
 
+    async def delete_user_data(
+        self,
+        account_id: str,
+        user_id: str,
+        *,
+        ctx: RequestContext,
+    ) -> int:
+        """Delete every vector record owned by one user as ROOT."""
+        self._check_root_role(ctx)
+        root_backend = self._get_root_backend()
+        return await root_backend.delete_by_filter(
+            And([Eq("account_id", account_id), Eq("owner_user_id", user_id)])
+        )
+
     async def delete_uris(self, ctx: RequestContext, uris: List[str]) -> None:
         for uri in uris:
             canonical_uri = canonicalize_uri(uri, ctx)

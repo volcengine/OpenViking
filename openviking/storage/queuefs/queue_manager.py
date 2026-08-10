@@ -77,6 +77,7 @@ class QueueManager:
     EXTERNAL_PARSE = "ExternalParse"
     ADD_RESOURCE = "AddResource"
     SESSION_COMMIT = "SessionCommit"
+    USER_DELETION = "UserDeletion"
 
     def __init__(
         self,
@@ -182,6 +183,8 @@ class QueueManager:
 
     def _max_concurrent_for_queue(self, queue_name: str) -> int:
         """Return the worker concurrency limit for a named queue."""
+        if queue_name == self.USER_DELETION:
+            return 1
         if queue_name == self.EMBEDDING:
             return self._max_concurrent_embedding
         if queue_name == self.EXTERNAL_PARSE:
@@ -357,9 +360,12 @@ class QueueManager:
                 )
             if self._started:
                 self._start_queue_worker(self._queues[name])
-        elif self._started:
-            # Ensure existing queue has a worker running
-            self._start_queue_worker(self._queues[name])
+        else:
+            if dequeue_handler is not None:
+                self._queues[name].set_dequeue_handler(dequeue_handler)
+            if self._started:
+                # Ensure existing queue has a worker running
+                self._start_queue_worker(self._queues[name])
         return self._queues[name]
 
     # ========== Compatibility convenience methods ==========

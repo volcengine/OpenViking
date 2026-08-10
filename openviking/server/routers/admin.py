@@ -466,7 +466,7 @@ async def list_users(
     return Response(status="ok", result=users)
 
 
-@router.delete("/accounts/{account_id}/users/{user_id}")
+@router.delete("/accounts/{account_id}/users/{user_id}", status_code=202)
 @require_auth_root_or_admin
 async def remove_user(
     request: Request,
@@ -474,11 +474,13 @@ async def remove_user(
     user_id: str = Path(..., description="User ID"),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """Remove a user from an account."""
+    """Revoke a user and start durable cleanup of their owned data."""
     _check_account_access(ctx, account_id)
-    manager = _get_api_key_manager(request)
-    await manager.remove_user(account_id, user_id)
-    return Response(status="ok", result={"deleted": True})
+    deletion_service = request.app.state.user_deletion_service
+    if deletion_service is None:
+        raise FailedPreconditionError("User deletion service is not initialized.")
+    result = await deletion_service.delete_user(account_id, user_id, actor=ctx)
+    return Response(status="ok", result=result)
 
 
 @router.put("/accounts/{account_id}/users/{user_id}/role")
