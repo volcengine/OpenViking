@@ -499,7 +499,7 @@ const workspace = {
         confirmHint: 'Account 名称必须完全一致。',
         confirmLabel: '请输入 {{account}} 以确认',
         description:
-          '此操作将永久删除 {{account}}，包括其中的用户、资源、记忆和向量数据，且无法撤销。',
+          '此操作将永久删除 {{account}}，之后将无法再访问该 Account，且无法撤销。',
         title: '删除这个 Account？',
       },
       regenerate: {

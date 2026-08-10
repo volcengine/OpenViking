@@ -19,9 +19,7 @@ import { deleteAdminAccount, fetchAdminAccounts } from '#/lib/admin'
 import type { AdminConnection } from '#/lib/admin'
 import { PLAIN_INPUT_PROPS } from '#/lib/form-input'
 
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
+import { getErrorMessage } from '../-lib/error'
 
 export function DeleteAccountButton({
   accountId,

@@ -76,16 +76,13 @@ import { resolveStudioManagementCapabilities } from '#/lib/studio-permissions'
 
 import { AddUserDialog } from './-components/add-user-dialog'
 import { DeleteAccountButton } from './-components/delete-account-button'
+import { getErrorMessage } from './-lib/error'
 
 export const Route = createFileRoute('/users')({
   component: UserManagementRoute,
 })
 
 const USER_ROLE_OPTIONS: AdminUserRole[] = ['user', 'admin', 'root']
-
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
 
 function isAdminUserRole(role: string): role is AdminUserRole {
   return USER_ROLE_OPTIONS.includes(role as AdminUserRole)

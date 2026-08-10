@@ -521,7 +521,7 @@ const workspace = {
         confirmHint: 'The account name must match exactly.',
         confirmLabel: 'Enter {{account}} to confirm',
         description:
-          'This permanently deletes {{account}}, including its users, resources, memories, and vector data. This action cannot be undone.',
+          'This permanently deletes {{account}} and removes access to it. This action cannot be undone.',
         title: 'Delete this account?',
       },
       regenerate: {
