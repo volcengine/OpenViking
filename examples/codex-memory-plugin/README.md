@@ -204,23 +204,31 @@ On `resume`, the script skips commit/sweep. It still injects the profile block. 
 
 Codex injects `additionalContext` into the model turn, so memories arrive without an extra tool call. By default the hook runs a Codex compression pass over recalled candidates before injection, dropping weakly-related memories and preserving only a short digest. If the compressor returns `NO_RELEVANT_MEMORY`, empty text, or non-digest chatter, the hook emits `{}` and injects nothing. The whole hook has its own `OPENVIKING_RECALL_TIMEOUT_MS` deadline (default 120s); the bundled `hooks.json` gives Codex 130s so the script can return `{}` before Codex kills it. Digests may keep `viking://` source URIs and point the model at the OpenViking MCP `read`/`search` tools for details when the inline bullet is intentionally short. The outer `<openviking-context ...>` wrapper is deterministic, not compressor-generated; capture strips it to distinguish recalled context from the user's prompt. Set `OPENVIKING_RECALL_COMPRESS=0` to fall back to deterministic short formatting.
 
-The compressor profile is recreated on every `SessionStart` and cached under `OPENVIKING_CODEX_STATE_DIR` so cross-session config changes are picked up but each `UserPromptSubmit` does not probe models. Default fallback order:
+The compressor profile is resolved on `SessionStart` when the cache is missing,
+expired, or marked runtime-failed, then cached under
+`OPENVIKING_CODEX_STATE_DIR`. A prompt tries at most two distinct model
+candidates within one shared timeout budget. If every runtime attempt fails,
+recall fails closed and injects nothing; a weak deterministic digest is never
+substituted merely because the relevance check failed. Explicitly disabling
+compression still uses the deterministic formatter. Candidate order is:
 
 1. configured `OPENVIKING_RECALL_COMPRESS_MODEL` + `OPENVIKING_RECALL_COMPRESS_THINKING`
 2. `gpt-5.3-codex-spark` with thinking `default`
 3. `gpt-5.6-luna` with thinking `low`
-4. off (deterministic digest, no `codex exec` compression)
+
+If a configured model occupies the first slot, the remaining candidate can be
+retried on a later prompt after failed models are recorded.
 
 Config knobs:
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `OPENVIKING_RECALL_LIMIT` | `10` | Legacy quota-scaling input; explicit values are converted to six coding quotas, not enforced as a final result cap. |
+| `OPENVIKING_RECALL_LIMIT` | `10` | Legacy quota-scaling input; an explicit value is distributed across coding categories and the resulting quotas sum to that value. |
 | `OPENVIKING_RECALL_COMPRESS` | `1` | Set `0` / `off` to disable `codex exec` compression. |
 | `OPENVIKING_RECALL_COMPRESS_MODEL` | unset | Custom first-choice compressor model. Set `off` to disable compression. |
 | `OPENVIKING_RECALL_COMPRESS_THINKING` | unset | Custom `model_reasoning_effort`; `default` omits the Codex config override. Alias: `OPENVIKING_RECALL_COMPRESS_REASONING_EFFORT`. |
 | `OPENVIKING_RECALL_COMPRESS_DETECT_ON_STARTUP` | `1` | Recreate/cache compressor profile in `SessionStart`. |
-| `OPENVIKING_RECALL_COMPRESS_DETECT_TIMEOUT_MS` | `15000` | Per-candidate startup probe timeout. |
+| `OPENVIKING_RECALL_COMPRESS_DETECT_TIMEOUT_MS` | `15000` | Compatibility setting retained for older installers; current detection reads the local model catalogue and does not launch a startup probe. |
 | `OPENVIKING_RECALL_COMPRESS_DETECT_TTL_MS` | `604800000` | Cache TTL used by `UserPromptSubmit` when reading the latest profile. |
 | `OPENVIKING_RECALL_MAX_TOKENS` | `1600` | Token budget the server assembles the context block within, independent of the local compressor input limit. |
 | `OPENVIKING_RECALL_DEDUP_TURNS` | `5` | Cross-turn cooldown: URIs served in the last N turns are skipped. |
@@ -233,9 +241,9 @@ that endpoint fall back to `/api/v1/search/recall`, and that outcome is cached s
 only the first turn pays for the probe. Server-owned Context defaults are omitted
 unless explicitly configured, so the plugin follows the server instead of copying
 values such as `limit=10` or `max_tokens=1600`. An explicit legacy `recallLimit`
-is converted to per-category coding quotas, not a final result cap. Values
-from 1 through 5 therefore produce an effective total quota of 6, one retrieval
-slot for each coding domain. Local `codex exec` compression is
+is converted to per-category coding quotas whose total equals the configured
+value; when the value is smaller than the number of categories, only the
+highest-priority categories receive a slot. Local `codex exec` compression is
 unchanged and still runs on top of whichever path answered.
 
 Client-side knobs can also live in `~/.openviking/ovcli.conf` under
@@ -249,6 +257,15 @@ defaults.
 
 After a successful append, Stop reads the session meta and commits when `pending_tokens >= OPENVIKING_COMMIT_TOKEN_THRESHOLD` (default `20000`). Threshold commits pass `keep_recent_count=OPENVIKING_COMMIT_KEEP_RECENT_COUNT` (default `10`) so the newest turns remain live for continuity while older context is archived and extracted. `PreCompact` still commits everything before compaction.
 
+Same-session state transitions are serialized across hook processes and every
+accepted append batch advances durable state before the next batch starts. The
+default Stop path launches its writer asynchronously, so Codex's 30-second
+hook deadline does not cut short a writer waiting on the 60-second state-lock
+budget. If asynchronous writing is disabled and Codex terminates a synchronous
+writer, the next hook recovers a complete temporary state file, resumes from
+the last recorded turn count, and safely reclaims a confirmed-dead owner in the
+same host and Linux PID namespace.
+
 ### PreCompact (deterministic commit)
 
 `pre-compact-capture.mjs`:
@@ -256,6 +273,32 @@ After a successful append, Stop reads the session meta and commits when `pending
 1. Catch-up append for any turns Stop hasn't captured yet (race-safe via `capturedTurnCount`)
 2. Commit the long-lived OV session so the extractor runs against the full pre-compact transcript
 3. Reset `ovSessionId` to `null` so the next `Stop` re-derives the same `cx-<safe-session-id>` and appends the post-compact half under that deterministic OV session id
+
+PreCompact uses a shorter state-lock wait (20 seconds by default; override
+with `OPENVIKING_PRECOMPACT_STATE_LOCK_TIMEOUT_MS`) so lock contention cannot
+silently consume its entire 60-second hook deadline. On timeout it emits a
+`systemMessage`, leaves durable capture progress untouched, and lets a later
+hook catch up.
+
+If multiple hosts share `OPENVIKING_CODEX_STATE_DIR`, the plugin never steals
+a different host's owner baton based only on elapsed time: without a server
+fencing token that could overlap remote writes. After a host failure, an
+operator must first verify that the remote owner process is gone and then
+recover the abandoned baton manually. Prefer a host-local state directory
+unless that operational coordination is available.
+
+The same fail-safe rule applies when multiple containers share that directory.
+Linux automatic recovery requires matching machine-id and PID namespace
+identity; legacy claims or claims from another PID namespace are left for
+manual recovery rather than treating an invisible container process as dead.
+Automatic dead-owner recovery is Linux-only; other platforms also require
+manual recovery because hostname and PID alone cannot prove host/process
+identity safely.
+
+The same rule applies to a contender that crashes before acquiring the baton:
+a later acquisition removes its ownerless claim metadata only when the same
+Linux identity tuple proves that process is dead. Unverifiable remote, legacy,
+container, or non-Linux claims remain available for manual cleanup.
 
 ### Known gap: SIGTERM / Ctrl+C / `/exit` are silent
 

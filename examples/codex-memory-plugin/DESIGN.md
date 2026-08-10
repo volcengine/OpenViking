@@ -17,7 +17,7 @@ events imply "context for a particular codex `session_id` is gone".
   memory extractor) at session-end-equivalent moments. `/messages`
   auto-creates the OV session, so the plugin does not call session create.
 - **State file** — `~/.openviking/codex-plugin-state/<safe-codex-session-id>.json`,
-  shape `{ codexSessionId, ovSessionId, capturedTurnCount, createdAt, lastUpdatedAt }`.
+  shape `{ codexSessionId, ovSessionId, capturedTurnCount, revision, createdAt, lastUpdatedAt }`.
 - **Active window** — state files whose `lastUpdatedAt` is within
   `ACTIVE_WINDOW_MS` (default 2 min) of "now". Used to detect "the codex
   session that just ended".
@@ -228,6 +228,7 @@ OV session id, while commits create additional archives under that session.
   "codexSessionId": "0193af...",   // codex thread id
   "ovSessionId": "cx-0193af...-or-null", // null means "committed, awaiting next Stop"
   "capturedTurnCount": 7,            // turns from transcript already appended
+  "revision": 4,                     // monotonic across save, clear, and recreation
   "createdAt": 1715000000000,
   "lastUpdatedAt": 1715000300000
 }
@@ -238,7 +239,37 @@ Legacy state files from earlier plugin versions may still contain a UUID
 next resolve. The migration window for preserving old UUID sessions has
 closed.
 
-State files are atomic-write (tmpfile + rename) to survive crash mid-write.
+State files use a unique tmpfile + rename and recover the newest complete,
+session-matching tmp after a crash. A monotonic revision counter lives beside
+the permanent per-session lock baton; `clear` advances that tombstone before
+removing the final file, so state recreation cannot reset the generation or
+make a stale SessionStart snapshot look current.
+
+Stop, PreCompact, and SessionStart run each same-session state/remote-I/O
+lifecycle under that cross-process baton. Acquire atomically renames
+`available` to a unique `owner-<token>` path; release and dead-owner recovery
+move only that unique source, avoiding pathname ABA. Automatic abandoned-owner
+recovery is intentionally limited to the same host and Linux PID namespace,
+where machine id, PID-namespace identity, boot id, namespace-local PID, and
+`/proc` start time can prove that the exact owner process is gone. Legacy claims
+without namespace identity and claims from another host or container namespace
+are never stolen on elapsed time alone because OpenViking does not provide a
+fencing token for the remote session operations; operators sharing one state
+directory across hosts or PID namespaces must recover an abandoned baton
+explicitly. Automatic dead-owner recovery is Linux-only; other platforms do not
+have this full identity tuple and therefore fail safe to manual recovery.
+Ownerless contender claim metadata is pruned on a later acquisition only when
+the same Linux identity proof confirms that its process is dead; otherwise it is
+left for manual cleanup under the same cross-host/container safety rule.
+
+The ordinary state-lock wait is 60 seconds so an in-flight append or commit is
+not mistaken for abandonment. The default Stop hook launches its writer in a
+detached process, so Codex's 30-second Stop deadline does not bound that
+writer. If an explicitly synchronous Stop writer is killed, the durable
+revision/tmp recovery above lets a later hook resume from the last accepted
+batch. PreCompact instead waits at most 20 seconds by default and reports a
+deferred capture on contention; this preserves most of its 60-second hook
+deadline for catch-up and commit work without discarding recoverable progress.
 
 ## Configuration
 
@@ -247,6 +278,8 @@ Env var overrides for tuning without rebuilding:
 | Var | Default | Purpose |
 |---|---|---|
 | `OPENVIKING_CODEX_STATE_DIR` | `~/.openviking/codex-plugin-state` | state file dir |
+| `OPENVIKING_CODEX_STATE_LOCK_TIMEOUT_MS` | `60000` | maximum wait for the same-session cross-process baton |
+| `OPENVIKING_PRECOMPACT_STATE_LOCK_TIMEOUT_MS` | `20000` | PreCompact-specific baton wait; timeout reports deferral and preserves state |
 | `OPENVIKING_CODEX_ACTIVE_WINDOW_MS` | `120000` (2 min) | rule-3 active window |
 | `OPENVIKING_CODEX_IDLE_TTL_MS` | `1800000` (30 min) | idle sweep TTL |
 | `OPENVIKING_RECALL_TIMEOUT_MS` | `120000` (2 min) | whole UserPromptSubmit auto-recall deadline |
@@ -254,7 +287,7 @@ Env var overrides for tuning without rebuilding:
 | `OPENVIKING_RECALL_COMPRESS_MODEL` | unset | custom first-choice compressor model; `off` disables compression |
 | `OPENVIKING_RECALL_COMPRESS_THINKING` | unset | custom `model_reasoning_effort`; `default` means omit override; alias `OPENVIKING_RECALL_COMPRESS_REASONING_EFFORT` |
 | `OPENVIKING_RECALL_COMPRESS_DETECT_ON_STARTUP` | `1` | recreate/cache compressor profile during every `SessionStart` |
-| `OPENVIKING_RECALL_COMPRESS_DETECT_TIMEOUT_MS` | `15000` | per-candidate compressor probe timeout |
+| `OPENVIKING_RECALL_COMPRESS_DETECT_TIMEOUT_MS` | `15000` | compatibility setting for older installers; current detection does not launch a startup probe |
 | `OPENVIKING_RECALL_COMPRESS_DETECT_TTL_MS` | `604800000` (7 days) | cache TTL used by `UserPromptSubmit` reads |
 | `OPENVIKING_RESUME_ARCHIVE_INJECT` | `1` | inject latest archive summary on `source=resume` when no live OV session is open |
 | `OPENVIKING_RESUME_ARCHIVE_TOKEN_BUDGET` | `32000` | token budget for `/sessions/{id}/context` on resume |
@@ -288,13 +321,15 @@ codex -m <model> -c 'model_reasoning_effort="low"' exec ...
 `thinking=default` omits the `model_reasoning_effort` override. This is
 important for model families whose default effort is tuned by Codex.
 
-Model availability is re-probed at every `SessionStart`, not in every
-`UserPromptSubmit`. Recreating the profile on each session start catches
-cross-session env/config changes. The detector writes
+Model availability is resolved from Codex's model catalogue when the cached
+profile is missing, expired, or marked runtime-failed; it is not probed with a
+child process on every `SessionStart` or `UserPromptSubmit`. The detector writes
 `recall-compressor-profile.json` under `OPENVIKING_CODEX_STATE_DIR` and
-auto-recall reads that cache. Cache misses in auto-recall use the first
-candidate directly and fall back to deterministic digest if `codex exec`
-fails.
+auto-recall reads that cache. A prompt tries at most two distinct candidates
+inside one shared timeout. If every attempt fails, it injects nothing and
+records those failed models; it does not turn unverified candidates into a
+deterministic digest. Explicitly configured `off` still uses deterministic
+formatting without `codex exec`.
 
 Fallback order:
 
@@ -302,7 +337,10 @@ Fallback order:
    `OPENVIKING_RECALL_COMPRESS_THINKING`)
 2. `gpt-5.3-codex-spark`, thinking `default`
 3. `gpt-5.6-luna`, thinking `low`
-4. off (deterministic digest, no child `codex exec`)
+
+When a configured model is distinct from both defaults, only it and the
+primary default fit in the first prompt's two-attempt budget; an untried
+fallback remains eligible on a later prompt.
 
 Configured `off` (`OPENVIKING_RECALL_COMPRESS=0`, model `off`, or thinking
 `off`) skips all probing and writes a disabled profile.

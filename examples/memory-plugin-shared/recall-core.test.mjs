@@ -25,9 +25,9 @@ test("context requests preserve the configured recall width and server budget", 
     recallCompressMaxInputChars: 18000,
   });
 
-  assert.equal(Object.values(body.quotas).reduce((sum, quota) => sum + quota, 0), 6);
+  assert.equal(Object.values(body.quotas).reduce((sum, quota) => sum + quota, 0), 1);
   assert.equal(body.quotas.resources, 1);
-  assert.equal(body.quotas.skills, 1);
+  assert.equal(body.quotas.skills, 0);
   assert.equal(body.max_tokens, 800);
   assert.equal(body.purpose, "coding");
 });
@@ -59,6 +59,44 @@ test("coding-agent fallback recall explicitly uses the 0.35 threshold", () => {
   const body = buildRecallEndpointBody({});
 
   assert.equal(body.min_score, 0.35);
+  assert.ok(body.quotas.experiences >= 1);
+  assert.equal(
+    Object.values(body.quotas).reduce((sum, quota) => sum + quota, 0),
+    10,
+  );
+});
+
+test("legacy fallback keeps Experience within a three-result recall limit", () => {
+  const body = buildRecallEndpointBody({ recallLimit: 3 });
+
+  assert.equal(
+    Object.values(body.quotas).reduce((sum, quota) => sum + quota, 0),
+    3,
+  );
+  assert.equal(body.quotas.events, 1);
+  assert.equal(body.quotas.entities, 1);
+  assert.equal(body.quotas.experiences, 1);
+  assert.equal(body.quotas.preferences, 0);
+});
+
+test("configured quota totals never exceed the requested recall width", () => {
+  for (let limit = 1; limit <= 12; limit += 1) {
+    const legacy = buildRecallEndpointBody({ recallLimit: limit });
+    const context = buildContextSearchBody({
+      recallLimit: limit,
+      recallLimitConfigured: true,
+    });
+    assert.equal(
+      Object.values(legacy.quotas).reduce((sum, quota) => sum + quota, 0),
+      limit,
+      `legacy limit=${limit}`,
+    );
+    assert.equal(
+      Object.values(context.quotas).reduce((sum, quota) => sum + quota, 0),
+      limit,
+      `context limit=${limit}`,
+    );
+  }
 });
 
 test("buildRecallBlock injects context assembled by the server", async () => {

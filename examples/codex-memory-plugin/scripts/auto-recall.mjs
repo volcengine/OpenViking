@@ -20,10 +20,13 @@ import { loadConfig } from "./config.mjs";
 import { trySpawnCodex } from "./codex-launch.mjs";
 import { createLogger } from "./debug-log.mjs";
 import {
+  buildRecallCompressorCandidates,
   buildCodexExecArgs,
+  cacheRecallCompressorProfile,
   fallbackRecallCompressorProfile,
   loadCachedRecallCompressorProfile,
   markRecallCompressorRuntimeFailed,
+  recallCompressionExplicitlyOff,
 } from "./recall-compressor-profile.mjs";
 import { deriveOvSessionId } from "./session-state.mjs";
 import {
@@ -42,6 +45,8 @@ let emitted = false;
 let activeCompressor = null;
 let recallDeadline = null;
 const DEFAULT_FINAL_RECALL_CHARS = 6500;
+const EXCLUDED_EXPERIENCE_STATUSES = new Set(["deprecated", "archived"]);
+const EXPERIENCE_SIDECAR_FILENAMES = new Set([".abstract.md", ".overview.md", ".relations.json"]);
 
 function output(obj, exitAfter = false) {
   if (emitted) return;
@@ -307,12 +312,146 @@ async function readMemoryContent(uri) {
   return null;
 }
 
-function assembledToRecallResult(rendered, entries) {
-  const items = entries
+function isRecord(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function experienceUriInfo(uri) {
+  const value = String(uri || "").trim();
+  const looksLikeExperience = /^viking:\/\//i.test(value)
+    && /\/memories\/experiences(?:\/|$)/i.test(value);
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return { isExperience: looksLikeExperience, canonical: false, value };
+  }
+  if (parsed.protocol !== "viking:") {
+    return { isExperience: looksLikeExperience, canonical: false, value };
+  }
+  const parts = [parsed.hostname, ...parsed.pathname.split("/").filter(Boolean)];
+  let memoryRoot = -1;
+  if (parts[0] === "user") {
+    if (parts.length > 5 && parts[2] === "peers" && parts[4] === "memories") memoryRoot = 4;
+    else if (parts.length > 3 && parts[2] === "memories") memoryRoot = 2;
+    else if (parts.length > 4 && parts[1] === "peers" && parts[3] === "memories") memoryRoot = 3;
+    else if (parts.length > 2 && parts[1] === "memories") memoryRoot = 1;
+  } else if (parts.length > 3 && parts[0] === "agent" && parts[2] === "memories") {
+    memoryRoot = 2;
+  }
+  if (memoryRoot < 0 || parts[memoryRoot + 1] !== "experiences") {
+    // Fail closed for malformed/unknown Viking namespaces that still visibly
+    // target the Experience directory; treating them as ordinary memories
+    // would bypass authoritative lifecycle hydration.
+    return { isExperience: looksLikeExperience, canonical: false, value };
+  }
+  const relative = parts.slice(memoryRoot + 2);
+  const basename = relative.at(-1) || "";
+  const canonical = Boolean(
+    !parsed.search
+    && !parsed.hash
+    && relative.length > 0
+    && relative.every((segment) => segment && segment !== "." && segment !== "..")
+    && !EXPERIENCE_SIDECAR_FILENAMES.has(basename),
+  );
+  return { isExperience: true, canonical, value };
+}
+
+function normalizedStatus(...sources) {
+  let status = "";
+  for (const source of sources) {
+    if (isRecord(source) && typeof source.status === "string" && source.status.trim()) {
+      status = source.status.trim().toLowerCase();
+    }
+  }
+  return status;
+}
+
+function parseAuthoritativeExperienceDocument(value) {
+  const objectValue = isRecord(value) ? value : null;
+  const raw = objectValue
+    ? objectValue.raw_content ?? objectValue.raw ?? objectValue.content
+    : value;
+  if (typeof raw !== "string" || !raw.trim()) return null;
+
+  const hasMemoryFieldsMarker = /<!--\s*MEMORY_FIELDS\b/i.test(raw);
+  const trailer = /<!--\s*MEMORY_FIELDS\b([\s\S]*?)\s*-->\s*$/i.exec(raw);
+  let fields = null;
+  if (hasMemoryFieldsMarker) {
+    if (!trailer) return null;
+    try {
+      fields = JSON.parse(trailer[1].trim());
+    } catch {
+      return null;
+    }
+    if (!isRecord(fields)) return null;
+  } else if (objectValue) {
+    // Some server versions return raw content and authoritative metadata as
+    // separate JSON members. Legacy documents can also have no lifecycle
+    // metadata at all; that is an eligible unknown status, not a parse error.
+    if (isRecord(objectValue.attrs)) fields = objectValue.attrs;
+    if (isRecord(objectValue.metadata)) fields = { ...(fields || {}), ...objectValue.metadata };
+    if (Object.hasOwn(objectValue, "status")) fields = { ...(fields || {}), status: objectValue.status };
+  } else {
+    // A non-empty legacy raw string without MEMORY_FIELDS has status="".
+    fields = {};
+  }
+
+  const content = (trailer ? raw.slice(0, trailer.index) : raw).trim();
+  if (!content) return null;
+  return {
+    content,
+    status: normalizedStatus(objectValue?.attrs, objectValue?.metadata, objectValue, fields),
+  };
+}
+
+async function readAuthoritativeExperience(uri) {
+  const info = experienceUriInfo(uri);
+  if (!info.isExperience) return { isExperience: false, document: null };
+  if (!info.canonical) {
+    log("experience_drop", { uri: info.value, reason: "noncanonical_uri" });
+    return { isExperience: true, document: null };
+  }
+  const result = await fetchJSON(
+    `/api/v1/content/read?uri=${encodeURIComponent(info.value)}&raw=true`,
+  );
+  if (!result.ok) {
+    log("experience_drop", { uri: info.value, reason: "raw_read_failed", status: result.status || 0 });
+    return { isExperience: true, document: null };
+  }
+  const document = parseAuthoritativeExperienceDocument(result.result);
+  if (!document) {
+    log("experience_drop", { uri: info.value, reason: "invalid_or_empty_raw_metadata" });
+    return { isExperience: true, document: null };
+  }
+  if (EXCLUDED_EXPERIENCE_STATUSES.has(document.status)) {
+    log("experience_drop", { uri: info.value, reason: "lifecycle_status", status: document.status });
+    return { isExperience: true, document: null };
+  }
+  return { isExperience: true, document };
+}
+
+async function enforceExperienceLifecycle(items) {
+  const checked = await Promise.all(items.map(async (item) => {
+    const result = await readAuthoritativeExperience(item?.uri);
+    if (!result.isExperience) return { item, experienceContent: null };
+    if (!result.document) return null;
+    return { item, experienceContent: result.document.content };
+  }));
+  const kept = checked.filter(Boolean);
+  return { kept, filtered: kept.length !== items.length };
+}
+
+async function assembledToRecallResult(rendered, entries) {
+  const normalizedItems = entries
     .map(normalizeContextEntry)
     .map((entry) => ({ ...entry, score: clampScore(entry.score) }))
     .filter((entry) => entry.uri && entry.text);
-  const context = rendered
+  const lifecycle = await enforceExperienceLifecycle(normalizedItems);
+  const items = lifecycle.kept.map(({ item, experienceContent }) => (
+    experienceContent === null ? item : { ...item, text: experienceContent }
+  ));
+  const renderedContext = rendered
     ? [
         "OpenViking memory digest:",
         rendered,
@@ -320,6 +459,11 @@ function assembledToRecallResult(rendered, entries) {
         "More detail: use the OpenViking MCP recall/read/search tools with cited viking:// URIs if needed.",
       ].join("\n")
     : "";
+  // Once any entry is removed, the server-rendered block is no longer safe: it
+  // still contains the excluded entry's body. Rebuild only from retained items.
+  const context = lifecycle.filtered || normalizedItems.length !== entries.length
+    ? fallbackDigest(items)
+    : renderedContext;
   return { context, items };
 }
 
@@ -341,7 +485,7 @@ async function recallViaServerAssembly(query, ovSessionId = "") {
     log,
   });
   if (assembled) {
-    return assembledToRecallResult(assembled.rendered, assembled.entries);
+    return await assembledToRecallResult(assembled.rendered, assembled.entries);
   }
 
   const body = buildRecallEndpointBody(cfg);
@@ -352,7 +496,7 @@ async function recallViaServerAssembly(query, ovSessionId = "") {
     log("recall_endpoint_fallback", { status: result.status || 0 });
     return null;
   }
-  return assembledToRecallResult(
+  return await assembledToRecallResult(
     String(result.result?.rendered || "").trim(),
     Array.isArray(result.result?.entries) ? result.result.entries : [],
   );
@@ -410,15 +554,34 @@ function normalizeCompressedContext(text) {
   return truncateText(appendMcpRetrievalHint(value), 4000);
 }
 
-async function getRecallCompressorProfile() {
+async function getRecallCompressorProfiles() {
+  if (recallCompressionExplicitlyOff(cfg)) return [];
   const cached = await loadCachedRecallCompressorProfile(cfg);
-  if (cached) return cached;
-  const fallback = fallbackRecallCompressorProfile(cfg);
-  log("compress_profile_cache_miss", fallback);
-  return fallback;
+  const failedModels = new Set(
+    cached?.source === "runtime_failed"
+      ? [...(cached.failedModels || []), cached.failedModel || ""].filter(Boolean)
+      : [],
+  );
+  const candidates = [];
+  if (cached?.enabled) candidates.push(cached);
+  if (!cached) {
+    const fallback = fallbackRecallCompressorProfile(cfg);
+    log("compress_profile_cache_miss", fallback);
+    if (fallback.enabled) candidates.push(fallback);
+  }
+  candidates.push(...buildRecallCompressorCandidates(cfg));
+
+  const seenModels = new Set();
+  return candidates.filter((profile) => {
+    if (!profile?.enabled && profile?.enabled !== undefined) return false;
+    if (!profile?.model || failedModels.has(profile.model)) return false;
+    if (seenModels.has(profile.model)) return false;
+    seenModels.add(profile.model);
+    return true;
+  }).slice(0, 2);
 }
 
-async function runCodexCompressor(prompt, profile) {
+async function runCodexCompressor(prompt, profile, timeoutMs) {
   const tmp = await mkdtemp(join(tmpdir(), "ov-recall-compress-"));
   const outputPath = join(tmp, "last-message.txt");
   const args = buildCodexExecArgs(profile, outputPath);
@@ -436,39 +599,28 @@ async function runCodexCompressor(prompt, profile) {
       let done = false;
       let timedOut = false;
       let stderr = "";
-      const finish = (value, { runtimeFailed = false } = {}) => {
+      const finish = (value) => {
         if (done) return;
         done = true;
         if (activeCompressor === child) activeCompressor = null;
         clearTimeout(timer);
-        if (runtimeFailed) {
-          // Mark the profile as runtime_failed so subsequent UPS calls in
-          // this same codex session skip compress (avoids burning
-          // ~recallCompressTimeoutMs per turn on a guaranteed-to-fail
-          // spawn). Next SessionStart's cache-first detect treats this
-          // marker as a cache miss and re-resolves against the current
-          // catalogue, so a transient failure self-recovers across codex
-          // restarts. Best-effort write; failure is non-fatal.
-          markRecallCompressorRuntimeFailed(cfg, { failedModel: profile.model || "" })
-            .catch(() => {});
-        }
         resolve(value);
       };
       const launch = trySpawnCodex(args, { env, stdio: ["pipe", "ignore", "pipe"] });
       if (launch.error) {
         logError("compress_spawn", launch.error);
-        finish(null, { runtimeFailed: true });
+        finish(null);
         return;
       }
       child = launch.child;
       activeCompressor = child;
       timer = setTimeout(() => {
         timedOut = true;
-        logError("compress_timeout", `timed out after ${cfg.recallCompressTimeoutMs}ms`);
+        logError("compress_timeout", `timed out after ${timeoutMs}ms`);
         try {
           child.kill("SIGKILL");
         } catch { /* best effort */ }
-      }, cfg.recallCompressTimeoutMs);
+      }, timeoutMs);
 
       child.stderr.on("data", (chunk) => {
         stderr += chunk.toString();
@@ -476,11 +628,11 @@ async function runCodexCompressor(prompt, profile) {
       });
       child.on("error", (err) => {
         logError("compress_spawn", err);
-        finish(null, { runtimeFailed: true });
+        finish(null);
       });
       child.on("close", async (code) => {
         if (timedOut) {
-          finish(null, { runtimeFailed: true });
+          finish(null);
           return;
         }
         if (code !== 0) {
@@ -488,14 +640,14 @@ async function runCodexCompressor(prompt, profile) {
             profile,
             error: stderr.trim().slice(-1000) || `codex exited ${code}`,
           });
-          finish(null, { runtimeFailed: true });
+          finish(null);
           return;
         }
         try {
           finish(await readFile(outputPath, "utf-8"));
         } catch (err) {
           logError("compress_read", err);
-          finish(null, { runtimeFailed: true });
+          finish(null);
         }
       });
       child.stdin.end(prompt);
@@ -506,11 +658,14 @@ async function runCodexCompressor(prompt, profile) {
 }
 
 async function compressMemoryContext(userPrompt, items) {
-  if (!cfg.recallCompress) return null;
-  const profile = await getRecallCompressorProfile();
-  if (!profile.enabled) {
-    log("compress_skip", { reason: "profile disabled", profile });
-    return null;
+  if (recallCompressionExplicitlyOff(cfg)) {
+    log("compress_skip", { reason: "explicitly disabled" });
+    return { status: "disabled", context: "" };
+  }
+  const profiles = await getRecallCompressorProfiles();
+  if (profiles.length === 0) {
+    log("compress_skip", { reason: "no usable profiles" });
+    return { status: "failed", context: "" };
   }
   const perItemChars = Math.max(500, Math.floor(cfg.recallCompressMaxInputChars / Math.max(1, items.length)));
   const payload = {
@@ -540,11 +695,44 @@ Task:
 Input JSON:
 ${JSON.stringify(payload, null, 2)}
 `;
-  const raw = await runCodexCompressor(prompt, profile);
-  if (raw === null) return null;
-  const compressed = normalizeCompressedContext(raw);
-  log("compressed", { inputCount: items.length, chars: compressed.length, profile });
-  return compressed;
+  const failedModels = [];
+  // `recallCompressTimeoutMs` is one total budget, not a per-model budget.
+  // Divide the remaining time across the attempts still available so a hung
+  // primary cannot consume the fallback's entire window or overrun the hook.
+  const compressorDeadline = Date.now() + cfg.recallCompressTimeoutMs;
+  for (const [attempt, profile] of profiles.entries()) {
+    const remainingMs = compressorDeadline - Date.now();
+    if (remainingMs <= 0) break;
+    const attemptsLeft = profiles.length - attempt;
+    const attemptTimeoutMs = Math.max(1, Math.floor(remainingMs / attemptsLeft));
+    log("compress_attempt", { attempt: attempt + 1, attemptTimeoutMs, profile });
+    const raw = await runCodexCompressor(prompt, profile, attemptTimeoutMs);
+    if (raw === null) {
+      failedModels.push(profile.model || "");
+      continue;
+    }
+    // A runtime_failed cache can exclude the primary before this loop, making a
+    // working fallback attempt 0 rather than attempt 1. Promote every successful
+    // profile when the cache does not already describe that exact model/profile;
+    // attempt position is not a reliable signal of whether promotion is needed.
+    const cached = await loadCachedRecallCompressorProfile(cfg);
+    const cachedThinking = String(cached?.thinking || "default").toLowerCase();
+    const profileThinking = String(profile?.thinking || "default").toLowerCase();
+    if (
+      !cached?.enabled
+      || cached.model !== profile.model
+      || cachedThinking !== profileThinking
+    ) {
+      await cacheRecallCompressorProfile(cfg, profile);
+    }
+    const compressed = normalizeCompressedContext(raw);
+    log("compressed", { inputCount: items.length, chars: compressed.length, profile });
+    return { status: "ok", context: compressed };
+  }
+
+  await markRecallCompressorRuntimeFailed(cfg, { failedModels });
+  log("compress_fail_closed", { failedModels });
+  return { status: "failed", context: "" };
 }
 
 async function main() {
@@ -601,15 +789,14 @@ async function main() {
       emit();
       return;
     }
-    const compressedContext = endpointRecall.items.length > 0
+    const compression = endpointRecall.items.length > 0
       ? await compressMemoryContext(userPrompt, endpointRecall.items)
-      : null;
-    const endpointFallback = cfg.recallCompress && endpointRecall.items.length > 0
-      ? fallbackDigest(endpointRecall.items)
-      : endpointRecall.context;
-    const memoryContext = compressedContext === null
-      ? endpointFallback
-      : compressedContext;
+      : { status: "disabled", context: "" };
+    const memoryContext = endpointRecall.items.length === 0
+      ? endpointRecall.context
+      : compression.status === "disabled"
+        ? (cfg.recallCompress ? fallbackDigest(endpointRecall.items) : endpointRecall.context)
+        : compression.context;
     if (!memoryContext) {
       log("skip", { stage: "recall_endpoint", reason: "compressor found no relevant memory" });
       emit();
@@ -617,7 +804,7 @@ async function main() {
     }
     log("recall_endpoint", {
       chars: memoryContext.length,
-      compressed: compressedContext !== null,
+      compressed: compression.status === "ok",
       entryCount: endpointRecall.items.length,
     });
     emit(memoryContext);
@@ -635,8 +822,23 @@ async function main() {
   const processed = postProcess(allMemories, candidateLimit, cfg.scoreThreshold);
   log("post_process", { beforeCount: allMemories.length, afterCount: processed.length });
 
+  // Validate the full ranked candidate pool before selecting the final width.
+  // Otherwise an archived top hit would consume a slot, be removed after pick,
+  // and prevent a lower-ranked eligible memory from backfilling it.
+  const lifecycle = await enforceExperienceLifecycle(processed);
+  const eligibleProcessed = lifecycle.kept.map(({ item }) => item);
+  const experienceContentByUri = new Map(
+    lifecycle.kept
+      .filter(({ experienceContent }) => experienceContent !== null)
+      .map(({ item, experienceContent }) => [item.uri, experienceContent]),
+  );
+  log("experience_lifecycle", {
+    beforeCount: processed.length,
+    afterCount: eligibleProcessed.length,
+  });
+
   const profile = buildQueryProfile(userPrompt);
-  const ranked = [...processed]
+  const ranked = [...eligibleProcessed]
     .map((item) => ({ item, breakdown: getRankingBreakdown(item, profile) }))
     .sort((a, b) => b.breakdown.finalScore - a.breakdown.finalScore);
 
@@ -646,24 +848,29 @@ async function main() {
     }
   } else {
     log("ranking_summary", {
-      candidateCount: processed.length,
+      candidateCount: eligibleProcessed.length,
       topCandidates: ranked.slice(0, 5).map((entry) => ({ uri: entry.item.uri, finalScore: entry.breakdown.finalScore })),
     });
   }
 
-  const memories = pickMemories(processed, cfg.recallLimit, userPrompt);
+  const memories = pickMemories(eligibleProcessed, cfg.recallLimit, userPrompt);
   if (memories.length === 0) {
     log("skip", { stage: "pick", reason: "no memories survived ranking" });
     emit();
     return;
   }
 
-  log("picked", { pickedCount: memories.length, uris: memories.map((m) => m.uri) });
+  log("picked", {
+    pickedCount: memories.length,
+    uris: memories.map((item) => item.uri),
+  });
 
   const memoryItems = await Promise.all(
     memories.map(async (item) => {
       let text = (item.abstract || item.overview || item.uri).trim();
-      if (item.level === 2) {
+      if (experienceContentByUri.has(item.uri)) {
+        text = experienceContentByUri.get(item.uri);
+      } else if (item.level === 2) {
         const content = await readMemoryContent(item.uri);
         if (content) text = content;
       }
@@ -676,8 +883,10 @@ async function main() {
     }),
   );
 
-  const compressedContext = await compressMemoryContext(userPrompt, memoryItems);
-  const memoryContext = compressedContext === null ? fallbackDigest(memoryItems) : compressedContext;
+  const compression = await compressMemoryContext(userPrompt, memoryItems);
+  const memoryContext = compression.status === "disabled"
+    ? fallbackDigest(memoryItems)
+    : compression.context;
 
   emit(memoryContext);
 }

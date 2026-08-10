@@ -31,7 +31,7 @@ import {
 } from "./capture-utils.mjs";
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
-import { loadState, resolveOvSessionId, saveState } from "./session-state.mjs";
+import { resolveOvSessionId, withStateTransaction } from "./session-state.mjs";
 import { maybeDetach, readHookStdin } from "./shared/async-writer.mjs";
 import { sendSessionMessages } from "./shared/batch-send.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
@@ -117,7 +117,7 @@ async function readTranscriptTurns(transcriptPath) {
   }
 }
 
-async function appendTurns(ovSessionId, turns, state) {
+async function appendTurns(ovSessionId, turns, state, save) {
   const payloads = turns.map((turn) => {
     const body = turn.parts?.length
       ? { role: turn.role, parts: turn.parts }
@@ -128,7 +128,7 @@ async function appendTurns(ovSessionId, turns, state) {
   const r = await sendSessionMessages(fetchJSONRes, ovSessionId, payloads, {
     onSent: async (n) => {
       state.capturedTurnCount += n;
-      await saveState(state);
+      await save(state);
     },
   });
   return r.sent;
@@ -189,73 +189,74 @@ async function main() {
 
   const sessionId = input.session_id || "unknown";
   const transcriptPath = input.transcript_path || null;
-  const state = await loadState(sessionId);
-  activePeerId = cfg.peerId || state.workspacePeerId || resolveEffectivePeerId({ cfg, cwd: process.cwd() }).peerId;
-  log("start", { sessionId, transcriptPath, hasPeer: Boolean(activePeerId) });
+  await withStateTransaction(sessionId, async ({ state, save }) => {
+    activePeerId = cfg.peerId || state.workspacePeerId || resolveEffectivePeerId({ cfg, cwd: process.cwd() }).peerId;
+    log("start", { sessionId, transcriptPath, hasPeer: Boolean(activePeerId) });
 
-  const health = await fetchJSON("/health");
-  if (!health) {
-    logError("health_check", "server unreachable or unhealthy");
-    noop();
-    return;
-  }
-
-  const allTurns = await readTranscriptTurns(transcriptPath);
-
-  // Post-compact transcript-shrink defense: codex's /compact may rewrite or
-  // truncate transcript_path. If allTurns has fewer entries than we cached,
-  // our slice math would underflow and silently drop turns. Reset the
-  // counter so the next slice captures everything in the new transcript.
-  // See DESIGN.md "Post-compact transcript shrink".
-  if (allTurns.length < state.capturedTurnCount) {
-    log("transcript_shrink_detected", {
-      cached: state.capturedTurnCount,
-      observed: allTurns.length,
-    });
-    state.capturedTurnCount = 0;
-  }
-
-  const newTurns = allTurns.slice(state.capturedTurnCount);
-
-  log("transcript_parse", {
-    totalTurns: allTurns.length,
-    previouslyCaptured: state.capturedTurnCount,
-    newTurns: newTurns.length,
-  });
-
-  if (cfg.captureMode === "keyword" && newTurns.length > 0 && !hasCaptureKeyword(newTurns)) {
-    log("skip", { stage: "capture_mode", reason: "keyword mode without capture trigger" });
-    await saveState(state);
-    noop();
-    return;
-  }
-
-  let added = 0;
-  let ovSessionId = "";
-  let commitInfo = { committed: false, pendingTokens: 0, commitCount: 0, totalMessageCount: 0 };
-  if (newTurns.length > 0) {
-    ovSessionId = resolveOvSessionId(state);
-    if (!ovSessionId) {
-      logError("resolve_ov_session", "failed to derive OV session id");
-    } else {
-      added = await appendTurns(ovSessionId, newTurns, state);
-      log("appended", { ovSessionId, added });
-      commitInfo = await maybeCommitByThreshold(ovSessionId, added);
+    const health = await fetchJSON("/health");
+    if (!health) {
+      logError("health_check", "server unreachable or unhealthy");
+      noop();
+      return;
     }
-  }
 
-  await saveState(state);
+    const allTurns = await readTranscriptTurns(transcriptPath);
 
-  // could also sweep here, deliberately not — see header comment + DESIGN.md §5.
+    // Post-compact transcript-shrink defense: codex's /compact may rewrite or
+    // truncate transcript_path. If allTurns has fewer entries than we cached,
+    // our slice math would underflow and silently drop turns. Reset the
+    // counter so the next slice captures everything in the new transcript.
+    // See DESIGN.md "Post-compact transcript shrink".
+    if (allTurns.length < state.capturedTurnCount) {
+      log("transcript_shrink_detected", {
+        cached: state.capturedTurnCount,
+        observed: allTurns.length,
+      });
+      state.capturedTurnCount = 0;
+    }
 
-  if (added > 0) {
-    noop(
-      `appended ${added} turn(s) to OpenViking session ${state.ovSessionId}` +
-      (commitInfo.committed ? " (committed)" : ""),
-    );
-  } else {
-    noop();
-  }
+    const newTurns = allTurns.slice(state.capturedTurnCount);
+
+    log("transcript_parse", {
+      totalTurns: allTurns.length,
+      previouslyCaptured: state.capturedTurnCount,
+      newTurns: newTurns.length,
+    });
+
+    if (cfg.captureMode === "keyword" && newTurns.length > 0 && !hasCaptureKeyword(newTurns)) {
+      log("skip", { stage: "capture_mode", reason: "keyword mode without capture trigger" });
+      await save(state);
+      noop();
+      return;
+    }
+
+    let added = 0;
+    let ovSessionId = "";
+    let commitInfo = { committed: false, pendingTokens: 0, commitCount: 0, totalMessageCount: 0 };
+    if (newTurns.length > 0) {
+      ovSessionId = resolveOvSessionId(state);
+      if (!ovSessionId) {
+        logError("resolve_ov_session", "failed to derive OV session id");
+      } else {
+        added = await appendTurns(ovSessionId, newTurns, state, save);
+        log("appended", { ovSessionId, added });
+        commitInfo = await maybeCommitByThreshold(ovSessionId, added);
+      }
+    }
+
+    await save(state);
+
+    // could also sweep here, deliberately not — see header comment + DESIGN.md §5.
+
+    if (added > 0) {
+      noop(
+        `appended ${added} turn(s) to OpenViking session ${state.ovSessionId}` +
+        (commitInfo.committed ? " (committed)" : ""),
+      );
+    } else {
+      noop();
+    }
+  });
 }
 
 function hasCaptureKeyword(turns) {

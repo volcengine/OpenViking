@@ -40,7 +40,8 @@ function scaleQuotas(limit, weights) {
   const order = Object.keys(weights);
   const quotas = Object.fromEntries(order.map((key) => [key, 0]));
   if (slots < order.length) {
-    for (const key of order) quotas[key] = 1;
+    const priority = [...order].sort((a, b) => weights[b] - weights[a]);
+    for (const key of priority.slice(0, slots)) quotas[key] = 1;
     return quotas;
   }
 
@@ -61,10 +62,12 @@ function scaleQuotas(limit, weights) {
 }
 
 function legacyMemoryQuotas(limit) {
-  return {
-    ...scaleQuotas(limit, { events: 10, entities: 10, preferences: 3 }),
-    experiences: 0,
-  };
+  return scaleQuotas(limit, {
+    events: 10,
+    entities: 10,
+    experiences: 3,
+    preferences: 3,
+  });
 }
 
 function codingQuotas(limit) {

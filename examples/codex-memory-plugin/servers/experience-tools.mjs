@@ -3,6 +3,7 @@ const DEFAULT_LIMIT = 5;
 const MAX_LIMIT = 20;
 const DEFAULT_TIMEOUT_MS = 15000;
 const EXPERIENCE_SIDECAR_FILENAMES = new Set([".abstract.md", ".overview.md", ".relations.json"]);
+const EXCLUDED_EXPERIENCE_STATUSES = new Set(["deprecated", "archived"]);
 
 const EXPERIENCE_TOOL_DEFINITIONS = [
   {
@@ -131,6 +132,96 @@ async function readJsonResponse(response) {
   return payload;
 }
 
+function isRecord(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function sanitizeMetadataValue(value, depth = 0) {
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  if (typeof value === "string") return value.slice(0, 4096);
+  if (depth >= 3) return undefined;
+  if (Array.isArray(value)) {
+    return value.slice(0, 50)
+      .map((item) => sanitizeMetadataValue(item, depth + 1))
+      .filter((item) => item !== undefined);
+  }
+  if (!isRecord(value)) return undefined;
+  const result = {};
+  for (const [key, item] of Object.entries(value).slice(0, 50)) {
+    const safe = sanitizeMetadataValue(item, depth + 1);
+    if (safe !== undefined) result[String(key).slice(0, 128)] = safe;
+  }
+  return result;
+}
+
+function safeExperienceMetadata(...sources) {
+  const metadata = {};
+  for (const source of sources) {
+    if (!isRecord(source)) continue;
+    if (typeof source.status === "string" && source.status.trim()) {
+      metadata.status = source.status.trim().toLowerCase().slice(0, 64);
+    }
+    const version = Number(source.version);
+    if (Number.isSafeInteger(version) && version >= 0) metadata.version = version;
+    if (typeof source.curated_at === "string" && source.curated_at.trim()) {
+      metadata.curated_at = source.curated_at.trim().slice(0, 512);
+    }
+    const curatedFrom = source.curated_from ?? source.from;
+    if (curatedFrom !== undefined) {
+      const safe = sanitizeMetadataValue(curatedFrom);
+      if (safe !== undefined) metadata.curated_from = safe;
+    }
+  }
+  return metadata;
+}
+
+function parseExperienceDocument(rawContent, ...metadataSources) {
+  const raw = String(rawContent || "");
+  const match = /<!--\s*MEMORY_FIELDS\b([\s\S]*?)\s*-->\s*$/i.exec(raw);
+  let fields = {};
+  let content = raw;
+  let metadataValid = true;
+  if (match) {
+    content = raw.slice(0, match.index).trimEnd();
+    try {
+      const parsed = JSON.parse(match[1].trim());
+      if (isRecord(parsed)) fields = parsed;
+      else metadataValid = false;
+    } catch {
+      metadataValid = false;
+    }
+  }
+  return {
+    content,
+    metadata: safeExperienceMetadata(...metadataSources, fields),
+    metadataValid,
+  };
+}
+
+function documentFromReadPayload(payload) {
+  const value = payload?.result;
+  if (!isRecord(value)) return parseExperienceDocument(value);
+  const content = value.raw_content ?? value.raw ?? value.content ?? "";
+  return parseExperienceDocument(content, value.attrs, value.metadata, value);
+}
+
+function withMetadata(payload, metadata) {
+  return Object.keys(metadata).length > 0 ? { ...payload, metadata } : payload;
+}
+
+async function fetchExperienceDocument(uri, config, fetchImpl) {
+  const url = new URL(`${normalizedBaseUrl(config)}/api/v1/content/read`);
+  url.searchParams.set("uri", uri);
+  url.searchParams.set("raw", "true");
+  const response = await fetchImpl(url.toString(), {
+    method: "GET",
+    headers: requestHeaders(config),
+    signal: requestSignal(config),
+  });
+  return documentFromReadPayload(await readJsonResponse(response));
+}
+
 async function searchExperience(args, config, fetchImpl) {
   const query = String(args?.query || "").trim();
   if (!query) return errorResult("search_experience requires a non-empty query");
@@ -147,14 +238,29 @@ async function searchExperience(args, config, fetchImpl) {
     });
     const payload = await readJsonResponse(response);
     const memories = Array.isArray(payload?.result?.memories) ? payload.result.memories : [];
-    const results = memories
-      .filter((item) => isExperienceUri(item?.uri, config?.user))
-      .map((item) => ({
+    const candidates = memories.filter((item) => isExperienceUri(item?.uri, config?.user));
+    const hydrated = await Promise.all(candidates.map(async (item) => {
+      const directMetadata = safeExperienceMetadata(item?.attrs, item?.metadata, item);
+      try {
+        const document = await fetchExperienceDocument(item.uri, config, fetchImpl);
+        if (!document.metadataValid) return null;
+        return { item, metadata: { ...directMetadata, ...document.metadata } };
+      } catch {
+        // Lifecycle state is authoritative only in the raw memory document.
+        // A missing/failed hydration must not turn an archived or deprecated
+        // Experience back into executable guidance.
+        return null;
+      }
+    }));
+    const results = hydrated
+      .filter(Boolean)
+      .filter(({ metadata }) => !EXCLUDED_EXPERIENCE_STATUSES.has(metadata.status))
+      .map(({ item, metadata }) => withMetadata({
         uri: item.uri,
         title: titleFromUri(item.uri),
         score: Number.isFinite(Number(item.score)) ? Number(item.score) : 0,
         snippet: String(item.abstract || item.overview || ""),
-      }));
+      }, metadata));
     return result({ results });
   } catch (error) {
     return errorResult(error instanceof Error ? error.message : error);
@@ -167,14 +273,16 @@ async function readExperience(args, config, fetchImpl) {
     return errorResult("read_experience requires an Experience URI owned by the current user");
   }
   try {
-    const url = `${normalizedBaseUrl(config)}/api/v1/content/read?uri=${encodeURIComponent(uri)}`;
-    const response = await fetchImpl(url, {
-      method: "GET",
-      headers: requestHeaders(config),
-      signal: requestSignal(config),
-    });
-    const payload = await readJsonResponse(response);
-    return result({ uri, content: String(payload?.result || "") });
+    const document = await fetchExperienceDocument(uri, config, fetchImpl);
+    if (!document.metadataValid) {
+      return errorResult("read_experience refuses malformed Experience lifecycle metadata");
+    }
+    if (EXCLUDED_EXPERIENCE_STATUSES.has(document.metadata.status)) {
+      return errorResult(
+        `read_experience refuses Experience status=${document.metadata.status}`,
+      );
+    }
+    return result(withMetadata({ uri, content: document.content }, document.metadata));
   } catch (error) {
     return errorResult(error instanceof Error ? error.message : error);
   }

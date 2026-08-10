@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import {
   detectRecallCompressorProfile,
+  cacheRecallCompressorProfile,
   invalidateRecallCompressorProfileCache,
   loadCachedRecallCompressorProfile,
   loadCodexModelsCache,
@@ -226,12 +227,68 @@ test("markRecallCompressorRuntimeFailed writes a disabled profile cached for UPS
     await writeModelsCache(codexHome, ["gpt-5.6-luna"]);
     await resolveRecallCompressorProfile(baseCfg(), {}, { CODEX_HOME: codexHome });
 
-    await markRecallCompressorRuntimeFailed(baseCfg(), { failedModel: "gpt-5.3-codex-spark" });
+    await markRecallCompressorRuntimeFailed(baseCfg(), { failedModel: "gpt-5.6-luna" });
     const cached = await loadCachedRecallCompressorProfile(baseCfg());
     assert.ok(cached, "expected cached profile to exist");
     assert.equal(cached.enabled, false);
     assert.equal(cached.source, "runtime_failed");
-    assert.equal(cached.failedModel, "gpt-5.3-codex-spark");
+    assert.equal(cached.failedModel, "gpt-5.6-luna");
+    assert.deepEqual(cached.failedModels, ["gpt-5.6-luna"]);
+  });
+});
+
+test("cacheRecallCompressorProfile promotes a working runtime fallback", async () => {
+  await withTempState(async () => {
+    await cacheRecallCompressorProfile(baseCfg(), {
+      model: "gpt-5.6-luna",
+      thinking: "low",
+      source: "default_fallback",
+    });
+    const cached = await loadCachedRecallCompressorProfile(baseCfg());
+    assert.equal(cached.enabled, true);
+    assert.equal(cached.model, "gpt-5.6-luna");
+  });
+});
+
+test("concurrent profile resolutions publish valid cache without shared tmp races", async () => {
+  await withTempState(async ({ stateDir, codexHome }) => {
+    await writeModelsCache(codexHome, ["gpt-5.3-codex-spark", "gpt-5.6-luna"]);
+    await Promise.all(Array.from({ length: 8 }, () => resolveRecallCompressorProfile(
+      baseCfg(),
+      {},
+      { CODEX_HOME: codexHome },
+    )));
+
+    const persisted = JSON.parse(
+      await readFile(join(stateDir, "recall-compressor-profile.json"), "utf-8"),
+    );
+    assert.equal(persisted.profile.enabled, true);
+    assert.equal(persisted.profile.model, "gpt-5.3-codex-spark");
+    assert.deepEqual(
+      (await readdir(stateDir)).filter((file) => file.startsWith("recall-compressor-profile.json.tmp-")),
+      [],
+    );
+  });
+});
+
+test("concurrent unrelated failure cannot overwrite a promoted fallback", async () => {
+  await withTempState(async () => {
+    for (let i = 0; i < 16; i += 1) {
+      await invalidateRecallCompressorProfileCache();
+      await Promise.all([
+        cacheRecallCompressorProfile(baseCfg(), {
+          model: "gpt-5.6-luna",
+          thinking: "low",
+          source: "default_fallback",
+        }),
+        markRecallCompressorRuntimeFailed(baseCfg(), {
+          failedModel: "gpt-5.3-codex-spark",
+        }),
+      ]);
+      const cached = await loadCachedRecallCompressorProfile(baseCfg());
+      assert.equal(cached?.enabled, true);
+      assert.equal(cached?.model, "gpt-5.6-luna");
+    }
   });
 });
 

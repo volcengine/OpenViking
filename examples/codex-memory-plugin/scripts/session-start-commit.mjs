@@ -40,7 +40,7 @@
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { detectRecallCompressorProfile } from "./recall-compressor-profile.mjs";
-import { clearState, deriveOvSessionId, listStates, loadState, saveState } from "./session-state.mjs";
+import { deriveOvSessionId, listStates, loadState, withStateTransaction } from "./session-state.mjs";
 import { buildProfileBlock } from "./shared/profile-inject.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
@@ -233,33 +233,54 @@ async function buildResumeArchiveContext(newSessionId) {
  * Returns { committed: bool, ovSessionId: string|null }.
  */
 async function commitAndClear(state, reason) {
-  if (state.ovSessionId) {
-    const ovSessionId = state.ovSessionId;
-    const commit = await commitOvSession(state.ovSessionId);
-    if (!commit) {
-      logError("commit_failed_keep_state", {
+  return withStateTransaction(state.codexSessionId, async ({ state: freshState, clear }) => {
+    // listStates() takes only a short scan lock and releases it before this
+    // remote commit lifecycle. Revalidate its snapshot after acquiring the
+    // full session lock so a Stop hook that refreshed this state after the scan
+    // cannot be committed or cleared by a stale SessionStart decision.
+    if (
+      freshState.revision !== state.revision
+      || freshState.lastUpdatedAt !== state.lastUpdatedAt
+      || freshState.capturedTurnCount !== state.capturedTurnCount
+      || freshState.ovSessionId !== state.ovSessionId
+    ) {
+      log("commit_skip_state_changed", {
         reason,
         codexSessionId: state.codexSessionId,
-        ovSessionId: state.ovSessionId,
+        snapshotUpdatedAt: state.lastUpdatedAt,
+        currentUpdatedAt: freshState.lastUpdatedAt,
       });
       return { committed: false, ovSessionId: null };
     }
-    log("commit", {
-      reason,
-      codexSessionId: state.codexSessionId,
-      ovSessionId,
-      archived: commit.archived ?? false,
-      taskId: commit.task_id,
-      status: commit.status,
-    });
-    await clearState(state.codexSessionId);
-    return { committed: true, ovSessionId };
-  }
-  // No OV session attached — nothing to commit on the server, but the local
-  // state file is still stale and should be removed.
-  log("clear_no_ov", { reason, codexSessionId: state.codexSessionId });
-  await clearState(state.codexSessionId);
-  return { committed: true, ovSessionId: null };
+
+    if (freshState.ovSessionId) {
+      const ovSessionId = freshState.ovSessionId;
+      const commit = await commitOvSession(ovSessionId);
+      if (!commit) {
+        logError("commit_failed_keep_state", {
+          reason,
+          codexSessionId: freshState.codexSessionId,
+          ovSessionId,
+        });
+        return { committed: false, ovSessionId: null };
+      }
+      log("commit", {
+        reason,
+        codexSessionId: freshState.codexSessionId,
+        ovSessionId,
+        archived: commit.archived ?? false,
+        taskId: commit.task_id,
+        status: commit.status,
+      });
+      await clear();
+      return { committed: true, ovSessionId };
+    }
+    // No OV session attached — nothing to commit on the server, but the local
+    // state file is still stale and should be removed.
+    log("clear_no_ov", { reason, codexSessionId: freshState.codexSessionId });
+    await clear();
+    return { committed: true, ovSessionId: null };
+  });
 }
 
 function describeCommittedSessions(ovSessionIds) {
@@ -288,10 +309,11 @@ async function main() {
   const effectivePeer = resolveEffectivePeerId({ cfg, cwd });
   activePeerId = effectivePeer.peerId;
   if (newSessionId !== "unknown") {
-    const state = await loadState(newSessionId);
-    await saveState({
-      ...state,
-      workspacePeerId: effectivePeer.source === "workspace" ? effectivePeer.peerId : "",
+    await withStateTransaction(newSessionId, async ({ state, save }) => {
+      await save({
+        ...state,
+        workspacePeerId: effectivePeer.source === "workspace" ? effectivePeer.peerId : "",
+      });
     });
   }
   log("start", {

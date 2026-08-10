@@ -5,7 +5,7 @@ description: >
   experiences with search_experience, read selected experiences with
   read_experience, and leave standard tool parts in the committed session so
   OpenViking can report recall and injection usage.
-version: 2026.7.9
+version: 2026.8.10
 tags:
   - openviking
   - experience-memory
@@ -56,7 +56,13 @@ Output schema:
       "uri": "viking://user/<current_user_id>/memories/experiences/example.md",
       "title": "example",
       "score": 0.82,
-      "snippet": "Short summary or matched situation"
+      "snippet": "Short summary or matched situation",
+      "metadata": {
+        "status": "production",
+        "version": 3,
+        "curated_at": "2026-08-10T00:00:00Z",
+        "curated_from": ["case-17"]
+      }
     }
   ]
 }
@@ -94,7 +100,12 @@ Output schema:
 ```json
 {
   "uri": "viking://user/<current_user_id>/memories/experiences/example.md",
-  "content": "Experience Markdown body"
+  "content": "Experience Markdown body",
+  "metadata": {
+    "status": "draft",
+    "version": 2,
+    "curated_from": {"project": "example"}
+  }
 }
 ```
 
@@ -112,13 +123,28 @@ event for `tool_input.uri` or `tool_output.uri`. In this design, reading an
 experience through `read_experience` means the experience was injected into the
 prompt.
 
+## Metadata and Status Contract
+
+`metadata` is optional on both tools for compatibility with older OpenViking
+servers. When present, it contains only the allowlisted fields `status`,
+`version`, `curated_at`, and `curated_from`; callers must not expect internal
+provenance fields. `status` is normalized to lowercase.
+
+`search_experience` omits experiences whose status is `deprecated` or
+`archived`. Results with `production`, `staging`, `draft`, an unknown status, or no status can
+still be returned. Treat `draft` as provisional guidance and validate it against
+the current task. `read_experience` revalidates the document metadata and rejects
+a direct URI whose status is `deprecated` or `archived`; treat that tool error as
+the experience being unavailable and do not inject it.
+
 ## Recommended Flow
 
 1. When a task begins, build a short query from the latest user instruction,
    current plan, active skill name, and important tool/environment context.
 2. Call `search_experience` before final prompt assembly.
-3. Review returned titles/snippets and select only experiences likely to affect
-   execution.
+3. Review returned titles, snippets, and optional metadata. Select only
+   experiences likely to affect execution; prefer `production` entries, treat
+   `draft` as provisional, and skip `deprecated` or `archived` entries.
 4. Call `read_experience` for selected experience URIs.
 5. Inject the returned Markdown into the prompt under an explicit experience
    section.

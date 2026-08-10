@@ -1,13 +1,16 @@
+import { randomUUID } from "node:crypto";
 import { readFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { mkdir, rename, writeFile } from "node:fs/promises";
-import { getStateDir } from "./session-state.mjs";
+import { getStateDir, withStateTransaction } from "./session-state.mjs";
 
 const DEFAULT_PRIMARY = { model: "gpt-5.3-codex-spark", thinking: "default", source: "default_primary" };
 const DEFAULT_FALLBACK = { model: "gpt-5.6-luna", thinking: "low", source: "default_fallback" };
-const PROFILE_SCHEMA_VERSION = 3;
+const PROFILE_SCHEMA_VERSION = 4;
 const DEFAULT_CODEX_HOME = join(homedir(), ".codex");
+const PROFILE_CACHE_LOCK_ID = "__recall-compressor-profile-cache__";
+const PROFILE_CACHE_LOCK_TIMEOUT_MS = 2_000;
 
 function isOff(value) {
   return /^(?:0|false|no|off|none|disabled)$/i.test(String(value || "").trim());
@@ -148,17 +151,46 @@ export async function loadCachedRecallCompressorProfile(cfg) {
   }
 }
 
-async function saveRecallCompressorProfile(cfg, profile) {
+async function withProfileCacheLock(callback) {
+  return withStateTransaction(
+    PROFILE_CACHE_LOCK_ID,
+    callback,
+    { lockTimeoutMs: PROFILE_CACHE_LOCK_TIMEOUT_MS },
+  );
+}
+
+async function writeRecallCompressorProfile(cfg, profile) {
   await mkdir(getStateDir(), { recursive: true });
   const final = profilePath();
-  const tmp = `${final}.tmp`;
-  await writeFile(tmp, JSON.stringify({
-    schemaVersion: PROFILE_SCHEMA_VERSION,
-    checkedAt: Date.now(),
-    configKey: configKey(cfg),
-    profile,
-  }));
-  await rename(tmp, final);
+  const tmp = `${final}.tmp-${process.pid}-${randomUUID()}`;
+  try {
+    await writeFile(tmp, JSON.stringify({
+      schemaVersion: PROFILE_SCHEMA_VERSION,
+      checkedAt: Date.now(),
+      configKey: configKey(cfg),
+      profile,
+    }));
+    await rename(tmp, final);
+  } finally {
+    // The rename removes tmp on success. On write/rename failure, leave no
+    // process-shared fixed temp (or unique crash residue) for a later hook to
+    // publish accidentally.
+    await rm(tmp, { force: true }).catch(() => {});
+  }
+}
+
+async function saveRecallCompressorProfile(cfg, profile) {
+  return withProfileCacheLock(() => writeRecallCompressorProfile(cfg, profile));
+}
+
+/** Persist a compressor that completed successfully so later hooks start there. */
+export async function cacheRecallCompressorProfile(cfg, profile) {
+  try {
+    await withProfileCacheLock(() => writeRecallCompressorProfile(
+      cfg,
+      { ...profile, enabled: true },
+    ));
+  } catch { /* best effort */ }
 }
 
 /**
@@ -168,26 +200,44 @@ async function saveRecallCompressorProfile(cfg, profile) {
  */
 export async function invalidateRecallCompressorProfileCache() {
   try {
-    await rm(profilePath(), { force: true });
+    await withProfileCacheLock(() => rm(profilePath(), { force: true }));
   } catch { /* best effort */ }
 }
 
 /**
- * Record a runtime compress failure as a disabled profile. UserPromptSubmit
- * reads the cached profile directly, so writing `enabled: false` here makes
- * subsequent UPS calls within the same codex session skip compress (and
- * fall back to deterministic digest) instead of paying ~recallCompressTimeoutMs
- * per turn on a guaranteed-to-fail spawn. The next SessionStart's cache-
- * first detect treats `source === "runtime_failed"` as a cache miss and
- * re-resolves from the current catalogue, so a transient failure does not
- * permanently disable compress across codex restarts.
+ * Record compressor models that failed at runtime. UserPromptSubmit skips those
+ * models within the same Codex session, trying any untried candidate before it
+ * fails closed. The next SessionStart treats `source === "runtime_failed"` as
+ * a cache miss and re-resolves from the current catalogue, so a transient
+ * failure does not permanently disable compression across Codex restarts.
  */
-export async function markRecallCompressorRuntimeFailed(cfg, { failedModel = "" } = {}) {
+export async function markRecallCompressorRuntimeFailed(
+  cfg,
+  { failedModel = "", failedModels = [] } = {},
+) {
   try {
-    await saveRecallCompressorProfile(cfg, {
-      enabled: false,
-      source: "runtime_failed",
-      failedModel: String(failedModel || ""),
+    await withProfileCacheLock(async () => {
+      const current = await loadCachedRecallCompressorProfile(cfg);
+      const previousFailures = current?.source === "runtime_failed"
+        ? current.failedModels || []
+        : [];
+      const models = [...new Set(
+        [...previousFailures, ...failedModels, failedModel]
+          .map((model) => String(model || "").trim())
+          .filter(Boolean),
+      )];
+
+      // A concurrent prompt may already have promoted a fallback that this
+      // attempt never tried. Keep that positive result; only disable an
+      // enabled cached profile when this attempt actually failed its model.
+      if (current?.enabled && current.model && !models.includes(current.model)) return;
+
+      await writeRecallCompressorProfile(cfg, {
+        enabled: false,
+        source: "runtime_failed",
+        failedModel: models.at(-1) || "",
+        failedModels: models,
+      });
     });
   } catch { /* best effort */ }
 }
@@ -250,8 +300,8 @@ export async function resolveRecallCompressorProfile(cfg, logger = {}, env = pro
  * SessionStart no longer probes models with a subprocess on every fire.
  * Instead it loads the cached profile and only resolves (a cheap
  * models_cache.json read) when nothing is cached or the cache is stale.
- * The runtime compress path invalidates the cache on failure, which is
- * what triggers the next re-resolve.
+ * The runtime compress path records exhausted candidates, which is what
+ * triggers the next SessionStart re-resolve.
  */
 export async function detectRecallCompressorProfile(cfg, logger = {}, env = process.env) {
   const { log } = logger;
@@ -261,7 +311,10 @@ export async function detectRecallCompressorProfile(cfg, logger = {}, env = proc
     return cached;
   }
   if (cached && cached.source === "runtime_failed") {
-    log?.("compress_profile_recover", { failedModel: cached.failedModel || "" });
+    log?.("compress_profile_recover", {
+      failedModel: cached.failedModel || "",
+      failedModels: cached.failedModels || [],
+    });
   }
   if (!cfg.recallCompressDetectOnStartup) {
     log?.("compress_profile_skip", { reason: "detect disabled and no usable cache" });
