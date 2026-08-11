@@ -1082,7 +1082,7 @@ class MemoryUpdater:
                     # Use merge_op to process field value
                     merge_op = MergeOpFactory.from_field(field)
                     try:
-                        new_value = merge_op.apply(current_value, patch_value)
+                        new_value = await merge_op.apply(current_value, patch_value)
                     except Exception as e:
                         tracer.info(
                             f"[memory_updater] Skipping field update after merge_op failure: uri={uri}, field={field.name}, error={e}"

@@ -4,6 +4,9 @@
 Tests for MergeOp architecture - type-safe merge operations.
 """
 
+import asyncio
+import threading
+
 import pytest
 
 from openviking.session.memory.dataclass import (
@@ -76,29 +79,50 @@ class TestPatchOp:
         assert "Replace" in desc
         assert "score" in desc
 
-    def test_apply(self):
+    @pytest.mark.asyncio
+    async def test_apply(self):
         """PatchOp apply should just return the patch value."""
         op_str = PatchOp(FieldType.STRING)
-        assert op_str.apply("old", "new") == "new"
+        assert await op_str.apply("old", "new") == "new"
 
         op_int = PatchOp(FieldType.INT64)
-        assert op_int.apply(100, 200) == 200
+        assert await op_int.apply(100, 200) == 200
 
-    def test_apply_dict_patch(self):
-        """Dict-form string patches should be converted and applied."""
+    @pytest.mark.asyncio
+    async def test_apply_dict_patch(self, monkeypatch):
+        """Dict-form string patches should be applied without blocking the event loop."""
+        from openviking.session.memory.merge_op import patch_handler
+
         op = PatchOp(FieldType.STRING)
+        original_apply = patch_handler.apply_str_patch
+        loop_progressed = threading.Event()
+        merge_observed_progress = None
+
+        def apply_and_observe(current_value, patch_value):
+            nonlocal merge_observed_progress
+            merge_observed_progress = loop_progressed.wait(timeout=0.5)
+            return original_apply(current_value, patch_value)
+
+        monkeypatch.setattr(patch_handler, "apply_str_patch", apply_and_observe)
         patch = {"blocks": [{"search": "hello world", "replace": "hello there"}]}
 
-        assert op.apply("hello world", patch) == "hello there"
+        merge_task = asyncio.create_task(op.apply("hello world", patch))
+        await asyncio.sleep(0)
+        loop_progressed.set()
 
-    def test_apply_invalid_dict_patch_falls_back_to_string_replacement(self):
+        assert await merge_task == "hello there"
+        assert merge_observed_progress is True
+
+    @pytest.mark.asyncio
+    async def test_apply_invalid_dict_patch_falls_back_to_string_replacement(self):
         """Invalid dict-form patches should preserve the compatibility fallback."""
         op = PatchOp(FieldType.STRING)
         patch = {"blocks": [{"search": "hello world"}]}
 
-        assert op.apply("hello world", patch) == str(patch)
+        assert await op.apply("hello world", patch) == str(patch)
 
-    def test_apply_dict_patch_propagates_patch_parse_error(self):
+    @pytest.mark.asyncio
+    async def test_apply_dict_patch_propagates_patch_parse_error(self):
         """Patch errors raised after dict conversion must reach the caller."""
         op = PatchOp(FieldType.STRING)
         patch = {
@@ -106,8 +130,7 @@ class TestPatchOp:
         }
 
         with pytest.raises(PatchParseError, match="matched 2 locations"):
-            op.apply("status: pending\nstatus: pending", patch)
-
+            await op.apply("status: pending\nstatus: pending", patch)
 
 class TestSumOp:
     """Tests for SumOp."""
@@ -124,30 +147,35 @@ class TestSumOp:
         desc = op.get_output_schema_description("打分合")
         assert desc == "add for '打分合'"
 
-    def test_apply_both_int(self):
+    @pytest.mark.asyncio
+    async def test_apply_both_int(self):
         """Sum of two ints."""
         op = SumOp()
-        assert op.apply(10, 5) == 15
+        assert await op.apply(10, 5) == 15
 
-    def test_apply_both_float(self):
+    @pytest.mark.asyncio
+    async def test_apply_both_float(self):
         """Sum of two floats."""
         op = SumOp()
-        assert op.apply(10.5, 3.5) == 14.0
+        assert await op.apply(10.5, 3.5) == 14.0
 
-    def test_apply_mixed(self):
+    @pytest.mark.asyncio
+    async def test_apply_mixed(self):
         """Sum of int and float."""
         op = SumOp()
-        assert op.apply(10, 3.5) == 13.5
+        assert await op.apply(10, 3.5) == 13.5
 
-    def test_apply_current_none(self):
+    @pytest.mark.asyncio
+    async def test_apply_current_none(self):
         """Current is None should return patch."""
         op = SumOp()
-        assert op.apply(None, 10) == 10
+        assert await op.apply(None, 10) == 10
 
-    def test_apply_invalid_values(self):
+    @pytest.mark.asyncio
+    async def test_apply_invalid_values(self):
         """Invalid values should keep current."""
         op = SumOp()
-        assert op.apply("not a number", 10) == "not a number"
+        assert await op.apply("not a number", 10) == "not a number"
 
 
 class TestImmutableOp:
@@ -167,15 +195,17 @@ class TestImmutableOp:
         assert "name" in desc
         assert "can only be set once" in desc
 
-    def test_apply_current_none(self):
+    @pytest.mark.asyncio
+    async def test_apply_current_none(self):
         """Current is None should set to patch."""
         op = ImmutableOp()
-        assert op.apply(None, "new value") == "new value"
+        assert await op.apply(None, "new value") == "new value"
 
-    def test_apply_current_exists(self):
+    @pytest.mark.asyncio
+    async def test_apply_current_exists(self):
         """Current exists should keep current."""
         op = ImmutableOp()
-        assert op.apply("existing", "new value") == "existing"
+        assert await op.apply("existing", "new value") == "existing"
 
 
 class TestMergeOpFactory:

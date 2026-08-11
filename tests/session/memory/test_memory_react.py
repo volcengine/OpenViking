@@ -7,15 +7,15 @@ Tests for memory ExtractLoop orchestrator.
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
 from openviking.session.memory.dataclass import (
     MemoryTypeSchema,
     ResolvedOperations,
 )
-from openviking.session.memory.schema_model_generator import SchemaModelGenerator
-
 from openviking.session.memory.extract_loop import (
     ExtractLoop,
 )
+from openviking.session.memory.schema_model_generator import SchemaModelGenerator
 
 
 class TestPreFetchFileFiltering:
@@ -205,7 +205,7 @@ class TestExtractLoopFinalJsonRetry:
         )
         extract_loop.resolve_operations = AsyncMock(return_value=(resolved, []))
         extract_loop._check_unread_existing_files = AsyncMock(return_value={})
-        extract_loop._validate_patch_operations = MagicMock(return_value=[])
+        extract_loop._validate_patch_operations = AsyncMock(return_value=[])
         extract_loop.finalize_operations = AsyncMock()
 
         await extract_loop.run()

@@ -21,7 +21,7 @@ from openviking.session.memory.dataclass import (
     StoredLink,
 )
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
-from openviking.session.memory.merge_op import MergeOp
+from openviking.session.memory.merge_op import FieldType, MergeOp, PatchOp
 from openviking.session.memory.schema_model_generator import SchemaModelGenerator
 from openviking.session.memory.tools import (
     MEMORY_TOOLS_REGISTRY,
@@ -293,7 +293,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
                         tracer.info(f"Extended max_iterations to {max_iterations} for refetch")
 
                     continue
-                patch_errors = self._validate_patch_operations(final_operations)
+                patch_errors = await self._validate_patch_operations(final_operations)
                 if patch_errors and patch_repair_count == 0:
                     patch_repair_count += 1
                     max_iterations += 1
@@ -779,11 +779,14 @@ The final output of the model must strictly follow the JSON Schema format shown 
             f"{skeleton}"
         )
 
-    def _validate_patch_operations(self, operations: ResolvedOperations) -> List[Dict[str, Any]]:
+    async def _validate_patch_operations(
+        self,
+        operations: ResolvedOperations,
+    ) -> List[Dict[str, Any]]:
         from openviking.session.memory.merge_op.base import SearchReplaceBlock, StrPatch
-        from openviking.session.memory.merge_op.patch_handler import apply_str_patch
 
         errors = []
+        patch_op = PatchOp(FieldType.STRING)
         read_files = self.context_provider.read_file_contents or {}
         for operation in operations.upsert_operations:
             if operation.old_memory_file_content is None:
@@ -806,7 +809,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     continue
                 patch = StrPatch(blocks=blocks)
                 try:
-                    applied_content = apply_str_patch(current_content, patch)
+                    applied_content = await patch_op.apply(current_content, patch)
                 except Exception:
                     applied_content = current_content
                 if applied_content != current_content:
