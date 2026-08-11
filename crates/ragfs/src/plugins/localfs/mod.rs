@@ -274,8 +274,8 @@ impl LocalFileSystem {
         Error::plugin(format!("failed to lock for {operation}: {error}"))
     }
 
-    /// Map local file read failures into stable filesystem error categories.
-    fn map_read_error(path: &str, error: std::io::Error) -> Error {
+    /// Map local file failures into stable filesystem error categories.
+    fn map_error(path: &str, error: std::io::Error) -> Error {
         if error.kind() == std::io::ErrorKind::NotFound {
             return Error::NotFound(path.to_string());
         }
@@ -964,7 +964,7 @@ impl FileSystem for LocalFileSystem {
         }
 
         // Read file
-        let data = fs::read(&local_path).map_err(|e| Self::map_read_error(path, e))?;
+        let data = fs::read(&local_path).map_err(|e| Self::map_error(path, e))?;
 
         // Apply offset and size
         let file_size = data.len() as u64;
