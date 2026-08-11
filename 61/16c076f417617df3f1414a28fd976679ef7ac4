@@ -1,0 +1,33 @@
+bot/tests/test_compile.py
+  s_2924a4a2bd05f5::t_6343c127a1953d 18,2510-2798
+bot/vikingbot/compile/models.py
+  s_2ec51de2827742::t_c77a4f9549372f 44
+bot/vikingbot/compile/service.py
+  s_2924a4a2bd05f5::t_41089798048113 6,8,18,22,24-29,53,83,87-89,467-469,471-476,508-509,512,800-841,848-1050,1659-1660
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "6116c076f417617df3f1414a28fd976679ef7ac4",
+  "prompts": {},
+  "sessions": {
+    "s_2924a4a2bd05f5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fef05-ad2c-7bf1-8637-bafaa3613f62",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    },
+    "s_2ec51de2827742": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019feebc-f8ba-7713-ba1a-12bf837bc385",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
