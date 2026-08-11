@@ -1,0 +1,21 @@
+openviking/service/__init__.py
+  s_6618d13f607fce::t_dbbba36c1b9e0f 10-32
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "9622f4fd25587050cb8d38df4373999cb2bea7ac",
+  "prompts": {},
+  "sessions": {
+    "s_6618d13f607fce": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019feb27-2da2-75c0-968b-b9a02aadb589",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
