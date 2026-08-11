@@ -1,0 +1,23 @@
+sdk/python/openviking_sdk/client.py
+  s_6618d13f607fce::t_d54d53517287b9 520-525,1215
+sdk/python/tests/test_async_client_behaviors.py
+  s_6618d13f607fce::t_1969445c44e763 964-981
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "85547cad352e3bc2393eadc91acb27d8905bcc2a",
+  "prompts": {},
+  "sessions": {
+    "s_6618d13f607fce": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019feb27-2da2-75c0-968b-b9a02aadb589",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
