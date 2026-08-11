@@ -17,6 +17,7 @@ const DEFAULT_STATE: RemoteSourceOptionState = {
     authMode: 'public',
     refMode: 'branch',
     refValue: '',
+    supportsHttpAuth: false,
     token: '',
     username: 'oauth2',
   },
@@ -75,5 +76,19 @@ describe('remote resource source strategy', () => {
     }
 
     expect(isRemoteSourceConfigurationValid('webPage', state)).toBe(false)
+  })
+
+  it('does not build token authentication for a non-HTTPS Git source', () => {
+    const state: RemoteSourceOptionState = {
+      ...DEFAULT_STATE,
+      git: {
+        ...DEFAULT_STATE.git,
+        authMode: 'token',
+        token: 'secret-token',
+      },
+    }
+
+    expect(isRemoteSourceConfigurationValid('git', state)).toBe(false)
+    expect(buildRemoteSourceRequestOptions('git', state)).toEqual({ args: {} })
   })
 })

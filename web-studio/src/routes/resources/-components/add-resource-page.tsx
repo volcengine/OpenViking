@@ -101,7 +101,7 @@ export function AddResourceForm({
   const { enqueueUploads, startRemote, resetRemote, remoteState } =
     useResourceUpload()
 
-  const [mode, setMode] = useState<Mode>(initialMode)
+  const [mode, setMode] = useState<Mode>(watchRequired ? 'remote' : initialMode)
   const [remoteUrl, setRemoteUrl] = useState('')
   const [remoteResourceType, setRemoteResourceType] =
     useState<RemoteResourceTypeSelection>('auto')
@@ -151,7 +151,13 @@ export function AddResourceForm({
     detectedRemoteResourceKind,
     remoteResourceType,
   )
-  const sourceCapabilities = getRemoteResourceCapabilities(remoteResourceKind)
+  const sourceCapabilities = getRemoteResourceCapabilities(
+    activeMode === 'remote' ? remoteResourceKind : 'unknown',
+  )
+  const gitSupportsHttpAuth = remoteUrl
+    .trim()
+    .toLowerCase()
+    .startsWith('https://')
   const effectiveWatchEnabled = watchEnabled && sourceCapabilities.watch
   const effectiveDestinationMode: ResourceDestinationMode =
     sourceCapabilities.exactDestination ? 'to' : destinationMode
@@ -165,6 +171,7 @@ export function AddResourceForm({
       authMode: gitAuthMode,
       refMode: gitRefMode,
       refValue: gitRef,
+      supportsHttpAuth: gitSupportsHttpAuth,
       token: gitToken,
       username: gitUsername,
     },
@@ -177,9 +184,17 @@ export function AddResourceForm({
       if (remotePhase === 'done') {
         resetRemote()
       }
+      const nextSupportsHttpAuth = value
+        .trim()
+        .toLowerCase()
+        .startsWith('https://')
+      if (gitSupportsHttpAuth && !nextSupportsHttpAuth) {
+        setGitAuthMode('public')
+        setGitToken('')
+      }
       setRemoteUrl(value)
     },
-    [remotePhase, resetRemote],
+    [gitSupportsHttpAuth, remotePhase, resetRemote],
   )
 
   const resetRemoteSourceFields = useCallback(() => {
@@ -317,7 +332,7 @@ export function AddResourceForm({
     setSelectedFiles([])
     setRemoteUrl('')
     setRemoteResourceType('auto')
-    setMode(initialMode)
+    setMode(watchRequired ? 'remote' : initialMode)
     resetRemoteSourceFields()
     setAdditionalOptions(DEFAULT_ADDITIONAL_OPTIONS)
     setDestinationMode('parent')
@@ -342,45 +357,52 @@ export function AddResourceForm({
     (effectiveDestinationMode === 'to' && !!targetUri.trim())
   const watchRequirementMet =
     !watchRequired ||
-    (sourceCapabilities.watch && effectiveWatchEnabled && hasValidWatchInterval)
+    (activeMode === 'remote' &&
+      sourceCapabilities.watch &&
+      effectiveWatchEnabled &&
+      hasValidWatchInterval)
   const canSubmit =
     hasValidCommonOptions &&
     hasValidDestination &&
     watchRequirementMet &&
-    remoteResourceTypeMatches &&
     (activeMode === 'upload'
       ? selectedFiles.length > 0
-      : !!remoteUrl.trim() && hasValidWatchInterval && hasValidSourceOptions)
+      : remoteResourceTypeMatches &&
+        !!remoteUrl.trim() &&
+        hasValidWatchInterval &&
+        hasValidSourceOptions)
 
   return (
     <div className="flex flex-col gap-6">
       <div className="space-y-5">
-        <div className="flex gap-1 rounded-lg bg-muted p-1">
-          <button
-            type="button"
-            className={`flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-              activeMode === 'upload'
-                ? 'bg-background text-foreground shadow-sm'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-            onClick={() => setMode('upload')}
-          >
-            <Upload className="size-4" />
-            {t('mode.upload')}
-          </button>
-          <button
-            type="button"
-            className={`flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-              activeMode === 'remote'
-                ? 'bg-background text-foreground shadow-sm'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-            onClick={() => setMode('remote')}
-          >
-            <Globe className="size-4" />
-            {t('mode.remote')}
-          </button>
-        </div>
+        {!watchRequired ? (
+          <div className="flex gap-1 rounded-lg bg-muted p-1">
+            <button
+              type="button"
+              className={`flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                activeMode === 'upload'
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+              onClick={() => setMode('upload')}
+            >
+              <Upload className="size-4" />
+              {t('mode.upload')}
+            </button>
+            <button
+              type="button"
+              className={`flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                activeMode === 'remote'
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+              onClick={() => setMode('remote')}
+            >
+              <Globe className="size-4" />
+              {t('mode.remote')}
+            </button>
+          </div>
+        ) : null}
 
         {activeMode === 'upload' ? (
           <UploadResourceFields
@@ -430,7 +452,7 @@ export function AddResourceForm({
                 onUsernameChange={setGitUsername}
                 refMode={gitRefMode}
                 refValue={gitRef}
-                supportsHttpAuth={remoteUrl.trim().startsWith('https://')}
+                supportsHttpAuth={gitSupportsHttpAuth}
                 t={t}
                 token={gitToken}
                 username={gitUsername}

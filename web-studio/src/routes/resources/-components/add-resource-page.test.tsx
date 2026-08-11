@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -146,6 +152,7 @@ describe('AddResourceForm watch options', () => {
     expect(
       screen.queryByRole('button', { name: /sourcePicker.tos/ }),
     ).toBeNull()
+    expect(screen.queryByRole('button', { name: 'mode.upload' })).toBeNull()
     fireEvent.change(screen.getByRole('textbox', { name: 'remoteUrl' }), {
       target: { value: 'tos://bucket/docs' },
     })
@@ -316,6 +323,72 @@ describe('AddResourceForm watch options', () => {
       onFailed: undefined,
       url: 'https://github.com/volcengine/OpenViking',
     })
+  })
+
+  it('clears HTTPS Git credentials when the source changes to SSH', async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AddResourceForm initialMode="remote" />
+      </QueryClientProvider>,
+    )
+
+    const remoteUrlInput = screen.getByRole('textbox', { name: 'remoteUrl' })
+    fireEvent.change(remoteUrlInput, {
+      target: { value: 'https://github.com/volcengine/OpenViking' },
+    })
+    fireEvent.click(screen.getByRole('radio', { name: /git.auth.token/ }))
+    fireEvent.change(screen.getByLabelText('git.token'), {
+      target: { value: 'secret-token' },
+    })
+
+    fireEvent.change(remoteUrlInput, {
+      target: { value: 'git@github.com:volcengine/OpenViking.git' },
+    })
+
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole('radio', { name: /git.auth.public/ })
+          .getAttribute('aria-checked'),
+      ).toBe('true'),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'startProcessing' }))
+
+    expect(uploadMocks.startRemote).toHaveBeenCalledWith({
+      commonBody: expect.not.objectContaining({
+        args: expect.objectContaining({ auth_config: expect.anything() }),
+      }),
+      onAccepted: undefined,
+      onCompleted: undefined,
+      onFailed: undefined,
+      url: 'git@github.com:volcengine/OpenViking.git',
+    })
+  })
+
+  it('restores native upload capabilities after selecting TOS', () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AddResourceForm initialMode="remote" />
+      </QueryClientProvider>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /sourcePicker.tos/ }))
+    expect(screen.getByText('destination.tosHint')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'mode.upload' }))
+
+    expect(screen.getByText('destination.parentHint')).toBeTruthy()
+    expect(screen.queryByText('destination.tosHint')).toBeNull()
+    fireEvent.click(screen.getByText('advancedOptions'))
+    expect(
+      screen.getByRole('checkbox', { name: 'strict' }).hasAttribute('disabled'),
+    ).toBe(false)
   })
 
   it('submits recursive web crawl options', () => {
