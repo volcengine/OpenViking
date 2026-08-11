@@ -7,12 +7,14 @@ import json
 import sys
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
+from urllib.parse import quote
 
 import pytest
 
 from openviking.parse.accessors.feishu_accessor import (
     _MAX_MEDIA_DOWNLOAD_CONTEXTS,
     FeishuAccessor,
+    _safe_path_segment,
     _title_as_filename,
 )
 
@@ -203,6 +205,20 @@ def test_feishu_url_detection_supports_drive_folder_and_file_paths():
     ) == ("file", "G0wKbPjCooZ7LUxktDOc56Ysnlg")
 
 
+def test_safe_path_segment_bounds_utf8_bytes_and_preserves_suffix():
+    filename = _safe_path_segment(f"{'文' * 100}.md")
+
+    assert filename.endswith(".md")
+    assert len(filename.encode("utf-8")) <= 240
+
+
+def test_safe_path_segment_bounds_extreme_suffix():
+    filename = _safe_path_segment(f"a.{'b' * 237}")
+
+    assert len(filename) <= 120
+    assert len(filename.encode("utf-8")) <= 240
+
+
 def test_access_downloads_lark_file_url(monkeypatch):
     _install_fake_lark_modules(monkeypatch)
     request = MagicMock(
@@ -236,6 +252,37 @@ def test_access_downloads_lark_file_url(monkeypatch):
         resource.cleanup()
 
 
+def test_access_downloads_lark_file_url_with_long_utf8_filename(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+    long_filename = f"{'文' * 100}.pdf"
+    request = MagicMock(
+        return_value=_FakeMediaResponse(
+            b"%PDF-1.7",
+            headers={
+                "content-type": "application/pdf",
+                "content-disposition": f"attachment; filename*=UTF-8''{quote(long_filename)}",
+            },
+        )
+    )
+    accessor = FeishuAccessor()
+    accessor._config = SimpleNamespace(download_images=False)
+    accessor._user_token_client = SimpleNamespace(request=request)
+
+    resource = asyncio.run(
+        accessor.access(
+            "https://bytedance.larkoffice.com/file/G0wKbPjCooZ7LUxktDOc56Ysnlg",
+            feishu_access_token="u-test",
+        )
+    )
+    try:
+        assert resource.path.read_bytes() == b"%PDF-1.7"
+        assert resource.path.name.endswith(".pdf")
+        assert len(resource.path.name.encode("utf-8")) <= 240
+        assert resource.meta["original_filename"] == resource.path.name
+    finally:
+        resource.cleanup()
+
+
 def test_access_expands_drive_folder_recursively(monkeypatch):
     _install_fake_lark_modules(monkeypatch)
     folder_children = {
@@ -250,10 +297,13 @@ def test_access_expands_drive_folder_recursively(monkeypatch):
         ],
     }
     request = MagicMock(
-        return_value=_FakeMediaResponse(
-            b"%PDF-1.7",
-            headers={"content-type": "application/pdf"},
-        )
+        side_effect=[
+            _SuccessResponse(SimpleNamespace(name="Product Docs")),
+            _FakeMediaResponse(
+                b"%PDF-1.7",
+                headers={"content-type": "application/pdf"},
+            ),
+        ]
     )
     accessor = FeishuAccessor()
     accessor._config = SimpleNamespace(download_images=False)
@@ -293,9 +343,94 @@ def test_access_expands_drive_folder_recursively(monkeypatch):
         assert (resource.path / "Design.pdf").read_bytes() == b"%PDF-1.7"
         assert resource.meta["feishu_doc_type"] == "folder"
         assert resource.meta["feishu_token"] == "root_folder"
+        assert resource.meta["original_filename"] == "Product Docs"
+        meta_request, meta_option = request.call_args_list[0].args
+        assert meta_request.http_method == "GET"
+        assert meta_request.uri == "/open-apis/drive/explorer/v2/folder/root_folder/meta"
+        assert meta_request.token_types == {"user"}
+        assert meta_option.user_access_token == "u-test"
+    finally:
+        resource.cleanup()
+
+
+def test_access_drive_folder_uses_token_name_when_metadata_unavailable(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+    accessor = FeishuAccessor()
+    accessor._config = SimpleNamespace(download_images=False)
+
+    monkeypatch.setattr(accessor, "_get_drive_folder_name", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(accessor, "_list_drive_folder_children", lambda *_args, **_kwargs: [])
+
+    resource = asyncio.run(
+        accessor.access(
+            "https://bytedance.larkoffice.com/drive/folder/root_folder",
+            feishu_access_token="u-test",
+        )
+    )
+    try:
         assert resource.meta["original_filename"] == "root_folder"
     finally:
         resource.cleanup()
+
+
+def test_access_drive_folder_materializes_long_utf8_document_names(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+    accessor = FeishuAccessor()
+    accessor._config = SimpleNamespace(download_images=False)
+    long_name = "文" * 100
+
+    monkeypatch.setattr(accessor, "_get_drive_folder_name", lambda *_args, **_kwargs: "根目录")
+    monkeypatch.setattr(
+        accessor,
+        "_list_drive_folder_children",
+        lambda *_args, **_kwargs: [
+            SimpleNamespace(token="doc_one", name=long_name, type="docx", url=""),
+            SimpleNamespace(token="doc_two", name=long_name, type="docx", url=""),
+        ],
+    )
+
+    async def fake_fetch_document(url, **_kwargs):
+        from openviking.parse.accessors.feishu_accessor import FeishuDocument
+
+        doc_type, token = accessor._parse_feishu_url(url)
+        return FeishuDocument(
+            doc_type=doc_type,
+            token=token,
+            markdown_content=f"# {token}",
+            title=long_name,
+            meta={},
+        )
+
+    monkeypatch.setattr(accessor, "_fetch_document", fake_fetch_document)
+
+    resource = asyncio.run(
+        accessor.access(
+            "https://bytedance.larkoffice.com/drive/folder/root_folder",
+            feishu_access_token="u-test",
+        )
+    )
+    try:
+        markdown_files = sorted(resource.path.glob("*.md"))
+        assert len(markdown_files) == 2
+        assert resource.meta["feishu_folder_skipped_items"] == []
+        assert all(path.name.endswith(".md") for path in markdown_files)
+        assert all(len(path.name.encode("utf-8")) <= 240 for path in markdown_files)
+        assert any(" (2).md" in path.name for path in markdown_files)
+    finally:
+        resource.cleanup()
+
+
+def test_unique_child_path_bounds_extreme_suffix(tmp_path):
+    name = f"a.{'b' * 237}"
+    first_path = FeishuAccessor._unique_child_path(tmp_path, name)
+    first_path.write_text("first", encoding="utf-8")
+
+    second_path = FeishuAccessor._unique_child_path(tmp_path, name)
+
+    assert len(first_path.name) <= 120
+    assert len(first_path.name.encode("utf-8")) <= 240
+    assert len(second_path.name) <= 120
+    assert len(second_path.name.encode("utf-8")) <= 240
 
 
 def test_access_drive_folder_skips_item_failures_by_default(monkeypatch):

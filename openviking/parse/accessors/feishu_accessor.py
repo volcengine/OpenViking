@@ -45,6 +45,8 @@ _FEISHU_DRIVE_DOC_TYPES = {
     "base": "base",
     "wiki": "wiki",
 }
+_MAX_PATH_SEGMENT_CHARS = 120
+_MAX_PATH_SEGMENT_BYTES = 240
 
 _MediaDownloadExtras = Dict[str, List[Optional[str]]]
 
@@ -59,18 +61,88 @@ def _title_as_filename(title: str) -> str:
     return title.replace("/", "_").replace("\\", "_")
 
 
-def _safe_path_segment(name: str, *, fallback: str = "untitled", max_len: int = 120) -> str:
+def _truncate_text_for_path_segment(text: str, *, max_chars: int, max_bytes: int) -> str:
+    """Trim text so its UTF-8 representation fits a single path segment budget."""
+    if max_chars <= 0 or max_bytes <= 0:
+        return ""
+    result: list[str] = []
+    used_bytes = 0
+    for char in text[:max_chars]:
+        char_bytes = len(char.encode("utf-8"))
+        if used_bytes + char_bytes > max_bytes:
+            break
+        result.append(char)
+        used_bytes += char_bytes
+    return "".join(result)
+
+
+def _fit_path_segment(text: str, *, max_chars: int, max_bytes: int) -> str:
+    """Ensure a complete path segment fits the configured character and byte budgets."""
+    if len(text) <= max_chars and len(text.encode("utf-8")) <= max_bytes:
+        return text
+    return _truncate_text_for_path_segment(
+        text,
+        max_chars=max_chars,
+        max_bytes=max_bytes,
+    ).rstrip(" ._")
+
+
+def _safe_path_segment(
+    name: str,
+    *,
+    fallback: str = "untitled",
+    max_len: int = _MAX_PATH_SEGMENT_CHARS,
+    max_bytes: int = _MAX_PATH_SEGMENT_BYTES,
+) -> str:
     """Return one portable path segment while preserving readable names."""
     safe_name = re.sub(r"[\x00-\x1f/\\:*?\"<>|]+", "_", str(name or "")).strip(" ._")
     safe_name = re.sub(r"\s+", " ", safe_name)
     if not safe_name:
         safe_name = fallback
-    if len(safe_name) > max_len:
-        stem = Path(safe_name).stem
-        suffix = Path(safe_name).suffix
-        max_stem = max_len - len(suffix)
-        safe_name = f"{stem[:max_stem].rstrip(' ._')}{suffix}" if max_stem > 0 else stem[:max_len]
-    return safe_name or fallback
+    if len(safe_name) <= max_len and len(safe_name.encode("utf-8")) <= max_bytes:
+        return safe_name
+
+    stem = Path(safe_name).stem
+    suffix = Path(safe_name).suffix
+    suffix_bytes = len(suffix.encode("utf-8"))
+    if suffix_bytes >= max_bytes:
+        suffix = ""
+        suffix_bytes = 0
+
+    stem = _truncate_text_for_path_segment(
+        stem,
+        max_chars=max_len - len(suffix),
+        max_bytes=max_bytes - suffix_bytes,
+    ).rstrip(" ._")
+    if not stem:
+        stem = _truncate_text_for_path_segment(
+            fallback,
+            max_chars=max_len - len(suffix),
+            max_bytes=max_bytes - suffix_bytes,
+        ).rstrip(" ._")
+    return _fit_path_segment(
+        f"{stem or 'untitled'}{suffix}",
+        max_chars=max_len,
+        max_bytes=max_bytes,
+    ) or "untitled"
+
+
+def _numbered_path_segment(stem: str, suffix: str, index: int) -> str:
+    marker = f" ({index})"
+    marker_bytes = len(marker.encode("utf-8"))
+    suffix_bytes = len(suffix.encode("utf-8"))
+    max_stem_bytes = _MAX_PATH_SEGMENT_BYTES - marker_bytes - suffix_bytes
+    max_stem_chars = _MAX_PATH_SEGMENT_CHARS - len(marker) - len(suffix)
+    safe_stem = _truncate_text_for_path_segment(
+        stem,
+        max_chars=max_stem_chars,
+        max_bytes=max_stem_bytes,
+    ).rstrip(" ._")
+    return _fit_path_segment(
+        f"{safe_stem or 'untitled'}{marker}{suffix}",
+        max_chars=_MAX_PATH_SEGMENT_CHARS,
+        max_bytes=_MAX_PATH_SEGMENT_BYTES,
+    ) or "untitled"
 
 
 def _getattr_safe(obj, key: str, default=None):
@@ -316,6 +388,11 @@ class FeishuAccessor(DataAccessor):
             if doc_type == "folder":
                 temp_dir = Path(tempfile.mkdtemp(prefix="ov_feishu_folder_"))
                 skipped_items: list[dict[str, Any]] = []
+                folder_name = await asyncio.to_thread(
+                    self._drive_folder_display_name,
+                    token,
+                    feishu_access_token=feishu_access_token,
+                )
                 try:
                     await self._materialize_drive_folder(
                         token,
@@ -334,7 +411,7 @@ class FeishuAccessor(DataAccessor):
                     meta={
                         "feishu_doc_type": doc_type,
                         "feishu_token": token,
-                        "original_filename": _safe_path_segment(token, fallback="folder"),
+                        "original_filename": _safe_path_segment(folder_name, fallback=token),
                         "feishu_folder_skipped_items": skipped_items,
                     },
                     is_temporary=True,
@@ -737,6 +814,60 @@ class FeishuAccessor(DataAccessor):
 
         return all_children
 
+    def _drive_folder_display_name(
+        self,
+        folder_token: str,
+        *,
+        feishu_access_token: Optional[str] = None,
+    ) -> str:
+        """Best-effort readable folder name for resource roots."""
+        try:
+            name = self._get_drive_folder_name(
+                folder_token,
+                feishu_access_token=feishu_access_token,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[FeishuAccessor] Falling back to Drive folder token %s as name: %s",
+                folder_token,
+                exc,
+            )
+            return folder_token
+        return name or folder_token
+
+    def _get_drive_folder_name(
+        self,
+        folder_token: str,
+        *,
+        feishu_access_token: Optional[str] = None,
+    ) -> Optional[str]:
+        """Fetch a Feishu Drive folder display name by folder token."""
+        import lark_oapi as lark
+
+        client = self._get_client(use_user_token=bool(feishu_access_token))
+        token_type = (
+            lark.AccessTokenType.USER if feishu_access_token else lark.AccessTokenType.TENANT
+        )
+        raw_req = (
+            lark.BaseRequest.builder()
+            .http_method(lark.HttpMethod.GET)
+            .uri(f"/open-apis/drive/explorer/v2/folder/{folder_token}/meta")
+            .token_types({token_type})
+            .build()
+        )
+        response = self._call_api(client.request, raw_req, feishu_access_token)
+        if not response.success():
+            _raise_from_lark_response(
+                response,
+                operation=f"fetch Drive folder metadata {folder_token}",
+                resource=folder_token,
+            )
+
+        data = self._drive_response_data(response)
+        folder_meta = _getattr_safe(data, "folder", None) or _getattr_safe(data, "meta", None)
+        name = _getattr_safe(data, "name", None) or _getattr_safe(folder_meta, "name", None)
+        return str(name) if name else None
+
     def _download_drive_file(
         self,
         file_token: str,
@@ -840,7 +971,7 @@ class FeishuAccessor(DataAccessor):
         suffix = path.suffix
         stem = path.stem
         for index in range(2, 10000):
-            candidate = parent / f"{stem} ({index}){suffix}"
+            candidate = parent / _numbered_path_segment(stem, suffix, index)
             if not candidate.exists():
                 return candidate
         raise RuntimeError(f"Unable to allocate unique path under {parent}")
@@ -854,17 +985,17 @@ class FeishuAccessor(DataAccessor):
         *,
         filename_hint: Optional[str] = None,
     ) -> str:
-        filename = _safe_path_segment(filename_hint or file_token, fallback=file_token)
-        if Path(filename).suffix:
-            return filename
-        return f"{filename}{cls._guess_drive_file_ext(content, content_type)}"
+        raw_name = filename_hint or file_token
+        if Path(raw_name).suffix:
+            return _safe_path_segment(raw_name, fallback=file_token)
+        ext = cls._guess_drive_file_ext(content, content_type)
+        return _safe_path_segment(f"{raw_name}{ext}", fallback=f"{file_token}{ext}")
 
     @staticmethod
     def _markdown_file_name(name: str) -> str:
-        safe_name = _safe_path_segment(name)
-        if safe_name.lower().endswith((".md", ".markdown")):
-            return safe_name
-        return f"{safe_name}.md"
+        if str(name).lower().endswith((".md", ".markdown")):
+            return _safe_path_segment(name)
+        return _safe_path_segment(f"{name}.md")
 
     @staticmethod
     def _guess_drive_file_ext(content: bytes, content_type: Optional[str]) -> str:
