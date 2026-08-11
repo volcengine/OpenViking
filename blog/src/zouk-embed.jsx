@@ -9,6 +9,8 @@ const CONFIG = {
 
 const BROWSER_ID_KEY = 'openviking.zouk.browserId';
 const CLOSE_ANIMATION_MS = 220;
+const WS_RECONNECT_MAX_DELAY_MS = 30000;
+const WS_STABLE_CONNECTION_MS = 15000;
 
 function browserAvailable() {
   return typeof window !== 'undefined' && typeof document !== 'undefined';
@@ -85,7 +87,9 @@ function currentGuestPictureUrl() {
 }
 
 function wsUrlFor(serverUrl, token, workspaceId) {
-  const url = new URL('/ws', serverUrl);
+  // Append to the full serverUrl so a reverse-proxy path prefix survives;
+  // `new URL('/ws', serverUrl)` resolves against the origin and drops it.
+  const url = new URL(`${String(serverUrl).replace(/\/+$/, '')}/ws`);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   url.searchParams.set('token', token);
   url.searchParams.set('workspaceId', workspaceId);
@@ -94,8 +98,40 @@ function wsUrlFor(serverUrl, token, workspaceId) {
 
 async function parseJsonResponse(res) {
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body?.error || `Request failed (${res.status})`);
+  if (!res.ok) {
+    const error = new Error(body?.error || `Request failed (${res.status})`);
+    error.status = res.status;
+    const retryAfterSeconds = Number(res.headers?.get?.('Retry-After'));
+    if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+      error.retryAfterMs = retryAfterSeconds * 1000;
+    }
+    throw error;
+  }
   return body;
+}
+
+function isAuthError(err) {
+  // zouk answers missing/expired embed tokens with 403 on REST and 401 on the
+  // websocket upgrade; treat both as "mint a fresh guest session and retry".
+  return err?.status === 401 || err?.status === 403;
+}
+
+function describeRequestError(err, fallback) {
+  if (err?.status === 429) {
+    const seconds = Math.ceil((err.retryAfterMs || 0) / 1000);
+    return seconds > 0
+      ? `Rate limited. Try again in ${seconds}s.`
+      : 'Rate limited. Try again shortly.';
+  }
+  return err instanceof Error ? err.message : fallback;
+}
+
+function authHeadersFor(token) {
+  return {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${token}`,
+    'X-Workspace-Id': CONFIG.workspaceId,
+  };
 }
 
 function normalizeAvatarUrl(value = '') {
@@ -739,6 +775,9 @@ export function ZoukInteractiveBlog({ route }) {
   const scrollRef = useRef(null);
   const textareaRef = useRef(null);
   const wsRef = useRef(null);
+  const tokenRef = useRef('');
+  const lastSeenMessageIdRef = useRef('');
+  const wsAttemptsRef = useRef(0);
   const closeTimerRef = useRef(null);
   const dragRef = useRef(null);
   const sheetHeightRef = useRef(0);
@@ -757,12 +796,6 @@ export function ZoukInteractiveBlog({ route }) {
   const submitDisabled = !composerTrimmed || status === 'sending' || sendWhenReady;
   const launcherLabel = currentUiLanguage() === 'zh' ? '打开 OpenViking 助手' : 'Open OpenViking assistant';
   const closeLabel = currentUiLanguage() === 'zh' ? '关闭助手' : 'Close assistant';
-
-  const authHeaders = useMemo(() => ({
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${token}`,
-    'X-Workspace-Id': CONFIG.workspaceId,
-  }), [token]);
 
   const visibleMessages = useMemo(
     () => messages.filter((message) => !isSystemMessage(message)),
@@ -828,48 +861,67 @@ export function ZoukInteractiveBlog({ route }) {
     }, CLOSE_ANIMATION_MS);
   }, []);
 
-  const loadHistory = useCallback(async (nextToken = token) => {
+  const mintSession = useCallback(async () => {
+    const res = await fetch(`${CONFIG.serverUrl}/api/auth/embed-guest-session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId: CONFIG.workspaceId,
+        channel: CONFIG.channel,
+        name: CONFIG.guestName,
+        browserId,
+        picture: currentGuestPictureUrl(),
+      }),
+    });
+    const body = await parseJsonResponse(res);
+    tokenRef.current = body.token;
+    setToken(body.token);
+    setUserName(body.user?.name || CONFIG.guestName);
+    return body.token;
+  }, [browserId]);
+
+  const requestWithReauth = useCallback(async (makeRequest) => {
+    try {
+      return await makeRequest(tokenRef.current);
+    } catch (err) {
+      if (!isAuthError(err)) throw err;
+      // Embed tokens are short-lived and server restarts wipe them; silently
+      // mint a fresh guest session once and retry before surfacing an error.
+      const freshToken = await mintSession();
+      return makeRequest(freshToken);
+    }
+  }, [mintSession]);
+
+  const loadHistory = useCallback(async (nextToken = tokenRef.current) => {
     if (!nextToken) return;
     const res = await fetch(`${CONFIG.serverUrl}/api/messages`, {
       headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${nextToken}`,
-        'X-Workspace-Id': CONFIG.workspaceId,
+        ...authHeadersFor(nextToken),
         'X-Channel': target,
         'X-Limit': '80',
       },
       cache: 'no-store',
     });
     const body = await parseJsonResponse(res);
-    setMessages((body.messages || []).map(normalizeMessage).filter((message) => message && !isSystemMessage(message)));
-  }, [target, token]);
+    const history = (body.messages || []).map(normalizeMessage).filter((message) => message && !isSystemMessage(message));
+    const newest = history[history.length - 1];
+    if (newest?.id) lastSeenMessageIdRef.current = newest.id;
+    setMessages(history);
+  }, [target]);
 
   const connect = useCallback(async () => {
     if (!browserId || status === 'connecting') return;
     setStatus('connecting');
     setError('');
     try {
-      const res = await fetch(`${CONFIG.serverUrl}/api/auth/embed-guest-session`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          workspaceId: CONFIG.workspaceId,
-          channel: CONFIG.channel,
-          name: CONFIG.guestName,
-          browserId,
-          picture: currentGuestPictureUrl(),
-        }),
-      });
-      const body = await parseJsonResponse(res);
-      setToken(body.token);
-      setUserName(body.user?.name || CONFIG.guestName);
-      await loadHistory(body.token);
+      const nextToken = await mintSession();
+      await loadHistory(nextToken);
       setStatus('connected');
     } catch (err) {
       setStatus('error');
-      setError(err instanceof Error ? err.message : 'Unable to connect');
+      setError(describeRequestError(err, 'Unable to connect'));
     }
-  }, [browserId, loadHistory, status]);
+  }, [browserId, loadHistory, mintSession, status]);
 
   useEffect(() => {
     if (!panelVisible || token || status === 'connecting' || status === 'error') return undefined;
@@ -878,54 +930,167 @@ export function ZoukInteractiveBlog({ route }) {
   }, [connect, panelVisible, status, token]);
 
   useEffect(() => {
-    if (!token) return undefined;
-    const ws = new WebSocket(wsUrlFor(CONFIG.serverUrl, token, CONFIG.workspaceId));
-    wsRef.current = ws;
-    ws.onopen = () => setStatus('connected');
-    ws.onclose = () => setStatus((prev) => (prev === 'error' ? prev : 'closed'));
-    ws.onerror = () => setStatus('error');
-    ws.onmessage = (event) => {
-      try {
-        const packet = JSON.parse(event.data);
-        if (packet.type === 'ping') return;
-        if (packet.type === 'init') {
-          setAgents(mergeAgents([], packet.agents || []));
-          return;
-        }
-        if (packet.type === 'agent_started' && packet.agent) {
-          setAgents((prev) => mergeAgents(prev, packet.agent));
-          return;
-        }
-        if (packet.type === 'agent_status') {
-          setAgents((prev) => updateAgentStatus(prev, packet));
-          return;
-        }
-        if (packet.type === 'agent_activity') {
-          setAgents((prev) => updateAgentActivity(prev, packet));
-          return;
-        }
-        if ((packet.type === 'message' || packet.type === 'new_message') && packet.message) {
-          const next = normalizeMessage(packet.message);
-          if (next?.channelType === 'thread' && next.parentChannelName === CONFIG.channel) {
-            dismissThinkingMessage();
-            setMessages((prev) => mergeThreadReply(prev, next));
-            setThreadStates((prev) => mergeThreadStateReply(prev, next));
-            return;
-          }
-          if (next?.channelName === CONFIG.channel) {
-            dismissThinkingMessage();
-            setMessages((prev) => mergeMessage(prev, next));
-          }
-        }
-      } catch {
-        // Ignore non-JSON websocket frames.
+    if (!token || !browserAvailable()) return undefined;
+    let disposed = false;
+    let socket = null;
+    let reconnectTimer = 0;
+    let waitingForVisibility = false;
+
+    const applyIncomingMessage = (next) => {
+      if (!next) return;
+      if (next.channelType === 'thread' && next.parentChannelName === CONFIG.channel) {
+        dismissThinkingMessage();
+        setMessages((prev) => mergeThreadReply(prev, next));
+        setThreadStates((prev) => mergeThreadStateReply(prev, next));
+        return;
+      }
+      if (next.channelName === CONFIG.channel) {
+        dismissThinkingMessage();
+        if (next.id) lastSeenMessageIdRef.current = next.id;
+        setMessages((prev) => mergeMessage(prev, next));
       }
     };
-    return () => {
-      ws.close();
-      if (wsRef.current === ws) wsRef.current = null;
+
+    const gapFill = async () => {
+      try {
+        const afterId = lastSeenMessageIdRef.current;
+        if (!afterId) {
+          await loadHistory();
+          return;
+        }
+        const res = await fetch(`${CONFIG.serverUrl}/api/messages`, {
+          headers: {
+            ...authHeadersFor(tokenRef.current),
+            'X-Channel': target,
+            'X-After': afterId,
+          },
+          cache: 'no-store',
+        });
+        const body = await parseJsonResponse(res);
+        (body.messages || []).map(normalizeMessage).forEach(applyIncomingMessage);
+      } catch {
+        // Gap-fill is best-effort; the live socket is already up again.
+      }
     };
-  }, [dismissThinkingMessage, token]);
+
+    const backoffDelayMs = () => {
+      const exponent = Math.min(wsAttemptsRef.current, 5);
+      return Math.min(WS_RECONNECT_MAX_DELAY_MS, 1000 * 2 ** exponent)
+        + Math.floor(Math.random() * 500);
+    };
+
+    const scheduleReconnect = (delayMs) => {
+      if (disposed) return;
+      if (reconnectTimer) window.clearTimeout(reconnectTimer);
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = 0;
+        attemptConnect();
+      }, delayMs);
+    };
+
+    const remintThenReconnect = async (delayMs) => {
+      try {
+        await mintSession();
+        // A changed token re-runs this effect and reconnects immediately; if
+        // the server handed back the same token, the timer below still fires.
+        scheduleReconnect(delayMs);
+      } catch (err) {
+        scheduleReconnect(Math.max(delayMs, err?.retryAfterMs || 0));
+      }
+    };
+
+    const attemptConnect = () => {
+      if (disposed) return;
+      if (document.visibilityState === 'hidden') {
+        // Don't churn reconnects in background tabs; resume once visible.
+        waitingForVisibility = true;
+        return;
+      }
+      openSocket();
+    };
+
+    const openSocket = () => {
+      let opened = false;
+      let openedAt = 0;
+      const ws = new WebSocket(wsUrlFor(CONFIG.serverUrl, tokenRef.current || token, CONFIG.workspaceId));
+      socket = ws;
+      wsRef.current = ws;
+      ws.onopen = () => {
+        if (disposed) return;
+        opened = true;
+        openedAt = Date.now();
+        const isReconnect = wsAttemptsRef.current > 0;
+        setStatus((prev) => (prev === 'sending' ? prev : 'connected'));
+        if (isReconnect) gapFill();
+      };
+      ws.onerror = () => {
+        // onclose always follows; reconnect handling lives there.
+      };
+      ws.onclose = () => {
+        if (wsRef.current === ws) wsRef.current = null;
+        if (disposed || socket !== ws) return;
+        setStatus((prev) => (prev === 'error' ? prev : 'closed'));
+        const stable = opened && Date.now() - openedAt >= WS_STABLE_CONNECTION_MS;
+        wsAttemptsRef.current = stable ? 1 : wsAttemptsRef.current + 1;
+        const delayMs = backoffDelayMs();
+        if (!opened) {
+          // The upgrade was rejected before the socket opened (zouk answers
+          // expired WS tokens with 401): silently re-mint, then reconnect.
+          remintThenReconnect(delayMs);
+        } else {
+          scheduleReconnect(delayMs);
+        }
+      };
+      ws.onmessage = (event) => {
+        try {
+          const packet = JSON.parse(event.data);
+          if (packet.type === 'ping') return;
+          if (packet.type === 'init') {
+            setAgents(mergeAgents([], packet.agents || []));
+            return;
+          }
+          if (packet.type === 'agent_started' && packet.agent) {
+            setAgents((prev) => mergeAgents(prev, packet.agent));
+            return;
+          }
+          if (packet.type === 'agent_status') {
+            setAgents((prev) => updateAgentStatus(prev, packet));
+            return;
+          }
+          if (packet.type === 'agent_activity') {
+            setAgents((prev) => updateAgentActivity(prev, packet));
+            return;
+          }
+          if ((packet.type === 'message' || packet.type === 'new_message') && packet.message) {
+            applyIncomingMessage(normalizeMessage(packet.message));
+          }
+        } catch {
+          // Ignore non-JSON websocket frames.
+        }
+      };
+    };
+
+    const onVisibilityChange = () => {
+      if (disposed || !waitingForVisibility) return;
+      if (document.visibilityState !== 'visible') return;
+      waitingForVisibility = false;
+      attemptConnect();
+    };
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    openSocket();
+    return () => {
+      disposed = true;
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      if (reconnectTimer) window.clearTimeout(reconnectTimer);
+      const ws = socket;
+      socket = null;
+      if (ws) {
+        ws.close();
+        if (wsRef.current === ws) wsRef.current = null;
+      }
+    };
+  }, [dismissThinkingMessage, loadHistory, mintSession, target, token]);
 
   useEffect(() => {
     thinkingMessageKeyRef.current = thinkingMessageKey;
@@ -1114,23 +1279,27 @@ export function ZoukInteractiveBlog({ route }) {
     setStatus('sending');
     setError('');
     try {
-      const res = await fetch(`${CONFIG.serverUrl}/api/messages`, {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify({ target, content }),
+      const body = await requestWithReauth(async (activeToken) => {
+        const res = await fetch(`${CONFIG.serverUrl}/api/messages`, {
+          method: 'POST',
+          headers: authHeadersFor(activeToken),
+          body: JSON.stringify({ target, content }),
+        });
+        return parseJsonResponse(res);
       });
-      const body = await parseJsonResponse(res);
       dismissThinkingMessage();
-      setMessages((prev) => mergeMessage(prev, normalizeMessage(body.message)));
+      const sent = normalizeMessage(body.message);
+      if (sent?.id) lastSeenMessageIdRef.current = sent.id;
+      setMessages((prev) => mergeMessage(prev, sent));
       if (nextIncludeUrl) setLastContextUrl(nextSourceUrl);
       setSelectedText('');
       setComposer('');
       setStatus('connected');
     } catch (err) {
       setStatus('error');
-      setError(err instanceof Error ? err.message : 'Send failed');
+      setError(describeRequestError(err, 'Send failed'));
     }
-  }, [authHeaders, composer, connect, dismissThinkingMessage, lastContextUrl, openChat, panelVisible, rememberSource, selectedText, status, target, token]);
+  }, [composer, connect, dismissThinkingMessage, lastContextUrl, openChat, panelVisible, rememberSource, requestWithReauth, selectedText, status, target, token]);
 
   useEffect(() => {
     if (!sendWhenReady || !token || status !== 'connected') return;
@@ -1153,15 +1322,17 @@ export function ZoukInteractiveBlog({ route }) {
       [parentId]: { ...(prev[parentId] || {}), open: true, loading: true, error: '' },
     }));
     try {
-      const res = await fetch(`${CONFIG.serverUrl}/api/messages`, {
-        headers: {
-          ...authHeaders,
-          'X-Channel': threadTargetForMessage(parentMessage),
-          'X-Limit': '100',
-        },
-        cache: 'no-store',
+      const body = await requestWithReauth(async (activeToken) => {
+        const res = await fetch(`${CONFIG.serverUrl}/api/messages`, {
+          headers: {
+            ...authHeadersFor(activeToken),
+            'X-Channel': threadTargetForMessage(parentMessage),
+            'X-Limit': '100',
+          },
+          cache: 'no-store',
+        });
+        return parseJsonResponse(res);
       });
-      const body = await parseJsonResponse(res);
       const threadMessages = (body.messages || []).map(normalizeMessage).filter(Boolean);
       setThreadStates((prev) => ({
         ...prev,
@@ -1178,7 +1349,7 @@ export function ZoukInteractiveBlog({ route }) {
         },
       }));
     }
-  }, [authHeaders, token]);
+  }, [requestWithReauth, token]);
 
   const toggleThread = useCallback((parentMessage) => {
     const parentId = parentMessage?.id;
