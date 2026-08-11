@@ -129,7 +129,7 @@ If you already have HTTPS configured, just connect to `https://your-server.com/m
 
 ## Available MCP Tools
 
-Once connected, OpenViking exposes 13 tools:
+Once connected, OpenViking exposes 14 tools:
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
@@ -139,6 +139,7 @@ Once connected, OpenViking exposes 13 tools:
 | `read` | Read one or more `viking://` URIs | `uris` (single string or array) |
 | `list` | List entries under a `viking://` directory | `uri`, `recursive` (optional) |
 | `remember` | Store messages into long-term memory (triggers extraction) | `messages` (list of `{role, content}`) |
+| `write` | Write text to a `viking://` file (create/overwrite/append), or edit a file with exact string replacements. Parent directories are created automatically; use `read` first to see current content before overwriting or editing | `uri`, `content` (optional, full write), `mode` (optional: `replace` default — creates the file if missing, `append`, `create` — fail if it exists), `edits` (optional list of `{old_string, new_string, replace_all}`), `wait` (optional, block until re-indexed), `timeout` (optional) |
 | `add_resource` | Add a local file or URL as a resource (local files trigger a progressive upload flow) | `path`, `temp_file_id` (optional), `description` (optional), `watch_interval` (optional, minutes — auto-refresh cadence for remote URLs), `processing_mode` (optional: `semantic_and_vectors` default, or `vectors_only` to skip VLM semantic understanding and only vectorize current files), `to` (optional, target `viking://resources/...` URI; if omitted when `watch_interval > 0`, the watch auto-binds to the resource's created URI), `args` (optional parser-specific options, including `{"parse_mode":"no_split"}` to parse each source document into one Markdown body, `{"feishu_access_token":"u-..."}` for one-time Feishu user-token imports, or `{"feishu_access_token":"u-...","feishu_refresh_token":"r-..."}` for Feishu user-token watches) |
 | `list_watches` | List watch tasks (auto-refresh subscriptions) visible to the current agent. Each entry shows target URI, refresh interval (minutes), active/paused status, and next scheduled execution time | none |
 | `cancel_watch` | Cancel (delete) a watch task by its target URI. To change the cadence or pause temporarily, cancel and re-add with a new `watch_interval` | `to_uri` (must match the watch task's `to` value, e.g. `viking://resources/...`) |

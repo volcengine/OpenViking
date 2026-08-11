@@ -3,7 +3,7 @@
 """MCP (Model Context Protocol) endpoint for OpenViking server.
 
 Exposes tools to Claude Code (or any MCP client) via streamable HTTP:
-  find, search, read, list, remember, add_resource, grep, glob, forget, health
+  find, search, read, write, list, remember, add_resource, grep, glob, forget, health
 
 Mounted on the FastAPI app at /mcp. The MCP session manager lifecycle is
 tied to the FastAPI app lifespan (not a sub-app lifespan) so the task group
@@ -47,6 +47,7 @@ from openviking.telemetry.span_models import update_root_span_identity
 from openviking.utils.search_filters import SearchContextTypeInput, merge_search_filter
 from openviking_cli.exceptions import (
     InvalidArgumentError,
+    NotFoundError,
     PermissionDeniedError,
     UnauthenticatedError,
 )
@@ -443,6 +444,123 @@ async def remember(messages: list[StoreMessage]) -> str:
                 session.add_message(msg.role, [TextPart(text=msg.content)])
     await service.sessions.commit_async(session_id, ctx)
     return f"Stored {len(messages)} message(s) and committed for memory extraction."
+
+
+# -- write -----------------------------------------------------------------
+
+
+class WriteEdit(BaseModel):
+    """One exact-string replacement applied by the write tool's `edits` mode."""
+
+    old_string: str = Field(
+        description="Exact text to find, including indentation and newlines. Must match the file content exactly."
+    )
+    new_string: str = Field(
+        description="Replacement text. Pass an empty string to delete old_string."
+    )
+    replace_all: bool = Field(
+        default=False,
+        description="Replace every occurrence of old_string. When false, the edit fails if old_string matches more than once.",
+    )
+
+
+@mcp.tool()
+async def write(
+    uri: str,
+    content: Optional[str] = None,
+    mode: Literal["replace", "append", "create"] = "replace",
+    edits: Optional[List[WriteEdit]] = None,
+    wait: bool = False,
+    timeout: Optional[float] = None,
+) -> str:
+    """Write text to a viking:// file, or edit an existing file with exact string replacements. Use this to save and update files (notes, profiles, knowledge, state) in OpenViking the same way you would use a working directory.
+
+    Full write — pass `content`:
+    - mode="replace" (default): overwrite the file; creates it and any missing parent directories if needed.
+    - mode="create": fail if the file already exists. New files must end in one of: .md .txt .json .yaml .yml .toml .py .js .ts
+    - mode="append": append to the end of an existing file; fails if the file does not exist.
+
+    Targeted edit — pass `edits` instead of `content`: a list of {old_string, new_string, replace_all} exact-string replacements applied to the file in order. Each old_string must match the current file content exactly (including indentation and newlines) and match exactly once unless replace_all=true. If any edit fails, the file is left unchanged. Prefer edits over a full rewrite when changing a small part of a larger file. Use the read tool first to see the file's exact current content.
+
+    Writable scopes: viking://resources/, viking://user/ (memories and resources), viking://agent/. After a write, semantic search indexes refresh in the background; pass wait=true to block until search reflects the change."""
+    service = get_service()
+    ctx = _get_ctx()
+
+    if edits:
+        if content is not None:
+            raise InvalidArgumentError(
+                "pass either content (full write) or edits (targeted edit), not both"
+            )
+        if mode != "replace":
+            raise InvalidArgumentError(
+                "mode applies only to full-content writes; edits always rewrite the matched text in place"
+            )
+        try:
+            current = await service.fs.read_visible(uri, ctx=ctx)
+        except (InvalidArgumentError, PermissionDeniedError, UnauthenticatedError):
+            raise
+        except Exception as exc:
+            raise NotFoundError(uri, "file") from exc
+        updated = current
+        for index, edit in enumerate(edits, start=1):
+            if not edit.old_string:
+                raise InvalidArgumentError(f"edit {index}: old_string must not be empty")
+            occurrences = updated.count(edit.old_string)
+            if occurrences == 0:
+                raise InvalidArgumentError(
+                    f"edit {index}: old_string not found in {uri}. "
+                    "Re-read the file with the read tool to get its current content."
+                )
+            if occurrences > 1 and not edit.replace_all:
+                raise InvalidArgumentError(
+                    f"edit {index}: old_string matches {occurrences} locations in {uri}. "
+                    "Include more surrounding context to make it unique, or set replace_all=true."
+                )
+            updated = updated.replace(edit.old_string, edit.new_string)
+        if updated == current:
+            return f"No changes: {uri} already matches the requested edit(s)."
+        result = await service.fs.write(
+            uri=uri, content=updated, ctx=ctx, mode="replace", wait=wait, timeout=timeout
+        )
+        written = result.get("written_bytes", 0)
+        message = (
+            f"Applied {len(edits)} edit(s) to {result.get('uri', uri)} ({written} bytes written)."
+        )
+        return message + _indexing_hint(result)
+
+    if content is None:
+        raise InvalidArgumentError("provide content for a full write, or edits for a targeted edit")
+
+    try:
+        result = await service.fs.write(
+            uri=uri, content=content, ctx=ctx, mode=mode, wait=wait, timeout=timeout
+        )
+    except NotFoundError:
+        if mode != "replace":
+            raise
+        # Replace doubles as create-or-overwrite so agents can save a new file
+        # without first checking whether it exists; strict creation stays
+        # available via mode="create".
+        result = await service.fs.write(
+            uri=uri, content=content, ctx=ctx, mode="create", wait=wait, timeout=timeout
+        )
+    written = result.get("written_bytes", 0)
+    message = (
+        f"Wrote {written} bytes to {result.get('uri', uri)} (mode={result.get('mode', mode)})."
+    )
+    return message + _indexing_hint(result)
+
+
+def _indexing_hint(result: Dict[str, Any]) -> str:
+    semantic = result.get("semantic_status")
+    vector = result.get("vector_status")
+    parts = [f"semantic={semantic}", f"vector={vector}"]
+    if result.get("overview_status") is not None:
+        parts.append(f"overview={result['overview_status']}")
+    hint = f"\nIndexing: {', '.join(parts)}."
+    if "queued" in (semantic, vector):
+        hint += " Search indexes update in the background; pass wait=true if a follow-up search must see this change immediately."
+    return hint
 
 
 # -- add_resource ----------------------------------------------------------
@@ -1045,8 +1163,8 @@ async def mcp_lifespan():
     """Run the MCP session manager. Call this inside the FastAPI lifespan."""
     async with mcp.session_manager.run():
         logger.info(
-            "MCP endpoint ready (13 tools: find, search, recall, read, list, remember, "
-            "add_resource, list_watches, cancel_watch, grep, glob, forget, health)"
+            "MCP endpoint ready (14 tools: find, search, recall, read, write, list, "
+            "remember, add_resource, list_watches, cancel_watch, grep, glob, forget, health)"
         )
         yield
 

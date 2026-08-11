@@ -21,6 +21,7 @@ from openviking.server.dependencies import set_service
 from openviking.server.identity import AuthMode, RequestContext, Role
 from openviking.server.mcp_endpoint import (
     StoreMessage,
+    WriteEdit,
     _get_ctx,
     _IdentityASGIMiddleware,
     _mcp_ctx,
@@ -35,9 +36,16 @@ from openviking.server.mcp_endpoint import (
     recall,
     remember,
     search,
+    write,
 )
 from openviking.server.mcp_endpoint import ls as list_tool
-from openviking_cli.exceptions import FailedPreconditionError, UnauthenticatedError
+from openviking_cli.exceptions import (
+    AlreadyExistsError,
+    FailedPreconditionError,
+    InvalidArgumentError,
+    NotFoundError,
+    UnauthenticatedError,
+)
 from openviking_cli.session.user_id import UserIdentifier
 
 DEFAULT_CTX = RequestContext(
@@ -900,6 +908,174 @@ async def test_forget_directory_with_recursive_succeeds(service):
 
     result = await forget(uri=dir_uri, recursive=True)
     assert "deleted" in result.lower()
+
+
+# ---------------------------------------------------------------------------
+# write tool
+# ---------------------------------------------------------------------------
+
+
+async def test_write_creates_new_file_with_replace_default(service):
+    uri = "viking://resources/test_write/notes.md"
+    result = await write(uri=uri, content="# Notes\nhello world\n")
+    assert "notes.md" in result
+    assert "Wrote" in result
+    body = await service.fs.read(uri, ctx=DEFAULT_CTX)
+    assert body == "# Notes\nhello world\n"
+
+
+async def test_write_replace_overwrites_existing(service):
+    uri = "viking://resources/test_write_replace.md"
+    await write(uri=uri, content="v1")
+    result = await write(uri=uri, content="v2-content")
+    assert "mode=replace" in result
+    body = await service.fs.read(uri, ctx=DEFAULT_CTX)
+    assert body == "v2-content"
+
+
+async def test_write_create_fails_when_file_exists(service):
+    uri = "viking://resources/test_write_create_exists.md"
+    await write(uri=uri, content="v1")
+    with pytest.raises(AlreadyExistsError):
+        await write(uri=uri, content="v2", mode="create")
+
+
+async def test_write_append_appends_to_existing(service):
+    uri = "viking://resources/test_write_append.md"
+    await write(uri=uri, content="line1\n")
+    await write(uri=uri, content="line2\n", mode="append")
+    body = await service.fs.read(uri, ctx=DEFAULT_CTX)
+    assert body == "line1\nline2\n"
+
+
+async def test_write_append_missing_file_fails(service):
+    with pytest.raises(NotFoundError):
+        await write(
+            uri="viking://resources/test_write_append_missing.md", content="x", mode="append"
+        )
+
+
+async def test_write_create_rejects_disallowed_extension(service):
+    with pytest.raises(InvalidArgumentError):
+        await write(uri="viking://resources/test_write_ext.csv", content="a,b\n", mode="create")
+
+
+async def test_write_rejects_derived_semantic_file(service):
+    with pytest.raises(InvalidArgumentError):
+        await write(uri="viking://resources/test_write_derived/.abstract.md", content="x")
+
+
+async def test_write_read_tool_roundtrip(service):
+    uri = "viking://resources/test_write_roundtrip/profile.md"
+    await write(uri=uri, content="name: ada\n")
+    assert "name: ada" in await read(uris=uri)
+
+
+async def test_write_edits_apply_single_replacement(service):
+    uri = "viking://resources/test_write_edit.md"
+    await write(uri=uri, content="alpha\nbeta\ngamma\n")
+    result = await write(uri=uri, edits=[WriteEdit(old_string="beta", new_string="BETA")])
+    assert "1 edit(s)" in result
+    body = await service.fs.read(uri, ctx=DEFAULT_CTX)
+    assert body == "alpha\nBETA\ngamma\n"
+
+
+async def test_write_edits_apply_in_order(service):
+    uri = "viking://resources/test_write_edit_order.md"
+    await write(uri=uri, content="foo bar baz\n")
+    await write(
+        uri=uri,
+        edits=[
+            WriteEdit(old_string="bar", new_string="qux"),
+            WriteEdit(old_string="foo qux", new_string="hello"),
+        ],
+    )
+    body = await service.fs.read(uri, ctx=DEFAULT_CTX)
+    assert body == "hello baz\n"
+
+
+async def test_write_edits_require_unique_match(service):
+    uri = "viking://resources/test_write_edit_multi.md"
+    await write(uri=uri, content="dup\ndup\n")
+    with pytest.raises(InvalidArgumentError, match="matches 2 locations"):
+        await write(uri=uri, edits=[WriteEdit(old_string="dup", new_string="x")])
+
+
+async def test_write_edits_replace_all(service):
+    uri = "viking://resources/test_write_edit_all.md"
+    await write(uri=uri, content="dup\ndup\n")
+    await write(uri=uri, edits=[WriteEdit(old_string="dup", new_string="x", replace_all=True)])
+    body = await service.fs.read(uri, ctx=DEFAULT_CTX)
+    assert body == "x\nx\n"
+
+
+async def test_write_edits_missing_old_string_fails(service):
+    uri = "viking://resources/test_write_edit_missing.md"
+    await write(uri=uri, content="alpha\n")
+    with pytest.raises(InvalidArgumentError, match="not found"):
+        await write(uri=uri, edits=[WriteEdit(old_string="zzz", new_string="x")])
+
+
+async def test_write_edits_on_missing_file_fails(service):
+    with pytest.raises(NotFoundError):
+        await write(
+            uri="viking://resources/test_write_edit_ghost.md",
+            edits=[WriteEdit(old_string="a", new_string="b")],
+        )
+
+
+async def test_write_edits_noop_reports_no_changes(service):
+    uri = "viking://resources/test_write_edit_noop.md"
+    await write(uri=uri, content="same\n")
+    result = await write(uri=uri, edits=[WriteEdit(old_string="same", new_string="same")])
+    assert "No changes" in result
+
+
+async def test_write_rejects_content_and_edits_together(service):
+    with pytest.raises(InvalidArgumentError, match="either content"):
+        await write(
+            uri="viking://resources/x.md",
+            content="a",
+            edits=[WriteEdit(old_string="a", new_string="b")],
+        )
+
+
+async def test_write_requires_content_or_edits(service):
+    with pytest.raises(InvalidArgumentError, match="provide content"):
+        await write(uri="viking://resources/x.md")
+
+
+async def test_write_edits_memory_file_preserves_metadata(service):
+    uri = "viking://user/default/memories/preferences/test_write_memory.md"
+    await write(uri=uri, content="likes: tea\n")
+    raw_before = await service.fs.read(uri, ctx=DEFAULT_CTX)
+    assert "MEMORY_FIELDS" in raw_before
+
+    await write(uri=uri, edits=[WriteEdit(old_string="tea", new_string="coffee")])
+
+    raw_after = await service.fs.read(uri, ctx=DEFAULT_CTX)
+    assert "MEMORY_FIELDS" in raw_after
+    assert "coffee" in raw_after
+    visible = await service.fs.read_visible(uri, ctx=DEFAULT_CTX)
+    assert visible.strip() == "likes: coffee"
+
+
+async def test_write_user_shorthand_uri(service):
+    uri = "viking://user/memories/preferences/shorthand_write.md"
+    result = await write(uri=uri, content="x")
+    assert "shorthand_write.md" in result
+    visible = await service.fs.read_visible(uri, ctx=DEFAULT_CTX)
+    assert visible.strip() == "x"
+
+
+async def test_write_tool_schema_is_portable():
+    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+    props = tools["write"].inputSchema["properties"]
+    assert props["uri"]["type"] == "string"
+    assert props["content"]["type"] == "string"
+    assert props["mode"]["enum"] == ["replace", "append", "create"]
+    assert props["edits"]["type"] == "array"
+    assert props["edits"]["items"]["type"] == "object"
 
 
 # ---------------------------------------------------------------------------
