@@ -150,6 +150,12 @@ Once connected, OpenViking exposes 16 tools:
 | `forget` | Delete any `viking://` URI (use `search` to find it first; pass `recursive=true` to delete a directory) | `uri`, `recursive` (optional) |
 | `health` | Check OpenViking service health | none |
 
+For MCP tools, `viking://user` is the authenticated user's workspace. For example,
+`viking://user/notes/todo.md` resolves to
+`viking://user/<current-user>/notes/todo.md`, regardless of the file name or
+extension. Canonical URIs containing that exact current user id are also accepted;
+MCP does not use this shorthand for cross-user access.
+
 > **Note**: MCP exposes the minimum closure for watch management (`list_watches` + `cancel_watch`). Pause / resume / trigger and the unified `update` verb are intentionally not exposed here — use the REST `/api/v1/watches/*` endpoints or the `ov task watch` CLI for those operations.
 
 > Feishu/Lark imports without `args.feishu_access_token` keep the existing app/tenant-token behavior and can be watched. Feishu/Lark one-time user-token imports pass only `args.feishu_access_token`; Feishu/Lark user-token watches must also pass `args.feishu_refresh_token` and require the same Feishu app credentials configured on the OpenViking server.

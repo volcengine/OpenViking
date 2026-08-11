@@ -142,6 +142,11 @@ claude mcp add --transport http openviking \
 | `forget` | 删除任意 `viking://` URI（先用 `search` 查找；删除目录需 `recursive=true`） | `uri`, `recursive`(可选) |
 | `health` | 检查 OpenViking 服务健康状态 | 无 |
 
+在 MCP 工具中，`viking://user` 表示当前认证用户的工作区。例如，
+`viking://user/notes/todo.md` 会解析成
+`viking://user/<当前用户>/notes/todo.md`，不依赖文件名或扩展名判断。工具返回的、
+包含当前用户 ID 的 canonical URI 也可以直接使用；这套简写不用于跨用户访问。
+
 > **注**：MCP 仅暴露 watch 管理的最小闭包（`list_watches` + `cancel_watch`）。pause / resume / trigger 和统一的 `update` 动作刻意不在此处暴露，请通过 REST `/api/v1/watches/*` 接口或 `ov task watch` CLI 使用上述操作。
 
 > 未传 `args.feishu_access_token` 的飞书/Lark 导入保持现有应用/tenant token 行为，也支持 watch。飞书/Lark 一次性用户 token 导入只传 `args.feishu_access_token`；飞书/Lark 用户 token watch 还必须传 `args.feishu_refresh_token`，并要求 OpenViking 服务端配置同一个飞书应用凭证。

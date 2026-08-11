@@ -148,31 +148,25 @@ def test_current_user_short_content_roots_are_canonicalized_from_content_segment
     assert is_content_root_uri("viking://resources", ctx, kind="resource")
 
 
-def test_dotted_user_root_segment_is_current_user_file_shorthand():
+def test_unreserved_user_root_segment_keeps_canonical_meaning():
     ctx = RequestContext(
         user=UserIdentifier(account_id="acct", user_id="alice"),
         role=Role.USER,
     )
 
-    # A segment with a text-file extension is a file name, so the current
-    # user is inserted.
-    assert (
-        canonicalize_uri("viking://user/zeus-persona.md", ctx)
-        == "viking://user/alice/zeus-persona.md"
-    )
-    # Canonical form with an explicit user id is unchanged, including
-    # subdirectories under the user root.
-    assert (
-        canonicalize_uri("viking://user/alice/notes/todo.md", ctx)
-        == "viking://user/alice/notes/todo.md"
-    )
-    # Dot-free segments still address an explicit user.
+    # The generic namespace parser stays canonical-first. Callers that expose
+    # a current-user workspace dialect (such as MCP) must opt into that policy
+    # at their boundary instead of guessing from file extensions or server state.
+    assert canonicalize_uri("viking://user/notes/todo.md", ctx) == "viking://user/notes/todo.md"
     assert (
         canonicalize_uri("viking://user/bob/zeus-persona.md", ctx)
         == "viking://user/bob/zeus-persona.md"
     )
-    # Dotted user ids without a file extension keep resolving as user ids
-    # (regression guard: shorthand must not re-route other users' spaces).
+    # A valid canonical user id may itself end in a common file extension.
+    assert (
+        canonicalize_uri("viking://user/writer.md/memories/profile.md", ctx)
+        == "viking://user/writer.md/memories/profile.md"
+    )
     assert (
         canonicalize_uri("viking://user/alice.smith/memories/preferences/p.md", ctx)
         == "viking://user/alice.smith/memories/preferences/p.md"
@@ -181,12 +175,8 @@ def test_dotted_user_root_segment_is_current_user_file_shorthand():
         canonicalize_uri("viking://user/bob@corp.com/resources/r.md", ctx)
         == "viking://user/bob@corp.com/resources/r.md"
     )
-    # The current user's own id always wins over the shorthand rule.
-    dotted_ctx = RequestContext(
-        user=UserIdentifier(account_id="acct", user_id="a.b"),
-        role=Role.USER,
-    )
+    # The current user's own canonical form remains unchanged.
     assert (
-        canonicalize_uri("viking://user/a.b/memories/preferences/p.md", dotted_ctx)
-        == "viking://user/a.b/memories/preferences/p.md"
+        canonicalize_uri("viking://user/alice/notes/todo.md", ctx)
+        == "viking://user/alice/notes/todo.md"
     )

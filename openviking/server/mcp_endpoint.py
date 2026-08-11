@@ -29,6 +29,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from openviking.core.namespace import canonical_user_root, canonicalize_uri, uri_parts
 from openviking.parse.mode import ParseMode, normalize_parse_mode
 from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.retrieve.context_assembler import assemble_context
@@ -78,6 +79,25 @@ def _get_ctx() -> RequestContext:
     if ctx is None:
         raise UnauthenticatedError("MCP request identity not set")
     return ctx
+
+
+def _resolve_mcp_workspace_uri(uri: str, ctx: RequestContext) -> str:
+    """Resolve ``viking://user/...`` as the current user's MCP workspace.
+
+    Generic namespace parsing must preserve canonical cross-user URIs, so it
+    cannot infer whether the first segment after ``user`` is a user id or a
+    file/directory name. MCP has a narrower contract: its filesystem tools act
+    on the authenticated user's workspace. An exact current-user id is already
+    canonical; every other suffix is relative to that user's root.
+    """
+    parts = uri_parts(uri)
+    if parts[:1] != ["user"]:
+        return uri
+    suffix = parts[1:]
+    if suffix[:1] == [ctx.user.user_id]:
+        return canonicalize_uri(uri, ctx)
+    root = canonical_user_root(ctx)
+    return root if not suffix else f"{root}/{'/'.join(suffix)}"
 
 
 def _scope_to_origin(scope: Scope) -> Optional[str]:
@@ -247,9 +267,12 @@ async def find(
 ) -> str:
     """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, and score."""
     service = get_service()
+    ctx = _get_ctx()
+    if target_uri:
+        target_uri = _resolve_mcp_workspace_uri(target_uri, ctx)
     result = await service.search.find(
         query=query,
-        ctx=_get_ctx(),
+        ctx=ctx,
         target_uri=target_uri,
         limit=limit,
         score_threshold=min_score,
@@ -272,6 +295,8 @@ async def search(
     """Deep semantic retrieval with optional session context and intent analysis. Returns ranked memories, resources, and skills with URI, abstract, and score."""
     service = get_service()
     ctx = _get_ctx()
+    if target_uri:
+        target_uri = _resolve_mcp_workspace_uri(target_uri, ctx)
     session = None
     # Intent off: skip session.load — SearchService will not scan session either.
     if session_id and service.search.is_intent_enabled():
@@ -374,7 +399,8 @@ async def read(uris: str | list[str]) -> str:
     async def _read_one(uri: str) -> str:
         async with semaphore:
             try:
-                body = await service.fs.read_visible(uri, ctx=ctx)
+                resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
+                body = await service.fs.read_visible(resolved_uri, ctx=ctx)
                 if isinstance(body, str) and body.strip():
                     return body
             except Exception:
@@ -399,8 +425,9 @@ async def ls(uri: str, recursive: bool = False) -> str:
     """List files and subdirectories under a viking:// directory URI. Use recursive=true for deep listing."""
     service = get_service()
     ctx = _get_ctx()
+    resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
 
-    entries = await service.fs.ls(uri, ctx=ctx, recursive=recursive, output="original")
+    entries = await service.fs.ls(resolved_uri, ctx=ctx, recursive=recursive, output="original")
     if not entries:
         return f"(no entries under {uri})"
 
@@ -429,10 +456,11 @@ async def tree(
     """Show the recursive directory tree under a viking:// URI, indented by depth, so you can understand the whole layout at a glance. Use this when you need a full picture of the file tree; use list for a single directory level, glob for filename patterns, and grep for content. level_limit caps the depth (default 3); node_limit caps the total entries. Set include_abstract=true to also see each file's summary (slower, but useful for orientation in unfamiliar directories)."""
     service = get_service()
     ctx = _get_ctx()
+    resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
     output = "agent" if include_abstract else "original"
     try:
         entries = await service.fs.tree(
-            uri,
+            resolved_uri,
             ctx=ctx,
             output=output,
             node_limit=node_limit,
@@ -512,9 +540,10 @@ async def write(
     - mode="create": fail if the file already exists. New files must end in one of: .md .txt .json .yaml .yml .toml .py .js .ts
     - mode="append": append to the end of an existing file; fails if the file does not exist.
 
-    Writable scopes: viking://resources/, viking://user/ (plain files at the user root such as viking://user/notes.md — the current user is inserted automatically — plus the memories/ and resources/ subtrees), viking://agent/. The managed user subtrees skills/, peers/, privacy/ and sessions/ are read-only. After a write, semantic search indexes refresh in the background; pass wait=true to block until search reflects the change."""
+    Writable scopes: viking://resources/, viking://user/ (all paths are relative to the authenticated user's root unless the URI already contains that exact user id), viking://agent/. The managed user subtrees skills/, peers/, privacy/ and sessions/ are read-only. After a write, semantic search indexes refresh in the background; pass wait=true to block until search reflects the change."""
     service = get_service()
     ctx = _get_ctx()
+    uri = _resolve_mcp_workspace_uri(uri, ctx)
 
     try:
         result = await service.fs.write(
@@ -550,6 +579,7 @@ async def edit(
     Editing a memory file preserves its metadata; after an edit, search indexes refresh in the background (pass wait=true to block until search reflects the change)."""
     service = get_service()
     ctx = _get_ctx()
+    uri = _resolve_mcp_workspace_uri(uri, ctx)
 
     if not old_string:
         raise InvalidArgumentError("old_string must not be empty")
@@ -1006,6 +1036,7 @@ async def grep(
 
     service = get_service()
     ctx = _get_ctx()
+    resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
     patterns = [pattern] if isinstance(pattern, str) else pattern
     semaphore = asyncio.Semaphore(10)
 
@@ -1013,7 +1044,7 @@ async def grep(
         async with semaphore:
             try:
                 result = await service.fs.grep(
-                    uri,
+                    resolved_uri,
                     p,
                     ctx=ctx,
                     case_insensitive=case_insensitive,
@@ -1053,9 +1084,10 @@ async def glob(pattern: str, uri: str = "viking://", node_limit: int = 100) -> s
     """Find viking:// files matching a glob pattern (e.g. **/*.md, *.py). Use this for filename matching; use the search tool for content-based retrieval."""
     service = get_service()
     ctx = _get_ctx()
+    resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
 
     try:
-        result = await service.fs.glob(pattern, ctx=ctx, uri=uri, node_limit=node_limit)
+        result = await service.fs.glob(pattern, ctx=ctx, uri=resolved_uri, node_limit=node_limit)
     except Exception as e:
         return f"Error: {e}"
 
@@ -1078,8 +1110,9 @@ async def forget(uri: str, recursive: bool = False) -> str:
     """Permanently delete a viking:// URI from OpenViking. Irreversible — confirm with user before calling."""
     service = get_service()
     ctx = _get_ctx()
-    await service.fs.rm(uri, ctx=ctx, recursive=recursive)
-    return f"Deleted: {uri}"
+    resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
+    await service.fs.rm(resolved_uri, ctx=ctx, recursive=recursive)
+    return f"Deleted: {resolved_uri}"
 
 
 # -- health ----------------------------------------------------------------
