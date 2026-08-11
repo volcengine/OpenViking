@@ -46,6 +46,12 @@ jobs:
         working-directory: blog
         env:
           VITE_COUNTER_URL: ${{ vars.VITE_COUNTER_URL }}
+          # Zouk embed backend overrides. Unset repo vars resolve to empty
+          # strings, so the client keeps its built-in defaults until cutover.
+          VITE_ZOUK_SERVER_URL: ${{ vars.VITE_ZOUK_SERVER_URL }}
+          VITE_ZOUK_WORKSPACE_ID: ${{ vars.VITE_ZOUK_WORKSPACE_ID }}
+          VITE_ZOUK_CHANNEL: ${{ vars.VITE_ZOUK_CHANNEL }}
+          VITE_ZOUK_GUEST_NAME: ${{ vars.VITE_ZOUK_GUEST_NAME }}
 
       - name: Check TOS configuration
         id: tos_config
