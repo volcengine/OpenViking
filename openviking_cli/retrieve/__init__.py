@@ -1,3 +1,4 @@
+from openviking_cli.retrieve.diversity import DiversityOptions
 from openviking_cli.retrieve.types import (
     ContextType,
     FindResult,
@@ -10,6 +11,7 @@ from openviking_cli.retrieve.types import (
 
 __all__ = [
     # Types
+    "DiversityOptions",
     "ContextType",
     "TypedQuery",
     "QueryPlan",

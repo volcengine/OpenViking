@@ -69,7 +69,7 @@ async def test_find_omits_unset_optional_fields():
     assert payload["query"] == "hello"
     assert payload["limit"] == 10
     # `tags` is the field that breaks `find` against pre-#2706 strict instances.
-    for dropped in ("score_threshold", "filter", "context_type", "tags"):
+    for dropped in ("score_threshold", "filter", "context_type", "tags", "diversity"):
         assert dropped not in payload
 
 
@@ -82,6 +82,15 @@ async def test_find_keeps_explicit_tags():
     assert payload["tags"] == ["a", "b"]
 
 
+async def test_find_keeps_explicit_diversity_options():
+    client, fake = _client_with_fake()
+    diversity = {"strategy": "combined", "lambda": 0.75, "max_per_group": 2}
+
+    await client.find("hello", diversity=diversity)
+
+    assert fake.calls[-1]["json"]["diversity"] == diversity
+
+
 async def test_search_omits_unset_optional_fields():
     client, fake = _client_with_fake()
 
@@ -89,7 +98,14 @@ async def test_search_omits_unset_optional_fields():
 
     payload = fake.calls[-1]["json"]
     assert payload["query"] == "hello"
-    for dropped in ("session_id", "score_threshold", "filter", "context_type", "tags"):
+    for dropped in (
+        "session_id",
+        "score_threshold",
+        "filter",
+        "context_type",
+        "tags",
+        "diversity",
+    ):
         assert dropped not in payload
 
 

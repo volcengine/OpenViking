@@ -1134,6 +1134,35 @@ session.add_message("user", [
 results = client.search("best practices", session=session)
 ```
 
+## 多样性排序与重复抑制
+
+`find` 和列表模式的 `search` 接受可选 `diversity` 对象。省略该对象时功能关闭，候选上限、
+embedding 调用、排序和响应结构均保持不变。context 模式携带该对象会返回 HTTP 422。
+
+```json
+{
+  "query": "architecture",
+  "diversity": {
+    "strategy": "combined",
+    "lambda": 0.7,
+    "group_by": "source_root",
+    "max_per_group": 2,
+    "candidate_multiplier": 4,
+    "similarity_threshold": 0.98
+  }
+}
+```
+
+strategy 支持 `mmr`、`group_limit`、`combined`。`lambda` 范围为 `0..1`，`max_per_group`
+为 `1..100`，`candidate_multiplier` 为 `1..10`，`similarity_threshold` 为 `0.8..1`。
+候选 embedding 失败时会退化为相关性/分组排序，不会让整个请求失败。发生折叠的保留结果可
+包含 `deduplicated_from`，其中列出被折叠的稳定 URI；空解释字段不会出现在响应中。
+
+Python 客户端通过 `diversity={...}` 传入 JSON 结构；TypeScript 使用 `relevanceWeight`、
+`maxPerGroup` 等 camelCase 字段；CLI 提供 `--diversity-strategy`、`--diversity-lambda`、
+`--diversity-group-by`、`--max-per-group`、`--candidate-multiplier` 和
+`--similarity-threshold`。
+
 ## 相关文档
 
 - [资源](02-resources.md) - 资源管理

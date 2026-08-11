@@ -21,8 +21,8 @@ from openviking.models.rerank import RerankClient
 from openviking.retrieve.memory_lifecycle import hotness_score
 from openviking.retrieve.retrieval_stats import get_stats_collector
 from openviking.server.identity import RequestContext
-from openviking.storage.vikingdb_manager import VikingDBManager, VikingDBManagerProxy
 from openviking.storage.expr import FilterExpr
+from openviking.storage.vikingdb_manager import VikingDBManager, VikingDBManagerProxy
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking.utils.token_estimation import (
@@ -106,6 +106,7 @@ class HierarchicalRetriever:
         score_gte: bool = False,
         scope_dsl: Optional[FilterExpr | Dict[str, Any]] = None,
         level: Optional[List[int]] = None,
+        candidate_limit: Optional[int] = None,
     ) -> QueryResult:
         """
         Execute hierarchical retrieval.
@@ -116,10 +117,12 @@ class HierarchicalRetriever:
             score_gte: True uses >=, False uses >
             scope_dsl: Additional scope constraints passed from public find/search filter
             level: Optional result level filter (0=L0, 1=L1, 2=L2)
+            candidate_limit: Internal candidate pool size before final selection
         """
         t0 = time.monotonic()
         telemetry = get_current_telemetry()
         effective_threshold = self._resolve_threshold(score_threshold)
+        retrieval_limit = max(limit, candidate_limit or limit)
         image_query = bool(getattr(query, "image_query", False))
         if mode is None:
             mode = RetrieverMode.QUICK if not self._rerank_client else RetrieverMode.THINKING
@@ -149,9 +152,7 @@ class HierarchicalRetriever:
         sparse_query_vector = None
         if self.embedder:
             if image_query and not getattr(self.embedder, "supports_multimodal", False):
-                raise InvalidArgumentError(
-                    "Image search requires a multimodal embedding model."
-                )
+                raise InvalidArgumentError("Image search requires a multimodal embedding model.")
             with telemetry.measure("search.embed_query"):
                 embedding_input = getattr(query, "embedding_input", None) or query.query
                 result: EmbedResult = await embed_compat(
@@ -173,7 +174,11 @@ class HierarchicalRetriever:
             context_type = ContextType.RESOURCE.value
 
         if mode == RetrieverMode.QUICK:
-            search_limit = max(limit * 5, 50) if image_query else max(limit, self.GLOBAL_SEARCH_TOPK)
+            search_limit = (
+                max(retrieval_limit * 5, 50)
+                if image_query
+                else max(retrieval_limit, self.GLOBAL_SEARCH_TOPK)
+            )
             with telemetry.measure("search.vector_retrieval"):
                 quick_results = await vector_proxy.search_in_tenant(
                     query_vector=query_vector,
@@ -223,7 +228,7 @@ class HierarchicalRetriever:
                     target_directories=target_dirs,
                     extra_filter=scope_dsl,
                     level=[0, 1],
-                    limit=max(limit, self.GLOBAL_SEARCH_TOPK),
+                    limit=max(retrieval_limit, self.GLOBAL_SEARCH_TOPK),
                 )
             telemetry.count("vector.searches", 1)
             telemetry.count("vector.scored", len(global_results))
@@ -287,7 +292,7 @@ class HierarchicalRetriever:
                     query_vector=query_vector,
                     sparse_query_vector=sparse_query_vector,
                     starting_points=starting_points,
-                    limit=limit,
+                    limit=retrieval_limit,
                     mode=mode,
                     threshold=effective_threshold,
                     score_gte=score_gte,
@@ -306,7 +311,7 @@ class HierarchicalRetriever:
             ctx=ctx,
             apply_hotness=apply_hotness,
         )
-        final = matched[:limit]
+        final = matched[:retrieval_limit]
 
         elapsed_ms = (time.monotonic() - t0) * 1000
         get_stats_collector().record_query(

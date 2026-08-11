@@ -1415,6 +1415,7 @@ pub async fn handle_find(
     level: Option<Vec<i32>>,
     context_type: Option<Vec<String>>,
     tags: Option<Vec<String>>,
+    diversity: crate::client::DiversityOptions,
     ctx: CliContext,
 ) -> Result<()> {
     let query = query.unwrap_or_default();
@@ -1462,6 +1463,7 @@ pub async fn handle_find(
         level,
         context_type,
         tags,
+        &diversity,
         ctx.output_format,
         ctx.compact,
     )
@@ -1480,6 +1482,7 @@ pub async fn handle_search(
     level: Option<Vec<i32>>,
     context_type: Option<Vec<String>>,
     tags: Option<Vec<String>>,
+    diversity: crate::client::DiversityOptions,
     ctx: CliContext,
 ) -> Result<()> {
     let query = query.unwrap_or_default();
@@ -1531,6 +1534,7 @@ pub async fn handle_search(
         level,
         context_type,
         tags,
+        &diversity,
         ctx.output_format,
         ctx.compact,
     )

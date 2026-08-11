@@ -221,6 +221,33 @@ def _config() -> RerankConfig:
     return RerankConfig(ak="ak", sk="sk", threshold=0.1)
 
 
+@pytest.mark.asyncio
+async def test_candidate_limit_expands_internal_pool_without_changing_public_default():
+    storage = QuickSearchStorage(
+        [_result(f"viking://resources/item-{index}.md", 1.0 - index / 100) for index in range(25)]
+    )
+    retriever = HierarchicalRetriever(storage=storage, embedder=DummyEmbedder())
+
+    expanded = await retriever.retrieve(
+        _query(),
+        ctx=_ctx(),
+        limit=2,
+        mode=RetrieverMode.QUICK,
+        candidate_limit=20,
+    )
+
+    assert storage.search_calls[-1]["limit"] == 20
+    assert len(expanded.matched_contexts) == 20
+
+    default = await retriever.retrieve(
+        _query(),
+        ctx=_ctx(),
+        limit=2,
+        mode=RetrieverMode.QUICK,
+    )
+    assert len(default.matched_contexts) == 2
+
+
 def test_retriever_initializes_rerank_client(monkeypatch):
     fake_client = FakeRerankClient([0.9, 0.1])
 

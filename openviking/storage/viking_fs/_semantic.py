@@ -4,9 +4,8 @@
 
 import asyncio
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
-from openviking.core.namespace import canonicalize_uri
 from openviking.core.retrieval_targets import resolve_retrieval_targets
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext
@@ -18,10 +17,7 @@ from openviking.storage.viking_fs._base import (
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.image_search import build_multimodal_embedding_input
 from openviking_cli.exceptions import NotFoundError
-
-if TYPE_CHECKING:
-    from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
-    from openviking_cli.utils.config import GrepConfig, RerankConfig, RetrievalConfig
+from openviking_cli.retrieve.diversity import DiversityOptions
 
 
 class _SemanticMixin:
@@ -203,6 +199,31 @@ class _SemanticMixin:
                     result.append({"uri": u, "reason": entry.reason})
         return result
 
+    async def _apply_retrieval_diversity(
+        self,
+        candidates: List[Any],
+        *,
+        diversity: Optional[DiversityOptions],
+        limit: int,
+    ) -> List[Any]:
+        """Apply optional diversity selection without changing the default path."""
+        if diversity is None:
+            return candidates[:limit]
+
+        from openviking.retrieve.diversity import select_diverse_contexts
+
+        selection = await select_diverse_contexts(
+            candidates[:500],
+            options=diversity,
+            embedder=self._get_embedder(),
+            limit=limit,
+        )
+        telemetry = get_current_telemetry()
+        telemetry.set("diversity.candidates", selection.candidate_count)
+        telemetry.set("diversity.suppressed", selection.suppressed_count)
+        telemetry.set("diversity.fallback", int(selection.fallback_used))
+        return selection.contexts
+
     async def find(
         self,
         query: str,
@@ -213,6 +234,7 @@ class _SemanticMixin:
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
         image_url: Optional[str] = None,
+        diversity: Optional[DiversityOptions] = None,
     ):
         """Semantic search.
 
@@ -279,11 +301,18 @@ class _SemanticMixin:
             score_threshold=score_threshold,
             scope_dsl=filter,
             level=level,
+            candidate_limit=diversity.resolve_candidate_limit(limit) if diversity else None,
+        )
+
+        selected_contexts = await self._apply_retrieval_diversity(
+            result.matched_contexts,
+            diversity=diversity,
+            limit=limit,
         )
 
         # Convert QueryResult to FindResult
         memories, resources, skills = [], [], []
-        for ctx in result.matched_contexts:
+        for ctx in selected_contexts:
             if ctx.context_type == ContextType.MEMORY:
                 memories.append(ctx)
             elif ctx.context_type == ContextType.RESOURCE:
@@ -310,6 +339,7 @@ class _SemanticMixin:
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
         image_url: Optional[str] = None,
+        diversity: Optional[DiversityOptions] = None,
     ):
         """Complex search with session context.
 
@@ -423,20 +453,37 @@ class _SemanticMixin:
                 score_threshold=score_threshold,
                 scope_dsl=filter,
                 level=level,
+                candidate_limit=(
+                    diversity.resolve_candidate_limit(limit) if diversity else None
+                ),
             )
 
         query_results = await asyncio.gather(*[_execute(tq) for tq in typed_queries])
 
+        aggregated_contexts = [
+            context for result in query_results for context in result.matched_contexts
+        ]
+        if diversity is not None:
+            aggregated_contexts = sorted(
+                enumerate(aggregated_contexts),
+                key=lambda item: (-item[1].score, item[0]),
+            )
+            aggregated_contexts = [context for _, context in aggregated_contexts[:500]]
+        selected_contexts = await self._apply_retrieval_diversity(
+            aggregated_contexts,
+            diversity=diversity,
+            limit=limit if diversity is not None else len(aggregated_contexts),
+        )
+
         # Aggregate results to FindResult
         memories, resources, skills = [], [], []
-        for result in query_results:
-            for ctx in result.matched_contexts:
-                if ctx.context_type == ContextType.MEMORY:
-                    memories.append(ctx)
-                elif ctx.context_type == ContextType.RESOURCE:
-                    resources.append(ctx)
-                elif ctx.context_type == ContextType.SKILL:
-                    skills.append(ctx)
+        for matched_context in selected_contexts:
+            if matched_context.context_type == ContextType.MEMORY:
+                memories.append(matched_context)
+            elif matched_context.context_type == ContextType.RESOURCE:
+                resources.append(matched_context)
+            elif matched_context.context_type == ContextType.SKILL:
+                skills.append(matched_context)
 
         find_result = FindResult(
             memories=memories,

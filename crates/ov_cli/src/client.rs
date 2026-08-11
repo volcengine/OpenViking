@@ -9,6 +9,56 @@ pub use crate::base_client::{BaseClient, FileUploader, TimeoutConfig};
 
 use crate::error::{Error, Result};
 
+#[derive(clap::Args, Clone, Debug, Default)]
+pub struct DiversityOptions {
+    /// Diversity strategy: mmr, group_limit, or combined
+    #[arg(long, value_parser = ["mmr", "group_limit", "combined"])]
+    pub diversity_strategy: Option<String>,
+    /// Relevance weight used by MMR (0.0 to 1.0)
+    #[arg(long, requires = "diversity_strategy")]
+    pub diversity_lambda: Option<f64>,
+    /// Grouping key: parent or source_root
+    #[arg(long, value_parser = ["parent", "source_root"], requires = "diversity_strategy")]
+    pub diversity_group_by: Option<String>,
+    /// Maximum results from one group
+    #[arg(long, value_parser = clap::value_parser!(i64).range(1..=100), requires = "diversity_strategy")]
+    pub max_per_group: Option<i64>,
+    /// Candidate over-fetch multiplier
+    #[arg(long, value_parser = clap::value_parser!(i64).range(1..=10), requires = "diversity_strategy")]
+    pub candidate_multiplier: Option<i64>,
+    /// Dense cosine threshold for near duplicates (0.8 to 1.0)
+    #[arg(long, requires = "diversity_strategy")]
+    pub similarity_threshold: Option<f64>,
+}
+
+impl DiversityOptions {
+    pub fn to_json(&self) -> Result<Option<Value>> {
+        let Some(strategy) = &self.diversity_strategy else {
+            return Ok(None);
+        };
+        let relevance_weight = self.diversity_lambda.unwrap_or(0.7);
+        let similarity_threshold = self.similarity_threshold.unwrap_or(0.98);
+        if !(0.0..=1.0).contains(&relevance_weight) {
+            return Err(Error::Client(
+                "--diversity-lambda must be between 0 and 1".into(),
+            ));
+        }
+        if !(0.8..=1.0).contains(&similarity_threshold) {
+            return Err(Error::Client(
+                "--similarity-threshold must be between 0.8 and 1".into(),
+            ));
+        }
+        Ok(Some(serde_json::json!({
+            "strategy": strategy,
+            "lambda": relevance_weight,
+            "group_by": self.diversity_group_by.as_deref().unwrap_or("source_root"),
+            "max_per_group": self.max_per_group.unwrap_or(2),
+            "candidate_multiplier": self.candidate_multiplier.unwrap_or(4),
+            "similarity_threshold": similarity_threshold,
+        })))
+    }
+}
+
 /// Drop null-valued keys (and an empty `args` object) from a request body before
 /// sending it. Older, stricter servers use `extra="forbid"` and reject any field
 /// they do not yet define, so unconditionally attaching optional fields (even as
@@ -629,6 +679,7 @@ impl HttpClient {
         level: Option<Vec<i32>>,
         context_type: Option<Vec<String>>,
         tags: Option<Vec<String>>,
+        diversity: &DiversityOptions,
     ) -> Result<serde_json::Value> {
         let image_url = normalize_image_input(image)?;
         let mut body = serde_json::json!({
@@ -643,6 +694,7 @@ impl HttpClient {
             "level": level,
             "context_type": context_type,
             "tags": tags,
+            "diversity": diversity.to_json()?,
         });
         compact_request_body(&mut body);
         self.post("/api/v1/search/find", &body).await
@@ -662,6 +714,7 @@ impl HttpClient {
         level: Option<Vec<i32>>,
         context_type: Option<Vec<String>>,
         tags: Option<Vec<String>>,
+        diversity: &DiversityOptions,
     ) -> Result<serde_json::Value> {
         let image_url = normalize_image_input(image)?;
         let mut body = serde_json::json!({
@@ -677,6 +730,7 @@ impl HttpClient {
             "level": level,
             "context_type": context_type,
             "tags": tags,
+            "diversity": diversity.to_json()?,
         });
         compact_request_body(&mut body);
         self.post("/api/v1/search/search", &body).await
@@ -1847,7 +1901,7 @@ impl HttpClient {
 
 #[cfg(test)]
 mod tests {
-    use super::{BaseClient, HttpClient, TimeoutConfig};
+    use super::{BaseClient, DiversityOptions, HttpClient, TimeoutConfig};
     use crate::base_client::api_error_from_envelope;
     use reqwest::StatusCode;
     use serde_json::{Map, json};
@@ -1855,6 +1909,30 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio::sync::oneshot;
+
+    #[test]
+    fn diversity_options_build_expected_json_and_omit_when_disabled() {
+        assert_eq!(DiversityOptions::default().to_json().unwrap(), None);
+        let options = DiversityOptions {
+            diversity_strategy: Some("combined".to_string()),
+            diversity_lambda: Some(0.7),
+            diversity_group_by: Some("source_root".to_string()),
+            max_per_group: Some(2),
+            candidate_multiplier: Some(4),
+            similarity_threshold: Some(0.98),
+        };
+        assert_eq!(
+            options.to_json().unwrap(),
+            Some(json!({
+                "strategy": "combined",
+                "lambda": 0.7,
+                "group_by": "source_root",
+                "max_per_group": 2,
+                "candidate_multiplier": 4,
+                "similarity_threshold": 0.98,
+            }))
+        );
+    }
 
     #[test]
     fn compact_request_body_drops_null_and_empty_args() {

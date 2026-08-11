@@ -1133,6 +1133,37 @@ session.add_message("user", [
 results = client.search("best practices", session=session)
 ```
 
+## Diversity-aware ranking
+
+`find` and `search` in list mode accept an optional `diversity` object. The feature is disabled
+when the object is omitted, so the candidate limit, embedding calls, ordering, and response shape
+remain unchanged. Context mode rejects this option with HTTP 422.
+
+```json
+{
+  "query": "architecture",
+  "diversity": {
+    "strategy": "combined",
+    "lambda": 0.7,
+    "group_by": "source_root",
+    "max_per_group": 2,
+    "candidate_multiplier": 4,
+    "similarity_threshold": 0.98
+  }
+}
+```
+
+Strategies are `mmr`, `group_limit`, and `combined`. `lambda` is in `0..1`, `max_per_group` in
+`1..100`, `candidate_multiplier` in `1..10`, and `similarity_threshold` in `0.8..1`. Candidate
+embedding failures fall back to relevance/group ranking rather than failing the request. A retained
+result can contain `deduplicated_from` with the stable URIs folded into it; empty explanation fields
+are omitted.
+
+Python clients pass the JSON-shaped object as `diversity={...}`. TypeScript uses camelCase fields
+such as `relevanceWeight` and `maxPerGroup`. The CLI exposes `--diversity-strategy`,
+`--diversity-lambda`, `--diversity-group-by`, `--max-per-group`, `--candidate-multiplier`, and
+`--similarity-threshold`.
+
 ## Related Documentation
 
 - [Resources](02-resources.md) - Resource management

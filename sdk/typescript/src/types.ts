@@ -95,6 +95,16 @@ export interface WriteOptions extends WaitOptions {
   mode?: string;
   processingMode?: ProcessingMode;
 }
+/** Optional diversity ranking controls for semantic retrieval. */
+export interface DiversityOptions {
+  strategy?: "mmr" | "group_limit" | "combined";
+  relevanceWeight?: number;
+  groupBy?: "parent" | "source_root";
+  maxPerGroup?: number;
+  candidateMultiplier?: number;
+  similarityThreshold?: number;
+}
+
 /** Semantic retrieval options. */
 export interface SearchOptions {
   targetUri?: TargetURI;
@@ -111,6 +121,7 @@ export interface SearchOptions {
   timeField?: string;
   level?: number[];
   tags?: string[];
+  diversity?: DiversityOptions;
 }
 /** Content grep options. */
 export interface GrepOptions {

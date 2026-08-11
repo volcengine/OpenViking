@@ -1249,6 +1249,7 @@ class AsyncHTTPClient:
         tags: Optional[List[str]] = None,
         telemetry: Any = False,
         image: Any = None,
+        diversity: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         actual_limit = node_limit if node_limit is not None else limit
         payload = {
@@ -1261,6 +1262,7 @@ class AsyncHTTPClient:
             "context_type": self._normalize_context_type(context_type),
             "tags": tags,
             "telemetry": telemetry,
+            "diversity": diversity,
         }
         payload = self._compact_request_body(payload)
         response = await self._request("POST", "/api/v1/search/find", json=payload)
@@ -1280,6 +1282,7 @@ class AsyncHTTPClient:
         tags: Optional[List[str]] = None,
         telemetry: Any = False,
         image: Any = None,
+        diversity: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         actual_limit = node_limit if node_limit is not None else limit
         sid = session_id or (session.session_id if session else None)
@@ -1294,6 +1297,7 @@ class AsyncHTTPClient:
             "context_type": self._normalize_context_type(context_type),
             "tags": tags,
             "telemetry": telemetry,
+            "diversity": diversity,
         }
         payload = self._compact_request_body(payload)
         response = await self._request("POST", "/api/v1/search/search", json=payload)
@@ -2306,6 +2310,7 @@ class SyncHTTPClient:
         tags: Optional[List[str]] = None,
         telemetry: Any = False,
         image: Any = None,
+        diversity: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.find(
@@ -2319,6 +2324,7 @@ class SyncHTTPClient:
                 tags=tags,
                 telemetry=telemetry,
                 image=image,
+                diversity=diversity,
             )
         )
 
@@ -2336,6 +2342,7 @@ class SyncHTTPClient:
         tags: Optional[List[str]] = None,
         telemetry: Any = False,
         image: Any = None,
+        diversity: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         actual_session_id = session_id
         if actual_session_id is None and session is not None:
@@ -2353,6 +2360,7 @@ class SyncHTTPClient:
                 tags=tags,
                 telemetry=telemetry,
                 image=image,
+                diversity=diversity,
             )
         )
 

@@ -336,6 +336,16 @@ export class OpenVikingClient {
     if (typeof options.image === "string") {
       imageUrl = (await nodeImagePathToDataURI(options.image)) ?? options.image;
     }
+    const diversity = options.diversity
+      ? compact({
+          strategy: options.diversity.strategy,
+          lambda: options.diversity.relevanceWeight,
+          group_by: options.diversity.groupBy,
+          max_per_group: options.diversity.maxPerGroup,
+          candidate_multiplier: options.diversity.candidateMultiplier,
+          similarity_threshold: options.diversity.similarityThreshold,
+        })
+      : undefined;
     return this.request("POST", `/api/v1/search/${kind}`, {
       body: compact({
         query,
@@ -352,6 +362,7 @@ export class OpenVikingClient {
         time_field: options.timeField,
         level: options.level,
         tags: options.tags,
+        diversity,
       }),
     });
   }

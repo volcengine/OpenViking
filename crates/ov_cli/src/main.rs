@@ -752,6 +752,8 @@ enum Commands {
         /// Only include results matching all of these explicit tags
         #[arg(long = "tags", value_delimiter = ',')]
         tags: Option<Vec<String>>,
+        #[command(flatten)]
+        diversity: client::DiversityOptions,
     },
     /// [Experimental][Data] Run context-aware retrieval
     Search {
@@ -821,6 +823,8 @@ enum Commands {
         /// Only include results matching all of these explicit tags
         #[arg(long = "tags", value_delimiter = ',')]
         tags: Option<Vec<String>>,
+        #[command(flatten)]
+        diversity: client::DiversityOptions,
     },
     /// [Data] Run content pattern search
     Grep {
@@ -3545,6 +3549,7 @@ async fn main() {
             level,
             context_type,
             tags,
+            diversity,
         } => {
             handlers::handle_find(
                 query,
@@ -3557,6 +3562,7 @@ async fn main() {
                 level,
                 context_type,
                 tags,
+                diversity,
                 ctx,
             )
             .await
@@ -3573,6 +3579,7 @@ async fn main() {
             level,
             context_type,
             tags,
+            diversity,
         } => {
             handlers::handle_search(
                 query,
@@ -3586,6 +3593,7 @@ async fn main() {
                 level,
                 context_type,
                 tags,
+                diversity,
                 ctx,
             )
             .await

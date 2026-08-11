@@ -294,6 +294,7 @@ class MatchedContext:
 
     relations: List[RelatedContext] = field(default_factory=list)
     search_tags: List[str] = field(default_factory=list)
+    deduplicated_from: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -380,7 +381,7 @@ class FindResult:
         ``search_tags`` is surfaced under the ``tags`` key to match the
         ``tags`` filter parameter accepted by find/search.
         """
-        return {
+        result = {
             "context_type": ctx.context_type.value,
             "uri": ctx.uri,
             "level": ctx.level,
@@ -388,6 +389,9 @@ class FindResult:
             "abstract": ctx.abstract,
             "tags": ctx.search_tags,
         }
+        if ctx.deduplicated_from:
+            result["deduplicated_from"] = list(ctx.deduplicated_from)
+        return result
 
     def _query_to_dict(self, q: TypedQuery) -> Dict[str, Any]:
         """Convert TypedQuery to dict."""
@@ -435,6 +439,7 @@ class FindResult:
                     for r in d.get("relations", [])
                 ],
                 search_tags=list(d.get("tags") or d.get("search_tags") or []),
+                deduplicated_from=list(d.get("deduplicated_from") or []),
             )
 
         return cls(

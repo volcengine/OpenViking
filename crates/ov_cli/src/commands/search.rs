@@ -129,6 +129,7 @@ pub async fn find(
     level: Option<Vec<i32>>,
     context_type: Option<Vec<String>>,
     tags: Option<Vec<String>>,
+    diversity: &crate::client::DiversityOptions,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -145,6 +146,7 @@ pub async fn find(
             level,
             context_type,
             tags,
+            diversity,
         )
         .await?;
     output_search_results(
@@ -170,6 +172,7 @@ pub async fn search(
     level: Option<Vec<i32>>,
     context_type: Option<Vec<String>>,
     tags: Option<Vec<String>>,
+    diversity: &crate::client::DiversityOptions,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -187,6 +190,7 @@ pub async fn search(
             level,
             context_type,
             tags,
+            diversity,
         )
         .await?;
     output_search_results(

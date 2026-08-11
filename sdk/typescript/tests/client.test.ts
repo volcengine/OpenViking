@@ -819,4 +819,27 @@ describe("OpenVikingClient", () => {
       content: "*.log\n",
     });
   });
+
+  it("serializes diversity options with HTTP field names", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(ok({ resources: [] }));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+    await client.find("architecture", {
+      diversity: {
+        strategy: "combined",
+        relevanceWeight: 0.7,
+        groupBy: "source_root",
+        maxPerGroup: 2,
+      },
+    });
+    const body = JSON.parse(String(fetcher.mock.calls[0]![1]?.body));
+    expect(body.diversity).toEqual({
+      strategy: "combined",
+      lambda: 0.7,
+      group_by: "source_root",
+      max_per_group: 2,
+    });
+  });
 });

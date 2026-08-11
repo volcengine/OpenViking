@@ -41,6 +41,7 @@ from openviking.utils.search_filters import (
 )
 from openviking.utils.tags import build_search_tags_filter
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
+from openviking_cli.retrieve.diversity import DiversityOptions
 
 
 def _sanitize_floats(obj: Any) -> Any:
@@ -119,6 +120,7 @@ class FindRequest(BaseModel):
     time_field: Optional[TimeField] = None
     level: Optional[Union[int, str, List[int]]] = None
     telemetry: TelemetryRequest = False
+    diversity: Optional[DiversityOptions] = None
 
 
 def _reject_unknown_categories(value: Any, label: str, allowed: Sequence[str]) -> None:
@@ -180,6 +182,7 @@ class SearchRequest(BaseModel):
     time_field: Optional[TimeField] = None
     level: Optional[Union[int, str, List[int]]] = None
     telemetry: TelemetryRequest = False
+    diversity: Optional[DiversityOptions] = None
 
     mode: Literal["list", "context"] = "list"
 
@@ -197,6 +200,8 @@ class SearchRequest(BaseModel):
 
     @model_validator(mode="after")
     def _validate_mode(self) -> "SearchRequest":
+        if self.mode == "context" and self.diversity is not None:
+            raise ValueError("diversity requires mode='list'")
         if self.mode == "list":
             used = sorted(set(CONTEXT_ONLY_FIELDS) & self.model_fields_set)
             if used:
@@ -296,6 +301,7 @@ async def find(
             filter=effective_filter,
             level=_resolve_levels(request.level) or None,
             image_url=request.image_url,
+            diversity=request.diversity,
         ),
     )
     result = execution.result
@@ -407,6 +413,7 @@ async def search(
             filter=effective_filter,
             level=_resolve_levels(request.level) or None,
             image_url=request.image_url,
+            diversity=request.diversity,
         )
 
     execution = await run_operation(

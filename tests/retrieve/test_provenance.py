@@ -157,3 +157,18 @@ class TestMatchedContextSearchTags:
         }
         result = FindResult.from_dict(payload)
         assert result.resources[0].search_tags == ["team=infra"]
+
+
+def test_context_serialization_only_includes_non_empty_deduplicated_from():
+    plain = MatchedContext(uri="viking://resources/a.md", context_type=ContextType.RESOURCE)
+    folded = MatchedContext(
+        uri="viking://resources/b.md",
+        context_type=ContextType.RESOURCE,
+        deduplicated_from=["viking://resources/b-copy.md"],
+    )
+    result = FindResult(memories=[], resources=[plain, folded], skills=[])
+    serialized = result.to_dict()["resources"]
+    assert "deduplicated_from" not in serialized[0]
+    assert serialized[1]["deduplicated_from"] == ["viking://resources/b-copy.md"]
+    restored = FindResult.from_dict(result.to_dict())
+    assert restored.resources[1].deduplicated_from == ["viking://resources/b-copy.md"]
