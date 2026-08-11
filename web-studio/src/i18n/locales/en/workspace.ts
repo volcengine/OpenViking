@@ -128,6 +128,7 @@ const workspace = {
       'Could not connect to the OpenViking service. Check the server URL and connection status.',
     connectionSettings: 'Open connection settings',
     detail: 'Details',
+    openPlayground: 'Open in Playground',
     viewDetail: 'View {{name}} details',
     detailLoading: 'Loading skill details...',
     detailLoadFailed: 'Could not load skill details',

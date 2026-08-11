@@ -123,6 +123,7 @@ const workspace = {
     networkError: '无法连接 OpenViking 服务，请检查服务地址和连接状态。',
     connectionSettings: '打开连接设置',
     detail: '详情',
+    openPlayground: '在 Playground 打开',
     viewDetail: '查看 {{name}} 详情',
     detailLoading: '正在加载技能详情...',
     detailLoadFailed: '技能详情加载失败',

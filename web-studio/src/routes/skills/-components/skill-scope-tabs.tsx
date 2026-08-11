@@ -7,6 +7,11 @@ export type SkillScope = 'agent' | 'user'
 
 const SKILL_SCOPES: SkillScope[] = ['user', 'agent']
 
+export const SKILL_SCOPE_ICONS = {
+  agent: UsersRoundIcon,
+  user: UserRoundIcon,
+} satisfies Record<SkillScope, typeof UserRoundIcon>
+
 export function getSkillsForScope<T extends { scope: SkillScope }>(
   skills: T[],
   scope: SkillScope,
@@ -32,7 +37,7 @@ export function SkillScopeTabs({
       role="tablist"
     >
       {SKILL_SCOPES.map((scope) => {
-        const ScopeIcon = scope === 'user' ? UserRoundIcon : UsersRoundIcon
+        const ScopeIcon = SKILL_SCOPE_ICONS[scope]
 
         return (
           <Button

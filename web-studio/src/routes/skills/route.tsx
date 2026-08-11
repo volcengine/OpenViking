@@ -3,12 +3,12 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, createFileRoute } from '@tanstack/react-router'
 import {
   ChevronRightIcon,
+  ExternalLinkIcon,
   FileCode2Icon,
   LoaderCircleIcon,
   RefreshCwIcon,
   SparklesIcon,
   UserRoundIcon,
-  UsersRoundIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
@@ -32,6 +32,7 @@ import { useAppConnection } from '#/hooks/use-app-connection'
 import { getOvResult, isOvClientError, ovClient } from '#/lib/ov-client'
 
 import {
+  SKILL_SCOPE_ICONS,
   SkillScopeTabs,
   getSkillsForScope,
 } from './-components/skill-scope-tabs'
@@ -305,8 +306,7 @@ function SkillsRoute() {
             ) : (
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 {visibleSkills.map((skill) => {
-                  const ScopeIcon =
-                    skill.scope === 'user' ? UserRoundIcon : UsersRoundIcon
+                  const ScopeIcon = SKILL_SCOPE_ICONS[skill.scope]
 
                   return (
                     <button
@@ -381,9 +381,29 @@ function SkillsRoute() {
                 {selectedSkill?.name}
               </SheetTitle>
             </div>
-            <SheetDescription className="truncate font-mono text-xs">
-              {selectedSkill?.uri}
-            </SheetDescription>
+            <div className="flex items-center gap-2 pr-10">
+              <SheetDescription className="min-w-0 flex-1 truncate font-mono text-xs">
+                {selectedSkill?.uri}
+              </SheetDescription>
+              {selectedSkill ? (
+                <Button
+                  render={
+                    <Link
+                      rel="noreferrer noopener"
+                      search={{ uri: selectedSkill.uri }}
+                      target="_blank"
+                      to="/playground"
+                    />
+                  }
+                  nativeButton={false}
+                  size="xs"
+                  variant="outline"
+                >
+                  {t('openPlayground')}
+                  <ExternalLinkIcon />
+                </Button>
+              ) : null}
+            </div>
           </SheetHeader>
 
           <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
