@@ -298,6 +298,10 @@ class ResolvedOperation(BaseModel):
     uris: List[str]
     page_id: Optional[int] = None  # Temporary page_id for link resolution (not persisted)
     source: Optional[MemoryOperationSource] = None
+    # Custom scalar tags (already normalized as "key=value") to attach to this
+    # operation's memories in the vector index. None means "no tags"; used by
+    # event-memory auto-tagging. Not persisted in the memory file content.
+    search_tags: Optional[List[str]] = None
 
     def is_edit(self):
         return self.old_memory_file_content is not None

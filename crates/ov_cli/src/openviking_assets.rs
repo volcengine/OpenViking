@@ -23,9 +23,28 @@ use crate::output::OutputFormat;
 pub const STATE_PROTOCOL: &str = "openviking-assets-state/1";
 const DEFAULT_CATALOG_FILENAME: &str = "catalog.yaml";
 const CREDENTIALS_ENV: &str = "OPENVIKING_ASSETS_CREDENTIALS_FILE";
+const NATIVE_AUTH_REQUEST_TIMEOUT_SECONDS: f64 = 300.0;
 
 fn client_err(msg: impl Into<String>) -> Error {
     Error::Client(msg.into())
+}
+
+fn manifest_request_timeout(
+    wait: bool,
+    requested_timeout: Option<f64>,
+    configured_timeout: f64,
+    has_native_auth: bool,
+) -> f64 {
+    let default_timeout = if has_native_auth {
+        NATIVE_AUTH_REQUEST_TIMEOUT_SECONDS
+    } else if wait {
+        60.0
+    } else {
+        20.0
+    };
+    requested_timeout
+        .unwrap_or(default_timeout)
+        .max(configured_timeout)
 }
 
 // The server owns OpenViking Assets syntax parsing and semantic validation.
@@ -34,8 +53,10 @@ fn client_err(msg: impl Into<String>) -> Error {
 pub struct ResolvedAsset {
     pub name: String,
     pub connector: String,
+    pub to: Option<String>,
     pub repo_url: String,
     pub branch: Option<String>,
+    pub commit: Option<String>,
     pub auth_ref: Option<String>,
     pub watch_interval: f64,
     pub locator: String,
@@ -258,16 +279,32 @@ fn effective_add_type(external_connector: bool, connector: &str) -> Option<Strin
 
 /// Where one asset lands.
 ///
-/// A resource already recorded in State is synced in place. A first create
-/// normally lets the server name the resource, but a declared `add_type`
-/// requires an exact target, so external-Connector runs derive one from the
-/// asset name — unique within a manifest and already URI-safe.
+/// A manifest-declared `to` is authoritative. It may create a new resource or
+/// sync the resource already recorded at that exact URI, but it never silently
+/// moves an existing asset. Without `to`, a resource already recorded in State
+/// is synced in place. A first create normally lets the server name the
+/// resource, while external-Connector runs derive the required exact target
+/// from the asset name.
 fn target_uri(
-    existing: Option<String>,
+    declared: Option<&str>,
+    existing: Option<&str>,
     external_connector: bool,
     asset_name: &str,
-) -> Option<String> {
-    existing.or_else(|| external_connector.then(|| format!("viking://resources/{asset_name}")))
+) -> Result<Option<String>> {
+    if let Some(declared) = declared {
+        if let Some(existing) = existing
+            && existing.trim_end_matches('/') != declared.trim_end_matches('/')
+        {
+            return Err(client_err(format!(
+                "asset '{asset_name}' declares target '{declared}', but its State entry points to \
+                 '{existing}'; move or remove the old resource and State entry before changing 'to'"
+            )));
+        }
+        return Ok(Some(declared.to_string()));
+    }
+    Ok(existing
+        .map(str::to_string)
+        .or_else(|| external_connector.then(|| format!("viking://resources/{asset_name}"))))
 }
 
 impl Default for ManifestRunOptions {
@@ -381,12 +418,17 @@ fn build_args(
     asset: &ResolvedAsset,
     credential_args: &Map<String, Value>,
 ) -> Option<Map<String, Value>> {
-    let mut args = Map::new();
-    if let Some(branch) = &asset.branch {
-        args.insert("branch".to_string(), json!(branch));
+    let mut args = credential_args.clone();
+    // Source selection belongs to the manifest, not the credential alias. Drop
+    // any legacy selector smuggled through the credentials file so the resolved
+    // plan remains authoritative and branch/commit cannot become ambiguous.
+    for key in ["branch", "ref", "commit"] {
+        args.remove(key);
     }
-    for (key, value) in credential_args {
-        args.insert(key.clone(), value.clone());
+    if let Some(commit) = &asset.commit {
+        args.insert("commit".to_string(), json!(commit));
+    } else if let Some(branch) = &asset.branch {
+        args.insert("branch".to_string(), json!(branch));
     }
     if args.is_empty() { None } else { Some(args) }
 }
@@ -406,6 +448,80 @@ fn git_auth_config(args: Option<&Map<String, Value>>) -> Option<Value> {
     }
 }
 
+/// Shape resolved Manifest credentials for the selected Git ingestion path.
+///
+/// External connectors keep their historical flat `username` / `token`
+/// contract. The native Git accessor accepts the same credentials under
+/// `args.auth_config`; source selectors remain top-level parser arguments.
+fn git_submit_args(
+    external_connector: bool,
+    args: Option<Map<String, Value>>,
+) -> Option<Map<String, Value>> {
+    if external_connector {
+        return args;
+    }
+
+    let mut args = args?;
+    let mut auth = Map::new();
+    for key in ["username", "token"] {
+        if let Some(value) = args.remove(key) {
+            auth.insert(key.to_string(), value);
+        }
+    }
+    if !auth.is_empty() {
+        args.insert("auth_config".to_string(), Value::Object(auth));
+    }
+    Some(args)
+}
+
+fn validate_native_git_auth(
+    asset: &ResolvedAsset,
+    args: &Map<String, Value>,
+    _watch_interval: f64,
+    external_connector: bool,
+) -> Result<()> {
+    if external_connector {
+        return Ok(());
+    }
+    if args.keys().any(|key| key != "username" && key != "token") {
+        return Err(client_err(format!(
+            "asset '{}' native Git credentials contain unsupported fields; only username and token are allowed",
+            asset.name
+        )));
+    }
+    if args.is_empty() && asset.auth_ref.is_none() {
+        return Ok(());
+    }
+
+    let token_valid = args
+        .get("token")
+        .and_then(Value::as_str)
+        .is_some_and(|token| !token.trim().is_empty());
+    if !token_valid {
+        return Err(client_err(format!(
+            "asset '{}' native Git credentials require a non-empty string token",
+            asset.name
+        )));
+    }
+    if args.get("username").is_some_and(|username| {
+        username
+            .as_str()
+            .is_none_or(|value| value.trim().is_empty())
+    }) {
+        return Err(client_err(format!(
+            "asset '{}' native Git username must be a non-empty string",
+            asset.name
+        )));
+    }
+    if !asset.repo_url.to_ascii_lowercase().starts_with("https://") {
+        return Err(client_err(format!(
+            "asset '{}' token authentication requires an HTTPS Git URL",
+            asset.name
+        )));
+    }
+    Ok(())
+}
+
 /// Preflight and then apply (or dry-run) a resolved manifest.
 ///
 /// Every source is checked before the first mutation. A preflight failure
@@ -421,6 +537,94 @@ pub async fn apply_manifest_core<S: Submitter>(
 ) -> Result<ApplySummary> {
     let mut state = load_state(manifest_path)?;
 
+    // Resolve all destinations before credential checks, permission preflight,
+    // or submission. A stale State mapping must never silently override a
+    // declarative target from the Manifest.
+    let mut target_uris = Vec::with_capacity(assets.len());
+    let mut existing_state_ids = Vec::with_capacity(assets.len());
+    for asset in assets {
+        let exact_state_id = state
+            .assets
+            .contains_key(&asset.asset_id)
+            .then(|| asset.asset_id.clone());
+        let adopted_state_id = if exact_state_id.is_none() {
+            if let Some(declared) = asset.to.as_deref() {
+                let matches = state
+                    .assets
+                    .iter()
+                    .filter(|(_, entry)| {
+                        entry.resource_uri.as_deref().is_some_and(|uri| {
+                            uri.trim_end_matches('/') == declared.trim_end_matches('/')
+                        })
+                    })
+                    .map(|(asset_id, _)| asset_id.clone())
+                    .collect::<Vec<_>>();
+                if matches.len() > 1 {
+                    return Err(client_err(format!(
+                        "asset '{}' declares target '{}', but multiple State entries point to it; \
+                         repair the State file before applying the Manifest",
+                        asset.name, declared
+                    )));
+                }
+                matches.into_iter().next()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let existing_state_id = exact_state_id.or(adopted_state_id);
+        let existing = existing_state_id
+            .as_ref()
+            .and_then(|asset_id| state.assets.get(asset_id))
+            .and_then(|entry| entry.resource_uri.as_deref());
+        target_uris.push(target_uri(
+            asset.to.as_deref(),
+            existing,
+            options.external_connector,
+            &asset.name,
+        )?);
+        existing_state_ids.push(existing_state_id);
+    }
+
+    // A target may come from the Manifest, an existing State entry, or the
+    // external-Connector fallback. Validate the completed plan rather than
+    // only the declarative `to` fields so two assets can never overwrite the
+    // same resource during one apply.
+    let mut claimed_targets = BTreeMap::<String, String>::new();
+    for (index, target) in target_uris.iter().enumerate() {
+        let Some(target) = target else {
+            continue;
+        };
+        let normalized = target.trim_end_matches('/').to_string();
+        if let Some(previous) =
+            claimed_targets.insert(normalized.clone(), assets[index].name.clone())
+        {
+            return Err(client_err(format!(
+                "assets '{}' and '{}' both resolve to target '{}'",
+                previous, assets[index].name, normalized
+            )));
+        }
+    }
+
+    // State adoption represents ownership transfer after a selector change.
+    // One old entry cannot be transferred to two current assets, even if a
+    // malformed State entry has no resource_uri for the target check above.
+    let mut claimed_state_entries = BTreeMap::<String, String>::new();
+    for (index, state_id) in existing_state_ids.iter().enumerate() {
+        let Some(state_id) = state_id else {
+            continue;
+        };
+        if let Some(previous) =
+            claimed_state_entries.insert(state_id.clone(), assets[index].name.clone())
+        {
+            return Err(client_err(format!(
+                "assets '{}' and '{}' both claim State entry '{}'",
+                previous, assets[index].name, state_id
+            )));
+        }
+    }
+
     // Pre-flight: every declared auth_ref must resolve before anything is submitted.
     let credentials = load_credentials(credentials_file)?;
     let mut credential_args: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
@@ -429,11 +633,19 @@ pub async fn apply_manifest_core<S: Submitter>(
             Some(auth_ref) => resolve_auth_ref(auth_ref, &credentials, credentials_file)?,
             None => Map::new(),
         };
+        validate_native_git_auth(
+            asset,
+            &args,
+            options.watch_interval.unwrap_or(asset.watch_interval),
+            options.external_connector,
+        )?;
         credential_args.insert(asset.name.clone(), args);
     }
 
-    let current_ids: HashSet<String> = assets.iter().map(|a| a.asset_id.clone()).collect();
-    for (asset_id, orphan) in state.orphans(&current_ids) {
+    let mut state_ids_in_use: HashSet<String> =
+        assets.iter().map(|asset| asset.asset_id.clone()).collect();
+    state_ids_in_use.extend(existing_state_ids.iter().flatten().cloned());
+    for (asset_id, orphan) in state.orphans(&state_ids_in_use) {
         emit(json!({
             "event": "orphan",
             "asset_id": asset_id,
@@ -462,6 +674,7 @@ pub async fn apply_manifest_core<S: Submitter>(
             "connector": asset.connector,
             "locator": asset.locator,
             "ref": asset.git_ref,
+            "to": target_uris[index],
         });
         emit({
             let mut event = base.as_object().cloned().unwrap_or_default();
@@ -493,7 +706,10 @@ pub async fn apply_manifest_core<S: Submitter>(
     };
     let mut stop = false;
     for (index, asset) in assets.iter().enumerate() {
-        let existing = state.assets.get(&asset.asset_id).cloned();
+        let existing = existing_state_ids[index]
+            .as_ref()
+            .and_then(|asset_id| state.assets.get(asset_id))
+            .cloned();
         let action = match &existing {
             Some(entry) if entry.resource_uri.is_some() => "sync",
             _ => "create",
@@ -508,6 +724,7 @@ pub async fn apply_manifest_core<S: Submitter>(
             "locator": asset.locator,
             "ref": asset.git_ref,
             "action": action,
+            "to": target_uris[index],
             "watch_interval": watch_interval,
         });
         let with = |base: &Value, extra: Value| {
@@ -543,16 +760,7 @@ pub async fn apply_manifest_core<S: Submitter>(
         };
         let args = build_args(asset, &credential_args[&asset.name]);
         match submitter
-            .submit(
-                asset,
-                target_uri(
-                    entry.resource_uri.clone(),
-                    options.external_connector,
-                    &asset.name,
-                ),
-                watch_interval,
-                args,
-            )
+            .submit(asset, target_uris[index].clone(), watch_interval, args)
             .await
         {
             Ok(response) => {
@@ -562,6 +770,10 @@ pub async fn apply_manifest_core<S: Submitter>(
                     extract_str(&response, &["root_uri", "uri", "resource_uri", "to"])
                 {
                     entry.resource_uri = Some(uri);
+                } else if entry.resource_uri.is_none() {
+                    // An explicit Manifest target remains a stable State mapping
+                    // even when an older server response omits its root URI.
+                    entry.resource_uri = target_uris[index].clone();
                 }
                 if let Some(task_id) = extract_str(&response, &["task_id"]) {
                     entry.task_id = Some(task_id);
@@ -575,6 +787,11 @@ pub async fn apply_manifest_core<S: Submitter>(
                         "task_id": entry.task_id,
                     }),
                 );
+                if let Some(previous_id) = &existing_state_ids[index]
+                    && previous_id != &asset.asset_id
+                {
+                    state.assets.remove(previous_id);
+                }
                 state.record(&asset.asset_id, entry);
                 summary.succeeded.push(asset.name.clone());
                 emit(done);
@@ -583,6 +800,11 @@ pub async fn apply_manifest_core<S: Submitter>(
                 let message = err.to_string();
                 entry.status = "failed".to_string();
                 entry.error = Some(message.clone());
+                if let Some(previous_id) = &existing_state_ids[index]
+                    && previous_id != &asset.asset_id
+                {
+                    state.assets.remove(previous_id);
+                }
                 state.record(&asset.asset_id, entry);
                 summary.failed.insert(asset.name.clone(), message.clone());
                 emit(with(
@@ -637,6 +859,7 @@ impl Submitter for HttpSubmitter {
                     "connector": asset.connector,
                     "repo_url": asset.repo_url,
                     "branch": asset.branch,
+                    "commit": asset.commit,
                     "auth_config": git_auth_config(args.as_ref()),
                 }),
             )
@@ -650,6 +873,7 @@ impl Submitter for HttpSubmitter {
         watch_interval: f64,
         args: Option<Map<String, Value>>,
     ) -> Result<Value> {
+        let args = git_submit_args(self.external_connector, args);
         self.client
             .add_resource(
                 &asset.repo_url,
@@ -840,11 +1064,8 @@ pub async fn handle_manifest_apply(
         })
         .transpose()?;
 
-    let effective_timeout = if options.wait {
-        timeout.unwrap_or(60.0).max(ctx.config.timeout)
-    } else {
-        ctx.config.timeout.max(20.0)
-    };
+    let effective_timeout =
+        manifest_request_timeout(options.wait, timeout, ctx.config.timeout, false);
     let client = ctx.get_client_with_timeout(Some(effective_timeout));
     let mut request = json!({
         "manifest_yaml": manifest_yaml,
@@ -857,6 +1078,11 @@ pub async fn handle_manifest_apply(
     let resolved: ResolveResponse = client
         .post("/api/v1/openviking-assets/resolve", &request)
         .await?;
+    let has_native_auth =
+        !options.external_connector && resolved.assets.iter().any(|asset| asset.auth_ref.is_some());
+    let effective_timeout =
+        manifest_request_timeout(options.wait, timeout, ctx.config.timeout, has_native_auth);
+    let client = ctx.get_client_with_timeout(Some(effective_timeout));
 
     let json_mode = matches!(ctx.output_format, OutputFormat::Json);
     let mut emit = |event: Value| {
@@ -922,6 +1148,145 @@ mod tests {
     }
 
     #[test]
+    fn native_auth_requests_get_a_long_default_and_honor_explicit_timeout() {
+        assert_eq!(manifest_request_timeout(false, None, 60.0, false), 60.0);
+        assert_eq!(manifest_request_timeout(false, None, 60.0, true), 300.0);
+        assert_eq!(
+            manifest_request_timeout(false, Some(900.0), 60.0, true),
+            900.0
+        );
+        assert_eq!(
+            manifest_request_timeout(false, Some(120.0), 180.0, true),
+            180.0
+        );
+    }
+
+    #[test]
+    fn build_args_uses_manifest_commit_as_authoritative_selector() {
+        let (_dir, _manifest, _catalog, mut assets) = workspace();
+        assets[0].branch = None;
+        assets[0].commit = Some("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef".into());
+        let credentials = json!({
+            "token": "sekrit",
+            "branch": "credential-branch",
+            "ref": "credential-ref",
+            "commit": "credential-commit",
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        let args = build_args(&assets[0], &credentials).unwrap();
+
+        assert_eq!(args["token"], json!("sekrit"));
+        assert_eq!(
+            args["commit"],
+            json!("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+        );
+        assert!(!args.contains_key("branch"));
+        assert!(!args.contains_key("ref"));
+    }
+
+    #[test]
+    fn native_git_submit_nests_credentials_but_keeps_source_selector_flat() {
+        let args = json!({
+            "username": "oauth2",
+            "token": "sekrit",
+            "branch": "main",
+        })
+        .as_object()
+        .cloned();
+
+        let args = git_submit_args(false, args).unwrap();
+
+        assert_eq!(
+            args["auth_config"],
+            json!({"username": "oauth2", "token": "sekrit"})
+        );
+        assert_eq!(args["branch"], json!("main"));
+        assert!(!args.contains_key("username"));
+        assert!(!args.contains_key("token"));
+    }
+
+    #[test]
+    fn git_preflight_keeps_auth_config_separate_from_source_selector() {
+        let args = json!({
+            "username": "oauth2",
+            "token": "sekrit",
+            "branch": "main",
+        })
+        .as_object()
+        .cloned();
+
+        assert_eq!(
+            git_auth_config(args.as_ref()),
+            Some(json!({"username": "oauth2", "token": "sekrit"}))
+        );
+    }
+
+    #[test]
+    fn external_git_submit_keeps_connector_credentials_flat() {
+        let args = json!({
+            "username": "oauth2",
+            "token": "sekrit",
+            "commit": "deadbeef",
+        })
+        .as_object()
+        .cloned();
+
+        let args = git_submit_args(true, args).unwrap();
+
+        assert_eq!(args["username"], json!("oauth2"));
+        assert_eq!(args["token"], json!("sekrit"));
+        assert_eq!(args["commit"], json!("deadbeef"));
+        assert!(!args.contains_key("auth_config"));
+    }
+
+    #[test]
+    fn native_git_auth_validation_matches_server_contract() {
+        let (_dir, _manifest, _catalog, mut assets) = workspace();
+        let username_only = json!({"username": "oauth2"}).as_object().unwrap().clone();
+        assert!(
+            validate_native_git_auth(&assets[0], &username_only, 0.0, false)
+                .unwrap_err()
+                .to_string()
+                .contains("token")
+        );
+
+        let token = json!({"token": "sekrit"}).as_object().unwrap().clone();
+        assets[0].repo_url = "git@github.com:org/alpha.git".into();
+        assert!(
+            validate_native_git_auth(&assets[0], &token, 0.0, false)
+                .unwrap_err()
+                .to_string()
+                .contains("HTTPS")
+        );
+
+        assets[0].repo_url = "http://github.com/org/alpha.git".into();
+        assert!(
+            validate_native_git_auth(&assets[0], &token, 0.0, false)
+                .unwrap_err()
+                .to_string()
+                .contains("HTTPS")
+        );
+
+        let unknown = json!({"password": "must-not-persist"})
+            .as_object()
+            .unwrap()
+            .clone();
+        assert!(
+            validate_native_git_auth(&assets[0], &unknown, 0.0, false)
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported")
+        );
+
+        assets[0].repo_url = "https://github.com/org/alpha.git".into();
+        assert!(validate_native_git_auth(&assets[0], &token, 30.0, false).is_ok());
+        assert!(validate_native_git_auth(&assets[0], &token, 30.0, true).is_ok());
+    }
+
+    #[test]
     fn manifest_run_args_parse_known_keys() {
         let args = serde_json::json!({
             "catalog": "shared/catalog.yaml",
@@ -940,7 +1305,7 @@ mod tests {
 
     #[test]
     fn manifest_run_args_reject_unknown_keys_and_bad_types() {
-        // Catalog params (e.g. git branch) belong in the catalog file, not
+        // Catalog params (e.g. git branch or commit) belong in the catalog file, not
         // here; an unknown key must not silently do nothing.
         let unknown = serde_json::json!({"branch": "main"});
         let err = parse_manifest_run_args(unknown.as_object()).unwrap_err();
@@ -959,18 +1324,38 @@ mod tests {
     }
 
     #[test]
-    fn creates_get_an_exact_target_only_for_external_connector_runs() {
+    fn manifest_target_is_authoritative_and_external_connector_has_a_fallback() {
         // Standard runs let the server name a new resource.
-        assert_eq!(target_uri(None, false, "alpha"), None);
+        assert_eq!(target_uri(None, None, false, "alpha").unwrap(), None);
+        // A declared target is used for a first create in either mode.
+        assert_eq!(
+            target_uri(Some("viking://resources/repos/alpha"), None, false, "alpha").unwrap(),
+            Some("viking://resources/repos/alpha".to_string())
+        );
         // A declared add_type requires an exact target, derived from the name.
         assert_eq!(
-            target_uri(None, true, "alpha"),
+            target_uri(None, None, true, "alpha").unwrap(),
             Some("viking://resources/alpha".to_string())
         );
         // An existing resource is synced in place under either mode.
-        let existing = Some("viking://resources/renamed".to_string());
-        assert_eq!(target_uri(existing.clone(), false, "alpha"), existing);
-        assert_eq!(target_uri(existing.clone(), true, "alpha"), existing);
+        let existing = "viking://resources/renamed";
+        assert_eq!(
+            target_uri(None, Some(existing), false, "alpha").unwrap(),
+            Some(existing.to_string())
+        );
+        assert_eq!(
+            target_uri(None, Some(existing), true, "alpha").unwrap(),
+            Some(existing.to_string())
+        );
+        // A changed declaration cannot silently move a State-owned resource.
+        let err = target_uri(
+            Some("viking://resources/new"),
+            Some(existing),
+            false,
+            "alpha",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("State entry"), "{err}");
     }
 
     #[test]
@@ -1005,8 +1390,10 @@ mod tests {
             ResolvedAsset {
                 name: "alpha".into(),
                 connector: "git".into(),
+                to: Some("viking://resources/repos/alpha".into()),
                 repo_url: "https://github.com/org/alpha".into(),
                 branch: Some("main".into()),
+                commit: None,
                 auth_ref: None,
                 watch_interval: 30.0,
                 locator: "github.com/org/alpha".into(),
@@ -1016,8 +1403,10 @@ mod tests {
             ResolvedAsset {
                 name: "beta".into(),
                 connector: "git".into(),
+                to: None,
                 repo_url: "https://github.com/org/beta".into(),
                 branch: None,
+                commit: None,
                 auth_ref: None,
                 watch_interval: 30.0,
                 locator: "github.com/org/beta".into(),
@@ -1027,8 +1416,10 @@ mod tests {
             ResolvedAsset {
                 name: "gamma".into(),
                 connector: "git".into(),
+                to: None,
                 repo_url: "git@github.com:org/gamma.git".into(),
                 branch: Some("dev".into()),
+                commit: None,
                 auth_ref: None,
                 watch_interval: 0.0,
                 locator: "github.com/org/gamma".into(),
@@ -1129,6 +1520,9 @@ mod tests {
             watch_interval: f64,
             args: Option<Map<String, Value>>,
         ) -> Result<Value> {
+            let root_uri = to
+                .clone()
+                .unwrap_or_else(|| format!("viking://resources/{}", asset.name));
             self.calls
                 .lock()
                 .unwrap()
@@ -1137,7 +1531,7 @@ mod tests {
                 return Err(client_err(format!("boom: {}", asset.name)));
             }
             Ok(json!({
-                "root_uri": format!("viking://resources/{}", asset.name),
+                "root_uri": root_uri,
                 "task_id": format!("task-{}", asset.name),
             }))
         }
@@ -1182,7 +1576,11 @@ mod tests {
         assert_eq!(summary.succeeded, ["alpha", "beta", "gamma"]);
         {
             let calls = submitter.calls.lock().unwrap();
-            assert!(calls.iter().all(|(_, to, _, _)| to.is_none()));
+            assert_eq!(
+                calls[0].1.as_deref(),
+                Some("viking://resources/repos/alpha")
+            );
+            assert!(calls[1..].iter().all(|(_, to, _, _)| to.is_none()));
             assert_eq!(calls[0].2, 30.0);
             assert_eq!(calls[2].2, 0.0);
             let alpha_args = calls[0].3.as_ref().unwrap();
@@ -1203,13 +1601,142 @@ mod tests {
         .await;
         assert_eq!(summary2.succeeded.len(), 3);
         let calls = submitter2.calls.lock().unwrap();
-        assert_eq!(calls[0].1.as_deref(), Some("viking://resources/alpha"));
+        assert_eq!(
+            calls[0].1.as_deref(),
+            Some("viking://resources/repos/alpha")
+        );
         let actions: Vec<&str> = events
             .iter()
             .filter(|e| e["event"] == "asset_done")
             .map(|e| e["action"].as_str().unwrap())
             .collect();
         assert_eq!(actions, ["sync", "sync", "sync"]);
+    }
+
+    #[tokio::test]
+    async fn changed_manifest_target_conflicts_with_existing_state() {
+        let (dir, manifest, catalog, mut assets) = workspace();
+        let creds = dir.path().join("no-creds.yaml");
+        let submitter = FakeSubmitter::new(vec![]);
+        run(
+            &manifest,
+            &catalog,
+            &assets,
+            &creds,
+            &run_opts(),
+            &submitter,
+        )
+        .await;
+
+        assets[0].to = Some("viking://resources/repos/moved-alpha".into());
+        let submitter = FakeSubmitter::new(vec![]);
+        let mut emit = |_event: Value| {};
+        let err = apply_manifest_core(
+            &manifest,
+            &catalog,
+            &assets,
+            &creds,
+            &run_opts(),
+            &submitter,
+            &mut emit,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains("State entry"), "{err}");
+        assert!(submitter.preflight_calls.lock().unwrap().is_empty());
+        assert!(submitter.calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn changed_ref_at_same_manifest_target_migrates_state() {
+        let (dir, manifest, catalog, mut assets) = workspace();
+        let creds = dir.path().join("no-creds.yaml");
+        let submitter = FakeSubmitter::new(vec![]);
+        run(
+            &manifest,
+            &catalog,
+            &assets,
+            &creds,
+            &run_opts(),
+            &submitter,
+        )
+        .await;
+
+        let previous_id = assets[0].asset_id.clone();
+        assets[0].asset_id = "alpha-dev-id".into();
+        assets[0].branch = Some("dev".into());
+        assets[0].git_ref = "dev".into();
+        let submitter = FakeSubmitter::new(vec![]);
+        let (_, events) = run(
+            &manifest,
+            &catalog,
+            &assets,
+            &creds,
+            &run_opts(),
+            &submitter,
+        )
+        .await;
+
+        assert_eq!(
+            submitter.calls.lock().unwrap()[0].1.as_deref(),
+            Some("viking://resources/repos/alpha")
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| event["event"] == "orphan" && event["name"] == "alpha")
+        );
+        let state = load_state(&manifest).unwrap();
+        assert!(!state.assets.contains_key(&previous_id));
+        assert!(state.assets.contains_key("alpha-dev-id"));
+    }
+
+    #[tokio::test]
+    async fn inherited_and_declared_target_collision_aborts_before_preflight() {
+        let (dir, manifest, catalog, assets) = workspace();
+        let creds = dir.path().join("no-creds.yaml");
+        let submitter = FakeSubmitter::new(vec![]);
+        run(
+            &manifest,
+            &catalog,
+            &assets,
+            &creds,
+            &run_opts(),
+            &submitter,
+        )
+        .await;
+
+        let state_path = state_path_for(&manifest);
+        let original_state = std::fs::read_to_string(&state_path).unwrap();
+
+        let mut inherited = assets[0].clone();
+        inherited.to = None;
+        let mut declared = assets[1].clone();
+        declared.asset_id = "beta-at-alpha-target".into();
+        declared.to = Some("viking://resources/repos/alpha/".into());
+        let selected = vec![inherited, declared];
+        let submitter = FakeSubmitter::new(vec![]);
+        let mut emit = |_event: Value| {};
+        let err = apply_manifest_core(
+            &manifest,
+            &catalog,
+            &selected,
+            &creds,
+            &run_opts(),
+            &submitter,
+            &mut emit,
+        )
+        .await
+        .unwrap_err();
+
+        let message = err.to_string();
+        assert!(message.contains("alpha"), "{message}");
+        assert!(message.contains("beta"), "{message}");
+        assert!(message.contains("both resolve to target"), "{message}");
+        assert!(submitter.preflight_calls.lock().unwrap().is_empty());
+        assert!(submitter.calls.lock().unwrap().is_empty());
+        assert_eq!(std::fs::read_to_string(state_path).unwrap(), original_state);
     }
 
     #[tokio::test]
@@ -1303,6 +1830,105 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn native_auth_watch_is_preflighted_and_submitted() {
+        let (dir, manifest, catalog, mut assets) = workspace();
+        assets[1].auth_ref = Some("team-git".into());
+        let creds = write(
+            dir.path(),
+            "creds.yaml",
+            "credentials:\n  team-git:\n    token: sekrit\n",
+        );
+        let submitter = FakeSubmitter::new(vec![]);
+        let mut emit = |_event: Value| {};
+
+        let summary = apply_manifest_core(
+            &manifest,
+            &catalog,
+            &assets,
+            &creds,
+            &run_opts(),
+            &submitter,
+            &mut emit,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(summary.succeeded, ["alpha", "beta", "gamma"]);
+        let preflight_calls = submitter.preflight_calls.lock().unwrap();
+        let beta_preflight = preflight_calls
+            .iter()
+            .find(|call| call.0 == "beta")
+            .unwrap();
+        assert_eq!(beta_preflight.1.as_ref().unwrap()["token"], json!("sekrit"));
+        drop(preflight_calls);
+        let calls = submitter.calls.lock().unwrap();
+        let beta_submit = calls.iter().find(|call| call.0 == "beta").unwrap();
+        assert_eq!(beta_submit.2, 30.0);
+        assert_eq!(beta_submit.3.as_ref().unwrap()["token"], json!("sekrit"));
+        assert!(state_path_for(&manifest).exists());
+    }
+
+    #[tokio::test]
+    async fn native_unknown_credential_field_aborts_before_preflight_or_submission() {
+        let (dir, manifest, catalog, mut assets) = workspace();
+        assets[1].auth_ref = Some("team-git".into());
+        let creds = write(
+            dir.path(),
+            "creds.yaml",
+            "credentials:\n  team-git:\n    password: must-not-persist\n",
+        );
+        let submitter = FakeSubmitter::new(vec![]);
+        let mut emit = |_event: Value| {};
+
+        let err = apply_manifest_core(
+            &manifest,
+            &catalog,
+            &assets,
+            &creds,
+            &run_opts(),
+            &submitter,
+            &mut emit,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains("unsupported"), "{err}");
+        assert!(!err.to_string().contains("must-not-persist"), "{err}");
+        assert!(submitter.preflight_calls.lock().unwrap().is_empty());
+        assert!(submitter.calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn native_empty_credential_alias_aborts_before_preflight_or_submission() {
+        for credentials_yaml in [
+            "credentials:\n  team-git: {}\n",
+            "credentials:\n  team-git:\n",
+        ] {
+            let (dir, manifest, catalog, mut assets) = workspace();
+            assets[1].auth_ref = Some("team-git".into());
+            let creds = write(dir.path(), "creds.yaml", credentials_yaml);
+            let submitter = FakeSubmitter::new(vec![]);
+            let mut emit = |_event: Value| {};
+
+            let err = apply_manifest_core(
+                &manifest,
+                &catalog,
+                &assets,
+                &creds,
+                &run_opts(),
+                &submitter,
+                &mut emit,
+            )
+            .await
+            .unwrap_err();
+
+            assert!(err.to_string().contains("token"), "{err}");
+            assert!(submitter.preflight_calls.lock().unwrap().is_empty());
+            assert!(submitter.calls.lock().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
     async fn orphan_reported_but_kept() {
         let (dir, manifest, catalog, assets) = workspace();
         let creds = dir.path().join("no-creds.yaml");
@@ -1337,6 +1963,7 @@ mod tests {
     async fn auth_ref_precheck_and_merge() {
         let (dir, manifest, catalog, mut assets) = workspace();
         assets[0].auth_ref = Some("team-git".into());
+        assets[0].watch_interval = 0.0;
 
         // Missing alias fails before anything is submitted.
         let submitter = FakeSubmitter::new(vec![]);

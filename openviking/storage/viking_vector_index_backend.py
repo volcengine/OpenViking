@@ -790,6 +790,10 @@ class VikingVectorIndexBackend:
     def mode(self) -> str:
         return self._get_default_backend()._mode
 
+    @property
+    def uses_content_field(self) -> bool:
+        return self._shared_adapter.USE_CONTENT_FIELD
+
     # =========================================================================
     # 内部辅助方法
     # =========================================================================
@@ -885,12 +889,10 @@ class VikingVectorIndexBackend:
         """
         options = normalize_upsert_options(options)
         logger.debug(
-            "[VikingVectorIndexBackend.upsert] Called with ctx.account_id=%s, "
-            "partial_update=%s, search_tag_mode=%s, data=%s",
-            ctx.account_id,
+            "[VikingVectorIndexBackend.upsert] uri=%s partial_update=%s search_tag_mode=%s",
+            data.get("uri", ""),
             options.partial_update,
             options.search_tag_mode,
-            data,
         )
         backend = self._get_backend_for_context(ctx)
         logger.debug(
@@ -968,9 +970,7 @@ class VikingVectorIndexBackend:
 
     async def update(self, data: Dict[str, Any], *, ctx: RequestContext) -> UpdateResult:
         """Strict update path. The target record must already exist."""
-        logger.debug(
-            f"[VikingVectorIndexBackend.update] Called with ctx.account_id={ctx.account_id}, data={data}"
-        )
+        logger.debug("[VikingVectorIndexBackend.update] uri=%s", data.get("uri", ""))
         backend = self._get_backend_for_context(ctx)
         logger.debug(
             f"[VikingVectorIndexBackend.update] Using backend for account_id={ctx.account_id}"
@@ -1374,6 +1374,20 @@ class VikingVectorIndexBackend:
         self._check_root_role(ctx)
         root_backend = self._get_root_backend()
         return await root_backend.delete_by_filter(Eq("account_id", account_id))
+
+    async def delete_user_data(
+        self,
+        account_id: str,
+        user_id: str,
+        *,
+        ctx: RequestContext,
+    ) -> int:
+        """Delete every vector record owned by one user as ROOT."""
+        self._check_root_role(ctx)
+        root_backend = self._get_root_backend()
+        return await root_backend.delete_by_filter(
+            And([Eq("account_id", account_id), Eq("owner_user_id", user_id)])
+        )
 
     async def delete_uris(self, ctx: RequestContext, uris: List[str]) -> None:
         for uri in uris:

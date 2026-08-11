@@ -821,11 +821,17 @@ async def test_embedding_handler_binds_registered_operation_telemetry(monkeypatc
     register_telemetry(telemetry)
 
     class _TelemetryAwareEmbedder:
+        def prepare_embedding_input(self, content):
+            return content
+
         def embed(self, text: str, is_query: bool = False) -> EmbedResult:
             assert text == "hello"
             assert is_query is False
             get_current_telemetry().record_token_usage("embedding", 9, 0)
             return EmbedResult(dense_vector=[0.1, 0.2])
+
+        async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+            return self.embed(text, is_query=is_query)
 
     class _DummyConfig:
         def __init__(self):
@@ -842,8 +848,9 @@ async def test_embedding_handler_binds_registered_operation_telemetry(monkeypatc
 
     class _DummyVikingDB:
         is_closing = False
+        uses_content_field = False
 
-        async def upsert(self, _data, *, ctx=None):
+        async def upsert(self, _data, *, ctx=None, options=None):
             return "rec-1"
 
     monkeypatch.setattr(

@@ -212,11 +212,13 @@ class ExcelParser(BaseParser):
         parse_started = time.perf_counter()
         loop = asyncio.get_running_loop()
         temp_uri = self._md_parser._create_temp_uri()
-        layout_kwargs = {
+        layout_kwargs: Dict[str, Any] = {
             key: value
             for key, value in kwargs.items()
             if key in {"resource_name", "source_name"} and isinstance(value, str)
         }
+        if isinstance(kwargs.get("split_content"), bool):
+            layout_kwargs["split_content"] = kwargs["split_content"]
         future = loop.run_in_executor(
             _get_excel_layout_executor(self._process_pool_workers()),
             partial(

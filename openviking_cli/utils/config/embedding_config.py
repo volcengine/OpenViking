@@ -4,6 +4,12 @@ from typing import Any, ClassVar, List, Literal, Optional, Tuple, cast
 
 from pydantic import BaseModel, Field, model_validator
 
+TEXT_SOURCE_CONTENT_ONLY = "content_only"
+TEXT_SOURCE_SUMMARY_FIRST = "summary_first"
+TEXT_SOURCE_SUMMARY_ONLY = "summary_only"
+SUMMARY_TEXT_SOURCES = frozenset({TEXT_SOURCE_SUMMARY_FIRST, TEXT_SOURCE_SUMMARY_ONLY})
+TEXT_SOURCES = SUMMARY_TEXT_SOURCES | {TEXT_SOURCE_CONTENT_ONLY}
+
 
 class EmbeddingCredential(BaseModel):
     """Single embedding credential configuration for multi-credential failover."""
@@ -640,7 +646,7 @@ class EmbeddingConfig(BaseModel):
         description="Maximum retry attempts for embedding provider calls (0 disables retry)",
     )
     text_source: str = Field(
-        default="content_only",
+        default=TEXT_SOURCE_CONTENT_ONLY,
         description="Text source for file vectorization: summary_first|summary_only|content_only",
     )
     max_input_tokens: int = Field(
@@ -687,7 +693,7 @@ class EmbeddingConfig(BaseModel):
             raise ValueError(
                 "At least one embedding configuration (dense, sparse, or hybrid) is required"
             )
-        if self.text_source not in {"summary_first", "summary_only", "content_only"}:
+        if self.text_source not in TEXT_SOURCES:
             raise ValueError(
                 "embedding.text_source must be one of: summary_first, summary_only, content_only"
             )

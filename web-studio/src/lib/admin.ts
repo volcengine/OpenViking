@@ -2,6 +2,7 @@ import axios from 'axios'
 
 import { createClient } from '#/gen/ov-client/client'
 import {
+  deleteAdminAccountByAccountId,
   deleteAdminAccountIdUserByUserId,
   getAdminAccountIdUsers,
   getAdminAccounts,
@@ -379,6 +380,20 @@ export async function createAdminAccount(
     }),
   )
   return normalizeKeyResult(result)
+}
+
+export async function deleteAdminAccount(
+  connection: AdminConnection,
+  accountId: string,
+): Promise<void> {
+  await getOvResult<unknown>(
+    deleteAdminAccountByAccountId({
+      client: createAdminClient(connection),
+      path: {
+        account_id: accountId,
+      },
+    }),
+  )
 }
 
 export async function createAdminUser(

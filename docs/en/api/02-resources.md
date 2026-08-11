@@ -143,7 +143,7 @@ This endpoint is the core entry point for resource management, supporting adding
 **Processing Flow**:
 1. Identify and validate the resource source (URL or uploaded temporary file)
 2. Resolve the target URI
-3. Call the corresponding Parser to parse content
+3. Call the corresponding format Parser; `args.parse_mode` controls whether the converted Markdown body may be split
 4. Build the directory tree and write to AGFS
 5. Run post-ingest processing according to `processing_mode`: `semantic_and_vectors` generates semantic artifacts and vectors; `vectors_only` skips semantic understanding and only enqueues file vectorization
 6. Wait for semantic processing/vectorization completion when `wait=true`; with `wait=false`, return a `task_id` for queue tracking
@@ -151,8 +151,7 @@ This endpoint is the core entry point for resource management, supporting adding
 8. Set up scheduled update task if `watch_interval` is specified
 
 **Code Entry Points**:
-- `openviking/client/local.py:LocalClient.add_resource` - SDK entry (embedded)
-- `openviking_cli/client/http.py:AsyncHTTPClient.add_resource` - SDK entry (HTTP)
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.add_resource` - Python SDK entry
 - `openviking/server/routers/resources.py:add_resource` - HTTP router
 - `openviking/service/resource_service.py` - Core service implementation
 - `crates/ov_cli/src/handlers.rs:handle_add_resource` - CLI handler
@@ -178,7 +177,7 @@ This endpoint is the core entry point for resource management, supporting adding
 | exclude | string | No | None | File patterns to exclude (glob) |
 | directly_upload_media | bool | No | True | Whether to directly upload media files |
 | preserve_structure | bool | No | None | Whether to preserve directory structure |
-| args | object | No | `{}` | Parser-specific import options forwarded to the source parser/accessor. E.g. `args.site=true/false` forces/opts out of whole-site (sitemap/RSS) ingestion, `args.max_pages` etc. override the `webfeed` config; the recursive web crawler accepts `args.depth`, `args.max_pages`, `args.include_paths`, `args.exclude_paths`, `args.allow_external_links`, `args.skip_download_links`; Feishu user-token imports pass `args.feishu_access_token`. Core `add_resource` fields such as `path`, `to`, `watch_interval`, `include`, and `exclude` are not allowed inside `args` |
+| args | object | No | `{}` | Parser-specific import options forwarded to the source parser/accessor. Native HTTPS Git imports and watches accept HTTP Basic credentials over TLS as `args.auth_config={"username":"oauth2","token":"..."}`; `username` defaults to `oauth2`. Git `branch` or `commit` remains at the top level of `args`. `args.parse_mode` accepts `default` (existing splitting behavior) or `no_split` (parse and convert each source document to one Markdown body). E.g. `args.site=true/false` forces/opts out of whole-site (sitemap/RSS) ingestion, `args.max_pages` etc. override the `webfeed` config; the recursive web crawler accepts `args.depth`, `args.max_pages`, `args.include_paths`, `args.exclude_paths`, `args.allow_external_links`, `args.skip_download_links`; Feishu user-token imports pass `args.feishu_access_token`. Core `add_resource` fields such as `path`, `to`, `watch_interval`, `include`, and `exclude` are not allowed inside `args` |
 | watch_interval | float | No | 0 | Scheduled update interval (minutes). >0 creates a task for a re-readable URL/sitemap/RSS source; uploaded `temp_file_id` content is a one-time snapshot and must be re-added when it changes. <=0 cancels a task; explicit `to` wins, otherwise binds to the imported `root_uri` |
 | processing_mode | string | No | `semantic_and_vectors` | Post-ingest processing mode. `semantic_and_vectors` is the normal flow: generate semantic artifacts (`.abstract.md`, `.overview.md`) and vectors. `vectors_only` skips semantic understanding/VLM summarization and only vectorizes current resource files |
 | telemetry | TelemetryRequest | No | False | Whether to return telemetry data |
@@ -192,6 +191,8 @@ This endpoint is the core entry point for resource management, supporting adding
 - Raw HTTP calls for local files require first uploading via [temp_upload](#temp_upload) to obtain `temp_file_id`
 - When `to` is specified and the target already exists, triggers incremental update
 - Only Git repository sources use full background import when `wait=false`; OpenViking performs repository preflight and target planning before returning the `task_id`.
+- Native HTTPS Git credentials in `args.auth_config` remain request-local when `watch_interval <= 0`. When `watch_interval > 0`, OpenViking stores the repository-bound username/token in private watch state and restores it only for later Git fetches. The credentials are excluded from ordinary queue payloads and watch API/MCP/CLI responses. Git PATs have no generic refresh flow; rotate an expired or revoked token by recreating the watch. Legacy URL-embedded credentials such as `https://user:token@host/repo.git` remain accepted and are passed through unchanged; because that URL is also the source identifier, it may be recorded in process arguments, logs, queues, resource metadata, and watch state. Prefer `args.auth_config` for new integrations. Plaintext HTTP authentication and authenticated redirects for `args.auth_config` remain rejected.
+- The token travels in the HTTPS request body. Keep diagnostic request-body dumping disabled in production because explicitly enabling it can record secrets.
 - Memory generated from `reason` is extracted through the same pipeline as `session.commit`. It uses `reason`, the resource URI, available source name, and available directory abstract; it does not inspect or expand the full resource content. OpenViking writes to existing memory types such as `entities`, `events`, or `preferences`, not a dedicated resource memory directory.
 - When deleting a resource, OpenViking scans the self or peer memories targeted by the current context before deletion, removes the matching resource URI and content introduced by that `reason`, and refreshes the semantic index for the affected memories.
 - Other sources with `wait=false` finish source parsing, target resolution, and AGFS writes before returning. Only semantic and embedding queues continue asynchronously.
@@ -204,6 +205,9 @@ This endpoint is the core entry point for resource management, supporting adding
 - Feishu/Lark user-token watches require `FEISHU_APP_ID` and `FEISHU_APP_SECRET` (or `feishu.app_id` and `feishu.app_secret` in `ov.conf`) because Feishu refresh tokens are bound to the app that issued them. The supplied user token must come from the same Feishu app configured in OpenViking.
 - Watch task token state is stored in the internal `viking://resources/.watch_tasks.json` control file and is hidden from watch API/MCP/CLI responses. If VikingFS file encryption is enabled, this control file is encrypted at rest; otherwise the server-side control file contains plaintext token state.
 - For local directory inputs, scanning respects `.gitignore` files (root and nested) with standard Git semantics; `ignore_dirs`, `include`, and `exclude` further refine what is ingested.
+- `args.parse_mode=no_split` still invokes the normal format Parser. PDF, Word, PowerPoint, HTML, and other supported documents are converted to Markdown, but heading-, paragraph-, and size-based splitting is skipped. A directory import applies this independently to each supported document and continues to honor `.gitignore`, filters, and `preserve_structure`.
+- For a single-file input in `no_split` mode, when parsing produces exactly one visible file and `to` is omitted, that file is stored directly under the resolved parent (for example, `guide.md` becomes `viking://resources/guide.md`). No wrapper directory or directory-level `.abstract.md` / `.overview.md` is created. If parsing also produces images or other visible files, the wrapper directory is retained. An explicit `to` is always preserved as the exact final URI.
+- `no_split` changes only the stored Markdown layout. Semantic processing, file vectorization, and any internal embedding chunking remain unchanged. Relative Markdown links are resolved against the same no-split output layout, so links do not point to split-only paths. A configured Understanding parser that cannot guarantee a single Markdown body returns an explicit unsupported-mode error.
 - To create or update plain text directly, use [content/write](03-filesystem.md#write) instead of `add_resource`. Semantic processing and embeddings are refreshed automatically after resource ingestion and content writes.
 
 #### 3. Usage Examples
@@ -224,6 +228,23 @@ curl -X POST http://localhost:1933/api/v1/resources \
     "path": "https://example.com/guide.md",
     "reason": "User guide documentation",
     "wait": true
+  }'
+
+# Import and watch a private HTTPS Git repository
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "https://git.example.com/team/private-repo.git",
+    "to": "viking://resources/private-repo",
+    "watch_interval": 60,
+    "args": {
+      "branch": "main",
+      "auth_config": {
+        "username": "oauth2",
+        "token": "replace-with-your-token"
+      }
+    }
   }'
 
 # Add a resource and only build vectors, without VLM semantic understanding
@@ -305,14 +326,9 @@ curl -X POST http://localhost:1933/api/v1/resources \
 **Python SDK**
 
 ```python
-import openviking as ov
+from openviking_sdk import SyncHTTPClient
 
-# Using embedded mode
-client = ov.OpenViking(path="./data")
-client.initialize()
-
-# Or using HTTP client
-client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 # Add local file
@@ -321,6 +337,12 @@ result = client.add_resource(
     reason="User guide documentation"
 )
 print(f"Added: {result['root_uri']}")
+
+# Parse each document to Markdown without splitting its body
+result = client.add_resource(
+    "./documents",
+    args={"parse_mode": "no_split"},
+)
 
 # Add from URL to specific location
 result = client.add_resource(
@@ -390,6 +412,7 @@ client.add_resource(
 const task = await client.addResource("https://example.com/docs", {
   to: "viking://resources/docs/",
   wait: true,
+  args: { parse_mode: "no_split" },
 });
 console.log(task);
 ```
@@ -400,6 +423,7 @@ console.log(task);
 result, err := client.AddResource(ctx, "./documents/guide.md", &openviking.AddResourceOptions{
     Reason: "User guide documentation",
     Wait:   true,
+    Args:   map[string]any{"parse_mode": "no_split"},
 })
 if err != nil {
     return err
@@ -412,6 +436,9 @@ fmt.Println(result["root_uri"])
 ```bash
 # Add local file
 ov add-resource ./documents/guide.md --reason "User guide"
+
+# Parse each document to one Markdown body
+ov add-resource ./documents --args parse_mode:no_split
 
 # Add from URL
 ov add-resource https://example.com/guide.md --to viking://resources/guide.md

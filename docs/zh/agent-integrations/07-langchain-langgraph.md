@@ -1,18 +1,23 @@
 # LangChain 和 LangGraph
 
-把 OpenViking 接入你的 LangChain 或 LangGraph Agent 作为上下文后端。SDK 提供 retriever、chat history、context wrapper、agent tools、LangGraph store 和 middleware，可连接 HTTP 服务或嵌入式 OpenViking。
+把 OpenViking 接入你的 LangChain 或 LangGraph Agent 作为上下文后端。独立集成包提供
+retriever、chat history、context wrapper、agent tools、LangGraph store 和 middleware，
+统一连接 OpenViking HTTP 服务。
 
 ## 安装
 
 ```bash
-pip install "openviking[langchain]"       # retriever + chat history
-pip install "openviking[langgraph]"       # 完整 LangGraph 支持（包含 langchain）
+pip install langchain-openviking                 # LangChain 适配器
+pip install "langchain-openviking[langgraph]"    # LangGraph middleware
 ```
+
+该集成独立于 OpenViking server 发布。为兼容现有应用，完整包仍会把旧的
+`openviking.integrations.langchain` 导入路径转发到 `langchain-openviking`。
 
 ## 连接
 
 ```python
-from openviking.integrations.langchain import create_openviking_tools
+from langchain_openviking import create_openviking_tools
 
 tools = create_openviking_tools(
     url="http://localhost:1933",
@@ -21,7 +26,8 @@ tools = create_openviking_tools(
 )
 ```
 
-同时省略 `url` 和 `path` 时，适配器会使用 OpenViking CLI 配置中的 HTTP 连接信息。传入 `path` 时，通过 OpenViking 同步 client 使用嵌入式 workspace。Embedding 和 VLM 在 OpenViking 侧配置，不在你的应用中。
+省略 `url` 时，适配器会使用 OpenViking CLI 配置中的 HTTP 连接信息。Embedding 和 VLM
+在 OpenViking 侧配置，不在你的应用中。
 
 ### 异步应用
 
@@ -37,20 +43,19 @@ result = await chain.ainvoke(
 )
 ```
 
-异步适配器支持三种 client 模式：
+异步适配器支持两种 client 模式：
 
 | 配置 | 异步接口 | 所有权 |
 |------|----------|--------|
 | `client=` 或 `async_client=` | 原样返回注入的 client | 调用方 |
-| `url=`，或同时省略 `url` 和 `path` | 每个 event loop 一个支持恢复的 HTTP handle | Adapter |
-| `path=` | 在 worker thread 中调用同步嵌入式 client | Adapter |
+| `url=`，或省略 | 每个 event loop 一个支持恢复的 HTTP handle | Adapter |
 
 长期运行的应用可以初始化一个由调用方管理的异步 client，并在同一 event loop
 内的多个适配器之间复用：
 
 ```python
-from openviking.client import AsyncHTTPClient
-from openviking.integrations.langchain import OpenVikingRetriever
+from openviking_sdk import AsyncHTTPClient
+from langchain_openviking import OpenVikingRetriever
 
 client = AsyncHTTPClient(url="http://localhost:1933", api_key="...")
 await client.initialize()
@@ -64,12 +69,6 @@ finally:
 注入的异步 client 会绑定到初始化它的 event loop。不要跨 event loop 共享同一个
 注入异步 client；应为每个 loop 分别创建并管理 client。注入的同步 client 仍可安全地
 用于异步 adapter 方法，因为调用会在 worker thread 中执行。
-
-`path=` 嵌入式 adapter 使用同步 fallback 是有意设计：`SyncOpenViking` 会让有状态的
-嵌入式引擎保持在 OpenViking 的共享后台 loop 上，同时不阻塞应用 event loop。若要使用
-原生嵌入式异步方法，请自行创建并初始化 `AsyncOpenViking`，通过 `async_client=` 注入，
-在同一个 event loop 中使用，并由调用方自行关闭。每个进程同时只能运行一个嵌入式
-workspace；切换 workspace 前应先关闭或 reset 当前 client。
 
 `OpenVikingChatMessageHistory` 提供 `aget_messages()`、`aadd_messages()` 和
 `aclear()`；`OpenVikingSessionRecorder` 提供 `arecord()`、`aflush()` 和
@@ -148,6 +147,42 @@ chain.invoke(
 )
 ```
 
+### 并发 Agent 的运行时 Actor Peer
+
+`OpenVikingContextMiddleware` 可以在复用绑定凭证的 HTTP client 时，从每次
+LangGraph 运行中解析当前 actor peer：
+
+```python
+from langchain_openviking import OpenVikingContextMiddleware
+
+
+def resolve_actor_peer(_state, runtime):
+    context = runtime.context or {}
+    return context.get("actor_peer_id")
+
+
+middleware = OpenVikingContextMiddleware(
+    url="http://localhost:1933",
+    api_key="user-api-key",
+    actor_peer_resolver=resolve_actor_peer,
+)
+```
+
+解析出的 actor peer 会作用于召回和捕获期间发出的 OpenViking HTTP 请求。并发运行
+互相隔离，middleware 的捕获进度也会按 actor peer、session 和 message peer 共同
+隔离。OpenViking 的 Session 接口仍然以 user 为作用域，不会使用 actor-peer header
+标记消息归属；如果捕获的消息也需要归属于同一个逻辑 peer，应同时设置
+`peer_id_resolver`。拥有独立历史的不同 peer 也应解析为不同的 session ID。未传入
+`actor_peer_resolver` 时，现有固定 client 行为保持不变。
+
+该 resolver 不能改变 OpenViking account 或 user；这些身份继续由 API Key 或 OAuth
+凭证决定。因此，多用户应用必须先选择绑定对应用户凭证的 client，再调用 middleware。
+Actor peer 只能从已经认证、由服务端控制的 runtime 字段中解析；不要信任 model state
+或客户端可控的 configurable 值。运行时 actor-peer 解析仅支持 HTTP-backed
+middleware。注入的自定义 client 必须设置
+`supports_request_actor_peer = True`，并遵循 `openviking_sdk` 的 actor-peer
+作用域。在已有环境中启用该能力前，应同时升级 `openviking-sdk` 和 `openviking`。
+
 ## 选哪个适配器？
 
 | 我想… | 用这个 |
@@ -165,7 +200,7 @@ chain.invoke(
 ### Retriever
 
 ```python
-from openviking.integrations.langchain import OpenVikingRetriever
+from langchain_openviking import OpenVikingRetriever
 
 retriever = OpenVikingRetriever(url="http://localhost:1933", api_key="...")
 docs = retriever.invoke("用户之前对部署方案做了什么决定？")
@@ -176,7 +211,7 @@ docs = retriever.invoke("用户之前对部署方案做了什么决定？")
 ```python
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
-from openviking.integrations.langchain import with_openviking_context
+from langchain_openviking import with_openviking_context
 
 with with_openviking_context(
     RunnableLambda(lambda msgs: AIMessage(content="...")),
@@ -189,7 +224,7 @@ with with_openviking_context(
 ### Agent tools
 
 ```python
-from openviking.integrations.langchain import create_openviking_tools
+from langchain_openviking import create_openviking_tools
 
 tools = create_openviking_tools(url="http://localhost:1933", profile="agent")
 # 包括：viking_find, viking_search, viking_browse, viking_read,
@@ -199,7 +234,7 @@ tools = create_openviking_tools(url="http://localhost:1933", profile="agent")
 ### LangGraph store
 
 ```python
-from openviking.integrations.langchain import OpenVikingStore
+from langchain_openviking import OpenVikingStore
 
 store = OpenVikingStore(url="http://localhost:1933", api_key="...")
 store.put(("users", "ada"), "preferences", {"color": "azure"})
@@ -209,7 +244,7 @@ items = store.search(("users",), query="azure", limit=3)
 ### LangGraph middleware
 
 ```python
-from openviking.integrations.langchain import OpenVikingContextMiddleware
+from langchain_openviking import OpenVikingContextMiddleware
 
 middleware = OpenVikingContextMiddleware(
     url="http://localhost:1933",
@@ -223,7 +258,7 @@ middleware = OpenVikingContextMiddleware(
 当应用已经自行管理会话生命周期，只需要复用 OpenViking 持久化能力时，可使用 recorder：
 
 ```python
-from openviking.integrations.langchain import (
+from langchain_openviking import (
     OpenVikingPartialWriteError,
     OpenVikingSessionRecorder,
 )
@@ -257,11 +292,11 @@ commit 策略。如果后续批次或写入后的 commit 失败，`OpenVikingPar
 仓库内提供了可直接运行的最小示例，使用内存测试客户端，无需模型凭证：
 
 ```bash
-uv run --extra langgraph python examples/langchain-langgraph/langchain/rag/quick_app.py
-uv run --extra langgraph python examples/langchain-langgraph/langchain/context-backend/quick_app.py
-uv run --extra langgraph python examples/langchain-langgraph/langchain/message-history/quick_app.py
-uv run --extra langgraph python examples/langchain-langgraph/langgraph/agent/quick_app.py
-uv run --extra langgraph python examples/langchain-langgraph/langgraph/middleware/quick_app.py
+uv run --project integrations/langchain --extra langgraph python examples/langchain-langgraph/langchain/rag/quick_app.py
+uv run --project integrations/langchain --extra langgraph python examples/langchain-langgraph/langchain/context-backend/quick_app.py
+uv run --project integrations/langchain --extra langgraph python examples/langchain-langgraph/langchain/message-history/quick_app.py
+uv run --project integrations/langchain --extra langgraph python examples/langchain-langgraph/langgraph/agent/quick_app.py
+uv run --project integrations/langchain --extra langgraph python examples/langchain-langgraph/langgraph/middleware/quick_app.py
 ```
 
 连接真实 OpenViking 服务和 OpenAI 兼容模型的示例见 [live LangGraph app](https://github.com/volcengine/OpenViking/blob/main/examples/langchain-langgraph/langgraph/agent/live_app.py)。

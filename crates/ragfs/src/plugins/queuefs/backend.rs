@@ -36,7 +36,7 @@ impl Message {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct StoredMessage {
+pub(super) struct StoredMessage {
     id: String,
     #[serde(deserialize_with = "deserialize_stored_message_data")]
     data: Vec<u8>,
@@ -45,7 +45,7 @@ struct StoredMessage {
 }
 
 impl StoredMessage {
-    fn from_message(msg: &Message) -> Self {
+    pub(super) fn from_message(msg: &Message) -> Self {
         Self {
             id: msg.id.clone(),
             data: msg.data.clone(),
@@ -54,7 +54,7 @@ impl StoredMessage {
         }
     }
 
-    fn into_message(self) -> Message {
+    pub(super) fn into_message(self) -> Message {
         Message {
             id: self.id,
             data: self.data,

@@ -2,7 +2,7 @@
 
 For initial setup, run `openviking-server init`, then run `openviking-server doctor` after saving the configuration.
 
-The OpenViking server and embedded Python SDK mode read `ov.conf`. The default path is:
+The OpenViking server reads `ov.conf`. The default path is:
 
 ```text
 ~/.openviking/ov.conf
@@ -42,8 +42,8 @@ Optional sections use their defaults when omitted. Unknown fields are rejected.
 
 | Setting | Type / values | Default | Purpose |
 |---|---|---|---|
-| `default_account` | string | `"default"` | Default account in embedded SDK mode |
-| `default_user` | string | `"default"` | Default user in embedded SDK mode |
+| `default_account` | string | `"default"` | Default account for the service context |
+| `default_user` | string | `"default"` | Default user for the service context |
 | `embedding` | object | built-in local dense model | Dense, sparse, and hybrid embedding; defaults to `local` / `bge-small-zh-v1.5-f16` |
 | `vlm` | object | empty config | Content understanding, summaries, and memory extraction; configure a working model before using these capabilities |
 | `query_planner` | object / `null` | `null` | Retrieval intent model; falls back to `vlm` |
@@ -51,6 +51,7 @@ Optional sections use their defaults when omitted. Unknown fields are rejected.
 | `retrieval` | object | see below | Ranking and intent-analysis behavior |
 | `grep` | object | built-in defaults | Text search engine |
 | `storage` | object | local | Workspace, file system, and vector database |
+| `queue_workers` | object | see below | Runtime concurrency for QueueFS consumer workers |
 | `server` | object | local development | HTTP, authentication, uploads, and observability |
 | `memory` | object | see below | Memory and skill extraction on session commit |
 | `parsers` | object | parser defaults | PDF, code, image, audio, video, and text parsing |
@@ -191,11 +192,33 @@ Search and Find requests default to `limit: 10`; override the limit on each API 
 |---|---|---|---|
 | `workspace` | path | `"./data"` | OpenViking workspace |
 | `agfs.backend` | `local`, `memory`, `s3` | `local` | File and metadata backend |
-| `vectordb.backend` | `local`, `cuvs`, `http`, `volcengine`, `vikingdb`, `qdrant`, `opengauss` | `local` | Vector database backend |
+| `vectordb.backend` | `local`, `cuvs`, `http`, `volcengine`, `vikingdb` | `local` | Vector database backend |
 | `vectordb.dimension` | integer | follows Embedding | Vector collection dimension |
 | `skip_process_lock` | boolean | `false` | Skip the workspace process lock; use only when accepting concurrent-write risk |
 
 Remote backends also require endpoint, bucket/collection, credentials, and timeout fields. See [Configuration](../guides/01-configuration.md#storage) for complete examples.
+
+## Queue Worker Settings
+
+### `queue_workers.external_parse`
+
+| Field | Type | Default | Description |
+|---|---|---:|---|
+| `max_concurrent` | integer | `4` | Number of complete ExternalParse jobs consumed concurrently; must be greater than `0`; requires a server restart after changes |
+
+This setting controls queue-job concurrency. It is separate from `vlm.media.max_concurrent`, which limits audio/video VLM calls, and does not limit individual Understanding API HTTP requests.
+
+### `queue_workers.add_resource`
+
+| Field | Type | Default | Description |
+|---|---|---:|---|
+| `max_concurrent` | integer | `4` | Number of complete AddResource jobs consumed concurrently; must be greater than `0`; requires a server restart after changes |
+
+### `queue_workers.session_commit`
+
+| Field | Type | Default | Description |
+|---|---|---:|---|
+| `max_concurrent` | integer | `4` | Number of SessionCommit jobs consumed concurrently; must be greater than `0`; requires a server restart after changes |
 
 ## HTTP Server Settings
 
@@ -222,6 +245,7 @@ Remote backends also require endpoint, bucket/collection, credentials, and timeo
 | `host` | IP / hostname | `"127.0.0.1"` | Listen address |
 | `port` | integer | `1933` | Listen port |
 | `workers` | integer | `1` | Worker process count |
+| `timeout_keep_alive` | integer (seconds) | `5` | Idle HTTP keep-alive timeout; raise it above the upstream's idle-connection lifetime |
 | `auth_mode` | `dev`, `api_key`, `trusted` / `null` | `null` | Auth mode; null is inferred from `root_api_key` |
 | `root_api_key` | string / `null` | `null` | Root key; setting it defaults auth to `api_key` |
 | `cors_origins` | string[] | `["*"]` | Allowed origins |

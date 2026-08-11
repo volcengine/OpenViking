@@ -8,6 +8,7 @@ This is the DataAccessor layer extracted from CodeRepositoryParser.
 """
 
 import asyncio
+import contextlib
 import os
 import shutil
 import stat
@@ -27,6 +28,10 @@ from openviking.utils import (
 from openviking.utils.code_hosting_utils import (
     is_git_repo_url,
     validate_git_ssh_uri,
+)
+from openviking.utils.git_auth import (
+    build_git_http_auth_env,
+    parse_git_http_auth_config,
 )
 from openviking_cli.utils.logger import get_logger
 
@@ -101,6 +106,8 @@ class GitAccessor(DataAccessor):
         temp_local_dir = None
         branch = kwargs.get("branch") or kwargs.get("ref")
         commit = kwargs.get("commit")
+        auth_config = parse_git_http_auth_config(kwargs.get("auth_config"), source_str)
+        git_env = None
 
         try:
             # Create local temp directory (non-blocking)
@@ -118,10 +125,13 @@ class GitAccessor(DataAccessor):
                     temp_local_dir,
                     branch=branch,
                     commit=commit,
+                    env=git_env,
                 )
             elif source_str.startswith(("http://", "https://", "git://", "ssh://")):
                 repo_url, branch, commit = self._parse_repo_source(source_str, **kwargs)
-                if self._is_github_url(repo_url):
+                if auth_config is not None:
+                    git_env = build_git_http_auth_env(auth_config, repo_url)
+                if self._is_github_url(repo_url) and auth_config is None:
                     # Try GitHub ZIP API first, fall back to git clone
                     try:
                         local_dir, repo_name = await self._github_zip_download(
@@ -146,8 +156,9 @@ class GitAccessor(DataAccessor):
                             temp_local_dir,
                             branch=branch,
                             commit=commit,
+                            env=git_env,
                         )
-                elif self._can_use_gitlab_zip(repo_url):
+                elif self._can_use_gitlab_zip(repo_url) and auth_config is None:
                     # Try GitLab ZIP API first, fall back to git clone
                     try:
                         local_dir, repo_name = await self._gitlab_zip_download(
@@ -172,6 +183,7 @@ class GitAccessor(DataAccessor):
                             temp_local_dir,
                             branch=branch,
                             commit=commit,
+                            env=git_env,
                         )
                 else:
                     # Other configured code-hosting URLs: use git clone
@@ -180,6 +192,7 @@ class GitAccessor(DataAccessor):
                         temp_local_dir,
                         branch=branch,
                         commit=commit,
+                        env=git_env,
                     )
             else:
                 raise ValueError(f"Unsupported source for GitAccessor: {source}")
@@ -201,10 +214,12 @@ class GitAccessor(DataAccessor):
                 is_temporary=True,
             )
 
-        except Exception as e:
-            logger.error(
-                f"[GitAccessor] Failed to access git repository {source}: {e}", exc_info=True
-            )
+        except BaseException as e:
+            if not isinstance(e, asyncio.CancelledError):
+                logger.error(
+                    f"[GitAccessor] Failed to access git repository {source}: {e}",
+                    exc_info=True,
+                )
             # Clean up on error
             if temp_local_dir and os.path.exists(temp_local_dir):
                 try:
@@ -272,15 +287,29 @@ class GitAccessor(DataAccessor):
         name = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
         return name or "repository"
 
-    async def _run_git(self, args: list[str], cwd: Optional[str] = None) -> str:
+    async def _run_git(
+        self,
+        args: list[str],
+        cwd: Optional[str] = None,
+        env: Optional[dict[str, str]] = None,
+    ) -> str:
         """Run a git command."""
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            cwd=cwd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
+        process_kwargs = {
+            "cwd": cwd,
+            "stdout": asyncio.subprocess.PIPE,
+            "stderr": asyncio.subprocess.PIPE,
+        }
+        if env is not None:
+            process_kwargs["env"] = env
+        proc = await asyncio.create_subprocess_exec(*args, **process_kwargs)
+        try:
+            stdout, stderr = await proc.communicate()
+        except BaseException:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            with contextlib.suppress(Exception):
+                await asyncio.shield(proc.wait())
+            raise
         if proc.returncode != 0:
             error_msg = stderr.decode().strip()
             user_msg = "Git command failed."
@@ -292,14 +321,28 @@ class GitAccessor(DataAccessor):
                 user_msg = (
                     "Git command failed: authentication error. Check your SSH keys or credentials."
                 )
-            logger.warning(f"[GitAccessor] {user_msg} Details: {error_msg}")
+            if env is None:
+                logger.warning(f"[GitAccessor] {user_msg} Details: {error_msg}")
+            else:
+                # An authenticated remote controls parts of stderr and may echo
+                # the request's Authorization header. Keep credentialed failures
+                # out of logs as well as argv and raised exceptions.
+                logger.warning(f"[GitAccessor] {user_msg}")
             raise RuntimeError(user_msg)
         return stdout.decode().strip()
 
-    async def _has_commit(self, repo_dir: str, commit: str) -> bool:
+    async def _has_commit(
+        self,
+        repo_dir: str,
+        commit: str,
+        env: Optional[dict[str, str]] = None,
+    ) -> bool:
         """Check if a commit exists in the repository."""
         try:
-            await self._run_git(["git", "-C", repo_dir, "rev-parse", "--verify", commit])
+            await self._run_git(
+                ["git", "-C", repo_dir, "rev-parse", "--verify", commit],
+                env=env,
+            )
             return True
         except RuntimeError:
             return False
@@ -327,6 +370,7 @@ class GitAccessor(DataAccessor):
         target_dir: str,
         branch: Optional[str] = None,
         commit: Optional[str] = None,
+        env: Optional[dict[str, str]] = None,
     ) -> str:
         """Clone a git repository into target_dir; return the repo name."""
         name = self._get_repo_name(url)
@@ -342,27 +386,32 @@ class GitAccessor(DataAccessor):
         if branch and not commit:
             clone_args.extend(["--branch", branch])
         clone_args.extend([url, target_dir])
-        await self._run_git(clone_args)
+        await self._run_git(clone_args, env=env)
 
         if commit:
             try:
-                await self._run_git(["git", "-C", target_dir, "fetch", "origin", commit])
+                await self._run_git(
+                    ["git", "-C", target_dir, "fetch", "origin", commit],
+                    env=env,
+                )
             except RuntimeError:
                 try:
                     await self._run_git(
-                        ["git", "-C", target_dir, "fetch", "--all", "--tags", "--prune"]
+                        ["git", "-C", target_dir, "fetch", "--all", "--tags", "--prune"],
+                        env=env,
                     )
                 except RuntimeError:
                     pass
-                ok = await self._has_commit(target_dir, commit)
+                ok = await self._has_commit(target_dir, commit, env=env)
                 if not ok:
                     try:
                         await self._run_git(
-                            ["git", "-C", target_dir, "fetch", "--unshallow", "origin"]
+                            ["git", "-C", target_dir, "fetch", "--unshallow", "origin"],
+                            env=env,
                         )
                     except RuntimeError:
                         pass
-                ok = await self._has_commit(target_dir, commit)
+                ok = await self._has_commit(target_dir, commit, env=env)
                 if not ok:
                     await self._run_git(
                         [
@@ -372,12 +421,16 @@ class GitAccessor(DataAccessor):
                             "fetch",
                             "origin",
                             "+refs/heads/*:refs/remotes/origin/*",
-                        ]
+                        ],
+                        env=env,
                     )
-                    ok = await self._has_commit(target_dir, commit)
+                    ok = await self._has_commit(target_dir, commit, env=env)
                     if not ok:
                         raise RuntimeError(f"Failed to fetch commit {commit} from {url}")
-            await self._run_git(["git", "-C", target_dir, "checkout", commit])
+            await self._run_git(
+                ["git", "-C", target_dir, "checkout", commit],
+                env=env,
+            )
 
         # Add .git_source_repo marker file with original URL (for consistency)
         def _write_marker():

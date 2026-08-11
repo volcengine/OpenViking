@@ -28,8 +28,8 @@ from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.uri import render_template
 from openviking.session.skill import SkillOperationUpdater, dedup_session_skill_operations
 from openviking.session.skill.session_skill_context_provider import SESSION_SKILL_MEMORY_TYPE
-from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
+from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.session.user_id import UserIdentifier
@@ -234,6 +234,7 @@ class SessionCompressorV2:
         allowed_memory_types: Optional[set[str]] = None,
         allow_self_memory: bool = True,
         allowed_peer_ids: Optional[set[str]] = None,
+        event_search_tags: Optional[List[str]] = None,
     ) -> List[Context]:
         """Extract long-term memories from messages using v2 templating system.
 
@@ -251,7 +252,10 @@ class SessionCompressorV2:
             allowed_memory_types: Optional set of memory types this phase may update.
             allow_self_memory: Whether operations without peer_id may write self memory.
             allowed_peer_ids: Peer IDs that may be written by this extraction.
+            event_search_tags: Accepted for interface parity with the v3 compressor;
+                v2 does not support event-memory auto-tagging.
         """
+        del event_search_tags
 
         if not messages:
             return []

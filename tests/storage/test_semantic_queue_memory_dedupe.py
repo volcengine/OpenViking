@@ -125,8 +125,8 @@ class _FakeVikingFS:
         del ctx
         return f"/fake/{uri.replace('://', '/').strip('/')}"
 
-    async def write_file(self, uri, content, ctx=None):
-        del ctx
+    async def write_file(self, uri, content, ctx=None, lease_ref=None):
+        del ctx, lease_ref
         self.writes.append((uri, content))
 
 
@@ -246,10 +246,12 @@ async def test_memory_directory_vectorizes_changed_files_with_generated_summary(
     async def generate_file_summary(file_path, llm_sem=None, ctx=None):
         del llm_sem, ctx
         name = file_path.rsplit("/", 1)[-1]
-        return {"name": name, "summary": f"summary:{name}"}
+        return {"name": name, "summary": f"summary:{name}", "content": "raw content"}
 
     async def generate_overview(dir_uri, file_summaries, children_abstracts, llm_sem=None):
-        del dir_uri, file_summaries, children_abstracts, llm_sem
+        del dir_uri, children_abstracts, llm_sem
+        assert len(captured_file_vectorize) == 1
+        assert all("content" not in summary for summary in file_summaries)
         return "overview"
 
     async def write_semantics(**kwargs):
@@ -292,6 +294,7 @@ async def test_memory_directory_vectorizes_changed_files_with_generated_summary(
     assert captured_file_vectorize[0]["summary_dict"] == {
         "name": "first.md",
         "summary": "summary:first.md",
+        "content": "raw content",
     }
     assert captured_file_vectorize[0]["preserve_existing_created_at"] is True
     assert len(captured_directory_vectorize) == 1

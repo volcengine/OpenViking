@@ -365,6 +365,13 @@ PyObject* value_to_py(const vdb::Value& value, vdb::FieldType field_type) {
             text.data(), static_cast<Py_ssize_t>(text.size()));
       }
       break;
+    case vdb::FieldType::TEXT:
+      if (std::holds_alternative<std::string>(value)) {
+        const auto& text = std::get<std::string>(value);
+        return PyUnicode_FromStringAndSize(
+            text.data(), static_cast<Py_ssize_t>(text.size()));
+      }
+      break;
     case vdb::FieldType::BINARY:
       if (std::holds_alternative<std::string>(value)) {
         const auto& blob = std::get<std::string>(value);
@@ -433,7 +440,8 @@ bool py_to_field_value(PyObject* obj, vdb::FieldType data_type,
       return true;
     }
     case vdb::FieldType::STRING:
-    case vdb::FieldType::BINARY: {
+    case vdb::FieldType::BINARY:
+    case vdb::FieldType::TEXT: {
       std::string value;
       if (!py_to_string(obj, &value, true)) {
         return false;
@@ -545,6 +553,9 @@ bool py_to_field_type(PyObject* obj, vdb::FieldType* out) {
       return true;
     case 8:
       *out = vdb::FieldType::LIST_FLOAT32;
+      return true;
+    case 9:
+      *out = vdb::FieldType::TEXT;
       return true;
     default:
       raise_value_error("Unsupported field type");

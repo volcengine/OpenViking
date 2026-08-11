@@ -8,12 +8,12 @@ from typing import Any
 import pytest
 
 pytest.importorskip("langchain_core")
+pytest.importorskip("langchain_openviking")
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.runnables import RunnableLambda
 from langchain_core.runnables.history import RunnableWithMessageHistory
-
-from openviking.integrations.langchain import (
+from langchain_openviking import (
     OpenVikingCommitPolicy,
     OpenVikingContextRunnable,
     with_openviking_context,
@@ -110,7 +110,7 @@ async def _async_answer(messages: list[BaseMessage]) -> AIMessage:
 
 def test_context_wrapper_reuses_and_closes_owned_sync_clients(monkeypatch):
     instances: list[Any] = []
-    import openviking.client as client_module
+    import openviking_sdk as client_module
 
     monkeypatch.setattr(client_module, "SyncHTTPClient", _sync_http_client_type(instances))
 
@@ -143,7 +143,7 @@ def test_context_wrapper_reuses_sync_clients_across_batch_threads(monkeypatch):
             original_init(self, **kwargs)
 
     monkeypatch.setattr(client_type, "__init__", synchronized_init)
-    import openviking.client as client_module
+    import openviking_sdk as client_module
 
     monkeypatch.setattr(client_module, "SyncHTTPClient", client_type)
     app = with_openviking_context(
@@ -246,7 +246,7 @@ def test_context_wrapper_does_not_close_injected_sync_client():
 @pytest.mark.asyncio
 async def test_context_wrapper_reuses_and_closes_owned_async_clients(monkeypatch):
     instances: list[Any] = []
-    import openviking.client as client_module
+    import openviking_sdk as client_module
 
     monkeypatch.setattr(client_module, "AsyncHTTPClient", _async_http_client_type(instances))
 
@@ -268,7 +268,7 @@ async def test_context_wrapper_reuses_and_closes_owned_async_clients(monkeypatch
 
 def test_context_wrapper_keeps_owned_async_clients_loop_scoped(monkeypatch):
     instances: list[Any] = []
-    import openviking.client as client_module
+    import openviking_sdk as client_module
 
     monkeypatch.setattr(client_module, "AsyncHTTPClient", _async_http_client_type(instances))
     app = with_openviking_context(
@@ -352,7 +352,7 @@ async def test_context_wrapper_close_inside_event_loop_remains_recoverable():
 @pytest.mark.asyncio
 async def test_context_wrapper_finishes_cleanup_when_aclose_is_cancelled(monkeypatch):
     instances: list[Any] = []
-    import openviking.client as client_module
+    import openviking_sdk as client_module
 
     monkeypatch.setattr(client_module, "AsyncHTTPClient", _async_http_client_type(instances))
     app = with_openviking_context(

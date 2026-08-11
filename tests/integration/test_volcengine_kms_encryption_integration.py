@@ -17,7 +17,6 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-from openviking import AsyncOpenViking
 from openviking.crypto.encryptor import FileEncryptor
 from openviking.crypto.providers import VolcengineKMSProvider
 from openviking.server.api_keys import APIKeyManager, is_new_format_key
@@ -174,44 +173,6 @@ async def volcengine_file_encryptor():
     return FileEncryptor(provider)
 
 
-@pytest_asyncio.fixture(scope="function")
-async def openviking_client_with_volcengine_encryption(test_data_dir: Path, volcengine_kms_config):
-    """Fixture that provides an OpenViking client with Volcengine KMS encryption"""
-    await AsyncOpenViking.reset()
-    OpenVikingConfigSingleton.reset_instance()
-
-    if test_data_dir.exists():
-        import shutil
-
-        shutil.rmtree(test_data_dir)
-    test_data_dir.mkdir(parents=True, exist_ok=True)
-
-    config_dict = {}
-    config_dict.update(volcengine_kms_config)
-    config_dict["storage"] = {
-        "workspace": str(test_data_dir / "workspace"),
-        "vectordb": {"name": "test", "backend": "local", "project": "default"},
-    }
-    config_dict["embedding"] = {
-        "dense": {
-            "provider": "openai",
-            "api_key": "fake",
-            "model": "text-embedding-3-small",
-        }
-    }
-
-    OpenVikingConfigSingleton.initialize(config_dict=config_dict)
-
-    client = AsyncOpenViking(path=str(test_data_dir))
-    await client.initialize()
-
-    yield client
-
-    await client.close()
-    await AsyncOpenViking.reset()
-    OpenVikingConfigSingleton.reset_instance()
-
-
 class TestVolcengineKMSEncryptionBootstrap:
     """Tests for encryption module bootstrap with Volcengine KMS"""
 
@@ -274,81 +235,31 @@ class TestVolcengineKMSEncryptionBootstrap:
 
 
 class TestVolcengineKMSEncryptionDisabled:
-    """Tests for behavior when encryption is disabled"""
+    """Normal resource I/O remains available when encryption is disabled."""
 
-    @pytest_asyncio.fixture(scope="function")
-    async def openviking_client_without_encryption(self, test_data_dir: Path):
-        """Fixture that provides an OpenViking client without encryption"""
-        await AsyncOpenViking.reset()
-        OpenVikingConfigSingleton.reset_instance()
-
-        if test_data_dir.exists():
-            import shutil
-
-            shutil.rmtree(test_data_dir)
-        test_data_dir.mkdir(parents=True, exist_ok=True)
-
-        # Create config dict with encryption disabled
-        config_dict = {
-            "encryption": {"enabled": False},
-            "storage": {
-                "workspace": str(test_data_dir / "workspace"),
-                "vectordb": {"name": "test", "backend": "local", "project": "default"},
-            },
-            "embedding": {
-                "dense": {
-                    "provider": "openai",
-                    "api_key": "fake",
-                    "model": "text-embedding-3-small",
-                }
-            },
-        }
-
-        # Initialize config singleton
-        OpenVikingConfigSingleton.initialize(config_dict=config_dict)
-
-        client = AsyncOpenViking(path=str(test_data_dir))
-        await client.initialize()
-
-        yield client
-
-        await client.close()
-        await AsyncOpenViking.reset()
-        OpenVikingConfigSingleton.reset_instance()
-
-    @pytest.mark.asyncio
     async def test_read_write_without_encryption(
-        self, openviking_client_without_encryption: AsyncOpenViking, tmp_path: Path
+        self,
+        service: OpenVikingService,
+        request_context,
+        tmp_path: Path,
     ):
-        """Test normal file operations when encryption is disabled"""
-        client = openviking_client_without_encryption
-
         test_file = tmp_path / "normal_file.txt"
         test_content = "Normal content without encryption"
         test_file.write_text(test_content)
 
-        result = await client.add_resource(
-            path=str(test_file), reason="Normal operation test", wait=True
+        result = await service.resources.add_resource(
+            path=str(test_file),
+            ctx=request_context,
+            reason="Normal operation test",
+            wait=True,
         )
-        root_uri = result["root_uri"]
-
-        # Get tree structure to find the actual file
-        uris = await client.tree(root_uri)
-        assert len(uris) > 0
-
-        # Find the actual file (skip .abstract.md and .overview.md)
-        found = False
-        for data in uris:
-            if not data["isDir"]:
-                filename = data["name"]
-                # Skip auto-generated files
-                if filename not in [".abstract.md", ".overview.md"]:
-                    file_uri = data["uri"]
-                    content = await client.read(file_uri)
-                    assert content == test_content
-                    found = True
-                    break
-        assert found, "Could not find the test file"
+        entries = await service.fs.tree(result["root_uri"], ctx=request_context)
+        contents = [
+            await service.fs.read(data["uri"], ctx=request_context)
+            for data in entries
+            if not data["isDir"] and data["name"] not in {".abstract.md", ".overview.md"}
+        ]
+        assert test_content in contents
 
 
 class TestVikingFSEncryptionWithVolcengineKMS:
@@ -361,7 +272,6 @@ class TestVikingFSEncryptionWithVolcengineKMS:
     @pytest_asyncio.fixture(scope="function")
     async def openviking_service_with_volcengine_encryption(self, test_data_dir: Path):
         """Fixture that provides OpenVikingService with Volcengine KMS encryption"""
-        await AsyncOpenViking.reset()
         OpenVikingConfigSingleton.reset_instance()
 
         if test_data_dir.exists():
@@ -381,7 +291,6 @@ class TestVikingFSEncryptionWithVolcengineKMS:
         yield {"service": svc, "api_key_manager": api_key_manager, "test_data_dir": test_data_dir}
 
         await svc.close()
-        await AsyncOpenViking.reset()
         OpenVikingConfigSingleton.reset_instance()
 
     def _is_file_encrypted(self, file_path: Path) -> bool:

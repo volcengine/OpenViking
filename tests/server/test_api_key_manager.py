@@ -234,20 +234,36 @@ async def test_register_user_in_nonexistent_account_raises(manager: APIKeyManage
         await manager.register_user("nonexistent", "bob", "user")
 
 
-async def test_remove_user(manager: APIKeyManager):
-    """Removing user should invalidate their key."""
+async def test_user_deletion_fence_revokes_key_and_rejects_stale_finish(
+    manager: APIKeyManager,
+):
     acct = _uid()
     await manager.create_account(acct, "alice")
     bob_key = await manager.register_user(acct, "bob", "user")
 
-    identity = manager.resolve(bob_key)
-    assert identity.user_id == "bob"
+    deletion, created = await manager.begin_user_deletion(
+        acct,
+        "bob",
+        task_id="delete-1",
+        owner_account_id=acct,
+        owner_user_id="alice",
+    )
 
-    await manager.remove_user(acct, "bob")
+    assert created is True
+    assert deletion["task_id"] == "delete-1"
+    assert manager.is_user_deleting(acct, "bob")
     with pytest.raises(UnauthenticatedError):
         manager.resolve(bob_key)
+    with pytest.raises(AlreadyExistsError):
+        await manager.register_user(acct, "bob", "user")
+    assert await manager.finish_user_deletion(acct, "bob", "stale") is False
+    assert manager.has_user(acct, "bob")
+    assert await manager.finish_user_deletion(acct, "bob", "delete-1") is True
+    assert not manager.has_user(acct, "bob")
 
-
+    new_key = await manager.register_user(acct, "bob", "user")
+    assert await manager.finish_user_deletion(acct, "bob", "delete-1") is False
+    assert manager.resolve(new_key).user_id == "bob"
 async def test_regenerate_key(manager: APIKeyManager):
     """Regenerating key should invalidate old key and return new valid key."""
     acct = _uid()
@@ -286,8 +302,14 @@ async def test_get_user_key_fingerprint_changes_on_rotation(manager: APIKeyManag
     assert fp2 is not None
     assert fp2 != fp1
 
-    # Removal → no fp at all.
-    await manager.remove_user(acct, "bob")
+    # Deletion fence immediately removes the fingerprint.
+    await manager.begin_user_deletion(
+        acct,
+        "bob",
+        task_id="delete-1",
+        owner_account_id=acct,
+        owner_user_id="alice",
+    )
     assert manager.get_user_key_fingerprint(acct, "bob") is None
 
 
@@ -890,3 +912,161 @@ def test_new_api_key_manager_public_api_parity_with_legacy():
         f"NewAPIKeyManager is missing public methods present on "
         f"LegacyAPIKeyManager: {sorted(missing)}"
     )
+
+
+# ---- Read-only reload / change-signature tests ----
+#
+# Read replicas load the key store once at startup and never rewrite it. A user
+# registered / rotated / removed on the writer is therefore invisible to a
+# reader until it refreshes its in-memory index. reload() + compute_store_
+# signature() give the optional background watcher a read-only way to converge.
+
+
+async def test_reload_picks_up_user_registered_by_writer(manager_service):
+    """A reader's reload() should see a user the writer registered afterwards.
+
+    This reproduces the read-replica auth failure: two managers over the same
+    store, a user created via the "writer", initially rejected by the "reader",
+    then accepted after reload().
+    """
+    writer = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await writer.load()
+    reader = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await reader.load()
+
+    acct = _uid()
+    await writer.create_account(acct, "alice")
+    user_key = await writer.register_user(acct, "bob")
+
+    # Reader has not refreshed yet: the new user's key is unknown.
+    with pytest.raises(UnauthenticatedError):
+        reader.resolve(user_key)
+
+    await reader.reload()
+
+    identity = reader.resolve(user_key)
+    assert identity.account_id == acct
+    assert identity.user_id == "bob"
+
+
+async def test_reload_reflects_removed_user(manager_service):
+    """reload() should drop a user the writer removed after the reader loaded."""
+    writer = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await writer.load()
+
+    acct = _uid()
+    await writer.create_account(acct, "alice")
+    user_key = await writer.register_user(acct, "bob")
+
+    reader = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await reader.load()
+    # Reader accepts bob at first.
+    assert reader.resolve(user_key).user_id == "bob"
+
+    await writer.begin_user_deletion(
+        acct,
+        "bob",
+        task_id="delete-1",
+        owner_account_id=acct,
+        owner_user_id="alice",
+    )
+    await writer.finish_user_deletion(acct, "bob", "delete-1")
+    await reader.reload()
+
+    with pytest.raises(UnauthenticatedError):
+        reader.resolve(user_key)
+
+
+async def test_reload_does_not_write_to_store(manager_service, monkeypatch):
+    """reload() must never persist: read replicas mount a read-only volume."""
+    writer = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await writer.load()
+    acct = _uid()
+    await writer.create_account(acct, "alice")
+
+    reader = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await reader.load()
+
+    async def _fail_write_json(*args, **kwargs):
+        raise AssertionError("reload() must not write to the key store")
+
+    monkeypatch.setattr(reader._legacy, "_write_json", _fail_write_json)
+    monkeypatch.setattr(reader._legacy, "_save_accounts_json", _fail_write_json)
+    monkeypatch.setattr(reader._legacy, "_save_users_json", _fail_write_json)
+
+    # Must not raise: no write path should be exercised.
+    await reader.reload()
+
+
+async def test_reload_with_hashing_enabled_does_not_migrate(manager_service, monkeypatch):
+    """reload() with hashing on must index plaintext keys without migrating them.
+
+    load() migrates plaintext -> Argon2id (a write); reload() is read-only and
+    must skip that migration while still resolving the plaintext key.
+    """
+    acct = _uid()
+    seed_mgr = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await seed_mgr._write_json(
+        ACCOUNTS_PATH, {"accounts": {acct: {"created_at": "2026-04-16T00:00:00+00:00"}}}
+    )
+    await seed_mgr._write_json(
+        f"/local/{acct}/_system/users.json",
+        {"users": {"alice": {"role": "admin", "key": "legacy-plaintext-key-alice"}}},
+    )
+
+    reader = APIKeyManager(
+        root_key=ROOT_KEY,
+        viking_fs=manager_service.viking_fs,
+        api_key_hashing_enabled=True,
+    )
+
+    async def _fail_write_json(*args, **kwargs):
+        raise AssertionError("reload() must not migrate plaintext keys")
+
+    monkeypatch.setattr(reader._legacy, "_write_json", _fail_write_json)
+    monkeypatch.setattr(reader._legacy, "_save_users_json", _fail_write_json)
+
+    await reader.reload()
+
+    identity = reader.resolve("legacy-plaintext-key-alice")
+    assert identity.account_id == acct
+    assert identity.user_id == "alice"
+
+
+async def test_reload_tolerates_uninitialized_store(manager_service):
+    """reload() before the store exists must keep current state, not wipe it."""
+    reader = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    # Deliberately skip load(): accounts.json does not exist yet (reader started
+    # before the writer bootstrapped the store).
+    await reader.reload()
+    # Root key still resolves; no crash from a missing store.
+    assert reader.resolve(ROOT_KEY).role == Role.ROOT
+
+
+async def test_store_signature_changes_on_user_registration(manager_service):
+    """The change signature must move when users.json changes (not just accounts)."""
+    writer = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await writer.load()
+    acct = _uid()
+    await writer.create_account(acct, "alice")
+
+    before = await writer.compute_store_signature()
+    await writer.register_user(acct, "bob")
+    after = await writer.compute_store_signature()
+
+    assert before != after
+
+
+async def test_store_signature_stable_without_changes(manager_service):
+    """Two consecutive signatures with no store change must be equal.
+
+    This is what lets the watcher skip a full reload on an unchanged store.
+    """
+    writer = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await writer.load()
+    acct = _uid()
+    await writer.create_account(acct, "alice")
+
+    first = await writer.compute_store_signature()
+    second = await writer.compute_store_signature()
+    assert first == second

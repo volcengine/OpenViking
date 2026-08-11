@@ -158,7 +158,7 @@ Skills are a special type of resource that define actions or tools agents can pe
 5. If `wait=true`, wait for vectorization to complete
 
 **Code Entry Points**:
-- `openviking/client/local.py:LocalClient.add_skill` - SDK entry point (embedded)
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.add_skill` - Python SDK entry point
 - `openviking_cli/client/http.py:AsyncHTTPClient.add_skill` - SDK entry point (HTTP)
 - `openviking/server/routers/resources.py:add_skill` - HTTP router
 - `openviking/service/resource_service.py:ResourceService.add_skill` - Core service implementation

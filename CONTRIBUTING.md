@@ -83,17 +83,8 @@ non-default path.
 
 ### 4. Verify Installation
 
-```python
-import asyncio
-import openviking as ov
-
-async def main():
-    client = ov.AsyncOpenViking(path="./test_data")
-    await client.initialize()
-    print("OpenViking initialized successfully!")
-    await client.close()
-
-asyncio.run(main())
+```bash
+python -c "import openviking; print(openviking.__version__)"
 ```
 
 ### 5. Build Rust CLI (Optional)
@@ -121,7 +112,7 @@ openviking/
 ├── pyproject.toml        # Python project and tooling configuration
 ├── Cargo.toml            # Rust workspace configuration
 ├── openviking/           # Python SDK and server implementation
-│   ├── client/           # Local and HTTP client implementations
+│   ├── client/           # HTTP client compatibility exports
 │   ├── connector/        # Data connectors
 │   ├── core/             # Core data models and directory abstractions
 │   ├── ingest/           # Ingestion pipeline
@@ -206,10 +197,10 @@ pytest tests/server/ -v
 pytest tests/parse/ -v
 
 # Run specific test file
-pytest tests/client/test_lifecycle.py
+pytest tests/client/test_http_client_config.py
 
 # Run specific test
-pytest tests/client/test_lifecycle.py::TestClientInitialization::test_initialize_success
+pytest tests/client/test_http_client_config.py
 
 # Run by keyword
 pytest -k "search" -v
@@ -223,26 +214,19 @@ pytest --cov=openviking --cov-report=term-missing
 Tests are organized in subdirectories under `tests/`. The project uses `asyncio_mode = "auto"`, so async tests do **not** need the `@pytest.mark.asyncio` decorator:
 
 ```python
-# tests/client/test_example.py
-from openviking import AsyncOpenViking
-
-
-class TestAsyncOpenViking:
-    async def test_initialize(self, uninitialized_client: AsyncOpenViking):
-        await uninitialized_client.initialize()
-        assert uninitialized_client._service is not None
-        await uninitialized_client.close()
-
-    async def test_add_resource(self, client: AsyncOpenViking, sample_markdown_file):
-        result = await client.add_resource(
+# tests/service/test_example.py
+class TestResourceService:
+    async def test_add_resource(self, service, request_context, sample_markdown_file):
+        result = await service.resources.add_resource(
             path=str(sample_markdown_file),
-            reason="test document"
+            ctx=request_context,
+            reason="test document",
         )
         assert "root_uri" in result
         assert result["root_uri"].startswith("viking://")
 ```
 
-Common fixtures are defined in `tests/conftest.py`, including `client` (initialized `AsyncOpenViking`), `uninitialized_client`, `temp_dir`, `sample_markdown_file`, and more.
+Common fixtures are defined in `tests/conftest.py`, including the initialized `service`, `request_context`, `temp_dir`, and sample files.
 
 ---
 

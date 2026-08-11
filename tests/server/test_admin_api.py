@@ -28,6 +28,8 @@ from openviking.service.task_store import (
     SYSTEM_TASK_ACCOUNT_ID,
     SYSTEM_TASK_USER_ID,
 )
+from openviking.service.task_tracker import get_task_tracker
+from openviking.service.user_deletion import setup_user_deletion
 from openviking_cli.exceptions import OpenVikingError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -175,6 +177,11 @@ async def admin_app(admin_service):
     manager = APIKeyManager(root_key=ROOT_KEY, viking_fs=admin_service.viking_fs)
     await manager.load()
     app.state.api_key_manager = manager
+    app.state.user_deletion_service = await setup_user_deletion(
+        service=admin_service,
+        manager=manager,
+        shared_upload_prefix=config.temp_upload.shared_prefix,
+    )
 
     # Set auth plugin (lifespan not triggered in ASGI tests)
     registry = get_registry()
@@ -629,8 +636,12 @@ async def test_list_users(admin_client: httpx.AsyncClient):
     assert user_ids == {"alice", "bob"}
 
 
-async def test_remove_user(admin_client: httpx.AsyncClient):
-    """ROOT can remove a user."""
+async def test_remove_user(
+    admin_client: httpx.AsyncClient,
+    admin_service: OpenVikingService,
+    admin_app: FastAPI,
+):
+    """Deletion revokes the user and removes their private data and task records."""
     acct = _uid()
     await admin_client.post(
         "/api/v1/admin/accounts",
@@ -643,18 +654,46 @@ async def test_remove_user(admin_client: httpx.AsyncClient):
         headers=root_headers(),
     )
     bob_key = resp.json()["result"]["user_key"]
-
+    bob_ctx = RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER)
+    private_uri = "viking://user/bob/memories/private.md"
+    await admin_service.viking_fs.write_file(private_uri, "private", ctx=bob_ctx)
+    bob_task = await get_task_tracker().create(
+        "session_commit",
+        resource_id="bob-session",
+        account_id=acct,
+        user_id="bob",
+    )
     resp = await admin_client.delete(
         f"/api/v1/admin/accounts/{acct}/users/bob", headers=root_headers()
     )
-    assert resp.status_code == 200
+    assert resp.status_code == 202
+    task_id = resp.json()["result"]["task_id"]
 
-    # Bob's key should be invalid now
+    # The fence invalidates Bob before background cleanup finishes.
     resp = await admin_client.get(
         "/api/v1/fs/ls?uri=viking://",
         headers={"X-API-Key": bob_key},
     )
     assert resp.status_code == 401
+
+    deletion_task = await _wait_for_task(admin_client, task_id)
+    assert deletion_task["status"] == "completed"
+    assert not await admin_service.viking_fs.exists(private_uri, ctx=bob_ctx)
+    assert not admin_app.state.api_key_manager.has_user(acct, "bob")
+    assert (
+        await get_task_tracker().get(
+            bob_task.task_id,
+            account_id=acct,
+            user_id="bob",
+        )
+        is None
+    )
+
+    missing = await admin_client.delete(
+        f"/api/v1/admin/accounts/{acct}/users/bob",
+        headers=root_headers(),
+    )
+    assert missing.status_code == 404
 
 
 # ---- Role management ----

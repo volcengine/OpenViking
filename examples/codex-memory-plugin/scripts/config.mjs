@@ -34,6 +34,7 @@
  *   OPENVIKING_RECALL_COMPRESS_MODEL, OPENVIKING_RECALL_COMPRESS_THINKING
  *   OPENVIKING_RECALL_LIMIT, OPENVIKING_SCORE_THRESHOLD
  *   OPENVIKING_WORKSPACE_PEER, OPENVIKING_RECALL_PEER_SCOPE
+ *   OPENVIKING_NO_AUTO_INJECT, OPENVIKING_PROFILE_TOKEN_BUDGET
  *   OPENVIKING_DEBUG=1, OPENVIKING_DEBUG_LOG
  */
 
@@ -41,6 +42,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { resolveOpenVikingCredentials } from "./ov-credentials.mjs";
 import { buildUserAgent, readManifestVersion } from "./shared/credentials.mjs";
+import { HARNESS_KEYS, loadPluginSettings } from "./shared/plugin-config.mjs";
 
 const USER_AGENT = buildUserAgent(
   "codex",
@@ -66,8 +68,18 @@ function envBool(name) {
   if (v == null || v === "") return undefined;
   const lower = v.trim().toLowerCase();
   if (lower === "0" || lower === "false" || lower === "no" || lower === "off") return false;
-  if (lower === "1" || lower === "true" || lower === "yes") return true;
+  if (lower === "1" || lower === "true" || lower === "yes" || lower === "on"
+      || lower === "auto" || lower === "client") return true;
   return undefined;
+}
+
+function configBool(value, fallback) {
+  if (typeof value === "boolean") return value;
+  const lower = String(value ?? "").trim().toLowerCase();
+  if (lower === "0" || lower === "false" || lower === "no" || lower === "off") return false;
+  if (lower === "1" || lower === "true" || lower === "yes" || lower === "on"
+      || lower === "auto" || lower === "client") return true;
+  return fallback;
 }
 
 function hasOwn(obj, key) {
@@ -84,7 +96,9 @@ export function loadConfig() {
   const { cliPath, ovFile, ovPath } = creds;
   const configPath = cliPath || ovPath || null;
 
-  const cx = ovFile.codex || {};
+  // ovcli.conf plugin.<harness> overrides plugin.* which overrides ov.conf's
+  // codex section, so client-side tuning no longer needs a server config.
+  const cx = { ...(ovFile.codex || {}), ...loadPluginSettings(HARNESS_KEYS.codex) };
   const server = ovFile.server || {};
   const explicitAuthMode = normalizeAuthMode(process.env.OPENVIKING_AUTH_MODE)
     || normalizeAuthMode(cx.authMode)
@@ -154,8 +168,10 @@ export function loadConfig() {
     autoRecall: envBool("OPENVIKING_AUTO_RECALL") ?? (cx.autoRecall !== false),
     recallLimit: Math.max(1, Math.floor(num(
       process.env.OPENVIKING_RECALL_LIMIT,
-      num(cx.recallLimit, 6),
+      num(cx.recallLimit, 10),
     ))),
+    recallLimitConfigured: Boolean(process.env.OPENVIKING_RECALL_LIMIT) ||
+      hasOwn(cx, "recallLimit"),
     scoreThreshold: Math.min(1, Math.max(0, num(
       process.env.OPENVIKING_SCORE_THRESHOLD,
       num(cx.scoreThreshold, 0.35),
@@ -166,7 +182,7 @@ export function loadConfig() {
     ))),
     logRankingDetails: envBool("OPENVIKING_LOG_RANKING_DETAILS") ?? (cx.logRankingDetails === true),
     recallPeerScope,
-    recallCompress: envBool("OPENVIKING_RECALL_COMPRESS") ?? (cx.recallCompress !== false),
+    recallCompress: envBool("OPENVIKING_RECALL_COMPRESS") ?? configBool(cx.recallCompress, true),
     recallCompressModel,
     recallCompressThinking,
     recallCompressConfigured: Boolean(recallCompressModel || recallCompressThinking),
@@ -188,6 +204,27 @@ export function loadConfig() {
       process.env.OPENVIKING_RECALL_COMPRESS_MAX_BULLETS,
       num(cx.recallCompressMaxBullets, 6),
     ))),
+    recallCompressMaxBulletsConfigured:
+      Boolean(process.env.OPENVIKING_RECALL_COMPRESS_MAX_BULLETS) ||
+      hasOwn(cx, "recallCompressMaxBullets"),
+
+    // Server-side context assembly (/search mode="context").
+    recallMaxTokens: Math.max(64, Math.floor(num(
+      process.env.OPENVIKING_RECALL_MAX_TOKENS,
+      num(cx.recallMaxTokens, 1600),
+    ))),
+    recallMaxTokensConfigured: Boolean(process.env.OPENVIKING_RECALL_MAX_TOKENS) ||
+      hasOwn(cx, "recallMaxTokens"),
+    recallDedupTurns: Math.max(0, Math.floor(num(
+      process.env.OPENVIKING_RECALL_DEDUP_TURNS,
+      num(cx.recallDedupTurns, 5),
+    ))),
+    recallQueryExpansion: str(
+      process.env.OPENVIKING_RECALL_QUERY_EXPANSION,
+      str(cx.recallQueryExpansion, "auto"),
+    ) === "off" ? "off" : "auto",
+    recallQueryExpansionConfigured: Boolean(process.env.OPENVIKING_RECALL_QUERY_EXPANSION) ||
+      hasOwn(cx, "recallQueryExpansion"),
 
     autoCapture: envBool("OPENVIKING_AUTO_CAPTURE") ?? (cx.autoCapture !== false),
     captureMode: (str(process.env.OPENVIKING_CAPTURE_MODE, str(cx.captureMode, "semantic")) === "keyword")
@@ -219,6 +256,11 @@ export function loadConfig() {
     ))),
 
     autoCommitOnCompact: envBool("OPENVIKING_AUTO_COMMIT_ON_COMPACT") ?? (cx.autoCommitOnCompact !== false),
+    noAutoInject: envBool("OPENVIKING_NO_AUTO_INJECT") ?? (cx.noAutoInject === true),
+    profileTokenBudget: Math.max(500, Math.floor(num(
+      process.env.OPENVIKING_PROFILE_TOKEN_BUDGET,
+      num(cx.profileTokenBudget, 10000),
+    ))),
     resumeArchiveInject: envBool("OPENVIKING_RESUME_ARCHIVE_INJECT") ?? (cx.resumeArchiveInject !== false),
     resumeArchiveTokenBudget: Math.max(0, Math.floor(num(
       process.env.OPENVIKING_RESUME_ARCHIVE_TOKEN_BUDGET,

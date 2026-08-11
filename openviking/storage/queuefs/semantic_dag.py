@@ -3,16 +3,19 @@
 """Semantic DAG executor with event-driven lazy dispatch."""
 
 import asyncio
+import re
 import threading
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Dict, List, Optional, Set
 from weakref import WeakKeyDictionary
 
+from openviking.parse.parsers.media import get_media_type
 from openviking.server.identity import RequestContext
 from openviking.service.task_work_index import bind_task_context, get_task_context
 from openviking.storage.queuefs.semantic_sidecar import write_semantic_sidecars
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
-from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+from openviking.telemetry import bind_telemetry, get_current_telemetry
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.logger import get_logger
@@ -50,26 +53,6 @@ class DagStats:
     done_nodes: int = 0
 
 
-@dataclass
-class VectorizeTask:
-    """Vectorize task information."""
-
-    task_type: str  # "file" or "directory"
-    uri: str
-    context_type: str
-    ctx: "RequestContext"
-    semantic_msg_id: Optional[str] = None
-    # For file tasks
-    file_path: Optional[str] = None
-    summary_dict: Optional[Dict[str, str]] = None
-    parent_uri: Optional[str] = None
-    use_summary: bool = False
-    ingest_options: IngestOptions = field(default_factory=IngestOptions)
-    # For directory tasks
-    abstract: Optional[str] = None
-    overview: Optional[str] = None
-
-
 @dataclass(frozen=True)
 class DagWork:
     """A scheduled unit of DAG work."""
@@ -78,7 +61,6 @@ class DagWork:
     dir_uri: str
     parent_uri: Optional[str] = None
     file_path: Optional[str] = None
-    vectorize_task: Optional[VectorizeTask] = None
 
 
 @dataclass(frozen=True)
@@ -168,8 +150,6 @@ class SemanticDagExecutor:
         ctx: RequestContext,
         incremental_update: bool = False,
         target_uri: Optional[str] = None,
-        semantic_msg_id: Optional[str] = None,
-        telemetry_id: str = "",
         recursive: bool = True,
         lock: Optional[Dict[str, Any]] = None,
         is_code_repo: bool = False,
@@ -184,8 +164,6 @@ class SemanticDagExecutor:
         self._ctx = ctx
         self._incremental_update = incremental_update
         self._target_uri = target_uri
-        self._semantic_msg_id = semantic_msg_id
-        self._telemetry_id = telemetry_id
         self._recursive = recursive
         self._lock = lock
         self._is_code_repo = is_code_repo
@@ -195,6 +173,7 @@ class SemanticDagExecutor:
         self._coalesce_key = coalesce_key
         self._coalesce_version = coalesce_version
         self._task_context = get_task_context()
+        self._telemetry = get_current_telemetry()
         self._stale = False
         self._changed_paths = {
             path for key in ("added", "modified", "deleted") for path in self._changes.get(key, [])
@@ -213,11 +192,6 @@ class SemanticDagExecutor:
         self._closed = False
         self._failure: Optional[Exception] = None
         self._stats = DagStats()
-        self._vectorize_task_count: int = 0
-        self._pending_vectorize_tasks: List[VectorizeTask] = []
-        self._pending_vectorize_work = 0
-        self._vectorize_done: Optional[asyncio.Event] = None
-        self._vectorize_lock = asyncio.Lock()
         self._file_change_status: Dict[str, bool] = {}
         self._dir_change_status: Dict[str, bool] = {}
         self._overview_cache: Dict[str, Dict[str, str]] = {}
@@ -235,36 +209,6 @@ class SemanticDagExecutor:
             await self._root_done.wait()
             if self._failure:
                 raise self._failure
-
-            # Mark semantic done after downstream vectorization finishes.
-            async def wrapped_on_complete() -> None:
-                if self._telemetry_id and self._semantic_msg_id:
-                    get_request_wait_tracker().mark_semantic_done(
-                        self._telemetry_id, self._semantic_msg_id
-                    )
-
-            async with self._vectorize_lock:
-                task_count = self._vectorize_task_count
-                tasks = list(self._pending_vectorize_tasks)
-
-            if task_count > 0:
-                from .embedding_tracker import EmbeddingTaskTracker
-
-                tracker = EmbeddingTaskTracker.get_instance()
-                await tracker.register(
-                    semantic_msg_id=self._semantic_msg_id,
-                    total_count=task_count,
-                    on_complete=wrapped_on_complete,
-                    metadata={"uri": root_uri},
-                )
-
-                await self._dispatch_vectorize_tasks(tasks)
-            else:
-                # No vectorize tasks — release lock immediately (via wrapped callback)
-                try:
-                    await wrapped_on_complete()
-                except Exception as e:
-                    logger.error(f"Error in on_complete callback: {e}", exc_info=True)
         except BaseException:
             self._closed = True
             await self._active_work_idle.wait()
@@ -330,8 +274,6 @@ class SemanticDagExecutor:
         self._closed = True
         if self._root_done:
             self._root_done.set()
-        if self._vectorize_done:
-            self._vectorize_done.set()
 
     def _register_active(self) -> None:
         with self._active_lock:
@@ -355,21 +297,19 @@ class SemanticDagExecutor:
         return stats
 
     async def _run_work(self, work: DagWork) -> None:
-        if self._task_context is not None:
-            with bind_task_context(
+        task_context = (
+            bind_task_context(
                 self._task_context.task_id,
                 self._task_context.account_id,
                 self._task_context.user_id,
-            ):
-                await self._run_work_bound(work)
-            return
-        await self._run_work_bound(work)
+            )
+            if self._task_context is not None
+            else nullcontext()
+        )
+        with bind_telemetry(self._telemetry), task_context:
+            await self._run_work_bound(work)
 
     async def _run_work_bound(self, work: DagWork) -> None:
-        if work.kind == "vectorize":
-            await self._run_vectorize_work(work.vectorize_task)
-            return
-
         self._mark_node_started()
 
         if work.kind == "dir":
@@ -396,54 +336,6 @@ class SemanticDagExecutor:
 
         self._mark_node_done()
         logger.warning("Unknown semantic DAG work kind: %s", work.kind)
-
-    async def _dispatch_vectorize_tasks(self, tasks: List[VectorizeTask]) -> None:
-        self._vectorize_done = asyncio.Event()
-        self._pending_vectorize_work = len(tasks)
-        for task in tasks:
-            self._schedule_work(
-                DagWork(
-                    kind="vectorize",
-                    dir_uri=task.uri,
-                    vectorize_task=task,
-                )
-            )
-        await self._vectorize_done.wait()
-
-    async def _run_vectorize_work(self, task: Optional[VectorizeTask]) -> None:
-        try:
-            if task is not None:
-                await self._run_vectorize_task(task)
-        except Exception as exc:
-            logger.error("Vectorization dispatch task failed: %s", exc, exc_info=True)
-        finally:
-            self._pending_vectorize_work = max(0, self._pending_vectorize_work - 1)
-            if self._pending_vectorize_work == 0 and self._vectorize_done:
-                self._vectorize_done.set()
-
-    async def _run_vectorize_task(self, task: VectorizeTask) -> None:
-        if task.task_type == "file":
-            await self._processor._vectorize_single_file(
-                parent_uri=task.parent_uri,
-                context_type=task.context_type,
-                file_path=task.file_path,
-                summary_dict=task.summary_dict,
-                ctx=task.ctx,
-                semantic_msg_id=task.semantic_msg_id,
-                use_summary=task.use_summary,
-                ingest_options=task.ingest_options,
-            )
-            return
-
-        await self._processor._vectorize_directory(
-            task.uri,
-            task.context_type,
-            task.abstract,
-            task.overview,
-            ctx=task.ctx,
-            semantic_msg_id=task.semantic_msg_id,
-            ingest_options=task.ingest_options,
-        )
 
     async def _dispatch_dir(self, dir_uri: str, parent_uri: Optional[str]) -> bool:
         """Lazy-dispatch tasks for a directory when it is triggered."""
@@ -707,25 +599,34 @@ class SemanticDagExecutor:
 
         if self._closed:
             return
-        try:
-            if need_vectorize:
-                use_summary = self._is_code_repo and bool(summary_dict.get("summary"))
-                task = VectorizeTask(
-                    task_type="file",
-                    uri=file_path,
+        if need_vectorize and not self._skip_vectorization:
+            use_summary = self._is_code_repo and bool(summary_dict.get("summary"))
+            try:
+                await self._processor._vectorize_single_file(
+                    parent_uri=parent_uri,
                     context_type=self._context_type,
-                    ctx=self._ctx,
-                    semantic_msg_id=self._semantic_msg_id,
                     file_path=file_path,
                     summary_dict=summary_dict,
-                    parent_uri=parent_uri,
+                    ctx=self._ctx,
                     use_summary=use_summary,
                     ingest_options=self._ingest_options,
                 )
-                await self._add_vectorize_task(task)
-        except Exception as e:
-            logger.error(f"Failed to schedule vectorization for {file_path}: {e}", exc_info=True)
-        await self._on_file_done(parent_uri, file_path, summary_dict)
+            except Exception as e:
+                logger.error(
+                    "Failed to schedule vectorization for %s: %s",
+                    file_path,
+                    e,
+                    exc_info=True,
+                )
+                raise
+        await self._on_file_done(
+            parent_uri,
+            file_path,
+            {
+                "name": str(summary_dict.get("name") or file_name),
+                "summary": str(summary_dict.get("summary") or ""),
+            },
+        )
 
     async def _on_file_done(
         self, parent_uri: str, file_path: str, summary_dict: Dict[str, str]
@@ -772,6 +673,39 @@ class SemanticDagExecutor:
             else:
                 summaries.append(item)
         return summaries
+
+    def _select_direct_media_overview(
+        self,
+        node: DirNode,
+        file_summaries: List[Dict[str, str]],
+    ) -> Optional[str]:
+        if len(node.file_paths) != 1 or node.children_dirs or len(file_summaries) != 1:
+            return None
+
+        file_path = node.file_paths[0]
+        filename = file_path.rsplit("/", 1)[-1]
+        if get_media_type(file_path, None) not in {"audio", "video"}:
+            return None
+
+        summary = str(file_summaries[0].get("summary") or "").strip()
+        if not summary.startswith("# "):
+            return None
+
+        lines = summary.splitlines()
+        brief_start = next((idx for idx in range(1, len(lines)) if lines[idx].strip()), None)
+        if brief_start is None or lines[brief_start].lstrip().startswith("#"):
+            return None
+
+        brief_end = brief_start
+        while brief_end < len(lines) and lines[brief_end].strip():
+            if lines[brief_end].lstrip().startswith("#"):
+                return None
+            brief_end += 1
+
+        filename_heading = re.compile(rf"^###\s+{re.escape(filename)}\s*$", re.MULTILINE)
+        if not any(filename_heading.fullmatch(line) for line in lines[brief_end:]):
+            return None
+        return summary
 
     @property
     def stale(self) -> bool:
@@ -838,10 +772,12 @@ class SemanticDagExecutor:
                 async with node.lock:
                     file_summaries = self._finalize_file_summaries(node)
                     children_abstracts = await self._finalize_children_abstracts(node)
-                async with self._llm_sem:
-                    overview = await self._processor._generate_overview(
-                        dir_uri, file_summaries, children_abstracts
-                    )
+                overview = self._select_direct_media_overview(node, file_summaries)
+                if overview is None:
+                    async with self._llm_sem:
+                        overview = await self._processor._generate_overview(
+                            dir_uri, file_summaries, children_abstracts
+                        )
                 overview, abstract = self._processor._normalize_overview_generation(overview)
 
             if self._closed:
@@ -855,24 +791,27 @@ class SemanticDagExecutor:
             except Exception:
                 logger.info(f"[SemanticDag] {dir_uri} write failed, skipping")
 
-            try:
-                if need_vectorize:
-                    task = VectorizeTask(
-                        task_type="directory",
-                        uri=dir_uri,
-                        context_type=self._context_type,
-                        ctx=self._ctx,
-                        semantic_msg_id=self._semantic_msg_id,
-                        abstract=abstract,
-                        overview=overview,
-                        ingest_options=self._ingest_options,
-                    )
-                    await self._add_vectorize_task(task)
-            except Exception as e:
-                logger.error(f"Failed to schedule vectorization for {dir_uri}: {e}", exc_info=True)
-
         except Exception as e:
             logger.error(f"Failed to generate overview for {dir_uri}: {e}", exc_info=True)
+        else:
+            if need_vectorize and not self._skip_vectorization:
+                try:
+                    await self._processor._vectorize_directory(
+                        dir_uri,
+                        context_type=self._context_type,
+                        abstract=abstract,
+                        overview=overview,
+                        ctx=self._ctx,
+                        ingest_options=self._ingest_options,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Failed to schedule vectorization for %s: %s",
+                        dir_uri,
+                        e,
+                        exc_info=True,
+                    )
+                    raise
         finally:
             self._stats.done_nodes += 1
             self._stats.in_progress_nodes = max(0, self._stats.in_progress_nodes - 1)
@@ -888,21 +827,6 @@ class SemanticDagExecutor:
 
         await self._on_child_done(parent_uri, dir_uri, abstract)
         self._release_dir_node(dir_uri)
-
-    async def _add_vectorize_task(self, task: VectorizeTask) -> None:
-        """Add a vectorize task to the pending list."""
-        if self._skip_vectorization:
-            logger.info(
-                "Skipping vectorization task for %s (requested via SemanticMsg)",
-                task.uri,
-            )
-            return
-        async with self._vectorize_lock:
-            self._pending_vectorize_tasks.append(task)
-            if task.task_type == "file":
-                self._vectorize_task_count += 1
-            else:  # directory
-                self._vectorize_task_count += 2
 
     def get_stats(self) -> DagStats:
         return DagStats(

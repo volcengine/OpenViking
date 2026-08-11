@@ -5,11 +5,11 @@ Message formatting and memory file parsing utilities.
 """
 
 import json
-import re
 from typing import Any, Dict, List
 
 import json_repair
 
+from openviking.session.memory.utils.memory_fields import MEMORY_FIELDS_COMMENT_RE
 from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
 
@@ -92,16 +92,12 @@ def parse_memory_file_with_fields(content: str) -> Dict[str, Any]:
     if not content:
         return {"content": ""}
 
-    # Pattern to match: <!-- MEMORY_FIELDS ... -->
-    # Matches multi-line JSON inside the comment
-    pattern = r"<!--\s*MEMORY_FIELDS\s*([\s\S]*?)\s*-->"
-
-    match = re.search(pattern, content)
+    match = MEMORY_FIELDS_COMMENT_RE.search(content)
 
     result = {}
 
     if match:
-        fields_json_str = match.group(1).strip()
+        fields_json_str = match.group("fields").strip()
         if fields_json_str:
             try:
                 fields = json_repair.loads(fields_json_str)
@@ -114,7 +110,7 @@ def parse_memory_file_with_fields(content: str) -> Dict[str, Any]:
                 tracer.warning(f"Failed to parse MEMORY_FIELDS JSON: {e}")
 
     # Remove the comment from content
-    content_without_comment = re.sub(pattern, "", content).strip()
+    content_without_comment = MEMORY_FIELDS_COMMENT_RE.sub("", content).strip()
     result["content"] = content_without_comment
 
     return result

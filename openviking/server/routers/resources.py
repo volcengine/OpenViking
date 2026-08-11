@@ -56,7 +56,10 @@ class AddResourceRequest(BaseModel):
         exclude: Glob pattern for files to exclude during parsing.
         directly_upload_media: Whether to directly upload media files. Default is True.
         preserve_structure: Whether to preserve directory structure when adding directories.
-        args: Parser-specific import options. For Feishu one-time user-token imports,
+        args: Parser-specific import options. Native HTTPS Git imports accept
+            {"auth_config": {"username": "oauth2", "token": "..."}}; when
+            watch_interval > 0 the credentials are stored in private watch state.
+            For Feishu one-time user-token imports,
             pass {"feishu_access_token": "..."}. For Feishu user-token watches,
             pass {"feishu_access_token": "...", "feishu_refresh_token": "..."}.
         watch_interval: Watch interval in minutes for automatic resource monitoring.
@@ -67,9 +70,9 @@ class AddResourceRequest(BaseModel):
             - watch_interval < 0: Same as watch_interval = 0, cancels any existing watch task.
             Default is 0 (no monitoring).
 
-            Note: If the target URI already has an active watch task, a ConflictError will be
-            raised. You must first cancel the existing watch (set watch_interval <= 0) before
-            creating a new one.
+            Note: Re-adding the same source to the same target updates its active watch task.
+            A different source targeting an active watch raises ConflictError; cancel that
+            watch first with watch_interval <= 0.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -182,6 +185,7 @@ async def temp_upload(
             processing_mode=signed.processing_mode,
             tags=signed.tags,
             tag_mode=signed.tag_mode,
+            parse_mode=signed.parse_mode,
         )
 
     try:

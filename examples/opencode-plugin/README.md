@@ -114,6 +114,7 @@ Create `~/.config/opencode/openviking-config.json`:
 ```json
 {
   "enabled": true,
+  "mcp": { "enabled": true },
   "timeoutMs": 30000,
   "repoContext": { "enabled": true, "cacheTtlMs": 60000 },
   "autoRecall": {
@@ -132,7 +133,12 @@ Create `~/.config/opencode/openviking-config.json`:
 }
 ```
 
-API keys are resolved from environment variables or `~/.openviking/ovcli.conf` and sent as `Authorization: Bearer ...` by both hooks and the MCP proxy. `account` and `user` are trusted-mode identity
+`autoRecall.limit` is a legacy quota-scaling input, not a final result cap.
+Explicit values from 1 through 5 produce an effective total quota of 6 because
+each coding category keeps one retrieval slot. Use Context `quotas` directly
+when exact category ceilings are required.
+
+API keys are resolved from environment variables or `~/.openviking/ovcli.conf` and sent as `Authorization: Bearer ...` by both hooks and the MCP proxy. Recall goes through the server-side context face (`POST /api/v1/search/search` with `mode="context"`), falling back to the deprecated `/api/v1/search/recall` on older deployments. `account` and `user` are trusted-mode identity
 headers sent as `X-OpenViking-Account` and `X-OpenViking-User`; leave them empty
 when using API-key mode with user/admin API keys.
 By default the plugin derives a peer from the project directory using Claude's
@@ -157,6 +163,20 @@ another person's session.
 and `OPENVIKING_PEER_ID` take precedence over values in this file.
 
 For advanced setups, `OPENVIKING_PLUGIN_CONFIG` can point to another config file path.
+
+### Hook-only mode
+
+When OpenViking is already exposed through another MCP server, retain the lifecycle hooks while
+skipping this plugin's bundled MCP registration:
+
+```json
+{
+  "mcp": { "enabled": false }
+}
+```
+
+This leaves repository context, automatic recall, message capture, and lifecycle commits enabled.
+It does not add or overwrite OpenCode's `mcp.openviking` entry.
 
 OpenCode's local `read`, `glob`, and `grep` tools cannot read `viking://` URIs.
 When the agent accidentally tries that, the plugin blocks the filesystem tool

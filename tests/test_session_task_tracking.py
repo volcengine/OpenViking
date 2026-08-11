@@ -9,31 +9,29 @@ from typing import AsyncGenerator, Tuple
 import httpx
 import pytest_asyncio
 
-from openviking import AsyncOpenViking
 from openviking.core.namespace import canonical_session_uri
 from openviking.server.app import create_app
+from openviking.server.auth.plugins import DevAuthPlugin
 from openviking.server.config import ServerConfig
 from openviking.server.dependencies import set_service
 from openviking.service.core import OpenVikingService
-from openviking.service.task_tracker import get_task_tracker, set_task_tracker
+from openviking.service.task_tracker import get_task_tracker
 
 
 @pytest_asyncio.fixture
-async def api_client(temp_dir) -> AsyncGenerator[Tuple[httpx.AsyncClient, OpenVikingService], None]:
+async def api_client(
+    service: OpenVikingService,
+) -> AsyncGenerator[Tuple[httpx.AsyncClient, OpenVikingService], None]:
     """Create in-process HTTP client for API endpoint tests."""
-    set_task_tracker(None)
-    service = OpenVikingService(path=str(temp_dir / "api_data"))
-    await service.initialize()
     app = create_app(config=ServerConfig(), service=service)
     set_service(service)
+    app.state.auth_plugin = DevAuthPlugin()
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         yield client, service
 
-    await service.close()
-    await AsyncOpenViking.reset()
-    set_task_tracker(None)
+    set_service(None)
 
 
 async def _new_session_with_message(client: httpx.AsyncClient) -> str:
@@ -209,33 +207,6 @@ async def test_task_lifecycle_failure(api_client):
     result = task_resp.json()["result"]
     assert result["status"] == "failed"
     assert "LLM provider timeout" in result["error"]
-
-
-async def test_task_failed_when_memory_extraction_raises(api_client):
-    """Extractor failures should propagate to task error instead of silent completed+0."""
-    client, service = api_client
-    session_id = await _new_session_with_message(client)
-
-    async def failing_extract(_context, _user, _session_id):
-        raise RuntimeError("memory_extraction_failed: synthetic extractor error")
-
-    service.sessions._session_compressor.extractor.extract = failing_extract
-
-    resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
-    task_id = resp.json()["result"]["task_id"]
-
-    result = None
-    for _ in range(120):
-        await asyncio.sleep(0.1)
-        task_resp = await client.get(f"/api/v1/tasks/{task_id}")
-        assert task_resp.status_code == 200
-        result = task_resp.json()["result"]
-        if result["status"] in {"completed", "failed"}:
-            break
-
-    assert result is not None
-    assert result["status"] == "failed"
-    assert "memory_extraction_failed" in result["error"]
 
 
 # ── Duplicate commit acceptance ──

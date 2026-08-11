@@ -2,9 +2,13 @@ import types
 
 import pytest
 
-from openviking.utils.ingest_options import IngestOptions
-from openviking.core.context import Context, ResourceContentType
+from openviking.core.context import ResourceContentType
+from openviking.parse.parsers.media.utils import (
+    MPEG_TS_PACKET_SIZE,
+    MPEG_TS_PROBE_BYTES,
+)
 from openviking.utils import embedding_utils
+from openviking.utils.ingest_options import IngestOptions
 
 
 class DummyQueue:
@@ -13,6 +17,7 @@ class DummyQueue:
 
     async def enqueue(self, msg):
         self.items.append(msg)
+        return "queue-message-id"
 
 
 class DummyQueueWithId(DummyQueue):
@@ -40,8 +45,14 @@ class DummyQueueManager:
 class DummyFS:
     def __init__(self, content):
         self.content = content
+        self.read_calls = []
         self.read_file_calls = 0
         self.read_file_bytes_calls = 0
+
+    async def read(self, _path, offset=0, size=-1, ctx=None):
+        self.read_calls.append((offset, size))
+        raw = self.content if isinstance(self.content, bytes) else str(self.content).encode("utf-8")
+        return raw[offset : offset + size]
 
     async def read_file(self, _path, ctx=None):
         self.read_file_calls += 1
@@ -77,34 +88,64 @@ class DummyReq:
         self.account_id = "default"
 
 
-@pytest.mark.parametrize("extension", [".ogg", ".m4a", ".opus", ".ac3"])
-def test_get_resource_content_type_recognizes_supported_audio_extensions(extension):
-    assert (
-        embedding_utils.get_resource_content_type(f"recording{extension}")
-        == ResourceContentType.AUDIO
+def test_get_resource_content_type_recognizes_media_extensions():
+    expected = {
+        "recording.ogg": ResourceContentType.AUDIO,
+        "RECORDING.OPUS": ResourceContentType.AUDIO,
+        "recording.mkv": ResourceContentType.VIDEO,
+        "RECORDING.WEBM": ResourceContentType.VIDEO,
+        "source.ts": ResourceContentType.TEXT,
+    }
+
+    for filename, content_type in expected.items():
+        assert embedding_utils.get_resource_content_type(filename) == content_type
+
+
+def _mpeg_ts_bytes() -> bytes:
+    content = bytearray(MPEG_TS_PROBE_BYTES)
+    for offset in range(0, MPEG_TS_PROBE_BYTES, MPEG_TS_PACKET_SIZE):
+        content[offset] = 0x47
+    return bytes(content)
+
+
+@pytest.mark.asyncio
+async def test_vectorize_disambiguates_typescript_and_mpeg_ts(monkeypatch):
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
+        ),
     )
 
+    async def vectorize(filename, content, summary):
+        queue = DummyQueue()
+        fs = DummyFS(content)
+        monkeypatch.setattr(
+            embedding_utils,
+            "get_queue_manager",
+            lambda: DummyQueueManager(queue),
+        )
+        monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: fs)
+        await embedding_utils.vectorize_file(
+            file_path=f"viking://user/default/resources/{filename}",
+            summary_dict={"name": filename, "summary": summary},
+            parent_uri="viking://user/default/resources",
+            ctx=DummyReq(),
+        )
+        return queue, fs
 
-@pytest.mark.parametrize("extension", [".mkv", ".webm"])
-def test_get_resource_content_type_recognizes_supported_video_extensions(extension):
-    assert (
-        embedding_utils.get_resource_content_type(f"recording{extension}")
-        == ResourceContentType.VIDEO
+    text_queue, text_fs = await vectorize(
+        "source.ts", "export const answer: number = 42;", "TypeScript source"
     )
+    video_queue, video_fs = await vectorize("broadcast.ts", _mpeg_ts_bytes(), "")
 
-
-def test_get_resource_content_type_media_extensions_are_case_insensitive():
-    assert embedding_utils.get_resource_content_type("RECORDING.OPUS") == ResourceContentType.AUDIO
-    assert embedding_utils.get_resource_content_type("RECORDING.WEBM") == ResourceContentType.VIDEO
-
-
-@pytest.mark.parametrize("extension", [".cu", ".cuh"])
-def test_get_resource_content_type_recognizes_cuda_extensions_as_text(extension):
-    assert embedding_utils.get_resource_content_type(f"kernel{extension}") == ResourceContentType.TEXT
-
-
-def test_get_resource_content_type_keeps_ts_as_text():
-    assert embedding_utils.get_resource_content_type("source.ts") == ResourceContentType.TEXT
+    assert text_fs.read_file_calls == 1
+    assert text_queue.items[0].message == "export const answer: number = 42;"
+    assert "content" not in text_queue.items[0].context_data
+    assert video_fs.read_file_calls == 0
+    assert video_queue.items[0].message == "broadcast.ts"
+    assert "content" not in video_queue.items[0].context_data
 
 
 @pytest.mark.asyncio
@@ -119,12 +160,6 @@ async def test_vectorize_file_uses_summary_first(monkeypatch):
             embedding=types.SimpleNamespace(text_source="summary_first", max_input_tokens=1000)
         ),
     )
-    monkeypatch.setattr(
-        embedding_utils.EmbeddingMsgConverter,
-        "from_context",
-        lambda context: context,
-    )
-
     await embedding_utils.vectorize_file(
         file_path="viking://user/default/resources/test.md",
         summary_dict={"name": "test.md", "summary": "short summary"},
@@ -133,8 +168,8 @@ async def test_vectorize_file_uses_summary_first(monkeypatch):
     )
 
     assert len(queue.items) == 1
-    assert isinstance(queue.items[0], Context)
-    assert queue.items[0].get_vectorization_text() == "short summary"
+    assert queue.items[0].message == "short summary"
+    assert "content" not in queue.items[0].context_data
 
 
 @pytest.mark.asyncio
@@ -165,7 +200,6 @@ async def test_vectorize_file_registers_request_wait_with_embedding_msg_id(monke
         summary_dict={"name": "test.md", "summary": ""},
         parent_uri="viking://user/default/resources",
         ctx=DummyReq(),
-        register_request_wait=True,
     )
 
     assert len(queue.items) == 1
@@ -200,13 +234,13 @@ async def test_vectorize_file_marks_registered_wait_root_failed_when_enqueue_rai
         ),
     )
 
-    await embedding_utils.vectorize_file(
-        file_path="viking://user/default/resources/test.md",
-        summary_dict={"name": "test.md", "summary": ""},
-        parent_uri="viking://user/default/resources",
-        ctx=DummyReq(),
-        register_request_wait=True,
-    )
+    with pytest.raises(RuntimeError, match="queue unavailable"):
+        await embedding_utils.vectorize_file(
+            file_path="viking://user/default/resources/test.md",
+            summary_dict={"name": "test.md", "summary": ""},
+            parent_uri="viking://user/default/resources",
+            ctx=DummyReq(),
+        )
 
     assert len(queue.items) == 1
     assert registered == [(queue.items[0].telemetry_id, queue.items[0].id)]
@@ -215,11 +249,49 @@ async def test_vectorize_file_marks_registered_wait_root_failed_when_enqueue_rai
 
 
 @pytest.mark.asyncio
-async def test_vectorize_unknown_text_file_embeds_summary_but_indexes_raw_content(monkeypatch):
+async def test_vectorize_file_propagates_enqueue_failure(monkeypatch):
+    monkeypatch.setattr(
+        embedding_utils, "get_queue_manager", lambda: DummyQueueManager(FailingQueue())
+    )
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("content"))
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="summary_first", max_input_tokens=1000)
+        ),
+    )
+    with pytest.raises(RuntimeError, match="queue unavailable"):
+        await embedding_utils.vectorize_file(
+            "viking://user/default/resources/test.md",
+            {"name": "test.md", "summary": "summary"},
+            "viking://user/default/resources",
+            ctx=DummyReq(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_vectorize_directory_propagates_enqueue_failures(monkeypatch):
+    monkeypatch.setattr(
+        embedding_utils, "get_queue_manager", lambda: DummyQueueManager(FailingQueue())
+    )
+
+    with pytest.raises(RuntimeError, match="queue unavailable"):
+        await embedding_utils.vectorize_directory_meta(
+            "viking://user/default/resources",
+            abstract="abstract",
+            overview="overview",
+            ctx=DummyReq(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_vectorize_unknown_text_file_embeds_summary_without_reading_content(monkeypatch):
     queue = DummyQueue()
     raw_makefile = "build:\n\tcargo build --locked\n"
+    fs = DummyFS(raw_makefile)
     monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
-    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS(raw_makefile))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: fs)
     monkeypatch.setattr(
         embedding_utils,
         "get_openviking_config",
@@ -238,7 +310,61 @@ async def test_vectorize_unknown_text_file_embeds_summary_but_indexes_raw_conten
     assert len(queue.items) == 1
     msg = queue.items[0]
     assert msg.message == "VLM generated build file summary"
-    assert msg.context_data["content"] == raw_makefile
+    assert "content" not in msg.context_data
+    assert fs.read_file_bytes_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_vectorize_unknown_text_file_without_summary_uses_bounded_content(monkeypatch):
+    queue = DummyQueue()
+    fs = DummyFS("build:\n\tcargo build --release\n")
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: fs)
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
+        ),
+    )
+
+    enqueued = await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/Makefile",
+        summary_dict={"name": "Makefile", "summary": ""},
+        parent_uri="viking://user/default/resources",
+        ctx=DummyReq(),
+    )
+
+    assert enqueued is True
+    assert len(queue.items) == 1
+    msg = queue.items[0]
+    assert msg.message == "build:\n\tcargo build --release\n"
+    assert "content" not in msg.context_data
+    assert fs.read_file_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_vectorize_empty_content_skips_enqueue(monkeypatch):
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS(""))
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
+        ),
+    )
+
+    enqueued = await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/obsolete.md",
+        summary_dict={"name": "obsolete.md", "summary": ""},
+        parent_uri="viking://user/default/resources",
+        ctx=DummyReq(),
+    )
+
+    assert enqueued is False
+    assert queue.items == []
 
 
 @pytest.mark.asyncio
@@ -380,42 +506,81 @@ async def test_vectorize_directory_meta_appends_search_tags_by_level(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_vectorize_unknown_text_file_sniffs_non_utf8_raw_content(monkeypatch):
+async def test_vectorize_directory_meta_l1_abstract_is_overview(monkeypatch):
+    """L1 records must carry the overview in the abstract scalar so Rerank
+    sees L1 text instead of the L0 abstract."""
     queue = DummyQueue()
-    raw_content = (
-        "# 构建脚本\n"
-        "目标: 编译项目\n"
-        "说明: 这是一个中文 Makefile 内容，用于测试编码探测。\n"
-        "命令: cargo build --locked\n"
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("ignored"))
+
+    overview = "# Overview\n\n" + ("section detail. " * 50)
+    await embedding_utils.vectorize_directory_meta(
+        uri="viking://user/default/resources/demo",
+        abstract="demo abstract",
+        overview=overview,
+        ctx=DummyReq(),
     )
-    fs = DummyFS(raw_content.encode("gb18030"))
+
+    assert len(queue.items) == 2
+    l0, l1 = queue.items
+    assert l0.context_data["level"] == 0
+    assert l0.context_data["abstract"] == "demo abstract"
+    assert l1.context_data["level"] == 1
+    assert l1.context_data["abstract"] == overview
+    assert l1.message == overview
+
+
+@pytest.mark.asyncio
+async def test_vectorize_directory_meta_l1_abstract_truncated(monkeypatch):
+    """Oversized overviews are capped below the scalar byte limit."""
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("ignored"))
+
+    oversized = "长" * 80_000
+    await embedding_utils.vectorize_directory_meta(
+        uri="viking://user/default/resources/demo",
+        abstract="demo abstract",
+        overview=oversized,
+        ctx=DummyReq(),
+    )
+
+    l1 = queue.items[1]
+    assert l1.context_data["level"] == 1
+    assert len(l1.context_data["abstract"].encode("utf-8")) <= 50_000
+
+
+@pytest.mark.asyncio
+async def test_vectorize_unknown_text_content_only_reads_embedding_input(monkeypatch):
+    queue = DummyQueue()
+    fs = DummyFS("build:\n\tcargo build --locked\n".encode("gb18030"))
     monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
     monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: fs)
     monkeypatch.setattr(
         embedding_utils,
         "get_openviking_config",
         lambda: types.SimpleNamespace(
-            embedding=types.SimpleNamespace(text_source="summary_first", max_input_tokens=1000)
+            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
         ),
     )
 
     await embedding_utils.vectorize_file(
         file_path="viking://user/default/resources/Makefile",
-        summary_dict={"name": "Makefile", "summary": "VLM generated build file summary"},
+        summary_dict={"name": "Makefile", "summary": ""},
         parent_uri="viking://user/default/resources",
         ctx=DummyReq(),
     )
 
     assert len(queue.items) == 1
     msg = queue.items[0]
-    assert msg.message == "VLM generated build file summary"
-    assert msg.context_data["content"] == raw_content
-    assert fs.read_file_bytes_calls == 1
-    assert fs.read_file_calls == 0
+    assert msg.message == "build:\n\tcargo build --locked\n"
+    assert "content" not in msg.context_data
+    assert fs.read_file_bytes_calls == 0
+    assert fs.read_file_calls == 1
 
 
 @pytest.mark.asyncio
-async def test_vectorize_unknown_file_reuses_summary_content_without_reread(monkeypatch):
+async def test_vectorize_unknown_file_ignores_summary_content_without_reread(monkeypatch):
     queue = DummyQueue()
     raw_content = "build:\n\tcargo build --locked\n"
     fs = DummyFS("should not be read")
@@ -443,7 +608,7 @@ async def test_vectorize_unknown_file_reuses_summary_content_without_reread(monk
     assert len(queue.items) == 1
     msg = queue.items[0]
     assert msg.message == "VLM generated build file summary"
-    assert msg.context_data["content"] == raw_content
+    assert "content" not in msg.context_data
     assert fs.read_file_bytes_calls == 0
     assert fs.read_file_calls == 0
 
@@ -474,48 +639,13 @@ async def test_vectorize_unknown_binary_file_falls_back_to_summary(monkeypatch):
     assert len(queue.items) == 1
     msg = queue.items[0]
     assert msg.message == summary
-    assert msg.context_data["content"] == summary
-    assert fs.read_file_bytes_calls == 1
+    assert "content" not in msg.context_data
+    assert fs.read_file_bytes_calls == 0
     assert fs.read_file_calls == 0
 
 
 @pytest.mark.asyncio
-async def test_vectorize_unknown_unrecognizable_encoding_falls_back_to_summary(monkeypatch):
-    queue = DummyQueue()
-    summary = "VLM generated unknown file summary"
-    fs = DummyFS(b"\xff\xfe\xfd")
-    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
-    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: fs)
-    monkeypatch.setattr(
-        embedding_utils,
-        "get_openviking_config",
-        lambda: types.SimpleNamespace(
-            embedding=types.SimpleNamespace(text_source="summary_first", max_input_tokens=1000)
-        ),
-    )
-    monkeypatch.setattr(
-        embedding_utils,
-        "from_bytes",
-        lambda _raw: types.SimpleNamespace(best=lambda: None),
-    )
-
-    await embedding_utils.vectorize_file(
-        file_path="viking://user/default/resources/unknown.data",
-        summary_dict={"name": "unknown.data", "summary": summary},
-        parent_uri="viking://user/default/resources",
-        ctx=DummyReq(),
-    )
-
-    assert len(queue.items) == 1
-    msg = queue.items[0]
-    assert msg.message == summary
-    assert msg.context_data["content"] == summary
-    assert fs.read_file_bytes_calls == 1
-    assert fs.read_file_calls == 0
-
-
-@pytest.mark.asyncio
-async def test_vectorize_text_summary_first_reuses_single_file_read(monkeypatch):
+async def test_vectorize_text_summary_first_defers_full_content_read(monkeypatch):
     queue = DummyQueue()
     fs = DummyFS("# README\nraw text for bm25\n")
     monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
@@ -538,8 +668,8 @@ async def test_vectorize_text_summary_first_reuses_single_file_read(monkeypatch)
     assert len(queue.items) == 1
     msg = queue.items[0]
     assert msg.message == "summary for embedding"
-    assert msg.context_data["content"] == "# README\nraw text for bm25\n"
-    assert fs.read_file_calls == 1
+    assert "content" not in msg.context_data
+    assert fs.read_file_calls == 0
     assert fs.read_file_bytes_calls == 0
 
 
@@ -569,7 +699,8 @@ async def test_vectorize_image_file_enqueues_summary_and_image(monkeypatch):
     assert msg.message[0] == {"type": "text", "text": "a cat on a sofa"}
     assert msg.message[1]["type"] == "image_url"
     assert msg.message[1]["image_url"]["url"].startswith("data:image/png;base64,")
-    assert msg.context_data["content"] == "a cat on a sofa"
+    assert "content" not in msg.context_data
+    assert fs.read_file_bytes_calls == 1
 
 
 @pytest.mark.asyncio
@@ -597,8 +728,8 @@ async def test_vectorize_svg_file_uses_summary_and_indexes_markup(monkeypatch):
     assert len(queue.items) == 1
     msg = queue.items[0]
     assert msg.message == "queue processing diagram"
-    assert msg.context_data["content"] == svg_content
-    assert fs.read_file_calls == 1
+    assert "content" not in msg.context_data
+    assert fs.read_file_calls == 0
     assert fs.read_file_bytes_calls == 0
 
 
@@ -634,7 +765,7 @@ async def test_vectorize_image_file_falls_back_to_summary_when_image_unreadable(
 
 
 @pytest.mark.asyncio
-async def test_vectorize_text_file_reuses_summary_content_without_reread(monkeypatch):
+async def test_vectorize_text_file_ignores_summary_content_without_reread(monkeypatch):
     queue = DummyQueue()
     raw_content = "# README\nraw text already read during summary\n"
     fs = DummyFS("should not be read")
@@ -662,28 +793,22 @@ async def test_vectorize_text_file_reuses_summary_content_without_reread(monkeyp
     assert len(queue.items) == 1
     msg = queue.items[0]
     assert msg.message == "summary for embedding"
-    assert msg.context_data["content"] == raw_content
+    assert "content" not in msg.context_data
     assert fs.read_file_calls == 0
     assert fs.read_file_bytes_calls == 0
 
 
 @pytest.mark.asyncio
-async def test_vectorize_text_bytes_sniffs_non_utf8_content(monkeypatch):
+async def test_vectorize_content_only_reads_embedding_input(monkeypatch):
     queue = DummyQueue()
-    raw_content = (
-        "# 说明文档\n"
-        "目标: 验证已知 TEXT 文件的 bytes 内容也会进行编码探测。\n"
-        "说明: 这是一个中文 README 内容，用于测试 GB18030 编码识别。\n"
-        "命令: openviking benchmark run\n"
-    )
-    fs = DummyFS(raw_content.encode("gb18030"))
+    fs = DummyFS("README content".encode("gb18030"))
     monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
     monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: fs)
     monkeypatch.setattr(
         embedding_utils,
         "get_openviking_config",
         lambda: types.SimpleNamespace(
-            embedding=types.SimpleNamespace(text_source="summary_first", max_input_tokens=1000)
+            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
         ),
     )
 
@@ -696,18 +821,19 @@ async def test_vectorize_text_bytes_sniffs_non_utf8_content(monkeypatch):
 
     assert len(queue.items) == 1
     msg = queue.items[0]
-    assert msg.message == "summary for embedding"
-    assert msg.context_data["content"] == raw_content
+    assert msg.message == "README content"
+    assert "content" not in msg.context_data
     assert fs.read_file_calls == 1
     assert fs.read_file_bytes_calls == 0
 
 
 @pytest.mark.asyncio
-async def test_vectorize_file_preserves_content_until_embedder_input_guard(monkeypatch):
+async def test_vectorize_file_bounds_content_before_enqueue(monkeypatch):
     queue = DummyQueue()
     content = " ".join(f"token-{i}" for i in range(200))
+    fs = DummyFS(content)
     monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
-    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS(content))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: fs)
     monkeypatch.setattr(
         embedding_utils,
         "get_openviking_config",
@@ -715,12 +841,6 @@ async def test_vectorize_file_preserves_content_until_embedder_input_guard(monke
             embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=20)
         ),
     )
-    monkeypatch.setattr(
-        embedding_utils.EmbeddingMsgConverter,
-        "from_context",
-        lambda context: context,
-    )
-
     await embedding_utils.vectorize_file(
         file_path="viking://user/default/resources/test.md",
         summary_dict={"name": "test.md", "summary": "short summary"},
@@ -729,8 +849,9 @@ async def test_vectorize_file_preserves_content_until_embedder_input_guard(monke
     )
 
     assert len(queue.items) == 1
-    text = queue.items[0].get_vectorization_text()
-    assert text == content
+    assert queue.items[0].message != content
+    assert queue.items[0].message.endswith("...(truncated for embedding)")
+    assert fs.read_file_calls == 1
 
 
 @pytest.mark.asyncio
@@ -745,12 +866,6 @@ async def test_index_resource_skips_session_namespace(monkeypatch):
             embedding=types.SimpleNamespace(text_source="summary_first", max_input_tokens=1000)
         ),
     )
-    monkeypatch.setattr(
-        embedding_utils.EmbeddingMsgConverter,
-        "from_context",
-        lambda context: context,
-    )
-
     await embedding_utils.index_resource(
         uri="viking://session/default/sess_001/history/archive_001",
         ctx=DummyReq(),
@@ -786,10 +901,6 @@ async def test_vectorize_file_truncates_oversized_abstract(monkeypatch):
             embedding=types.SimpleNamespace(text_source="summary_first", max_input_tokens=1000)
         ),
     )
-    monkeypatch.setattr(
-        embedding_utils.EmbeddingMsgConverter, "from_context", lambda context: context
-    )
-
     oversized = "你" * 30_000  # 90,000 UTF-8 bytes
     await embedding_utils.vectorize_file(
         file_path="viking://user/default/resources/big.md",
@@ -799,9 +910,64 @@ async def test_vectorize_file_truncates_oversized_abstract(monkeypatch):
     )
 
     assert len(queue.items) == 1
-    abstract = queue.items[0].abstract
+    abstract = queue.items[0].context_data["abstract"]
     assert len(abstract.encode("utf-8")) <= embedding_utils._ABSTRACT_MAX_BYTES
     assert abstract.encode("utf-8").decode("utf-8") == abstract  # valid UTF-8
+
+
+@pytest.mark.asyncio
+async def test_empty_media_uses_filename_but_unknown_binary_skips(monkeypatch):
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(
+                text_source="content_only",
+                max_input_tokens=1000,
+            )
+        ),
+    )
+
+    queue = DummyQueue()
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_queue_manager",
+        lambda: DummyQueueManager(queue),
+    )
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_viking_fs",
+        lambda: DummyFS(b"media"),
+    )
+    await embedding_utils.vectorize_file(
+        file_path="viking://resources/media/meeting.mp3",
+        summary_dict={"name": "meeting.mp3", "summary": ""},
+        parent_uri="viking://resources/media",
+        ctx=DummyReq(),
+    )
+
+    assert queue.items[0].message == "meeting.mp3"
+    assert "content" not in queue.items[0].context_data
+
+    queue = DummyQueue()
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_queue_manager",
+        lambda: DummyQueueManager(queue),
+    )
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_viking_fs",
+        lambda: DummyFS(b"binary"),
+    )
+    await embedding_utils.vectorize_file(
+        file_path="viking://resources/media/archive.bin",
+        summary_dict={"name": "archive.bin", "summary": ""},
+        parent_uri="viking://resources/media",
+        ctx=DummyReq(),
+    )
+
+    assert queue.items == []
 
 
 @pytest.mark.asyncio
@@ -811,10 +977,6 @@ async def test_vectorize_directory_meta_truncates_oversized_abstract(monkeypatch
     queue = DummyQueue()
     monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
     monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("ignored"))
-    monkeypatch.setattr(
-        embedding_utils.EmbeddingMsgConverter, "from_context", lambda context: context
-    )
-
     oversized = "你" * 30_000  # 90,000 UTF-8 bytes
     await embedding_utils.vectorize_directory_meta(
         uri="viking://user/default/resources/dir",
@@ -825,6 +987,6 @@ async def test_vectorize_directory_meta_truncates_oversized_abstract(monkeypatch
 
     assert queue.items  # at least the abstract-level Context was enqueued
     for item in queue.items:
-        assert isinstance(item, Context)
-        assert len(item.abstract.encode("utf-8")) <= embedding_utils._ABSTRACT_MAX_BYTES
-        assert item.abstract.encode("utf-8").decode("utf-8") == item.abstract
+        abstract = item.context_data["abstract"]
+        assert len(abstract.encode("utf-8")) <= embedding_utils._ABSTRACT_MAX_BYTES
+        assert abstract.encode("utf-8").decode("utf-8") == abstract

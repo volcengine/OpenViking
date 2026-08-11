@@ -7,6 +7,7 @@ Ensures that _process_memory_directory() error paths propagate exceptions
 so that on_dequeue() always calls report_success() or report_error().
 """
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -198,11 +199,15 @@ async def test_memory_write_error_reports_error():
     fake_fs.ls = AsyncMock(return_value=[{"name": "file1.md", "isDir": False}])
     fake_fs.read_file = AsyncMock(return_value="some content")
     fake_fs.write_file = AsyncMock(side_effect=PermissionError("Permission denied"))
+    fake_fs._async_agfs.pathlock_acquire_exact_batch = AsyncMock(
+        return_value={"lease_ref": "test"}
+    )
+    fake_fs._async_agfs.pathlock_release = AsyncMock()
     fake_fs._uri_to_path = MagicMock(
         side_effect=lambda uri, ctx=None: f"/local/acc1/{uri.removeprefix('viking://')}"
     )
 
-    msg = _make_msg()
+    msg = _make_msg(skip_vectorization=True)
     data = _build_data(msg)
 
     success_called = False
@@ -229,6 +234,15 @@ async def test_memory_write_error_reports_error():
         patch(
             "openviking.storage.queuefs.semantic_processor.resolve_telemetry",
             return_value=None,
+        ),
+        patch(
+            "openviking.storage.queuefs.semantic_processor.get_openviking_config",
+            return_value=SimpleNamespace(
+                semantic=SimpleNamespace(
+                    overview_max_chars=100_000,
+                    abstract_max_chars=10_000,
+                )
+            ),
         ),
         patch.object(
             processor,

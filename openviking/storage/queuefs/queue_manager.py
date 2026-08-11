@@ -30,8 +30,10 @@ def init_queue_manager(
     timeout: int = 10,
     mount_point: str = "/queue",
     max_concurrent_embedding: int = 10,
-    max_concurrent_semantic: int = 64,
+    max_concurrent_semantic: int = 32,
     max_concurrent_external_parse: int = 4,
+    max_concurrent_add_resource: int = 4,
+    max_concurrent_session_commit: int = 4,
 ) -> "QueueManager":
     """Initialize QueueManager singleton.
 
@@ -41,6 +43,9 @@ def init_queue_manager(
         mount_point: Path where QueueFS is mounted.
         max_concurrent_embedding: Max concurrent embedding tasks.
         max_concurrent_semantic: Max concurrent semantic node work.
+        max_concurrent_external_parse: Max concurrent ExternalParse tasks.
+        max_concurrent_add_resource: Max concurrent AddResource tasks.
+        max_concurrent_session_commit: Max concurrent SessionCommit tasks.
     """
     global _instance
     _instance = QueueManager(
@@ -50,6 +55,8 @@ def init_queue_manager(
         max_concurrent_embedding=max_concurrent_embedding,
         max_concurrent_semantic=max_concurrent_semantic,
         max_concurrent_external_parse=max_concurrent_external_parse,
+        max_concurrent_add_resource=max_concurrent_add_resource,
+        max_concurrent_session_commit=max_concurrent_session_commit,
     )
     return _instance
 
@@ -74,6 +81,7 @@ class QueueManager:
     EXTERNAL_PARSE = "ExternalParse"
     ADD_RESOURCE = "AddResource"
     SESSION_COMMIT = "SessionCommit"
+    USER_DELETION = "UserDeletion"
 
     def __init__(
         self,
@@ -81,8 +89,10 @@ class QueueManager:
         timeout: int = 10,
         mount_point: str = "/queue",
         max_concurrent_embedding: int = 10,
-        max_concurrent_semantic: int = 64,
+        max_concurrent_semantic: int = 32,
         max_concurrent_external_parse: int = 4,
+        max_concurrent_add_resource: int = 4,
+        max_concurrent_session_commit: int = 4,
     ):
         """Initialize QueueManager."""
         self._agfs = agfs
@@ -91,6 +101,8 @@ class QueueManager:
         self._max_concurrent_embedding = max_concurrent_embedding
         self._max_concurrent_semantic = max_concurrent_semantic
         self._max_concurrent_external_parse = max_concurrent_external_parse
+        self._max_concurrent_add_resource = max_concurrent_add_resource
+        self._max_concurrent_session_commit = max_concurrent_session_commit
         self._queues: Dict[str, NamedQueue] = {}
         self._started = False
         self._queue_threads: Dict[str, threading.Thread] = {}
@@ -166,12 +178,7 @@ class QueueManager:
             if thread.is_alive():
                 return
 
-        if queue.name == self.EMBEDDING:
-            max_concurrent = self._max_concurrent_embedding
-        elif queue.name in {self.EXTERNAL_PARSE, self.SESSION_COMMIT}:
-            max_concurrent = self._max_concurrent_external_parse
-        else:
-            max_concurrent = self._max_concurrent_semantic
+        max_concurrent = self._max_concurrent_for_queue(queue.name)
         stop_event = threading.Event()
         self._queue_stop_events[queue.name] = stop_event
         thread = threading.Thread(
@@ -181,6 +188,20 @@ class QueueManager:
         )
         self._queue_threads[queue.name] = thread
         thread.start()
+
+    def _max_concurrent_for_queue(self, queue_name: str) -> int:
+        """Return the worker concurrency limit for a named queue."""
+        if queue_name == self.USER_DELETION:
+            return 1
+        if queue_name == self.EMBEDDING:
+            return self._max_concurrent_embedding
+        if queue_name == self.EXTERNAL_PARSE:
+            return self._max_concurrent_external_parse
+        if queue_name == self.ADD_RESOURCE:
+            return self._max_concurrent_add_resource
+        if queue_name == self.SESSION_COMMIT:
+            return self._max_concurrent_session_commit
+        return self._max_concurrent_semantic
 
     def _queue_worker_loop(
         self, queue: NamedQueue, stop_event: threading.Event, max_concurrent: int = 1
@@ -204,9 +225,7 @@ class QueueManager:
                         if queue.has_dequeue_handler() and queue_size > 0:
                             data = loop.run_until_complete(queue.dequeue())
                             if data is not None:
-                                logger.debug(
-                                    f"[QueueManager] Dequeued message from {queue.name}: {data}"
-                                )
+                                logger.debug("[QueueManager] Dequeued message from %s", queue.name)
                         else:
                             stop_event.wait(self._poll_interval)
                     except Exception as e:
@@ -351,9 +370,12 @@ class QueueManager:
                 )
             if self._started:
                 self._start_queue_worker(self._queues[name])
-        elif self._started:
-            # Ensure existing queue has a worker running
-            self._start_queue_worker(self._queues[name])
+        else:
+            if dequeue_handler is not None:
+                self._queues[name].set_dequeue_handler(dequeue_handler)
+            if self._started:
+                # Ensure existing queue has a worker running
+                self._start_queue_worker(self._queues[name])
         return self._queues[name]
 
     # ========== Compatibility convenience methods ==========

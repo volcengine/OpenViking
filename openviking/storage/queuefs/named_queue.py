@@ -143,11 +143,16 @@ class NamedQueue:
 
         # Inject callbacks to handler
         if self._dequeue_handler:
-            self._dequeue_handler.set_callbacks(
-                on_success=self._on_process_success,
-                on_requeue=self._on_process_requeue,
-                on_error=self._on_process_error,
-            )
+            self.set_dequeue_handler(self._dequeue_handler)
+
+    def set_dequeue_handler(self, handler: DequeueHandlerBase) -> None:
+        """Bind the consumer after its runtime dependencies are initialized."""
+        self._dequeue_handler = handler
+        handler.set_callbacks(
+            on_success=self._on_process_success,
+            on_requeue=self._on_process_requeue,
+            on_error=self._on_process_error,
+        )
 
     def _on_dequeue_start(self) -> None:
         """Called on dequeue."""

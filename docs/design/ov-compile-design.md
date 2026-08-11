@@ -278,6 +278,8 @@ VikingBot 从 canonical Skill URI 拆出 `skill_name` 和 `target_uri`，调用�
 
 该层只负责远程 bundle 的快照和物化，不实现新的 frontmatter parser、Skill 目录规范或 requirements 协议。OpenViking 派生文件和 Skill source metadata 不进入快照；加载过程限制文件数量、单文件大小和总大小，并拒绝逃逸 Skill root 的相对路径。task workspace 只包含本次选择的 Skill，selected Skill 正文直接加入 structured system prompt。任务结束后先调用 `SandboxManager.cleanup_session()` 停止 backend，再删除 compile 专属 workspace；现有 `cleanup_session()` 本身不会删除 direct-backend 目录，不能把它当成文件清理。
 
+Skill package 内的文件使用 `read_file` 读取 task workspace 路径 `skills/<skill-name>/...`；`openviking_*` 工具只读取任务范围内的 `viking://` URI。
+
 Skill 用于描述整理方法，例如：
 
 - 应关注哪些信息；

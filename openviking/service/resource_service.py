@@ -19,6 +19,7 @@ from uuid import uuid4
 
 from openviking.core.content_targets import ContentTargetSpec
 from openviking.core.uri_validation import validate_optional_content_target_uri
+from openviking.parse.mode import ParseMode, normalize_parse_mode
 from openviking.parse.parsers.constants import MPEG_TS_EXTENSION_ALIAS
 from openviking.resource.feishu_watch_auth import (
     FEISHU_ACCESS_TOKEN_ARG,
@@ -26,6 +27,7 @@ from openviking.resource.feishu_watch_auth import (
     create_feishu_auth_state,
     load_feishu_app_credentials,
 )
+from openviking.resource.git_watch_auth import create_git_http_auth_state
 from openviking.resource.processing_mode import (
     DEFAULT_PROCESSING_MODE,
     ProcessingMode,
@@ -49,6 +51,7 @@ from openviking.telemetry.resource_summary import (
     build_queue_status_payload,
 )
 from openviking.utils import is_git_repo_url, parse_code_hosting_url
+from openviking.utils.git_auth import parse_git_http_auth_config
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.media_processor import _smart_stem
 from openviking.utils.network_guard import ensure_public_remote_target
@@ -78,6 +81,7 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "path",
         "ctx",
         "to",
+        "to_is_directory",
         "parent",
         "reason",
         "instruction",
@@ -121,6 +125,7 @@ _INTERNAL_INGESTION_FIELDS = frozenset(
         "route_source",
         "skip_watch_management",
         "stage_callback",
+        "to_is_directory",
         "watch_auth_state",
         "understanding_response_id",
         "parser_backend",
@@ -140,6 +145,7 @@ class _ResourceSourceInfo:
 class _NormalizedAddResourceArgs:
     processor_kwargs: Dict[str, Any]
     watch_auth_state: Optional[Dict[str, Any]] = None
+    parse_mode: ParseMode = ParseMode.DEFAULT
 
 
 class ResourceService:
@@ -188,6 +194,12 @@ class ResourceService:
     def _sanitize_watch_processor_kwargs(self, processor_kwargs: Dict[str, Any]) -> Dict[str, Any]:
         sanitized: Dict[str, Any] = {}
         for key, value in processor_kwargs.items():
+            if key in {
+                "auth_config",
+                FEISHU_ACCESS_TOKEN_ARG,
+                FEISHU_REFRESH_TOKEN_ARG,
+            }:
+                continue
             try:
                 json.dumps(value, ensure_ascii=False)
             except TypeError:
@@ -236,6 +248,7 @@ class ResourceService:
         manage_watch: bool,
         watch_interval: float,
         target: ContentTargetSpec,
+        to_is_directory: bool,
         root_uri: str,
         path: str,
         reason: str,
@@ -282,11 +295,10 @@ class ResourceService:
                     )
                 try:
                     sanitized = self._sanitize_watch_processor_kwargs(processor_kwargs)
-                    if watch_auth_state is not None:
-                        sanitized.pop(FEISHU_ACCESS_TOKEN_ARG, None)
                     await self._handle_watch_task_creation(
                         path=path,
                         to_uri=watch_to,
+                        to_is_directory=to_is_directory,
                         parent_uri=parent_uri,
                         reason=reason,
                         instruction=instruction,
@@ -332,6 +344,11 @@ class ResourceService:
             )
 
         normalized = dict(args)
+        raw_parse_mode = normalized.pop("parse_mode", ParseMode.DEFAULT)
+        try:
+            parse_mode = normalize_parse_mode(raw_parse_mode)
+        except InvalidArgumentError as exc:
+            raise InvalidArgumentError(str(exc).replace("parse_mode", "args.parse_mode")) from exc
         token = normalized.get(FEISHU_ACCESS_TOKEN_ARG)
         refresh_token = normalized.pop(FEISHU_REFRESH_TOKEN_ARG, None)
         watch_auth_state = None
@@ -358,7 +375,7 @@ class ResourceService:
                 "args.feishu_refresh_token requires args.feishu_access_token."
             )
 
-        return _NormalizedAddResourceArgs(normalized, watch_auth_state)
+        return _NormalizedAddResourceArgs(normalized, watch_auth_state, parse_mode)
 
     def _ensure_feishu_credentials_for_watch(self) -> None:
         try:
@@ -510,6 +527,7 @@ class ResourceService:
                 build_index=msg.build_index,
                 summarize=msg.summarize,
                 processing_mode=msg.processing_mode,
+                parse_mode=msg.parse_mode,
                 watch_interval=msg.watch_interval,
                 manage_watch=not msg.skip_watch_management,
                 tags=msg.tags,
@@ -577,6 +595,7 @@ class ResourceService:
         build_index: bool = True,
         summarize: bool = False,
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
+        parse_mode: ParseMode | str | None = None,
         watch_interval: float = 0,
         manage_watch: bool = True,
         tags: Optional[List[str]] = None,
@@ -591,7 +610,18 @@ class ResourceService:
         processing_mode = normalize_processing_mode(processing_mode)
         self._validate_add_resource_tag_policy(tags=tags, tag_mode=tag_mode)
         normalized_args = self._normalize_add_resource_args(args, watch_interval=watch_interval)
+        mode = (
+            normalize_parse_mode(parse_mode)
+            if parse_mode is not None
+            else normalized_args.parse_mode
+        )
         kwargs.update(normalized_args.processor_kwargs)
+        if "auth_config" in kwargs:
+            raise InvalidArgumentError(
+                "args.auth_config cannot be used with enqueue_git_add_resource because "
+                "native Git credentials must be consumed before durable queue submission. "
+                "Call add_resource instead."
+            )
         from openviking.connector.routing import credential_arg_names
 
         credential_args = credential_arg_names("git", kwargs)
@@ -659,6 +689,7 @@ class ResourceService:
                 build_index=build_index,
                 summarize=summarize,
                 processing_mode=processing_mode,
+                parse_mode=mode.value,
                 watch_interval=watch_interval,
                 skip_watch_management=not manage_watch,
                 tags=tags,
@@ -837,6 +868,7 @@ class ResourceService:
         path: str,
         ctx: RequestContext,
         to: Optional[str] = None,
+        to_is_directory: Optional[bool] = None,
         parent: Optional[str] = None,
         reason: str = "",
         instruction: str = "",
@@ -854,6 +886,7 @@ class ResourceService:
             path=path,
             ctx=ctx,
             to=to,
+            to_is_directory=to_is_directory,
             parent=parent,
             reason=reason,
             instruction=instruction,
@@ -876,6 +909,7 @@ class ResourceService:
         ctx: RequestContext,
         add_type: Optional[str] = None,
         to: Optional[str] = None,
+        to_is_directory: Optional[bool] = None,
         parent: Optional[str] = None,
         reason: str = "",
         instruction: str = "",
@@ -888,6 +922,7 @@ class ResourceService:
         manage_watch: bool = True,
         tags: Optional[List[str]] = None,
         tag_mode: str = "replace",
+        parse_mode: ParseMode | str | None = None,
         allow_local_path_resolution: bool = True,
         enforce_public_remote_targets: bool = False,
         args: Optional[Dict[str, Any]] = None,
@@ -921,9 +956,9 @@ class ResourceService:
                 - watch_interval < 0: Same as watch_interval = 0, cancels any existing watch task.
                 Default is 0 (no monitoring).
 
-                Note: If the target URI already has an active watch task, a ConflictError will be
-                raised. You must first cancel the existing watch (set watch_interval <= 0) before
-                creating a new one.
+                Note: Re-adding the same source to the same target updates its active watch
+                task in place. A different source targeting an active watch raises
+                ConflictError; cancel that watch first with watch_interval <= 0.
             enforce_public_remote_targets: When True, reject non-public remote hosts and
                 validate each outbound HTTP request URL during fetch.
             args: Parser/accessor-specific options forwarded to the processing chain.
@@ -933,14 +968,20 @@ class ResourceService:
             Processing result containing 'root_uri' and other metadata
 
         Raises:
-            ConflictError: If the target URI already has an active watch task
+            ConflictError: If a different source targets an active watch task
             InvalidArgumentError: If the URI scope is not 'resources'
         """
         self._ensure_initialized()
         processing_mode = normalize_processing_mode(processing_mode)
         self._validate_add_resource_tag_policy(tags=tags, tag_mode=tag_mode)
         normalized_args = self._normalize_add_resource_args(args, watch_interval=watch_interval)
+        mode = (
+            normalize_parse_mode(parse_mode)
+            if parse_mode is not None
+            else normalized_args.parse_mode
+        )
         kwargs.update(normalized_args.processor_kwargs)
+        git_repo_source = is_git_repo_url(path)
         if watch_interval > 0 and kwargs.get("temp_file_id"):
             # Fail fast, before any ingestion: an uploaded source is a one-time
             # snapshot, so a watch on it can never observe the live source (see the
@@ -976,8 +1017,9 @@ class ResourceService:
             build_index=build_index,
             summarize=summarize,
             processing_mode=processing_mode,
+            parse_mode=mode,
             watch_interval=watch_interval,
-            connector_args=args or {},
+            connector_args=normalized_args.processor_kwargs,
             kwargs=kwargs,
         ):
             return await self._connector.submit(
@@ -986,37 +1028,85 @@ class ResourceService:
                 declared_add_type=add_type,
                 to=to,
                 reason=reason,
-                connector_args=args or {},
+                connector_args=normalized_args.processor_kwargs,
                 tags=tags,
                 tag_mode=tag_mode,
                 **kwargs,
             )
 
-        if is_git_repo_url(path):
-            result = await self.enqueue_git_add_resource(
-                path=path,
-                ctx=ctx,
-                to=to,
-                parent=parent,
-                reason=reason,
-                instruction=instruction,
-                timeout=timeout,
-                build_index=build_index,
-                summarize=summarize,
-                processing_mode=processing_mode,
-                watch_interval=watch_interval,
-                manage_watch=manage_watch,
-                tags=tags,
-                tag_mode=tag_mode,
-                allow_local_path_resolution=allow_local_path_resolution,
-                enforce_public_remote_targets=enforce_public_remote_targets,
-                **kwargs,
-            )
+        if git_repo_source:
+            if "auth_config" in kwargs:
+                git_auth = parse_git_http_auth_config(
+                    kwargs["auth_config"],
+                    path,
+                )
+                if git_auth is None:
+                    raise InvalidArgumentError("args.auth_config must be an object.")
+
+                watch_auth_state = normalized_args.watch_auth_state
+                if watch_interval > 0:
+                    watch_auth_state = create_git_http_auth_state(git_auth, path)
+
+                # The native Git queue is durable, so credentials must be consumed
+                # before crossing that boundary. Fetch and parse in this request;
+                # _execute_resource_ingestion only queues the credential-free
+                # prepared post-processing payload when defer_post_processing=True.
+                request_local_kwargs = dict(kwargs)
+                request_local_kwargs["auth_config"] = {
+                    "username": git_auth.username,
+                    "token": git_auth.token,
+                }
+                result = await self._execute_resource_ingestion(
+                    path=path,
+                    ctx=ctx,
+                    to=to,
+                    to_is_directory=to_is_directory,
+                    parent=parent,
+                    reason=reason,
+                    instruction=instruction,
+                    defer_post_processing=True,
+                    timeout=timeout,
+                    build_index=build_index,
+                    summarize=summarize,
+                    processing_mode=processing_mode,
+                    parse_mode=mode,
+                    watch_interval=watch_interval,
+                    manage_watch=manage_watch,
+                    tags=tags,
+                    tag_mode=tag_mode,
+                    allow_local_path_resolution=allow_local_path_resolution,
+                    enforce_public_remote_targets=enforce_public_remote_targets,
+                    watch_auth_state=watch_auth_state,
+                    **request_local_kwargs,
+                )
+            else:
+                result = await self.enqueue_git_add_resource(
+                    path=path,
+                    ctx=ctx,
+                    to=to,
+                    to_is_directory=to_is_directory,
+                    parent=parent,
+                    reason=reason,
+                    instruction=instruction,
+                    timeout=timeout,
+                    build_index=build_index,
+                    summarize=summarize,
+                    processing_mode=processing_mode,
+                    parse_mode=mode,
+                    watch_interval=watch_interval,
+                    manage_watch=manage_watch,
+                    tags=tags,
+                    tag_mode=tag_mode,
+                    allow_local_path_resolution=allow_local_path_resolution,
+                    enforce_public_remote_targets=enforce_public_remote_targets,
+                    **kwargs,
+                )
         else:
             result = await self._execute_resource_ingestion(
                 path=path,
                 ctx=ctx,
                 to=to,
+                to_is_directory=to_is_directory,
                 parent=parent,
                 reason=reason,
                 instruction=instruction,
@@ -1025,6 +1115,7 @@ class ResourceService:
                 build_index=build_index,
                 summarize=summarize,
                 processing_mode=processing_mode,
+                parse_mode=mode,
                 watch_interval=watch_interval,
                 manage_watch=manage_watch,
                 tags=tags,
@@ -1037,6 +1128,8 @@ class ResourceService:
             )
         get_current_telemetry().set("resource.flags.wait", wait)
         if not wait:
+            return result
+        if result.get("status") == "error":
             return result
         from openviking.service.task_tracker import TaskStatus, get_task_tracker
 
@@ -1068,6 +1161,7 @@ class ResourceService:
         ctx: RequestContext,
         defer_post_processing: bool,
         to: Optional[str] = None,
+        to_is_directory: Optional[bool] = None,
         parent: Optional[str] = None,
         reason: str = "",
         instruction: str = "",
@@ -1075,6 +1169,7 @@ class ResourceService:
         build_index: bool = True,
         summarize: bool = False,
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
+        parse_mode: ParseMode | str = ParseMode.DEFAULT,
         watch_interval: float = 0,
         manage_watch: bool = True,
         tags: Optional[List[str]] = None,
@@ -1089,6 +1184,9 @@ class ResourceService:
     ) -> Dict[str, Any]:
         """Execute an already-routed resource ingestion."""
         self._ensure_initialized()
+        mode = normalize_parse_mode(parse_mode)
+        if mode is ParseMode.NO_SPLIT:
+            kwargs["parse_mode"] = mode.value
         request_start = time.perf_counter()
         telemetry = get_current_telemetry()
         telemetry_id = telemetry.telemetry_id
@@ -1115,6 +1213,9 @@ class ResourceService:
                 parent=parent,
                 create_parent=bool(kwargs.get("create_parent", False)),
             )
+            if to_is_directory is None:
+                to_is_directory = bool(target.to)
+            watch_to_is_directory = to_is_directory
             if enforce_public_remote_targets and is_remote_resource_source(path):
                 path = require_remote_resource_source(path)
                 kwargs.setdefault("request_validator", ensure_public_remote_target)
@@ -1122,7 +1223,8 @@ class ResourceService:
                 kwargs["resource_lock"] = resource_lock
 
             async_understanding_candidate = (
-                defer_post_processing
+                mode is ParseMode.DEFAULT
+                and defer_post_processing
                 and not is_git_repo_url(path)
                 and not allow_local_path_resolution
                 and self._resource_processor is not None
@@ -1303,6 +1405,7 @@ class ResourceService:
                     manage_watch=manage_watch,
                     watch_interval=watch_interval,
                     target=target,
+                    to_is_directory=watch_to_is_directory,
                     root_uri=root_uri,
                     path=path,
                     reason=reason,
@@ -1330,6 +1433,7 @@ class ResourceService:
                 scope="resources",
                 to=target.to,
                 parent=target.parent,
+                to_is_directory=to_is_directory,
                 build_index=build_index,
                 summarize=summarize,
                 processing_mode=processing_mode,
@@ -1346,6 +1450,12 @@ class ResourceService:
                 return result
             prepared = result.pop("_post_process", None)
             deferred_lock = result.pop("_resource_lock", None)
+            if (
+                not target.to
+                and isinstance(prepared, dict)
+                and isinstance(prepared.get("root_is_file"), bool)
+            ):
+                watch_to_is_directory = not prepared["root_is_file"]
             if defer_post_processing:
                 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 
@@ -1402,6 +1512,7 @@ class ResourceService:
                 manage_watch=manage_watch,
                 watch_interval=watch_interval,
                 target=target,
+                to_is_directory=watch_to_is_directory,
                 root_uri=str(result.get("root_uri") or ""),
                 path=path,
                 reason=reason,
@@ -1517,6 +1628,7 @@ class ResourceService:
         self,
         path: str,
         to_uri: str,
+        to_is_directory: bool,
         parent_uri: Optional[str],
         reason: str,
         instruction: str,
@@ -1540,7 +1652,7 @@ class ResourceService:
             ctx: Request context with user identity
 
         Raises:
-            ConflictError: If target URI is already used by another active task
+            ConflictError: If target URI is actively watched from a different source
         """
         watch_manager = self._get_watch_manager()
         if not watch_manager:
@@ -1553,12 +1665,13 @@ class ResourceService:
             role=str(ctx.role),
         )
         if existing_task:
-            if existing_task.is_active:
+            if existing_task.is_active and existing_task.path != path:
                 raise ConflictError(
                     f"Target URI '{to_uri}' is already being monitored by task {existing_task.task_id}. "
                     f"Please cancel the existing task first.",
                     resource=to_uri,
                 )
+            was_active = existing_task.is_active
             await watch_manager.update_task(
                 task_id=existing_task.task_id,
                 account_id=ctx.account_id,
@@ -1566,6 +1679,7 @@ class ResourceService:
                 role=str(ctx.role),
                 path=path,
                 to_uri=to_uri,
+                to_is_directory=to_is_directory,
                 parent_uri=parent_uri,
                 reason=reason,
                 instruction=instruction,
@@ -1578,7 +1692,8 @@ class ResourceService:
                 is_active=True,
             )
             logger.info(
-                f"[ResourceService] Reactivated and updated watch task {existing_task.task_id} for {to_uri}"
+                f"[ResourceService] {'Updated active' if was_active else 'Reactivated and updated'} "
+                f"watch task {existing_task.task_id} for {to_uri}"
             )
         else:
             task = await watch_manager.create_task(
@@ -1587,6 +1702,7 @@ class ResourceService:
                 user_id=ctx.user.user_id,
                 original_role=str(ctx.role),
                 to_uri=to_uri,
+                to_is_directory=to_is_directory,
                 parent_uri=parent_uri,
                 reason=reason,
                 instruction=instruction,

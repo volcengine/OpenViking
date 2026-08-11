@@ -200,7 +200,8 @@ const apiReferenceSidebar = {
           ['03-filesystem.md', 'File System'],
           ['04-skills.md', 'Skills'],
           ['05-sessions.md', 'Sessions'],
-          ['16-memory.md', 'Memory']
+          ['16-memory.md', 'Memory'],
+          ['19-agent-evolution.md', 'Agent Evolution']
         ]
       },
       {
@@ -259,7 +260,8 @@ const apiReferenceSidebar = {
           ['03-filesystem.md', '文件系统'],
           ['04-skills.md', '技能'],
           ['05-sessions.md', '会话'],
-          ['16-memory.md', '记忆']
+          ['16-memory.md', '记忆'],
+          ['19-agent-evolution.md', 'Agent 进化']
         ]
       },
       {

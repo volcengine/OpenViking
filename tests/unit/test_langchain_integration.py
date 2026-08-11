@@ -7,13 +7,12 @@ import pytest
 
 pytest.importorskip("langchain_core")
 pytest.importorskip("langgraph")
+pytest.importorskip("langchain_openviking")
 
+import langchain_openviking.client as client_helpers
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableLambda
-from langgraph.store.base import PutOp
-
-import openviking.integrations.langchain.client as client_helpers
-from openviking.integrations.langchain import (
+from langchain_openviking import (
     InMemoryOpenVikingClient,
     OpenVikingChatMessageHistory,
     OpenVikingCommitPolicy,
@@ -24,19 +23,20 @@ from openviking.integrations.langchain import (
     create_openviking_tools,
     with_openviking_context,
 )
-from openviking.integrations.langchain.client import (
+from langchain_openviking.client import (
     OpenVikingConnection,
     apply_commit_policy,
     call_openviking,
     ensure_client,
 )
-from openviking.integrations.langchain.history import (
+from langchain_openviking.history import (
     langchain_message_to_openviking,
     openviking_message_to_langchain,
 )
-from openviking.integrations.langchain.middleware import _message_signature
-from openviking.integrations.langchain.tools import _archive_grep_pattern, _resolve_resource_source
-from openviking_cli.exceptions import InvalidArgumentError
+from langchain_openviking.middleware import _message_signature
+from langchain_openviking.tools import _archive_grep_pattern, _resolve_resource_source
+from langgraph.store.base import PutOp
+from openviking_sdk.errors import InvalidArgumentError
 
 
 def test_langchain_client_exposes_apply_commit_policy_without_legacy_alias():
@@ -59,6 +59,16 @@ def _schema_enums(schema: dict[str, Any]) -> set[str]:
         for child in schema.get(child_key, []):
             values.update(_schema_enums(child))
     return values
+
+
+def _schema_has_description(schema: dict[str, Any]) -> bool:
+    if schema.get("description"):
+        return True
+    return any(
+        _schema_has_description(child)
+        for child_key in ("anyOf", "oneOf", "allOf")
+        for child in schema.get(child_key, [])
+    )
 
 
 def test_retriever_returns_langchain_documents():
@@ -352,7 +362,9 @@ def test_openviking_tool_schemas_describe_model_visible_arguments():
     for tool in tools:
         schema = _tool_schema(tool)
         for name, property_schema in schema.get("properties", {}).items():
-            assert property_schema.get("description"), f"{tool.name}.{name} lacks a description"
+            assert _schema_has_description(property_schema), (
+                f"{tool.name}.{name} lacks a description"
+            )
 
 
 def test_openviking_health_tool_returns_safe_summary():
@@ -425,7 +437,7 @@ def test_ensure_client_defaults_to_http_client(monkeypatch):
         def initialize(self):
             self._initialized = True
 
-    import openviking.client as client_module
+    import openviking_sdk as client_module
 
     monkeypatch.setattr(client_module, "SyncHTTPClient", FakeHTTPClient)
 
@@ -441,30 +453,6 @@ def test_ensure_client_defaults_to_http_client(monkeypatch):
     assert created["api_key"] == "test-key"
     assert created["user_id"] == "test-user"
     assert created["url"] is None
-
-
-def test_ensure_client_keeps_local_path_clients_direct(monkeypatch, tmp_path):
-    created = {}
-
-    class FakeLocalClient:
-        def __init__(self, path, actor_peer_id=None):
-            created["path"] = path
-            created["actor_peer_id"] = actor_peer_id
-            self._initialized = False
-
-        def initialize(self):
-            self._initialized = True
-
-    import openviking.sync_client as sync_client_module
-
-    monkeypatch.setattr(sync_client_module, "SyncOpenViking", FakeLocalClient)
-
-    client = ensure_client(OpenVikingConnection(path=str(tmp_path)))
-
-    assert isinstance(client, FakeLocalClient)
-    assert client._initialized is True
-    assert created["path"] == str(tmp_path)
-    assert created["actor_peer_id"] is None
 
 
 def test_openviking_client_retries_recoverable_read_with_fresh_client(monkeypatch):
@@ -498,7 +486,7 @@ def test_openviking_client_retries_recoverable_read_with_fresh_client(monkeypatc
                 "skills": [],
             }
 
-    import openviking.client as client_module
+    import openviking_sdk as client_module
 
     monkeypatch.setattr(client_module, "SyncHTTPClient", FlakyHTTPClient)
 
@@ -522,7 +510,7 @@ def test_openviking_client_handle_filters_kwargs_for_direct_calls(monkeypatch):
         def find(self, query):
             return {"query": query}
 
-    import openviking.client as client_module
+    import openviking_sdk as client_module
 
     monkeypatch.setattr(client_module, "SyncHTTPClient", FakeHTTPClient)
 
@@ -550,7 +538,7 @@ def test_openviking_client_evicts_but_does_not_retry_mutating_call(monkeypatch):
         def add_message(self, **_kwargs):
             raise ConnectionError("OpenViking connection dropped during write")
 
-    import openviking.client as client_module
+    import openviking_sdk as client_module
 
     monkeypatch.setattr(client_module, "SyncHTTPClient", FlakyHTTPClient)
 
@@ -601,7 +589,7 @@ def test_retriever_recovers_from_stale_cached_remote_client(monkeypatch):
                 "skills": [],
             }
 
-    import openviking.client as client_module
+    import openviking_sdk as client_module
 
     monkeypatch.setattr(client_module, "SyncHTTPClient", FlakyHTTPClient)
 

@@ -31,6 +31,7 @@ from openviking.server.profile_middleware import create_profile_http_middleware
 from openviking.server.request_id import REQUEST_ID_HEADER, RequestIdMiddleware
 from openviking.server.routers import (
     admin_router,
+    agent_evolution_router,
     bot_router,
     console_router,
     content_router,
@@ -89,6 +90,7 @@ def create_worker_app() -> FastAPI:
         config.bot_api_url = bot_api_url
     return create_app(config, config_path=config_path)
 
+
 async def _initialize_auth_plugin(
     app: FastAPI,
     service: OpenVikingService,
@@ -137,6 +139,15 @@ async def _initialize_runtime_state(
     """Initialize service and auth dependencies before traffic is accepted."""
     await service.initialize()
     await _initialize_auth_plugin(app, service, config)
+    from openviking.service.user_deletion import setup_user_deletion
+
+    app.state.user_deletion_service = await setup_user_deletion(
+        service=service,
+        manager=app.state.api_key_manager,
+        shared_upload_prefix=config.temp_upload.shared_prefix,
+        oauth_store=getattr(app.state, "oauth_store", None),
+        usage_audit_runtime=getattr(app.state, "usage_audit_runtime", None),
+    )
     logger.info("OpenVikingService initialization complete")
 
 
@@ -344,6 +355,12 @@ def create_app(
         await shutdown_usage_audit(app=app)
         await shutdown_metrics_async(app=app)
         task_tracker.stop_cleanup_loop()
+        auth_plugin_state = getattr(app.state, "auth_plugin", None)
+        if auth_plugin_state is not None:
+            try:
+                await auth_plugin_state.shutdown()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Auth plugin shutdown failed: %s", e)
         if oauth_gc_task is not None:
             oauth_gc_task.cancel()
             try:
@@ -376,6 +393,7 @@ def create_app(
 
     app.state.config = config
     app.state.api_key_manager = None
+    app.state.user_deletion_service = None
     set_server_config(config)
 
     # Body dump middleware must be registered BEFORE observability so it ends up
@@ -572,6 +590,7 @@ def create_app(
     # Register routers
     app.include_router(system_router)
     app.include_router(admin_router)
+    app.include_router(agent_evolution_router)
     app.include_router(resources_router)
     app.include_router(filesystem_router)
     app.include_router(content_router)

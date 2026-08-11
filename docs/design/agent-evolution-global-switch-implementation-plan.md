@@ -4,7 +4,7 @@
 
 **Goal:** Replace the per-user Agent Evolution setting with one deployment-level switch shared by every account and user in an OpenViking server instance.
 
-**Architecture:** `ServerConfig.agent_evolution.enabled` is the only active Agent Evolution setting for HTTP server deployments. `SessionService` snapshots it into each `Session`; commit Phase 1 stores the effective value in archive metadata and Phase 2 consumes that snapshot. Embedded/local SDK clients preserve the historical enabled behavior because they do not load `ServerConfig`. The former user field remains parse-only for compatibility, while user-facing management APIs, clients, and CLI commands are removed.
+**Architecture:** `ServerConfig.agent_evolution.enabled` is the only active Agent Evolution setting for HTTP server deployments. `SessionService` snapshots it into each `Session`; commit Phase 1 stores the effective value in archive metadata and Phase 2 consumes that snapshot. Directly constructed services retain the enabled default because they do not load `ServerConfig`. The former user field remains parse-only for compatibility, while user-facing management APIs, clients, and CLI commands are removed.
 
 **Tech Stack:** Python 3.10+, Pydantic v2, FastAPI, pytest, Rust/clap CLI.
 
@@ -168,7 +168,7 @@ Expected: failures because sessions still resolve per-user settings.
 In `SessionService`, replace `_user_config_defaults` with:
 
 ```python
-# Embedded/local compatibility default. HTTP app setup overrides it from
+# Direct-service default. HTTP app setup overrides it from
 # ServerConfig, whose default is false.
 self._agent_evolution_enabled = True
 
@@ -234,17 +234,12 @@ git commit -m "feat(agent-evolution): apply global commit switch"
 **Files:**
 - Modify: `openviking/server/routers/admin.py`
 - Modify: `openviking/server/routers/user_settings.py`
-- Modify: `openviking/async_client.py`
-- Modify: `openviking/sync_client.py`
-- Modify: `openviking/client/local.py`
-- Modify: `openviking_cli/client/base.py`
 - Modify: `sdk/python/openviking_sdk/client.py`
 - Modify: `crates/ov_cli/src/commands/mod.rs`
 - Delete: `crates/ov_cli/src/commands/user_settings.rs`
 - Modify: `crates/ov_cli/src/main.rs`
 - Modify: `crates/ov_cli/src/help_ui.rs`
 - Delete: `tests/client/test_user_memory_settings.py`
-- Modify: `tests/client/test_base_client_compatibility.py`
 - Modify: `sdk/python/tests/test_async_client_behaviors.py`
 - Modify: `tests/server/test_admin_api.py`
 
@@ -267,7 +262,6 @@ Run:
 ```bash
 uv run pytest -q --no-cov --tb=short \
   tests/server/test_agent_evolution_global_setting.py \
-  tests/client/test_base_client_compatibility.py \
   sdk/python/tests/test_async_client_behaviors.py
 ```
 
@@ -276,8 +270,8 @@ Expected: the endpoint and client methods still exist.
 - [ ] **Step 3: Remove the Python and HTTP surfaces**
 
 Delete the memory request model and `/user-settings/memory` routes. Remove
-`get_memory_settings()` and `patch_memory_settings()` from embedded, async,
-sync, CLI-base, and SDK clients. Remove Agent Evolution handling from account
+`get_memory_settings()` and `patch_memory_settings()` from HTTP and SDK
+clients. Remove Agent Evolution handling from account
 and user creation; deprecated user input remains accepted by `UserConfig` but
 is ignored.
 

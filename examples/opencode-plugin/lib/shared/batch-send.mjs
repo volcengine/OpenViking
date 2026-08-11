@@ -1,12 +1,11 @@
 // GENERATED FROM examples/memory-plugin-shared/lib. DO NOT EDIT.
 import { enqueue } from "./pending-queue.mjs";
+import { isRetryableFailure } from "./retryable.mjs";
 
 export const BATCH_LIMIT = 100;
 
 export function isRetryableSendFailure(res) {
-  if (!res || res.ok) return false;
-  const status = Number(res.status || 0);
-  return !status || status === 408 || status === 429 || status >= 500;
+  return isRetryableFailure(res);
 }
 
 function makeResult() {

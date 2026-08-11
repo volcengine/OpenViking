@@ -1,4 +1,4 @@
-Add persistent, cross-session memory to [Codex](https://developers.openai.com/codex). Install it once, and the plugin will automatically recall memories before every user prompt, capture updates after each turn, and commit changes before compaction. It also connects Codex to OpenViking's `/mcp` endpoint, allowing the model to directly invoke tools such as find, search, recall, and remember.
+Add persistent, cross-session memory to [Codex](https://developers.openai.com/codex). Install it once, and the plugin will load your OpenViking profile and memory index at session start, recall relevant memories before every user prompt, capture updates after each turn, and commit changes before compaction. It also connects Codex to OpenViking's `/mcp` endpoint, allowing the model to directly invoke tools such as find, search, recall, and remember.
 
 Source: [examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin) | [Blog: motivation and demo](https://blog.openviking.ai/post/openviking-coding-agent/)
 
@@ -36,11 +36,11 @@ Prerequisites: Node.js >= 22, Codex >= 0.130.0, and the `plugin_hooks` feature e
 
 ## Step 2: Verify
 
-Launch `codex`; the plugin will now recall memory before every prompt. You can set `OPENVIKING_DEBUG=1` to log events to `~/.openviking/logs/codex-hooks.log`.
+Launch `codex`; the `SessionStart` hook will load your profile on the session's first prompt, then the plugin will recall relevant memory before every prompt. You can set `OPENVIKING_DEBUG=1` to log events to `~/.openviking/logs/codex-hooks.log`.
 
 ## How it works
 
-The plugin hooks into the Codex lifecycle. It searches OpenViking and injects relevant memories before every user prompt (`UserPromptSubmit`), appends new conversation turns to the session after each response (`Stop`), and completes and commits the full transcript before compaction (`PreCompact`) to ensure the memory extractor has complete context. When a new session starts, it also cleans up orphaned sessions from previous runs.
+The plugin hooks into the Codex lifecycle. On `SessionStart` (`startup`, `clear`, or `resume`), it injects `profile.md` plus URI and abstract indexes for `preferences/` and `entities/` through the shared CJK-aware profile builder. It searches OpenViking and injects relevant memories before every user prompt (`UserPromptSubmit`), appends new conversation turns to the session after each response (`Stop`), and completes and commits the full transcript before compaction (`PreCompact`) to ensure the memory extractor has complete context. When a new session starts, it also cleans up orphaned sessions from previous runs. Resume may combine the profile with the latest archive digest.
 
 > **Known limitation**: Codex does not trigger hooks on `SIGTERM`, `Ctrl+C`, or `/exit`. Orphaned sessions are reclaimed during the next `SessionStart` using either the idle TTL cleanup window (30 minutes) or the active-window heuristic.
 
@@ -53,9 +53,13 @@ Configuration priority: environment variables > `ovcli.conf` > `ov.conf` > built
 |---------|--------|------|
 | `OPENVIKING_URL` / `OPENVIKING_BASE_URL` | - | Full server URL |
 | `OPENVIKING_API_KEY` | - | API key sent as `Authorization: Bearer` |
+| `OPENVIKING_NO_AUTO_INJECT` | `false` | Disable fixed session-start profile/background injection without disabling per-prompt recall |
+| `OPENVIKING_PROFILE_TOKEN_BUDGET` | `10000` | CJK-aware token budget for the profile and memory indexes |
 | `OPENVIKING_CODEX_ACTIVE_WINDOW_MS` | `120000` | SessionStart active-window threshold |
 | `OPENVIKING_CODEX_IDLE_TTL_MS` | `1800000` | SessionStart idle TTL cleanup threshold |
 | `OPENVIKING_DEBUG` | `false` | Write logs to `~/.openviking/logs/codex-hooks.log` |
+
+If recall latency matters most, see [Low-latency recall](https://docs.openviking.net/en/agent-integrations/01-overview#low-latency-recall).
 
 For tuning options such as `OPENVIKING_RECALL_LIMIT` and `OPENVIKING_CAPTURE_ASSISTANT_TURNS`, see the [plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md#tuning-the-plugin).
 

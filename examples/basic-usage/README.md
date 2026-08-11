@@ -9,8 +9,7 @@ integration, use this example as the foundation and then move to the server and 
 
 ## What This Example Covers
 
-- Embedded SDK usage for local exploration
-- HTTP client usage for server mode
+- HTTP SDK usage
 - Resource ingestion from a remote URL
 - Filesystem-style access with `ls`, `tree`, and `read`
 - Retrieval with `find`, `abstract`, `overview`, and `grep`
@@ -18,15 +17,14 @@ integration, use this example as the foundation and then move to the server and 
 
 ## Choose the Right Mode
 
-OpenViking currently has three common integration paths:
+OpenViking has two common integration paths:
 
 | Mode | Best for | Recommended? |
 |------|----------|--------------|
-| Embedded SDK | Single-process local experimentation | Yes, for first contact |
 | HTTP server + SDK/CLI | Shared service, multi-session, multi-agent workloads | Yes, preferred for real deployments |
 | MCP | Claude Code, Cursor, Claude Desktop, OpenClaw, and other MCP hosts | Yes, for tool-based client integration |
 
-If you are building anything beyond a one-process local demo, prefer HTTP server mode over spawning isolated local processes repeatedly. For MCP specifically, follow the dedicated [MCP Integration Guide](../../docs/en/guides/06-mcp-integration.md).
+For MCP specifically, follow the dedicated [MCP Integration Guide](../../docs/en/guides/06-mcp-integration.md).
 
 ## Prerequisites
 
@@ -34,10 +32,10 @@ If you are building anything beyond a one-process local demo, prefer HTTP server
 2. OpenViking installed:
 
 ```bash
-pip install openviking --upgrade --force-reinstall
+pip install openviking-sdk --upgrade
 ```
 
-3. A valid config file at `~/.openviking/ov.conf`
+3. A running OpenViking server
 
 ## Quick Start
 
@@ -49,21 +47,12 @@ cd OpenViking/examples/basic-usage
 python basic_usage.py
 ```
 
-The script uses embedded mode by default:
+The script connects to a local OpenViking server:
 
 ```python
-import openviking as ov
+from openviking_sdk import SyncHTTPClient
 
-client = ov.OpenViking(path="./data")
-client.initialize()
-```
-
-To point the same flow at a running server instead, switch to:
-
-```python
-import openviking as ov
-
-client = ov.SyncHTTPClient(url="http://localhost:1933")
+client = SyncHTTPClient(url="http://localhost:1933")
 client.initialize()
 ```
 
@@ -86,28 +75,19 @@ See the dedicated [Server Mode Quick Start](../../docs/en/getting-started/03-qui
 
 ### Initialization
 
-Use embedded mode for a local first run:
+Use the HTTP client when OpenViking runs as a separate service:
 
 ```python
-import openviking as ov
+from openviking_sdk import SyncHTTPClient
 
-client = ov.OpenViking(path="./data")
-client.initialize()
-```
-
-Use HTTP client mode when OpenViking runs as a separate service:
-
-```python
-import openviking as ov
-
-client = ov.SyncHTTPClient(url="http://localhost:1933")
+client = SyncHTTPClient(url="http://localhost:1933")
 client.initialize()
 ```
 
 If server authentication is enabled, use a `user_key` for normal data access:
 
 ```python
-client = ov.SyncHTTPClient(
+client = SyncHTTPClient(
     url="http://localhost:1933",
     api_key="<user-key>",
 )

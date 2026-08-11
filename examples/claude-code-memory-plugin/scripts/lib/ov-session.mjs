@@ -24,6 +24,7 @@ import {
   deriveHarnessSessionId,
   isBypassed,
 } from "../shared/session-model.mjs";
+import { isRetryableFailure as isSharedRetryableFailure } from "../shared/retryable.mjs";
 
 /**
  * Check whether a CC session_id or cwd matches any bypass pattern.
@@ -47,8 +48,9 @@ export function deriveOvSessionId(ccSessionId, suffix = "") {
  * (from scripts/config.mjs loadConfig()) so the timeout can vary per hook.
  */
 export function makeFetchJSON(cfg, timeoutKey = "timeoutMs") {
-  const timeoutMs = Math.max(1000, cfg[timeoutKey] || cfg.timeoutMs || 10000);
+  const defaultTimeoutMs = Math.max(1000, cfg[timeoutKey] || cfg.timeoutMs || 10000);
   return async function fetchJSON(path, init = {}, options = {}) {
+    const timeoutMs = Math.max(1000, Number(options.timeoutMs) || defaultTimeoutMs);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -74,9 +76,7 @@ export function makeFetchJSON(cfg, timeoutKey = "timeoutMs") {
 }
 
 export function isRetryableFailure(res) {
-  if (!res || res.ok) return false;
-  const status = Number(res.status || 0);
-  return !status || status >= 500 || status === 408 || status === 429;
+  return isSharedRetryableFailure(res);
 }
 
 function warnNonRetryable(operation, res) {
@@ -134,7 +134,7 @@ export async function commitSession(fetchJSON, sessionId, payload = {}) {
   });
   if (!res.ok) {
     if (isRetryableFailure(res)) {
-      const queued = await enqueuePendingDirectly("commitSession", sessionId, {});
+      const queued = await enqueuePendingDirectly("commitSession", sessionId, payload || {});
       if (queued.ok) res.pendingQueued = true;
       else res.pendingEnqueueFailed = true;
     } else {

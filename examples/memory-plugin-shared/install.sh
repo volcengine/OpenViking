@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 #
 # OpenViking Memory Plugin shared installer for Claude Code, Codex, Cursor,
-# TRAE / TRAE CN, OpenCode, and pi.
+# TRAE / TRAE CN, ZCode, OpenCode, and pi.
 #
 # One-liner (GitHub):
 #   bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh)
 # One-liner (TOS mirror, for regions where GitHub is unreachable):
 #   bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --dist tos
 # Non-interactive:
-#   bash install.sh --harness claude,codex,cursor,trae,trae-cn,opencode,pi --dist github --lang en --url http://127.0.0.1:1933 --api-key ''
+#   bash install.sh --harness claude,codex,cursor,trae,trae-cn,zcode,opencode,pi --dist github --lang en --url http://127.0.0.1:1933 --api-key ''
 # Format-compatible CLI aliases:
 #   bash install.sh --harness codex --codex-bin codex,traex
 #   bash install.sh --harness claude --claude-bin claude,seed
@@ -143,7 +143,7 @@ usage() {
 Usage: install.sh [options]
 
 Options:
-  --harness LIST     Comma-separated harnesses: claude, codex, cursor, trae, trae-cn, opencode, pi.
+  --harness LIST     Comma-separated harnesses: claude, codex, cursor, trae, trae-cn, zcode, opencode, pi.
   --claude-bin LIST  Comma-separated Claude-format CLI commands (default: claude).
   --codex-bin LIST   Comma-separated Codex-format CLI commands (default: codex).
   --dist CHANNEL     github (default) | tos (mirror for GitHub-blocked regions).
@@ -369,7 +369,7 @@ EOF
 }
 
 refresh_available_harnesses() {
-  HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_OPENCODE=0; HAVE_PI=0
+  HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0
   has_available_bin "$CLAUDE_BINS" && HAVE_CLAUDE=1
   has_available_bin "$CODEX_BINS" && HAVE_CODEX=1
   { command -v cursor >/dev/null 2>&1 || command -v cursor-agent >/dev/null 2>&1 || [ -d "/Applications/Cursor.app" ] || [ -d "$HOME/.cursor" ]; } && HAVE_CURSOR=1
@@ -377,6 +377,7 @@ refresh_available_harnesses() {
   { [ -d "/Applications/Trae CN.app" ] || [ -d "/Applications/TRAE SOLO CN.app" ] || [ -d "$HOME/.trae-cn" ]; } && HAVE_TRAE_CN=1
   command -v opencode >/dev/null 2>&1 && HAVE_OPENCODE=1
   command -v pi >/dev/null 2>&1 && HAVE_PI=1
+  { command -v zcode >/dev/null 2>&1 || [ -d "$HOME/.zcode" ]; } && HAVE_ZCODE=1
   return 0
 }
 
@@ -443,7 +444,7 @@ NODE
 CLAUDE_BINS="$(normalize_bin_list "$CLAUDE_BINS_ARG" claude)"
 CODEX_BINS="$(normalize_bin_list "$CODEX_BINS_ARG" codex)"
 
-HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_OPENCODE=0; HAVE_PI=0
+HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0
 refresh_available_harnesses
 
 TUI_CLAUDE_BINS="$CLAUDE_BINS"
@@ -455,6 +456,7 @@ SEL_PI=0
 SEL_CURSOR_APP=0
 SEL_TRAE=0
 SEL_TRAE_CN=0
+SEL_ZCODE=0
 TUI_CURSOR=0; TUI_LINES=0
 
 list_count() {
@@ -468,7 +470,7 @@ EOF
 }
 
 tui_selectable_count() {
-  printf '%s' $(( $(list_count "$TUI_CLAUDE_BINS") + $(list_count "$TUI_CODEX_BINS") + 5 ))
+  printf '%s' $(( $(list_count "$TUI_CLAUDE_BINS") + $(list_count "$TUI_CODEX_BINS") + 6 ))
 }
 
 tui_total_count() {
@@ -500,6 +502,8 @@ EOF
   if [ "$i" -eq "$idx" ]; then printf 'trae|trae'; return 0; fi
   i=$((i + 1))
   if [ "$i" -eq "$idx" ]; then printf 'trae-cn|trae-cn'; return 0; fi
+  i=$((i + 1))
+  if [ "$i" -eq "$idx" ]; then printf 'zcode|zcode'; return 0; fi
   printf 'add|'
 }
 
@@ -529,6 +533,7 @@ tui_bin_label() {
     cursor:*) printf 'Cursor' ;;
     trae:*) printf 'TRAE' ;;
     trae-cn:*) printf 'TRAE CN' ;;
+    zcode:*) printf 'ZCode' ;;
     claude:*) printf '%s %s' "$bin" "$(t '(Claude-format)' '（Claude 格式）')" ;;
     codex:*) printf '%s %s' "$bin" "$(t '(Codex-format)' '（Codex 格式）')" ;;
   esac
@@ -548,6 +553,8 @@ tui_bin_selected() {
     [ "$SEL_CURSOR_APP" -eq 1 ]
   elif [ "$kind" = "trae" ]; then
     [ "$SEL_TRAE" -eq 1 ]
+  elif [ "$kind" = "zcode" ]; then
+    [ "$SEL_ZCODE" -eq 1 ]
   else
     [ "$SEL_TRAE_CN" -eq 1 ]
   fi
@@ -558,6 +565,7 @@ tui_bin_detected() { # tui_bin_detected <kind> <bin>
     cursor) [ "$HAVE_CURSOR" -eq 1 ] ;;
     trae) [ "$HAVE_TRAE" -eq 1 ] ;;
     trae-cn) [ "$HAVE_TRAE_CN" -eq 1 ] ;;
+    zcode) [ "$HAVE_ZCODE" -eq 1 ] ;;
     *) command -v "$2" >/dev/null 2>&1 ;;
   esac
 }
@@ -570,6 +578,7 @@ tui_set_all_bins() {
   SEL_CURSOR_APP=1
   SEL_TRAE=1
   SEL_TRAE_CN=1
+  SEL_ZCODE=1
 }
 
 tui_toggle_bin() {
@@ -588,6 +597,8 @@ tui_toggle_bin() {
     SEL_CURSOR_APP=$((1 - SEL_CURSOR_APP)); return 0
   elif [ "$kind" = "trae" ]; then
     SEL_TRAE=$((1 - SEL_TRAE)); return 0
+  elif [ "$kind" = "zcode" ]; then
+    SEL_ZCODE=$((1 - SEL_ZCODE)); return 0
   else
     SEL_TRAE_CN=$((1 - SEL_TRAE_CN)); return 0
   fi
@@ -658,6 +669,7 @@ tui_reset_bin_selection() {
   SEL_CURSOR_APP=0
   SEL_TRAE=0
   SEL_TRAE_CN=0
+  SEL_ZCODE=0
   while IFS= read -r bin; do
     [ -n "$bin" ] || continue
     if command -v "$bin" >/dev/null 2>&1; then
@@ -681,6 +693,7 @@ EOF
   if [ "$HAVE_CURSOR" -eq 1 ]; then SEL_CURSOR_APP=1; any=1; fi
   if [ "$HAVE_TRAE" -eq 1 ]; then SEL_TRAE=1; any=1; fi
   if [ "$HAVE_TRAE_CN" -eq 1 ]; then SEL_TRAE_CN=1; any=1; fi
+  if [ "$HAVE_ZCODE" -eq 1 ]; then SEL_ZCODE=1; any=1; fi
   if [ "$any" -ne 1 ]; then
     SEL_CLAUDE_BINS="$TUI_CLAUDE_BINS"
     SEL_CODEX_BINS="$TUI_CODEX_BINS"
@@ -768,7 +781,7 @@ tui_add_compatible_cli() {
 tui_has_selection() {
   [ -n "$(list_words "$SEL_CLAUDE_BINS")" ] || [ -n "$(list_words "$SEL_CODEX_BINS")" ] \
     || [ "$SEL_OPENCODE" -eq 1 ] || [ "$SEL_PI" -eq 1 ] || [ "$SEL_CURSOR_APP" -eq 1 ] \
-    || [ "$SEL_TRAE" -eq 1 ] || [ "$SEL_TRAE_CN" -eq 1 ]
+    || [ "$SEL_TRAE" -eq 1 ] || [ "$SEL_TRAE_CN" -eq 1 ] || [ "$SEL_ZCODE" -eq 1 ]
 }
 
 tui_finish_selection() {
@@ -782,6 +795,7 @@ tui_finish_selection() {
   [ "$SEL_CURSOR_APP" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}cursor"
   [ "$SEL_TRAE" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}trae"
   [ "$SEL_TRAE_CN" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}trae-cn"
+  [ "$SEL_ZCODE" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}zcode"
   return 0
 }
 
@@ -852,6 +866,7 @@ select_harnesses() {
   [ "$HAVE_TRAE_CN" -eq 1 ] && detected="${detected:+$detected,}trae-cn"
   [ "$HAVE_OPENCODE" -eq 1 ] && detected="${detected:+$detected,}opencode"
   [ "$HAVE_PI" -eq 1 ] && detected="${detected:+$detected,}pi"
+  [ "$HAVE_ZCODE" -eq 1 ] && detected="${detected:+$detected,}zcode"
 
   if [ -n "$REQUESTED_HARNESSES" ]; then
     SELECTED_HARNESSES="$REQUESTED_HARNESSES"
@@ -897,7 +912,7 @@ validate_selected_harnesses() {
   local h bad=0
   while IFS= read -r h; do
     case "$h" in
-      claude|codex|cursor|trae|trae-cn|opencode|pi) ;;
+      claude|codex|cursor|trae|trae-cn|opencode|pi|zcode) ;;
       *) err "Unsupported harness: $h"; bad=1 ;;
     esac
   done <<EOF
@@ -936,7 +951,7 @@ EOF
   if contains_harness pi && command -v pi >/dev/null 2>&1; then ok=1; fi
   # Cursor and TRAE are config-driven integrations. They may be installed
   # before the desktop app itself, so a CLI in PATH is not required.
-  if contains_harness cursor || contains_harness trae || contains_harness trae-cn; then ok=1; fi
+  if contains_harness cursor || contains_harness trae || contains_harness trae-cn || contains_harness zcode; then ok=1; fi
   if [ "$ok" -ne 1 ]; then
     err "$(t 'No selected compatible CLI command was found in PATH.' '未在 PATH 中找到任何已选择的兼容 CLI 命令。')"
     exit 2
@@ -1742,7 +1757,9 @@ assemble_agent_integration() { # assemble_agent_integration <source-subdir> <des
   mkdir -p "$shared_dest.tmp"
   for file in \
     agent-hook-runtime.mjs agent-uri-guard.mjs credentials.mjs debug-log.mjs \
-    batch-send.mjs mcp-proxy-core.mjs pending-queue.mjs profile-inject.mjs recall-core.mjs \
+    batch-send.mjs mcp-proxy-core.mjs pending-queue.mjs plugin-config.mjs profile-inject.mjs \
+    retryable.mjs \
+    recall-compress-core.mjs recall-core.mjs \
     session-model.mjs uri-guard.mjs workspace-peer.mjs; do
     cp "$shared/lib/$file" "$shared_dest.tmp/$file"
   done
@@ -1793,6 +1810,7 @@ function isOpenVikingHook(value) {
   return text.includes("OPENVIKING_INTEGRATION_ID") || (text.includes("openviking") && [
     "cursor-hook.mjs",
     "trae-hook.mjs",
+    "zcode-hook.mjs",
     "session-start.mjs",
     "auto-recall.mjs",
     "auto-capture.mjs",
@@ -1824,10 +1842,15 @@ function renderHookCommand(command) {
   if (cursorMatch) {
     rendered = `${shellArg(nodeBin)} ${shellArg(path.join(root, cursorMatch[1]))}`;
   } else {
-    const traeMatch = /^node\s+__OPENVIKING_TRAE_ROOT__\/(\S+)\s+(.+)$/u.exec(rendered);
-    if (!traeMatch) throw new Error(`Unsupported ${clientId} hook command template: ${command}`);
-    rendered = `${shellArg(nodeBin)} ${shellArg(path.join(root, traeMatch[1]))} ${traeMatch[2]
-      .replaceAll("__OPENVIKING_CLIENT_ID__", clientId)}`;
+    const pluginRootMatch = /^node\s+"?\$\{(?:CLAUDE_PLUGIN_ROOT|ZCODE_PLUGIN_ROOT)\}"?\/(.+?)"?$/u.exec(rendered);
+    if (pluginRootMatch) {
+      rendered = `${shellArg(nodeBin)} ${shellArg(path.join(root, pluginRootMatch[1]))}`;
+    } else {
+      const traeMatch = /^node\s+__OPENVIKING_TRAE_ROOT__\/(\S+)\s+(.+)$/u.exec(rendered);
+      if (!traeMatch) throw new Error(`Unsupported ${clientId} hook command template: ${command}`);
+      rendered = `${shellArg(nodeBin)} ${shellArg(path.join(root, traeMatch[1]))} ${traeMatch[2]
+        .replaceAll("__OPENVIKING_CLIENT_ID__", clientId)}`;
+    }
   }
   return `${envPrefix} ${rendered} # openviking-memory`;
 }
@@ -1955,6 +1978,7 @@ function ownsHook(value) {
   return text.includes("openviking") && [
     "cursor-hook.mjs",
     "trae-hook.mjs",
+    "zcode-hook.mjs",
     "session-start.mjs",
     "auto-recall.mjs",
     "auto-capture.mjs",
@@ -2003,9 +2027,53 @@ uninstall_agent_integrations() {
     rm -rf "$OV_HOME/agent-integrations/trae-cn"
     info "$(t 'Removed TRAE CN OpenViking hooks and MCP config.' '已移除 TRAE CN OpenViking hooks 与 MCP 配置。')"
   fi
+  if contains_harness zcode; then
+    # ZCode reads hooks/MCP from config.json, not standalone files.
+    # Use a node script to strip openviking entries from config.json.
+    # Safe read: ENOENT → skip; parse error → skip (do NOT overwrite user data).
+    "$NODE_BIN" - "$HOME/.zcode/cli/config.json" <<'CLEAN_NODE' 2>/dev/null || true
+const fs = require("node:fs");
+const configPath = process.argv[2];
+if (!fs.existsSync(configPath)) process.exit(0);
+let config;
+try {
+  config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+} catch {
+  // Malformed config — do NOT overwrite; skip cleanup silently.
+  process.exit(0);
+}
+if (typeof config !== "object" || config === null || Array.isArray(config)) process.exit(0);
+// Remove openviking hooks from each event
+if (config.hooks?.events) {
+  for (const [event, handlers] of Object.entries(config.hooks.events)) {
+    config.hooks.events[event] = (Array.isArray(handlers) ? handlers : []).filter(
+      (group) => !JSON.stringify(group).includes("openviking-memory"),
+    );
+    if (config.hooks.events[event].length === 0) delete config.hooks.events[event];
+  }
+  if (Object.keys(config.hooks.events).length === 0) delete config.hooks.events;
+}
+// Remove openviking MCP server — ONLY if it's managed by us (contains openviking-memory tag)
+if (config.mcp?.servers?.openviking) {
+  if (JSON.stringify(config.mcp.servers.openviking).includes("openviking-memory")) {
+    delete config.mcp.servers.openviking;
+    if (Object.keys(config.mcp.servers).length === 0) delete config.mcp.servers;
+    if (Object.keys(config.mcp).length === 0) delete config.mcp;
+  }
+}
+const tmp = `${configPath}.${process.pid}.tmp`;
+fs.writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n");
+fs.renameSync(tmp, configPath);
+CLEAN_NODE
+    # Clean up intermediate files generated by agent_write_json_configs
+    rm -f "$HOME/.zcode/hooks.json" "$HOME/.zcode/mcp.json" 2>/dev/null
+    rm -rf "$OV_HOME/agent-integrations/zcode"
+    info "$(t 'Removed ZCode OpenViking hooks and MCP config.' '已移除 ZCode OpenViking hooks 与 MCP 配置。')"
+  fi
   if [ ! -d "$OV_HOME/agent-integrations/cursor" ] \
     && [ ! -d "$OV_HOME/agent-integrations/trae" ] \
-    && [ ! -d "$OV_HOME/agent-integrations/trae-cn" ]; then
+    && [ ! -d "$OV_HOME/agent-integrations/trae-cn" ] \
+    && [ ! -d "$OV_HOME/agent-integrations/zcode" ]; then
     rm -rf "$OV_HOME/agent-integrations/memory-plugin-shared"
   fi
 }
@@ -2063,6 +2131,101 @@ install_cursor() {
     warn "$(t 'Cursor may also import these older Claude OpenViking plugins and run duplicate Hooks:' 'Cursor 还可能导入以下旧版 Claude OpenViking 插件并重复执行 Hook：') $legacy_plugins"
     warn "$(t 'Upgrade or remove those legacy plugin ids, then restart Cursor.' '请升级或移除这些旧插件 id，然后重启 Cursor。')"
   fi
+}
+
+zcode_mcp_path() {
+  printf '%s' "$HOME/.zcode/mcp.json"
+}
+
+zcode_merge_config() { # zcode_merge_config <config_path> <hooks_path> <mcp_path>
+  "$NODE_BIN" - "$1" "$2" "$3" <<'ZCODE_MERGE_NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+const [configPath, hooksPath, mcpPath] = process.argv.slice(2);
+
+// --- Safe read: ENOENT → empty config; parse error → abort, do NOT overwrite ---
+let config = {};
+const exists = fs.existsSync(configPath);
+if (exists) {
+  let raw;
+  try {
+    raw = fs.readFileSync(configPath, "utf8");
+  } catch (e) {
+    process.stderr.write(`Cannot read ${configPath}: ${e.message}\n`);
+    process.exit(1);
+  }
+  try {
+    config = JSON.parse(raw);
+  } catch (e) {
+    process.stderr.write(`${configPath} is malformed and will NOT be overwritten: ${e.message}\n`);
+    process.exit(1);
+  }
+  if (typeof config !== "object" || config === null || Array.isArray(config)) {
+    process.stderr.write(`${configPath} top-level value is not an object; refusing to overwrite\n`);
+    process.exit(1);
+  }
+}
+
+// --- Merge hooks ---
+if (fs.existsSync(hooksPath)) {
+  const hooks = JSON.parse(fs.readFileSync(hooksPath, "utf8"));
+  config.hooks = config.hooks || {};
+  config.hooks.enabled = true;
+  config.hooks.events = config.hooks.events || {};
+  if (hooks.hooks) {
+    for (const [event, handlers] of Object.entries(hooks.hooks)) {
+      const existing = (config.hooks.events[event] || []).filter(
+        (group) => !JSON.stringify(group).includes("openviking-memory"),
+      );
+      config.hooks.events[event] = [...existing, ...handlers];
+    }
+  }
+}
+
+// --- Merge MCP: only manage entries tagged as openviking-memory ---
+if (fs.existsSync(mcpPath)) {
+  const stat = fs.statSync(mcpPath);
+  if (stat.size > 0) {
+    const mcp = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
+    config.mcp = config.mcp || {};
+    config.mcp.servers = config.mcp.servers || {};
+    const incoming = mcp.mcpServers || {};
+    if (mcp.openviking) incoming.openviking = mcp.openviking;
+    for (const [name, server] of Object.entries(incoming)) {
+      const existing = config.mcp.servers[name];
+      // Only replace if the entry doesn't exist OR is already managed by us
+      if (existing && !JSON.stringify(existing).includes("openviking-memory")) {
+        process.stderr.write(`Skipping ${name} MCP server: already exists and is not managed by OpenViking\n`);
+        continue;
+      }
+      config.mcp.servers[name] = server;
+    }
+  }
+}
+
+// --- Atomic write: backup + tmp + rename ---
+if (exists) fs.copyFileSync(configPath, `${configPath}.bak`);
+const tmp = `${configPath}.${process.pid}.tmp`;
+fs.writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n");
+fs.renameSync(tmp, configPath);
+ZCODE_MERGE_NODE
+}
+
+install_zcode() {
+  heading "$(t 'ZCode integration' 'ZCode 集成')"
+  local root hooks_path mcp_path config_path
+  root="$(assemble_agent_integration zcode-memory-plugin zcode)" || return 1
+  hooks_path="$HOME/.zcode/hooks.json"
+  mcp_path="$(zcode_mcp_path)"
+  config_path="$HOME/.zcode/cli/config.json"
+  mkdir -p "$HOME/.zcode/cli"
+  agent_write_json_configs zcode "$hooks_path" "$mcp_path" "$root" zcode "$NODE_BIN"
+  # ZCode reads hooks from config.json → hooks.events, not a standalone hooks.json.
+  # Merge the generated hooks.json and mcp.json into config.json so ZCode picks them up.
+  zcode_merge_config "$config_path" "$hooks_path" "$mcp_path" \
+    || { warn "$(t 'Failed to merge ZCode config' 'ZCode 配置合并失败')"; return 1; }
+  info "$(t 'ZCode hooks installed:' 'ZCode hooks 已安装：') $config_path (hooks.events)"
+  info "$(t 'ZCode MCP installed:' 'ZCode MCP 已安装：') $config_path (mcp.servers)"
 }
 
 install_trae_variant() { # install_trae_variant <trae|trae-cn>
@@ -2655,6 +2818,32 @@ EOF
       ok=0; agent_fatal=1
     fi
   fi
+  if contains_harness zcode; then
+    local zcode_config="$HOME/.zcode/cli/config.json"
+    if grep -q 'scripts/session-start.mjs' "$zcode_config" 2>/dev/null \
+      && grep -q 'scripts/auto-recall.mjs' "$zcode_config" 2>/dev/null \
+      && grep -q 'scripts/auto-capture.mjs' "$zcode_config" 2>/dev/null \
+      && grep -q 'scripts/uri-guard.mjs' "$zcode_config" 2>/dev/null \
+      && grep -q 'OPENVIKING_INTEGRATION_ID' "$zcode_config" 2>/dev/null \
+      && grep -q 'mcp-proxy.mjs' "$zcode_config" 2>/dev/null \
+      && [ -f "$OV_HOME/agent-integrations/zcode/scripts/zcode-hook.mjs" ] \
+      && [ -f "$OV_HOME/agent-integrations/zcode/scripts/uri-guard.mjs" ] \
+      && [ -f "$OV_HOME/agent-integrations/zcode/integration.json" ]; then
+      "$NODE_BIN" --check "$OV_HOME/agent-integrations/zcode/scripts/zcode-hook.mjs" \
+        || { ok=0; agent_fatal=1; }
+      "$NODE_BIN" --check "$OV_HOME/agent-integrations/zcode/scripts/uri-guard.mjs" \
+        || { ok=0; agent_fatal=1; }
+      if ! printf '%s' '{}' | env HOME="$HOME" OPENVIKING_MEMORY_ENABLED=0 \
+        "$NODE_BIN" "$OV_HOME/agent-integrations/zcode/scripts/session-start.mjs" >/dev/null; then
+        warn "zcode: $(t 'installed Hook runtime failed its smoke test' '已安装的 Hook 运行时 smoke test 失败')"
+        ok=0; agent_fatal=1
+      fi
+      info "zcode: $(t 'hooks and MCP are configured' 'hooks 与 MCP 已配置')"
+    else
+      warn "zcode: $(t 'OpenViking hook or MCP config is incomplete' 'OpenViking hook 或 MCP 配置不完整')"
+      ok=0; agent_fatal=1
+    fi
+  fi
   if contains_harness opencode; then
     local ocfg="$HOME/.config/opencode/opencode.json"
     local ocfgc="$HOME/.config/opencode/opencode.jsonc"
@@ -2773,6 +2962,7 @@ fi
 if contains_harness cursor; then install_cursor; fi
 if contains_harness trae; then install_trae_variant trae; fi
 if contains_harness trae-cn; then install_trae_variant trae-cn; fi
+if contains_harness zcode; then install_zcode; fi
 if contains_harness opencode; then install_opencode; fi
 if contains_harness pi; then install_pi; fi
 validate_install
@@ -2788,5 +2978,6 @@ if contains_harness codex; then info "Codex-format:  $(list_words "$CODEX_BINS")
 if contains_harness cursor; then info "Cursor: Hooks + MCP + Rule + Skill"; fi
 if contains_harness trae; then info "TRAE: ~/.trae/hooks.json + MCP"; fi
 if contains_harness trae-cn; then info "TRAE CN: ~/.trae-cn/hooks.json + MCP"; fi
+if contains_harness zcode; then info "ZCode: ~/.zcode/cli/config.json (hooks + MCP)"; fi
 if contains_harness opencode; then info "OpenCode: @openviking/opencode-plugin"; fi
 if contains_harness pi; then info "pi: ~/.pi/agent/extensions/openviking"; fi

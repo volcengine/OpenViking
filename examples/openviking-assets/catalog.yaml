@@ -11,6 +11,7 @@ catalog:
   - name: openviking
     connector: git
     description: OpenViking main repository — server, CLI and SDKs
+    to: viking://resources/repos/openviking
     params:
       repo_url: https://github.com/volcengine/OpenViking
       branch: main

@@ -22,7 +22,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, TypeVar, Union
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
@@ -317,6 +317,9 @@ class VikingFS:
     Uses Rust binding mode: Use RAGFSBindingClient to directly use RAGFS implementation
     """
 
+    def set_user_deletion_guard(self, guard: Optional[Callable[[str, str], bool]]) -> None:
+        self._user_deletion_guard = guard
+
     def __init__(
         self,
         agfs: Any,
@@ -343,6 +346,7 @@ class VikingFS:
             "vikingfs_bound_ctx", default=None
         )
         self._background_tasks: set = set()
+        self._user_deletion_guard: Optional[Callable[[str, str], bool]] = None
 
     @staticmethod
     def _default_ctx() -> RequestContext:
@@ -428,6 +432,7 @@ class VikingFS:
     def _ensure_mutable_access(self, uri: str, ctx: Optional[RequestContext]) -> None:
         self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
+        self._ensure_user_not_deleting(real_ctx)
         normalized_uri, _ = self._normalized_uri_parts(uri)
         if is_hidden_by_actor_peer_view(normalized_uri, real_ctx) or may_include_hidden_actor_peers(
             normalized_uri, real_ctx
@@ -443,6 +448,7 @@ class VikingFS:
     def _ensure_delete_access(self, uri: str, ctx: Optional[RequestContext]) -> None:
         self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
+        self._ensure_user_not_deleting(real_ctx)
         normalized_uri, _ = self._normalized_uri_parts(uri)
         if is_hidden_by_actor_peer_view(normalized_uri, real_ctx) or may_include_hidden_actor_peers(
             normalized_uri, real_ctx
@@ -454,6 +460,14 @@ class VikingFS:
                 "Temp root is read-only for non-root users",
                 resource=normalized_uri,
             )
+
+    def _ensure_user_not_deleting(self, ctx: RequestContext) -> None:
+        if (
+            ctx.role != Role.ROOT
+            and self._user_deletion_guard is not None
+            and self._user_deletion_guard(ctx.account_id, ctx.user.user_id)
+        ):
+            raise FailedPreconditionError("User deletion is in progress")
 
     def _ensure_supported_delete_namespace(self, normalized_uri: str) -> None:
         parts = [p for p in normalized_uri[len("viking://") :].strip("/").split("/") if p]
@@ -597,6 +611,7 @@ class VikingFS:
             already_exists = "exist" in message or "already" in message
             if exist_ok and already_exists:
                 return
+            raise
 
     async def rm(
         self,
@@ -977,7 +992,7 @@ class VikingFS:
         """Recursively copy a directory through VikingFS read/write hooks."""
         await self.mkdir(new_uri, exist_ok=True, ctx=ctx, lease_ref=lease_ref)
 
-        entries = await self.ls(old_uri, show_all_hidden=True, ctx=ctx)
+        entries = await self.ls(old_uri, show_all_hidden=True, node_limit=LS_ALL_NODES, ctx=ctx)
         for entry in entries:
             name = entry.get("name", "")
             if not name or name in (".", ".."):
@@ -1031,6 +1046,7 @@ class VikingFS:
         node_limit: Optional[int] = None,
         level_limit: int = 10,
         ctx: Optional[RequestContext] = None,
+        content_transform: Optional[Callable[[str, str], str]] = None,
     ) -> Dict:
         """Content search by pattern or keywords.
 
@@ -1049,6 +1065,7 @@ class VikingFS:
             node_limit: Maximum number of results to return
             level_limit: Maximum depth level to traverse (default: 10)
             ctx: Request context
+            content_transform: Optional projection applied before regex matching.
             Internal bm25 recall limit is auto-adapted from node_limit as
             min(node_limit * 5, 100000); when node_limit is unset, use 100000.
 
@@ -1070,8 +1087,12 @@ class VikingFS:
             self.grep_config.switch_to_remote_threshold if self.grep_config else 10000
         )
 
-        resolved_engine = await self._resolve_grep_engine(
-            engine, uri, ctx, switch_to_remote_threshold
+        # A projection must run before matching. The remote BM25 index contains
+        # persisted raw content, so it cannot safely recall projected results.
+        resolved_engine = (
+            "fs"
+            if content_transform is not None
+            else await self._resolve_grep_engine(engine, uri, ctx, switch_to_remote_threshold)
         )
 
         if resolved_engine == "fs":
@@ -1083,6 +1104,7 @@ class VikingFS:
                 node_limit=node_limit,
                 level_limit=level_limit,
                 ctx=ctx,
+                content_transform=content_transform,
             )
         else:  # "vikingdb_then_fs"
             return await self._grep_vikingdb_then_fs(
@@ -1188,21 +1210,30 @@ class VikingFS:
         return count
 
     async def _grep_fs(
-        self, uri, pattern, exclude_uri, case_insensitive, node_limit, level_limit, ctx
+        self,
+        uri,
+        pattern,
+        exclude_uri,
+        case_insensitive,
+        node_limit,
+        level_limit,
+        ctx,
+        content_transform=None,
     ):
         """Filesystem grep path: prefer native agfs grep and fall back if unavailable."""
-        try:
-            return await self._grep_with_agfs(
-                uri=uri,
-                pattern=pattern,
-                exclude_uri=exclude_uri,
-                case_insensitive=case_insensitive,
-                node_limit=node_limit,
-                level_limit=level_limit,
-                ctx=ctx,
-            )
-        except (AttributeError, AGFSNotSupportedError, NotImplementedError) as e:
-            logger.debug(f"agfs grep unavailable, falling back to VikingFS implementation: {e}")
+        if content_transform is None:
+            try:
+                return await self._grep_with_agfs(
+                    uri=uri,
+                    pattern=pattern,
+                    exclude_uri=exclude_uri,
+                    case_insensitive=case_insensitive,
+                    node_limit=node_limit,
+                    level_limit=level_limit,
+                    ctx=ctx,
+                )
+            except (AttributeError, AGFSNotSupportedError, NotImplementedError) as e:
+                logger.debug(f"agfs grep unavailable, falling back to VikingFS implementation: {e}")
 
         return await self._grep_encrypted(
             uri=uri,
@@ -1212,6 +1243,7 @@ class VikingFS:
             node_limit=node_limit,
             level_limit=level_limit,
             ctx=ctx,
+            content_transform=content_transform,
         )
 
     async def _grep_vikingdb_then_fs(
@@ -1449,6 +1481,7 @@ class VikingFS:
         node_limit: Optional[int] = None,
         level_limit: int = 10,
         ctx: Optional[RequestContext] = None,
+        content_transform: Optional[Callable[[str, str], str]] = None,
     ) -> Dict:
         """Grep implementation for encrypted files.
 
@@ -1484,6 +1517,7 @@ class VikingFS:
             compiled_pattern=compiled_pattern,
             node_limit=node_limit,
             ctx=ctx,
+            content_transform=content_transform,
         )
 
         return {
@@ -1555,13 +1589,20 @@ class VikingFS:
         compiled_pattern: re.Pattern,
         node_limit: Optional[int],
         ctx: Optional[RequestContext] = None,
+        content_transform: Optional[Callable[[str, str], str]] = None,
     ) -> tuple[List[Dict[str, Any]], int]:
         results: List[Dict[str, Any]] = []
         files_scanned = 0
         for start in range(0, len(file_uris), _DEFAULT_GREP_FILE_CONCURRENCY):
             batch_uris = file_uris[start : start + _DEFAULT_GREP_FILE_CONCURRENCY]
             batch_jobs = [
-                self._grep_single_file(entry_uri, compiled_pattern, ctx) for entry_uri in batch_uris
+                self._grep_single_file(
+                    entry_uri,
+                    compiled_pattern,
+                    ctx,
+                    content_transform=content_transform,
+                )
+                for entry_uri in batch_uris
             ]
             batch_results = await asyncio.gather(*batch_jobs)
             for matches, scanned_count in batch_results:
@@ -1578,11 +1619,14 @@ class VikingFS:
         entry_uri: str,
         compiled_pattern: re.Pattern,
         ctx: Optional[RequestContext] = None,
+        content_transform: Optional[Callable[[str, str], str]] = None,
     ) -> tuple[List[Dict[str, Any]], int]:
         try:
             content = await self.read(entry_uri, ctx=ctx)
             if isinstance(content, bytes):
                 content = content.decode("utf-8", errors="replace")
+            if content_transform is not None:
+                content = content_transform(content, entry_uri)
 
             matches: List[Dict[str, Any]] = []
             lines = content.split("\n")
@@ -4195,6 +4239,7 @@ class VikingFS:
         path: str,
         from_ref: Optional[str],
         to_ref: str,
+        raw: bool = True,
         ctx: Optional[RequestContext] = None,
     ) -> Dict[str, Any]:
         """Return a unified text diff for one path between two snapshots."""
@@ -4247,6 +4292,21 @@ class VikingFS:
                     f"snapshot diff file size limit exceeded ({SNAPSHOT_DIFF_MAX_FILE_BYTES} bytes)",
                     details={"limit_bytes": SNAPSHOT_DIFF_MAX_FILE_BYTES, "path": path},
                 )
+
+        if not raw:
+            from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+
+            def visible_content(value: Optional[bytes]) -> Optional[bytes]:
+                if value is None:
+                    return None
+                try:
+                    text = value.decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    raise InvalidArgumentError("raw=false requires UTF-8 snapshot content") from exc
+                return MemoryFileUtils.read(text, uri=path).content.encode("utf-8")
+
+            before_bytes = visible_content(before_bytes)
+            after_bytes = visible_content(after_bytes)
 
         change_type, before, after = await asyncio.to_thread(
             _prepare_snapshot_diff,

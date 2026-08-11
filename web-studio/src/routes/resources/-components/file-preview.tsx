@@ -106,6 +106,7 @@ interface FilePreviewProps {
   file: VikingFsEntry | null
   hideDirectoryHeader?: boolean
   onClose: () => void
+  onNavigate?: (uri: string) => void
   showCloseButton?: boolean
 }
 
@@ -1024,6 +1025,7 @@ export function FilePreview({
   file,
   hideDirectoryHeader = false,
   onClose,
+  onNavigate,
   showCloseButton = true,
 }: FilePreviewProps) {
   const { t } = useTranslation('resources')
@@ -1598,15 +1600,28 @@ export function FilePreview({
                       />
                     ),
                     a: ({ href, children }) => {
-                      const resolvedHref = href
-                        ? resolveMarkdownAssetUrl(String(href), file.uri)
-                        : String(href || '')
+                      const target = href
+                        ? resolveMarkdownAssetTarget(String(href), file.uri)
+                        : null
+                      const isInternal =
+                        target?.kind === 'viking' && Boolean(onNavigate)
+                      const resolvedHref = target
+                        ? isInternal
+                          ? target.value
+                          : resolveMarkdownAssetUrl(target.value, file.uri)
+                        : ''
                       const isExternal = /^(https?:|mailto:|tel:)/i.test(
                         resolvedHref,
                       )
                       return (
                         <a
                           href={resolvedHref}
+                          onClick={(event) => {
+                            if (target?.kind === 'viking' && onNavigate) {
+                              event.preventDefault()
+                              onNavigate(target.value)
+                            }
+                          }}
                           target={isExternal ? '_blank' : undefined}
                           rel={isExternal ? 'noreferrer noopener' : undefined}
                         >

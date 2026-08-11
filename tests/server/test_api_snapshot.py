@@ -236,6 +236,31 @@ async def test_show_blob_returns_binary_with_headers(client_with_resource_and_bl
     assert resp.content == expected_bytes
 
 
+async def test_show_blob_can_hide_memory_fields(snapshot_router_client, monkeypatch):
+    from openviking.server.routers import snapshot
+
+    stored = b'visible content\n\n<!-- MEMORY_FIELDS\n{"version": 2}\n-->'
+    show_mock = AsyncMock(return_value={"oid": "a" * 40, "size": len(stored), "bytes": stored})
+    monkeypatch.setattr(
+        snapshot,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(show_blob_raw=show_mock)),
+    )
+
+    response = await snapshot_router_client.get(
+        "/api/v1/snapshot/show",
+        params={
+            "target_ref": "a" * 40,
+            "path": "viking://user/default/memories/experiences/example.md",
+            "raw": "false",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.content == b"visible content"
+    assert response.headers["x-snapshot-size"] == str(len(response.content))
+
+
 async def test_show_path_not_found_returns_404(client_with_resource):
     client, _ = client_with_resource
     commit = (await client.post("/api/v1/snapshot/commit", json={"message": "for 404"})).json()["result"]

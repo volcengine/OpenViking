@@ -98,4 +98,14 @@ describe("plugin registration", () => {
       expect.any(Function),
     );
   });
+
+  it("registers the standard Experience tools by default", () => {
+    const api = createPluginApi({});
+
+    contextEnginePlugin.register(api as any);
+
+    const registeredNames = api.registerTool.mock.calls.map((call) => call[1]?.name);
+    expect(registeredNames).toContain("search_experience");
+    expect(registeredNames).toContain("read_experience");
+  });
 });

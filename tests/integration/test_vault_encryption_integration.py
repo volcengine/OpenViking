@@ -15,7 +15,6 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-from openviking import AsyncOpenViking
 from openviking.crypto.config import bootstrap_encryption
 from openviking.crypto.encryptor import FileEncryptor
 from openviking.crypto.exceptions import AuthenticationFailedError, ConfigError
@@ -212,47 +211,6 @@ async def vault_file_encryptor():
     return FileEncryptor(provider)
 
 
-@pytest_asyncio.fixture(scope="function")
-async def openviking_client_with_vault_encryption(test_data_dir: Path, vault_encryption_config):
-    """Fixture that provides an OpenViking client with Vault encryption enabled"""
-    await AsyncOpenViking.reset()
-    OpenVikingConfigSingleton.reset_instance()
-
-    # Clean data directory
-    if test_data_dir.exists():
-        import shutil
-
-        shutil.rmtree(test_data_dir)
-    test_data_dir.mkdir(parents=True, exist_ok=True)
-
-    # Create config dict with encryption enabled
-    config_dict = {}
-    config_dict.update(vault_encryption_config)
-    config_dict["storage"] = {
-        "workspace": str(test_data_dir / "workspace"),
-        "vectordb": {"name": "test", "backend": "local", "project": "default"},
-    }
-    config_dict["embedding"] = {
-        "dense": {
-            "provider": "openai",
-            "api_key": "fake",
-            "model": "text-embedding-3-small",
-        }
-    }
-
-    # Initialize config singleton
-    OpenVikingConfigSingleton.initialize(config_dict=config_dict)
-
-    client = AsyncOpenViking(path=str(test_data_dir))
-    await client.initialize()
-
-    yield client
-
-    await client.close()
-    await AsyncOpenViking.reset()
-    OpenVikingConfigSingleton.reset_instance()
-
-
 class TestVaultEncryptionBootstrap:
     """Tests for encryption module bootstrap with Vault provider"""
 
@@ -367,7 +325,6 @@ class TestVikingFSEncryptionWithVault:
         yield {"service": svc, "api_key_manager": api_key_manager, "test_data_dir": test_data_dir}
 
         await svc.close()
-        await AsyncOpenViking.reset()
         OpenVikingConfigSingleton.reset_instance()
 
     def _is_file_encrypted(self, file_path: Path) -> bool:

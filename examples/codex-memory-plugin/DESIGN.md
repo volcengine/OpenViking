@@ -96,6 +96,14 @@ Short reconnects and `/resume` re-fire `SessionStart` for the same
 `session_id`. Committing here would seal a still-active session. So
 `resume` is a no-op for commit purposes.
 
+All `SessionStart` sources (`startup`, `clear`, and `resume`) independently
+load the shared OpenViking profile block unless
+`OPENVIKING_NO_AUTO_INJECT=1`. The implementation is the same
+`buildProfileBlock()` used by the other coding-agent integrations: full
+`profile.md` plus abstract-annotated URI indexes for `preferences/` and
+`entities/`, bounded by `OPENVIKING_PROFILE_TOKEN_BUDGET` with the shared
+CJK-aware estimator. Profile loading does not alter the commit decision tree.
+
 Resume may still need continuity after `PreCompact` or idle sweep already
 committed the live OV session. If local state has `ovSessionId = null`
 (or no state file remains), the hook derives `cx-<codex-session-id>`,
@@ -103,7 +111,8 @@ calls `GET /api/v1/sessions/{id}/context?token_budget=...`, and injects
 `latest_archive_overview` via `hookSpecificOutput.additionalContext` when
 present. The injected block includes
 `viking://user/sessions/{id}/history/` so the model can use OpenViking MCP
-read/search tools for exact prior details.
+read/search tools for exact prior details. When both profile and archive are
+available, they are combined in one `SessionStart` response.
 
 If local state still has a live `ovSessionId`, resume injection is skipped:
 the session is appendable and Codex should already be resuming its own
@@ -292,7 +301,7 @@ Fallback order:
 1. configured model/thinking (`OPENVIKING_RECALL_COMPRESS_MODEL` +
    `OPENVIKING_RECALL_COMPRESS_THINKING`)
 2. `gpt-5.3-codex-spark`, thinking `default`
-3. `gpt-5.5`, thinking `low`
+3. `gpt-5.6-luna`, thinking `low`
 4. off (deterministic digest, no child `codex exec`)
 
 Configured `off` (`OPENVIKING_RECALL_COMPRESS=0`, model `off`, or thinking
@@ -378,6 +387,8 @@ Configured `off` (`OPENVIKING_RECALL_COMPRESS=0`, model `off`, or thinking
 ```
 
 Output schema for SessionStart / UserPromptSubmit supports
-`hookSpecificOutput.additionalContext`. Stop / PreCompact only support
+`hookSpecificOutput.additionalContext`. A SessionStart response may include
+that field together with `systemMessage`, allowing profile injection and orphan
+commit status to coexist. Stop / PreCompact only support
 `{ continue, stopReason, suppressOutput, systemMessage }` — `{}` is a
 valid no-op.

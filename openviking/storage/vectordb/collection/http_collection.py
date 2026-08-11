@@ -523,7 +523,6 @@ class HttpCollection(ICollection):
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
-        raise_on_error: bool = False,
     ) -> SearchResult:
         url = self.url_prefix + "api/vikingdb/data/search/random"
         response = requests.post(
@@ -541,12 +540,9 @@ class HttpCollection(ICollection):
             timeout=DEFAULT_TIMEOUT,
         )
         # logger.info(f"SearchByRandom response: {response.text}")
-        if raise_on_error:
-            payload = _parse_success_response(response, "query data for deletion")
-        else:
-            if response.status_code != 200:
-                return SearchResult()
-            payload = json.loads(response.text)
+        if response.status_code != 200:
+            return SearchResult()
+        payload = json.loads(response.text)
 
         data = payload.get("data", {})
         result = SearchResult()

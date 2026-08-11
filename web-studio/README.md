@@ -144,6 +144,7 @@ It formats the OpenAPI document, normalizes operation IDs, and runs `@hey-api/op
 ```text
 src/routes/              TanStack Router routes
 src/routes/<page>/       Top-level page modules
+src/routes/<page>/*.ts   Explicit public feature entry points for cross-route reuse
 src/routes/<page>/-*     Page-private components, hooks, schemas, and helpers
 src/components/ui/       Shared base UI primitives
 src/components/          Shared app components
@@ -155,7 +156,7 @@ src/styles.css           Global CSS and design tokens
 types/ov-server/         Supplemental typed server-result subsets
 ```
 
-Keep route-specific implementation colocated under the corresponding route directory. User-visible copy belongs in both `src/i18n/locales/en.ts` and `src/i18n/locales/zh-CN.ts`.
+Keep route-specific implementation colocated under the corresponding route directory. Cross-route consumers must import an explicit public feature entry point instead of reaching into a `-*` module. User-visible copy belongs in both `src/i18n/locales/en.ts` and `src/i18n/locales/zh-CN.ts`.
 
 ## Deployment
 

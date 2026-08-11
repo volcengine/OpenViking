@@ -152,6 +152,21 @@ If the config file is at a different location, specify it via environment variab
 export OPENVIKING_CONFIG_FILE=/path/to/your/ov.conf
 ```
 
+## Start the Local Server
+
+For the first local run, initialize the config and start the server:
+
+```bash
+openviking-server init
+openviking-server
+```
+
+Keep the server running and open another terminal for the Python SDK example below.
+To use a custom config path, start it with `openviking-server --config /path/to/ov.conf`.
+
+The default local setup does not require an API key. For an authenticated server, set
+`OPENVIKING_API_KEY` before running the example.
+
 ## Run Your First Example
 
 ### Create Python Script
@@ -159,13 +174,13 @@ export OPENVIKING_CONFIG_FILE=/path/to/your/ov.conf
 Create `example.py`:
 
 ```python
-import openviking as ov
+from openviking_sdk import SyncHTTPClient
 
-# Initialize OpenViking client with data directory
-client = ov.OpenViking(path="./data")
+# Connect to the local OpenViking Server
+client = SyncHTTPClient(url="http://localhost:1933")
 
 try:
-    # Initialize the client
+    # Check the connection
     client.initialize()
 
     # Add resource (supports URL, file, or directory)
@@ -196,8 +211,8 @@ try:
     # Perform semantic search
     results = client.find("what is openviking", target_uri=root_uri)
     print("Search results:")
-    for r in results.resources:
-        print(f"  {r.uri} (score: {r.score:.4f})")
+    for result in results.get("resources", []):
+        print(f"  {result['uri']} (score: {result.get('score', 0.0):.4f})")
 
     # Close the client
     client.close()

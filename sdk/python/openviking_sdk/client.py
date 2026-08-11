@@ -15,6 +15,7 @@ from urllib.parse import quote
 import httpx
 
 from ._utils import run_async
+from .actor_peer import _request_actor_peer_headers
 from .config import resolve_client_config
 from .errors import (
     AbortedError,
@@ -64,6 +65,8 @@ ERROR_CODE_TO_EXCEPTION = {
 
 GATEWAY_MARKER_HEADER = "X-VikingBot-Gateway"
 GATEWAY_TOKEN_HEADER = "X-Gateway-Token"
+_SESSION_CONFIG_UNSET = object()
+
 
 
 def _image_mime_type(file_name: str = "") -> str:
@@ -172,6 +175,7 @@ class Session:
         keep_recent_turn_count: int | None = None,
         retained_message_token_budget: int | None = None,
         min_raw_tail_steps: int | None = None,
+        event_tags: list[str] | None = None,
     ) -> Dict[str, Any]:
         optional_retention = {
             key: value
@@ -183,6 +187,8 @@ class Session:
             }.items()
             if value is not None
         }
+        if event_tags is not None:
+            optional_retention["event_tags"] = event_tags
         return await self._client.commit_session(
             self.session_id,
             keep_recent_count=keep_recent_count,
@@ -249,6 +255,7 @@ class SyncSession:
         keep_recent_turn_count: int | None = None,
         retained_message_token_budget: int | None = None,
         min_raw_tail_steps: int | None = None,
+        event_tags: list[str] | None = None,
     ) -> Dict[str, Any]:
         optional_retention = {
             key: value
@@ -260,6 +267,8 @@ class SyncSession:
             }.items()
             if value is not None
         }
+        if event_tags is not None:
+            optional_retention["event_tags"] = event_tags
         return self._client.commit_session(
             self.session_id,
             telemetry=telemetry,
@@ -276,6 +285,7 @@ class SyncSession:
         keep_recent_turn_count: int | None = None,
         retained_message_token_budget: int | None = None,
         min_raw_tail_steps: int | None = None,
+        event_tags: list[str] | None = None,
     ) -> Dict[str, Any]:
         optional_retention = {
             key: value
@@ -287,6 +297,8 @@ class SyncSession:
             }.items()
             if value is not None
         }
+        if event_tags is not None:
+            optional_retention["event_tags"] = event_tags
         return self.commit(
             telemetry=telemetry,
             keep_recent_count=keep_recent_count,
@@ -334,6 +346,8 @@ class _HTTPObserver:
 
 
 class AsyncHTTPClient:
+    supports_request_actor_peer = True
+
     def __init__(
         self,
         url: Optional[str] = None,
@@ -348,6 +362,12 @@ class AsyncHTTPClient:
         profile_enabled: Optional[bool] = None,
         upload_mode: Optional[str] = None,
         event_hooks: Optional[Dict[str, List[Callable[..., Any]]]] = None,
+        # LDAP parameters
+        auth_mode: Optional[str] = None,
+        ldap_username: Optional[str] = None,
+        ldap_password: Optional[str] = None,
+        # OIDC parameters
+        oidc_token: Optional[str] = None,
     ):
         if actor_peer_id and agent_id:
             raise ValueError("actor_peer_id cannot be used with agent_id")
@@ -363,6 +383,10 @@ class AsyncHTTPClient:
             extra_headers=extra_headers,
             profile_enabled=profile_enabled,
             upload_mode=upload_mode,
+            auth_mode=auth_mode,
+            ldap_username=ldap_username,
+            ldap_password=ldap_password,
+            oidc_token=oidc_token,
         )
         self._url = config.url
         self._api_key = config.api_key
@@ -374,6 +398,10 @@ class AsyncHTTPClient:
         self._extra_headers = config.extra_headers
         self._profile_enabled = config.profile_enabled
         self._upload_mode = config.upload_mode
+        self._auth_mode = config.auth_mode
+        self._ldap_username = config.ldap_username
+        self._ldap_password = config.ldap_password
+        self._oidc_token = config.oidc_token
         self._event_hooks = {
             event: list(hooks) for event, hooks in (event_hooks or {}).items()
         }
@@ -391,6 +419,23 @@ class AsyncHTTPClient:
             headers["X-OpenViking-User"] = self._user_id
         if self._actor_peer_id:
             headers["X-OpenViking-Actor-Peer"] = self._actor_peer_id
+
+        # LDAP Basic Auth
+        if self._auth_mode == "ldap" and self._ldap_username and self._ldap_password:
+            from .config import get_basic_auth_header
+            headers["Authorization"] = get_basic_auth_header(
+                self._ldap_username, self._ldap_password
+            )
+
+        # OIDC Bearer token. An explicit oidc_token wins; otherwise fall back
+        # to api_key when it looks like a JWT (header.payload.signature).
+        if self._auth_mode == "oidc":
+            token = self._oidc_token
+            if not token and self._api_key and self._api_key.count(".") == 2:
+                token = self._api_key
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+
         headers.update(self._extra_headers)
         self._http = httpx.AsyncClient(
             base_url=self._url,
@@ -446,7 +491,8 @@ class AsyncHTTPClient:
             raise RuntimeError("Client is not initialized")
 
         request_kwargs = dict(kwargs)
-        headers = dict(request_kwargs.pop("headers", {}) or {})
+        headers = _request_actor_peer_headers()
+        headers.update(dict(request_kwargs.pop("headers", {}) or {}))
         has_explicit_gateway_header = self._has_explicit_gateway_header(headers)
 
         # Multipart streams cannot be replayed safely after the first request. Probe the
@@ -1118,18 +1164,22 @@ class AsyncHTTPClient:
         wait: bool = False,
         timeout: Optional[float] = None,
         telemetry: Any = False,
+        processing_mode: Optional[str] = None,
     ) -> Dict[str, Any]:
+        payload = {
+            "uri": VikingURI.normalize(uri),
+            "content": content,
+            "mode": mode,
+            "wait": wait,
+            "timeout": timeout,
+            "telemetry": telemetry,
+        }
+        if processing_mode is not None:
+            payload["processing_mode"] = processing_mode
         response = await self._request(
             "POST",
             "/api/v1/content/write",
-            json={
-                "uri": VikingURI.normalize(uri),
-                "content": content,
-                "mode": mode,
-                "wait": wait,
-                "timeout": timeout,
-                "telemetry": telemetry,
-            },
+            json=payload,
         )
         return self._handle_response_data(response).get("result", {})
 
@@ -1317,12 +1367,18 @@ class AsyncHTTPClient:
         session_id: Optional[str] = None,
         telemetry: Any = False,
         memory_policy: Optional[Dict[str, Any]] = None,
+        auto_commit_policy: Any = _SESSION_CONFIG_UNSET,
+        memory_extraction_config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         json_body: Dict[str, Any] = {}
         if session_id is not None:
             json_body["session_id"] = session_id
         if memory_policy is not None:
             json_body["memory_policy"] = memory_policy
+        if auto_commit_policy is not _SESSION_CONFIG_UNSET:
+            json_body["auto_commit_policy"] = auto_commit_policy
+        if memory_extraction_config is not None:
+            json_body["memory_extraction_config"] = memory_extraction_config
         if telemetry is not False:
             json_body["telemetry"] = telemetry
         response = await self._request("POST", "/api/v1/sessions", json=json_body)
@@ -1337,6 +1393,29 @@ class AsyncHTTPClient:
         session_path = self._path_segment(session_id)
         response = await self._request("GET", f"/api/v1/sessions/{session_path}", params=params)
         return self._handle_response(response)
+
+    async def update_session_config(
+        self,
+        session_id: str,
+        *,
+        memory_extraction_config: Optional[Dict[str, Any]] = None,
+        auto_commit_policy: Any = _SESSION_CONFIG_UNSET,
+        telemetry: Any = False,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {}
+        if memory_extraction_config is not None:
+            payload["memory_extraction_config"] = memory_extraction_config
+        if auto_commit_policy is not _SESSION_CONFIG_UNSET:
+            payload["auto_commit_policy"] = auto_commit_policy
+        if telemetry is not False:
+            payload["telemetry"] = telemetry
+        session_path = self._path_segment(session_id)
+        response = await self._request(
+            "PATCH",
+            f"/api/v1/sessions/{session_path}/config",
+            json=payload,
+        )
+        return self._handle_response_data(response).get("result", {})
 
     async def get_session_context(
         self, session_id: str, token_budget: int = 128_000
@@ -1399,6 +1478,7 @@ class AsyncHTTPClient:
         keep_recent_turn_count: int | None = None,
         retained_message_token_budget: int | None = None,
         min_raw_tail_steps: int | None = None,
+        event_tags: list[str] | None = None,
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
             "keep_recent_count": keep_recent_count,
@@ -1411,6 +1491,8 @@ class AsyncHTTPClient:
             "min_raw_tail_steps": min_raw_tail_steps,
         }
         payload.update({key: value for key, value in optional.items() if value is not None})
+        if event_tags is not None:
+            payload["extraction_metadata"] = {"event": {"tags": event_tags}}
         session_path = self._path_segment(session_id)
         response = await self._request(
             "POST",
@@ -1819,6 +1901,8 @@ class AsyncHTTPClient:
 
 
 class SyncHTTPClient:
+    supports_request_actor_peer = True
+
     def __init__(self, *args, **kwargs):
         self._async_client = AsyncHTTPClient(*args, **kwargs)
         self._initialized = False
@@ -2154,6 +2238,7 @@ class SyncHTTPClient:
         wait: bool = False,
         timeout: Optional[float] = None,
         telemetry: Any = False,
+        processing_mode: Optional[str] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.write(
@@ -2163,6 +2248,7 @@ class SyncHTTPClient:
                 wait=wait,
                 timeout=timeout,
                 telemetry=telemetry,
+                processing_mode=processing_mode,
             )
         )
 
@@ -2304,20 +2390,40 @@ class SyncHTTPClient:
         session_id: Optional[str] = None,
         telemetry: Any = False,
         memory_policy: Optional[Dict[str, Any]] = None,
+        auto_commit_policy: Any = _SESSION_CONFIG_UNSET,
+        memory_extraction_config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        return run_async(
-            self._async_client.create_session(
-                session_id=session_id,
-                telemetry=telemetry,
-                memory_policy=memory_policy,
-            )
-        )
+        kwargs: Dict[str, Any] = {
+            "session_id": session_id,
+            "telemetry": telemetry,
+            "memory_policy": memory_policy,
+            "memory_extraction_config": memory_extraction_config,
+        }
+        if auto_commit_policy is not _SESSION_CONFIG_UNSET:
+            kwargs["auto_commit_policy"] = auto_commit_policy
+        return run_async(self._async_client.create_session(**kwargs))
 
     def list_sessions(self) -> List[Any]:
         return run_async(self._async_client.list_sessions())
 
     def get_session(self, session_id: str, *, auto_create: bool = False) -> Dict[str, Any]:
         return run_async(self._async_client.get_session(session_id, auto_create=auto_create))
+
+    def update_session_config(
+        self,
+        session_id: str,
+        *,
+        memory_extraction_config: Optional[Dict[str, Any]] = None,
+        auto_commit_policy: Any = _SESSION_CONFIG_UNSET,
+        telemetry: Any = False,
+    ) -> Dict[str, Any]:
+        kwargs: Dict[str, Any] = {
+            "memory_extraction_config": memory_extraction_config,
+            "telemetry": telemetry,
+        }
+        if auto_commit_policy is not _SESSION_CONFIG_UNSET:
+            kwargs["auto_commit_policy"] = auto_commit_policy
+        return run_async(self._async_client.update_session_config(session_id, **kwargs))
 
     def get_session_context(self, session_id: str, token_budget: int = 128_000) -> Dict[str, Any]:
         return run_async(self._async_client.get_session_context(session_id, token_budget))
@@ -2360,6 +2466,7 @@ class SyncHTTPClient:
         keep_recent_turn_count: int | None = None,
         retained_message_token_budget: int | None = None,
         min_raw_tail_steps: int | None = None,
+        event_tags: list[str] | None = None,
     ) -> Dict[str, Any]:
         kwargs = {"keep_recent_count": keep_recent_count}
         kwargs.update(
@@ -2374,6 +2481,8 @@ class SyncHTTPClient:
                 if value is not None
             }
         )
+        if event_tags is not None:
+            kwargs["event_tags"] = event_tags
         if telemetry is False:
             return run_async(
                 self._async_client.commit_session(

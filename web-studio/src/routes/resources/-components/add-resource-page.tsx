@@ -24,6 +24,7 @@ import {
 } from '#/components/ui/collapsible'
 import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
+import { Switch } from '#/components/ui/switch'
 import { Textarea } from '#/components/ui/textarea'
 import {
   Tooltip,
@@ -31,7 +32,9 @@ import {
   TooltipTrigger,
 } from '#/components/ui/tooltip'
 import { cn } from '#/lib/utils'
+import { parsePositiveMinutes } from '#/lib/watch-interval'
 import { useResourceUpload } from '../-hooks/use-resource-upload'
+import type { RemoteStartResult } from '../-hooks/use-resource-upload'
 import {
   MAX_UPLOAD_FILES,
   MAX_UPLOAD_FILE_SIZE_BYTES,
@@ -68,13 +71,25 @@ async function detectFileType(file: File): Promise<string | null> {
 }
 
 export function AddResourceForm({
+  initialMode = 'upload',
+  initialWatchEnabled = false,
+  onAccepted,
+  onCompleted,
+  onFailed,
   onSubmitted,
-}: { onSubmitted?: () => void } = {}) {
+}: {
+  initialMode?: Mode
+  initialWatchEnabled?: boolean
+  onAccepted?: (result: RemoteStartResult) => void
+  onCompleted?: () => void
+  onFailed?: () => void
+  onSubmitted?: () => void
+} = {}) {
   const { t } = useTranslation('addResource')
   const { enqueueUploads, startRemote, resetRemote, remoteState } =
     useResourceUpload()
 
-  const [mode, setMode] = useState<Mode>('upload')
+  const [mode, setMode] = useState<Mode>(initialMode)
   const [remoteUrl, setRemoteUrl] = useState('')
   const [selectedFiles, setSelectedFiles] = useState<SelectedUploadFile[]>([])
   const [targetUri, setTargetUri] = useState('viking://resources/')
@@ -86,6 +101,8 @@ export function AddResourceForm({
   const [ignoreDirs, setIgnoreDirs] = useState('')
   const [include, setInclude] = useState('')
   const [exclude, setExclude] = useState('')
+  const [watchEnabled, setWatchEnabled] = useState(initialWatchEnabled)
+  const [watchInterval, setWatchInterval] = useState('1440')
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [dirPickerOpen, setDirPickerOpen] = useState(false)
 
@@ -178,6 +195,10 @@ export function AddResourceForm({
       body.instruction = instruction.trim()
     }
     if (mode === 'remote') {
+      if (watchEnabled) {
+        const minutes = parsePositiveMinutes(watchInterval)
+        if (minutes !== null) body.watch_interval = minutes
+      }
       if (ignoreDirs.trim()) {
         body.ignore_dirs = ignoreDirs.trim()
       }
@@ -205,7 +226,13 @@ export function AddResourceForm({
 
     const url = remoteUrl.trim()
     if (!url) return
-    startRemote({ url, commonBody: buildCommonBody() })
+    startRemote({
+      url,
+      commonBody: buildCommonBody(),
+      onAccepted,
+      onCompleted,
+      onFailed,
+    })
     onSubmitted?.()
   }
 
@@ -213,11 +240,17 @@ export function AddResourceForm({
     resetRemote()
     setSelectedFiles([])
     setRemoteUrl('')
-    setMode('upload')
+    setMode(initialMode)
+    setWatchEnabled(initialWatchEnabled)
+    setWatchInterval('1440')
   }
 
+  const hasValidWatchInterval =
+    !watchEnabled || parsePositiveMinutes(watchInterval) !== null
   const canSubmit =
-    activeMode === 'upload' ? selectedFiles.length > 0 : !!remoteUrl.trim()
+    activeMode === 'upload'
+      ? selectedFiles.length > 0
+      : !!remoteUrl.trim() && hasValidWatchInterval
 
   return (
     <div className="flex flex-col gap-6">
@@ -306,18 +339,58 @@ export function AddResourceForm({
             ) : null}
           </div>
         ) : (
-          <div className="space-y-2">
-            <Label htmlFor="add-resource-remote-url">{t('remoteUrl')}</Label>
-            <Input
-              id="add-resource-remote-url"
-              placeholder={t('remoteUrl.placeholder')}
-              value={displayRemoteUrl}
-              onChange={(e) => handleRemoteUrlChange(e.target.value)}
-              disabled={remotePhase === 'processing'}
-            />
-            <p className="text-xs text-muted-foreground">
-              {t('remoteUrl.hint')}
-            </p>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="add-resource-remote-url">{t('remoteUrl')}</Label>
+              <Input
+                id="add-resource-remote-url"
+                placeholder={t('remoteUrl.placeholder')}
+                value={displayRemoteUrl}
+                onChange={(e) => handleRemoteUrlChange(e.target.value)}
+                disabled={remotePhase === 'processing'}
+              />
+              <p className="text-xs text-muted-foreground">
+                {t('remoteUrl.hint')}
+              </p>
+            </div>
+
+            <div className="rounded-lg border border-border/60 bg-muted/10 p-4">
+              <div className="flex items-start justify-between gap-4">
+                <div className="grid gap-1">
+                  <Label htmlFor="add-resource-watch-enabled">
+                    {t('watch.enabled')}
+                  </Label>
+                  <p className="text-xs leading-5 text-muted-foreground">
+                    {t('watch.hint')}
+                  </p>
+                </div>
+                <Switch
+                  id="add-resource-watch-enabled"
+                  checked={watchEnabled}
+                  disabled={remotePhase === 'processing'}
+                  onCheckedChange={setWatchEnabled}
+                />
+              </div>
+              {watchEnabled ? (
+                <div className="mt-4 grid gap-2 border-t border-border/50 pt-4">
+                  <Label htmlFor="add-resource-watch-interval">
+                    {t('watch.interval')}
+                  </Label>
+                  <Input
+                    id="add-resource-watch-interval"
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={watchInterval}
+                    disabled={remotePhase === 'processing'}
+                    onChange={(event) => setWatchInterval(event.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {t('watch.intervalHint')}
+                  </p>
+                </div>
+              ) : null}
+            </div>
           </div>
         )}
 
@@ -426,9 +499,7 @@ export function AddResourceForm({
                         <Info className="size-3.5 text-muted-foreground" />
                       }
                     />
-                    <TooltipContent>
-                      {t('createParent.hint')}
-                    </TooltipContent>
+                    <TooltipContent>{t('createParent.hint')}</TooltipContent>
                   </Tooltip>
                 </Label>
                 <Label className="flex items-center gap-2">

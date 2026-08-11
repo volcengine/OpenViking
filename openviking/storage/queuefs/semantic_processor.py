@@ -25,13 +25,13 @@ from openviking.parse.parsers.constants import (
     FILE_TYPE_OTHER,
 )
 from openviking.parse.parsers.media.utils import (
+    MPEG_TS_PROBE_BYTES,
     generate_audio_summary,
     generate_image_summary,
     generate_video_summary,
     get_media_type,
 )
 from openviking.prompts import render_prompt
-from openviking.utils.ingest_options import IngestOptions
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
@@ -49,6 +49,7 @@ from openviking.utils.circuit_breaker import (
     CircuitBreakerOpen,
     classify_api_error,
 )
+from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.model_retry import ERROR_CLASS_INPUT_TOO_LARGE, ERROR_CLASS_PERMANENT
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import VikingURI
@@ -101,7 +102,7 @@ class SemanticProcessor(DequeueHandlerBase):
     _request_stats_order: List[str] = []
     _max_cached_stats = 256
 
-    def __init__(self, max_concurrent_llm: int = 64):
+    def __init__(self, max_concurrent_llm: int = 32):
         """
         Initialize SemanticProcessor.
 
@@ -437,8 +438,6 @@ class SemanticProcessor(DequeueHandlerBase):
                                 ctx=current_ctx,
                                 incremental_update=is_incremental,
                                 target_uri=target_uri,
-                                semantic_msg_id=msg.id,
-                                telemetry_id=msg.telemetry_id,
                                 recursive=msg.recursive,
                                 lock=semantic_lock.lock,
                                 is_code_repo=msg.is_code_repo,
@@ -458,6 +457,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                 await self._enqueue_parent_refresh(msg, target_uri or msg.uri)
                     finally:
                         await semantic_lock.close()
+                    get_request_wait_tracker().mark_semantic_done(msg.telemetry_id, msg.id)
                     self._merge_request_stats(msg.telemetry_id, processed=1)
                     logger.info(f"Completed semantic generation for: {msg.uri}")
                     self.report_success()
@@ -554,8 +554,9 @@ class SemanticProcessor(DequeueHandlerBase):
         """Process a memory directory with special handling.
 
         For memory directories:
-        - Memory files are already vectorized via embedding queue
-        - Only generate abstract.md and overview.md
+        - Generate file summaries in bounded batches
+        - Enqueue each changed file for vectorization as soon as its summary is ready
+        - Retain only compact summaries for the directory overview
         - Vectorize the generated abstract.md and overview.md
 
         Args:
@@ -565,185 +566,154 @@ class SemanticProcessor(DequeueHandlerBase):
         dir_uri = msg.uri
         ctx = ctx or self._default_ctx
         llm_sem = asyncio.Semaphore(self.max_concurrent_llm)
-        request_wait_tracker = get_request_wait_tracker()
-
-        def _mark_done() -> None:
-            if msg.telemetry_id and msg.id:
-                request_wait_tracker.mark_semantic_done(msg.telemetry_id, msg.id)
 
         try:
+            entries = await viking_fs.ls(dir_uri, node_limit=LS_ALL_NODES, ctx=ctx)
+        except Exception as e:
+            raise RuntimeError(f"Failed to list memory directory {dir_uri}: {e}") from e
+
+        file_paths: List[str] = []
+        for entry in entries:
+            name = entry.get("name", "")
+            if not name or name.startswith(".") or name in [".", ".."]:
+                continue
+            if not entry.get("isDir", False):
+                item_uri = VikingURI(dir_uri).join(name).uri
+                file_paths.append(item_uri)
+
+        if not file_paths:
+            logger.info(f"No memory files found in {dir_uri}")
+            return
+
+        existing_summaries: Dict[str, str] = {}
+        if msg.changes:
             try:
-                entries = await viking_fs.ls(dir_uri, node_limit=LS_ALL_NODES, ctx=ctx)
-            except Exception as e:
-                raise RuntimeError(f"Failed to list memory directory {dir_uri}: {e}") from e
-
-            file_paths: List[str] = []
-            for entry in entries:
-                name = entry.get("name", "")
-                if not name or name.startswith(".") or name in [".", ".."]:
-                    continue
-                if not entry.get("isDir", False):
-                    item_uri = VikingURI(dir_uri).join(name).uri
-                    file_paths.append(item_uri)
-
-            if not file_paths:
-                logger.info(f"No memory files found in {dir_uri}")
-                _mark_done()
-                return
-
-            existing_summaries: Dict[str, str] = {}
-            if msg.changes:
-                try:
-                    old_overview = await viking_fs.read_file(f"{dir_uri}/.overview.md", ctx=ctx)
-                    if old_overview:
-                        existing_summaries = self._parse_overview_md(old_overview)
-                        logger.info(
-                            f"Parsed {len(existing_summaries)} existing summaries from overview.md"
-                        )
-                except Exception as e:
-                    logger.debug(f"No existing overview.md found for {dir_uri}: {e}")
-
-            changed_files: Set[str] = set()
-            if msg.changes:
-                changed_files = set(msg.changes.get("added", []) + msg.changes.get("modified", []))
-                deleted_files = set(msg.changes.get("deleted", []))
-                logger.info(
-                    f"Processing memory directory {dir_uri} with changes: "
-                    f"added={len(msg.changes.get('added', []))}, "
-                    f"modified={len(msg.changes.get('modified', []))}, "
-                    f"deleted={len(deleted_files)}"
-                )
-
-            pending_indices: List[Tuple[int, str]] = []
-            file_summaries: List[Optional[Dict[str, str]]] = [None] * len(file_paths)
-
-            for idx, file_path in enumerate(file_paths):
-                file_name = file_path.split("/")[-1]
-                if file_path not in changed_files and file_name in existing_summaries:
-                    file_summaries[idx] = {
-                        "name": file_name,
-                        "summary": existing_summaries[file_name],
-                    }
-                    logger.debug(f"Reused existing summary for {file_name}")
-                else:
-                    pending_indices.append((idx, file_path))
-
-            if file_paths and not pending_indices:
-                try:
-                    from openviking.metrics.datasources.cache import CacheEventDataSource
-
-                    CacheEventDataSource.record_hit("L1")
-                except Exception:
-                    pass
-            elif file_paths and pending_indices:
-                try:
-                    from openviking.metrics.datasources.cache import CacheEventDataSource
-
-                    if len(file_paths) > len(pending_indices):
-                        CacheEventDataSource.record_hit("L1")
-                    CacheEventDataSource.record_miss("L1")
-                except Exception:
-                    pass
-
-            if pending_indices:
-                logger.info(
-                    f"Generating summaries for {len(pending_indices)} changed files "
-                    f"(reused {len(file_paths) - len(pending_indices)} cached)"
-                )
-
-                async def _gen(idx: int, file_path: str) -> None:
-                    file_name = file_path.split("/")[-1]
-                    try:
-                        summary_dict = await self._generate_single_file_summary(
-                            file_path, llm_sem=llm_sem, ctx=ctx
-                        )
-                        file_summaries[idx] = summary_dict
-                        logger.debug(f"Generated summary for {file_name}")
-                    except Exception as e:
-                        logger.warning(f"Failed to generate summary for {file_path}: {e}")
-                        file_summaries[idx] = {"name": file_name, "summary": ""}
-
-                batch_size = max(1, min(self.max_concurrent_llm, 10))
-                for batch_start in range(0, len(pending_indices), batch_size):
-                    batch = pending_indices[batch_start : batch_start + batch_size]
+                old_overview = await viking_fs.read_file(f"{dir_uri}/.overview.md", ctx=ctx)
+                if old_overview:
+                    existing_summaries = self._parse_overview_md(old_overview)
                     logger.info(
-                        f"[MemorySemantic] Processing batch {batch_start // batch_size + 1}/"
-                        f"{(len(pending_indices) + batch_size - 1) // batch_size} "
-                        f"({len(batch)} files)"
+                        f"Parsed {len(existing_summaries)} existing summaries from overview.md"
                     )
-                    await asyncio.gather(*[_gen(i, fp) for i, fp in batch])
-
-            completed_summaries = [s for s in file_summaries if s is not None]
-            # Incremental writes carry changes; full rebuild tasks do not.
-            if msg.changes:
-                paths_to_vectorize = changed_files
-            else:
-                paths_to_vectorize = set(file_paths)
-            file_vectorize_items = [
-                (file_path, summary)
-                for file_path, summary in zip(file_paths, file_summaries, strict=False)
-                if file_path in paths_to_vectorize and summary is not None
-            ]
-            generated_content = await self._generate_overview(
-                dir_uri, completed_summaries, [], llm_sem=llm_sem
-            )
-            overview, abstract = self._normalize_overview_generation(generated_content)
-
-            try:
-                wrote_semantics = await self._write_memory_directory_semantics(
-                    msg=msg,
-                    viking_fs=viking_fs,
-                    dir_uri=dir_uri,
-                    overview=overview,
-                    abstract=abstract,
-                    ctx=ctx,
-                    lock=lock,
-                )
             except Exception as e:
-                raise RuntimeError(f"Failed to write abstract/overview for {dir_uri}: {e}") from e
-            if not wrote_semantics:
-                _mark_done()
-                return
-            logger.info(f"Generated abstract.md and overview.md for {dir_uri}")
+                logger.debug(f"No existing overview.md found for {dir_uri}: {e}")
 
-            if msg.skip_vectorization:
-                logger.info(f"Skipping vectorization for {dir_uri} (requested via SemanticMsg)")
-                _mark_done()
-                return
-            if msg.telemetry_id and msg.id:
-                from openviking.storage.queuefs.embedding_tracker import EmbeddingTaskTracker
-
-                async def _on_complete() -> None:
-                    get_request_wait_tracker().mark_semantic_done(msg.telemetry_id, msg.id)
-
-                tracker = EmbeddingTaskTracker.get_instance()
-                await tracker.register(
-                    semantic_msg_id=msg.id,
-                    total_count=2 + len(file_vectorize_items),
-                    on_complete=_on_complete,
-                    metadata={"uri": dir_uri},
-                )
-            for file_path, summary_dict in file_vectorize_items:
-                await self._vectorize_single_file(
-                    parent_uri=dir_uri,
-                    context_type="memory",
-                    file_path=file_path,
-                    summary_dict=summary_dict,
-                    ctx=ctx,
-                    semantic_msg_id=msg.id,
-                    preserve_existing_created_at=True,
-                )
-            await self._vectorize_directory(
-                uri=dir_uri,
-                context_type="memory",
-                abstract=abstract,
-                overview=overview,
-                ctx=ctx,
-                semantic_msg_id=msg.id,
+        changed_files: Set[str] = set()
+        if msg.changes:
+            changed_files = set(msg.changes.get("added", []) + msg.changes.get("modified", []))
+            deleted_files = set(msg.changes.get("deleted", []))
+            logger.info(
+                f"Processing memory directory {dir_uri} with changes: "
+                f"added={len(msg.changes.get('added', []))}, "
+                f"modified={len(msg.changes.get('modified', []))}, "
+                f"deleted={len(deleted_files)}"
             )
-            logger.info(f"Vectorized abstract.md and overview.md for {dir_uri}")
-        finally:
-            pass
+
+        pending_indices: List[Tuple[int, str]] = []
+        file_summaries: List[Optional[Dict[str, str]]] = [None] * len(file_paths)
+        paths_to_vectorize = changed_files if msg.changes else set(file_paths)
+
+        for idx, file_path in enumerate(file_paths):
+            file_name = file_path.split("/")[-1]
+            if file_path not in changed_files and file_name in existing_summaries:
+                file_summaries[idx] = {
+                    "name": file_name,
+                    "summary": existing_summaries[file_name],
+                }
+                logger.debug(f"Reused existing summary for {file_name}")
+            else:
+                pending_indices.append((idx, file_path))
+
+        if file_paths and not pending_indices:
+            try:
+                from openviking.metrics.datasources.cache import CacheEventDataSource
+
+                CacheEventDataSource.record_hit("L1")
+            except Exception:
+                pass
+        elif file_paths and pending_indices:
+            try:
+                from openviking.metrics.datasources.cache import CacheEventDataSource
+
+                if len(file_paths) > len(pending_indices):
+                    CacheEventDataSource.record_hit("L1")
+                CacheEventDataSource.record_miss("L1")
+            except Exception:
+                pass
+
+        if pending_indices:
+            logger.info(
+                f"Generating summaries for {len(pending_indices)} changed files "
+                f"(reused {len(file_paths) - len(pending_indices)} cached)"
+            )
+
+            async def _gen(idx: int, file_path: str) -> None:
+                file_name = file_path.split("/")[-1]
+                try:
+                    summary_dict = await self._generate_single_file_summary(
+                        file_path, llm_sem=llm_sem, ctx=ctx
+                    )
+                    logger.debug(f"Generated summary for {file_name}")
+                except Exception as e:
+                    logger.warning(f"Failed to generate summary for {file_path}: {e}")
+                    summary_dict = {"name": file_name, "summary": ""}
+
+                if file_path in paths_to_vectorize and not msg.skip_vectorization:
+                    await self._vectorize_single_file(
+                        parent_uri=dir_uri,
+                        context_type="memory",
+                        file_path=file_path,
+                        summary_dict=summary_dict,
+                        ctx=ctx,
+                        preserve_existing_created_at=True,
+                    )
+                file_summaries[idx] = {
+                    "name": str(summary_dict.get("name") or file_name),
+                    "summary": str(summary_dict.get("summary") or ""),
+                }
+
+            batch_size = max(1, min(self.max_concurrent_llm, 10))
+            for batch_start in range(0, len(pending_indices), batch_size):
+                batch = pending_indices[batch_start : batch_start + batch_size]
+                logger.info(
+                    f"[MemorySemantic] Processing batch {batch_start // batch_size + 1}/"
+                    f"{(len(pending_indices) + batch_size - 1) // batch_size} "
+                    f"({len(batch)} files)"
+                )
+                await asyncio.gather(*[_gen(i, fp) for i, fp in batch])
+
+        completed_summaries = [s for s in file_summaries if s is not None]
+        generated_content = await self._generate_overview(
+            dir_uri, completed_summaries, [], llm_sem=llm_sem
+        )
+        overview, abstract = self._normalize_overview_generation(generated_content)
+
+        try:
+            wrote_semantics = await self._write_memory_directory_semantics(
+                msg=msg,
+                viking_fs=viking_fs,
+                dir_uri=dir_uri,
+                overview=overview,
+                abstract=abstract,
+                ctx=ctx,
+                lock=lock,
+            )
+        except Exception as e:
+            raise RuntimeError(f"Failed to write abstract/overview for {dir_uri}: {e}") from e
+        if not wrote_semantics:
+            return
+        logger.info(f"Generated abstract.md and overview.md for {dir_uri}")
+
+        if msg.skip_vectorization:
+            logger.info(f"Skipping vectorization for {dir_uri} (requested via SemanticMsg)")
+            return
+        await self._vectorize_directory(
+            uri=dir_uri,
+            context_type="memory",
+            abstract=abstract,
+            overview=overview,
+            ctx=ctx,
+        )
+        logger.info(f"Vectorized abstract.md and overview.md for {dir_uri}")
 
     async def _write_memory_directory_semantics(
         self,
@@ -1077,10 +1047,8 @@ class SemanticProcessor(DequeueHandlerBase):
 
             content = _decode_text_bytes(content)
 
-        full_content = content or ""
-
         def result(summary: str) -> Dict[str, Any]:
-            return {"name": file_name, "summary": summary, "content": full_content}
+            return {"name": file_name, "summary": summary}
 
         config = get_openviking_config()
 
@@ -1152,12 +1120,22 @@ class SemanticProcessor(DequeueHandlerBase):
             file_path: File path
 
         Returns:
-            {"name": file_name, "summary": summary_content}; text files also carry
-            decoded "content" so vectorization can avoid re-reading the same file.
+            {"name": file_name, "summary": summary_content}
         """
         file_name = file_path.split("/")[-1]
         llm_sem = llm_sem or asyncio.Semaphore(self.max_concurrent_llm)
         media_type = get_media_type(file_name, None)
+        if file_name.lower().endswith(".ts"):
+            try:
+                prefix = await get_viking_fs().read(
+                    file_path,
+                    offset=0,
+                    size=MPEG_TS_PROBE_BYTES,
+                    ctx=ctx,
+                )
+            except Exception:
+                prefix = None
+            media_type = get_media_type(file_name, None, content=prefix)
         if media_type == "image":
             return await generate_image_summary(file_path, file_name, llm_sem, ctx=ctx)
         elif media_type == "audio":
@@ -1554,7 +1532,6 @@ class SemanticProcessor(DequeueHandlerBase):
         abstract: str,
         overview: str,
         ctx: Optional[RequestContext] = None,
-        semantic_msg_id: Optional[str] = None,
         ingest_options: IngestOptions | None = None,
     ) -> None:
         """Create directory Context and enqueue to EmbeddingQueue."""
@@ -1568,7 +1545,6 @@ class SemanticProcessor(DequeueHandlerBase):
             overview=overview,
             context_type=context_type,
             ctx=active_ctx,
-            semantic_msg_id=semantic_msg_id,
             ingest_options=ingest_options,
         )
 
@@ -1579,7 +1555,6 @@ class SemanticProcessor(DequeueHandlerBase):
         file_path: str,
         summary_dict: Dict[str, str],
         ctx: Optional[RequestContext] = None,
-        semantic_msg_id: Optional[str] = None,
         use_summary: bool = False,
         preserve_existing_created_at: bool = False,
         ingest_options: IngestOptions | None = None,
@@ -1594,7 +1569,6 @@ class SemanticProcessor(DequeueHandlerBase):
             parent_uri=parent_uri,
             context_type=context_type,
             ctx=active_ctx,
-            semantic_msg_id=semantic_msg_id,
             use_summary=use_summary,
             preserve_existing_created_at=preserve_existing_created_at,
             ingest_options=ingest_options,

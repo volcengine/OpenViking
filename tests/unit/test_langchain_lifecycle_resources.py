@@ -10,14 +10,15 @@ from typing import Any
 import pytest
 
 pytest.importorskip("langchain_core")
+pytest.importorskip("langchain_openviking")
 
-from openviking.integrations.langchain import (
+from langchain_openviking import (
     OpenVikingCommitPolicy,
     OpenVikingRetriever,
     OpenVikingSessionContextAssembler,
     OpenVikingSessionRecorder,
 )
-from openviking.integrations.langchain.client import (
+from langchain_openviking.client import (
     OpenVikingClientHandle,
     OpenVikingConnection,
 )
@@ -37,7 +38,7 @@ def test_sync_client_handle_initializes_once_under_concurrency(monkeypatch):
         def close(self) -> None:
             self.closed = True
 
-    import openviking.client as client_module
+    import openviking_sdk as client_module
 
     monkeypatch.setattr(client_module, "SyncHTTPClient", SlowSyncHTTPClient)
     handle = OpenVikingClientHandle(OpenVikingConnection(url="http://localhost:1933"))
@@ -78,7 +79,7 @@ def test_sync_client_handle_recovery_does_not_discard_fresh_client(monkeypatch):
                 raise ConnectionError("replace the first client")
             return {"client": self.index}
 
-    import openviking.client as client_module
+    import openviking_sdk as client_module
 
     monkeypatch.setattr(client_module, "SyncHTTPClient", RecoveringSyncHTTPClient)
     handle = OpenVikingClientHandle(OpenVikingConnection(url="http://localhost:1933"))
@@ -111,7 +112,7 @@ def test_session_scoped_retriever_copies_share_owned_sync_client(monkeypatch):
         def find(self, **_kwargs: Any) -> dict[str, Any]:
             return {"memories": [], "resources": [], "skills": []}
 
-    import openviking.client as client_module
+    import openviking_sdk as client_module
 
     monkeypatch.setattr(client_module, "SyncHTTPClient", TrackingSyncHTTPClient)
     retriever = OpenVikingRetriever(url="http://localhost:1933")
@@ -227,7 +228,7 @@ def test_recorder_and_assembler_deepcopy_do_not_share_owned_sync_clients(monkeyp
         def close(self) -> None:
             self.closed = True
 
-    import openviking.client as client_module
+    import openviking_sdk as client_module
 
     monkeypatch.setattr(client_module, "SyncHTTPClient", TrackingSyncHTTPClient)
     recorder = OpenVikingSessionRecorder(url="http://localhost:1933")

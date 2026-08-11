@@ -63,6 +63,7 @@ Schema::Schema(const std::vector<FieldDef>& fields) {
         break;
       case FieldType::STRING:
       case FieldType::BINARY:
+      case FieldType::TEXT:
       case FieldType::LIST_INT64:
       case FieldType::LIST_STRING:
       case FieldType::LIST_FLOAT32:
@@ -139,6 +140,17 @@ std::string BytesRow::serialize(const std::vector<Value>& row_data) const {
       case FieldType::BINARY: {
         if (std::holds_alternative<std::string>(
                 val)) {  // Binary stored as string
+          int len = std::get<std::string>(val).length();
+          var_infos[i] = {variable_region_offset, len};
+          variable_region_offset += UINT32_SIZE + len;
+        } else {
+          var_infos[i] = {variable_region_offset, 0};
+          variable_region_offset += UINT32_SIZE;
+        }
+        break;
+      }
+      case FieldType::TEXT: {
+        if (std::holds_alternative<std::string>(val)) {
           int len = std::get<std::string>(val).length();
           var_infos[i] = {variable_region_offset, len};
           variable_region_offset += UINT32_SIZE + len;
@@ -253,6 +265,7 @@ std::string BytesRow::serialize(const std::vector<Value>& row_data) const {
       // to variable region
       case FieldType::STRING:
       case FieldType::BINARY:
+      case FieldType::TEXT:
       case FieldType::LIST_INT64:
       case FieldType::LIST_FLOAT32:
       case FieldType::LIST_STRING: {
@@ -269,7 +282,8 @@ std::string BytesRow::serialize(const std::vector<Value>& row_data) const {
           std::memcpy(var_ptr, &len, sizeof(len));
           if (len > 0)
             std::memcpy(var_ptr + sizeof(len), s.data(), len);
-        } else if (meta.data_type == FieldType::BINARY) {
+        } else if (meta.data_type == FieldType::BINARY ||
+                   meta.data_type == FieldType::TEXT) {
           const std::string& s = std::holds_alternative<std::string>(val)
                                      ? std::get<std::string>(val)
                                      : "";
@@ -382,6 +396,26 @@ Value BytesRow::deserialize_field(const std::string& serialized_data,
       return std::string(ptr + offset + sizeof(len), len);
     }
     case FieldType::BINARY: {
+      uint32_t offset;
+      if (sizeof(offset) >
+          serialized_data.size() -
+              static_cast<size_t>(field_ptr - serialized_data.data()))
+        return std::string("");
+      std::memcpy(&offset, field_ptr, sizeof(offset));
+      if (offset >= serialized_data.size())
+        return std::string("");
+
+      uint32_t len;
+      if (offset + sizeof(len) > serialized_data.size())
+        return std::string("");
+      std::memcpy(&len, ptr + offset, sizeof(len));
+
+      if (static_cast<size_t>(offset) + sizeof(len) + len >
+          serialized_data.size())
+        return std::string("");
+      return std::string(ptr + offset + sizeof(len), len);
+    }
+    case FieldType::TEXT: {
       uint32_t offset;
       if (sizeof(offset) >
           serialized_data.size() -

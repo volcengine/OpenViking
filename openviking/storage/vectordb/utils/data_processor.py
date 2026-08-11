@@ -260,10 +260,10 @@ class DataProcessor:
             lat = float(parts[1].strip())
         except ValueError as exc:
             raise ValueError("geo_point lon/lat must be float") from exc
-        if not (-180.0 < lon < 180.0):
-            raise ValueError("geo_point longitude out of range (-180, 180)")
-        if not (-90.0 < lat < 90.0):
-            raise ValueError("geo_point latitude out of range (-90, 90)")
+        if not (-180.0 <= lon <= 180.0):
+            raise ValueError("geo_point longitude out of range [-180, 180]")
+        if not (-90.0 <= lat <= 90.0):
+            raise ValueError("geo_point latitude out of range [-90, 90]")
         return lon, lat
 
     def parse_radius(self, value: Any) -> float:

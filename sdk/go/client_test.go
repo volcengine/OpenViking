@@ -11,9 +11,16 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestAddResourceOptionsHasNoTopLevelParseMode(t *testing.T) {
+	if _, ok := reflect.TypeOf(AddResourceOptions{}).FieldByName("ParseMode"); ok {
+		t.Fatal("AddResourceOptions must configure parse_mode through Args")
+	}
+}
 
 func testClient(t *testing.T, handler http.Handler) (*Client, func()) {
 	t.Helper()
@@ -576,7 +583,7 @@ func TestAddResourceUploadsLocalFile(t *testing.T) {
 			// args must be omitted when the caller does not pass any, so the
 			// request is accepted by pre-#2549 instances whose resources route
 			// uses model_config=ConfigDict(extra="forbid").
-			requireBodyKeysAbsent(t, body, "args")
+			requireBodyKeysAbsent(t, body, "args", "parse_mode")
 			writeOK(t, w, map[string]any{"uri": "viking://resources/note.md"})
 		default:
 			t.Fatalf("unexpected path %s", r.URL.Path)
@@ -590,6 +597,27 @@ func TestAddResourceUploadsLocalFile(t *testing.T) {
 	}
 	if result["uri"] != "viking://resources/note.md" {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestAddResourceSendsNoSplitMode(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		args, ok := body["args"].(map[string]any)
+		if !ok || args["parse_mode"] != "no_split" {
+			t.Fatalf("args = %#v", body["args"])
+		}
+		requireBodyKeysAbsent(t, body, "parse_mode")
+		writeOK(t, w, map[string]any{"uri": "viking://resources/manual"})
+	}))
+	defer closeServer()
+
+	if _, err := client.AddResource(
+		context.Background(),
+		"https://example.com/manual.pdf",
+		&AddResourceOptions{Args: map[string]any{"parse_mode": "no_split"}},
+	); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -1311,5 +1339,82 @@ func TestGrepOmitsLevelLimitWhenUnset(t *testing.T) {
 
 	if _, err := client.Grep(context.Background(), "viking://user", "pat", nil); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSessionAPIsSendEventMemoryTags(t *testing.T) {
+	var requests []map[string]any
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, map[string]any{
+			"method": r.Method,
+			"path":   r.URL.Path,
+			"body":   readJSONBody(t, r),
+		})
+		writeOK(t, w, map[string]any{"status": "ok"})
+	}))
+	defer closeServer()
+
+	config := map[string]any{
+		"events": map[string]any{"tags": []string{"team=search", "channel=web"}},
+	}
+	if _, err := client.CreateSession(context.Background(), &CreateSessionOptions{
+		SessionID:              "tagged",
+		MemoryExtractionConfig: config,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.UpdateSessionConfig(context.Background(), "tagged", &UpdateSessionConfigOptions{
+		MemoryExtractionConfig: config,
+		AutoCommitPolicy:       Map(map[string]any{"message_count_threshold": 25}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.CommitSession(context.Background(), "tagged", &CommitSessionOptions{
+		EventTags: []string{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.UpdateSessionConfig(
+		context.Background(),
+		"tagged",
+		&UpdateSessionConfigOptions{AutoCommitPolicy: Map(nil)},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.CreateSession(
+		context.Background(),
+		&CreateSessionOptions{DisableAutoCommit: true},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(requests) != 5 {
+		t.Fatalf("requests = %#v", requests)
+	}
+	createBody := requests[0]["body"].(map[string]any)
+	if _, ok := createBody["memory_extraction_config"]; !ok {
+		t.Fatalf("create body = %#v", createBody)
+	}
+	if requests[1]["method"] != http.MethodPatch ||
+		requests[1]["path"] != "/api/v1/sessions/tagged/config" {
+		t.Fatalf("patch request = %#v", requests[1])
+	}
+	patchBody := requests[1]["body"].(map[string]any)
+	if policy, ok := patchBody["auto_commit_policy"].(map[string]any); !ok ||
+		policy["message_count_threshold"] != float64(25) {
+		t.Fatalf("patch auto_commit_policy = %#v", patchBody["auto_commit_policy"])
+	}
+	commitBody := requests[2]["body"].(map[string]any)
+	metadata := commitBody["extraction_metadata"].(map[string]any)
+	event := metadata["event"].(map[string]any)
+	if tags, ok := event["tags"].([]any); !ok || len(tags) != 0 {
+		t.Fatalf("commit event tags = %#v", event["tags"])
+	}
+	for _, request := range requests[3:] {
+		body := request["body"].(map[string]any)
+		value, ok := body["auto_commit_policy"]
+		if !ok || value != nil {
+			t.Fatalf("auto_commit_policy = %#v, present = %v", value, ok)
+		}
 	}
 }
