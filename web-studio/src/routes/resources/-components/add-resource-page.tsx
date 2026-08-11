@@ -44,9 +44,9 @@ import { DirectoryPickerDialog } from './directory-picker-dialog'
 import { AdditionalResourceOptions } from './additional-resource-options'
 import type { AdditionalResourceOptionsValue } from './additional-resource-options'
 import { FeishuResourceOptions } from './feishu-resource-options'
-import type { FeishuAuthMode } from './feishu-resource-options'
+import type { FeishuResourceOptionsValue } from './feishu-resource-options'
 import { GitResourceOptions } from './git-resource-options'
-import type { GitAuthMode, GitRefMode } from './git-resource-options'
+import type { GitResourceOptionsValue } from './git-resource-options'
 import { RemoteResourceFields } from './remote-resource-fields'
 import { ResourceDestinationFields } from './resource-destination-fields'
 import type { ResourceDestinationMode } from './resource-destination-fields'
@@ -67,6 +67,20 @@ const DEFAULT_WEB_OPTIONS: WebResourceOptionsValue = {
   maxPages: '50',
   mode: 'auto',
   skipDownloadLinks: true,
+}
+
+const DEFAULT_FEISHU_OPTIONS: FeishuResourceOptionsValue = {
+  accessToken: '',
+  authMode: 'app',
+  refreshToken: '',
+}
+
+const DEFAULT_GIT_OPTIONS: GitResourceOptionsValue = {
+  authMode: 'public',
+  refMode: 'branch',
+  refValue: '',
+  token: '',
+  username: 'oauth2',
 }
 
 const DEFAULT_ADDITIONAL_OPTIONS: AdditionalResourceOptionsValue = {
@@ -118,14 +132,8 @@ export function AddResourceForm({
   const [exclude, setExclude] = useState('')
   const [watchEnabled, setWatchEnabled] = useState(initialWatchEnabled)
   const [watchInterval, setWatchInterval] = useState('1440')
-  const [feishuAuthMode, setFeishuAuthMode] = useState<FeishuAuthMode>('app')
-  const [feishuAccessToken, setFeishuAccessToken] = useState('')
-  const [feishuRefreshToken, setFeishuRefreshToken] = useState('')
-  const [gitRefMode, setGitRefMode] = useState<GitRefMode>('branch')
-  const [gitRef, setGitRef] = useState('')
-  const [gitAuthMode, setGitAuthMode] = useState<GitAuthMode>('public')
-  const [gitUsername, setGitUsername] = useState('oauth2')
-  const [gitToken, setGitToken] = useState('')
+  const [feishuOptions, setFeishuOptions] = useState(DEFAULT_FEISHU_OPTIONS)
+  const [gitOptions, setGitOptions] = useState(DEFAULT_GIT_OPTIONS)
   const [webOptions, setWebOptions] =
     useState<WebResourceOptionsValue>(DEFAULT_WEB_OPTIONS)
   const [additionalOptions, setAdditionalOptions] =
@@ -161,18 +169,10 @@ export function AddResourceForm({
   const effectiveDestinationMode: ResourceDestinationMode =
     sourceCapabilities.exactDestination ? 'to' : destinationMode
   const sourceOptionState: RemoteSourceOptionState = {
-    feishu: {
-      accessToken: feishuAccessToken,
-      authMode: feishuAuthMode,
-      refreshToken: feishuRefreshToken,
-    },
+    feishu: feishuOptions,
     git: {
-      authMode: gitAuthMode,
-      refMode: gitRefMode,
-      refValue: gitRef,
+      ...gitOptions,
       supportsHttpAuth: gitSupportsHttpAuth,
-      token: gitToken,
-      username: gitUsername,
     },
     watchEnabled: effectiveWatchEnabled,
     web: webOptions,
@@ -188,8 +188,11 @@ export function AddResourceForm({
         .toLowerCase()
         .startsWith('https://')
       if (gitSupportsHttpAuth && !nextSupportsHttpAuth) {
-        setGitAuthMode('public')
-        setGitToken('')
+        setGitOptions((current) => ({
+          ...current,
+          authMode: 'public',
+          token: '',
+        }))
       }
       setRemoteUrl(value)
     },
@@ -199,14 +202,8 @@ export function AddResourceForm({
   const resetRemoteSourceFields = useCallback(() => {
     setWatchEnabled(initialWatchEnabled)
     setWatchInterval('1440')
-    setFeishuAuthMode('app')
-    setFeishuAccessToken('')
-    setFeishuRefreshToken('')
-    setGitRefMode('branch')
-    setGitRef('')
-    setGitAuthMode('public')
-    setGitUsername('oauth2')
-    setGitToken('')
+    setFeishuOptions(DEFAULT_FEISHU_OPTIONS)
+    setGitOptions(DEFAULT_GIT_OPTIONS)
     setWebOptions(DEFAULT_WEB_OPTIONS)
   }, [initialWatchEnabled])
 
@@ -424,33 +421,21 @@ export function AddResourceForm({
           >
             {remoteResourceKind === 'feishu' ? (
               <FeishuResourceOptions
-                accessToken={feishuAccessToken}
-                authMode={feishuAuthMode}
                 disabled={remotePhase === 'processing'}
                 documentationUrl={feishuConfigurationUrl}
-                onAccessTokenChange={setFeishuAccessToken}
-                onAuthModeChange={setFeishuAuthMode}
-                onRefreshTokenChange={setFeishuRefreshToken}
-                refreshToken={feishuRefreshToken}
+                onChange={setFeishuOptions}
                 t={t}
+                value={feishuOptions}
                 watchEnabled={effectiveWatchEnabled}
               />
             ) : null}
             {remoteResourceKind === 'git' ? (
               <GitResourceOptions
-                authMode={gitAuthMode}
                 disabled={remotePhase === 'processing'}
-                onAuthModeChange={setGitAuthMode}
-                onRefChange={setGitRef}
-                onRefModeChange={setGitRefMode}
-                onTokenChange={setGitToken}
-                onUsernameChange={setGitUsername}
-                refMode={gitRefMode}
-                refValue={gitRef}
+                onChange={setGitOptions}
                 supportsHttpAuth={gitSupportsHttpAuth}
                 t={t}
-                token={gitToken}
-                username={gitUsername}
+                value={gitOptions}
               />
             ) : null}
             {remoteResourceKind === 'webPage' ||

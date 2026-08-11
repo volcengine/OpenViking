@@ -23,6 +23,7 @@ const CODE_HOSTS = new Set([
   'atomgit.com',
   'git.sr.ht',
 ])
+const AZURE_DEVOPS_HOSTS = new Set(['dev.azure.com'])
 const REMOTE_FILE_EXTENSIONS = new Set([
   'pdf',
   'md',
@@ -95,12 +96,18 @@ function looksLikeRemoteFile(url: URL): boolean {
 function looksLikeGitRepository(url: URL): boolean {
   if (['git:', 'ssh:'].includes(url.protocol)) return true
   if (!['http:', 'https:'].includes(url.protocol)) return false
-  if (!CODE_HOSTS.has(url.hostname.toLowerCase())) return false
 
   const parts = url.pathname.split('/').filter(Boolean)
-  if (parts.length < 2) return false
+  const host = url.hostname.toLowerCase()
+  if (AZURE_DEVOPS_HOSTS.has(host)) {
+    return (
+      parts.length === 4 && parts[2] === '_git' && !url.searchParams.has('path')
+    )
+  }
   if (url.pathname.endsWith('.git')) return true
-  if (url.hostname.toLowerCase() === 'github.com') {
+  if (!CODE_HOSTS.has(host)) return false
+  if (parts.length < 2) return false
+  if (host === 'github.com') {
     return parts.length === 2 || ['tree', 'commit'].includes(parts[2] ?? '')
   }
   return !['blob', 'raw', 'issues', 'pull', 'merge_requests'].some((segment) =>
@@ -141,6 +148,12 @@ export function matchesRemoteResourceTypeSelection(
   }
   if (selected === 'remoteFile') {
     return detected === 'remoteFile' || detected === 'webPage'
+  }
+  if (selected === 'git') {
+    // The server can allow self-hosted code domains that Studio cannot know.
+    // Treat an otherwise generic HTTP(S) page as ambiguous and let an explicit
+    // Git selection defer the final routing decision to the server.
+    return detected === 'git' || detected === 'webPage'
   }
   return detected === selected
 }

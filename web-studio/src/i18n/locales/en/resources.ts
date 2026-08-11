@@ -270,7 +270,7 @@ const resources = {
       configuration: {
         service: 'Deploy a Connector service that handles TOS imports.',
         endpoints:
-          'Set connector.enable=true in ov.conf, then fill connector.connector and connector.tracker.',
+          'Set connector.enable=true in ov.conf. Set connector.connector to the full doc/add endpoint URL and connector.tracker to the full task/info endpoint URL.',
         allow: 'Add tos to connector.allowed_add_types.',
         restart: 'Restart OpenViking, then import with tos://bucket/path.',
         noDocumentation:

@@ -8,29 +8,27 @@ import { ResourceOptionRadioCard } from './resource-option-radio-card'
 
 export type FeishuAuthMode = 'app' | 'user'
 
-type FeishuResourceOptionsProps = {
+export type FeishuResourceOptionsValue = {
   accessToken: string
   authMode: FeishuAuthMode
+  refreshToken: string
+}
+
+type FeishuResourceOptionsProps = {
   disabled: boolean
   documentationUrl: string
-  onAccessTokenChange: (value: string) => void
-  onAuthModeChange: (value: FeishuAuthMode) => void
-  onRefreshTokenChange: (value: string) => void
-  refreshToken: string
+  onChange: (value: FeishuResourceOptionsValue) => void
   t: TFunction<'addResource'>
+  value: FeishuResourceOptionsValue
   watchEnabled: boolean
 }
 
 export function FeishuResourceOptions({
-  accessToken,
-  authMode,
   disabled,
   documentationUrl,
-  onAccessTokenChange,
-  onAuthModeChange,
-  onRefreshTokenChange,
-  refreshToken,
+  onChange,
   t,
+  value,
   watchEnabled,
 }: FeishuResourceOptionsProps) {
   return (
@@ -41,9 +39,12 @@ export function FeishuResourceOptions({
       </div>
 
       <RadioGroup
-        value={authMode}
-        onValueChange={(value) =>
-          onAuthModeChange(value === 'user' ? 'user' : 'app')
+        value={value.authMode}
+        onValueChange={(authMode) =>
+          onChange({
+            ...value,
+            authMode: authMode === 'user' ? 'user' : 'app',
+          })
         }
         disabled={disabled}
         className="grid gap-3 sm:grid-cols-2"
@@ -60,7 +61,7 @@ export function FeishuResourceOptions({
         />
       </RadioGroup>
 
-      {authMode === 'app' ? (
+      {value.authMode === 'app' ? (
         <ResourceConfigurationGuide
           documentationLabel={t('configurationGuide.documentation')}
           documentationUrl={documentationUrl}
@@ -74,7 +75,7 @@ export function FeishuResourceOptions({
         </ResourceConfigurationGuide>
       ) : null}
 
-      {authMode === 'user' ? (
+      {value.authMode === 'user' ? (
         <div className="grid gap-3 border-t border-border/50 pt-3 sm:grid-cols-2">
           <div className="grid gap-2">
             <Label htmlFor="add-resource-feishu-access-token">
@@ -84,9 +85,11 @@ export function FeishuResourceOptions({
               id="add-resource-feishu-access-token"
               type="password"
               autoComplete="off"
-              value={accessToken}
+              value={value.accessToken}
               disabled={disabled}
-              onChange={(event) => onAccessTokenChange(event.target.value)}
+              onChange={(event) =>
+                onChange({ ...value, accessToken: event.target.value })
+              }
               placeholder={t('feishu.accessToken.placeholder')}
             />
           </div>
@@ -99,9 +102,11 @@ export function FeishuResourceOptions({
                 id="add-resource-feishu-refresh-token"
                 type="password"
                 autoComplete="off"
-                value={refreshToken}
+                value={value.refreshToken}
                 disabled={disabled}
-                onChange={(event) => onRefreshTokenChange(event.target.value)}
+                onChange={(event) =>
+                  onChange({ ...value, refreshToken: event.target.value })
+                }
                 placeholder={t('feishu.refreshToken.placeholder')}
               />
             </div>

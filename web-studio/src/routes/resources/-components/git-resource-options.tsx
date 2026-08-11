@@ -9,38 +9,30 @@ import { ResourceOptionRadioCard } from './resource-option-radio-card'
 export type GitAuthMode = 'public' | 'token'
 export type GitRefMode = 'branch' | 'commit'
 
-const GIT_REF_MODES: GitRefMode[] = ['branch', 'commit']
-
-type GitResourceOptionsProps = {
+export type GitResourceOptionsValue = {
   authMode: GitAuthMode
-  disabled: boolean
-  onAuthModeChange: (value: GitAuthMode) => void
-  onRefChange: (value: string) => void
-  onRefModeChange: (value: GitRefMode) => void
-  onTokenChange: (value: string) => void
-  onUsernameChange: (value: string) => void
   refMode: GitRefMode
   refValue: string
-  supportsHttpAuth: boolean
-  t: TFunction<'addResource'>
   token: string
   username: string
 }
 
+const GIT_REF_MODES: GitRefMode[] = ['branch', 'commit']
+
+type GitResourceOptionsProps = {
+  disabled: boolean
+  onChange: (value: GitResourceOptionsValue) => void
+  supportsHttpAuth: boolean
+  t: TFunction<'addResource'>
+  value: GitResourceOptionsValue
+}
+
 export function GitResourceOptions({
-  authMode,
   disabled,
-  onAuthModeChange,
-  onRefChange,
-  onRefModeChange,
-  onTokenChange,
-  onUsernameChange,
-  refMode,
-  refValue,
+  onChange,
   supportsHttpAuth,
   t,
-  token,
-  username,
+  value,
 }: GitResourceOptionsProps) {
   return (
     <div className="space-y-4 rounded-lg border border-border/60 bg-muted/10 p-4">
@@ -56,13 +48,13 @@ export function GitResourceOptions({
               <button
                 key={mode}
                 type="button"
-                aria-pressed={refMode === mode}
+                aria-pressed={value.refMode === mode}
                 className={cn(
                   'grid h-full w-full min-w-0 place-items-center rounded px-2 text-xs transition-colors',
-                  refMode === mode && 'bg-background shadow-sm',
+                  value.refMode === mode && 'bg-background shadow-sm',
                 )}
                 disabled={disabled}
-                onClick={() => onRefModeChange(mode)}
+                onClick={() => onChange({ ...value, refMode: mode })}
               >
                 {mode === 'branch' ? t('git.branch') : t('git.commit')}
               </button>
@@ -71,15 +63,17 @@ export function GitResourceOptions({
         </div>
         <div className="grid gap-2">
           <Label htmlFor="add-resource-git-ref">
-            {refMode === 'branch' ? t('git.branch') : t('git.commit')}
+            {value.refMode === 'branch' ? t('git.branch') : t('git.commit')}
           </Label>
           <Input
             id="add-resource-git-ref"
-            value={refValue}
+            value={value.refValue}
             disabled={disabled}
-            onChange={(event) => onRefChange(event.target.value)}
+            onChange={(event) =>
+              onChange({ ...value, refValue: event.target.value })
+            }
             placeholder={
-              refMode === 'branch'
+              value.refMode === 'branch'
                 ? t('git.branch.placeholder')
                 : t('git.commit.placeholder')
             }
@@ -90,9 +84,12 @@ export function GitResourceOptions({
       <div className="space-y-3 border-t border-border/50 pt-3">
         <Label>{t('git.auth.title')}</Label>
         <RadioGroup
-          value={authMode}
-          onValueChange={(value) =>
-            onAuthModeChange(value === 'token' ? 'token' : 'public')
+          value={value.authMode}
+          onValueChange={(authMode) =>
+            onChange({
+              ...value,
+              authMode: authMode === 'token' ? 'token' : 'public',
+            })
           }
           disabled={disabled}
           className="grid gap-3 sm:grid-cols-2"
@@ -114,7 +111,7 @@ export function GitResourceOptions({
           />
         </RadioGroup>
 
-        {authMode === 'token' && supportsHttpAuth ? (
+        {value.authMode === 'token' && supportsHttpAuth ? (
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="grid gap-2">
               <Label htmlFor="add-resource-git-username">
@@ -122,9 +119,11 @@ export function GitResourceOptions({
               </Label>
               <Input
                 id="add-resource-git-username"
-                value={username}
+                value={value.username}
                 disabled={disabled}
-                onChange={(event) => onUsernameChange(event.target.value)}
+                onChange={(event) =>
+                  onChange({ ...value, username: event.target.value })
+                }
                 placeholder={t('git.username.placeholder')}
               />
             </div>
@@ -134,9 +133,11 @@ export function GitResourceOptions({
                 id="add-resource-git-token"
                 type="password"
                 autoComplete="off"
-                value={token}
+                value={value.token}
                 disabled={disabled}
-                onChange={(event) => onTokenChange(event.target.value)}
+                onChange={(event) =>
+                  onChange({ ...value, token: event.target.value })
+                }
                 placeholder={t('git.token.placeholder')}
               />
             </div>

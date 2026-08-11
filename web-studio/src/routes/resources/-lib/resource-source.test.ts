@@ -12,6 +12,8 @@ describe('detectRemoteResourceKind', () => {
     ['https://github.com/volcengine/OpenViking', 'git'],
     ['git@github.com:volcengine/OpenViking.git', 'git'],
     ['https://gitlab.com/group/repo.git', 'git'],
+    ['https://git.example.com/group/repo.git', 'git'],
+    ['https://dev.azure.com/org/project/_git/repo', 'git'],
     ['https://example.com/sitemap.xml', 'webFeed'],
     ['https://example.com/feed.atom', 'webFeed'],
     ['https://example.com/guide.pdf', 'remoteFile'],
@@ -30,6 +32,14 @@ describe('detectRemoteResourceKind', () => {
       ),
     ).toBe('remoteFile')
   })
+
+  it('does not classify an Azure DevOps file browser URL as a repository', () => {
+    expect(
+      detectRemoteResourceKind(
+        'https://dev.azure.com/org/project/_git/repo?path=/README.md',
+      ),
+    ).toBe('webPage')
+  })
 })
 
 describe('matchesRemoteResourceTypeSelection', () => {
@@ -40,5 +50,6 @@ describe('matchesRemoteResourceTypeSelection', () => {
     expect(matchesRemoteResourceTypeSelection('webPage', 'remoteFile')).toBe(
       true,
     )
+    expect(matchesRemoteResourceTypeSelection('webPage', 'git')).toBe(true)
   })
 })

@@ -1,23 +1,12 @@
-import type { ComponentType } from 'react'
 import type { TFunction } from 'i18next'
-import { Cloud, FileDown, FileText, GitBranch, Globe2 } from 'lucide-react'
 
 import { cn } from '#/lib/utils'
 import { getRemoteResourceCapabilities } from '../-lib/resource-source-strategy'
 import type { RemoteResourceTypeSelection } from '../-lib/resource-source'
-
-type ResourceTypeOption = {
-  icon: ComponentType<{ className?: string }>
-  type: Exclude<RemoteResourceTypeSelection, 'auto'>
-}
-
-const RESOURCE_TYPE_OPTIONS: ResourceTypeOption[] = [
-  { type: 'feishu', icon: FileText },
-  { type: 'git', icon: GitBranch },
-  { type: 'webPage', icon: Globe2 },
-  { type: 'remoteFile', icon: FileDown },
-  { type: 'tos', icon: Cloud },
-]
+import {
+  getRemoteResourceDescriptor,
+  REMOTE_RESOURCE_DESCRIPTORS,
+} from './remote-resource-descriptors'
 
 type RemoteResourceTypePickerProps = {
   disabled: boolean
@@ -35,10 +24,12 @@ export function RemoteResourceTypePicker({
   watchOnly = false,
 }: RemoteResourceTypePickerProps) {
   const availableOptions = watchOnly
-    ? RESOURCE_TYPE_OPTIONS.filter(
+    ? REMOTE_RESOURCE_DESCRIPTORS.filter(
         ({ type }) => getRemoteResourceCapabilities(type).watch,
       )
-    : RESOURCE_TYPE_OPTIONS
+    : REMOTE_RESOURCE_DESCRIPTORS
+  const selectedDescriptor =
+    value === 'auto' ? undefined : getRemoteResourceDescriptor(value)
 
   return (
     <div className="space-y-2.5 rounded-xl border border-border/60 bg-muted/10 p-3">
@@ -90,16 +81,16 @@ export function RemoteResourceTypePicker({
         })}
       </div>
 
-      {value === 'auto' ? null : (
+      {selectedDescriptor ? (
         <div className="flex min-h-7 min-w-0 items-center gap-2 rounded-md bg-muted/40 px-2.5 py-1.5 text-xs text-muted-foreground">
           <span className="min-w-0 flex-1 truncate">
             {t(`sourcePicker.${value}Hint`)}
           </span>
           <code className="hidden max-w-[42%] shrink-0 truncate text-[11px] text-muted-foreground/80 sm:block">
-            {t(`sourcePicker.${value}Example`)}
+            {t(selectedDescriptor.exampleKey)}
           </code>
         </div>
-      )}
+      ) : null}
     </div>
   )
 }

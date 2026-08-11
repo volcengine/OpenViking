@@ -23,7 +23,14 @@ export function isOptionalIntegerValid(
   return !value.trim() || parseOptionalInteger(value, minimum) !== undefined
 }
 
-const RESOURCE_TAG_PATTERN = /^[^=,\s]+=[^=,\s]+$/
+function isResourceTagValid(tag: string): boolean {
+  const separator = tag.indexOf('=')
+  return (
+    separator > 0 &&
+    separator === tag.lastIndexOf('=') &&
+    separator < tag.length - 1
+  )
+}
 
 export function parseResourceTags(value: string): {
   tags: string[]
@@ -32,6 +39,6 @@ export function parseResourceTags(value: string): {
   const tags = Array.from(new Set(parseDelimitedValues(value)))
   return {
     tags,
-    valid: tags.every((tag) => RESOURCE_TAG_PATTERN.test(tag)),
+    valid: tags.every(isResourceTagValid),
   }
 }

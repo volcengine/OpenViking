@@ -251,7 +251,7 @@ const resources = {
       configuration: {
         service: '先部署可处理 TOS 导入的 Connector 服务。',
         endpoints:
-          '在 ov.conf 中设置 connector.enable=true，并填写 connector.connector 和 connector.tracker。',
+          '在 ov.conf 中设置 connector.enable=true；connector.connector 填写完整的 doc/add 接口 URL，connector.tracker 填写完整的 task/info 接口 URL。',
         allow: '将 tos 加入 connector.allowed_add_types。',
         restart: '重启 OpenViking 服务后，再使用 tos://bucket/path 导入。',
         noDocumentation:

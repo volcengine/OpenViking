@@ -9,6 +9,7 @@ import type {
   RemoteResourceKind,
   RemoteResourceTypeSelection,
 } from '../-lib/resource-source'
+import { getRemoteResourceDescriptor } from './remote-resource-descriptors'
 import { RemoteResourceTypePicker } from './remote-resource-type-picker'
 
 type RemoteResourceFieldsProps = {
@@ -33,21 +34,8 @@ function getRemoteUrlPlaceholder(
   resourceKind: RemoteResourceKind,
   t: TFunction<'addResource'>,
 ): string {
-  switch (resourceKind) {
-    case 'feishu':
-      return t('sourcePicker.feishuExample')
-    case 'git':
-      return t('sourcePicker.gitExample')
-    case 'webFeed':
-    case 'webPage':
-      return t('sourcePicker.webPageExample')
-    case 'remoteFile':
-      return t('sourcePicker.remoteFileExample')
-    case 'tos':
-      return t('sourcePicker.tosExample')
-    default:
-      return t('remoteUrl.placeholder')
-  }
+  const descriptor = getRemoteResourceDescriptor(resourceKind)
+  return descriptor ? t(descriptor.exampleKey) : t('remoteUrl.placeholder')
 }
 
 export function RemoteResourceFields({

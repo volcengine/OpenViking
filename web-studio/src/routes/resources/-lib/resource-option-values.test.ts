@@ -28,7 +28,14 @@ describe('resource option values', () => {
       tags: ['team=docs', 'env=test'],
       valid: true,
     })
+    expect(parseResourceTags('topic=machine learning')).toEqual({
+      tags: ['topic=machine learning'],
+      valid: true,
+    })
     expect(parseResourceTags('team=docs, invalid')).toMatchObject({
+      valid: false,
+    })
+    expect(parseResourceTags('team=docs=archive')).toMatchObject({
       valid: false,
     })
   })
