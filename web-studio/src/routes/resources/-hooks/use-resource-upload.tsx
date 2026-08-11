@@ -14,7 +14,12 @@ import {
   mergeServerTasks,
   normalizeTaskList,
 } from '../-lib/resource-upload-tasks'
+import {
+  buildRemoteResourceRequest,
+  buildUploadedResourceRequest,
+} from '../-lib/resource-import-request'
 import type {
+  AddResourceCommonBody,
   AddResourceResult,
   TempUploadResult,
 } from '@ov-server/api/v1/resources'
@@ -61,7 +66,7 @@ export type UploadBatchItem = {
 
 export type UploadBatchParams = {
   files: UploadBatchItem[]
-  commonBody: Record<string, unknown>
+  commonBody: AddResourceCommonBody
 }
 
 export type RemoteStartResult = {
@@ -71,7 +76,7 @@ export type RemoteStartResult = {
 
 export type RemoteStartParams = {
   url: string
-  commonBody: Record<string, unknown>
+  commonBody: AddResourceCommonBody
   onAccepted?: (result: RemoteStartResult) => void
   onCompleted?: () => void
   onFailed?: () => void
@@ -234,7 +239,7 @@ export function ResourceUploadProvider({
     async (
       taskId: string,
       params: UploadBatchItem,
-      commonBody: Record<string, unknown>,
+      commonBody: AddResourceCommonBody,
     ) => {
       try {
         updateTask(taskId, (task) => ({
@@ -276,11 +281,11 @@ export function ResourceUploadProvider({
 
         const addResult = await getOvResult<AddResourceResult>(
           postResources({
-            body: {
-              ...commonBody,
-              temp_file_id: tempFileId,
-              source_name: params.file.name,
-            } as Parameters<typeof postResources>[0]['body'],
+            body: buildUploadedResourceRequest(
+              tempFileId,
+              params.file.name,
+              commonBody,
+            ) as Parameters<typeof postResources>[0]['body'],
           }),
         )
 
@@ -406,10 +411,10 @@ export function ResourceUploadProvider({
         try {
           const result = await getOvResult<AddResourceResult>(
             postResources({
-              body: {
-                ...params.commonBody,
-                path: params.url,
-              } as Parameters<typeof postResources>[0]['body'],
+              body: buildRemoteResourceRequest(
+                params.url,
+                params.commonBody,
+              ) as Parameters<typeof postResources>[0]['body'],
               signal: controller.signal,
             }),
           )

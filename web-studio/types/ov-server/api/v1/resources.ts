@@ -6,6 +6,57 @@ export type TempUploadResult = {
   temp_file_id: string
 }
 
+export type ResourceProcessingMode = 'semantic_and_vectors' | 'vectors_only'
+
+export type ResourceTagMode = 'replace' | 'append'
+
+export type AddResourceArgs = Record<string, unknown> & {
+  allow_external_links?: boolean
+  auth_config?: Record<string, unknown>
+  branch?: string
+  commit?: string
+  depth?: number
+  exclude_paths?: string[]
+  feishu_access_token?: string
+  feishu_refresh_token?: string
+  include_paths?: string[]
+  max_pages?: number
+  parse_mode?: 'default' | 'no_split'
+  site?: boolean
+  skip_download_links?: boolean
+}
+
+export type AddResourceRequest = {
+  path?: string
+  temp_file_id?: string
+  add_type?: string
+  to?: string
+  parent?: string
+  create_parent?: boolean
+  reason?: string
+  instruction?: string
+  wait?: boolean
+  timeout?: number
+  strict?: boolean
+  source_name?: string
+  ignore_dirs?: string
+  include?: string
+  exclude?: string
+  directly_upload_media?: boolean
+  preserve_structure?: boolean
+  args?: AddResourceArgs
+  telemetry?: boolean | Record<string, boolean>
+  watch_interval?: number
+  processing_mode?: ResourceProcessingMode
+  tags?: string[]
+  tag_mode?: ResourceTagMode
+}
+
+export type AddResourceCommonBody = Omit<
+  AddResourceRequest,
+  'path' | 'temp_file_id' | 'source_name'
+>
+
 export type AddResourceResult = {
   errors?: string[]
   message?: string
