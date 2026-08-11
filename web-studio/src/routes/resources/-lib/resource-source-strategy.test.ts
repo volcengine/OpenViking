@@ -78,6 +78,27 @@ describe('remote resource source strategy', () => {
     expect(isRemoteSourceConfigurationValid('webPage', state)).toBe(false)
   })
 
+  it('builds site filters as top-level comma-delimited patterns', () => {
+    const state: RemoteSourceOptionState = {
+      ...DEFAULT_STATE,
+      web: {
+        ...DEFAULT_STATE.web,
+        excludePaths: '/archive\n/private',
+        includePaths: '/docs, /zh/',
+        mode: 'site',
+      },
+    }
+
+    expect(buildRemoteSourceRequestOptions('webPage', state)).toEqual({
+      args: {
+        max_pages: 50,
+        site: true,
+      },
+      exclude: '/archive,/private',
+      include: '/docs,/zh/',
+    })
+  })
+
   it('does not build token authentication for a non-HTTPS Git source', () => {
     const state: RemoteSourceOptionState = {
       ...DEFAULT_STATE,

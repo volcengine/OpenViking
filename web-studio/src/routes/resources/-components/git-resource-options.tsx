@@ -2,8 +2,9 @@ import type { TFunction } from 'i18next'
 
 import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
-import { RadioGroup, RadioGroupItem } from '#/components/ui/radio-group'
+import { RadioGroup } from '#/components/ui/radio-group'
 import { cn } from '#/lib/utils'
+import { ResourceOptionRadioCard } from './resource-option-radio-card'
 
 export type GitAuthMode = 'public' | 'token'
 export type GitRefMode = 'branch' | 'commit'
@@ -96,32 +97,21 @@ export function GitResourceOptions({
           disabled={disabled}
           className="grid gap-3 sm:grid-cols-2"
         >
-          <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border/50 p-3">
-            <RadioGroupItem value="public" className="mt-0.5" />
-            <span className="grid gap-1">
-              <span className="text-sm font-medium">
-                {t('git.auth.public')}
-              </span>
-              <span className="text-xs text-muted-foreground">
-                {t('git.auth.publicHint')}
-              </span>
-            </span>
-          </label>
-          <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border/50 p-3">
-            <RadioGroupItem
-              value="token"
-              disabled={!supportsHttpAuth}
-              className="mt-0.5"
-            />
-            <span className="grid gap-1">
-              <span className="text-sm font-medium">{t('git.auth.token')}</span>
-              <span className="text-xs text-muted-foreground">
-                {supportsHttpAuth
-                  ? t('git.auth.tokenHint')
-                  : t('git.auth.httpsOnly')}
-              </span>
-            </span>
-          </label>
+          <ResourceOptionRadioCard
+            description={t('git.auth.publicHint')}
+            title={t('git.auth.public')}
+            value="public"
+          />
+          <ResourceOptionRadioCard
+            description={
+              supportsHttpAuth
+                ? t('git.auth.tokenHint')
+                : t('git.auth.httpsOnly')
+            }
+            disabled={!supportsHttpAuth}
+            title={t('git.auth.token')}
+            value="token"
+          />
         </RadioGroup>
 
         {authMode === 'token' && supportsHttpAuth ? (

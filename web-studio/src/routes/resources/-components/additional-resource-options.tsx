@@ -19,7 +19,7 @@ export type ResourceParseMode = 'default' | 'no_split'
 
 export type AdditionalResourceOptionsValue = {
   parseMode: ResourceParseMode
-  preserveStructure: boolean
+  preserveStructure?: boolean
   processingMode: ResourceProcessingMode
   sourceName: string
   tagMode: ResourceTagMode
@@ -35,7 +35,7 @@ type AdditionalResourceOptionsProps = {
   t: TFunction<'addResource'>
   tagsValid: boolean
   value: AdditionalResourceOptionsValue
-  tosMode?: boolean
+  nativeOptions?: boolean
 }
 
 export function AdditionalResourceOptions({
@@ -45,8 +45,15 @@ export function AdditionalResourceOptions({
   t,
   tagsValid,
   value,
-  tosMode = false,
+  nativeOptions = true,
 }: AdditionalResourceOptionsProps) {
+  const preserveStructureMode =
+    value.preserveStructure === undefined
+      ? 'server_default'
+      : value.preserveStructure
+        ? 'preserve'
+        : 'flatten'
+
   return (
     <div className="space-y-4 border-t border-border/50 pt-4">
       <div className="grid gap-3 sm:grid-cols-2">
@@ -60,7 +67,7 @@ export function AdditionalResourceOptions({
                 parseMode: parseMode === 'no_split' ? 'no_split' : 'default',
               })
             }
-            disabled={disabled || tosMode}
+            disabled={disabled || !nativeOptions}
           >
             <SelectTrigger className="w-full">
               <SelectValue />
@@ -84,7 +91,7 @@ export function AdditionalResourceOptions({
                     : 'semantic_and_vectors',
               })
             }
-            disabled={disabled || tosMode}
+            disabled={disabled || !nativeOptions}
           >
             <SelectTrigger className="w-full">
               <SelectValue />
@@ -102,20 +109,46 @@ export function AdditionalResourceOptions({
       </div>
 
       <div className="flex flex-wrap gap-x-5 gap-y-3">
-        <Label className="flex items-center gap-2">
-          <Checkbox
-            checked={value.preserveStructure}
-            disabled={disabled || tosMode}
-            onCheckedChange={(checked) =>
-              onChange({ ...value, preserveStructure: Boolean(checked) })
+        <div className="grid min-w-48 gap-2">
+          <Label htmlFor="add-resource-preserve-structure">
+            {t('preserveStructure')}
+          </Label>
+          <Select
+            value={preserveStructureMode}
+            onValueChange={(mode) =>
+              onChange({
+                ...value,
+                preserveStructure:
+                  mode === 'server_default' ? undefined : mode === 'preserve',
+              })
             }
-          />
-          {t('preserveStructure')}
-        </Label>
+            disabled={disabled || !nativeOptions}
+          >
+            <SelectTrigger
+              id="add-resource-preserve-structure"
+              className="w-full"
+            >
+              <SelectValue>
+                {t(`preserveStructure.${preserveStructureMode}`)}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="server_default">
+                {t('preserveStructure.serverDefault')}
+              </SelectItem>
+              <SelectItem value="preserve">
+                {t('preserveStructure.preserve')}
+              </SelectItem>
+              <SelectItem value="flatten">
+                {t('preserveStructure.flatten')}
+              </SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
         <Label className="flex items-center gap-2">
           <Checkbox
             checked={value.wait}
-            disabled={disabled || tosMode}
+            disabled={disabled || !nativeOptions}
             onCheckedChange={(checked) =>
               onChange({ ...value, wait: Boolean(checked) })
             }
@@ -124,7 +157,7 @@ export function AdditionalResourceOptions({
         </Label>
       </div>
 
-      {value.wait && !tosMode ? (
+      {value.wait && nativeOptions ? (
         <div className="grid gap-2 sm:max-w-xs">
           <Label htmlFor="add-resource-timeout">{t('timeout')}</Label>
           <Input
@@ -142,7 +175,7 @@ export function AdditionalResourceOptions({
         </div>
       ) : null}
 
-      {isRemote && !tosMode ? (
+      {isRemote && nativeOptions ? (
         <div className="grid gap-2">
           <Label htmlFor="add-resource-source-name">{t('sourceName')}</Label>
           <Input

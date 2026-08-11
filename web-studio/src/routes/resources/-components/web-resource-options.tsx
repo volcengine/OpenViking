@@ -3,8 +3,9 @@ import type { TFunction } from 'i18next'
 import { Checkbox } from '#/components/ui/checkbox'
 import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
-import { RadioGroup, RadioGroupItem } from '#/components/ui/radio-group'
+import { RadioGroup } from '#/components/ui/radio-group'
 import { Textarea } from '#/components/ui/textarea'
+import { ResourceOptionRadioCard } from './resource-option-radio-card'
 
 export type WebImportMode = 'auto' | 'single' | 'recursive' | 'site'
 
@@ -53,20 +54,12 @@ export function WebResourceOptions({
           className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4"
         >
           {WEB_IMPORT_MODES.map((mode) => (
-            <label
+            <ResourceOptionRadioCard
               key={mode}
-              className="flex cursor-pointer items-start gap-2 rounded-md border border-border/50 p-3"
-            >
-              <RadioGroupItem value={mode} className="mt-0.5" />
-              <span className="grid gap-1">
-                <span className="text-sm font-medium">
-                  {t(`web.mode.${mode}`)}
-                </span>
-                <span className="text-xs text-muted-foreground">
-                  {t(`web.mode.${mode}Hint`)}
-                </span>
-              </span>
-            </label>
+              description={t(`web.mode.${mode}Hint`)}
+              title={t(`web.mode.${mode}`)}
+              value={mode}
+            />
           ))}
         </RadioGroup>
       </div>

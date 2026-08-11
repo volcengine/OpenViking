@@ -1,7 +1,7 @@
 import { fileTypeFromBlob } from 'file-type'
 import { FileIcon, Upload } from 'lucide-react'
 import type { TFunction } from 'i18next'
-import { useCallback } from 'react'
+import { useCallback, useRef } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { toast } from 'sonner'
@@ -51,6 +51,18 @@ export function UploadResourceFields({
   onFilesChange,
   t,
 }: UploadResourceFieldsProps) {
+  const filesRef = useRef(files)
+  filesRef.current = files
+
+  const updateFiles = useCallback(
+    (update: (currentFiles: SelectedUploadFile[]) => SelectedUploadFile[]) => {
+      const nextFiles = update(filesRef.current)
+      filesRef.current = nextFiles
+      onFilesChange(nextFiles)
+    },
+    [onFilesChange],
+  )
+
   const addFiles = useCallback(
     (nextFiles: File[]) => {
       void (async () => {
@@ -80,22 +92,21 @@ export function UploadResourceFields({
           })
         }
 
-        const remainingSlots = Math.max(MAX_UPLOAD_FILES - files.length, 0)
-        if (accepted.length > remainingSlots) {
-          toast(t('tooManyFiles', { count: MAX_UPLOAD_FILES }), {
-            duration: 2500,
-          })
-        }
-        onFilesChange((currentFiles) => {
-          const currentRemainingSlots = Math.max(
+        updateFiles((currentFiles) => {
+          const remainingSlots = Math.max(
             MAX_UPLOAD_FILES - currentFiles.length,
             0,
           )
-          return [...currentFiles, ...accepted.slice(0, currentRemainingSlots)]
+          if (accepted.length > remainingSlots) {
+            toast(t('tooManyFiles', { count: MAX_UPLOAD_FILES }), {
+              duration: 2500,
+            })
+          }
+          return [...currentFiles, ...accepted.slice(0, remainingSlots)]
         })
       })()
     },
-    [files, onFilesChange, t],
+    [t, updateFiles],
   )
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -147,7 +158,9 @@ export function UploadResourceFields({
                 size="sm"
                 className="shrink-0 text-muted-foreground hover:text-foreground"
                 onClick={() =>
-                  onFilesChange(files.filter((item) => item.id !== id))
+                  updateFiles((currentFiles) =>
+                    currentFiles.filter((item) => item.id !== id),
+                  )
                 }
               >
                 {t('fileInfo.remove')}

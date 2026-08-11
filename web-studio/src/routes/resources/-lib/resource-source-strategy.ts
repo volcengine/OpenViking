@@ -20,7 +20,7 @@ type RemoteResourceCapabilities = {
 
 type RemoteSourceRequestOptions = Pick<
   AddResourceCommonBody,
-  'add_type' | 'args'
+  'add_type' | 'args' | 'exclude' | 'include'
 >
 
 type RemoteSourceStrategy = {
@@ -133,6 +133,12 @@ const WEB_STRATEGY: RemoteSourceStrategy = {
             }
           : {}),
       },
+      ...(site && includePaths.length
+        ? { include: includePaths.join(',') }
+        : {}),
+      ...(site && excludePaths.length
+        ? { exclude: excludePaths.join(',') }
+        : {}),
     }
   },
   capabilities: DEFAULT_CAPABILITIES,

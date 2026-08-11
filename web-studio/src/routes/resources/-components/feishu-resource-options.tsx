@@ -2,8 +2,9 @@ import type { TFunction } from 'i18next'
 
 import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
-import { RadioGroup, RadioGroupItem } from '#/components/ui/radio-group'
+import { RadioGroup } from '#/components/ui/radio-group'
 import { ResourceConfigurationGuide } from './resource-configuration-guide'
+import { ResourceOptionRadioCard } from './resource-option-radio-card'
 
 export type FeishuAuthMode = 'app' | 'user'
 
@@ -47,24 +48,16 @@ export function FeishuResourceOptions({
         disabled={disabled}
         className="grid gap-3 sm:grid-cols-2"
       >
-        <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border/50 p-3">
-          <RadioGroupItem value="app" className="mt-0.5" />
-          <span className="grid gap-1">
-            <span className="text-sm font-medium">{t('feishu.auth.app')}</span>
-            <span className="text-xs text-muted-foreground">
-              {t('feishu.auth.appHint')}
-            </span>
-          </span>
-        </label>
-        <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border/50 p-3">
-          <RadioGroupItem value="user" className="mt-0.5" />
-          <span className="grid gap-1">
-            <span className="text-sm font-medium">{t('feishu.auth.user')}</span>
-            <span className="text-xs text-muted-foreground">
-              {t('feishu.auth.userHint')}
-            </span>
-          </span>
-        </label>
+        <ResourceOptionRadioCard
+          description={t('feishu.auth.appHint')}
+          title={t('feishu.auth.app')}
+          value="app"
+        />
+        <ResourceOptionRadioCard
+          description={t('feishu.auth.userHint')}
+          title={t('feishu.auth.user')}
+          value="user"
+        />
       </RadioGroup>
 
       {authMode === 'app' ? (

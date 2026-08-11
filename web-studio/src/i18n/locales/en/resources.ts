@@ -287,6 +287,9 @@ const resources = {
     'createParent.hint':
       'When enabled, automatically creates the parent directory if it does not exist.',
     preserveStructure: 'Preserve directory structure',
+    'preserveStructure.serverDefault': 'Use server default',
+    'preserveStructure.preserve': 'Preserve structure',
+    'preserveStructure.flatten': 'Flatten files',
     parseMode: 'Parse Layout',
     'parseMode.default': 'Default splitting',
     'parseMode.noSplit': 'One Markdown body per document',

@@ -507,7 +507,6 @@ describe('AddResourceForm watch options', () => {
 
     expect(uploadMocks.startRemote).toHaveBeenCalledWith({
       commonBody: expect.objectContaining({
-        preserve_structure: true,
         processing_mode: 'semantic_and_vectors',
         tag_mode: 'replace',
         tags: ['team=docs', 'env=test'],
@@ -522,6 +521,9 @@ describe('AddResourceForm watch options', () => {
     expect(
       uploadMocks.startRemote.mock.calls[0]?.[0].commonBody,
     ).not.toHaveProperty('parent')
+    expect(
+      uploadMocks.startRemote.mock.calls[0]?.[0].commonBody,
+    ).not.toHaveProperty('preserve_structure')
   })
 
   it('submits TOS through the built-in server route', () => {
@@ -546,7 +548,6 @@ describe('AddResourceForm watch options', () => {
       commonBody: expect.objectContaining({
         add_type: 'tos',
         directly_upload_media: true,
-        preserve_structure: true,
         processing_mode: 'semantic_and_vectors',
         strict: false,
         to: 'viking://resources/custom',
@@ -561,5 +562,6 @@ describe('AddResourceForm watch options', () => {
     expect(commonBody).not.toHaveProperty('parent')
     expect(commonBody).not.toHaveProperty('watch_interval')
     expect(commonBody).not.toHaveProperty('args')
+    expect(commonBody).not.toHaveProperty('preserve_structure')
   })
 })

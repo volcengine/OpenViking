@@ -71,7 +71,6 @@ const DEFAULT_WEB_OPTIONS: WebResourceOptionsValue = {
 
 const DEFAULT_ADDITIONAL_OPTIONS: AdditionalResourceOptionsValue = {
   parseMode: 'default',
-  preserveStructure: true,
   processingMode: 'semantic_and_vectors',
   sourceName: '',
   tagMode: 'replace',
@@ -238,9 +237,10 @@ export function AddResourceForm({
       directly_upload_media: sourceCapabilities.nativeOptions
         ? directlyUploadMedia
         : true,
-      preserve_structure: sourceCapabilities.nativeOptions
-        ? additionalOptions.preserveStructure
-        : true,
+      ...(sourceCapabilities.nativeOptions &&
+      additionalOptions.preserveStructure !== undefined
+        ? { preserve_structure: additionalOptions.preserveStructure }
+        : {}),
       processing_mode: sourceCapabilities.nativeOptions
         ? additionalOptions.processingMode
         : 'semantic_and_vectors',
@@ -284,18 +284,13 @@ export function AddResourceForm({
       if (sourceRequestOptions.add_type) {
         body.add_type = sourceRequestOptions.add_type
       }
-      body.args = { ...body.args, ...sourceRequestOptions.args }
-      if (
-        remoteResourceKind === 'webPage' ||
-        remoteResourceKind === 'webFeed'
-      ) {
-        if (webOptions.mode === 'site' && webOptions.includePaths.trim()) {
-          body.include = webOptions.includePaths.trim()
-        }
-        if (webOptions.mode === 'site' && webOptions.excludePaths.trim()) {
-          body.exclude = webOptions.excludePaths.trim()
-        }
+      if (sourceRequestOptions.include) {
+        body.include = sourceRequestOptions.include
       }
+      if (sourceRequestOptions.exclude) {
+        body.exclude = sourceRequestOptions.exclude
+      }
+      body.args = { ...body.args, ...sourceRequestOptions.args }
       if (Object.keys(body.args).length === 0) {
         delete body.args
       }
@@ -594,9 +589,9 @@ export function AddResourceForm({
               </div>
 
               <AdditionalResourceOptions
-                tosMode={!sourceCapabilities.nativeOptions}
                 disabled={remotePhase === 'processing'}
                 isRemote={activeMode === 'remote'}
+                nativeOptions={sourceCapabilities.nativeOptions}
                 onChange={setAdditionalOptions}
                 t={t}
                 tagsValid={parsedTags.valid}
