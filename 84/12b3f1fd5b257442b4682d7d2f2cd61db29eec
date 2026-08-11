@@ -1,0 +1,37 @@
+bot/tests/test_compile.py
+  s_2924a4a2bd05f5::t_e1cf503c0ef6be 9,112,118-140,1364-1399,1443,1452,2572-2605,2729-2732,2783-2784,2815,2819,2862,2872-2881
+bot/vikingbot/agent/loop.py
+  s_2924a4a2bd05f5::t_b2f72bcd63b699 89-98,1348-1349
+bot/vikingbot/compile/models.py
+  s_2924a4a2bd05f5::t_e7d04bc9b618d3 44,56-60,72-76
+bot/vikingbot/compile/service.py
+  s_2924a4a2bd05f5::t_54f7b3e8efdb12 31,348,468-469,471,479,660-671,829-836,843-881,888,997
+crates/ov_cli/src/client.rs
+  s_2924a4a2bd05f5::t_120897eb5b5e57 167-168,361,368,2274-2276,2304
+crates/ov_cli/src/commands/compile.rs
+  s_2924a4a2bd05f5::t_b2e87df4028551 17,32
+crates/ov_cli/src/main.rs
+  s_2924a4a2bd05f5::t_f3a71d9c3131cb 1083-1089,3448,3459,3848-3849,3859,3867
+docs/en/api/24-vikingbot.md
+  s_2924a4a2bd05f5::t_3384fba89db784 148,179
+docs/zh/api/24-vikingbot.md
+  s_2924a4a2bd05f5::t_cfe151232df09c 145,176
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "8412b3f1fd5b257442b4682d7d2f2cd61db29eec",
+  "prompts": {},
+  "sessions": {
+    "s_2924a4a2bd05f5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fef05-ad2c-7bf1-8637-bafaa3613f62",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
