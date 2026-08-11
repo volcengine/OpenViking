@@ -154,7 +154,8 @@ def test_dotted_user_root_segment_is_current_user_file_shorthand():
         role=Role.USER,
     )
 
-    # A dotted segment is a file name, so the current user is inserted.
+    # A segment with a text-file extension is a file name, so the current
+    # user is inserted.
     assert (
         canonicalize_uri("viking://user/zeus-persona.md", ctx)
         == "viking://user/alice/zeus-persona.md"
@@ -170,7 +171,17 @@ def test_dotted_user_root_segment_is_current_user_file_shorthand():
         canonicalize_uri("viking://user/bob/zeus-persona.md", ctx)
         == "viking://user/bob/zeus-persona.md"
     )
-    # The current user's own id always wins over the dotted shorthand rule.
+    # Dotted user ids without a file extension keep resolving as user ids
+    # (regression guard: shorthand must not re-route other users' spaces).
+    assert (
+        canonicalize_uri("viking://user/alice.smith/memories/preferences/p.md", ctx)
+        == "viking://user/alice.smith/memories/preferences/p.md"
+    )
+    assert (
+        canonicalize_uri("viking://user/bob@corp.com/resources/r.md", ctx)
+        == "viking://user/bob@corp.com/resources/r.md"
+    )
+    # The current user's own id always wins over the shorthand rule.
     dotted_ctx = RequestContext(
         user=UserIdentifier(account_id="acct", user_id="a.b"),
         role=Role.USER,

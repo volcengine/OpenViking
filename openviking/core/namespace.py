@@ -419,14 +419,45 @@ def _is_current_user_relative_uri(parts: list[str], ctx: Optional[RequestContext
     return _is_user_relative_root_segment(parts[1])
 
 
+# File extensions that mark a first path segment under viking://user/ as a
+# file name rather than a user id, enabling current-user shorthand for files
+# at the user root (viking://user/notes.md -> viking://user/<user>/notes.md).
+_TEXT_FILE_EXTENSIONS = frozenset(
+    {
+        "md",
+        "txt",
+        "json",
+        "jsonl",
+        "yaml",
+        "yml",
+        "toml",
+        "py",
+        "js",
+        "ts",
+        "tsx",
+        "jsx",
+        "csv",
+        "xml",
+        "html",
+        "css",
+        "sh",
+        "sql",
+        "log",
+    }
+)
+
+
 def _is_user_relative_root_segment(segment: str) -> bool:
     if segment in _CONTENT_TYPES_BY_SCOPE["user"] or segment in _USER_RELATIVE_ROOT_SEGMENTS:
         return True
-    # A segment containing "." is a file name (e.g. viking://user/notes.md), not
-    # a user id: canonical user ids are dot-free by convention. Treat it as
-    # current-user shorthand for a file at the user root, so
-    # viking://user/notes.md resolves to viking://user/<user>/notes.md.
-    return "." in segment
+    # A segment ending in a common text-file extension is a file name (e.g.
+    # viking://user/notes.md), not a user id, so treat the URI as current-user
+    # shorthand for a file at the user root. Bare dots alone do not trigger
+    # shorthand: dotted user ids (e.g. email-style "alice.smith@corp.com")
+    # keep resolving as canonical user ids.
+    if "." not in segment:
+        return False
+    return segment.rsplit(".", 1)[-1].lower() in _TEXT_FILE_EXTENSIONS
 
 
 def _resolve_session_uri(
