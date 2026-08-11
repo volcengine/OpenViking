@@ -1,0 +1,27 @@
+openviking/service/fs_service.py
+  s_6618d13f607fce::t_4cc89084201df0 317
+openviking/storage/queuefs/semantic_processor.py
+  s_6618d13f607fce::t_a8b0bad3de707d 332-337
+tests/service/test_fs_service.py
+  s_6618d13f607fce::t_0b28a620f32833 282-299
+tests/storage/test_memory_semantic_stall.py
+  s_6618d13f607fce::t_00eff907b3255d 43-53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "0887ea9212222b856cd348b19a22821ec2c4cc4d",
+  "prompts": {},
+  "sessions": {
+    "s_6618d13f607fce": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019feb27-2da2-75c0-968b-b9a02aadb589",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
