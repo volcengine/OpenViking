@@ -21,12 +21,12 @@ from openviking.server.dependencies import set_service
 from openviking.server.identity import AuthMode, RequestContext, Role
 from openviking.server.mcp_endpoint import (
     StoreMessage,
-    WriteEdit,
     _get_ctx,
     _IdentityASGIMiddleware,
     _mcp_ctx,
     add_resource,
     cancel_watch,
+    edit,
     forget,
     glob,
     grep,
@@ -36,6 +36,7 @@ from openviking.server.mcp_endpoint import (
     recall,
     remember,
     search,
+    tree,
     write,
 )
 from openviking.server.mcp_endpoint import ls as list_tool
@@ -971,87 +972,72 @@ async def test_write_read_tool_roundtrip(service):
     assert "name: ada" in await read(uris=uri)
 
 
-async def test_write_edits_apply_single_replacement(service):
-    uri = "viking://resources/test_write_edit.md"
+async def test_edit_replaces_unique_occurrence(service):
+    uri = "viking://resources/test_edit.md"
     await write(uri=uri, content="alpha\nbeta\ngamma\n")
-    result = await write(uri=uri, edits=[WriteEdit(old_string="beta", new_string="BETA")])
-    assert "1 edit(s)" in result
+    result = await edit(uri=uri, old_string="beta", new_string="BETA")
+    assert "Edited" in result
     body = await service.fs.read(uri, ctx=DEFAULT_CTX)
     assert body == "alpha\nBETA\ngamma\n"
 
 
-async def test_write_edits_apply_in_order(service):
-    uri = "viking://resources/test_write_edit_order.md"
+async def test_edit_sequential_edits_compose(service):
+    uri = "viking://resources/test_edit_order.md"
     await write(uri=uri, content="foo bar baz\n")
-    await write(
-        uri=uri,
-        edits=[
-            WriteEdit(old_string="bar", new_string="qux"),
-            WriteEdit(old_string="foo qux", new_string="hello"),
-        ],
-    )
+    await edit(uri=uri, old_string="bar", new_string="qux")
+    await edit(uri=uri, old_string="foo qux", new_string="hello")
     body = await service.fs.read(uri, ctx=DEFAULT_CTX)
     assert body == "hello baz\n"
 
 
-async def test_write_edits_require_unique_match(service):
-    uri = "viking://resources/test_write_edit_multi.md"
+async def test_edit_requires_unique_match(service):
+    uri = "viking://resources/test_edit_multi.md"
     await write(uri=uri, content="dup\ndup\n")
     with pytest.raises(InvalidArgumentError, match="matches 2 locations"):
-        await write(uri=uri, edits=[WriteEdit(old_string="dup", new_string="x")])
+        await edit(uri=uri, old_string="dup", new_string="x")
 
 
-async def test_write_edits_replace_all(service):
-    uri = "viking://resources/test_write_edit_all.md"
+async def test_edit_replace_all(service):
+    uri = "viking://resources/test_edit_all.md"
     await write(uri=uri, content="dup\ndup\n")
-    await write(uri=uri, edits=[WriteEdit(old_string="dup", new_string="x", replace_all=True)])
+    await edit(uri=uri, old_string="dup", new_string="x", replace_all=True)
     body = await service.fs.read(uri, ctx=DEFAULT_CTX)
     assert body == "x\nx\n"
 
 
-async def test_write_edits_missing_old_string_fails(service):
-    uri = "viking://resources/test_write_edit_missing.md"
+async def test_edit_missing_old_string_fails(service):
+    uri = "viking://resources/test_edit_missing.md"
     await write(uri=uri, content="alpha\n")
     with pytest.raises(InvalidArgumentError, match="not found"):
-        await write(uri=uri, edits=[WriteEdit(old_string="zzz", new_string="x")])
+        await edit(uri=uri, old_string="zzz", new_string="x")
 
 
-async def test_write_edits_on_missing_file_fails(service):
+async def test_edit_empty_old_string_fails(service):
+    uri = "viking://resources/test_edit_empty.md"
+    await write(uri=uri, content="alpha\n")
+    with pytest.raises(InvalidArgumentError, match="must not be empty"):
+        await edit(uri=uri, old_string="", new_string="x")
+
+
+async def test_edit_on_missing_file_fails(service):
     with pytest.raises(NotFoundError):
-        await write(
-            uri="viking://resources/test_write_edit_ghost.md",
-            edits=[WriteEdit(old_string="a", new_string="b")],
-        )
+        await edit(uri="viking://resources/test_edit_ghost.md", old_string="a", new_string="b")
 
 
-async def test_write_edits_noop_reports_no_changes(service):
-    uri = "viking://resources/test_write_edit_noop.md"
+async def test_edit_noop_reports_no_changes(service):
+    uri = "viking://resources/test_edit_noop.md"
     await write(uri=uri, content="same\n")
-    result = await write(uri=uri, edits=[WriteEdit(old_string="same", new_string="same")])
+    result = await edit(uri=uri, old_string="same", new_string="same")
     assert "No changes" in result
 
 
-async def test_write_rejects_content_and_edits_together(service):
-    with pytest.raises(InvalidArgumentError, match="either content"):
-        await write(
-            uri="viking://resources/x.md",
-            content="a",
-            edits=[WriteEdit(old_string="a", new_string="b")],
-        )
-
-
-async def test_write_requires_content_or_edits(service):
-    with pytest.raises(InvalidArgumentError, match="provide content"):
-        await write(uri="viking://resources/x.md")
-
-
-async def test_write_edits_memory_file_preserves_metadata(service):
-    uri = "viking://user/default/memories/preferences/test_write_memory.md"
+async def test_edit_memory_file_preserves_metadata(service):
+    uri = "viking://user/default/memories/preferences/test_edit_memory.md"
     await write(uri=uri, content="likes: tea\n")
     raw_before = await service.fs.read(uri, ctx=DEFAULT_CTX)
     assert "MEMORY_FIELDS" in raw_before
 
-    await write(uri=uri, edits=[WriteEdit(old_string="tea", new_string="coffee")])
+    await edit(uri=uri, old_string="tea", new_string="coffee")
 
     raw_after = await service.fs.read(uri, ctx=DEFAULT_CTX)
     assert "MEMORY_FIELDS" in raw_after
@@ -1074,8 +1060,17 @@ async def test_write_tool_schema_is_portable():
     assert props["uri"]["type"] == "string"
     assert props["content"]["type"] == "string"
     assert props["mode"]["enum"] == ["replace", "append", "create"]
-    assert props["edits"]["type"] == "array"
-    assert props["edits"]["items"]["type"] == "object"
+    assert {"uri", "content"} <= set(tools["write"].inputSchema.get("required", []))
+
+
+async def test_edit_tool_schema_is_portable():
+    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+    props = tools["edit"].inputSchema["properties"]
+    assert props["uri"]["type"] == "string"
+    assert props["old_string"]["type"] == "string"
+    assert props["new_string"]["type"] == "string"
+    assert props["replace_all"]["type"] == "boolean"
+    assert {"uri", "old_string", "new_string"} <= set(tools["edit"].inputSchema.get("required", []))
 
 
 # ---------------------------------------------------------------------------
@@ -1213,3 +1208,52 @@ async def test_mcp_middleware_stamps_root_span_identity():
     assert response.status_code == 200
     assert root_attrs.account_id == "acct-1"
     assert root_attrs.user_id == "user-1"
+
+
+# ---- tree tool ----
+
+
+async def test_tree_renders_indented_hierarchy(service):
+    await write(uri="viking://resources/test_tree/top.md", content="top\n")
+    await write(uri="viking://resources/test_tree/sub/a.md", content="alpha\n")
+    await write(uri="viking://resources/test_tree/sub/deeper/b.md", content="beta\n")
+
+    result = await tree(uri="viking://resources/test_tree")
+
+    assert result.startswith("Tree of viking://resources/test_tree")
+    assert "\nsub/\n" in result
+    assert "\n  a.md (6 B)\n" in result
+    assert "\n  deeper/\n" in result
+    assert "\n    b.md (5 B)" in result
+    assert "\ntop.md (4 B)" in result
+
+
+async def test_tree_empty_directory(service):
+    result = await tree(uri="viking://resources/test_tree_nope")
+    assert result == "(nothing under viking://resources/test_tree_nope)"
+
+
+async def test_tree_respects_level_limit(service):
+    await write(uri="viking://resources/test_tree_depth/d1/d2/deep.md", content="x\n")
+
+    shallow = await tree(uri="viking://resources/test_tree_depth", level_limit=1)
+    assert "d1/" in shallow
+    assert "deep.md" not in shallow
+
+    full = await tree(uri="viking://resources/test_tree_depth", level_limit=10)
+    assert "\n    deep.md (2 B)" in full
+
+
+async def test_tree_node_limit_adds_truncation_note(service):
+    await write(uri="viking://resources/test_tree_limit/f1.md", content="1\n")
+    await write(uri="viking://resources/test_tree_limit/f2.md", content="2\n")
+
+    result = await tree(uri="viking://resources/test_tree_limit", node_limit=1)
+    assert "(truncated at node_limit=1" in result
+
+
+async def test_tree_include_abstract_still_renders(service):
+    await write(uri="viking://resources/test_tree_abs/note.md", content="hello tree\n")
+
+    result = await tree(uri="viking://resources/test_tree_abs", include_abstract=True)
+    assert "\nnote.md (11 B)" in result
