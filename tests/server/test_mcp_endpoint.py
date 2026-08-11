@@ -7,6 +7,7 @@ Tests the tool functions directly by setting up the identity contextvar
 and service dependency, avoiding MCP protocol complexity.
 """
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -32,12 +33,18 @@ from openviking.server.mcp_endpoint import (
     health,
     list_watches,
     read,
+    read_experience,
     recall,
     remember,
     search,
+    search_experience,
 )
 from openviking.server.mcp_endpoint import ls as list_tool
-from openviking_cli.exceptions import FailedPreconditionError, UnauthenticatedError
+from openviking_cli.exceptions import (
+    FailedPreconditionError,
+    InvalidArgumentError,
+    UnauthenticatedError,
+)
 from openviking_cli.session.user_id import UserIdentifier
 
 DEFAULT_CTX = RequestContext(
@@ -949,6 +956,200 @@ async def test_glob_match_all_md(service, client_with_resource):
 async def test_glob_with_uri_scope(service):
     result = await glob(pattern="**/*", uri="viking://resources")
     assert isinstance(result, str)
+
+
+# ---------------------------------------------------------------------------
+# search_experience / read_experience tools
+# ---------------------------------------------------------------------------
+
+EXPERIENCE_DIR = "viking://user/test_user/memories/experiences"
+
+
+def _matched(uri: str, *, abstract: str = "", overview=None, score: float = 0.5):
+    return SimpleNamespace(uri=uri, abstract=abstract, overview=overview, score=score)
+
+
+def _stub_find(service, monkeypatch, memories):
+    captured = {}
+
+    async def fake_find(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(memories=list(memories), resources=[], skills=[])
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+    return captured
+
+
+async def test_search_experience_pins_target_uri_and_omits_score_threshold(service, monkeypatch):
+    captured = _stub_find(service, monkeypatch, [])
+
+    payload = json.loads(await search_experience(query="  handle a refund  "))
+
+    assert payload == {"results": []}
+    assert captured["query"] == "handle a refund"
+    assert captured["ctx"] == DEFAULT_CTX
+    assert captured["target_uri"] == "viking://user/memories/experiences/"
+    # The neighbouring find/search tools default min_score to 0.35; passing any
+    # threshold here would silently drop the weaker half of the matches.
+    assert "score_threshold" not in captured
+    assert "filter" not in captured
+    assert "level" not in captured
+
+
+@pytest.mark.parametrize(
+    "requested,expected",
+    [(None, 5), (1, 1), (7, 7), (20, 20), (50, 20), (0, 1), (-3, 1), ("4", 4), ("junk", 5)],
+)
+async def test_search_experience_clamps_limit_instead_of_rejecting(
+    service, monkeypatch, requested, expected
+):
+    captured = _stub_find(service, monkeypatch, [])
+
+    if requested is None:
+        await search_experience(query="q")
+    else:
+        await search_experience(query="q", limit=requested)
+
+    assert captured["limit"] == expected
+
+
+async def test_search_experience_rejects_empty_query_without_touching_the_backend(
+    service, monkeypatch
+):
+    async def fail_find(**kwargs):
+        raise AssertionError("empty query must not reach the search service")
+
+    monkeypatch.setattr(service.search, "find", fail_find)
+
+    with pytest.raises(InvalidArgumentError):
+        await search_experience(query="   ")
+
+
+async def test_search_experience_filters_out_everything_but_own_experiences(service, monkeypatch):
+    own = f"{EXPERIENCE_DIR}/no-order-exchange.md"
+    _stub_find(
+        service,
+        monkeypatch,
+        [
+            _matched(own),
+            _matched("viking://user/other/memories/experiences/theirs.md"),
+            _matched("viking://user/test_user/memories/preferences/tone.md"),
+            _matched(f"{EXPERIENCE_DIR}/.abstract.md"),
+            _matched(f"{EXPERIENCE_DIR}/.overview.md"),
+            _matched(f"{EXPERIENCE_DIR}/.relations.json"),
+            _matched(f"{own}?source=codex"),
+            _matched(""),
+        ],
+    )
+
+    payload = json.loads(await search_experience(query="q"))
+
+    assert [item["uri"] for item in payload["results"]] == [own]
+
+
+async def test_search_experience_decodes_percent_encoded_titles(service, monkeypatch):
+    uri = f"{EXPERIENCE_DIR}/%E6%97%A0%E8%AE%A2%E5%8D%95%E5%8F%B7%E6%8D%A2%E8%B4%A7.md"
+    _stub_find(service, monkeypatch, [_matched(uri)])
+
+    payload = json.loads(await search_experience(query="q"))
+
+    assert payload["results"][0]["title"] == "无订单号换货"
+
+
+async def test_search_experience_falls_back_to_overview_and_truncates_snippets(
+    service, monkeypatch
+):
+    _stub_find(
+        service,
+        monkeypatch,
+        [
+            _matched(f"{EXPERIENCE_DIR}/a.md", abstract="A" * 400),
+            _matched(f"{EXPERIENCE_DIR}/b.md", abstract="", overview="B" * 400),
+            _matched(f"{EXPERIENCE_DIR}/c.md", abstract="", overview=None),
+        ],
+    )
+
+    results = json.loads(await search_experience(query="q"))["results"]
+
+    assert results[0]["snippet"] == "A" * 120
+    assert results[1]["snippet"] == "B" * 120
+    assert results[2]["snippet"] == ""
+
+
+async def test_search_experience_emits_json_parseable_scores(service, monkeypatch):
+    _stub_find(
+        service,
+        monkeypatch,
+        [
+            _matched(f"{EXPERIENCE_DIR}/a.md", score=float("nan")),
+            _matched(f"{EXPERIENCE_DIR}/b.md", score=float("inf")),
+            _matched(f"{EXPERIENCE_DIR}/c.md", score=None),
+            _matched(f"{EXPERIENCE_DIR}/d.md", score=0.42),
+        ],
+    )
+
+    raw = await search_experience(query="q")
+
+    assert "NaN" not in raw and "Infinity" not in raw
+    assert [item["score"] for item in json.loads(raw)["results"]] == [0.0, 0.0, 0.0, 0.42]
+
+
+async def test_read_experience_returns_uri_and_content(service, monkeypatch):
+    uri = f"{EXPERIENCE_DIR}/no-order-exchange.md"
+    captured = {}
+
+    async def fake_read_visible(target, **kwargs):
+        captured["uri"] = target
+        captured["ctx"] = kwargs.get("ctx")
+        return "## Situation\n用户未提供订单号但要求换货。"
+
+    monkeypatch.setattr(service.fs, "read_visible", fake_read_visible)
+
+    payload = json.loads(await read_experience(uri=f"  {uri}  "))
+
+    assert payload == {"uri": uri, "content": "## Situation\n用户未提供订单号但要求换货。"}
+    assert captured == {"uri": uri, "ctx": DEFAULT_CTX}
+
+
+@pytest.mark.parametrize(
+    "bad_uri",
+    [
+        "",
+        "   ",
+        "viking://user/other/memories/experiences/theirs.md",
+        "viking://user/test_user/memories/preferences/tone.md",
+        f"{EXPERIENCE_DIR}/.abstract.md",
+        f"{EXPERIENCE_DIR}/.overview.md",
+        f"{EXPERIENCE_DIR}/.relations.json",
+        EXPERIENCE_DIR,
+        f"{EXPERIENCE_DIR}/own.md?source=codex",
+        f"{EXPERIENCE_DIR}/own.md#approach",
+        # Canonicalizes to the owned URI but is not the form attribution records.
+        "viking://user/memories/experiences/own.md",
+        "https://example.com/own.md",
+    ],
+)
+async def test_read_experience_rejects_uris_without_touching_storage(service, monkeypatch, bad_uri):
+    async def fail_read(*args, **kwargs):
+        raise AssertionError("rejected URI must not reach storage")
+
+    monkeypatch.setattr(service.fs, "read_visible", fail_read)
+
+    with pytest.raises(InvalidArgumentError):
+        await read_experience(uri=bad_uri)
+
+
+async def test_experience_tools_are_registered_with_portable_schemas():
+    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+
+    assert {"search_experience", "read_experience"} <= tools.keys()
+    for name, required in (("search_experience", ["query"]), ("read_experience", ["uri"])):
+        schema = tools[name].inputSchema
+        assert schema["type"] == "object"
+        assert schema["required"] == required
+        assert all(
+            "anyOf" not in prop and "$ref" not in prop for prop in schema["properties"].values()
+        )
 
 
 # ---------------------------------------------------------------------------

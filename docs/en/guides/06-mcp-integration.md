@@ -129,7 +129,7 @@ If you already have HTTPS configured, just connect to `https://your-server.com/m
 
 ## Available MCP Tools
 
-Once connected, OpenViking exposes 13 tools:
+Once connected, OpenViking exposes 15 tools:
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
@@ -146,6 +146,10 @@ Once connected, OpenViking exposes 13 tools:
 | `glob` | Find files matching a glob pattern | `pattern`, `uri` (optional scope), `node_limit` |
 | `forget` | Delete any `viking://` URI (use `search` to find it first; pass `recursive=true` to delete a directory) | `uri`, `recursive` (optional) |
 | `health` | Check OpenViking service health | none |
+| `search_experience` | Search reusable execution Experiences owned by the current user. Returns JSON `{"results":[{"uri","title","score","snippet"}]}` | `query`, `limit` (optional, 1–20, default 5) |
+| `read_experience` | Read one Experience returned by `search_experience`. Returns JSON `{"uri","content"}` | `uri` (canonical `viking://user/<user>/memories/experiences/...` URI) |
+
+> **Note**: `search_experience` / `read_experience` have a fixed name and JSON payload contract — Agent Evolution attribution reads the recorded tool calls to emit recall/injection events and to tag trajectories with their source Experience. See [Agent Evolution API](../api/19-agent-evolution.md).
 
 > **Note**: MCP exposes the minimum closure for watch management (`list_watches` + `cancel_watch`). Pause / resume / trigger and the unified `update` verb are intentionally not exposed here — use the REST `/api/v1/watches/*` endpoints or the `ov task watch` CLI for those operations.
 

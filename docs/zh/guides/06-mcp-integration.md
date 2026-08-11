@@ -121,7 +121,7 @@ claude mcp add --transport http openviking \
 
 ## 可用的 MCP 工具
 
-连接后，OpenViking MCP 端点暴露 13 个工具：
+连接后，OpenViking MCP 端点暴露 15 个工具：
 
 | 工具 | 说明 | 主要参数 |
 |------|------|----------|
@@ -138,6 +138,10 @@ claude mcp add --transport http openviking \
 | `glob` | 按 glob 模式匹配文件 | `pattern`, `uri`(可选范围), `node_limit` |
 | `forget` | 删除任意 `viking://` URI（先用 `search` 查找；删除目录需 `recursive=true`） | `uri`, `recursive`(可选) |
 | `health` | 检查 OpenViking 服务健康状态 | 无 |
+| `search_experience` | 检索当前用户可复用的执行经验（Experience），返回 JSON `{"results":[{"uri","title","score","snippet"}]}` | `query`, `limit`(可选，1–20，默认 5) |
+| `read_experience` | 读取 `search_experience` 返回的某条 Experience，返回 JSON `{"uri","content"}` | `uri`（规范形式的 `viking://user/<user>/memories/experiences/...`） |
+
+> **注**：`search_experience` / `read_experience` 的工具名与 JSON 输出格式是固定契约——Agent 进化的用量归因会读取记录下来的工具调用，产出召回/注入事件并给轨迹打上来源 Experience 标签。详见 [Agent 进化 API](../api/19-agent-evolution.md)。
 
 > **注**：MCP 仅暴露 watch 管理的最小闭包（`list_watches` + `cancel_watch`）。pause / resume / trigger 和统一的 `update` 动作刻意不在此处暴露，请通过 REST `/api/v1/watches/*` 接口或 `ov task watch` CLI 使用上述操作。
 

@@ -3,7 +3,8 @@
 """MCP (Model Context Protocol) endpoint for OpenViking server.
 
 Exposes tools to Claude Code (or any MCP client) via streamable HTTP:
-  find, search, read, list, remember, add_resource, grep, glob, forget, health
+  find, search, recall, read, list, remember, add_resource, list_watches,
+  cancel_watch, grep, glob, forget, health, search_experience, read_experience
 
 Mounted on the FastAPI app at /mcp. The MCP session manager lifecycle is
 tied to the FastAPI app lifespan (not a sub-app lifespan) so the task group
@@ -16,11 +17,13 @@ are extracted from HTTP request scope and propagated via contextvars.
 from __future__ import annotations
 
 import contextvars
+import json
+import math
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, Union
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -43,6 +46,7 @@ from openviking.server.local_input_guard import (
 from openviking.server.resource_ingest import ingest_temp_upload
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.server.upload_token_store import upload_token_store
+from openviking.session.memory.experience_lineage import canonical_experience_uri
 from openviking.telemetry.span_models import update_root_span_identity
 from openviking.utils.search_filters import SearchContextTypeInput, merge_search_filter
 from openviking_cli.exceptions import (
@@ -947,6 +951,103 @@ async def health() -> str:
         return f"OpenViking is unhealthy: {e}"
 
 
+# -- agent evolution -------------------------------------------------------
+#
+# The Experience tools have a fixed name and input/output contract: usage
+# attribution reads the recorded tool call to emit memory.recalled /
+# memory.injected events and to tag trajectories with their source Experience.
+# Keep both the tool names and the JSON payload shapes stable.
+
+_EXPERIENCE_TARGET_URI = "viking://user/memories/experiences/"
+_EXPERIENCE_DEFAULT_LIMIT = 5
+_EXPERIENCE_MAX_LIMIT = 20
+# Keeps a full result set well under the 2000-char tool_output cap harness
+# plugins apply, so attribution never parses a truncated payload.
+_EXPERIENCE_SNIPPET_CHARS = 120
+
+
+def _experience_json(payload: Dict[str, Any]) -> str:
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _experience_title(uri: str) -> str:
+    basename = uri.rsplit("/", 1)[-1] or uri
+    if basename.lower().endswith(".md"):
+        basename = basename[: -len(".md")]
+    return unquote(basename)
+
+
+@mcp.tool()
+async def search_experience(query: str, limit: int = _EXPERIENCE_DEFAULT_LIMIT) -> str:
+    """Search reusable execution experiences for the current user. Returns JSON {"results":[{"uri","title","score","snippet"}]} — pass a uri to read_experience for the full write-up."""
+    text = str(query or "").strip()
+    if not text:
+        raise InvalidArgumentError("search_experience requires a non-empty query")
+
+    service = get_service()
+    ctx = _get_ctx()
+    try:
+        bounded_limit = int(limit)
+    except (TypeError, ValueError):
+        bounded_limit = _EXPERIENCE_DEFAULT_LIMIT
+    bounded_limit = max(1, min(_EXPERIENCE_MAX_LIMIT, bounded_limit))
+
+    # No score_threshold: the neighbouring find/search tools default to 0.35,
+    # which would silently drop the weaker half of the Experience matches.
+    result = await service.search.find(
+        query=text,
+        ctx=ctx,
+        target_uri=_EXPERIENCE_TARGET_URI,
+        limit=bounded_limit,
+    )
+
+    results: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in result.memories:
+        uri = canonical_experience_uri(str(getattr(item, "uri", "") or ""), ctx)
+        # Canonicalization can collapse two rows onto one URI, and each result
+        # row becomes one memory.recalled event.
+        if not uri or uri in seen:
+            continue
+        seen.add(uri)
+        try:
+            score = float(getattr(item, "score", 0.0))
+        except (TypeError, ValueError):
+            score = 0.0
+        if not math.isfinite(score):
+            # json.dumps emits bare NaN/Infinity, which JSON.parse rejects —
+            # one such row would cost the whole recall its attribution.
+            score = 0.0
+        snippet = str(getattr(item, "abstract", "") or getattr(item, "overview", "") or "")
+        results.append(
+            {
+                "uri": uri,
+                "title": _experience_title(uri),
+                "score": score,
+                "snippet": snippet[:_EXPERIENCE_SNIPPET_CHARS],
+            }
+        )
+    return _experience_json({"results": results})
+
+
+@mcp.tool()
+async def read_experience(uri: str) -> str:
+    """Read one Experience returned by search_experience. Returns JSON {"uri","content"}."""
+    ctx = _get_ctx()
+    requested = str(uri or "").strip()
+    # Require the canonical form verbatim: canonicalize_uri truncates at "?",
+    # so an aliased URI would read fine yet fail usage attribution, which
+    # matches on the recorded input.
+    canonical = canonical_experience_uri(requested, ctx)
+    if not canonical or canonical != requested:
+        raise InvalidArgumentError(
+            "read_experience requires a canonical Experience URI owned by the current user"
+        )
+    service = get_service()
+    content = await service.fs.read_visible(canonical, ctx=ctx)
+    return _experience_json({"uri": canonical, "content": str(content or "")})
+
+
 # ---------------------------------------------------------------------------
 # Portable tool schemas
 # ---------------------------------------------------------------------------
@@ -1045,8 +1146,9 @@ async def mcp_lifespan():
     """Run the MCP session manager. Call this inside the FastAPI lifespan."""
     async with mcp.session_manager.run():
         logger.info(
-            "MCP endpoint ready (13 tools: find, search, recall, read, list, remember, "
-            "add_resource, list_watches, cancel_watch, grep, glob, forget, health)"
+            "MCP endpoint ready (15 tools: find, search, recall, read, list, remember, "
+            "add_resource, list_watches, cancel_watch, grep, glob, forget, health, "
+            "search_experience, read_experience)"
         )
         yield
 
