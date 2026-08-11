@@ -2,6 +2,7 @@ import { fileTypeFromBlob } from 'file-type'
 import { FileIcon, Upload } from 'lucide-react'
 import type { TFunction } from 'i18next'
 import { useCallback } from 'react'
+import type { Dispatch, SetStateAction } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { toast } from 'sonner'
 
@@ -22,7 +23,7 @@ export type SelectedUploadFile = {
 
 type UploadResourceFieldsProps = {
   files: SelectedUploadFile[]
-  onFilesChange: (files: SelectedUploadFile[]) => void
+  onFilesChange: Dispatch<SetStateAction<SelectedUploadFile[]>>
   t: TFunction<'addResource'>
 }
 
@@ -85,7 +86,13 @@ export function UploadResourceFields({
             duration: 2500,
           })
         }
-        onFilesChange([...files, ...accepted.slice(0, remainingSlots)])
+        onFilesChange((currentFiles) => {
+          const currentRemainingSlots = Math.max(
+            MAX_UPLOAD_FILES - currentFiles.length,
+            0,
+          )
+          return [...currentFiles, ...accepted.slice(0, currentRemainingSlots)]
+        })
       })()
     },
     [files, onFilesChange, t],

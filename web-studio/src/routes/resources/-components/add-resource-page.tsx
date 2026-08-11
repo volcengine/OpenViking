@@ -33,12 +33,13 @@ import {
   matchesRemoteResourceTypeSelection,
 } from '../-lib/resource-source'
 import type { RemoteResourceTypeSelection } from '../-lib/resource-source'
+import { parseResourceTags } from '../-lib/resource-option-values'
 import {
-  isOptionalIntegerValid,
-  parseDelimitedValues,
-  parseOptionalInteger,
-  parseResourceTags,
-} from '../-lib/resource-option-values'
+  buildRemoteSourceRequestOptions,
+  getRemoteResourceCapabilities,
+  isRemoteSourceConfigurationValid,
+} from '../-lib/resource-source-strategy'
+import type { RemoteSourceOptionState } from '../-lib/resource-source-strategy'
 import { DirectoryPickerDialog } from './directory-picker-dialog'
 import { AdditionalResourceOptions } from './additional-resource-options'
 import type { AdditionalResourceOptionsValue } from './additional-resource-options'
@@ -86,6 +87,7 @@ export function AddResourceForm({
   onCompleted,
   onFailed,
   onSubmitted,
+  watchRequired = false,
 }: {
   initialMode?: Mode
   initialWatchEnabled?: boolean
@@ -93,6 +95,7 @@ export function AddResourceForm({
   onCompleted?: () => void
   onFailed?: () => void
   onSubmitted?: () => void
+  watchRequired?: boolean
 } = {}) {
   const { i18n, t } = useTranslation('addResource')
   const { enqueueUploads, startRemote, resetRemote, remoteState } =
@@ -148,10 +151,26 @@ export function AddResourceForm({
     detectedRemoteResourceKind,
     remoteResourceType,
   )
-  const isTosResource = remoteResourceKind === 'tos'
-  const effectiveDestinationMode: ResourceDestinationMode = isTosResource
-    ? 'to'
-    : destinationMode
+  const sourceCapabilities = getRemoteResourceCapabilities(remoteResourceKind)
+  const effectiveWatchEnabled = watchEnabled && sourceCapabilities.watch
+  const effectiveDestinationMode: ResourceDestinationMode =
+    sourceCapabilities.exactDestination ? 'to' : destinationMode
+  const sourceOptionState: RemoteSourceOptionState = {
+    feishu: {
+      accessToken: feishuAccessToken,
+      authMode: feishuAuthMode,
+      refreshToken: feishuRefreshToken,
+    },
+    git: {
+      authMode: gitAuthMode,
+      refMode: gitRefMode,
+      refValue: gitRef,
+      token: gitToken,
+      username: gitUsername,
+    },
+    watchEnabled: effectiveWatchEnabled,
+    web: webOptions,
+  }
 
   const handleRemoteUrlChange = useCallback(
     (value: string) => {
@@ -192,115 +211,78 @@ export function AddResourceForm({
     const timeout = Number(additionalOptions.timeout)
     const body: AddResourceCommonBody = {
       [effectiveDestinationMode]: targetUri.trim() || undefined,
-      strict: isTosResource ? false : strict,
+      strict: sourceCapabilities.nativeOptions ? strict : false,
       create_parent: createParent,
       telemetry: true,
-      wait: isTosResource ? false : additionalOptions.wait,
-      ...(!isTosResource &&
+      wait: sourceCapabilities.nativeOptions ? additionalOptions.wait : false,
+      ...(sourceCapabilities.nativeOptions &&
       additionalOptions.wait &&
       additionalOptions.timeout.trim()
         ? { timeout }
         : {}),
-      directly_upload_media: isTosResource ? true : directlyUploadMedia,
-      preserve_structure: isTosResource
-        ? true
-        : additionalOptions.preserveStructure,
-      processing_mode: isTosResource
-        ? 'semantic_and_vectors'
-        : additionalOptions.processingMode,
+      directly_upload_media: sourceCapabilities.nativeOptions
+        ? directlyUploadMedia
+        : true,
+      preserve_structure: sourceCapabilities.nativeOptions
+        ? additionalOptions.preserveStructure
+        : true,
+      processing_mode: sourceCapabilities.nativeOptions
+        ? additionalOptions.processingMode
+        : 'semantic_and_vectors',
       ...(parsedTags.tags.length
         ? { tags: parsedTags.tags, tag_mode: additionalOptions.tagMode }
         : {}),
       ...(mode === 'remote' &&
-      !isTosResource &&
+      sourceCapabilities.nativeOptions &&
       additionalOptions.sourceName.trim()
         ? { source_name: additionalOptions.sourceName.trim() }
         : {}),
-      ...(!isTosResource && additionalOptions.parseMode === 'no_split'
+      ...(sourceCapabilities.nativeOptions &&
+      additionalOptions.parseMode === 'no_split'
         ? { args: { parse_mode: 'no_split' } }
         : {}),
     }
     if (reason.trim()) {
       body.reason = reason.trim()
     }
-    if (instruction.trim() && !isTosResource) {
+    if (instruction.trim() && sourceCapabilities.nativeOptions) {
       body.instruction = instruction.trim()
     }
     if (mode === 'remote') {
-      if (watchEnabled && !isTosResource) {
+      if (effectiveWatchEnabled) {
         const minutes = parsePositiveMinutes(watchInterval)
         if (minutes !== null) body.watch_interval = minutes
       }
-      if (ignoreDirs.trim() && !isTosResource) {
+      if (ignoreDirs.trim() && sourceCapabilities.nativeOptions) {
         body.ignore_dirs = ignoreDirs.trim()
       }
-      if (include.trim() && !isTosResource) {
+      if (include.trim() && sourceCapabilities.nativeOptions) {
         body.include = include.trim()
       }
-      if (exclude.trim() && !isTosResource) {
+      if (exclude.trim() && sourceCapabilities.nativeOptions) {
         body.exclude = exclude.trim()
       }
-      if (remoteResourceKind === 'feishu' && feishuAuthMode === 'user') {
-        body.args = {
-          ...body.args,
-          feishu_access_token: feishuAccessToken.trim(),
-          ...(watchEnabled
-            ? { feishu_refresh_token: feishuRefreshToken.trim() }
-            : {}),
-        }
+      const sourceRequestOptions = buildRemoteSourceRequestOptions(
+        remoteResourceKind,
+        sourceOptionState,
+      )
+      if (sourceRequestOptions.add_type) {
+        body.add_type = sourceRequestOptions.add_type
       }
-      if (remoteResourceKind === 'git') {
-        body.args = {
-          ...body.args,
-          ...(gitRef.trim() ? { [gitRefMode]: gitRef.trim() } : {}),
-          ...(gitAuthMode === 'token'
-            ? {
-                auth_config: {
-                  username: gitUsername.trim() || 'oauth2',
-                  token: gitToken.trim(),
-                },
-              }
-            : {}),
-        }
-      }
+      body.args = { ...body.args, ...sourceRequestOptions.args }
       if (
         remoteResourceKind === 'webPage' ||
         remoteResourceKind === 'webFeed'
       ) {
-        const includePaths = parseDelimitedValues(webOptions.includePaths)
-        const excludePaths = parseDelimitedValues(webOptions.excludePaths)
-        const isRecursiveWebImport = webOptions.mode === 'recursive'
-        const isSiteImport = webOptions.mode === 'site'
-        body.args = {
-          ...body.args,
-          ...(webOptions.mode === 'single' ? { site: false, depth: 0 } : {}),
-          ...(isRecursiveWebImport
-            ? {
-                site: false,
-                depth: parseOptionalInteger(webOptions.depth, 0),
-                max_pages: parseOptionalInteger(webOptions.maxPages, 1),
-                include_paths: includePaths.length ? includePaths : undefined,
-                exclude_paths: excludePaths.length ? excludePaths : undefined,
-                allow_external_links: webOptions.allowExternalLinks,
-                skip_download_links: webOptions.skipDownloadLinks,
-              }
-            : {}),
-          ...(isSiteImport
-            ? {
-                site: true,
-                max_pages: parseOptionalInteger(webOptions.maxPages, 1),
-              }
-            : {}),
-        }
-        if (isSiteImport && webOptions.includePaths.trim()) {
+        if (webOptions.mode === 'site' && webOptions.includePaths.trim()) {
           body.include = webOptions.includePaths.trim()
         }
-        if (isSiteImport && webOptions.excludePaths.trim()) {
+        if (webOptions.mode === 'site' && webOptions.excludePaths.trim()) {
           body.exclude = webOptions.excludePaths.trim()
         }
       }
-      if (isTosResource) {
-        body.add_type = 'tos'
+      if (Object.keys(body.args).length === 0) {
+        delete body.args
       }
     }
     return body
@@ -342,39 +324,33 @@ export function AddResourceForm({
   }
 
   const hasValidWatchInterval =
-    !watchEnabled || parsePositiveMinutes(watchInterval) !== null
-  const hasValidWebOptions =
-    !['webPage', 'webFeed'].includes(remoteResourceKind) ||
-    ((!['recursive'].includes(webOptions.mode) ||
-      isOptionalIntegerValid(webOptions.depth, 0)) &&
-      (!['recursive', 'site'].includes(webOptions.mode) ||
-        isOptionalIntegerValid(webOptions.maxPages, 1)))
+    !effectiveWatchEnabled || parsePositiveMinutes(watchInterval) !== null
+  const hasValidSourceOptions = isRemoteSourceConfigurationValid(
+    remoteResourceKind,
+    sourceOptionState,
+  )
   const parsedTags = parseResourceTags(additionalOptions.tags)
   const hasValidTimeout =
-    isTosResource ||
+    !sourceCapabilities.nativeOptions ||
     !additionalOptions.wait ||
     !additionalOptions.timeout.trim() ||
     (Number.isFinite(Number(additionalOptions.timeout)) &&
       Number(additionalOptions.timeout) > 0)
   const hasValidCommonOptions = parsedTags.valid && hasValidTimeout
-  const hasValidTosOptions =
-    !isTosResource || (effectiveDestinationMode === 'to' && !!targetUri.trim())
+  const hasValidDestination =
+    !sourceCapabilities.exactDestination ||
+    (effectiveDestinationMode === 'to' && !!targetUri.trim())
+  const watchRequirementMet =
+    !watchRequired ||
+    (sourceCapabilities.watch && effectiveWatchEnabled && hasValidWatchInterval)
   const canSubmit =
     hasValidCommonOptions &&
-    hasValidTosOptions &&
+    hasValidDestination &&
+    watchRequirementMet &&
     remoteResourceTypeMatches &&
     (activeMode === 'upload'
       ? selectedFiles.length > 0
-      : !!remoteUrl.trim() &&
-        (isTosResource || hasValidWatchInterval) &&
-        hasValidWebOptions &&
-        (remoteResourceKind !== 'feishu' ||
-          feishuAuthMode === 'app' ||
-          (!!feishuAccessToken.trim() &&
-            (!watchEnabled || !!feishuRefreshToken.trim()))) &&
-        (remoteResourceKind !== 'git' ||
-          gitAuthMode === 'public' ||
-          !!gitToken.trim()))
+      : !!remoteUrl.trim() && hasValidWatchInterval && hasValidSourceOptions)
 
   return (
     <div className="flex flex-col gap-6">
@@ -424,9 +400,10 @@ export function AddResourceForm({
             resourceTypeMatches={remoteResourceTypeMatches}
             t={t}
             url={displayRemoteUrl}
-            watchEnabled={watchEnabled}
+            watchEnabled={effectiveWatchEnabled}
             watchInterval={watchInterval}
-            watchSupported={!isTosResource}
+            watchRequired={watchRequired}
+            watchSupported={sourceCapabilities.watch}
           >
             {remoteResourceKind === 'feishu' ? (
               <FeishuResourceOptions
@@ -439,7 +416,7 @@ export function AddResourceForm({
                 onRefreshTokenChange={setFeishuRefreshToken}
                 refreshToken={feishuRefreshToken}
                 t={t}
-                watchEnabled={watchEnabled}
+                watchEnabled={effectiveWatchEnabled}
               />
             ) : null}
             {remoteResourceKind === 'git' ? (
@@ -516,7 +493,7 @@ export function AddResourceForm({
 
         <ResourceDestinationFields
           disabled={remotePhase === 'processing'}
-          exactOnly={isTosResource}
+          exactOnly={sourceCapabilities.exactDestination}
           mode={effectiveDestinationMode}
           onBrowse={() => setDirPickerOpen(true)}
           onModeChange={setDestinationMode}
@@ -537,8 +514,8 @@ export function AddResourceForm({
               <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
                 <Label className="flex items-center gap-2">
                   <Checkbox
-                    checked={isTosResource ? false : strict}
-                    disabled={isTosResource}
+                    checked={sourceCapabilities.nativeOptions ? strict : false}
+                    disabled={!sourceCapabilities.nativeOptions}
                     onCheckedChange={(checked) => setStrict(Boolean(checked))}
                   />
                   <span>{t('strict')}</span>
@@ -570,8 +547,12 @@ export function AddResourceForm({
                 </Label>
                 <Label className="flex items-center gap-2">
                   <Checkbox
-                    checked={isTosResource ? true : directlyUploadMedia}
-                    disabled={isTosResource}
+                    checked={
+                      sourceCapabilities.nativeOptions
+                        ? directlyUploadMedia
+                        : true
+                    }
+                    disabled={!sourceCapabilities.nativeOptions}
                     onCheckedChange={(checked) =>
                       setDirectlyUploadMedia(Boolean(checked))
                     }
@@ -591,7 +572,7 @@ export function AddResourceForm({
               </div>
 
               <AdditionalResourceOptions
-                tosMode={isTosResource}
+                tosMode={!sourceCapabilities.nativeOptions}
                 disabled={remotePhase === 'processing'}
                 isRemote={activeMode === 'remote'}
                 onChange={setAdditionalOptions}
@@ -600,7 +581,7 @@ export function AddResourceForm({
                 value={additionalOptions}
               />
 
-              {activeMode === 'remote' && !isTosResource ? (
+              {activeMode === 'remote' && sourceCapabilities.nativeOptions ? (
                 <div className="space-y-4 border-t border-border/50 pt-4">
                   <div className="space-y-2">
                     <Label htmlFor="add-resource-ignore-dirs">
@@ -648,7 +629,7 @@ export function AddResourceForm({
                 />
               </div>
 
-              {!isTosResource ? (
+              {sourceCapabilities.nativeOptions ? (
                 <div className="space-y-2">
                   <Label htmlFor="add-resource-instruction">
                     {t('instruction')}

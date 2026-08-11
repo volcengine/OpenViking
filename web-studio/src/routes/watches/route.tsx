@@ -577,6 +577,7 @@ export function WatchManagementPage() {
             <AddResourceForm
               initialMode="remote"
               initialWatchEnabled
+              watchRequired
               onAccepted={discoverWatch}
               onCompleted={() => {
                 void refreshWatches()

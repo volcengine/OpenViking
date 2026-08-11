@@ -25,6 +25,7 @@ type RemoteResourceFieldsProps = {
   url: string
   watchEnabled: boolean
   watchInterval: string
+  watchRequired?: boolean
   watchSupported?: boolean
 }
 
@@ -63,6 +64,7 @@ export function RemoteResourceFields({
   url,
   watchEnabled,
   watchInterval,
+  watchRequired = false,
   watchSupported = true,
 }: RemoteResourceFieldsProps) {
   const remoteUrlPlaceholder = getRemoteUrlPlaceholder(resourceKind, t)
@@ -74,6 +76,7 @@ export function RemoteResourceFields({
         onChange={onResourceTypeChange}
         t={t}
         value={resourceType}
+        watchOnly={watchRequired}
       />
 
       <div className="space-y-2">
@@ -116,12 +119,17 @@ export function RemoteResourceFields({
           </div>
           <Switch
             id="add-resource-watch-enabled"
-            checked={watchEnabled}
-            disabled={disabled || !watchSupported}
+            checked={watchSupported && watchEnabled}
+            disabled={disabled || !watchSupported || watchRequired}
             onCheckedChange={onWatchEnabledChange}
           />
         </div>
-        {watchEnabled ? (
+        {watchRequired && !watchSupported ? (
+          <p className="mt-3 text-xs text-destructive" role="alert">
+            {t('watch.requiredUnsupported')}
+          </p>
+        ) : null}
+        {watchEnabled && watchSupported ? (
           <div className="mt-4 grid gap-2 border-t border-border/50 pt-4">
             <Label htmlFor="add-resource-watch-interval">
               {t('watch.interval')}

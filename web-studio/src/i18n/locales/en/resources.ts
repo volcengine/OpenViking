@@ -257,6 +257,8 @@ const resources = {
       enabled: 'Scheduled Sync',
       hint: 'Periodically check this remote resource and import its latest content.',
       unsupported: 'Scheduled sync is not available for TOS imports.',
+      requiredUnsupported:
+        'This resource type cannot create a scheduled sync. Choose another type.',
       interval: 'Sync interval (minutes)',
       intervalHint: 'For example, 60 for hourly or 1440 for daily.',
     },

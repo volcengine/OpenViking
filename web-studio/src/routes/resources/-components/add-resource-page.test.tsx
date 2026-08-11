@@ -129,6 +129,45 @@ describe('AddResourceForm watch options', () => {
     ).toBe(true)
   })
 
+  it('blocks non-watchable TOS imports in the watch creation flow', () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AddResourceForm
+          initialMode="remote"
+          initialWatchEnabled
+          watchRequired
+        />
+      </QueryClientProvider>,
+    )
+
+    expect(
+      screen.queryByRole('button', { name: /sourcePicker.tos/ }),
+    ).toBeNull()
+    fireEvent.change(screen.getByRole('textbox', { name: 'remoteUrl' }), {
+      target: { value: 'tos://bucket/docs' },
+    })
+
+    expect(screen.getByRole('alert').textContent).toBe(
+      'watch.requiredUnsupported',
+    )
+    expect(
+      screen
+        .getByRole('switch', { name: 'watch.enabled' })
+        .getAttribute('aria-checked'),
+    ).toBe('false')
+    expect(
+      screen.queryByRole('spinbutton', { name: 'watch.interval' }),
+    ).toBeNull()
+    expect(
+      screen
+        .getByRole('button', { name: 'startProcessing' })
+        .hasAttribute('disabled'),
+    ).toBe(true)
+  })
+
   it('clears source values when switching resource types', () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },

@@ -3,6 +3,7 @@ import type { TFunction } from 'i18next'
 import { Cloud, FileDown, FileText, GitBranch, Globe2 } from 'lucide-react'
 
 import { cn } from '#/lib/utils'
+import { getRemoteResourceCapabilities } from '../-lib/resource-source-strategy'
 import type { RemoteResourceTypeSelection } from '../-lib/resource-source'
 
 type ResourceTypeOption = {
@@ -23,6 +24,7 @@ type RemoteResourceTypePickerProps = {
   onChange: (value: RemoteResourceTypeSelection) => void
   t: TFunction<'addResource'>
   value: RemoteResourceTypeSelection
+  watchOnly?: boolean
 }
 
 export function RemoteResourceTypePicker({
@@ -30,7 +32,14 @@ export function RemoteResourceTypePicker({
   onChange,
   t,
   value,
+  watchOnly = false,
 }: RemoteResourceTypePickerProps) {
+  const availableOptions = watchOnly
+    ? RESOURCE_TYPE_OPTIONS.filter(
+        ({ type }) => getRemoteResourceCapabilities(type).watch,
+      )
+    : RESOURCE_TYPE_OPTIONS
+
   return (
     <div className="space-y-2.5 rounded-xl border border-border/60 bg-muted/10 p-3">
       <div className="flex min-w-0 items-baseline gap-2">
@@ -47,7 +56,7 @@ export function RemoteResourceTypePicker({
         aria-label={t('sourcePicker.title')}
         className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-5"
       >
-        {RESOURCE_TYPE_OPTIONS.map(({ type, icon: Icon }) => {
+        {availableOptions.map(({ type, icon: Icon }) => {
           const selected = value === type
           return (
             <button

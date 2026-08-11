@@ -239,6 +239,7 @@ const resources = {
       enabled: '定时同步',
       hint: '定期检查该远程资源，并导入最新内容。',
       unsupported: 'TOS 导入暂不支持定时同步。',
+      requiredUnsupported: '该资源类型不支持创建定时同步，请选择其他类型。',
       interval: '同步周期（分钟）',
       intervalHint: '例如每小时填写 60，每天填写 1440。',
     },
