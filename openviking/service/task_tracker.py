@@ -792,6 +792,10 @@ class TaskTracker:
         while self._work_index.has_work(task_id, exclude_work_id=current_work_id):
             await asyncio.sleep(0.05)
 
+    def has_work(self, task_id: str) -> bool:
+        """Return whether a task still owns durable or active queue work."""
+        return self._work_index.has_work(task_id)
+
     def register_running_task(self, task_id: str) -> None:
         """Register the current asyncio task so cancellation can interrupt it."""
         active_task = asyncio.current_task()

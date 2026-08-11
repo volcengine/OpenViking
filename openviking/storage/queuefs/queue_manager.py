@@ -82,6 +82,8 @@ class QueueManager:
     ADD_RESOURCE = "AddResource"
     SESSION_COMMIT = "SessionCommit"
     USER_DELETION = "UserDeletion"
+    # A deferred archive re-enqueues itself; throttle the next scheduling round.
+    _SESSION_COMMIT_POLL_INTERVAL = 1.0
 
     def __init__(
         self,
@@ -213,6 +215,11 @@ class QueueManager:
         """
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        poll_interval = (
+            self._SESSION_COMMIT_POLL_INTERVAL
+            if queue.name == self.SESSION_COMMIT
+            else self._poll_interval
+        )
         try:
             if max_concurrent > 1:
                 loop.run_until_complete(
@@ -226,12 +233,14 @@ class QueueManager:
                             data = loop.run_until_complete(queue.dequeue())
                             if data is not None:
                                 logger.debug("[QueueManager] Dequeued message from %s", queue.name)
+                            if queue.name == self.SESSION_COMMIT:
+                                stop_event.wait(poll_interval)
                         else:
-                            stop_event.wait(self._poll_interval)
+                            stop_event.wait(poll_interval)
                     except Exception as e:
                         logger.error(f"[QueueManager] Worker error for {queue.name}: {e}")
                         traceback.print_exc()
-                        stop_event.wait(self._poll_interval)
+                        stop_event.wait(poll_interval)
         finally:
             loop.close()
 
@@ -242,6 +251,11 @@ class QueueManager:
 
         A Semaphore caps inflight tasks at max_concurrent.
         """
+        poll_interval = (
+            self._SESSION_COMMIT_POLL_INTERVAL
+            if queue.name == self.SESSION_COMMIT
+            else self._poll_interval
+        )
         sem = asyncio.Semaphore(max_concurrent)
         active_tasks: Set[asyncio.Task] = set()
 
@@ -283,7 +297,7 @@ class QueueManager:
                     f"(active={len(active_tasks)})"
                 )
 
-            await asyncio.sleep(self._poll_interval)
+            await asyncio.sleep(poll_interval)
 
         # Drain remaining in-flight tasks on shutdown (with timeout)
         if active_tasks:
