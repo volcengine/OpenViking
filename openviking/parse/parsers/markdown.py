@@ -177,12 +177,15 @@ class MarkdownParser(BaseParser):
         Initialize the enhanced markdown parser.
 
         Args:
-            extract_frontmatter: Whether to extract YAML frontmatter. When None, uses config.
+            extract_frontmatter: Whether to REMOVE YAML frontmatter from the stored
+                document body. Frontmatter is parsed into the parse result metadata
+                either way. Defaults to False (lossless ingestion); when None, uses
+                config.
             config: Parser configuration (uses default if None)
         """
         self.config = config or ParserConfig()
         if extract_frontmatter is None:
-            extract_frontmatter = getattr(self.config, "extract_frontmatter", True)
+            extract_frontmatter = getattr(self.config, "extract_frontmatter", False)
         self.extract_frontmatter = extract_frontmatter
 
         # Compile regex patterns for better performance
@@ -369,11 +372,16 @@ class MarkdownParser(BaseParser):
         meta: Dict[str, Any] = {}
         warnings: List[str] = []
 
-        # Extract frontmatter if present
+        # Frontmatter is ALWAYS parsed into ``meta`` (it drives doc_title below), but
+        # it is only removed from the stored body when explicitly configured.
+        # ``meta`` is transient — it is returned in the parse result and never written
+        # to VikingFS — so stripping by default silently destroyed the frontmatter of
+        # every ingested markdown file with no way to read those fields back.
+        stripped_content, frontmatter = self._extract_frontmatter(content)
+        if frontmatter:
+            meta["frontmatter"] = frontmatter
         if self.extract_frontmatter:
-            content, frontmatter = self._extract_frontmatter(content)
-            if frontmatter:
-                meta["frontmatter"] = frontmatter
+            content = stripped_content
 
         explicit_name = kwargs.get("resource_name")
         if not explicit_name and kwargs.get("source_name"):

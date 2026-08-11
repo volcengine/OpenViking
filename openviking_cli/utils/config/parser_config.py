@@ -439,13 +439,16 @@ class MarkdownConfig(ParserConfig):
 
     Attributes:
         preserve_links: Whether to preserve hyperlinks in output
-        extract_frontmatter: Whether to extract YAML frontmatter
+        extract_frontmatter: Whether to REMOVE YAML frontmatter from the stored
+            document body. Frontmatter is parsed into the parse result metadata
+            regardless. Off by default: the parsed metadata is never persisted, so
+            removing the block would silently lose those fields.
         include_metadata: Whether to include file metadata
         max_heading_depth: Maximum heading depth to include in structure
     """
 
     preserve_links: bool = True
-    extract_frontmatter: bool = True
+    extract_frontmatter: bool = False
     include_metadata: bool = True
     max_heading_depth: int = 3
 
