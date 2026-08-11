@@ -76,6 +76,10 @@ _BATCH_MAX_FILE_BYTES = 8 * 1024 * 1024
 _BATCH_MAX_TOTAL_BYTES = 16 * 1024 * 1024
 _SHA256_PREFIX = "sha256:"
 
+# Subtrees directly under a user root that OpenViking manages itself; only
+# memories/, resources/, and plain files may be written under a user root.
+_USER_MANAGED_SUBTREES = frozenset({"skills", "peers", "privacy", "sessions"})
+
 
 class ContentWriteCoordinator:
     """Write a file (create or modify) and trigger downstream maintenance."""
@@ -1322,18 +1326,25 @@ class ContentWriteCoordinator:
                         root_uri = parent.uri
                 else:
                     root_uri = VikingURI.build(*parts[: resources_idx + 2])
-            else:
-                try:
-                    memories_idx = parts.index("memories")
-                except ValueError as exc:
-                    raise InvalidArgumentError(
-                        f"write only supports memory or resource files under user scope: {uri}"
-                    ) from exc
+            elif "memories" in parts:
+                memories_idx = parts.index("memories")
                 if len(parts) <= memories_idx + 1:
                     raise InvalidArgumentError(
                         f"memory write target must be inside a memory type directory: {uri}"
                     )
                 root_uri = VikingURI.build(*parts[: memories_idx + 2])
+            else:
+                # Plain files directly under the user root are allowed (e.g. a
+                # persona file at viking://user/<user>/persona.md); the managed
+                # subtrees (skills/, peers/, privacy/, sessions/) are not.
+                if len(parts) <= 2 or parts[2] in _USER_MANAGED_SUBTREES:
+                    raise InvalidArgumentError(
+                        "user-scope writes need a file under memories/, resources/, "
+                        f"or directly at the user root: {uri}"
+                    )
+                parent = parsed.parent
+                if parent is not None:
+                    root_uri = parent.uri
 
         stat = await self._safe_stat(root_uri, ctx=ctx, allow_not_found=_allow_not_found)
         if stat.get("not_found") or not stat.get("isDir"):

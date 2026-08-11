@@ -1054,6 +1054,27 @@ async def test_write_user_shorthand_uri(service):
     assert visible.strip() == "x"
 
 
+async def test_write_user_root_file_via_shorthand(service):
+    # viking://user/persona.md shorthand inserts the current user.
+    result = await write(uri="viking://user/zeus-persona.md", content="# Zeus persona\n")
+    assert "viking://user/test_user/zeus-persona.md" in result
+    body = await service.fs.read("viking://user/test_user/zeus-persona.md", ctx=DEFAULT_CTX)
+    assert body == "# Zeus persona\n"
+
+
+async def test_write_user_root_subdirectory_file(service):
+    uri = "viking://user/default/notes/todo.md"
+    await write(uri=uri, content="- buy milk\n")
+    assert "- buy milk" in await read(uris=uri)
+
+
+async def test_write_user_managed_subtree_rejected(service):
+    with pytest.raises(InvalidArgumentError, match="user root"):
+        await write(uri="viking://user/default/sessions/fake-session.md", content="x")
+    with pytest.raises(InvalidArgumentError, match="user root"):
+        await write(uri="viking://user/default/skills/demo/SKILL.md", content="x")
+
+
 async def test_write_tool_schema_is_portable():
     tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
     props = tools["write"].inputSchema["properties"]

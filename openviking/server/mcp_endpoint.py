@@ -512,7 +512,7 @@ async def write(
     - mode="create": fail if the file already exists. New files must end in one of: .md .txt .json .yaml .yml .toml .py .js .ts
     - mode="append": append to the end of an existing file; fails if the file does not exist.
 
-    Writable scopes: viking://resources/, viking://user/ (memories and resources), viking://agent/. After a write, semantic search indexes refresh in the background; pass wait=true to block until search reflects the change."""
+    Writable scopes: viking://resources/, viking://user/ (plain files at the user root such as viking://user/notes.md — the current user is inserted automatically — plus the memories/ and resources/ subtrees), viking://agent/. The managed user subtrees skills/, peers/, privacy/ and sessions/ are read-only. After a write, semantic search indexes refresh in the background; pass wait=true to block until search reflects the change."""
     service = get_service()
     ctx = _get_ctx()
 

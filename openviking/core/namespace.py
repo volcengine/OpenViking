@@ -420,7 +420,13 @@ def _is_current_user_relative_uri(parts: list[str], ctx: Optional[RequestContext
 
 
 def _is_user_relative_root_segment(segment: str) -> bool:
-    return segment in _CONTENT_TYPES_BY_SCOPE["user"] or segment in _USER_RELATIVE_ROOT_SEGMENTS
+    if segment in _CONTENT_TYPES_BY_SCOPE["user"] or segment in _USER_RELATIVE_ROOT_SEGMENTS:
+        return True
+    # A segment containing "." is a file name (e.g. viking://user/notes.md), not
+    # a user id: canonical user ids are dot-free by convention. Treat it as
+    # current-user shorthand for a file at the user root, so
+    # viking://user/notes.md resolves to viking://user/<user>/notes.md.
+    return "." in segment
 
 
 def _resolve_session_uri(

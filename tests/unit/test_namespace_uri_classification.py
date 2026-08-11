@@ -146,3 +146,36 @@ def test_current_user_short_content_roots_are_canonicalized_from_content_segment
         "viking://user/alice/resources"
     )
     assert is_content_root_uri("viking://resources", ctx, kind="resource")
+
+
+def test_dotted_user_root_segment_is_current_user_file_shorthand():
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="acct", user_id="alice"),
+        role=Role.USER,
+    )
+
+    # A dotted segment is a file name, so the current user is inserted.
+    assert (
+        canonicalize_uri("viking://user/zeus-persona.md", ctx)
+        == "viking://user/alice/zeus-persona.md"
+    )
+    # Canonical form with an explicit user id is unchanged, including
+    # subdirectories under the user root.
+    assert (
+        canonicalize_uri("viking://user/alice/notes/todo.md", ctx)
+        == "viking://user/alice/notes/todo.md"
+    )
+    # Dot-free segments still address an explicit user.
+    assert (
+        canonicalize_uri("viking://user/bob/zeus-persona.md", ctx)
+        == "viking://user/bob/zeus-persona.md"
+    )
+    # The current user's own id always wins over the dotted shorthand rule.
+    dotted_ctx = RequestContext(
+        user=UserIdentifier(account_id="acct", user_id="a.b"),
+        role=Role.USER,
+    )
+    assert (
+        canonicalize_uri("viking://user/a.b/memories/preferences/p.md", dotted_ctx)
+        == "viking://user/a.b/memories/preferences/p.md"
+    )
