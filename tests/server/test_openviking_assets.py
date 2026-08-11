@@ -330,13 +330,7 @@ async def test_git_preflight_uses_process_local_auth_without_secret_in_argv(monk
     assert captured["env"]["GIT_TERMINAL_PROMPT"] == "0"
 
 
-@pytest.mark.parametrize(
-    "repo_url",
-    [
-        "http://github.com/org/private.git",
-        "https://user:embedded-token@github.com/org/private.git",
-    ],
-)
+@pytest.mark.parametrize("repo_url", ["http://github.com/org/private.git"])
 async def test_git_preflight_rejects_unsafe_token_urls_before_spawn(monkeypatch, repo_url):
     exec_mock = AsyncMock()
     monkeypatch.setattr("asyncio.create_subprocess_exec", exec_mock)

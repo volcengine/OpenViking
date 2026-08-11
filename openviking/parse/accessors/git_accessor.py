@@ -32,7 +32,6 @@ from openviking.utils.code_hosting_utils import (
 from openviking.utils.git_auth import (
     build_git_http_auth_env,
     parse_git_http_auth_config,
-    reject_git_url_userinfo,
 )
 from openviking_cli.utils.logger import get_logger
 
@@ -107,7 +106,6 @@ class GitAccessor(DataAccessor):
         temp_local_dir = None
         branch = kwargs.get("branch") or kwargs.get("ref")
         commit = kwargs.get("commit")
-        reject_git_url_userinfo(source_str)
         auth_config = parse_git_http_auth_config(kwargs.get("auth_config"), source_str)
         git_env = None
 

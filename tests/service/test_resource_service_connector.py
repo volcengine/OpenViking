@@ -881,26 +881,29 @@ async def test_native_git_enqueue_rejects_nested_auth_without_secret_in_error(ct
 
 
 @pytest.mark.asyncio
-async def test_git_url_embedded_credentials_are_rejected_before_routing(
+async def test_git_url_embedded_credentials_are_passed_to_native_queue_unchanged(
     monkeypatch,
     connector_config,
     ctx,
     service,
 ):
     monkeypatch.setattr(resource_service_module, "is_git_repo_url", lambda _path: True)
-    service._execute_resource_ingestion = AsyncMock()
-    service.enqueue_git_add_resource = AsyncMock()
+    service.enqueue_git_add_resource = AsyncMock(
+        return_value={
+            "status": "success",
+            "root_uri": "viking://resources/private",
+            "task_id": "task-private",
+        }
+    )
+    source = "https://user:embedded-token@git.example/org/private.git"
+    result = await service.add_resource(
+        path=source,
+        ctx=ctx,
+        to="viking://resources/private",
+    )
 
-    with pytest.raises(InvalidArgumentError, match="userinfo") as exc_info:
-        await service.add_resource(
-            path="https://user:embedded-token@git.example/org/private.git",
-            ctx=ctx,
-            to="viking://resources/private",
-        )
-
-    assert "embedded-token" not in str(exc_info.value)
-    service._execute_resource_ingestion.assert_not_awaited()
-    service.enqueue_git_add_resource.assert_not_awaited()
+    assert result["task_id"] == "task-private"
+    assert service.enqueue_git_add_resource.await_args.kwargs["path"] == source
 
 
 def test_prepared_add_resource_payload_drops_nested_git_auth():

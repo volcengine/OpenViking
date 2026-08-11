@@ -51,7 +51,7 @@ from openviking.telemetry.resource_summary import (
     build_queue_status_payload,
 )
 from openviking.utils import is_git_repo_url, parse_code_hosting_url
-from openviking.utils.git_auth import parse_git_http_auth_config, reject_git_url_userinfo
+from openviking.utils.git_auth import parse_git_http_auth_config
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.media_processor import _smart_stem
 from openviking.utils.network_guard import ensure_public_remote_target
@@ -616,7 +616,6 @@ class ResourceService:
             else normalized_args.parse_mode
         )
         kwargs.update(normalized_args.processor_kwargs)
-        reject_git_url_userinfo(path)
         if "auth_config" in kwargs:
             raise InvalidArgumentError(
                 "args.auth_config cannot be used with enqueue_git_add_resource because "
@@ -983,8 +982,6 @@ class ResourceService:
         )
         kwargs.update(normalized_args.processor_kwargs)
         git_repo_source = is_git_repo_url(path)
-        if git_repo_source:
-            reject_git_url_userinfo(path)
         if watch_interval > 0 and kwargs.get("temp_file_id"):
             # Fail fast, before any ingestion: an uploaded source is a one-time
             # snapshot, so a watch on it can never observe the live source (see the

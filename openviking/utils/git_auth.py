@@ -8,7 +8,6 @@ import base64
 import os
 from dataclasses import dataclass, field
 from typing import Mapping
-from urllib.parse import urlsplit
 
 from openviking_cli.exceptions import InvalidArgumentError
 
@@ -21,27 +20,7 @@ class GitHttpAuthConfig:
     token: str = field(repr=False)
 
 
-def reject_git_url_userinfo(repo_url: str) -> None:
-    """Reject URL-embedded credentials before the URL can reach logs or queues."""
-
-    if not isinstance(repo_url, str):
-        return
-    try:
-        parsed = urlsplit(repo_url.strip())
-        has_userinfo = parsed.scheme.lower() in {"http", "https"} and (
-            parsed.username is not None or parsed.password is not None
-        )
-    except ValueError:
-        has_userinfo = True
-    if has_userinfo:
-        raise InvalidArgumentError(
-            "Git repository URLs must not contain userinfo; pass credentials via "
-            "args.auth_config instead."
-        )
-
-
 def _validate_git_https_auth_url(repo_url: str) -> str:
-    reject_git_url_userinfo(repo_url)
     normalized = repo_url.strip() if isinstance(repo_url, str) else ""
     if not normalized.lower().startswith("https://"):
         raise InvalidArgumentError(

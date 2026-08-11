@@ -18,7 +18,6 @@ from openviking.utils.git_auth import (
     build_git_http_auth_env,
     git_http_basic_auth_header,
     parse_git_http_auth_config,
-    reject_git_url_userinfo,
 )
 from openviking_cli.exceptions import InvalidArgumentError
 
@@ -78,10 +77,6 @@ def test_git_http_auth_config_defaults_username_and_builds_isolated_env() -> Non
     assert env["GIT_CONFIG_KEY_4"] == f"http.{repo_url}.extraHeader"
 
 
-def test_git_url_userinfo_guard_preserves_ssh_username() -> None:
-    reject_git_url_userinfo("ssh://git@git.example.com/org/repo.git")
-
-
 @pytest.mark.parametrize(
     ("value", "repo_url", "message"),
     [
@@ -108,11 +103,6 @@ def test_git_url_userinfo_guard_preserves_ssh_username() -> None:
             {"token": "secret-token"},
             "http://git.example.com/org/repo.git",
             "HTTPS",
-        ),
-        (
-            {"token": "secret-token"},
-            "https://user:embedded-token@git.example.com/org/repo.git",
-            "userinfo",
         ),
     ],
 )
@@ -495,18 +485,31 @@ class TestGitAccessor:
         assert resource.original_source == source
         assert token not in str(resource.meta)
 
-    async def test_embedded_http_credentials_are_rejected_before_clone_or_logging(
+    async def test_embedded_http_credentials_are_passed_through_unchanged(
         self,
         accessor: GitAccessor,
-        caplog,
+        tmp_path: Path,
     ) -> None:
-        source = "https://user:embedded-token@github.com/org/private.git"
-        with patch.object(accessor, "_git_clone", new_callable=AsyncMock) as git_clone:
-            with pytest.raises(InvalidArgumentError, match="userinfo"):
-                await accessor.access(source)
+        source = "https://user:embedded-token@codeberg.org/org/private.git"
+        with (
+            patch(
+                "openviking.parse.accessors.git_accessor.tempfile.mkdtemp",
+                return_value=str(tmp_path),
+            ),
+            patch.object(
+                accessor,
+                "_git_clone",
+                new_callable=AsyncMock,
+                return_value="org/private",
+            ) as git_clone,
+        ):
+            resource = await accessor.access(source)
 
-        git_clone.assert_not_awaited()
-        assert "embedded-token" not in caplog.text
+        git_clone.assert_awaited_once()
+        call = git_clone.await_args
+        assert call.args[0] == source
+        assert call.kwargs["env"] is None
+        assert resource.original_source == source
 
     def test_normalize_repo_url_github_commit_page(self, accessor: GitAccessor) -> None:
         """Commit-pin URLs normalize to the bare repo; the ref is extracted separately."""

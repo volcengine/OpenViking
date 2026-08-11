@@ -22,7 +22,6 @@ from openviking.server.local_input_guard import require_remote_resource_source
 from openviking.utils.git_auth import (
     GitHttpAuthConfig,
     build_git_http_auth_env,
-    reject_git_url_userinfo,
 )
 from openviking_cli.exceptions import (
     DeadlineExceededError,
@@ -281,7 +280,6 @@ async def preflight_git_repository(
 ) -> dict[str, Any]:
     """Verify that the server can read a Git source without cloning or creating a task."""
 
-    reject_git_url_userinfo(repo_url)
     _validate_clone_url(repo_url, asset_name)
     repo_url = require_remote_resource_source(repo_url)
     if timeout <= 0 or not math.isfinite(timeout):
