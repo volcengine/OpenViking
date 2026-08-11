@@ -68,6 +68,7 @@ URI_REWRITE_OUTPUT_FIELDS = [
     "content",
     "account_id",
 ]
+URI_REWRITE_RECORD_LIMIT = 100_000
 
 VIKINGDB_CONTENT_MAX_SIZE = 1024 * 1024
 
@@ -466,13 +467,17 @@ class _SingleAccountBackend:
 
     async def get(self, ids: List[str]) -> List[Dict[str, Any]]:
         try:
-            records = await self._async_adapter.call("get", ids)
-            if self._bound_account_id:
-                records = [r for r in records if r.get("account_id") == self._bound_account_id]
-            return records
+            return await self.get_strict(ids)
         except Exception as e:
             logger.error("Error getting records: %s", e)
             return []
+
+    async def get_strict(self, ids: List[str]) -> List[Dict[str, Any]]:
+        """Fetch records without converting backend failures into an empty result."""
+        records = await self._async_adapter.call("get", ids)
+        if self._bound_account_id:
+            records = [r for r in records if r.get("account_id") == self._bound_account_id]
+        return records
 
     async def delete(self, ids: List[str]) -> int:
         try:
@@ -528,23 +533,7 @@ class _SingleAccountBackend:
         order_desc: bool = False,
     ) -> List[Dict[str, Any]]:
         try:
-            logger.debug(
-                f"[_SingleAccountBackend.query] Called with bound_account_id={self._bound_account_id}, filter={filter}"
-            )
-            if self._bound_account_id:
-                account_filter = Eq("account_id", self._bound_account_id)
-                if filter:
-                    if isinstance(filter, dict):
-                        filter = RawDSL(filter)
-                    filter = And([account_filter, filter])
-                else:
-                    filter = account_filter
-                logger.debug(
-                    f"[_SingleAccountBackend.query] Applied account filter, final filter={filter}"
-                )
-
-            return await self._async_adapter.call(
-                "query",
+            return await self.query_strict(
                 query_vector=query_vector,
                 sparse_query_vector=sparse_query_vector,
                 filter=filter,
@@ -557,6 +546,50 @@ class _SingleAccountBackend:
         except Exception as e:
             logger.error("Error querying collection: %s", e, exc_info=True)
             return []
+
+    async def query_strict(
+        self,
+        query_vector: Optional[List[float]] = None,
+        sparse_query_vector: Optional[Dict[str, float]] = None,
+        filter: Optional[Dict[str, Any] | FilterExpr] = None,
+        limit: int = 10,
+        offset: int = 0,
+        output_fields: Optional[List[str]] = None,
+        order_by: Optional[str] = None,
+        order_desc: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Query without converting backend failures into an empty result."""
+        logger.debug(
+            "[_SingleAccountBackend.query_strict] Called with "
+            "bound_account_id=%s, filter=%s",
+            self._bound_account_id,
+            filter,
+        )
+        if self._bound_account_id:
+            account_filter = Eq("account_id", self._bound_account_id)
+            if filter:
+                if isinstance(filter, dict):
+                    filter = RawDSL(filter)
+                filter = And([account_filter, filter])
+            else:
+                filter = account_filter
+            logger.debug(
+                "[_SingleAccountBackend.query_strict] Applied account filter, "
+                "final filter=%s",
+                filter,
+            )
+
+        return await self._async_adapter.call(
+            "query",
+            query_vector=query_vector,
+            sparse_query_vector=sparse_query_vector,
+            filter=filter,
+            limit=limit,
+            offset=offset,
+            output_fields=output_fields,
+            order_by=order_by,
+            order_desc=order_desc,
+        )
 
     async def search(
         self,
@@ -653,19 +686,26 @@ class _SingleAccountBackend:
 
     async def count(self, filter: Optional[Dict[str, Any] | FilterExpr] = None) -> int:
         try:
-            if self._bound_account_id:
-                account_filter = Eq("account_id", self._bound_account_id)
-                if filter:
-                    if isinstance(filter, dict):
-                        filter = RawDSL(filter)
-                    filter = And([account_filter, filter])
-                else:
-                    filter = account_filter
-
-            return await self._async_adapter.call("count", filter=filter)
+            return await self.count_strict(filter=filter)
         except Exception as e:
             logger.error("Error counting records: %s", e)
             return 0
+
+    async def count_strict(
+        self,
+        filter: Optional[Dict[str, Any] | FilterExpr] = None,
+    ) -> int:
+        """Count records without converting backend failures into zero."""
+        if self._bound_account_id:
+            account_filter = Eq("account_id", self._bound_account_id)
+            if filter:
+                if isinstance(filter, dict):
+                    filter = RawDSL(filter)
+                filter = And([account_filter, filter])
+            else:
+                filter = account_filter
+
+        return await self._async_adapter.call("count", filter=filter)
 
     async def clear(self) -> bool:
         try:
@@ -1406,7 +1446,8 @@ class VikingVectorIndexBackend:
         uri: str,
         new_uri: str,
         levels: Optional[List[int]] = None,
-    ) -> bool:
+    ) -> Optional[bool]:
+        """Return True when remapped, None when absent, or False on invalid records."""
         import hashlib
 
         canonical_uri = canonicalize_uri(uri, ctx)
@@ -1414,34 +1455,66 @@ class VikingVectorIndexBackend:
         conds: List[FilterExpr] = [Eq("uri", canonical_uri), Eq("account_id", ctx.account_id)]
         if levels:
             conds.append(In("level", levels))
+        rewrite_filter = And(conds)
+        backend = self._get_backend_for_context(ctx)
 
-        records = await self.filter(
-            filter=And(conds),
-            limit=100,
+        record_count = await backend.count_strict(filter=rewrite_filter)
+        if record_count == 0:
+            return None
+        if record_count > URI_REWRITE_RECORD_LIMIT:
+            logger.warning(
+                "update_uri_mapping exceeded the safe record limit: uri=%s "
+                "new_uri=%s account_id=%s count=%s limit=%s",
+                canonical_uri,
+                canonical_new_uri,
+                ctx.account_id,
+                record_count,
+                URI_REWRITE_RECORD_LIMIT,
+            )
+            return False
+        records = await backend.query_strict(
+            filter=rewrite_filter,
+            limit=record_count,
             output_fields=URI_REWRITE_OUTPUT_FIELDS,
-            ctx=ctx,
         )
-        if not records:
+        if len(records) != record_count:
+            logger.warning(
+                "update_uri_mapping fetched an incomplete record set: uri=%s "
+                "new_uri=%s account_id=%s expected=%s actual=%s",
+                canonical_uri,
+                canonical_new_uri,
+                ctx.account_id,
+                record_count,
+                len(records),
+            )
             return False
         record_ids = [str(record["id"]) for record in records if record.get("id")]
-        if not record_ids:
+        if len(record_ids) != record_count or len(set(record_ids)) != record_count:
             logger.warning(
-                "update_uri_mapping found records without ids: uri=%s new_uri=%s account_id=%s",
+                "update_uri_mapping found records with missing or duplicate ids: "
+                "uri=%s new_uri=%s account_id=%s",
                 canonical_uri,
                 canonical_new_uri,
                 ctx.account_id,
             )
             return False
-        full_records = await self.get(record_ids, ctx=ctx)
-        if not full_records:
+        full_records = await backend.get_strict(record_ids)
+        full_records_by_id = {
+            str(record["id"]): record for record in full_records if record.get("id")
+        }
+        if len(full_records_by_id) != record_count or any(
+            record_id not in full_records_by_id for record_id in record_ids
+        ):
             logger.warning(
-                "update_uri_mapping failed to fetch full records: uri=%s new_uri=%s account_id=%s ids=%s",
+                "update_uri_mapping failed to fetch every full record: "
+                "uri=%s new_uri=%s account_id=%s ids=%s",
                 canonical_uri,
                 canonical_new_uri,
                 ctx.account_id,
                 record_ids,
             )
             return False
+        ordered_records = [full_records_by_id[record_id] for record_id in record_ids]
 
         def _seed_uri_for_id(uri: str, level: int) -> str:
             if level == 0:
@@ -1450,11 +1523,8 @@ class VikingVectorIndexBackend:
                 return uri if uri.endswith("/.overview.md") else f"{uri}/.overview.md"
             return uri
 
-        success = False
-        ids_to_delete: List[str] = []
-        for record in full_records:
-            if "id" not in record:
-                continue
+        rewritten_records: List[Dict[str, Any]] = []
+        for record in ordered_records:
             raw_level = record.get("level", 2)
             try:
                 level = int(raw_level)
@@ -1473,25 +1543,147 @@ class VikingVectorIndexBackend:
             vector = updated.get("vector")
             if not vector:
                 logger.warning(
-                    "update_uri_mapping skipped record without dense vector: old_uri=%s new_uri=%s level=%s account_id=%s id=%s",
+                    "update_uri_mapping cannot rewrite record without dense vector: "
+                    "old_uri=%s new_uri=%s level=%s account_id=%s id=%s",
                     canonical_uri,
                     canonical_new_uri,
                     level,
                     ctx.account_id,
                     record.get("id"),
                 )
-                continue
-            result = await self.upsert(updated, ctx=ctx)
-            if result:
-                success = True
-                old_id = record.get("id")
-                if old_id and old_id != new_id:
-                    ids_to_delete.append(old_id)
+                return False
+            rewritten_records.append(updated)
 
-        if ids_to_delete:
-            await self.delete(list(set(ids_to_delete)), ctx=ctx)
+        new_ids = [str(record["id"]) for record in rewritten_records]
+        if len(set(new_ids)) != len(new_ids):
+            logger.warning(
+                "update_uri_mapping generated duplicate destination ids: "
+                "old_uri=%s new_uri=%s account_id=%s ids=%s",
+                canonical_uri,
+                canonical_new_uri,
+                ctx.account_id,
+                new_ids,
+            )
+            return False
 
-        return success
+        destination_records = await backend.get_strict(new_ids)
+        destination_records_by_id = {
+            str(record["id"]): record
+            for record in destination_records
+            if record.get("id")
+        }
+        attempted_ids: List[str] = []
+
+        async def _restore_after_failure(*, restore_source: bool) -> List[str]:
+            rollback_failures: List[str] = []
+            if restore_source:
+                for source_record in ordered_records:
+                    try:
+                        restored_id = await self.upsert(source_record, ctx=ctx)
+                        expected_id = str(source_record["id"])
+                        if str(restored_id) != expected_id:
+                            raise RuntimeError(
+                                f"source upsert returned {restored_id!r}, "
+                                f"expected {expected_id!r}"
+                            )
+                    except Exception as exc:
+                        rollback_failures.append(
+                            f"restore source {source_record.get('id')}: {exc}"
+                        )
+
+            current_destination_ids: set[str] = set()
+            if attempted_ids:
+                try:
+                    current_destination_ids = {
+                        str(record["id"])
+                        for record in await backend.get_strict(attempted_ids)
+                        if record.get("id")
+                    }
+                except Exception as exc:
+                    rollback_failures.append(
+                        f"inspect destination records {attempted_ids}: {exc}"
+                    )
+
+            destination_ids_to_delete: List[str] = []
+            for attempted_id in attempted_ids:
+                previous = destination_records_by_id.get(attempted_id)
+                if previous is not None:
+                    try:
+                        restored_id = await self.upsert(previous, ctx=ctx)
+                        expected_id = str(previous["id"])
+                        if str(restored_id) != expected_id:
+                            raise RuntimeError(
+                                f"destination restore returned {restored_id!r}, "
+                                f"expected {expected_id!r}"
+                            )
+                    except Exception as exc:
+                        rollback_failures.append(
+                            f"restore destination {attempted_id}: {exc}"
+                        )
+                elif attempted_id in current_destination_ids:
+                    destination_ids_to_delete.append(attempted_id)
+
+            if destination_ids_to_delete:
+                try:
+                    deleted = await self.delete(
+                        destination_ids_to_delete,
+                        ctx=ctx,
+                    )
+                    if deleted != len(destination_ids_to_delete):
+                        raise RuntimeError(
+                            f"deleted {deleted} of "
+                            f"{len(destination_ids_to_delete)} destination records"
+                        )
+                except Exception as exc:
+                    rollback_failures.append(
+                        f"delete destination records {destination_ids_to_delete}: {exc}"
+                    )
+            return rollback_failures
+
+        source_delete_attempted = False
+        try:
+            for rewritten in rewritten_records:
+                expected_id = str(rewritten["id"])
+                attempted_ids.append(expected_id)
+                result = await self.upsert(rewritten, ctx=ctx)
+                if str(result) != expected_id:
+                    raise RuntimeError(
+                        f"Vector store URI upsert returned {result!r}, "
+                        f"expected {expected_id!r}"
+                    )
+
+            old_ids_to_delete = list(
+                dict.fromkeys(
+                    str(source_record["id"])
+                    for source_record, rewritten in zip(
+                        ordered_records,
+                        rewritten_records,
+                        strict=True,
+                    )
+                    if str(source_record["id"]) != str(rewritten["id"])
+                )
+            )
+            if old_ids_to_delete:
+                source_delete_attempted = True
+                deleted = await self.delete(old_ids_to_delete, ctx=ctx)
+                if deleted != len(old_ids_to_delete):
+                    raise RuntimeError(
+                        f"Vector store URI rewrite deleted {deleted} of "
+                        f"{len(old_ids_to_delete)} source records"
+                    )
+        except Exception as exc:
+            rollback_failures = await _restore_after_failure(
+                restore_source=source_delete_attempted
+            )
+            if rollback_failures:
+                raise RuntimeError(
+                    f"Vector store URI remap failed for {canonical_uri} -> "
+                    f"{canonical_new_uri}; rollback incomplete: "
+                    f"{'; '.join(rollback_failures)}"
+                ) from exc
+            raise
+
+        return True
 
     async def increment_active_count(self, ctx: RequestContext, uris: List[str]) -> int:
         updated = 0
