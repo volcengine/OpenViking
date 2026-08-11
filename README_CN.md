@@ -190,18 +190,47 @@ ov chat   # 在另一个终端运行
 
 生产环境建议把 OpenViking 作为独立 HTTP 服务运行——见[服务器部署](https://docs.openviking.ai/zh/getting-started/03-quickstart-server)和[部署指南](https://docs.openviking.ai/zh/guides/03-deployment)。
 
-不想自己运维？OpenViking Personal 由官方托管、开箱即用，借助 VikingDB 获得远超本地硬件的扩展能力，并提供至多 50 个文件的免费试用；开源版用户可以用迁移工具平滑迁移。→ [openviking.ai](https://www.openviking.ai)
+## 商业版本
 
-## 托管服务
+**开源版本不会被削弱。** 本仓库的 OpenViking 以 AGPLv3 完整开源：不锁功能、不需要注册账号、不需要激活码，按上面的[生产部署](#生产部署)自行部署即可用于生产环境，并且会一直如此。
 
-### 火山引擎（中国地区）
-在火山引擎上官方托管，中国地区可用。
-- 产品页面：[www.volcengine.com/product/openviking-service](https://www.volcengine.com/product/openviking-service)
-- 文档：[docs.volcengine.com/docs/84313/2374478](https://docs.volcengine.com/docs/84313/2374478)
+下面两个版本解决的是「谁来运维、部署在哪」，不是「能不能用」。
 
-### 即将推出
-- 在 [BytePlus](https://www.byteplus.com) 上的全球托管服务（面向中国以外地区）
-- 私有化分布式企业版（通过激活码激活部署，支持 BYOC）
+<table>
+<tr>
+<td width="50%" valign="top">
+
+<img src="docs/images/commercial-saas.png" alt="商业化 SaaS 版" width="100%" />
+
+<h3>☁️ 商业化 SaaS 版</h3>
+<p>由<b>火山引擎</b>官方托管，开箱即用，不用自建也不用运维。</p>
+<ul>
+<li><b>个人版</b> — 面向个人开发者，最多 50 个文件免费试用，借助 VikingDB 获得远超本地硬件的扩展能力。</li>
+<li><b>企业版</b> — 面向团队的多用户上下文管理、协作与权限、企业级 SLA 与技术支持。</li>
+</ul>
+<p>开源版用户可以用迁移工具平滑迁入。</p>
+<p><a href="https://www.volcengine.com/product/openviking-service"><b>→ 火山引擎产品页</b></a> · <a href="https://docs.volcengine.com/docs/84313/2374478">使用文档</a></p>
+<p><sub>面向中国以外地区的全球托管服务将在 <a href="https://www.byteplus.com">BytePlus</a> 上线。</sub></p>
+
+</td>
+<td width="50%" valign="top">
+
+<img src="docs/images/commercial-self-hosted.png" alt="私有化部署版" width="100%" />
+
+<h3>🏢 私有化部署版</h3>
+<p>部署在<b>你自己的环境</b>里，数据不出域。</p>
+<ul>
+<li><b>在线部署</b> — 部署到你自己的云账号 / VPC，支持 BYOC，可连公网获取更新与授权。</li>
+<li><b>离线部署</b> — 完全内网、无外网连接的环境，适用于政企、金融、制造等强合规场景。</li>
+</ul>
+<p>在开源版基础上增加分布式部署能力与官方技术支持，通过激活码激活。</p>
+<p><a href="https://my.feishu.cn/share/base/form/shrcnMFqymCd9sq77sLk34Krxoc"><b>→ 提交私有化部署咨询</b></a></p>
+
+</td>
+</tr>
+</table>
+
+> 只想自己跑开源版？完全没问题，不需要联系任何人，直接看[快速开始](#快速开始)。
 
 ## 研究
 

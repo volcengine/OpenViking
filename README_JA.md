@@ -190,18 +190,47 @@ ov chat   # 別のターミナルで実行
 
 本番環境では、OpenViking をスタンドアロンの HTTP サービスとして実行してください — [Server deployment](https://docs.openviking.ai/en/getting-started/03-quickstart-server) と [Deployment guide](https://docs.openviking.ai/en/guides/03-deployment) を参照してください。
 
-自分で運用したくない場合は、公式ホスティング版の OpenViking Personal をすぐに利用できます。VikingDB によりローカルハードウェアをはるかに超える規模までスケールし、最大 50 ファイルまでの無料トライアルが付属します。既存のオープンソース版ユーザーは移行ツールで移行できます。→ [openviking.ai](https://www.openviking.ai)
+## 商用版
 
-## マネージドサービス
+**オープンソース版が機能制限されることはありません。** 本リポジトリの OpenViking は AGPLv3 で完全にオープンソースです。機能ロックなし、アカウント登録なし、アクティベーションコードなしで、上記の[本番環境へのデプロイ](#本番環境へのデプロイ)に従って自分で本番運用できます。今後もそれは変わりません。
 
-### Volcano Engine（中国地域）
-Volcano Engine 上で公式にホスティングされており、中国地域で利用可能です。
-- 製品ページ：[www.volcengine.com/product/openviking-service](https://www.volcengine.com/product/openviking-service)
-- ドキュメント：[docs.volcengine.com/docs/84313/2374478](https://docs.volcengine.com/docs/84313/2374478)
+以下の 2 つの版が解決するのは「誰が運用し、どこで動かすか」であって、「使えるかどうか」ではありません。
 
-### 近日公開
-- [BytePlus](https://www.byteplus.com) 上でのグローバルホスティングサービス（中国以外の地域向け）
-- プライベート分散型エンタープライズ版（アクティベーションコードでデプロイ、BYOC をサポート）
+<table>
+<tr>
+<td width="50%" valign="top">
+
+<img src="docs/images/commercial-saas.png" alt="マネージド SaaS 版" width="100%" />
+
+<h3>☁️ マネージド SaaS 版</h3>
+<p><b>Volcano Engine</b> 上で公式にホスティングされ、構築も運用も不要です。</p>
+<ul>
+<li><b>Personal</b> — 個人開発者向け。最大 50 ファイルまで無料トライアル、VikingDB によりローカルハードウェアを超えてスケールします。</li>
+<li><b>Enterprise</b> — チーム向けのマルチユーザー管理、権限管理、エンタープライズ SLA とサポート。</li>
+</ul>
+<p>オープンソース版のユーザーは移行ツールでそのまま移行できます。</p>
+<p><a href="https://www.volcengine.com/product/openviking-service"><b>→ Volcano Engine 製品ページ</b></a> · <a href="https://docs.volcengine.com/docs/84313/2374478">ドキュメント</a></p>
+<p><sub>中国以外の地域向けグローバルホスティングは <a href="https://www.byteplus.com">BytePlus</a> で提供予定です。</sub></p>
+
+</td>
+<td width="50%" valign="top">
+
+<img src="docs/images/commercial-self-hosted.png" alt="プライベートデプロイ版" width="100%" />
+
+<h3>🏢 プライベートデプロイ版</h3>
+<p><b>自社環境内</b>で動作し、データは外部に出ません。</p>
+<ul>
+<li><b>オンライン</b> — 自社のクラウドアカウント / VPC にデプロイ。BYOC 対応、更新とライセンス取得のため外部接続あり。</li>
+<li><b>オフライン</b> — 外部接続のない完全な閉域環境向け。規制産業に対応します。</li>
+</ul>
+<p>オープンソース版に加えて分散デプロイと公式サポートを提供し、アクティベーションコードで有効化します。</p>
+<p><a href="https://docs.google.com/forms/d/e/1FAIpQLScQqwsm7fvKdjtNiW5rWNXJjoHPtedVzLsKSMJgObtsj2_udA/viewform"><b>→ プライベートデプロイのお問い合わせ</b></a></p>
+
+</td>
+</tr>
+</table>
+
+> オープンソース版を自分で動かしたいだけですか？問題ありません。誰にも連絡する必要はなく、[クイックスタート](#クイックスタート)へどうぞ。
 
 ## 研究
 
