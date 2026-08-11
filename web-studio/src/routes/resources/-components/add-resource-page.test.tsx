@@ -149,13 +149,20 @@ describe('AddResourceForm watch options', () => {
       </QueryClientProvider>,
     )
 
-    expect(
-      screen.queryByRole('button', { name: /sourcePicker.tos/ }),
-    ).toBeNull()
-    expect(screen.queryByRole('button', { name: 'mode.upload' })).toBeNull()
-    fireEvent.change(screen.getByRole('textbox', { name: 'remoteUrl' }), {
-      target: { value: 'tos://bucket/docs' },
+    const tosTypeButton = screen.getByRole('button', {
+      name: /sourcePicker.tos/,
     })
+    expect(tosTypeButton.getAttribute('data-unavailable')).toBe('true')
+    expect(tosTypeButton.hasAttribute('disabled')).toBe(false)
+    expect(screen.queryByRole('button', { name: 'mode.upload' })).toBeNull()
+    fireEvent.click(tosTypeButton)
+    expect(screen.getByText('tosOptions.title')).toBeTruthy()
+    expect(screen.getByText('tosOptions.configuration.allow')).toBeTruthy()
+    expect(
+      screen
+        .getByRole('textbox', { name: 'remoteUrl' })
+        .hasAttribute('disabled'),
+    ).toBe(true)
 
     expect(screen.getByRole('alert').textContent).toBe(
       'watch.requiredUnsupported',

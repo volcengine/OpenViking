@@ -64,7 +64,7 @@ export function RemoteResourceFields({
         onChange={onResourceTypeChange}
         t={t}
         value={resourceType}
-        watchOnly={watchRequired}
+        watchRequired={watchRequired}
       />
 
       <div className="space-y-2">
@@ -79,7 +79,7 @@ export function RemoteResourceFields({
           placeholder={remoteUrlPlaceholder}
           value={url}
           onChange={(event) => onUrlChange(event.target.value)}
-          disabled={disabled}
+          disabled={disabled || (watchRequired && !watchSupported)}
         />
         <p className="text-xs text-muted-foreground">
           {resourceKind === 'unknown'

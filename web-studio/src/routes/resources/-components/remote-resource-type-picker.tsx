@@ -13,7 +13,7 @@ type RemoteResourceTypePickerProps = {
   onChange: (value: RemoteResourceTypeSelection) => void
   t: TFunction<'addResource'>
   value: RemoteResourceTypeSelection
-  watchOnly?: boolean
+  watchRequired?: boolean
 }
 
 export function RemoteResourceTypePicker({
@@ -21,13 +21,8 @@ export function RemoteResourceTypePicker({
   onChange,
   t,
   value,
-  watchOnly = false,
+  watchRequired = false,
 }: RemoteResourceTypePickerProps) {
-  const availableOptions = watchOnly
-    ? REMOTE_RESOURCE_DESCRIPTORS.filter(
-        ({ type }) => getRemoteResourceCapabilities(type).watch,
-      )
-    : REMOTE_RESOURCE_DESCRIPTORS
   const selectedDescriptor =
     value === 'auto' ? undefined : getRemoteResourceDescriptor(value)
 
@@ -47,15 +42,19 @@ export function RemoteResourceTypePicker({
         aria-label={t('sourcePicker.title')}
         className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-5"
       >
-        {availableOptions.map(({ type, icon: Icon }) => {
+        {REMOTE_RESOURCE_DESCRIPTORS.map(({ type, icon: Icon }) => {
           const selected = value === type
+          const optionUnavailable =
+            watchRequired && !getRemoteResourceCapabilities(type).watch
           return (
             <button
               key={type}
               type="button"
               aria-pressed={selected}
+              data-unavailable={optionUnavailable || undefined}
+              title={optionUnavailable ? t('watch.unsupported') : undefined}
               className={cn(
-                'group flex min-w-0 items-center justify-center gap-2 rounded-md border px-2.5 py-2 text-left transition-colors',
+                'group flex min-w-0 items-center justify-center gap-2 rounded-md border px-2.5 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50',
                 selected
                   ? 'border-primary/50 bg-primary/8 shadow-sm'
                   : 'border-border/50 bg-background/60 hover:border-border hover:bg-background',
