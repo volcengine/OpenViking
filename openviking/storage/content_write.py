@@ -962,11 +962,14 @@ class ContentWriteCoordinator:
             return
 
         if mode == "append":
+            # Plain concatenation for resource/skill files: MEMORY_FIELDS is a
+            # reserved trailer of memory namespaces only (see content_visibility),
+            # so non-memory appends must not round-trip through MemoryFileUtils
+            # (which strips trailing newlines and injects a metadata trailer).
             existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
-            mf = MemoryFileUtils.read(existing_raw, uri=uri)
-            mf.content = mf.content + content
-            updated_raw = MemoryFileUtils.write(mf)
-            await self._viking_fs.write_file(uri, updated_raw, ctx=ctx, lease_ref=lease_ref)
+            await self._viking_fs.write_file(
+                uri, existing_raw + content, ctx=ctx, lease_ref=lease_ref
+            )
             return
         await self._viking_fs.write_file(uri, content, ctx=ctx, lease_ref=lease_ref)
 

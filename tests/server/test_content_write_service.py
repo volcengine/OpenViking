@@ -99,6 +99,20 @@ async def test_memory_replace_preserves_metadata(service):
 
 
 @pytest.mark.asyncio
+async def test_resource_append_is_plain_concatenation(service):
+    """Appending to a non-memory file must not inject a MEMORY_FIELDS trailer
+    or strip the existing trailing newline (memory namespaces only)."""
+    ctx = RequestContext(user=service.user, role=Role.USER)
+    uri = "viking://resources/append_plain/journal.md"
+
+    await service.fs.write(uri, content="line1\n", ctx=ctx, mode="create")
+    await service.fs.write(uri, content="line2\n", ctx=ctx, mode="append")
+
+    stored = await service.viking_fs.read_file(uri, ctx=ctx)
+    assert stored == "line1\nline2\n"
+
+
+@pytest.mark.asyncio
 async def test_memory_append_preserves_metadata(service):
     ctx = RequestContext(user=service.user, role=Role.USER)
     memory_uri = f"viking://user/{ctx.user.user_space_name()}/memories/preferences/theme.md"
