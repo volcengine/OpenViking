@@ -537,7 +537,8 @@ async def write(
     """Write text to a viking:// file. Use this to save files (notes, profiles, knowledge, state) in OpenViking the same way you would use a working directory. To change part of an existing file, prefer the edit tool over a full rewrite.
 
     - mode="replace" (default): overwrite the file; creates it and any missing parent directories if needed.
-    - mode="create": fail if the file already exists. New files must end in one of: .md .txt .json .yaml .yml .toml .py .js .ts
+    - mode="create": fail if the file already exists.
+    - Any new file (whether created by "replace" or "create") must end in one of: .md .txt .json .yaml .yml .toml .py .js .ts
     - mode="append": append to the end of an existing file; fails if the file does not exist.
 
     Writable scopes: viking://resources/, viking://user/ (all paths are relative to the authenticated user's root unless the URI already contains that exact user id), viking://agent/. The managed user subtrees skills/, peers/, privacy/ and sessions/ are read-only. After a write, semantic search indexes refresh in the background; pass wait=true to block until search reflects the change."""

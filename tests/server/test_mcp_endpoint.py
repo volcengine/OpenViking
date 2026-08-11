@@ -1103,6 +1103,14 @@ async def test_write_user_root_file_via_shorthand(service):
     assert body == "# Zeus persona\n"
 
 
+async def test_write_plain_file_directly_at_user_root(service):
+    # A file with no intermediate directory: the write coordinator anchors its
+    # refresh at the user root itself, which is the shape the shorthand exists for.
+    result = await write(uri="viking://user/persona.md", content="# Persona\n")
+    assert "viking://user/test_user/persona.md" in result
+    assert "# Persona" in await read(uris="viking://user/persona.md")
+
+
 async def test_write_user_root_subdirectory_file(service):
     uri = "viking://user/test_user/notes/todo.md"
     await write(uri=uri, content="- buy milk\n")
