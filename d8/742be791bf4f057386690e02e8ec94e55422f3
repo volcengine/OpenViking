@@ -1,0 +1,45 @@
+bot/vikingbot/sandbox/__init__.py
+  s_2ab19ed98c97bb::t_44c056e76229b3 6,8-9,21
+bot/vikingbot/sandbox/backends/direct.py
+  s_99abb01b86e892::t_c2642cb37d6b79 105-106,112
+bot/vikingbot/sandbox/backends/opensandbox.py
+  s_2ab19ed98c97bb::t_e05bb3a4e2ef2a 5,7-8,20,299-304,313,328,366-472
+bot/vikingbot/sandbox/base.py
+  s_2ab19ed98c97bb::t_c87b81ee97953e 4-5,7-9,14-21,90-157,162-163,173,176-228
+docs/design/ov-compile-design.md
+  s_2ab19ed98c97bb::t_179dcbb9984c35 51,58,191-192,215-216,354,396,555,559,575-576,651
+docs/en/api/24-vikingbot.md
+  s_2ab19ed98c97bb::t_9b451c5a44d936 148,179,246-247
+docs/zh/api/24-vikingbot.md
+  s_2ab19ed98c97bb::t_dbee36678f0ff3 145,176,243-244
+openviking/session/memory/utils/link_renderer.py
+  s_2ab19ed98c97bb::t_e9b4f0e2023e8a 3-4,10-17,21-27,40-124,128,152,156-159,188,204-205,216,219,222,224,279,297-300,302,304,306-307,309,315
+tests/test_link_renderer.py
+  s_2ab19ed98c97bb::t_12d6d3029de491 86-125,142-155,431-449,529-543
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "d8742be791bf4f057386690e02e8ec94e55422f3",
+  "prompts": {},
+  "sessions": {
+    "s_2ab19ed98c97bb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff491-4069-7cf1-bb58-752f854e9dab",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    },
+    "s_99abb01b86e892": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff495-0bee-77e2-b308-27eaed083d30",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
