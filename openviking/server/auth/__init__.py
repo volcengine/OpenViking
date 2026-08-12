@@ -303,9 +303,8 @@ def require_auth_role(*allowed_roles: Role):
                     "Admin API authentication failed: unable to resolve request context."
                 )
 
-            plugin = _get_plugin(request)
             manager = getattr(request.app.state, "api_key_manager", None)
-            if manager is None and plugin.requires_api_key_manager():
+            if manager is None:
                 raise PermissionDeniedError(_DEV_MODE_ADMIN_API_MESSAGE)
 
             if ctx.role not in allowed_roles:
@@ -345,11 +344,9 @@ def get_api_key_manager_or_raise(request: Request):
     """Get APIKeyManager from app state or raise appropriate error.
 
     Raises:
-        PermissionDeniedError: When the current auth plugin requires an
-            APIKeyManager but none is available.
+        PermissionDeniedError: When no APIKeyManager is available.
     """
     manager = getattr(request.app.state, "api_key_manager", None)
-    plugin = _get_plugin(request)
-    if manager is None and plugin.requires_api_key_manager():
+    if manager is None:
         raise PermissionDeniedError(_DEV_MODE_ADMIN_API_MESSAGE)
     return manager
