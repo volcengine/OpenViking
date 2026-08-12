@@ -7,7 +7,13 @@ type VikingBotWidgetLocale = 'en' | 'zh'
 type VikingBotWidgetMountOptions = {
   site: string
   locale?: VikingBotWidgetLocale
-  trigger?: HTMLElement
+  /**
+   * 'none' keeps the widget from rendering its own floating launcher AND from
+   * binding a click handler of its own — this component owns the trigger, so a
+   * widget-side listener would toggle the panel a second time per click and
+   * desync `aria-expanded`.
+   */
+  trigger?: 'none' | 'floating'
   open?: boolean
   onEvent?: (name: string, payload?: unknown) => void
 }
@@ -33,7 +39,6 @@ let widgetScriptPromise: Promise<void> | null = null
 let widgetMounted = false
 
 const { lang } = useData()
-const triggerArea = ref<HTMLButtonElement>()
 const isOpen = ref(false)
 const isLoading = ref(false)
 const hasError = ref(false)
@@ -101,7 +106,7 @@ async function onTriggerClick() {
     widget.mount({
       site: WIDGET_SITE,
       locale: locale.value,
-      trigger: triggerArea.value,
+      trigger: 'none',
       open: true,
       onEvent: onWidgetEvent
     })
@@ -119,7 +124,6 @@ async function onTriggerClick() {
 <template>
   <span class="vikingbot-launcher">
     <button
-      ref="triggerArea"
       class="vikingbot-trigger"
       type="button"
       :aria-label="copy.trigger"
