@@ -32,13 +32,13 @@
 # 添加资源
 client.add_resource(
     "https://docs.example.com/api.pdf",
-    reason="API 文档"
+    {"reason": "API 文档"},
 )
 
 # 搜索资源
 results = client.find(
     "认证方法",
-    target_uri="viking://resources/"
+    {"target_uri": "viking://resources/"},
 )
 ```
 
@@ -145,7 +145,7 @@ results = await client.find(
 # 搜索全局 agent 技能
 results = await client.find(
     "网络搜索",
-    target_uri="viking://agent/skills/"
+    {"target_uri": "viking://agent/skills/"},
 )
 ```
 

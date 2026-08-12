@@ -177,7 +177,7 @@ L0/L1 是目录级 sidecar，不是 per-file sidecar。生成父目录摘要时�
 # 添加资源
 await client.add_resource(
     "/path/to/doc.pdf",
-    reason="API 文档"
+    {"reason": "API 文档"},
 )
 
 # 流程: Parser → TreeBuilder(scope=resources) → SemanticQueue

@@ -191,24 +191,26 @@ results = client.find("how to authenticate users")
 # 带过滤和时间范围的搜索
 recent_emails = client.find(
     "invoice",
-    target_uri="viking://resources/email",
-    since="7d",
-    time_field="created_at",
+    {
+        "target_uri": "viking://resources/email",
+        "since": "7d",
+        "time_field": "created_at",
+    },
 )
 
 # 仅搜索 memories 和 resources
 typed_results = client.find(
     "authentication",
-    context_type=[ContextType.MEMORY, ContextType.RESOURCE],
+    {"context_type": [ContextType.MEMORY, ContextType.RESOURCE]},
 )
 
 # 按本地图片、bytes、data URI、HTTP URL 或 viking:// URI 搜索
-image_results = client.find(image="/path/to/photo.png")
+image_results = client.find("", {"image": "/path/to/photo.png"})
 
 # 按显式检索标签搜索。多个 tags 之间是 AND 关系。
 tagged_results = client.find(
     "rollback runbook",
-    tags=["env=prod", "team=search"],
+    {"tags": ["env=prod", "team=search"]},
 )
 
 # 遍历结果
@@ -226,7 +228,7 @@ for ctx in results.resources:
 # 仅在资源中搜索
 results = client.find(
     "authentication",
-    target_uri="viking://resources"
+    {"target_uri": "viking://resources"},
 )
 
 # 仅在用户记忆中搜索
@@ -258,7 +260,7 @@ results = client.find(
 # 在特定项目中搜索
 results = client.find(
     "API endpoints",
-    target_uri="viking://resources/my-project"
+    {"target_uri": "viking://resources/my-project"},
 )
 ```
 
@@ -1078,7 +1080,7 @@ client.initialize()
 # 在相关范围内搜索以获得更好的结果
 results = client.find(
     "error handling",
-    target_uri="viking://resources/my-project"
+    {"target_uri": "viking://resources/my-project"},
 )
 ```
 

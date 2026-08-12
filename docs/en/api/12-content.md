@@ -237,8 +237,7 @@ Update an existing file, or create a new one when `mode="create"`, and automatic
 result = client.write(
     "viking://resources/docs/api.md",
     "# Updated API\n\nFresh content.",
-    mode="replace",
-    wait=True,
+    {"mode": "replace", "wait": True},
 )
 print(result["root_uri"])
 ```
@@ -478,8 +477,7 @@ Set explicit `k=v` tags used by retrieval filters. `replace` replaces existing t
 result = client.set_tags(
     "viking://resources/project/",
     ["team=search", "env=prod"],
-    mode="replace",
-    recursive=True,
+    {"mode": "replace", "recursive": True},
 )
 ```
 
@@ -625,29 +623,29 @@ Subtree reindex is not transactional. Records skipped because no semantic source
 
 ```python
 result = client.reindex(
-    uri="viking://resources",
-    mode="vectors_only",
-    wait=True,
-    tags=["team=search", "env=prod"],
-    tag_mode="replace",
+    "viking://resources",
+    {
+        "mode": "vectors_only",
+        "wait": True,
+        "tags": ["team=search", "env=prod"],
+        "tag_mode": "replace",
+    },
 )
 print(result)
 ```
 
 ```python
 result = client.reindex(
-    uri="viking://user/default/skills",
-    mode="semantic_and_vectors",
-    wait=False,
+    "viking://user/default/skills",
+    {"mode": "semantic_and_vectors", "wait": False},
 )
 print(result["status"])
 ```
 
 ```python
 result = client.reindex(
-    uri="viking://resources",
-    mode="prune_orphans",
-    dry_run=True,
+    "viking://resources",
+    {"mode": "prune_orphans", "dry_run": True},
 )
 print(result["would_delete_records"])
 ```

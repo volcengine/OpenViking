@@ -71,7 +71,13 @@ class Recipe:
 
         # Search all resources or specific target
         # `find` has better performance, but not so smart
-        results = self.client.search(query, target_uri=target_uri, score_threshold=score_threshold)
+        results = self.client.search(
+            query,
+            {
+                "target_uri": target_uri,
+                "score_threshold": score_threshold,
+            },
+        )
 
         # Extract top results
         search_results = []

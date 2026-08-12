@@ -1374,8 +1374,8 @@ class AsyncHTTPClient:
         payload = dict(message)
         if "content" not in payload and "parts" not in payload:
             raise ValueError("Either content or parts must be provided")
-        if "content" in payload and "parts" in payload:
-            raise ValueError("content and parts cannot both be provided")
+        if "content" in payload and payload.get("parts") is not None:
+            payload.pop("content")
         payload = self._compact_request_body(payload)
         session_path = self._path_segment(session_id)
         response = await self._request(

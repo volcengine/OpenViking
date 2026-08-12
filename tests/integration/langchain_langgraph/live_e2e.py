@@ -520,29 +520,33 @@ def _build_real_client():
 
 
 def _seed_session_context(client, session_id: str, code: str, *, framework: str) -> None:
-    client.create_session(session_id=session_id)
+    client.create_session({"session_id": session_id})
     client.add_message(
-        session_id=session_id,
-        role="user",
-        parts=[
-            {
-                "type": "text",
-                "text": (
-                    f"Remember this OpenViking {framework} live e2e exact code: {code}. "
-                    "This is durable session context for the next agent turn."
-                ),
-            }
-        ],
+        session_id,
+        {
+            "role": "user",
+            "parts": [
+                {
+                    "type": "text",
+                    "text": (
+                        f"Remember this OpenViking {framework} live e2e exact code: {code}. "
+                        "This is durable session context for the next agent turn."
+                    ),
+                }
+            ],
+        },
     )
     client.add_message(
-        session_id=session_id,
-        role="assistant",
-        parts=[
-            {
-                "type": "text",
-                "text": f"Stored the OpenViking {framework} live e2e exact code: {code}.",
-            }
-        ],
+        session_id,
+        {
+            "role": "assistant",
+            "parts": [
+                {
+                    "type": "text",
+                    "text": f"Stored the OpenViking {framework} live e2e exact code: {code}.",
+                }
+            ],
+        },
     )
 
 

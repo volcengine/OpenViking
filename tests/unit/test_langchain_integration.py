@@ -518,6 +518,73 @@ def test_openviking_client_handle_filters_kwargs_for_direct_calls(monkeypatch):
     assert result == {"query": "recover"}
 
 
+def test_call_openviking_adapts_flat_kwargs_to_sdk_options():
+    calls = []
+
+    class OptionsClient:
+        def find(self, query, options=None):
+            calls.append(("find", query, options))
+            return {"query": query}
+
+        def create_session(self, options=None):
+            calls.append(("create_session", options))
+            return {"session_id": options["session_id"]}
+
+        def add_message(self, session_id, message):
+            calls.append(("add_message", session_id, message))
+            return {"ok": True}
+
+        def write(self, uri, content, options=None):
+            calls.append(("write", uri, content, options))
+            return {"ok": True}
+
+    client = OptionsClient()
+
+    call_openviking(
+        client,
+        "find",
+        query="recover",
+        target_uri="viking://resources",
+        limit=5,
+    )
+    call_openviking(client, "create_session", session_id="session-1")
+    call_openviking(
+        client,
+        "add_message",
+        session_id="session-1",
+        role="user",
+        content="hello",
+    )
+    call_openviking(
+        client,
+        "write",
+        uri="viking://resources/a.md",
+        content="hello",
+        mode="replace",
+        wait=False,
+    )
+
+    assert calls == [
+        (
+            "find",
+            "recover",
+            {"target_uri": "viking://resources", "limit": 5},
+        ),
+        ("create_session", {"session_id": "session-1"}),
+        (
+            "add_message",
+            "session-1",
+            {"role": "user", "content": "hello"},
+        ),
+        (
+            "write",
+            "viking://resources/a.md",
+            "hello",
+            {"mode": "replace", "wait": False},
+        ),
+    ]
+
+
 def test_openviking_client_evicts_but_does_not_retry_mutating_call(monkeypatch):
     instances = []
 

@@ -339,40 +339,46 @@ client.initialize()
 ## 添加本地文件
 result = client.add_resource(
     "./documents/guide.md",
-    reason="User guide documentation"
+    {"reason": "User guide documentation"},
 )
 print(f"Added: {result['root_uri']}")
 
 ## 正常解析并转换为 Markdown，但每个文档正文不拆分
 result = client.add_resource(
     "./documents",
-    args={"parse_mode": "no_split"},
+    {"args": {"parse_mode": "no_split"}},
 )
 
 ## 从 URL 添加到指定位置
 result = client.add_resource(
     "https://example.com/api-docs.md",
-    to="viking://resources/external/api-docs.md",
-    reason="External API docs"
+    {
+        "to": "viking://resources/external/api-docs.md",
+        "reason": "External API docs",
+    },
 )
 
 ## 递归抓取网页（同域 BFS，depth 层数、max_pages 页数上限）
 result = client.add_resource(
     "https://docs.openviking.ai/zh/getting-started/01-introduction",
-    wait=True,
-    timeout=180,
-    args={"depth": 1, "max_pages": 10},
+    {
+        "wait": True,
+        "timeout": 180,
+        "args": {"depth": 1, "max_pages": 10},
+    },
 )
 
 ## 递归抓取并按路径前缀过滤，同时下载页面中的文件链接
 result = client.add_resource(
     "https://docs.openviking.ai/",
-    args={
-        "depth": 2,
-        "max_pages": 50,
-        "include_paths": ["/zh/"],
-        "exclude_paths": ["/changelog"],
-        "skip_download_links": False,
+    {
+        "args": {
+            "depth": 2,
+            "max_pages": 50,
+            "include_paths": ["/zh/"],
+            "exclude_paths": ["/changelog"],
+            "skip_download_links": False,
+        },
     },
 )
 

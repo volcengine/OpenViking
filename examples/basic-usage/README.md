@@ -103,15 +103,15 @@ Add a URL, local file, or directory:
 
 ```python
 result = client.add_resource(
-    path="https://example.com/docs",
-    wait=False,
+    "https://example.com/docs",
+    {"wait": False},
 )
 
-result = client.add_resource(path="/path/to/manual.pdf")
+result = client.add_resource("/path/to/manual.pdf")
 
 result = client.add_resource(
-    path="/path/to/repo",
-    instruction="This is a Python web application",
+    "/path/to/repo",
+    {"instruction": "This is a Python web application"},
 )
 ```
 
@@ -140,15 +140,13 @@ Use `find` for fast semantic search and `search` for more advanced retrieval:
 
 ```python
 results = client.find(
-    query="how does authentication work",
-    target_uri="viking://resources/my-project",
-    limit=5,
+    "how does authentication work",
+    {"target_uri": "viking://resources/my-project", "limit": 5},
 )
 
 results = client.search(
-    query="database configuration and failure handling",
-    target_uri="viking://resources/",
-    limit=10,
+    "database configuration and failure handling",
+    {"target_uri": "viking://resources/", "limit": 10},
 )
 ```
 
@@ -177,8 +175,14 @@ The example script creates a session and appends messages:
 session_info = client.create_session()
 session_id = session_info["session_id"]
 
-client.add_message(session_id, "user", "I prefer TypeScript over JavaScript")
-client.add_message(session_id, "assistant", "Understood. I will use TypeScript where appropriate.")
+client.add_message(
+    session_id,
+    {"role": "user", "content": "I prefer TypeScript over JavaScript"},
+)
+client.add_message(
+    session_id,
+    {"role": "assistant", "content": "Understood. I will use TypeScript where appropriate."},
+)
 ```
 
 To extract durable memories from that conversation, commit the session:

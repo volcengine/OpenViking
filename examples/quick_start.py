@@ -20,8 +20,8 @@ try:
     # Add resource (URL, file, or directory) and wait until it is ready to inspect
     print("Wait for semantic processing...")
     res = client.add_resource(
-        path="https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md",
-        wait=True,
+        "https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md",
+        {"wait": True},
     )
     root_uri = res["root_uri"]
     res = client.ls(root_uri)  # Explore resource tree
@@ -36,7 +36,7 @@ try:
     overview = client.overview(root_uri)  # Get overview
     print(f"Abstract:\n{abstract}\n\nOverview:\n{overview}\n")
 
-    results = client.find("what is openviking", target_uri=root_uri)  # Semantic search
+    results = client.find("what is openviking", {"target_uri": root_uri})  # Semantic search
     print("Search results:")
     for result in results.get("resources", []):
         print(f"  {result['uri']} (score: {result.get('score', 0.0):.4f})")

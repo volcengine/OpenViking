@@ -32,7 +32,11 @@ def short_oid(commit_oid: str | None) -> str:
 
 
 def write_text(client: Any, uri: str, content: str, mode: str) -> None:
-    result = client.write(uri, content, mode=mode, wait=True, timeout=WAIT_TIMEOUT)
+    result = client.write(
+        uri,
+        content,
+        {"mode": mode, "wait": True, "timeout": WAIT_TIMEOUT},
+    )
     print(f"write: {uri} (mode={result.get('mode')}, bytes={result.get('written_bytes')})")
 
 
@@ -42,7 +46,7 @@ def remove_resource(client: Any, uri: str) -> None:
 
 
 def print_find(client: Any, query: str, root_uri: str) -> None:
-    results = client.find(query, target_uri=root_uri, limit=10)
+    results = client.find(query, {"target_uri": root_uri, "limit": 10})
     resources = results.get("resources", [])
     if not resources:
         print(f"find {query!r}: (no matches)")

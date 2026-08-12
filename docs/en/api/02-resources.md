@@ -334,40 +334,46 @@ client.initialize()
 # Add local file
 result = client.add_resource(
     "./documents/guide.md",
-    reason="User guide documentation"
+    {"reason": "User guide documentation"},
 )
 print(f"Added: {result['root_uri']}")
 
 # Parse each document to Markdown without splitting its body
 result = client.add_resource(
     "./documents",
-    args={"parse_mode": "no_split"},
+    {"args": {"parse_mode": "no_split"}},
 )
 
 # Add from URL to specific location
 result = client.add_resource(
     "https://example.com/api-docs.md",
-    to="viking://resources/external/api-docs.md",
-    reason="External API documentation"
+    {
+        "to": "viking://resources/external/api-docs.md",
+        "reason": "External API documentation",
+    },
 )
 
 # Recursively crawl a site (same-host BFS; depth levels, max_pages cap)
 result = client.add_resource(
     "https://docs.openviking.ai/getting-started/01-introduction",
-    wait=True,
-    timeout=180,
-    args={"depth": 1, "max_pages": 10},
+    {
+        "wait": True,
+        "timeout": 180,
+        "args": {"depth": 1, "max_pages": 10},
+    },
 )
 
 # Recursive crawl with path-prefix filters, also downloading file links
 result = client.add_resource(
     "https://docs.openviking.ai/",
-    args={
-        "depth": 2,
-        "max_pages": 50,
-        "include_paths": ["/docs/"],
-        "exclude_paths": ["/changelog"],
-        "skip_download_links": False,
+    {
+        "args": {
+            "depth": 2,
+            "max_pages": 50,
+            "include_paths": ["/docs/"],
+            "exclude_paths": ["/changelog"],
+            "skip_download_links": False,
+        },
     },
 )
 

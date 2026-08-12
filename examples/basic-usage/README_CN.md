@@ -104,15 +104,15 @@ client = SyncHTTPClient(
 
 ```python
 result = client.add_resource(
-    path="https://example.com/docs",
-    wait=False,
+    "https://example.com/docs",
+    {"wait": False},
 )
 
-result = client.add_resource(path="/path/to/manual.pdf")
+result = client.add_resource("/path/to/manual.pdf")
 
 result = client.add_resource(
-    path="/path/to/repo",
-    instruction="这是一个 Python Web 应用",
+    "/path/to/repo",
+    {"instruction": "这是一个 Python Web 应用"},
 )
 ```
 
@@ -141,15 +141,13 @@ content = client.read("viking://resources/my-project/README.md")
 
 ```python
 results = client.find(
-    query="认证逻辑是怎么做的",
-    target_uri="viking://resources/my-project",
-    limit=5,
+    "认证逻辑是怎么做的",
+    {"target_uri": "viking://resources/my-project", "limit": 5},
 )
 
 results = client.search(
-    query="数据库配置和故障处理",
-    target_uri="viking://resources/",
-    limit=10,
+    "数据库配置和故障处理",
+    {"target_uri": "viking://resources/", "limit": 10},
 )
 ```
 
@@ -178,8 +176,14 @@ matches = result.get("matches", [])
 session_info = client.create_session()
 session_id = session_info["session_id"]
 
-client.add_message(session_id, "user", "我更喜欢 TypeScript 而不是 JavaScript")
-client.add_message(session_id, "assistant", "明白了，在合适场景下我会优先使用 TypeScript。")
+client.add_message(
+    session_id,
+    {"role": "user", "content": "我更喜欢 TypeScript 而不是 JavaScript"},
+)
+client.add_message(
+    session_id,
+    {"role": "assistant", "content": "明白了，在合适场景下我会优先使用 TypeScript。"},
+)
 ```
 
 如果要把这段对话真正提取成长期记忆，需要提交 session：

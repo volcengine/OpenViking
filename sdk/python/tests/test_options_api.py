@@ -115,6 +115,50 @@ async def test_extra_cannot_override_official_or_fixed_fields():
 
 
 @pytest.mark.asyncio
+async def test_add_message_prefers_parts_when_content_is_also_provided():
+    client, post = _client()
+
+    await client.add_message(
+        "session-1",
+        {
+            "role": "assistant",
+            "content": "fallback text",
+            "parts": [{"type": "text", "text": "structured text"}],
+        },
+    )
+
+    post.assert_awaited_once_with(
+        "/api/v1/sessions/session-1/messages",
+        json={
+            "role": "assistant",
+            "parts": [{"type": "text", "text": "structured text"}],
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_add_message_keeps_content_when_parts_is_null():
+    client, post = _client()
+
+    await client.add_message(
+        "session-1",
+        {
+            "role": "assistant",
+            "content": "fallback text",
+            "parts": None,
+        },
+    )
+
+    post.assert_awaited_once_with(
+        "/api/v1/sessions/session-1/messages",
+        json={
+            "role": "assistant",
+            "content": "fallback text",
+        },
+    )
+
+
+@pytest.mark.asyncio
 async def test_write_uses_options_and_extra():
     client, post = _client()
 

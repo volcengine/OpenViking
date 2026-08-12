@@ -237,8 +237,7 @@ openviking read viking://resources/docs/api.md
 result = client.write(
     "viking://resources/docs/api.md",
     "# Updated API\n\nFresh content.",
-    mode="replace",
-    wait=True,
+    {"mode": "replace", "wait": True},
 )
 print(result["root_uri"])
 ```
@@ -478,8 +477,7 @@ Content-Disposition: attachment; filename*=UTF-8''logo.png
 result = client.set_tags(
     "viking://resources/project/",
     ["team=search", "env=prod"],
-    mode="replace",
-    recursive=True,
+    {"mode": "replace", "recursive": True},
 )
 ```
 
@@ -625,29 +623,29 @@ session 子树会被跳过。
 
 ```python
 result = client.reindex(
-    uri="viking://resources",
-    mode="vectors_only",
-    wait=True,
-    tags=["team=search", "env=prod"],
-    tag_mode="replace",
+    "viking://resources",
+    {
+        "mode": "vectors_only",
+        "wait": True,
+        "tags": ["team=search", "env=prod"],
+        "tag_mode": "replace",
+    },
 )
 print(result)
 ```
 
 ```python
 result = client.reindex(
-    uri="viking://user/default/skills",
-    mode="semantic_and_vectors",
-    wait=False,
+    "viking://user/default/skills",
+    {"mode": "semantic_and_vectors", "wait": False},
 )
 print(result["status"])
 ```
 
 ```python
 result = client.reindex(
-    uri="viking://resources",
-    mode="prune_orphans",
-    dry_run=True,
+    "viking://resources",
+    {"mode": "prune_orphans", "dry_run": True},
 )
 print(result["would_delete_records"])
 ```

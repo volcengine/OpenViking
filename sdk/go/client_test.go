@@ -671,6 +671,23 @@ func TestSessionSendsLatestMessageAndRetentionFields(t *testing.T) {
 	}
 }
 
+func TestCreateSessionSendsExtra(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		if body["future_flag"] != false {
+			t.Fatalf("body = %#v", body)
+		}
+		writeOK(t, w, map[string]any{"session_id": "session-1"})
+	}))
+	defer closeServer()
+
+	if _, err := client.CreateSession(context.Background(), &CreateSessionOptions{
+		Extra: map[string]any{"future_flag": false},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAgentEvolutionQueries(t *testing.T) {
 	var paths []string
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

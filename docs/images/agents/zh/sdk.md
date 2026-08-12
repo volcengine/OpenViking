@@ -33,9 +33,8 @@ reason = "[TODO]your-reason" # e.g. External API documentation
 
 # Reuse the initialized client.
 client.add_resource(
-    path=file_path,
-    to=resource_to,
-    reason=reason,
+    file_path,
+    {"to": resource_to, "reason": reason},
 )
 ```
 
@@ -50,8 +49,7 @@ session = client.create_session()
 session_id = session["session_id"]
 client.add_message(
     session_id,
-    "user",
-    parts=[{"type": "text", "text": text}],
+    {"role": "user", "parts": [{"type": "text", "text": text}]},
 )
 result = client.commit_session(session_id)
 ```

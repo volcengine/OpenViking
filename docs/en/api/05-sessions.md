@@ -106,7 +106,7 @@ result = await client.create_session()
 print(f"Session ID: {result['session_id']}")
 
 # Create new session with specified ID
-result = await client.create_session(session_id="my-custom-session-id")
+result = await client.create_session({"session_id": "my-custom-session-id"})
 print(f"Session ID: {result['session_id']}")
 
 # Create new session with a custom auto-commit policy
@@ -1127,33 +1127,36 @@ client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
 
 # Simple mode: Add user message
 await client.add_message(
-    session_id="a1b2c3d4",
-    role="user",
-    content="How do I authenticate users?"
+    "a1b2c3d4",
+    {"role": "user", "content": "How do I authenticate users?"},
 )
 
 # Parts mode: Add assistant message with context reference
 await client.add_message(
-    session_id="a1b2c3d4",
-    role="assistant",
-    parts=[
-        TextPart(text="Based on the documentation, you can configure embedding..."),
-        ContextPart(
-            uri="viking://resources/docs/auth/",
-            context_type="resource",
-            abstract="Authentication guide"
-        )
-    ]
+    "a1b2c3d4",
+    {
+        "role": "assistant",
+        "parts": [
+            TextPart(text="Based on the documentation, you can configure embedding..."),
+            ContextPart(
+                uri="viking://resources/docs/auth/",
+                context_type="resource",
+                abstract="Authentication guide"
+            )
+        ],
+    },
 )
 
 # Parts mode: Add user message with an image URL
 await client.add_message(
-    session_id="a1b2c3d4",
-    role="user",
-    parts=[
-        TextPart(text="Remember this studio layout."),
-        ImagePart(url="https://example.com/studio.png", detail="auto"),
-    ]
+    "a1b2c3d4",
+    {
+        "role": "user",
+        "parts": [
+            TextPart(text="Remember this studio layout."),
+            ImagePart(url="https://example.com/studio.png", detail="auto"),
+        ],
+    },
 )
 ```
 
@@ -1657,27 +1660,28 @@ print(f"Session created: {session_id}")
 
 # Add user message
 await client.add_message(
-    session_id=session_id,
-    role="user",
-    content="How do I configure embedding?"
+    session_id,
+    {"role": "user", "content": "How do I configure embedding?"},
 )
 
 # Search with session context
-results = await client.search("embedding configuration", session_id=session_id)
+results = await client.search("embedding configuration", {"session_id": session_id})
 
 # Add assistant message with context reference
 if results.resources:
     await client.add_message(
-        session_id=session_id,
-        role="assistant",
-        parts=[
-            TextPart(text="Based on the documentation, you can configure embedding..."),
-            ContextPart(
-                uri=results.resources[0].uri,
-                context_type="resource",
-                abstract=results.resources[0].abstract
-            )
-        ]
+        session_id,
+        {
+            "role": "assistant",
+            "parts": [
+                TextPart(text="Based on the documentation, you can configure embedding..."),
+                ContextPart(
+                    uri=results.resources[0].uri,
+                    context_type="resource",
+                    abstract=results.resources[0].abstract
+                )
+            ],
+        },
     )
 # Commit session (returns immediately; summary + memory extraction runs in background)
 commit_result = await client.commit_session(session_id)
@@ -1750,7 +1754,7 @@ if session_info["message_count"] > 10:
 
 ```python
 # Better search results with conversation context
-results = await client.search(query, session_id=session_id)
+results = await client.search(query, {"session_id": session_id})
 ```
 
 ---

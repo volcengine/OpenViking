@@ -86,9 +86,8 @@ class RAGQueryPipeline:
 
             logger.info(f"Adding document: {path}")
             result = client.add_resource(
-                path=str(path),
-                wait=wait,
-                timeout=timeout,
+                str(path),
+                {"wait": wait, "timeout": timeout},
             )
 
             if result and "root_uri" in result:
@@ -141,8 +140,8 @@ class RAGQueryPipeline:
         # Retrieve contexts
         logger.debug(f"Searching for: {question}")
         search_result = client.search(
-            query=question,
-            limit=top_k,
+            question,
+            {"limit": top_k},
         )
 
         contexts = []

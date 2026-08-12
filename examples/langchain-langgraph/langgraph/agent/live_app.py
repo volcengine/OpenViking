@@ -16,13 +16,12 @@ import uuid
 from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_openviking import OpenVikingContextMiddleware
+from langchain_openviking.client import extract_message_text
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from openai import OpenAI
 from typing_extensions import Annotated, TypedDict
-
-from langchain_openviking import OpenVikingContextMiddleware
-from langchain_openviking.client import extract_message_text
 
 
 class LiveState(TypedDict, total=False):
@@ -42,29 +41,33 @@ def build_context_client():
 
 
 def seed_context(client, session_id: str, code: str) -> None:
-    client.create_session(session_id=session_id)
+    client.create_session({"session_id": session_id})
     client.add_message(
-        session_id=session_id,
-        role="user",
-        parts=[
-            {
-                "type": "text",
-                "text": (
-                    f"Remember this OpenViking LangGraph live e2e exact code: {code}. "
-                    "This is durable session context for the next agent turn."
-                ),
-            }
-        ],
+        session_id,
+        {
+            "role": "user",
+            "parts": [
+                {
+                    "type": "text",
+                    "text": (
+                        f"Remember this OpenViking LangGraph live e2e exact code: {code}. "
+                        "This is durable session context for the next agent turn."
+                    ),
+                }
+            ],
+        },
     )
     client.add_message(
-        session_id=session_id,
-        role="assistant",
-        parts=[
-            {
-                "type": "text",
-                "text": f"Stored the OpenViking LangGraph live e2e exact code: {code}.",
-            }
-        ],
+        session_id,
+        {
+            "role": "assistant",
+            "parts": [
+                {
+                    "type": "text",
+                    "text": f"Stored the OpenViking LangGraph live e2e exact code: {code}.",
+                }
+            ],
+        },
     )
 
 

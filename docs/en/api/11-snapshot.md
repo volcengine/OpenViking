@@ -659,11 +659,11 @@ client.initialize()
 root = "viking://resources/my_project"
 
 # 1. Write initial content and commit v1
-client.write(f"{root}/guide.md", "# Guide\n\nv1 content\n", mode="create", wait=True)
+client.write(f"{root}/guide.md", "# Guide\n\nv1 content\n", {"mode": "create", "wait": True})
 v1 = client.snapshot.commit(message="v1 initial import")
 
 # 2. Modify and commit v2
-client.write(f"{root}/guide.md", "# Guide\n\nv2 content\n", mode="replace", wait=True)
+client.write(f"{root}/guide.md", "# Guide\n\nv2 content\n", {"mode": "replace", "wait": True})
 v2 = client.snapshot.commit(message="v2 update")
 
 # 3. Walk history

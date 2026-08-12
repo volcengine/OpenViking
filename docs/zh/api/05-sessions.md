@@ -106,7 +106,7 @@ result = await client.create_session()
 print(f"Session ID: {result['session_id']}")
 
 # 创建指定 ID 的新会话
-result = await client.create_session(session_id="my-custom-session-id")
+result = await client.create_session({"session_id": "my-custom-session-id"})
 print(f"Session ID: {result['session_id']}")
 
 # 创建带自定义自动 commit 策略的新会话
@@ -1109,23 +1109,24 @@ client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
 
 # 简单模式：添加用户消息
 await client.add_message(
-    session_id="a1b2c3d4",
-    role="user",
-    content="How do I authenticate users?"
+    "a1b2c3d4",
+    {"role": "user", "content": "How do I authenticate users?"},
 )
 
 # Parts 模式：添加带有上下文引用的助手消息
 await client.add_message(
-    session_id="a1b2c3d4",
-    role="assistant",
-    parts=[
-        TextPart(text="Based on the documentation, you can configure embedding..."),
-        ContextPart(
-            uri="viking://resources/docs/auth/",
-            context_type="resource",
-            abstract="Authentication guide"
-        )
-    ]
+    "a1b2c3d4",
+    {
+        "role": "assistant",
+        "parts": [
+            TextPart(text="Based on the documentation, you can configure embedding..."),
+            ContextPart(
+                uri="viking://resources/docs/auth/",
+                context_type="resource",
+                abstract="Authentication guide"
+            )
+        ],
+    },
 )
 ```
 
@@ -1628,27 +1629,28 @@ print(f"Session created: {session_id}")
 
 # 添加用户消息
 await client.add_message(
-    session_id=session_id,
-    role="user",
-    content="How do I configure embedding?"
+    session_id,
+    {"role": "user", "content": "How do I configure embedding?"},
 )
 
 # 使用会话上下文进行搜索
-results = await client.search("embedding configuration", session_id=session_id)
+results = await client.search("embedding configuration", {"session_id": session_id})
 
 # 添加带有上下文引用的助手回复
 if results.resources:
     await client.add_message(
-        session_id=session_id,
-        role="assistant",
-        parts=[
-            TextPart(text="Based on the documentation, you can configure embedding..."),
-            ContextPart(
-                uri=results.resources[0].uri,
-                context_type="resource",
-                abstract=results.resources[0].abstract
-            )
-        ]
+        session_id,
+        {
+            "role": "assistant",
+            "parts": [
+                TextPart(text="Based on the documentation, you can configure embedding..."),
+                ContextPart(
+                    uri=results.resources[0].uri,
+                    context_type="resource",
+                    abstract=results.resources[0].abstract
+                )
+            ],
+        },
     )
 # 提交会话（立即返回，后台执行摘要生成和记忆提取）
 commit_result = await client.commit_session(session_id)
@@ -1721,7 +1723,7 @@ if session_info["message_count"] > 10:
 
 ```python
 # 结合对话上下文可获得更好的搜索结果
-results = await client.search(query, session_id=session_id)
+results = await client.search(query, {"session_id": session_id})
 ```
 
 ---

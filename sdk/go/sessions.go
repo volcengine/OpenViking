@@ -26,9 +26,6 @@ func (c *Client) CreateSession(ctx context.Context, opts *CreateSessionOptions) 
 	if err := mergeExtra(payload, opts.Extra); err != nil {
 		return nil, err
 	}
-	if err := mergeExtra(payload, opts.Extra); err != nil {
-		return nil, err
-	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/sessions", nil, payload, &result)
 	return result, err
