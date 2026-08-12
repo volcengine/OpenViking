@@ -143,6 +143,17 @@ class MemoryIsolationHandler:
         peer_ids = list(dict.fromkeys(targets))
         return peer_ids[0] if len(peer_ids) == 1 else None
 
+    def _unique_owner_target_id_in_messages(self) -> Optional[str]:
+        targets = []
+        for msg in self._messages():
+            if not self._is_peer_owner_message(msg):
+                continue
+            target_id = self._message_target_id(msg)
+            if target_id:
+                targets.append(target_id)
+        target_ids = list(dict.fromkeys(targets))
+        return target_ids[0] if len(target_ids) == 1 else None
+
     def render_schema_directories(self, memory_type_schema: MemoryTypeSchema) -> List[str]:
         user_id = self.ctx.user.user_id if self.ctx and self.ctx.user else "default"
         user_space = user_id
@@ -174,12 +185,24 @@ class MemoryIsolationHandler:
             return []
 
         target_ids = []
+        has_messages = False
+        has_owner_message = False
         for msg_group in getattr(msg_range, "elements", []) or []:
             for msg in msg_group:
+                has_messages = True
+                has_owner_message = has_owner_message or self._is_peer_owner_message(msg)
                 target_id = self._message_target_id(msg)
                 if target_id:
                     target_ids.append(target_id)
-        return list(dict.fromkeys(target_ids))
+        target_ids = list(dict.fromkeys(target_ids))
+        if target_ids:
+            return target_ids
+
+        if not has_messages or has_owner_message:
+            return []
+
+        fallback_target_id = self._unique_owner_target_id_in_messages()
+        return [fallback_target_id] if fallback_target_id else []
 
     def _resolve_operation_target_id(self, raw_peer_id: Any) -> Optional[str]:
         peer_id = safe_peer_id(raw_peer_id)
