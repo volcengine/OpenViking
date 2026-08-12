@@ -796,6 +796,10 @@ class TaskTracker:
         """Return whether a task still owns durable or active queue work."""
         return self._work_index.has_work(task_id)
 
+    def has_session_work(self, account_id: str, user_id: str, session_id: str) -> bool:
+        """Return whether QueueFS contains work for this exact Session owner."""
+        return self._work_index.has_session_work(account_id, user_id, session_id)
+
     def register_running_task(self, task_id: str) -> None:
         """Register the current asyncio task so cancellation can interrupt it."""
         active_task = asyncio.current_task()

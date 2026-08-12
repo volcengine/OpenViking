@@ -1799,6 +1799,7 @@ async def test_phase1_enqueues_before_root_rewrite_and_publishes_ready_last(
     queued_task_ids: set[str] = set()
     tracker = get_task_tracker()
     existing_has_work = tracker.has_work
+    existing_has_session_work = tracker.has_session_work
 
     class InspectingQueueManager:
         async def enqueue(self, _queue_name, data):
@@ -1821,7 +1822,13 @@ async def test_phase1_enqueues_before_root_rewrite_and_publishes_ready_last(
         "has_work",
         lambda task_id: task_id in queued_task_ids or existing_has_work(task_id),
     )
-
+    monkeypatch.setattr(
+        tracker,
+        "has_session_work",
+        lambda account_id, user_id, session_id: bool(queued_task_ids)
+        if session_id == session.session_id
+        else existing_has_session_work(account_id, user_id, session_id),
+    )
     result = await session.commit_async()
     session.add_message("user", [TextPart("wait for predecessor")])
     second = await session.commit_async()

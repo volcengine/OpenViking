@@ -30,6 +30,7 @@ async def client(
     original_enqueue = queue_manager.enqueue
     commit_tasks = []
     queued_commit_tasks: set[str] = set()
+    queued_commit_sessions: list[str] = []
     tracker = get_task_tracker()
     original_has_work = tracker.has_work
 
@@ -38,12 +39,18 @@ async def client(
         "has_work",
         lambda task_id: task_id in queued_commit_tasks or original_has_work(task_id),
     )
+    monkeypatch.setattr(
+        tracker,
+        "has_session_work",
+        lambda _account_id, _user_id, session_id: session_id in queued_commit_sessions,
+    )
 
     async def enqueue_with_session_commit_fallback(queue_name, data):
         if queue_name != QueueManager.SESSION_COMMIT:
             return await original_enqueue(queue_name, data)
 
         queued_commit_tasks.add(data["task_id"])
+        queued_commit_sessions.append(data["session_id"])
 
         async def process_commit():
             message = SessionCommitMsg(**data)
@@ -66,6 +73,7 @@ async def client(
                     await asyncio.sleep(0)
             finally:
                 queued_commit_tasks.discard(message.task_id)
+                queued_commit_sessions.remove(message.session_id)
 
         commit_tasks.append(asyncio.create_task(process_commit()))
         return data["task_id"]

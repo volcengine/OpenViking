@@ -660,33 +660,33 @@ class Session:
                 raise
             logger.debug(f"Session {self.session_id} not found, starting fresh")
 
-        # Restore compression_index (scan history directory)
-        try:
-            history_items = await self._viking_fs.ls(f"{self._session_uri}/history", ctx=self.ctx)
-            archive_indices = [
-                int(match.group(1))
-                for item in history_items
-                if (match := re.fullmatch(r"archive_(\d+)", item["name"]))
-            ]
-            if archive_indices:
-                max_index = max(archive_indices)
-                self._compression.compression_index = max_index
-                self._stats.compression_count = len(archive_indices)
-                logger.debug(f"Restored compression_index: {max_index}")
-        except Exception as exc:
-            if not _is_storage_not_found(exc):
-                raise
-
         # Load .meta.json
         try:
             meta_content = await self._viking_fs.read_file(
                 f"{self._session_uri}/.meta.json", ctx=self.ctx
             )
             self._meta = SessionMeta.from_dict(json.loads(meta_content))
+            self._compression.compression_index = max(0, int(self._meta.commit_count))
+            self._stats.compression_count = self._compression.compression_index
         except Exception as exc:
             if not _is_storage_not_found(exc):
                 raise
             # Old session without meta — derive from existing data
+            try:
+                history_items = await self._viking_fs.ls(
+                    f"{self._session_uri}/history", ctx=self.ctx
+                )
+                archive_indices = [
+                    int(match.group(1))
+                    for item in history_items
+                    if (match := re.fullmatch(r"archive_(\d+)", item["name"]))
+                ]
+                if archive_indices:
+                    self._compression.compression_index = max(archive_indices)
+                    self._stats.compression_count = len(archive_indices)
+            except Exception as exc:
+                if not _is_storage_not_found(exc):
+                    raise
             self._meta.commit_count = self._compression.compression_index
             self._meta.total_message_count = None
 
@@ -1915,8 +1915,6 @@ class Session:
             session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
         )
         try:
-            await self._schedule_next_archive_locked(lease)
-
             self._messages = await self._read_live_messages_strict()
             try:
                 meta_content = await self._viking_fs.read_file(
@@ -1970,11 +1968,32 @@ class Session:
                     effective_memory_types=set(effective_memory_types),
                 )
 
-            archive_refs = await self._list_archive_refs()
             self._compression.compression_index = max(
-                [archive["index"] for archive in archive_refs],
-                default=0,
+                self._compression.compression_index,
+                int(self._meta.commit_count),
             )
+            while await self._viking_fs.exists(
+                (
+                    f"{self._session_uri}/history/"
+                    f"archive_{self._compression.compression_index + 1:03d}"
+                ),
+                ctx=self.ctx,
+            ):
+                self._compression.compression_index += 1
+
+            tracker = get_task_tracker()
+            if self._compression.compression_index > 0 and not tracker.has_session_work(
+                self.ctx.account_id,
+                self.ctx.user.user_id,
+                self.session_id,
+            ):
+                latest_archive_uri = (
+                    f"{self._session_uri}/history/"
+                    f"archive_{self._compression.compression_index:03d}"
+                )
+                latest_state = await self._archive_terminal_state(latest_archive_uri)
+                if latest_state == "pending":
+                    await self._schedule_next_archive_locked(lease)
             if not self._messages:
                 self._meta.pending_tokens = 0
                 self._remember_retention_policy(
@@ -2071,8 +2090,6 @@ class Session:
             phase1_stage = "phase1_persist"
             task_registered = False
             try:
-                # Persist the full intent before any root rewrite. The task starts
-                # in a durable waiting state; only the Session head is dispatched.
                 await self._write_phase1_marker(
                     archive_uri,
                     queue_message=queue_msg.to_dict(),
@@ -2114,7 +2131,7 @@ class Session:
                         )
 
                 phase1_stage = "task_tracker_create"
-                await get_task_tracker().create(
+                await tracker.create(
                     "session_commit",
                     resource_id=self.session_id,
                     account_id=self.ctx.account_id,
@@ -2123,9 +2140,10 @@ class Session:
                 )
                 task_registered = True
 
-                if not any(
-                    state.state == "pending" and state.index < self._compression.compression_index
-                    for state in await self._scan_archive_states()
+                if not tracker.has_session_work(
+                    self.ctx.account_id,
+                    self.ctx.user.user_id,
+                    self.session_id,
                 ):
                     phase1_stage = "queue_enqueue"
                     await get_queue_manager().enqueue(
@@ -2179,7 +2197,7 @@ class Session:
                         archive_uri,
                     )
                 if task_registered:
-                    await get_task_tracker().fail(
+                    await tracker.fail(
                         task_id,
                         str(e),
                         account_id=self.ctx.account_id,
@@ -2219,17 +2237,23 @@ class Session:
             stage="cancelled",
             error="session commit cancelled",
         )
-        await self._schedule_next_archive()
+        await self._schedule_next_archive(
+            after_index=self._archive_index_from_uri(archive_uri)
+        )
 
     async def resume_queued_commit(self, msg: "SessionCommitMsg") -> bool:
         """Run one durable Phase 2 job and advance this Session's queue head."""
+        archive_index = self._archive_index_from_uri(msg.archive_uri)
         try:
             processed = await self._resume_queued_commit(msg)
         except asyncio.CancelledError:
-            await self._schedule_next_archive()
+            from openviking.service.task_tracker import get_task_tracker
+
+            if get_task_tracker().is_cancellation_requested(msg.task_id):
+                await self._schedule_next_archive(after_index=archive_index)
             raise
         if processed:
-            await self._schedule_next_archive()
+            await self._schedule_next_archive(after_index=archive_index)
         return processed
 
     async def _resume_queued_commit(self, msg: "SessionCommitMsg") -> bool:
@@ -2296,9 +2320,11 @@ class Session:
             )
             return True
 
-        claim = await self._schedule_next_archive(msg)
-        if not claim:
-            return False
+        phase1 = await self._read_phase1_meta(msg.archive_uri)
+        if phase1.get("enqueued") is not True:
+            claim = await self._schedule_next_archive(msg)
+            if not claim:
+                return False
 
         archive_error = ""
         try:
@@ -3940,21 +3966,48 @@ class Session:
             raise ValueError(f"Invalid archive URI: {archive_uri}")
         return int(match.group(1))
 
-    async def _schedule_next_archive_locked(self, lease_ref: Any) -> Optional[int]:
-        """Ensure only the earliest unfinished new-format archive owns QueueFS work."""
-        from openviking.service.task_tracker import get_task_tracker
+    async def _schedule_next_archive_locked(
+        self,
+        lease_ref: Any,
+        after_index: Optional[int] = None,
+    ) -> Optional[int]:
+        """Dispatch the next unfinished Archive, scanning only for recovery."""
+        from openviking.service.task_tracker import TaskStatus, get_task_tracker
         from openviking.storage.queuefs import QueueManager, get_queue_manager
         from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
 
         tracker = get_task_tracker()
-        for state in await self._scan_archive_states():
+        if after_index is None:
+            state_iter = iter(await self._scan_archive_states())
+            next_index: Optional[int] = None
+        else:
+            state_iter = iter(())
+            next_index = after_index + 1
+
+        while True:
+            if next_index is None:
+                try:
+                    state = next(state_iter)
+                except StopIteration:
+                    return None
+            else:
+                archive_id = f"archive_{next_index:03d}"
+                archive_uri = f"{self._session_uri}/history/{archive_id}"
+                if not await self._viking_fs.exists(archive_uri, ctx=self.ctx):
+                    return None
+                state = ArchiveState(
+                    archive_id=archive_id,
+                    archive_uri=archive_uri,
+                    index=next_index,
+                    state=await self._archive_terminal_state(archive_uri),
+                )
+                next_index += 1
+
             if state.state != "pending":
                 continue
 
             phase1 = await self._read_phase1_meta(state.archive_uri)
             if not phase1:
-                # Older archives do not contain a durable queue payload. Their
-                # already-enqueued work keeps the published compatibility path.
                 return state.index
             queue_message = phase1.get("queue_message")
             msg = SessionCommitMsg.from_dict(queue_message)
@@ -3965,17 +4018,24 @@ class Session:
                 account_id=self.ctx.account_id,
                 user_id=self.ctx.user.user_id,
             )
-            task_status = task.status.value if task is not None else ""
-            if task_status in ("failed", "cancelled"):
+            task_status = task.status if task is not None else None
+            if task_status in (TaskStatus.FAILED, TaskStatus.CANCELLED):
                 await self._write_failed_marker(
                     state.archive_uri,
-                    stage=task_status,
-                    error=task.error or f"session commit {task_status}",
+                    stage=task_status.value,
+                    error=task.error or f"session commit {task_status.value}",
                     lease_ref=lease_ref,
                 )
                 continue
-            if task_status == "completed":
-                return state.index
+            if task_status == TaskStatus.COMPLETED:
+                error = "Session commit task completed without an Archive completion marker"
+                await self._write_failed_marker(
+                    state.archive_uri,
+                    stage=TaskStatus.FAILED.value,
+                    error=error,
+                    lease_ref=lease_ref,
+                )
+                continue
             if has_work:
                 return state.index
 
@@ -4009,11 +4069,12 @@ class Session:
                     account_id=self.ctx.account_id,
                     user_id=self.ctx.user.user_id,
                 )
-        return None
 
     async def _schedule_next_archive(
         self,
         msg: Optional["SessionCommitMsg"] = None,
+        *,
+        after_index: Optional[int] = None,
     ) -> Optional[bool]:
         """Advance the queue head and optionally claim one dequeued archive."""
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
@@ -4021,7 +4082,10 @@ class Session:
             session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
         )
         try:
-            head_index = await self._schedule_next_archive_locked(lease)
+            head_index = await self._schedule_next_archive_locked(
+                lease,
+                after_index=after_index,
+            )
             if msg is None:
                 return None
 
