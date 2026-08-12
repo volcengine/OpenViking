@@ -111,9 +111,11 @@ export function buildResourceImportCommonBody({
     remoteResourceKind,
     sourceOptionState,
   )
-  Object.assign(body, sourceRequestOptions)
-  body.args = { ...body.args, ...sourceRequestOptions.args }
-  if (Object.keys(body.args).length === 0) delete body.args
+  const { args: sourceArgs, ...sourceOptions } = sourceRequestOptions
+  Object.assign(body, sourceOptions)
+  const mergedArgs = { ...body.args, ...sourceArgs }
+  if (Object.keys(mergedArgs).length > 0) body.args = mergedArgs
+  else delete body.args
 
   return body
 }

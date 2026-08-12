@@ -102,6 +102,29 @@ describe('resource import request builders', () => {
     })
   })
 
+  it('merges parse mode with source-specific Git options', () => {
+    const body = buildResourceImportCommonBody({
+      ...BASE_FORM_STATE,
+      additionalOptions: {
+        ...BASE_FORM_STATE.additionalOptions,
+        parseMode: 'no_split',
+      },
+      remoteResourceKind: 'git',
+      sourceOptionState: {
+        ...BASE_FORM_STATE.sourceOptionState,
+        git: {
+          ...BASE_FORM_STATE.sourceOptionState.git,
+          refValue: 'main',
+        },
+      },
+    })
+
+    expect(body.args).toEqual({
+      branch: 'main',
+      parse_mode: 'no_split',
+    })
+  })
+
   it('keeps TOS selectable but emits only its supported request fields', () => {
     expect(
       buildResourceImportCommonBody({
