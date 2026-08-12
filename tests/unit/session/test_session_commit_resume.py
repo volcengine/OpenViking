@@ -73,6 +73,7 @@ async def test_resume_queued_commit_continues_phase2(monkeypatch):
         session_uri=session_uri,
         archive_uri=archive_uri,
         user={"account_id": "default", "user_id": "default"},
+        memory_policy={"memory_types": []},
     )
 
     try:

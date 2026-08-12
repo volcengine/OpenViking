@@ -1603,6 +1603,7 @@ class Session:
         payload = {
             "version": 1,
             "status": "preparing",
+            "enqueued": False,
             "created_at": get_current_timestamp(),
             "queue_message": queue_message,
             "original_message_ids": [message.id for message in original_messages],
@@ -1639,6 +1640,16 @@ class Session:
                 "ready_at": get_current_timestamp(),
             }
         )
+        await self._merge_archive_meta(archive_uri, {"phase1": phase1}, lease_ref=lease_ref)
+
+    async def _write_phase1_enqueued_marker(
+        self,
+        archive_uri: str,
+        lease_ref: Optional[Any] = None,
+    ) -> None:
+        """Persist that this archive has been dispatched to QueueFS."""
+        phase1 = await self._read_phase1_meta(archive_uri)
+        phase1["enqueued"] = True
         await self._merge_archive_meta(archive_uri, {"phase1": phase1}, lease_ref=lease_ref)
 
     async def _archive_file_exists(self, archive_uri: str, file_name: str) -> bool:
@@ -1809,9 +1820,9 @@ class Session:
 
         Phase 1 (Archive prep, path-lock protected): Split messages into
         archive/retain parts, persist a recoverable intent and archive raw,
-        enqueue Phase 2, then atomically publish the retained root state with
-        ``phase1.status=ready``. Uses a distributed filesystem lock across
-        workers and processes.
+        enqueue Phase 2 only for the earliest unfinished archive, then publish
+        the retained root state with ``phase1.status=ready``. Uses a distributed
+        filesystem lock across workers and processes.
         Phase 2 (Memory extraction): Runs through the persistent QueueFS queue.
 
         Args:
@@ -1904,6 +1915,8 @@ class Session:
             session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
         )
         try:
+            await self._schedule_next_archive_locked(lease)
+
             self._messages = await self._read_live_messages_strict()
             try:
                 meta_content = await self._viking_fs.read_file(
@@ -2056,10 +2069,10 @@ class Session:
                 event_search_tags=list(effective_event_tags),
             )
             phase1_stage = "phase1_persist"
+            task_registered = False
             try:
-                # Persist the full intent before any root rewrite. Queueing while
-                # holding the same session lock lets a consumer either observe
-                # final ready metadata or recover the exact interrupted state.
+                # Persist the full intent before any root rewrite. The task starts
+                # in a durable waiting state; only the Session head is dispatched.
                 await self._write_phase1_marker(
                     archive_uri,
                     queue_message=queue_msg.to_dict(),
@@ -2100,17 +2113,6 @@ class Session:
                             lease_ref=lease,
                         )
 
-                phase1_stage = "queue_enqueue"
-                await get_queue_manager().enqueue(
-                    QueueManager.SESSION_COMMIT,
-                    queue_msg.to_dict(),
-                )
-
-                # Register after the durable queue write but before publishing
-                # ready. The consumer is blocked by this session lock until
-                # ready, so it cannot complete the task before registration;
-                # if registration fails, the queued consumer will observe the
-                # Phase 1 failure marker and create/fail the task itself.
                 phase1_stage = "task_tracker_create"
                 await get_task_tracker().create(
                     "session_commit",
@@ -2119,6 +2121,21 @@ class Session:
                     user_id=self.ctx.user.user_id,
                     task_id=task_id,
                 )
+                task_registered = True
+
+                if not any(
+                    state.state == "pending" and state.index < self._compression.compression_index
+                    for state in await self._scan_archive_states()
+                ):
+                    phase1_stage = "queue_enqueue"
+                    await get_queue_manager().enqueue(
+                        QueueManager.SESSION_COMMIT,
+                        queue_msg.to_dict(),
+                    )
+                    await self._write_phase1_enqueued_marker(
+                        archive_uri,
+                        lease_ref=lease,
+                    )
 
                 phase1_stage = "phase1_persist"
                 self._messages = retained_messages
@@ -2161,13 +2178,20 @@ class Session:
                         "Failed to mark archive after Phase 1 persistence failure: %s",
                         archive_uri,
                     )
+                if task_registered:
+                    await get_task_tracker().fail(
+                        task_id,
+                        str(e),
+                        account_id=self.ctx.account_id,
+                        user_id=self.ctx.user.user_id,
+                    )
                 self._messages = original_messages
                 self._compression.compression_index -= 1
                 raise
         finally:
             await self._viking_fs._async_agfs.pathlock_release(lease)
-        # Lock released; Phase 1 intent, queue item, retained root, metadata and
-        # ready metadata are all durable.
+        # Lock released; Phase 1 and task state are durable. QueueFS contains
+        # this archive only when it is the Session's earliest unfinished work.
 
         self._compression.original_count += len(messages_to_archive)
         logger.info(
@@ -2189,14 +2213,26 @@ class Session:
         }
 
     async def finalize_cancelled_commit(self, archive_uri: str) -> None:
-        """Make a cancelled queued commit terminal without discarding its raw archive."""
+        """Make a cancelled commit terminal and advance the Session queue head."""
         await self._write_failed_marker(
             archive_uri,
             stage="cancelled",
             error="session commit cancelled",
         )
+        await self._schedule_next_archive()
 
     async def resume_queued_commit(self, msg: "SessionCommitMsg") -> bool:
+        """Run one durable Phase 2 job and advance this Session's queue head."""
+        try:
+            processed = await self._resume_queued_commit(msg)
+        except asyncio.CancelledError:
+            await self._schedule_next_archive()
+            raise
+        if processed:
+            await self._schedule_next_archive()
+        return processed
+
+    async def _resume_queued_commit(self, msg: "SessionCommitMsg") -> bool:
         """Run one durable Phase 2 job from its archived messages."""
         from openviking.service.task_tracker import get_task_tracker
 
@@ -2260,7 +2296,8 @@ class Session:
             )
             return True
 
-        if not await self._can_run_archive(self._archive_index_from_uri(msg.archive_uri)):
+        claim = await self._schedule_next_archive(msg)
+        if not claim:
             return False
 
         archive_error = ""
@@ -3903,54 +3940,97 @@ class Session:
             raise ValueError(f"Invalid archive URI: {archive_uri}")
         return int(match.group(1))
 
-    async def _can_run_archive(self, archive_index: int) -> bool:
-        """Resolve orphaned predecessors and report whether this archive may run."""
-        if archive_index <= 1 or not self._viking_fs:
-            return True
-
+    async def _schedule_next_archive_locked(self, lease_ref: Any) -> Optional[int]:
+        """Ensure only the earliest unfinished new-format archive owns QueueFS work."""
         from openviking.service.task_tracker import get_task_tracker
+        from openviking.storage.queuefs import QueueManager, get_queue_manager
+        from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
 
         tracker = get_task_tracker()
-        earlier_states = [
-            state for state in await self._scan_archive_states() if state.index < archive_index
-        ]
-        for state in earlier_states:
+        for state in await self._scan_archive_states():
             if state.state != "pending":
                 continue
+
             phase1 = await self._read_phase1_meta(state.archive_uri)
             if not phase1:
-                # Archives predating Phase 1 metadata keep their existing
-                # ordering contract because their QueueFS owner is unknown.
-                return False
-            if phase1.get("status") != "ready":
-                if not await self._ensure_phase1_ready(state.archive_uri):
-                    continue
-                phase1 = await self._read_phase1_meta(state.archive_uri)
-
+                # Older archives do not contain a durable queue payload. Their
+                # already-enqueued work keeps the published compatibility path.
+                return state.index
             queue_message = phase1.get("queue_message")
-            task_id = queue_message.get("task_id") if isinstance(queue_message, dict) else None
-            if not task_id:
-                return False
-            if tracker.has_work(str(task_id)):
-                return False
+            msg = SessionCommitMsg.from_dict(queue_message)
 
-            error = "Session commit queue work is missing"
-            await self._write_failed_marker(
-                state.archive_uri,
-                stage="queue_missing",
-                error=error,
-            )
-            await tracker.fail(
-                str(task_id),
-                error,
+            has_work = tracker.has_work(msg.task_id)
+            task = await tracker.get(
+                msg.task_id,
                 account_id=self.ctx.account_id,
                 user_id=self.ctx.user.user_id,
             )
-            logger.warning(
-                "Skipped orphaned Session archive without QueueFS work: %s",
-                state.archive_uri,
+            task_status = task.status.value if task is not None else ""
+            if task_status in ("failed", "cancelled"):
+                await self._write_failed_marker(
+                    state.archive_uri,
+                    stage=task_status,
+                    error=task.error or f"session commit {task_status}",
+                    lease_ref=lease_ref,
+                )
+                continue
+            if task_status == "completed":
+                return state.index
+            if has_work:
+                return state.index
+
+            if phase1.get("status") == "ready" and phase1.get("enqueued") is False:
+                await get_queue_manager().enqueue(
+                    QueueManager.SESSION_COMMIT,
+                    msg.to_dict(),
+                )
+                await self._write_phase1_enqueued_marker(
+                    state.archive_uri,
+                    lease_ref=lease_ref,
+                )
+                return state.index
+
+            interrupted = phase1.get("status") != "ready"
+            error = (
+                "Session commit Phase 1 was interrupted"
+                if interrupted
+                else "Session commit queue work is missing"
             )
-        return True
+            await self._write_failed_marker(
+                state.archive_uri,
+                stage="phase1_recovery" if interrupted else "queue_missing",
+                error=error,
+                lease_ref=lease_ref,
+            )
+            if task is not None:
+                await tracker.fail(
+                    msg.task_id,
+                    error,
+                    account_id=self.ctx.account_id,
+                    user_id=self.ctx.user.user_id,
+                )
+        return None
+
+    async def _schedule_next_archive(
+        self,
+        msg: Optional["SessionCommitMsg"] = None,
+    ) -> Optional[bool]:
+        """Advance the queue head and optionally claim one dequeued archive."""
+        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
+        lease = await self._viking_fs._async_agfs.pathlock_acquire_tree(
+            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
+        )
+        try:
+            head_index = await self._schedule_next_archive_locked(lease)
+            if msg is None:
+                return None
+
+            current_index = self._archive_index_from_uri(msg.archive_uri)
+            if head_index is None or head_index >= current_index:
+                return True
+            return False
+        finally:
+            await self._viking_fs._async_agfs.pathlock_release(lease)
 
     async def _prepare_phase2_archive_messages(
         self,

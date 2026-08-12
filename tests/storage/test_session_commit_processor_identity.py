@@ -11,7 +11,7 @@ worker binds the committing account/user (so tokens are not attributed to
 import asyncio
 import concurrent.futures
 import json
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 from openviking.observability.context import get_root_observability_context
 from openviking.server.identity import RequestContext, Role
@@ -122,6 +122,7 @@ async def test_cancelled_queued_commit_writes_terminal_marker_before_success(mon
         session_id=msg.session_id,
         session_uri=msg.session_uri,
     )
+    monkeypatch.setattr(session, "_schedule_next_archive", AsyncMock())
     processor = SessionCommitProcessor(
         _SingleSessionService(session),
         asyncio.get_running_loop(),
