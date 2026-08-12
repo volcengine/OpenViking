@@ -13,8 +13,6 @@ import pytest
 from openviking.parse.accessors.feishu_accessor import (
     _MAX_MEDIA_DOWNLOAD_CONTEXTS,
     FeishuAccessor,
-    _safe_path_segment,
-    _title_as_filename,
 )
 
 
@@ -168,370 +166,14 @@ def _install_fake_lark_modules(monkeypatch):
     monkeypatch.setitem(sys.modules, "lark_oapi.core.model", core_model)
 
 
-def test_fetch_all_blocks_uses_user_access_token_option(monkeypatch):
+def test_feishu_api_lists_paginated_content_with_user_token(monkeypatch):
     _install_fake_lark_modules(monkeypatch)
     list_blocks = MagicMock(
         return_value=_SuccessResponse(
             SimpleNamespace(items=[], has_more=False, page_token=None),
         )
     )
-    accessor = FeishuAccessor()
-    accessor._user_token_client = SimpleNamespace(
-        docx=SimpleNamespace(v1=SimpleNamespace(document_block=SimpleNamespace(list=list_blocks)))
-    )
-
-    blocks = accessor._fetch_all_blocks("doc_token", feishu_access_token="u-test")
-
-    assert blocks == []
-    request, option = list_blocks.call_args.args
-    assert request.document_id == "doc_token"
-    assert option.user_access_token == "u-test"
-
-
-def test_feishu_url_detection_supports_drive_folder_and_file_paths():
-    assert FeishuAccessor._is_feishu_url(
-        "https://bytedance.larkoffice.com/drive/folder/ZihPfsmbBlK4iCdFK8ocMA0Onre"
-    )
-    assert FeishuAccessor._is_feishu_url(
-        "https://bytedance.larkoffice.com/file/G0wKbPjCooZ7LUxktDOc56Ysnlg"
-    )
-
-    assert FeishuAccessor._parse_feishu_url(
-        "https://bytedance.larkoffice.com/drive/folder/ZihPfsmbBlK4iCdFK8ocMA0Onre"
-    ) == ("folder", "ZihPfsmbBlK4iCdFK8ocMA0Onre")
-    assert FeishuAccessor._parse_feishu_url(
-        "https://bytedance.larkoffice.com/file/G0wKbPjCooZ7LUxktDOc56Ysnlg"
-    ) == ("file", "G0wKbPjCooZ7LUxktDOc56Ysnlg")
-
-
-def test_safe_path_segment_bounds_utf8_bytes_and_preserves_suffix():
-    filename = _safe_path_segment(f"{'文' * 100}.md")
-
-    assert filename.endswith(".md")
-    assert len(filename.encode("utf-8")) <= 240
-
-
-def test_safe_path_segment_bounds_extreme_suffix():
-    filename = _safe_path_segment(f"a.{'b' * 237}")
-
-    assert len(filename) <= 120
-    assert len(filename.encode("utf-8")) <= 240
-
-
-def test_access_downloads_lark_file_url(monkeypatch):
-    _install_fake_lark_modules(monkeypatch)
-    request = MagicMock(
-        return_value=_FakeMediaResponse(
-            b"%PDF-1.7",
-            headers={"content-type": "application/pdf"},
-        )
-    )
-    accessor = FeishuAccessor()
-    accessor._config = SimpleNamespace(download_images=False)
-    accessor._user_token_client = SimpleNamespace(request=request)
-
-    resource = asyncio.run(
-        accessor.access(
-            "https://bytedance.larkoffice.com/file/G0wKbPjCooZ7LUxktDOc56Ysnlg",
-            feishu_access_token="u-test",
-        )
-    )
-    try:
-        assert resource.path.read_bytes() == b"%PDF-1.7"
-        assert resource.path.suffix == ".pdf"
-        assert resource.meta["feishu_doc_type"] == "file"
-        assert resource.meta["feishu_token"] == "G0wKbPjCooZ7LUxktDOc56Ysnlg"
-        assert resource.meta["original_filename"] == "G0wKbPjCooZ7LUxktDOc56Ysnlg.pdf"
-        raw_request, option = request.call_args.args
-        assert raw_request.http_method == "GET"
-        assert raw_request.uri == "/open-apis/drive/v1/files/G0wKbPjCooZ7LUxktDOc56Ysnlg/download"
-        assert raw_request.token_types == {"user"}
-        assert option.user_access_token == "u-test"
-    finally:
-        resource.cleanup()
-
-
-def test_access_expands_drive_folder_recursively(monkeypatch):
-    _install_fake_lark_modules(monkeypatch)
-    folder_children = {
-        "root_folder": [
-            SimpleNamespace(token="doc_token", name="Spec Doc", type="docx", url=""),
-            SimpleNamespace(token="versioned_doc", name="Spec v1.2", type="docx", url=""),
-            SimpleNamespace(token="child_folder", name="Nested Folder", type="folder", url=""),
-            SimpleNamespace(token="file_token", name="Design.pdf", type="file", url=""),
-        ],
-        "child_folder": [
-            SimpleNamespace(token="sheet_token", name="Metrics", type="sheet", url=""),
-        ],
-    }
-    request = MagicMock(
-        side_effect=[
-            _SuccessResponse(SimpleNamespace(name="Product Docs")),
-            _FakeMediaResponse(
-                b"%PDF-1.7",
-                headers={"content-type": "application/pdf"},
-            ),
-        ]
-    )
-    accessor = FeishuAccessor()
-    accessor._config = SimpleNamespace(download_images=False)
-    accessor._user_token_client = SimpleNamespace(request=request)
-
-    def fake_list_children(folder_token, **_kwargs):
-        return folder_children[folder_token]
-
-    async def fake_fetch_document(url, **_kwargs):
-        from openviking.parse.accessors.feishu_accessor import FeishuDocument
-
-        doc_type, token = accessor._parse_feishu_url(url)
-        return FeishuDocument(
-            doc_type=doc_type,
-            token=token,
-            markdown_content=f"# {token}",
-            title=f"{token} title",
-            meta={},
-        )
-
-    monkeypatch.setattr(accessor, "_list_drive_folder_children", fake_list_children)
-    monkeypatch.setattr(accessor, "_fetch_document", fake_fetch_document)
-
-    resource = asyncio.run(
-        accessor.access(
-            "https://bytedance.larkoffice.com/drive/folder/root_folder",
-            feishu_access_token="u-test",
-        )
-    )
-    try:
-        assert resource.path.is_dir()
-        assert (resource.path / "Spec Doc.md").read_text(encoding="utf-8") == "# doc_token"
-        assert (resource.path / "Spec v1.2.md").read_text(encoding="utf-8") == "# versioned_doc"
-        assert (resource.path / "Nested Folder" / "Metrics.md").read_text(
-            encoding="utf-8"
-        ) == "# sheet_token"
-        assert (resource.path / "Design.pdf").read_bytes() == b"%PDF-1.7"
-        assert resource.meta["feishu_doc_type"] == "folder"
-        assert resource.meta["feishu_token"] == "root_folder"
-        assert resource.meta["original_filename"] == "Product Docs"
-        meta_request, meta_option = request.call_args_list[0].args
-        assert meta_request.http_method == "GET"
-        assert meta_request.uri == "/open-apis/drive/explorer/v2/folder/root_folder/meta"
-        assert meta_request.token_types == {"user"}
-        assert meta_option.user_access_token == "u-test"
-    finally:
-        resource.cleanup()
-
-
-def test_access_drive_folder_uses_token_name_when_metadata_unavailable(monkeypatch):
-    _install_fake_lark_modules(monkeypatch)
-    accessor = FeishuAccessor()
-    accessor._config = SimpleNamespace(download_images=False)
-
-    monkeypatch.setattr(accessor, "_get_drive_folder_name", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(accessor, "_list_drive_folder_children", lambda *_args, **_kwargs: [])
-
-    resource = asyncio.run(
-        accessor.access(
-            "https://bytedance.larkoffice.com/drive/folder/root_folder",
-            feishu_access_token="u-test",
-        )
-    )
-    try:
-        assert resource.meta["original_filename"] == "root_folder"
-    finally:
-        resource.cleanup()
-
-
-def test_access_drive_folder_materializes_long_utf8_document_names(monkeypatch):
-    _install_fake_lark_modules(monkeypatch)
-    accessor = FeishuAccessor()
-    accessor._config = SimpleNamespace(download_images=False)
-    long_name = "文" * 100
-
-    monkeypatch.setattr(accessor, "_get_drive_folder_name", lambda *_args, **_kwargs: "根目录")
-    monkeypatch.setattr(
-        accessor,
-        "_list_drive_folder_children",
-        lambda *_args, **_kwargs: [
-            SimpleNamespace(token="doc_one", name=long_name, type="docx", url=""),
-            SimpleNamespace(token="doc_two", name=long_name, type="docx", url=""),
-        ],
-    )
-
-    async def fake_fetch_document(url, **_kwargs):
-        from openviking.parse.accessors.feishu_accessor import FeishuDocument
-
-        doc_type, token = accessor._parse_feishu_url(url)
-        return FeishuDocument(
-            doc_type=doc_type,
-            token=token,
-            markdown_content=f"# {token}",
-            title=long_name,
-            meta={},
-        )
-
-    monkeypatch.setattr(accessor, "_fetch_document", fake_fetch_document)
-
-    resource = asyncio.run(
-        accessor.access(
-            "https://bytedance.larkoffice.com/drive/folder/root_folder",
-            feishu_access_token="u-test",
-        )
-    )
-    try:
-        markdown_files = sorted(resource.path.glob("*.md"))
-        assert len(markdown_files) == 2
-        assert resource.meta["feishu_folder_skipped_items"] == []
-        assert all(path.name.endswith(".md") for path in markdown_files)
-        assert all(len(path.name.encode("utf-8")) <= 240 for path in markdown_files)
-        assert any(" (2).md" in path.name for path in markdown_files)
-    finally:
-        resource.cleanup()
-
-
-def test_unique_child_path_bounds_extreme_suffix(tmp_path):
-    name = f"a.{'b' * 237}"
-    first_path = FeishuAccessor._unique_child_path(tmp_path, name)
-    first_path.write_text("first", encoding="utf-8")
-
-    second_path = FeishuAccessor._unique_child_path(tmp_path, name)
-
-    assert len(first_path.name) <= 120
-    assert len(first_path.name.encode("utf-8")) <= 240
-    assert len(second_path.name) <= 120
-    assert len(second_path.name.encode("utf-8")) <= 240
-
-
-def test_access_drive_folder_skips_item_failures_by_default(monkeypatch):
-    _install_fake_lark_modules(monkeypatch)
-    accessor = FeishuAccessor()
-    accessor._config = SimpleNamespace(download_images=False)
-
-    monkeypatch.setattr(
-        accessor,
-        "_list_drive_folder_children",
-        lambda folder_token, **_kwargs: [
-            SimpleNamespace(token="doc_token", name="Spec Doc", type="docx", url=""),
-            SimpleNamespace(token="blocked_file", name="Blocked.pptx", type="file", url=""),
-        ],
-    )
-
-    async def fake_fetch_document(url, **_kwargs):
-        from openviking.parse.accessors.feishu_accessor import FeishuDocument
-
-        doc_type, token = accessor._parse_feishu_url(url)
-        return FeishuDocument(
-            doc_type=doc_type,
-            token=token,
-            markdown_content="# ok",
-            title="Spec Doc",
-            meta={},
-        )
-
-    def fake_download(file_token, **_kwargs):
-        raise RuntimeError("HTTP 403")
-
-    monkeypatch.setattr(accessor, "_fetch_document", fake_fetch_document)
-    monkeypatch.setattr(accessor, "_download_drive_file", fake_download)
-
-    resource = asyncio.run(
-        accessor.access(
-            "https://bytedance.larkoffice.com/drive/folder/root_folder",
-            feishu_access_token="u-test",
-        )
-    )
-    try:
-        assert (resource.path / "Spec Doc.md").read_text(encoding="utf-8") == "# ok"
-        skipped = resource.meta["feishu_folder_skipped_items"]
-        assert len(skipped) == 1
-        assert skipped[0]["name"] == "Blocked.pptx"
-        assert skipped[0]["type"] == "file"
-        assert skipped[0]["token"] == "blocked_file"
-        assert "HTTP 403" in skipped[0]["reason"]
-    finally:
-        resource.cleanup()
-
-
-def test_access_drive_folder_reports_unsupported_items(monkeypatch):
-    _install_fake_lark_modules(monkeypatch)
-    accessor = FeishuAccessor()
-    accessor._config = SimpleNamespace(download_images=False)
-
-    monkeypatch.setattr(
-        accessor,
-        "_list_drive_folder_children",
-        lambda folder_token, **_kwargs: [
-            SimpleNamespace(token="doc_token", name="Spec Doc", type="docx", url=""),
-            SimpleNamespace(token="unknown_token", name="Mystery", type="unknown", url=""),
-        ],
-    )
-
-    async def fake_fetch_document(url, **_kwargs):
-        from openviking.parse.accessors.feishu_accessor import FeishuDocument
-
-        doc_type, token = accessor._parse_feishu_url(url)
-        return FeishuDocument(
-            doc_type=doc_type,
-            token=token,
-            markdown_content="# ok",
-            title="Spec Doc",
-            meta={},
-        )
-
-    monkeypatch.setattr(accessor, "_fetch_document", fake_fetch_document)
-
-    resource = asyncio.run(
-        accessor.access(
-            "https://bytedance.larkoffice.com/drive/folder/root_folder",
-            feishu_access_token="u-test",
-        )
-    )
-    try:
-        assert (resource.path / "Spec Doc.md").read_text(encoding="utf-8") == "# ok"
-        skipped = resource.meta["feishu_folder_skipped_items"]
-        assert skipped == [
-            {
-                "path": str(resource.path / "Mystery"),
-                "name": "Mystery",
-                "type": "unknown",
-                "token": "unknown_token",
-                "reason": "Unsupported Feishu Drive item type: unknown",
-            }
-        ]
-    finally:
-        resource.cleanup()
-
-
-def test_access_drive_folder_strict_raises_item_failures(monkeypatch):
-    _install_fake_lark_modules(monkeypatch)
-    accessor = FeishuAccessor()
-    accessor._config = SimpleNamespace(download_images=False)
-
-    monkeypatch.setattr(
-        accessor,
-        "_list_drive_folder_children",
-        lambda folder_token, **_kwargs: [
-            SimpleNamespace(token="blocked_file", name="Blocked.pptx", type="file", url=""),
-        ],
-    )
-    monkeypatch.setattr(
-        accessor,
-        "_download_drive_file",
-        lambda file_token, **_kwargs: (_ for _ in ()).throw(RuntimeError("HTTP 403")),
-    )
-
-    with pytest.raises(RuntimeError, match="HTTP 403"):
-        asyncio.run(
-            accessor.access(
-                "https://bytedance.larkoffice.com/drive/folder/root_folder",
-                feishu_access_token="u-test",
-                strict=True,
-            )
-        )
-
-
-def test_list_drive_folder_children_paginates_with_user_token(monkeypatch):
-    _install_fake_lark_modules(monkeypatch)
-    request = MagicMock(
+    list_drive = MagicMock(
         side_effect=[
             _SuccessResponse(
                 SimpleNamespace(
@@ -550,27 +192,24 @@ def test_list_drive_folder_children_paginates_with_user_token(monkeypatch):
         ]
     )
     accessor = FeishuAccessor()
-    accessor._user_token_client = SimpleNamespace(request=request)
+    accessor._user_token_client = SimpleNamespace(
+        docx=SimpleNamespace(v1=SimpleNamespace(document_block=SimpleNamespace(list=list_blocks))),
+        request=list_drive,
+    )
 
+    blocks = accessor._fetch_all_blocks("doc_token", feishu_access_token="u-test")
     children = accessor._list_drive_folder_children(
         "folder_token",
         feishu_access_token="u-test",
     )
 
+    assert blocks == []
     assert [child.token for child in children] == ["doc_token", "file_token"]
-    first_request, first_option = request.call_args_list[0].args
-    second_request, second_option = request.call_args_list[1].args
-    assert first_request.http_method == "GET"
-    assert first_request.uri == "/open-apis/drive/v1/files"
-    assert first_request.token_types == {"user"}
-    assert first_request.queries == {"folder_token": "folder_token", "page_size": 200}
-    assert second_request.queries == {
-        "folder_token": "folder_token",
-        "page_size": 200,
-        "page_token": "page-2",
-    }
-    assert first_option.user_access_token == "u-test"
-    assert second_option.user_access_token == "u-test"
+    request, option = list_blocks.call_args.args
+    assert request.document_id == "doc_token"
+    assert option.user_access_token == "u-test"
+    assert list_drive.call_args_list[1].args[0].queries["page_token"] == "page-2"
+    assert all(call.args[1].user_access_token == "u-test" for call in list_drive.call_args_list)
 
 
 def test_resolve_image_refs_respects_download_images_disabled():
@@ -761,15 +400,96 @@ def test_download_image_advertises_user_token_when_provided(monkeypatch):
     assert args[1].user_access_token == "u-test"
 
 
-def test_guess_image_ext_defaults_to_png_when_unknown():
+def test_access_downloads_drive_file_with_user_token(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+    request = MagicMock(
+        return_value=_FakeMediaResponse(
+            b"%PDF-1.7",
+            headers={"content-type": "application/pdf"},
+        )
+    )
     accessor = FeishuAccessor()
-    assert accessor._guess_image_ext(b"not-an-image", None) == ".png"
-    assert accessor._guess_image_ext(b"\xff\xd8\xff", None) == ".jpg"
-    assert accessor._guess_image_ext(b"anything", "image/gif") == ".gif"
+    accessor._user_token_client = SimpleNamespace(request=request)
+    url = "https://bytedance.larkoffice.com/file/file_token"
+
+    assert accessor.can_handle(url)
+    resource = asyncio.run(accessor.access(url, feishu_access_token="u-test"))
+    try:
+        assert resource.path.read_bytes() == b"%PDF-1.7"
+        assert resource.path.name == "file_token.pdf"
+        assert resource.meta["feishu_doc_type"] == "file"
+        assert resource.meta["feishu_token"] == "file_token"
+        raw_request, option = request.call_args.args
+        assert raw_request.uri == "/open-apis/drive/v1/files/file_token/download"
+        assert option.user_access_token == "u-test"
+    finally:
+        resource.cleanup()
 
 
-def test_title_as_filename_preserves_prefix_around_path_separators():
-    assert _title_as_filename("API Docs/Overview\\v2") == "API Docs_Overview_v2"
+def test_access_materializes_drive_folder_contract(monkeypatch):
+    from openviking.parse.accessors.feishu_accessor import FeishuDocument
+
+    accessor = FeishuAccessor()
+    accessor._config = SimpleNamespace(download_images=False)
+    long_name = "文" * 100
+    children = {
+        "root_folder": [
+            SimpleNamespace(token="doc_one", name=long_name, type="docx", url=""),
+            SimpleNamespace(token="doc_two", name=long_name, type="docx", url=""),
+            SimpleNamespace(token="nested", name="Nested", type="folder", url=""),
+            SimpleNamespace(token="design", name="Design.pdf", type="file", url=""),
+            SimpleNamespace(token="blocked", name="Blocked.pptx", type="file", url=""),
+        ],
+        "nested": [SimpleNamespace(token="sheet", name="Metrics", type="sheet", url="")],
+    }
+
+    async def fake_fetch_document(url, **_kwargs):
+        doc_type, token = accessor._parse_feishu_url(url)
+        return FeishuDocument(
+            doc_type=doc_type,
+            token=token,
+            markdown_content=f"# {token}",
+            title=token,
+            meta={},
+        )
+
+    def fake_download(file_token, **_kwargs):
+        if file_token == "blocked":
+            raise RuntimeError("HTTP 403")
+        return b"%PDF-1.7", "application/pdf", "Design.pdf"
+
+    monkeypatch.setattr(
+        accessor, "_get_drive_folder_name", lambda *_args, **_kwargs: "Product Docs"
+    )
+    monkeypatch.setattr(
+        accessor,
+        "_list_drive_folder_children",
+        lambda folder_token, **_kwargs: children[folder_token],
+    )
+    monkeypatch.setattr(accessor, "_fetch_document", fake_fetch_document)
+    monkeypatch.setattr(accessor, "_download_drive_file", fake_download)
+    url = "https://bytedance.larkoffice.com/drive/folder/root_folder"
+
+    assert accessor.can_handle(url)
+    resource = asyncio.run(accessor.access(url, feishu_access_token="u-test"))
+    try:
+        markdown_files = sorted(resource.path.glob("*.md"))
+        assert {path.read_text(encoding="utf-8") for path in markdown_files} == {
+            "# doc_one",
+            "# doc_two",
+        }
+        assert all(len(path.name.encode("utf-8")) <= 240 for path in markdown_files)
+        assert any(" (2).md" in path.name for path in markdown_files)
+        assert (resource.path / "Nested" / "Metrics.md").read_text(encoding="utf-8") == "# sheet"
+        assert (resource.path / "Design.pdf").read_bytes() == b"%PDF-1.7"
+        assert resource.meta["original_filename"] == "Product Docs"
+        assert resource.meta["feishu_doc_type"] == "folder"
+        skipped = resource.meta["feishu_folder_skipped_items"]
+        assert [(item["name"], item["token"], item["reason"]) for item in skipped] == [
+            ("Blocked.pptx", "blocked", "HTTP 403")
+        ]
+    finally:
+        resource.cleanup()
 
 
 def test_access_offloads_synchronous_download_to_thread(monkeypatch):

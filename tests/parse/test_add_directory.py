@@ -270,12 +270,38 @@ class TestEmptyDirectory:
 
     @pytest.mark.asyncio
     async def test_empty_dir_returns_zero_files(self, tmp_empty: Path, parser, fake_fs) -> None:
-        result = await parser.parse(str(tmp_empty))
+        blocked_path = tmp_empty / "blocked.pdf"
+        result = await parser.parse(
+            str(tmp_empty),
+            _source_meta={
+                "feishu_folder_skipped_items": [
+                    {
+                        "path": str(blocked_path),
+                        "name": blocked_path.name,
+                        "type": "file",
+                        "token": "file-token",
+                        "reason": "HTTP 403",
+                    }
+                ]
+            },
+        )
 
         assert result.parser_name == "DirectoryParser"
         assert result.source_format == "directory"
         assert result.temp_dir_path is not None
-        assert result.meta.get("file_count", 0) == 0 or len(fake_fs.files) == 0
+        assert result.meta["file_count"] == 0
+        assert result.meta["total_processable"] == 0
+        assert result.meta["failed_files"] == [
+            {
+                "path": "blocked.pdf",
+                "parser": "feishu",
+                "status": "failed",
+                "type": "file",
+                "token": "file-token",
+                "reason": "HTTP 403",
+            }
+        ]
+        assert any("Skipped Feishu Drive item blocked.pdf: HTTP 403" in w for w in result.warnings)
 
 
 # ---------------------------------------------------------------------------
@@ -867,42 +893,6 @@ class TestParseResultMetadata:
         assert result.meta["dir_name"] == tmp_code.name
         assert result.meta["total_processable"] == 3
         assert result.meta["file_count"] == 3
-
-    @pytest.mark.asyncio
-    async def test_feishu_accessor_skipped_items_are_reported(
-        self, tmp_path: Path, parser, fake_fs
-    ) -> None:
-        (tmp_path / "ok.py").write_text("print('ok')", encoding="utf-8")
-        blocked_path = tmp_path / "slides.pptx"
-
-        result = await parser.parse(
-            str(tmp_path),
-            _source_meta={
-                "feishu_folder_skipped_items": [
-                    {
-                        "path": str(blocked_path),
-                        "name": "slides.pptx",
-                        "type": "file",
-                        "token": "file-token",
-                        "reason": "HTTP 403",
-                    }
-                ]
-            },
-        )
-
-        assert result.meta["file_count"] == 1
-        assert result.meta["processed_files"] == [{"path": "ok.py", "parser": "direct"}]
-        assert result.meta["failed_files"] == [
-            {
-                "path": "slides.pptx",
-                "parser": "feishu",
-                "status": "failed",
-                "type": "file",
-                "token": "file-token",
-                "reason": "HTTP 403",
-            }
-        ]
-        assert any("Skipped Feishu Drive item slides.pptx: HTTP 403" in w for w in result.warnings)
 
 
 # ---------------------------------------------------------------------------
