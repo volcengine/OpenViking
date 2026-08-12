@@ -7,14 +7,7 @@ Provides business logic decoupled from transport layer,
 enabling reuse across HTTP Server and CLI.
 """
 
-from openviking.service.core import OpenVikingService
-from openviking.service.debug_service import ComponentStatus, DebugService, SystemStatus
-from openviking.service.fs_service import FSService
-from openviking.service.pack_service import PackService
-from openviking.service.relation_service import RelationService
-from openviking.service.resource_service import ResourceService
-from openviking.service.search_service import SearchService
-from openviking.service.session_service import SessionService
+from typing import TYPE_CHECKING
 
 __all__ = [
     "OpenVikingService",
@@ -22,9 +15,41 @@ __all__ = [
     "DebugService",
     "SystemStatus",
     "FSService",
-    "RelationService",
     "PackService",
     "SearchService",
     "ResourceService",
     "SessionService",
 ]
+
+_EXPORTS = {
+    "OpenVikingService": ("openviking.service.core", "OpenVikingService"),
+    "ComponentStatus": ("openviking.service.debug_service", "ComponentStatus"),
+    "DebugService": ("openviking.service.debug_service", "DebugService"),
+    "SystemStatus": ("openviking.service.debug_service", "SystemStatus"),
+    "FSService": ("openviking.service.fs_service", "FSService"),
+    "PackService": ("openviking.service.pack_service", "PackService"),
+    "SearchService": ("openviking.service.search_service", "SearchService"),
+    "ResourceService": ("openviking.service.resource_service", "ResourceService"),
+    "SessionService": ("openviking.service.session_service", "SessionService"),
+}
+
+if TYPE_CHECKING:
+    from openviking.service.core import OpenVikingService
+    from openviking.service.debug_service import ComponentStatus, DebugService, SystemStatus
+    from openviking.service.fs_service import FSService
+    from openviking.service.pack_service import PackService
+    from openviking.service.resource_service import ResourceService
+    from openviking.service.search_service import SearchService
+    from openviking.service.session_service import SessionService
+
+
+def __getattr__(name: str):
+    try:
+        module_name, attr_name = _EXPORTS[name]
+    except KeyError as exc:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from exc
+    from importlib import import_module
+
+    value = getattr(import_module(module_name), attr_name)
+    globals()[name] = value
+    return value

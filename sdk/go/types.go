@@ -335,16 +335,6 @@ type MatchedContext struct {
 	Category    string           `json:"category,omitempty"`
 	Score       float64          `json:"score,omitempty"`
 	MatchReason string           `json:"match_reason,omitempty"`
-	Relations   []RelatedContext `json:"relations,omitempty"`
-}
-
-// RelatedContext is a related context reference attached to a retrieval hit.
-type RelatedContext struct {
-	URI        string  `json:"uri,omitempty"`
-	Reason     string  `json:"reason,omitempty"`
-	Score      float64 `json:"score,omitempty"`
-	Relation   string  `json:"relation,omitempty"`
-	RelationID string  `json:"relation_id,omitempty"`
 }
 
 // QueryPlan describes search query expansion details when the server returns them.

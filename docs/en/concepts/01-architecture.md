@@ -54,7 +54,7 @@ OpenViking is a context database designed for AI Agents, unifying all context ty
 | Module | Responsibility | Key Capabilities |
 |--------|----------------|------------------|
 | **Client** | Unified entry | Provides all operation interfaces, delegates to Service layer |
-| **Service** | Business logic | FSService, SearchService, SessionService, ResourceService, RelationService, PackService, DebugService |
+| **Service** | Business logic | FSService, SearchService, SessionService, ResourceService, PackService, DebugService |
 | **Retrieve** | Context retrieval | Intent analysis (IntentAnalyzer), hierarchical retrieval (HierarchicalRetriever), Rerank |
 | **Session** | Session management | Message recording, usage tracking, session compression, memory commit |
 | **Parse** | Context extraction | Document parsing (PDF/MD/HTML), tree building (TreeBuilder), async semantic generation |
@@ -71,7 +71,6 @@ The Service layer decouples business logic from the transport layer, enabling re
 | **SearchService** | Semantic search | search, find |
 | **SessionService** | Session management | session, sessions, commit, delete |
 | **ResourceService** | Resource import | add_resource, add_skill, wait_processed |
-| **RelationService** | Relation management | relations, link, unlink |
 | **PackService** | Import/export and backup/restore | export_ovpack, import_ovpack, backup_ovpack, restore_ovpack |
 | **DebugService** | Debug service | observer (ObserverService) |
 
@@ -81,7 +80,7 @@ OpenViking uses a dual-layer storage architecture separating content from index 
 
 | Layer | Responsibility | Content |
 |-------|----------------|---------|
-| **AGFS** | Content storage | L0/L1/L2 full content, multimedia files, relations |
+| **AGFS** | Content storage | L0/L1/L2 full content, multimedia files |
 | **Vector Index** | Index storage | URIs, vectors, metadata (no file content) |
 
 ## Data Flow Overview

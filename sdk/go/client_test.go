@@ -475,46 +475,6 @@ func TestSearchSendsImageURI(t *testing.T) {
 	}
 }
 
-func TestRelationRequests(t *testing.T) {
-	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method + " " + r.URL.Path {
-		case "GET /api/v1/relations":
-			if got := r.URL.Query().Get("uri"); got != "viking://resources/from" {
-				t.Fatalf("uri = %q", got)
-			}
-			writeOK(t, w, []map[string]any{{"uri": "viking://resources/to"}})
-		case "POST /api/v1/relations/link":
-			body := readJSONBody(t, r)
-			targets, ok := body["to_uris"].([]any)
-			if body["from_uri"] != "viking://resources/from" || body["reason"] != "related" ||
-				!ok || len(targets) != 1 || targets[0] != "viking://resources/to" {
-				t.Fatalf("link body = %#v", body)
-			}
-			writeOK(t, w, map[string]any{"linked": true})
-		case "DELETE /api/v1/relations/link":
-			body := readJSONBody(t, r)
-			if body["from_uri"] != "viking://resources/from" || body["to_uri"] != "viking://resources/to" {
-				t.Fatalf("unlink body = %#v", body)
-			}
-			writeOK(t, w, map[string]any{"unlinked": true})
-		default:
-			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
-		}
-	}))
-	defer closeServer()
-
-	relations, err := client.Relations(context.Background(), "resources/from")
-	if err != nil || len(relations) != 1 {
-		t.Fatalf("relations = %#v, err = %v", relations, err)
-	}
-	if err := client.Link(context.Background(), "resources/from", []string{"resources/to"}, "related"); err != nil {
-		t.Fatal(err)
-	}
-	if err := client.Unlink(context.Background(), "resources/from", "resources/to"); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestErrorEnvelopePreservesCodeDetailsAndStatus(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(t, w, http.StatusNotFound, "NOT_FOUND", map[string]any{"resource": "viking://resources/missing"})

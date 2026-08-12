@@ -705,12 +705,9 @@ describe("OpenVikingClient", () => {
     }
   });
 
-  it("maps relation and snapshot APIs to the Python contracts", async () => {
+  it("maps snapshot and health APIs to the Python contracts", async () => {
     const fetcher = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(ok([]))
-      .mockResolvedValueOnce(ok({}))
-      .mockResolvedValueOnce(ok({}))
       .mockResolvedValueOnce(ok({ oid: "commit" }))
       .mockResolvedValueOnce(ok({ is_healthy: true }));
     const client = new OpenVikingClient({
@@ -718,20 +715,10 @@ describe("OpenVikingClient", () => {
       fetch: fetcher,
     });
 
-    await client.relations("resources/a");
-    await client.link("resources/a", ["resources/b"]);
-    await client.unlink("resources/a", "resources/b");
     await client.gitCommit({ message: "snapshot" });
     await expect(client.isHealthy()).resolves.toBe(true);
 
-    expect(String(fetcher.mock.calls[0]![0])).toContain(
-      "uri=viking%3A%2F%2Fresources%2Fa",
-    );
-    expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toMatchObject({
-      from_uri: "viking://resources/a",
-      to_uris: ["viking://resources/b"],
-    });
-    expect(JSON.parse(String(fetcher.mock.calls[3]![1]?.body))).toEqual({
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
       message: "snapshot",
       branch: "main",
     });

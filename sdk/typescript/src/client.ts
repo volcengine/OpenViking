@@ -384,38 +384,6 @@ export class OpenVikingClient {
       body: { pattern, uri: normalizeURI(uri), node_limit: nodeLimit },
     });
   }
-  /** Return relations associated with a resource. */
-  relations(uri: string): Promise<unknown[]> {
-    return this.request("GET", "/api/v1/relations", {
-      query: { uri: normalizeURI(uri) },
-    });
-  }
-  /** Create one or more resource relations. */
-  async link(
-    fromUri: string,
-    toUris: string | string[],
-    reason = "",
-  ): Promise<void> {
-    await this.request("POST", "/api/v1/relations/link", {
-      body: {
-        from_uri: normalizeURI(fromUri),
-        to_uris: Array.isArray(toUris)
-          ? toUris.map(normalizeURI)
-          : normalizeURI(toUris),
-        reason,
-      },
-    });
-  }
-  /** Remove a resource relation. */
-  async unlink(fromUri: string, toUri: string): Promise<void> {
-    await this.request("DELETE", "/api/v1/relations/link", {
-      body: {
-        from_uri: normalizeURI(fromUri),
-        to_uri: normalizeURI(toUri),
-      },
-    });
-  }
-
   /** List directory contents. */
   list(uri: string, options: ListOptions = {}): Promise<unknown[]> {
     return this.request("GET", "/api/v1/fs/ls", {

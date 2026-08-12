@@ -112,7 +112,6 @@ content = client.read("viking://resources/docs/auth/oauth.md")
 viking://resources/docs/auth/
 ├── .abstract.md          # L0: ~100 tokens
 ├── .overview.md          # L1: ~1k tokens
-├── .relations.json       # 相关资源
 ├── oauth.md              # L2: 完整内容
 ├── jwt.md                # L2: 完整内容
 └── api-keys.md           # L2: 完整内容

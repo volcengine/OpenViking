@@ -125,7 +125,7 @@ class TestMatchedContextSearchTags:
         )
         result = FindResult(memories=[], resources=[ctx], skills=[])
         item = result.to_dict()["resources"][0]
-        for dropped in ("category", "match_reason", "relations", "overview"):
+        for dropped in ("category", "match_reason", "overview"):
             assert dropped not in item
 
     def test_context_to_dict_keeps_useful_fields(self):

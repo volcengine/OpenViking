@@ -81,7 +81,7 @@ Modes:
 
 `--wait` blocks until semantic/vector refresh completes. Parent directories are auto-created for `create`.
 
-Derived semantic files cannot be written directly: `.abstract.md`, `.overview.md`, `.relations.json`.
+Derived semantic files cannot be written directly: `.abstract.md`, `.overview.md`.
 
 ### `ov mkdir` — Create a directory
 
@@ -132,30 +132,6 @@ ov glob "**/*.py" --uri viking://resources/
 ```
 
 Parameters: `pattern` (required), `--uri`, `--node-limit`.
-
-## Relation Operations
-
-### `ov link` — Create relations
-
-```bash
-# Single link
-ov link viking://resources/docs/auth/ viking://resources/docs/security/ \
-  --reason "Security best practices"
-
-# Multiple links (via API/SDK)
-```
-
-### `ov relations` — List relations
-
-```bash
-ov relations viking://resources/docs/auth/
-```
-
-### `ov unlink` — Remove a relation
-
-```bash
-ov unlink viking://resources/docs/auth/ viking://resources/docs/security/
-```
 
 ## WebDAV
 

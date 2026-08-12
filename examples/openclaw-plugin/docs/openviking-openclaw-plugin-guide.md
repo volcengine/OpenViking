@@ -260,7 +260,7 @@ transformContext auto recall 流程：
 
 | API | 官方用途 | 当前插件映射 | 关键参数 / 返回 |
 | --- | --- | --- | --- |
-| `POST /api/v1/search/find` | 快速语义检索，不依赖 session context | 自动召回、`memory_recall`、`ov_search`、`memory_forget` | body: `query`、`target_uri`、`limit`、`score_threshold`；返回 `memories[]`、`resources[]`、`skills[]`，每项含 `uri`、`level`、`abstract`、`score`、`category`、`relations`：`client.ts:428` |
+| `POST /api/v1/search/find` | 快速语义检索，不依赖 session context | 自动召回、`memory_recall`、`ov_search`、`memory_forget` | body: `query`、`target_uri`、`limit`、`score_threshold`；返回 `memories[]`、`resources[]`、`skills[]`，每项含 `uri`、`level`、`abstract`、`score`、`category`：`client.ts:428` |
 | `POST /api/v1/search/search` | 带 session context 和 intent analysis 的检索 | 暂未使用 | body 可带 `session_id`；返回 `query_plan` / `query_results`。当前插件为了稳定和低延迟统一用 `find()`，session context 由插件自己组装 |
 | `POST /api/v1/search/grep` | 正则/关键词内容搜索 | `ov_archive_search` | body: `uri`、`pattern`、`case_insensitive`、`node_limit`；插件限定在 `viking://session/{id}/history` 内搜 archive：`client.ts:897` |
 | `POST /api/v1/search/glob` | glob 文件匹配 | 暂未封装 | body: `pattern`、`uri`、`node_limit`；适合按 `**/*.md`、`src/**/*.ts` 找资源路径 |
@@ -273,14 +273,11 @@ transformContext auto recall 流程：
 | `GET /api/v1/fs/tree?uri=...` | 递归树 | 暂未封装 | 支持 `level_limit`、`node_limit`，返回 flat array + `rel_path` |
 | `GET /api/v1/fs/stat?uri=...` | 查元信息/是否存在 | 暂未封装 | 返回 `name`、`size`、`mode`、`isDir`、`uri`、`mtime`、`ctime` |
 | `POST /api/v1/fs/mkdir` | 创建目录 | 暂未封装 | body: `uri`，父目录自动创建 |
-| `POST /api/v1/fs/mv` | 移动/重命名 | 暂未封装 | body: `from_uri`、`to_uri`，会保留元数据和 relations |
+| `POST /api/v1/fs/mv` | 移动/重命名 | 暂未封装 | body: `from_uri`、`to_uri`，会保留元数据 |
 | `DELETE /api/v1/fs?uri=...&recursive=...` | 删除资源/目录 | `memory_forget`、`deleteUri` | 插件默认 `recursive=false`，用于删除具体 memory URI：`client.ts:934` |
 | `GET /api/v1/content/abstract?uri=...` | 读取 L0 abstract | 暂未封装 | 约 100 token 摘要，适合快速判断目录/文件主题 |
 | `GET /api/v1/content/overview?uri=...` | 读取 L1 overview | 暂未封装 | 目录级结构化概览，适合介于 abstract 和 full content 之间的排查 |
 | `GET /api/v1/content/read?uri=...&offset=...&limit=...` | 读取 L2 full content | 自动召回读取 level=2 命中内容、`ov_read` | `ov_read` 暴露 `uri` 参数，未暴露 `offset/limit`：`client.ts:470` |
-| `GET /api/v1/relations?uri=...` | 查看资源关系 | 暂未封装 | 返回 `from_uri`、`to_uri`、`reason`、`created_at` |
-| `POST /api/v1/relations/link` | 创建有向关系 | 暂未封装 | body: `from_uri`、`to_uri`/`uris`、`reason` |
-| `POST /api/v1/relations/unlink` | 删除有向关系 | 暂未封装 | body: `from_uri`、`to_uri`；幂等 |
 
 #### 6.2.4 Resources / Skills Import
 

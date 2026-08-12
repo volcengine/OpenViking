@@ -573,7 +573,7 @@ def test_classify_restore_path(vfs):
         ContextLevel.OVERVIEW,
     )
 
-    # .relations.json has no vector side-effect
+    # .relations.json is an obsolete sidecar with no vector side-effect.
     assert vfs._classify_restore_path("resources/proj/.relations.json", deleted=False) is None
     assert vfs._classify_restore_path("resources/proj/.relations.json", deleted=True) is None
 

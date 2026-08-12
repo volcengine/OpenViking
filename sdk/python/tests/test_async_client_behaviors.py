@@ -961,23 +961,6 @@ async def test_rm_uses_delete_request_with_timeout_when_provided():
     )
 
 
-@pytest.mark.asyncio
-async def test_link_normalizes_single_and_multiple_target_uris():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response = lambda _response: None
-
-    await client.link("/resources/from", ["/resources/a", "viking://resources/b"], reason="demo")
-
-    fake_http.post.assert_awaited_once_with(
-        "/api/v1/relations/link",
-        json={
-            "from_uri": "viking://resources/from",
-            "to_uris": ["viking://resources/a", "viking://resources/b"],
-            "reason": "demo",
-        },
-    )
 
 
 @pytest.mark.asyncio

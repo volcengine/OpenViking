@@ -112,7 +112,6 @@ Each directory follows a unified file structure:
 viking://resources/docs/auth/
 ├── .abstract.md          # L0: ~100 tokens
 ├── .overview.md          # L1: ~1k tokens
-├── .relations.json       # Related resources
 ├── oauth.md              # L2: Full content
 ├── jwt.md                # L2: Full content
 └── api-keys.md           # L2: Full content

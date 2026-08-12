@@ -219,8 +219,7 @@ Phase 2 — Memory extraction + write (persistent `session_commit` queue):
   1. Persist archive metadata and enqueue `SessionCommitMsg`
   2. Extract memories from archived messages (LLM)
   3. Write current message state
-  4. Write relations
-  5. Directly enqueue SemanticQueue
+  4. Directly enqueue SemanticQueue
 ```
 
 **Crash recovery analysis**:

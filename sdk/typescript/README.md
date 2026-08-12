@@ -20,7 +20,7 @@ const results = await client.search("deployment guide", {
 });
 ```
 
-The client follows the same HTTP API, identity headers, response envelope and error codes as `openviking-sdk` for Python and the Go SDK. It supports resources and skills, filesystem/content operations, relations, retrieval, sessions, OVPack files, snapshots, tasks, watches, observer status and tenant administration.
+The client follows the same HTTP API, identity headers, response envelope and error codes as `openviking-sdk` for Python and the Go SDK. It supports resources and skills, filesystem/content operations, retrieval, sessions, OVPack files, snapshots, tasks, watches, observer status and tenant administration.
 
 Existing local file paths are uploaded automatically, and local directories are zipped before upload. Other strings are sent to the server as URLs or server-side paths.
 

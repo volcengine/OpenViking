@@ -41,14 +41,15 @@ async def test_write_rejects_directory_uri(client_with_resource):
 
 async def test_write_rejects_derived_file_uri(client_with_resource):
     client, uri = client_with_resource
-    resp = await client.post(
-        "/api/v1/content/write",
-        json={"uri": f"{uri}/.overview.md", "content": "new content"},
-    )
-    assert resp.status_code == 400
-    body = resp.json()
-    assert body["status"] == "error"
-    assert body["error"]["code"] == "INVALID_ARGUMENT"
+    for filename in (".overview.md", ".relations.json"):
+        resp = await client.post(
+            "/api/v1/content/write",
+            json={"uri": f"{uri}/{filename}", "content": "new content"},
+        )
+        assert resp.status_code == 400
+        body = resp.json()
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "INVALID_ARGUMENT"
 
 
 async def test_write_replaces_existing_resource_file(client_with_resource):

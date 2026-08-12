@@ -127,7 +127,6 @@ while dir_queue:
 | `retrieval.score_propagation_alpha` | 1.0 | 分数传播混合中子节点自身分数的权重；`1.0` 表示仅使用子节点自身分数，忽略父节点分数 |
 | `MAX_CONVERGENCE_ROUNDS` | 3 | 收敛检测轮数 |
 | `GLOBAL_SEARCH_TOPK` | 10 | 全局搜索候选数 |
-| `MAX_RELATIONS` | 5 | 每资源最大关联数 |
 
 ## Rerank 策略
 
@@ -171,7 +170,6 @@ class MatchedContext:
     is_leaf: bool           # 是否文件
     abstract: str           # L0 摘要
     score: float            # 最终分数
-    relations: List[RelatedContext]  # 关联上下文
 ```
 
 ### FindResult

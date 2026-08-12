@@ -127,7 +127,6 @@ while dir_queue:
 | `retrieval.score_propagation_alpha` | 1.0 | Child-score weight in the propagation blend; `1.0` uses only the child's own score and ignores the parent score |
 | `MAX_CONVERGENCE_ROUNDS` | 3 | Convergence detection rounds |
 | `GLOBAL_SEARCH_TOPK` | 10 | Global search candidates |
-| `MAX_RELATIONS` | 5 | Max relations per resource |
 
 ## Rerank Strategy
 
@@ -171,7 +170,6 @@ class MatchedContext:
     is_leaf: bool           # Whether file
     abstract: str           # L0 abstract
     score: float            # Final score
-    relations: List[RelatedContext]  # Related contexts
 ```
 
 ### FindResult

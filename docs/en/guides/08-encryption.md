@@ -412,7 +412,7 @@ ov backup ./backups/before-encryption.ovpack
 ov restore ./backups/before-encryption.ovpack --on-conflict fail
 ```
 
-4. Verify resource, user, session, and index data before switching traffic. OVPack excludes runtime/internal state such as queues, uploads, locks, watches, and relation files; recreate or validate those separately.
+4. Verify resource, user, session, and index data before switching traffic. OVPack excludes runtime/internal state such as queues, uploads, locks, and watches; recreate or validate those separately.
 
 See [OVPack Import and Export](09-ovpack.md#full-backup-and-restore) for supported scopes and restore options.
 

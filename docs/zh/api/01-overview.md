@@ -411,7 +411,7 @@ JSON 输出 - 错误：
 | GET | `/api/v1/agent-evolution/experiences/trajectories` | 分页查询应用过指定 Experience 的 Trajectory |
 | GET | `/api/v1/agent-evolution/experiences/outcomes` | 聚合应用过指定 Experience 的 Trajectory 结果分布 |
 
-### [检索](06-retrieval.md)与[关系](13-relations.md)
+### [检索](06-retrieval.md)
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -419,10 +419,6 @@ JSON 输出 - 错误：
 | POST | `/api/v1/search/search` | 上下文感知搜索；`mode="context"` 返回可注入的组装上下文 |
 | POST | `/api/v1/search/grep` | 内容模式搜索 |
 | POST | `/api/v1/search/glob` | 文件模式匹配 |
-| GET | `/api/v1/relations` | 获取资源关系 |
-| POST | `/api/v1/relations/link` | 创建资源链接 |
-| DELETE | `/api/v1/relations/link` | 删除资源链接 |
-| POST | `/api/v1/relations/build_graph` | 构建关系图 |
 
 ### [Watch](15-watches.md)、[快照](11-snapshot.md)与 [OVPack](14-ovpack.md)
 
@@ -519,7 +515,7 @@ JSON 输出 - 错误：
 | 分组 | 适合查找的内容 |
 |------|----------------|
 | 核心数据 | 资源、内容、文件系统、技能、会话、记忆 |
-| 检索与关系 | 语义检索、代码检索、资源关系 |
+| 检索 | 语义检索、代码检索 |
 | 数据生命周期 | Watch、快照、OVPack |
 | 运维与观测 | 系统、任务、Observer、Metrics |
 | 身份与治理 | 管理员、隐私配置 |

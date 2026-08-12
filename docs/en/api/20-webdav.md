@@ -17,7 +17,7 @@ Phase 1 intentionally keeps the scope narrow:
 - Resources only. Memories, skills, sessions, and other namespaces are not exposed.
 - Text-first writes. `PUT` currently accepts UTF-8 text content only.
 - WebDAV subset only. `OPTIONS`, `PROPFIND`, `GET`, `HEAD`, `PUT`, `DELETE`, `MKCOL`, and `MOVE` are supported.
-- Semantic sidecars and internal system files stay internal. Derived or internal files such as `.abstract.md`, `.overview.md`, `.relations.json`, `.path.ovlock`, `.redirect.json`, and `.sync_log.json` are hidden from listings and cannot be accessed directly through WebDAV.
+- Semantic sidecars and internal system files stay internal. Derived or internal files such as `.abstract.md`, `.overview.md`, `.path.ovlock`, `.redirect.json`, and `.sync_log.json` are hidden from listings and cannot be accessed directly through WebDAV.
 
 Behavior notes:
 
