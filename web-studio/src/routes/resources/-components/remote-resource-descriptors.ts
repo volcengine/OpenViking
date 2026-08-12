@@ -10,6 +10,7 @@ type SelectableRemoteResourceKind = Exclude<RemoteResourceTypeSelection, 'auto'>
 
 type RemoteResourceDescriptor = {
   exampleKey: `sourcePicker.${SelectableRemoteResourceKind}Example`
+  hidden?: boolean
   icon: ComponentType<{ className?: string }>
   type: SelectableRemoteResourceKind
 }
@@ -35,8 +36,16 @@ export const REMOTE_RESOURCE_DESCRIPTORS: RemoteResourceDescriptor[] = [
     icon: FileDown,
     exampleKey: 'sourcePicker.remoteFileExample',
   },
-  { type: 'tos', icon: Cloud, exampleKey: 'sourcePicker.tosExample' },
+  {
+    type: 'tos',
+    hidden: true,
+    icon: Cloud,
+    exampleKey: 'sourcePicker.tosExample',
+  },
 ]
+
+export const VISIBLE_REMOTE_RESOURCE_DESCRIPTORS =
+  REMOTE_RESOURCE_DESCRIPTORS.filter(({ hidden }) => !hidden)
 
 const DESCRIPTOR_BY_TYPE = new Map(
   REMOTE_RESOURCE_DESCRIPTORS.map((descriptor) => [

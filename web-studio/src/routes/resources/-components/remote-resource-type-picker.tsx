@@ -5,7 +5,7 @@ import { getRemoteResourceCapabilities } from '../-lib/resource-source-strategy'
 import type { RemoteResourceTypeSelection } from '../-lib/resource-source'
 import {
   getRemoteResourceDescriptor,
-  REMOTE_RESOURCE_DESCRIPTORS,
+  VISIBLE_REMOTE_RESOURCE_DESCRIPTORS,
 } from './remote-resource-descriptors'
 
 type RemoteResourceTypePickerProps = {
@@ -40,9 +40,9 @@ export function RemoteResourceTypePicker({
       <div
         role="group"
         aria-label={t('sourcePicker.title')}
-        className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-5"
+        className="grid grid-cols-2 gap-1.5 sm:grid-cols-4"
       >
-        {REMOTE_RESOURCE_DESCRIPTORS.map(({ type, icon: Icon }) => {
+        {VISIBLE_REMOTE_RESOURCE_DESCRIPTORS.map(({ type, icon: Icon }) => {
           const selected = value === type
           const optionUnavailable =
             watchRequired && !getRemoteResourceCapabilities(type).watch

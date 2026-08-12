@@ -59,7 +59,7 @@ describe('AddResourceForm watch options', () => {
     expect(remoteUrlInput.getAttribute('placeholder')).toBe(
       'remoteUrl.placeholder',
     )
-    for (const type of ['feishu', 'git', 'webPage', 'remoteFile', 'tos']) {
+    for (const type of ['feishu', 'git', 'webPage', 'remoteFile']) {
       expect(
         screen.getByRole('button', {
           name: new RegExp(`sourcePicker.${type}`),
@@ -99,14 +99,9 @@ describe('AddResourceForm watch options', () => {
     )
     expect(screen.getByText('web.mode.title')).toBeTruthy()
 
-    fireEvent.click(screen.getByRole('button', { name: /sourcePicker.tos/ }))
-    expect(remoteUrlInput.getAttribute('placeholder')).toBe(
-      'sourcePicker.tosExample',
-    )
-    expect(screen.getByText('tosOptions.title')).toBeTruthy()
-    fireEvent.click(screen.getByText('configurationGuide.title'))
-    expect(screen.getByText('tosOptions.configuration.allow')).toBeTruthy()
-    expect(screen.queryByRole('link')).toBeNull()
+    expect(
+      screen.queryByRole('button', { name: /sourcePicker.tos/ }),
+    ).toBeNull()
     expect(
       screen.queryByRole('button', { name: /sourcePicker.connector/ }),
     ).toBeNull()
@@ -137,7 +132,7 @@ describe('AddResourceForm watch options', () => {
     )
   })
 
-  it('blocks non-watchable TOS imports in the watch creation flow', () => {
+  it('hides unfinished TOS imports in the watch creation flow', () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     })
@@ -151,32 +146,11 @@ describe('AddResourceForm watch options', () => {
       </QueryClientProvider>,
     )
 
-    const tosTypeButton = screen.getByRole('button', {
-      name: /sourcePicker.tos/,
-    })
-    expect(tosTypeButton.getAttribute('data-unavailable')).toBe('true')
-    expect(tosTypeButton.hasAttribute('disabled')).toBe(false)
     expect(screen.queryByRole('button', { name: 'mode.upload' })).toBeNull()
-    fireEvent.click(tosTypeButton)
-    expect(screen.getByText('tosOptions.title')).toBeTruthy()
-    expect(screen.getByText('tosOptions.configuration.allow')).toBeTruthy()
     expect(
-      screen
-        .getByRole('textbox', { name: 'remoteUrl' })
-        .hasAttribute('disabled'),
-    ).toBe(true)
-
-    expect(screen.getByRole('alert').textContent).toBe(
-      'watch.requiredUnsupported',
-    )
-    expect(
-      screen
-        .getByRole('switch', { name: 'watch.enabled' })
-        .getAttribute('aria-checked'),
-    ).toBe('false')
-    expect(
-      screen.queryByRole('spinbutton', { name: 'watch.interval' }),
+      screen.queryByRole('button', { name: /sourcePicker.tos/ }),
     ).toBeNull()
+    expect(screen.queryByText('tosOptions.title')).toBeNull()
     expect(
       screen
         .getByRole('button', { name: 'startProcessing' })
@@ -373,7 +347,7 @@ describe('AddResourceForm watch options', () => {
     })
   })
 
-  it('restores native upload capabilities after selecting TOS', () => {
+  it('restores native upload capabilities after detecting TOS', () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     })
@@ -383,7 +357,9 @@ describe('AddResourceForm watch options', () => {
       </QueryClientProvider>,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: /sourcePicker.tos/ }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'remoteUrl' }), {
+      target: { value: 'tos://bucket/docs' },
+    })
     expect(screen.getByText('destination.tosHint')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'mode.upload' }))
