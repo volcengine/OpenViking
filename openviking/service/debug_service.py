@@ -206,6 +206,53 @@ class ObserverService:
         )
 
     @property
+    def keyword(self) -> ComponentStatus:
+        """Get local keyword (FTS5) sidecar status."""
+        try:
+            from openviking.storage.viking_fs import get_viking_fs
+
+            viking_fs = get_viking_fs()
+            cfg = getattr(viking_fs, "keyword_config", None)
+            if cfg is None or not cfg.enabled:
+                return ComponentStatus(
+                    name="keyword",
+                    is_healthy=True,
+                    has_errors=False,
+                    status="Disabled (keyword.enabled=false)",
+                )
+            kfs = viking_fs._get_keyword_fs() if hasattr(viking_fs, "_get_keyword_fs") else None
+            if kfs is None:
+                return ComponentStatus(
+                    name="keyword",
+                    is_healthy=False,
+                    has_errors=True,
+                    status="Not initialized",
+                )
+            account = self._config.default_account if self._config else "default"
+            st = kfs.stats(account or "default")
+            lines = [
+                f"Enabled: true",
+                f"Ready: {st['ready']}",
+                f"Docs: {st['docs']}",
+                f"Tokenizer version: {st['tokenizer_version']}",
+                f"Last built: {st['last_built_at'] or 'never'}",
+                f"DB: {kfs.db_path(account or 'default')}",
+            ]
+            return ComponentStatus(
+                name="keyword",
+                is_healthy=bool(st["ready"]),
+                has_errors=not bool(st["ready"]),
+                status="\n".join(lines),
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            return ComponentStatus(
+                name="keyword",
+                is_healthy=False,
+                has_errors=True,
+                status=f"Error: {exc}",
+            )
+
+    @property
     def filesystem(self) -> ComponentStatus:
         """Get filesystem operation status."""
         observer = FilesystemObserver()
@@ -249,6 +296,7 @@ class ObserverService:
             "lock": self.lock,
             "retrieval": self.retrieval,
             "filesystem": self.filesystem,
+            "keyword": self.keyword,
         }
         errors = [f"{c.name} has errors" for c in components.values() if c.has_errors]
         return SystemStatus(

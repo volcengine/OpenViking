@@ -37,6 +37,7 @@ def init_queue_manager(
     max_concurrent_add_resource: int = 4,
     max_concurrent_session_commit: int = DEFAULT_MAX_CONCURRENT_SESSION_COMMIT,
     max_concurrent_external_task: int = 10,
+    max_concurrent_keyword: int = 4,
 ) -> "QueueManager":
     """Initialize QueueManager singleton.
 
@@ -61,6 +62,7 @@ def init_queue_manager(
         max_concurrent_add_resource=max_concurrent_add_resource,
         max_concurrent_session_commit=max_concurrent_session_commit,
         max_concurrent_external_task=max_concurrent_external_task,
+        max_concurrent_keyword=max_concurrent_keyword,
     )
     return _instance
 
@@ -89,6 +91,7 @@ class QueueManager:
     USER_DELETION = "UserDeletion"
     # Deferred work re-enqueues itself; throttle the next scheduling round.
     _REQUEUE_POLL_INTERVAL = 1.0
+    KEYWORD = "Keyword"
 
     def __init__(
         self,
@@ -101,6 +104,7 @@ class QueueManager:
         max_concurrent_add_resource: int = 4,
         max_concurrent_session_commit: int = DEFAULT_MAX_CONCURRENT_SESSION_COMMIT,
         max_concurrent_external_task: int = 10,
+        max_concurrent_keyword: int = 4,
     ):
         """Initialize QueueManager."""
         self._agfs = agfs
@@ -112,6 +116,7 @@ class QueueManager:
         self._max_concurrent_add_resource = max_concurrent_add_resource
         self._max_concurrent_session_commit = max_concurrent_session_commit
         self._max_concurrent_external_task = max_concurrent_external_task
+        self._max_concurrent_keyword = max_concurrent_keyword
         self._queues: Dict[str, NamedQueue] = {}
         self._started = False
         self._queue_threads: Dict[str, threading.Thread] = {}
@@ -143,6 +148,40 @@ class QueueManager:
         owners = self._task_work_index.rebuild(snapshots)
         tracker.attach_work_index(self._task_work_index)
         return await tracker.restore_work_tasks(owners)
+
+    def setup_keyword_queue(self, keyword_fs: Any, config: Any, start: bool = True) -> None:
+        """Setup the Keyword queue with its processor.
+
+        Args:
+            keyword_fs: KeywordFS sidecar instance.
+            config: KeywordConfig instance (or object with ``enabled``).
+            start: Whether to start the worker thread immediately.
+        """
+        from openviking.storage.keywordfs.keyword_processor import KeywordProcessor
+        from openviking.storage.keywordfs.keyword_queue import KeywordQueue
+
+        # Ensure the Keyword queue is created with the KeywordQueue class so
+        # serialized messages round-trip through KeywordMsg.
+        if self.KEYWORD not in self._queues:
+            self._queues[self.KEYWORD] = KeywordQueue(
+                self._agfs,
+                self.mount_point,
+                self.KEYWORD,
+                task_work_index=self._task_work_index,
+            )
+            if self._started:
+                self._start_queue_worker(self._queues[self.KEYWORD])
+
+        processor = KeywordProcessor(keyword_fs=keyword_fs, config=config)
+        self.get_queue(
+            self.KEYWORD,
+            dequeue_handler=processor,
+            allow_create=True,
+        )
+        logger.info("Keyword queue initialized with KeywordProcessor")
+
+        if start:
+            self.start()
 
     def setup_standard_queues(self, vector_store: Any, start: bool = True) -> None:
         """
@@ -212,6 +251,8 @@ class QueueManager:
             return self._max_concurrent_session_commit
         if queue_name == self.EXTERNAL_TASK:
             return self._max_concurrent_external_task
+        if queue_name == self.KEYWORD:
+            return self._max_concurrent_keyword
         return self._max_concurrent_semantic
 
     def _queue_worker_loop(
@@ -375,6 +416,15 @@ class QueueManager:
                 )
             elif name == self.SEMANTIC:
                 self._queues[name] = SemanticQueue(
+                    self._agfs,
+                    self.mount_point,
+                    name,
+                    enqueue_hook=enqueue_hook,
+                    dequeue_handler=dequeue_handler,
+                    task_work_index=self._task_work_index,
+                )
+            elif name == self.KEYWORD:
+                self._queues[name] = KeywordQueue(
                     self._agfs,
                     self.mount_point,
                     name,
