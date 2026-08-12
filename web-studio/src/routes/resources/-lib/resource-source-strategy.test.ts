@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest'
 import {
   buildRemoteSourceRequestOptions,
   getRemoteResourceCapabilities,
-  isRemoteSourceConfigurationValid,
 } from './resource-source-strategy'
 import type { RemoteSourceOptionState } from './resource-source-strategy'
 
@@ -45,7 +44,7 @@ describe('remote resource source strategy', () => {
     })
   })
 
-  it('builds and validates watched Feishu user credentials together', () => {
+  it('builds watched Feishu user credentials', () => {
     const state: RemoteSourceOptionState = {
       ...DEFAULT_STATE,
       feishu: {
@@ -56,7 +55,6 @@ describe('remote resource source strategy', () => {
       watchEnabled: true,
     }
 
-    expect(isRemoteSourceConfigurationValid('feishu', state)).toBe(true)
     expect(buildRemoteSourceRequestOptions('feishu', state)).toEqual({
       args: {
         feishu_access_token: 'u-token',
@@ -65,7 +63,7 @@ describe('remote resource source strategy', () => {
     })
   })
 
-  it('validates recursive web limits in the same strategy that builds them', () => {
+  it('forwards recursive web limits for server validation', () => {
     const state: RemoteSourceOptionState = {
       ...DEFAULT_STATE,
       web: {
@@ -75,7 +73,17 @@ describe('remote resource source strategy', () => {
       },
     }
 
-    expect(isRemoteSourceConfigurationValid('webPage', state)).toBe(false)
+    expect(buildRemoteSourceRequestOptions('webPage', state)).toEqual({
+      args: {
+        allow_external_links: false,
+        depth: -1,
+        exclude_paths: undefined,
+        include_paths: undefined,
+        max_pages: 50,
+        site: false,
+        skip_download_links: true,
+      },
+    })
   })
 
   it('builds site filters as top-level comma-delimited patterns', () => {
@@ -109,7 +117,6 @@ describe('remote resource source strategy', () => {
       },
     }
 
-    expect(isRemoteSourceConfigurationValid('git', state)).toBe(false)
     expect(buildRemoteSourceRequestOptions('git', state)).toEqual({ args: {} })
   })
 })

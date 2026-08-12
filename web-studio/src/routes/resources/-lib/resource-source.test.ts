@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import {
-  detectRemoteResourceKind,
-  matchesRemoteResourceTypeSelection,
-} from './resource-source'
+import { detectRemoteResourceKind } from './resource-source'
 
 describe('detectRemoteResourceKind', () => {
   it.each([
@@ -39,17 +36,5 @@ describe('detectRemoteResourceKind', () => {
         'https://dev.azure.com/org/project/_git/repo?path=/README.md',
       ),
     ).toBe('webPage')
-  })
-})
-
-describe('matchesRemoteResourceTypeSelection', () => {
-  it('matches native server routing categories', () => {
-    expect(matchesRemoteResourceTypeSelection('feishu', 'feishu')).toBe(true)
-    expect(matchesRemoteResourceTypeSelection('git', 'feishu')).toBe(false)
-    expect(matchesRemoteResourceTypeSelection('webFeed', 'webPage')).toBe(true)
-    expect(matchesRemoteResourceTypeSelection('webPage', 'remoteFile')).toBe(
-      true,
-    )
-    expect(matchesRemoteResourceTypeSelection('webPage', 'git')).toBe(true)
   })
 })

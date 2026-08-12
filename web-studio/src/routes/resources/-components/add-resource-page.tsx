@@ -25,19 +25,14 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '#/components/ui/tooltip'
-import { parsePositiveMinutes } from '#/lib/watch-interval'
 import { useResourceUpload } from '../-hooks/use-resource-upload'
 import type { RemoteStartResult } from '../-hooks/use-resource-upload'
-import {
-  detectRemoteResourceKind,
-  matchesRemoteResourceTypeSelection,
-} from '../-lib/resource-source'
+import { detectRemoteResourceKind } from '../-lib/resource-source'
 import type { RemoteResourceTypeSelection } from '../-lib/resource-source'
 import { parseResourceTags } from '../-lib/resource-option-values'
 import {
   buildRemoteSourceRequestOptions,
   getRemoteResourceCapabilities,
-  isRemoteSourceConfigurationValid,
 } from '../-lib/resource-source-strategy'
 import type { RemoteSourceOptionState } from '../-lib/resource-source-strategy'
 import { DirectoryPickerDialog } from './directory-picker-dialog'
@@ -154,10 +149,6 @@ export function AddResourceForm({
     remoteResourceType === 'auto'
       ? detectedRemoteResourceKind
       : remoteResourceType
-  const remoteResourceTypeMatches = matchesRemoteResourceTypeSelection(
-    detectedRemoteResourceKind,
-    remoteResourceType,
-  )
   const sourceCapabilities = getRemoteResourceCapabilities(
     activeMode === 'remote' ? remoteResourceKind : 'unknown',
   )
@@ -218,7 +209,7 @@ export function AddResourceForm({
   )
 
   const buildCommonBody = () => {
-    const parsedTags = parseResourceTags(additionalOptions.tags)
+    const tags = parseResourceTags(additionalOptions.tags)
     const timeout = Number(additionalOptions.timeout)
     const body: AddResourceCommonBody = {
       [effectiveDestinationMode]: targetUri.trim() || undefined,
@@ -241,9 +232,7 @@ export function AddResourceForm({
       processing_mode: sourceCapabilities.nativeOptions
         ? additionalOptions.processingMode
         : 'semantic_and_vectors',
-      ...(parsedTags.tags.length
-        ? { tags: parsedTags.tags, tag_mode: additionalOptions.tagMode }
-        : {}),
+      ...(tags.length ? { tags, tag_mode: additionalOptions.tagMode } : {}),
       ...(mode === 'remote' &&
       sourceCapabilities.nativeOptions &&
       additionalOptions.sourceName.trim()
@@ -262,8 +251,7 @@ export function AddResourceForm({
     }
     if (mode === 'remote') {
       if (effectiveWatchEnabled) {
-        const minutes = parsePositiveMinutes(watchInterval)
-        if (minutes !== null) body.watch_interval = minutes
+        body.watch_interval = Number(watchInterval)
       }
       if (ignoreDirs.trim() && sourceCapabilities.nativeOptions) {
         body.ignore_dirs = ignoreDirs.trim()
@@ -330,20 +318,8 @@ export function AddResourceForm({
     setDestinationMode('parent')
   }
 
-  const hasValidWatchInterval =
-    !effectiveWatchEnabled || parsePositiveMinutes(watchInterval) !== null
-  const hasValidSourceOptions = isRemoteSourceConfigurationValid(
-    remoteResourceKind,
-    sourceOptionState,
-  )
-  const parsedTags = parseResourceTags(additionalOptions.tags)
-  const hasValidTimeout =
-    !sourceCapabilities.nativeOptions ||
-    !additionalOptions.wait ||
-    !additionalOptions.timeout.trim() ||
-    (Number.isFinite(Number(additionalOptions.timeout)) &&
-      Number(additionalOptions.timeout) > 0)
-  const hasValidCommonOptions = parsedTags.valid && hasValidTimeout
+  const hasWatchInterval =
+    !effectiveWatchEnabled || Boolean(watchInterval.trim())
   const hasValidDestination =
     !sourceCapabilities.exactDestination ||
     (effectiveDestinationMode === 'to' && !!targetUri.trim())
@@ -352,17 +328,13 @@ export function AddResourceForm({
     (activeMode === 'remote' &&
       sourceCapabilities.watch &&
       effectiveWatchEnabled &&
-      hasValidWatchInterval)
+      hasWatchInterval)
   const canSubmit =
-    hasValidCommonOptions &&
     hasValidDestination &&
     watchRequirementMet &&
     (activeMode === 'upload'
       ? selectedFiles.length > 0
-      : remoteResourceTypeMatches &&
-        !!remoteUrl.trim() &&
-        hasValidWatchInterval &&
-        hasValidSourceOptions)
+      : !!remoteUrl.trim() && hasWatchInterval)
 
   return (
     <div className="flex flex-col gap-6">
@@ -411,7 +383,6 @@ export function AddResourceForm({
             onWatchIntervalChange={setWatchInterval}
             resourceKind={remoteResourceKind}
             resourceType={remoteResourceType}
-            resourceTypeMatches={remoteResourceTypeMatches}
             t={t}
             url={displayRemoteUrl}
             watchEnabled={effectiveWatchEnabled}
@@ -579,7 +550,6 @@ export function AddResourceForm({
                 nativeOptions={sourceCapabilities.nativeOptions}
                 onChange={setAdditionalOptions}
                 t={t}
-                tagsValid={parsedTags.valid}
                 value={additionalOptions}
               />
 

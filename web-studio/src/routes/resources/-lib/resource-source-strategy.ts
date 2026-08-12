@@ -5,9 +5,8 @@ import type {
 } from '../-components/git-resource-options'
 import type { WebResourceOptionsValue } from '../-components/web-resource-options'
 import {
-  isOptionalIntegerValid,
   parseDelimitedValues,
-  parseOptionalInteger,
+  parseOptionalNumber,
 } from './resource-option-values'
 import type { RemoteResourceKind } from './resource-source'
 import type { AddResourceCommonBody } from '@ov-server/api/v1/resources'
@@ -26,7 +25,6 @@ type RemoteSourceRequestOptions = Pick<
 type RemoteSourceStrategy = {
   build: (state: RemoteSourceOptionState) => RemoteSourceRequestOptions
   capabilities: RemoteResourceCapabilities
-  validate: (state: RemoteSourceOptionState) => boolean
 }
 
 const DEFAULT_CAPABILITIES: RemoteResourceCapabilities = {
@@ -62,7 +60,6 @@ export type RemoteSourceOptionState = {
 const DEFAULT_STRATEGY: RemoteSourceStrategy = {
   build: () => ({}),
   capabilities: DEFAULT_CAPABILITIES,
-  validate: () => true,
 }
 
 const FEISHU_STRATEGY: RemoteSourceStrategy = {
@@ -78,10 +75,6 @@ const FEISHU_STRATEGY: RemoteSourceStrategy = {
         }
       : {},
   capabilities: DEFAULT_CAPABILITIES,
-  validate: (state) =>
-    state.feishu.authMode === 'app' ||
-    (!!state.feishu.accessToken.trim() &&
-      (!state.watchEnabled || !!state.feishu.refreshToken.trim())),
 }
 
 const GIT_STRATEGY: RemoteSourceStrategy = {
@@ -101,9 +94,6 @@ const GIT_STRATEGY: RemoteSourceStrategy = {
     },
   }),
   capabilities: DEFAULT_CAPABILITIES,
-  validate: (state) =>
-    state.git.authMode === 'public' ||
-    (state.git.supportsHttpAuth && !!state.git.token.trim()),
 }
 
 const WEB_STRATEGY: RemoteSourceStrategy = {
@@ -118,8 +108,8 @@ const WEB_STRATEGY: RemoteSourceStrategy = {
         ...(recursive
           ? {
               site: false,
-              depth: parseOptionalInteger(state.web.depth, 0),
-              max_pages: parseOptionalInteger(state.web.maxPages, 1),
+              depth: parseOptionalNumber(state.web.depth),
+              max_pages: parseOptionalNumber(state.web.maxPages),
               include_paths: includePaths.length ? includePaths : undefined,
               exclude_paths: excludePaths.length ? excludePaths : undefined,
               allow_external_links: state.web.allowExternalLinks,
@@ -129,7 +119,7 @@ const WEB_STRATEGY: RemoteSourceStrategy = {
         ...(site
           ? {
               site: true,
-              max_pages: parseOptionalInteger(state.web.maxPages, 1),
+              max_pages: parseOptionalNumber(state.web.maxPages),
             }
           : {}),
       },
@@ -142,17 +132,11 @@ const WEB_STRATEGY: RemoteSourceStrategy = {
     }
   },
   capabilities: DEFAULT_CAPABILITIES,
-  validate: (state) =>
-    (state.web.mode !== 'recursive' ||
-      isOptionalIntegerValid(state.web.depth, 0)) &&
-    (!['recursive', 'site'].includes(state.web.mode) ||
-      isOptionalIntegerValid(state.web.maxPages, 1)),
 }
 
 const TOS_STRATEGY: RemoteSourceStrategy = {
   build: () => ({ add_type: 'tos' }),
   capabilities: TOS_CAPABILITIES,
-  validate: () => true,
 }
 
 const REMOTE_SOURCE_STRATEGIES: Record<
@@ -183,11 +167,4 @@ export function buildRemoteSourceRequestOptions(
   state: RemoteSourceOptionState,
 ): RemoteSourceRequestOptions {
   return getRemoteSourceStrategy(kind).build(state)
-}
-
-export function isRemoteSourceConfigurationValid(
-  kind: RemoteResourceKind,
-  state: RemoteSourceOptionState,
-): boolean {
-  return getRemoteSourceStrategy(kind).validate(state)
 }

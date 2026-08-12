@@ -161,8 +161,6 @@ const resources = {
     sourcePicker: {
       title: 'Supported Remote Resource Types',
       hint: 'Every listed type has a server-side import path. Choose one to configure its parameters, or keep auto detection.',
-      mismatch:
-        'This address does not match the selected type. Change it or use auto detection.',
       feishu: 'Feishu / Lark',
       feishuHint: 'Documents, wiki pages, spreadsheets, and bitables',
       feishuExample: 'https://example.feishu.cn/docx/...',
@@ -303,7 +301,6 @@ const resources = {
     'sourceName.placeholder': 'Optional override for the detected source name',
     tags: 'Retrieval Tags',
     'tags.placeholder': 'team=docs, env=production',
-    'tags.invalid': 'Tags must use comma-separated key=value entries.',
     tagMode: 'Tag Write Mode',
     'tagMode.replace': 'Replace',
     'tagMode.append': 'Append',

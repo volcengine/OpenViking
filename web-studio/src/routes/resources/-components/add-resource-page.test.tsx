@@ -112,7 +112,7 @@ describe('AddResourceForm watch options', () => {
     ).toBeNull()
   })
 
-  it('rejects a source address that conflicts with the selected server route', () => {
+  it('lets the server validate an address that differs from the selected type', () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     })
@@ -127,12 +127,14 @@ describe('AddResourceForm watch options', () => {
       target: { value: 'https://github.com/volcengine/OpenViking' },
     })
 
-    expect(screen.getByRole('alert').textContent).toBe('sourcePicker.mismatch')
-    expect(
-      screen
-        .getByRole('button', { name: 'startProcessing' })
-        .hasAttribute('disabled'),
-    ).toBe(true)
+    const submit = screen.getByRole('button', { name: 'startProcessing' })
+    expect(submit.hasAttribute('disabled')).toBe(false)
+    fireEvent.click(submit)
+    expect(uploadMocks.startRemote).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: 'https://github.com/volcengine/OpenViking',
+      }),
+    )
   })
 
   it('blocks non-watchable TOS imports in the watch creation flow', () => {
@@ -244,7 +246,7 @@ describe('AddResourceForm watch options', () => {
     })
   })
 
-  it('submits Feishu user credentials and requires a refresh token for watches', () => {
+  it('submits Feishu user credentials and defers token validation', () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     })
@@ -263,18 +265,14 @@ describe('AddResourceForm watch options', () => {
     })
 
     const submit = screen.getByRole('button', { name: 'startProcessing' })
-    expect(submit.hasAttribute('disabled')).toBe(true)
-
-    fireEvent.change(screen.getByLabelText('feishu.refreshToken'), {
-      target: { value: 'r-token' },
-    })
+    expect(submit.hasAttribute('disabled')).toBe(false)
     fireEvent.click(submit)
 
     expect(uploadMocks.startRemote).toHaveBeenCalledWith({
       commonBody: expect.objectContaining({
         args: {
           feishu_access_token: 'u-token',
-          feishu_refresh_token: 'r-token',
+          feishu_refresh_token: '',
         },
         watch_interval: 1440,
       }),
@@ -440,6 +438,49 @@ describe('AddResourceForm watch options', () => {
           site: false,
           skip_download_links: true,
         },
+      }),
+      onAccepted: undefined,
+      onCompleted: undefined,
+      onFailed: undefined,
+      url: 'https://example.com/docs',
+    })
+  })
+
+  it('forwards server-owned option rules instead of blocking submission', () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AddResourceForm initialMode="remote" />
+      </QueryClientProvider>,
+    )
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'remoteUrl' }), {
+      target: { value: 'https://example.com/docs' },
+    })
+    fireEvent.click(screen.getByRole('radio', { name: /web.mode.recursive/ }))
+    fireEvent.change(screen.getByLabelText('web.depth'), {
+      target: { value: '-1' },
+    })
+    fireEvent.click(screen.getByText('advancedOptions'))
+    fireEvent.change(screen.getByLabelText('tags'), {
+      target: { value: 'server decides this format' },
+    })
+    fireEvent.click(screen.getByRole('checkbox', { name: 'waitForProcessing' }))
+    fireEvent.change(screen.getByLabelText('timeout'), {
+      target: { value: '-1' },
+    })
+
+    const submit = screen.getByRole('button', { name: 'startProcessing' })
+    expect(submit.hasAttribute('disabled')).toBe(false)
+    fireEvent.click(submit)
+
+    expect(uploadMocks.startRemote).toHaveBeenCalledWith({
+      commonBody: expect.objectContaining({
+        args: expect.objectContaining({ depth: -1 }),
+        tags: ['server decides this format'],
+        timeout: -1,
       }),
       onAccepted: undefined,
       onCompleted: undefined,

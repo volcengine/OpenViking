@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  isOptionalIntegerValid,
   parseDelimitedValues,
-  parseOptionalInteger,
+  parseOptionalNumber,
   parseResourceTags,
 } from './resource-option-values'
 
@@ -16,27 +15,21 @@ describe('resource option values', () => {
     ])
   })
 
-  it('accepts only optional bounded integers', () => {
-    expect(parseOptionalInteger('2', 0)).toBe(2)
-    expect(parseOptionalInteger('', 1)).toBeUndefined()
-    expect(isOptionalIntegerValid('-1', 0)).toBe(false)
-    expect(isOptionalIntegerValid('1.5', 0)).toBe(false)
+  it('converts optional numeric values without applying server rules', () => {
+    expect(parseOptionalNumber('2')).toBe(2)
+    expect(parseOptionalNumber('-1')).toBe(-1)
+    expect(parseOptionalNumber('1.5')).toBe(1.5)
+    expect(parseOptionalNumber('')).toBeUndefined()
   })
 
-  it('validates resource tags as key=value pairs', () => {
-    expect(parseResourceTags('team=docs, env=test')).toEqual({
-      tags: ['team=docs', 'env=test'],
-      valid: true,
-    })
-    expect(parseResourceTags('topic=machine learning')).toEqual({
-      tags: ['topic=machine learning'],
-      valid: true,
-    })
-    expect(parseResourceTags('team=docs, invalid')).toMatchObject({
-      valid: false,
-    })
-    expect(parseResourceTags('team=docs=archive')).toMatchObject({
-      valid: false,
-    })
+  it('normalizes resource tags without duplicating server validation', () => {
+    expect(parseResourceTags('team=docs, env=test')).toEqual([
+      'team=docs',
+      'env=test',
+    ])
+    expect(parseResourceTags('team=docs, invalid')).toEqual([
+      'team=docs',
+      'invalid',
+    ])
   })
 })

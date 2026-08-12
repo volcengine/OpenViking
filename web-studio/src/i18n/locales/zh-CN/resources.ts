@@ -149,7 +149,6 @@ const resources = {
     sourcePicker: {
       title: '支持的远程资源类型',
       hint: '以下类型均有服务端处理链路；选择后可填写对应参数，也可以保持自动识别。',
-      mismatch: '当前地址与所选类型不匹配，请更换地址或使用自动识别。',
       feishu: '飞书 / Lark',
       feishuHint: '文档、知识库、电子表格和多维表格',
       feishuExample: 'https://example.feishu.cn/docx/...',
@@ -283,7 +282,6 @@ const resources = {
     'sourceName.placeholder': '可选，覆盖自动识别的来源名称',
     tags: '检索标签',
     'tags.placeholder': 'team=docs, env=production',
-    'tags.invalid': '标签必须使用 key=value 格式，并以逗号分隔。',
     tagMode: '标签写入方式',
     'tagMode.replace': '替换',
     'tagMode.append': '追加',

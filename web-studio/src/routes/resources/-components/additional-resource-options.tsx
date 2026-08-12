@@ -33,7 +33,6 @@ type AdditionalResourceOptionsProps = {
   isRemote: boolean
   onChange: (value: AdditionalResourceOptionsValue) => void
   t: TFunction<'addResource'>
-  tagsValid: boolean
   value: AdditionalResourceOptionsValue
   nativeOptions?: boolean
 }
@@ -43,7 +42,6 @@ export function AdditionalResourceOptions({
   isRemote,
   onChange,
   t,
-  tagsValid,
   value,
   nativeOptions = true,
 }: AdditionalResourceOptionsProps) {
@@ -195,7 +193,6 @@ export function AdditionalResourceOptions({
           <Label htmlFor="add-resource-tags">{t('tags')}</Label>
           <Input
             id="add-resource-tags"
-            aria-invalid={!tagsValid}
             value={value.tags}
             disabled={disabled}
             onChange={(event) =>
@@ -203,11 +200,6 @@ export function AdditionalResourceOptions({
             }
             placeholder={t('tags.placeholder')}
           />
-          {!tagsValid ? (
-            <p className="text-xs text-destructive" role="alert">
-              {t('tags.invalid')}
-            </p>
-          ) : null}
         </div>
         <div className="grid gap-2">
           <Label>{t('tagMode')}</Label>

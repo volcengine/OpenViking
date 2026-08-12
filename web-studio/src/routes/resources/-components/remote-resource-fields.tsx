@@ -21,7 +21,6 @@ type RemoteResourceFieldsProps = {
   onWatchIntervalChange: (value: string) => void
   resourceKind: RemoteResourceKind
   resourceType: RemoteResourceTypeSelection
-  resourceTypeMatches: boolean
   t: TFunction<'addResource'>
   url: string
   watchEnabled: boolean
@@ -47,7 +46,6 @@ export function RemoteResourceFields({
   onWatchIntervalChange,
   resourceKind,
   resourceType,
-  resourceTypeMatches,
   t,
   url,
   watchEnabled,
@@ -86,11 +84,6 @@ export function RemoteResourceFields({
             ? t('remoteUrl.hint')
             : t(`sourceKind.${resourceKind}Hint`)}
         </p>
-        {!resourceTypeMatches ? (
-          <p className="text-xs text-destructive" role="alert">
-            {t('sourcePicker.mismatch')}
-          </p>
-        ) : null}
       </div>
 
       {children}

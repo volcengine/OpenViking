@@ -137,23 +137,3 @@ export function detectRemoteResourceKind(
   if (['http:', 'https:'].includes(url.protocol)) return 'webPage'
   return 'unknown'
 }
-
-export function matchesRemoteResourceTypeSelection(
-  detected: RemoteResourceKind,
-  selected: RemoteResourceTypeSelection,
-): boolean {
-  if (selected === 'auto' || detected === 'unknown') return true
-  if (selected === 'webPage') {
-    return detected === 'webPage' || detected === 'webFeed'
-  }
-  if (selected === 'remoteFile') {
-    return detected === 'remoteFile' || detected === 'webPage'
-  }
-  if (selected === 'git') {
-    // The server can allow self-hosted code domains that Studio cannot know.
-    // Treat an otherwise generic HTTP(S) page as ambiguous and let an explicit
-    // Git selection defer the final routing decision to the server.
-    return detected === 'git' || detected === 'webPage'
-  }
-  return detected === selected
-}
