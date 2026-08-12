@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-06-02",
+  "updatedAt": "2026-08-12",
   "cdnBaseUrl": "https://docs.openviking.net/",
   "accessMethods": [
     {
@@ -95,6 +95,26 @@
       "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/OpenCode.png",
       "summary": "Provides one unified OpenCode plugin for repository context, memory tools, session sync, and automatic recall.",
       "detailPath": "https://docs.openviking.net/agents/en/opencode.md"
+    },
+    {
+      "id": "deerflow",
+      "name": "DeerFlow",
+      "tags": ["MemoryManager", "MCP"],
+      "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/deer.png",
+      "summary": "DeerFlow can connect through MemoryManager and MCP to automatically write, recall, inject, and manage memory. Enable both methods for the full memory experience.",
+      "detailPath": "https://docs.openviking.net/agents/en/deerflow-memory-manager.md",
+      "tabs": [
+        {
+          "id": "memory-manager",
+          "label": "MemoryManager Integration",
+          "detailPath": "https://docs.openviking.net/agents/en/deerflow-memory-manager.md"
+        },
+        {
+          "id": "mcp",
+          "label": "MCP Integration",
+          "detailPath": "https://docs.openviking.net/agents/en/deerflow-mcp.md"
+        }
+      ]
     }
   ]
 }
