@@ -186,6 +186,7 @@ async def test_legacy_doc_parser_uses_anydoc_for_real_doc(tmp_path, monkeypatch)
     parser = legacy_doc.LegacyDocParser(anydoc_config=AnydocConfig())
     seen = _stub_markdown_parse(parser)
     source = tmp_path / "legacy.doc"
+    import_root = tmp_path / "import"
     source.write_bytes(b"\xd0\xcf\x11\xe0placeholder")
     monkeypatch.setattr(
         anydoc_converter.AnyDocConverter,
@@ -196,10 +197,10 @@ async def test_legacy_doc_parser_uses_anydoc_for_real_doc(tmp_path, monkeypatch)
         ),
     )
 
-    result = await parser.parse(source)
+    result = await parser.parse(source, allowed_media_dirs=[import_root])
 
     assert seen["content"] == "# converted doc"
-    assert seen["kwargs"]["allowed_media_dirs"] == [storage.media_dir]
+    assert seen["kwargs"]["allowed_media_dirs"] == [import_root, storage.media_dir]
     assert result.source_format == "doc"
     assert result.parser_name == "LegacyDocParser"
 
@@ -228,6 +229,7 @@ async def test_powerpoint_parser_uses_anydoc_and_allows_media_dir(tmp_path, monk
     parser = powerpoint.PowerPointParser(anydoc_config=AnydocConfig())
     seen = _stub_markdown_parse(parser)
     source = tmp_path / "slides.pps"
+    import_root = tmp_path / "import"
     source.write_bytes(b"placeholder")
     monkeypatch.setattr(
         anydoc_converter.AnyDocConverter,
@@ -238,7 +240,15 @@ async def test_powerpoint_parser_uses_anydoc_and_allows_media_dir(tmp_path, monk
         ),
     )
 
-    result = await parser.parse(source)
+    result = await parser.parse(
+        source,
+        source_name="Slides.pps",
+        enable_link_rewrite=True,
+        link_rewrite_root=str(import_root),
+        allowed_media_dirs=[import_root],
+        flatten_single_output=True,
+        split_content=False,
+    )
 
     assert parser.supported_extensions == [
         ".pptx",
@@ -251,7 +261,12 @@ async def test_powerpoint_parser_uses_anydoc_and_allows_media_dir(tmp_path, monk
         ".odp",
     ]
     assert seen["content"] == "# converted slides\n\n## Notes\n\nPresenter note"
-    assert seen["kwargs"]["allowed_media_dirs"] == [storage.media_dir]
+    assert seen["kwargs"]["enable_link_rewrite"] is True
+    assert seen["kwargs"]["link_rewrite_root"] == str(import_root)
+    assert seen["kwargs"]["allowed_media_dirs"] == [import_root, storage.media_dir]
+    assert seen["kwargs"]["flatten_single_output"] is True
+    assert seen["kwargs"]["split_content"] is False
+    assert seen["kwargs"]["base_dir"] == source.parent
     assert result.source_format == "pps"
     assert result.parser_name == "PowerPointParser"
 
@@ -335,6 +350,7 @@ async def test_epub_parser_uses_anydoc_and_allows_media_dir(tmp_path, monkeypatc
     parser = epub.EPubParser(anydoc_config=AnydocConfig())
     seen = _stub_markdown_parse(parser)
     source = tmp_path / "book.epub"
+    import_root = tmp_path / "import"
     source.write_bytes(b"placeholder")
     monkeypatch.setattr(
         anydoc_converter.AnyDocConverter,
@@ -345,10 +361,23 @@ async def test_epub_parser_uses_anydoc_and_allows_media_dir(tmp_path, monkeypatc
         ),
     )
 
-    result = await parser.parse(source)
+    result = await parser.parse(
+        source,
+        source_name="Book.epub",
+        enable_link_rewrite=True,
+        link_rewrite_root=str(import_root),
+        allowed_media_dirs=[import_root],
+        flatten_single_output=True,
+        split_content=False,
+    )
 
     assert seen["content"] == "# converted book"
-    assert seen["kwargs"]["allowed_media_dirs"] == [storage.media_dir]
+    assert seen["kwargs"]["enable_link_rewrite"] is True
+    assert seen["kwargs"]["link_rewrite_root"] == str(import_root)
+    assert seen["kwargs"]["allowed_media_dirs"] == [import_root, storage.media_dir]
+    assert seen["kwargs"]["flatten_single_output"] is True
+    assert seen["kwargs"]["split_content"] is False
+    assert seen["kwargs"]["base_dir"] == source.parent
     assert result.source_format == "epub"
     assert result.parser_name == "EPubParser"
 

@@ -101,7 +101,12 @@ class LegacyDocParser(BaseParser):
                     )
                     text = conversion.markdown
                     source_format = conversion.source_format or source_format
-                    markdown_kwargs["allowed_media_dirs"] = [storage.media_dir]
+                    allowed_media_dirs = list(
+                        markdown_kwargs.get("allowed_media_dirs") or []
+                    )
+                    if storage.media_dir not in allowed_media_dirs:
+                        allowed_media_dirs.append(storage.media_dir)
+                    markdown_kwargs["allowed_media_dirs"] = allowed_media_dirs
                 except Exception:
                     if not self.anydoc_config.fallback_to_legacy:
                         raise

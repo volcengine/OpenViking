@@ -37,14 +37,24 @@ def _load_document(path: Path, format_hint: str | None = None):
     data = path.read_bytes()
     detected = anydoc.format_from_bytes(data)
     detected_name = _format_name(detected)
-    if detected_name == "pdf":
+    source_format = (
+        _format_name(format_hint)
+        or detected_name
+        or _format_name(anydoc.format_from_extension(path.suffix))
+    )
+    if source_format == "pdf":
         raise ValueError("AnyDocConverter does not support PDF; use PDFParser")
 
-    document = anydoc.to_document(data, format_hint) if format_hint else anydoc.to_document(data)
-    source_format = (
-        _format_name(format_hint) or detected_name or path.suffix.lstrip(".").lower() or "unknown"
-    )
-    return source_format, document
+    try:
+        document = (
+            anydoc.to_document(data, source_format)
+            if source_format
+            else anydoc.to_document(data)
+        )
+    except anydoc.ConvertError as exc:
+        format_context = f" as {source_format}" if source_format else ""
+        raise type(exc)(f"Failed to convert {path}{format_context}: {exc}") from exc
+    return source_format or path.suffix.lstrip(".").lower() or "unknown", document
 
 
 def _kind(value: Any) -> str:
@@ -207,15 +217,25 @@ class _SerializeCtx:
             return alt
 
         extension = self._image_extension(asset, media_type)
-        self.images_saved += 1
-        filename = f"image{self.images_saved}"
-        saved_path = self.storage.save_image(
-            self.resource_name,
-            bytes(image_data),
-            filename=filename,
-            extension=extension,
-        )
-        relative = Path(saved_path).relative_to(Path(self.storage.media_dir)).as_posix()
+        image_number = self.images_saved + 1
+        filename = f"image{image_number}"
+        try:
+            saved_path = self.storage.save_image(
+                self.resource_name,
+                bytes(image_data),
+                filename=filename,
+                extension=extension,
+            )
+            relative = Path(saved_path).relative_to(Path(self.storage.media_dir)).as_posix()
+        except Exception:
+            logger.warning(
+                "Failed to save anydoc image asset %s from %s",
+                reference,
+                self.resource_name,
+                exc_info=True,
+            )
+            return alt
+        self.images_saved = image_number
         return f"![{alt or filename}]({relative})"
 
     def _serialize_list(self, block: Any) -> str:

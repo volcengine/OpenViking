@@ -189,6 +189,10 @@ class AnyDocConverter:
 | `.xlsx` `.xls` `.xlsm` `.xlsb` `.ods` `.csv` | `ExcelParser` |
 | `.epub` | `EPubParser` |
 
+`.xlsb` 保留支持：anydoc 官方支持列表包含该扩展名，并将
+`format_from_extension(".xlsb")` 映射到共享的 `"xlsx"` 解析器；已用真实二进制
+XLSB 样本验证 `to_document` 可成功转换。
+
 **`max_rows_per_sheet`（拍板）**：anydoc 路径下该配置仍保留，但首 PR **不保证**与 openpyxl 路径逐行等价裁剪。行为定为：默认全量转换；若 `max_rows_per_sheet > 0`，在转换后的 Markdown 上按「每个 sheet 二级标题下的第一个表格」做行截断（表头保留 + 最多 N 行数据），并在截断处追加一行说明注释。做不到稳定识别 sheet 边界时，打 warning 并跳过截断（不静默丢数据）。
 
 ---
@@ -210,6 +214,8 @@ parsers:
 ```
 
 配置类放在 `parser_config.py`，缺省值保证未配置时行为为「启用 anydoc、不 fallback」。
+总开关字段是 `parsers.anydoc.enable`；继承字段
+`parsers.anydoc.enabled` 不参与 anydoc 转换开关判断。
 
 ---
 

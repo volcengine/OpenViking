@@ -75,12 +75,66 @@ def test_converter_skips_non_image_assets(tmp_path, monkeypatch):
     assert storage.saved == []
 
 
+def test_converter_continues_when_image_save_fails(tmp_path, monkeypatch):
+    class FailingStorage(FakeStorage):
+        def save_image(self, *args, **kwargs):
+            raise OSError("disk full")
+
+    monkeypatch.setattr(
+        "openviking.parse.parsers.anydoc_converter._load_document",
+        lambda path, format_hint=None: ("docx", _doc_with_image()),
+    )
+
+    result = AnyDocConverter().convert(
+        tmp_path / "x.docx",
+        resource_name="Demo",
+        storage=FailingStorage(tmp_path),
+    )
+
+    assert result.images_saved == 0
+    assert result.markdown.strip() == "chart"
+
+
 def test_converter_rejects_pdf(tmp_path):
     pdf = tmp_path / "a.pdf"
     pdf.write_bytes(b"%PDF-1.4")
     storage = FakeStorage(tmp_path)
     with pytest.raises(ValueError, match="PDF"):
         AnyDocConverter().convert(pdf, resource_name="Demo", storage=storage)
+
+
+def test_converter_loads_signatureless_csv_from_extension(tmp_path):
+    pytest.importorskip("anydoc")
+    source = tmp_path / "minimal.csv"
+    source.write_text("name,value\nalpha,1\n", encoding="utf-8")
+
+    result = AnyDocConverter().convert(
+        source,
+        resource_name="minimal",
+        storage=FakeStorage(tmp_path / "media"),
+    )
+
+    assert result.source_format == "csv"
+    assert "alpha" in result.markdown
+
+
+def test_anydoc_maps_xlsb_to_xlsx_parser():
+    anydoc = pytest.importorskip("anydoc")
+
+    assert anydoc.format_from_extension(".xlsb") == "xlsx"
+
+
+def test_converter_adds_path_to_anydoc_conversion_error(tmp_path):
+    anydoc = pytest.importorskip("anydoc")
+    source = tmp_path / "broken.docx"
+    source.write_bytes(b"not a document")
+
+    with pytest.raises(anydoc.ConvertError, match="broken\\.docx"):
+        AnyDocConverter().convert(
+            source,
+            resource_name="broken",
+            storage=FakeStorage(tmp_path / "media"),
+        )
 
 
 def test_converter_saves_table_cell_image_once(tmp_path, monkeypatch):

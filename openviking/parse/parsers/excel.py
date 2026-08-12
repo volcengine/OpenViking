@@ -217,6 +217,8 @@ class ExcelParser(BaseParser):
 
     @property
     def supported_extensions(self) -> List[str]:
+        # anydoc intentionally maps .xlsb to its shared "xlsx" parser. This is
+        # documented upstream and verified against a real binary XLSB workbook.
         return [".xlsx", ".xls", ".xlsm", ".xlsb", ".ods", ".csv"]
 
     async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:

@@ -148,15 +148,19 @@ class EPubParser(BaseParser):
             else:
                 markdown_content = await self._legacy_convert(path)
 
+            markdown_kwargs = dict(kwargs)
+            allowed_media_dirs = list(markdown_kwargs.get("allowed_media_dirs") or [])
+            if storage.media_dir not in allowed_media_dirs:
+                allowed_media_dirs.append(storage.media_dir)
+            markdown_kwargs.update(
+                source_path=str(path),
+                base_dir=path.parent,
+                allowed_media_dirs=allowed_media_dirs,
+            )
             result = await self._md_parser.parse_content(
                 markdown_content,
-                source_path=str(path),
-                resource_name=kwargs.get("resource_name"),
-                source_name=kwargs.get("source_name"),
                 instruction=instruction,
-                base_dir=path.parent,
-                allowed_media_dirs=[storage.media_dir],
-                split_content=kwargs.get("split_content", True),
+                **markdown_kwargs,
             )
             result.source_format = source_format
         else:
