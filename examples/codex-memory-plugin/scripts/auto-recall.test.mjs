@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { resolveCodexLaunch, trySpawnCodex } from "./codex-launch.mjs";
@@ -108,29 +108,37 @@ function runAutoRecall(input, env) {
 async function withFakeCodex(output, fn, { exitCode = 0 } = {}) {
   const binDir = await mkdtemp(join(tmpdir(), "ov-fake-codex-"));
   const executable = join(binDir, "codex");
+  const npmEntryPoint = join(
+    binDir,
+    "node_modules",
+    "@openai",
+    "codex",
+    "bin",
+    "codex.js",
+  );
   const callLog = join(binDir, "calls.log");
-  await writeFile(executable, `#!/bin/sh
-output_path=""
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = "--output-last-message" ]; then
-    shift
-    output_path="$1"
-  fi
-  shift
-done
-cat >/dev/null
-printf 'called\\n' >> "$FAKE_CODEX_CALL_LOG"
-if [ "$FAKE_CODEX_EXIT_CODE" -ne 0 ]; then
-  exit "$FAKE_CODEX_EXIT_CODE"
-fi
-printf '%s' "$FAKE_CODEX_OUTPUT" > "$output_path"
-`);
+  const fakeCodex = `#!/usr/bin/env node
+const fs = require("node:fs");
+
+const outputFlagIndex = process.argv.indexOf("--output-last-message");
+const outputPath = outputFlagIndex >= 0 ? process.argv[outputFlagIndex + 1] : "";
+fs.readFileSync(0);
+fs.appendFileSync(process.env.FAKE_CODEX_CALL_LOG, "called\\n");
+
+const exitCode = Number(process.env.FAKE_CODEX_EXIT_CODE || 0);
+if (exitCode !== 0) process.exit(exitCode);
+if (!outputPath) process.exit(2);
+fs.writeFileSync(outputPath, process.env.FAKE_CODEX_OUTPUT || "");
+`;
+  await writeFile(executable, fakeCodex);
+  await mkdir(dirname(npmEntryPoint), { recursive: true });
+  await writeFile(npmEntryPoint, fakeCodex);
   await chmod(executable, 0o755);
   try {
     return await fn({
       callLog,
       env: {
-        PATH: `${binDir}:${process.env.PATH}`,
+        PATH: `${binDir}${delimiter}${process.env.PATH}`,
         FAKE_CODEX_CALL_LOG: callLog,
         FAKE_CODEX_EXIT_CODE: String(exitCode),
         FAKE_CODEX_OUTPUT: output,
@@ -401,11 +409,11 @@ test("auto-recall preserves recalled memory when compressor spawn throws synchro
 const childProcess = require("node:child_process");
 const { syncBuiltinESMExports } = require("node:module");
 const originalSpawn = childProcess.spawn;
-childProcess.spawn = function patchedSpawn(command, ...args) {
-  if (command === "codex") {
+childProcess.spawn = function patchedSpawn(command, args, ...rest) {
+  if (Array.isArray(args) && args.includes("exec")) {
     throw Object.assign(new Error("spawn EPERM"), { code: "EPERM" });
   }
-  return originalSpawn.call(this, command, ...args);
+  return originalSpawn.call(this, command, args, ...rest);
 };
 syncBuiltinESMExports();
 `);
