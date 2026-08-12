@@ -2864,6 +2864,19 @@ def test_timeout_salvage_removes_unresolved_complex_markdown_links(content: str)
     )
 
 
+def test_timeout_salvage_preserves_existing_escaped_parenthesis_link():
+    content = r"[Paren](../meta/foo\(1\).md)"
+
+    assert (
+        BotCompileService._repair_salvaged_markdown(
+            content,
+            source_path="guide/topic.md",
+            known_paths={"meta/foo(1).md"},
+        )
+        == content
+    )
+
+
 @pytest.mark.asyncio
 async def test_timeout_salvage_ignores_preexisting_srt_settings(tmp_path: Path):
     service = _compile_service(

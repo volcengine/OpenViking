@@ -182,7 +182,8 @@ class LinkRenderer:
         return None
 
     @staticmethod
-    def _normalize_markdown_target(target: str) -> str:
+    def normalize_markdown_target(target: str) -> str:
+        """Decode and normalize a parsed Markdown link destination."""
         target = unquote(target.strip())
         if target.startswith("<") and target.endswith(">"):
             target = target[1:-1]
@@ -207,8 +208,8 @@ class LinkRenderer:
         non_link_protected = [span for span in protected_spans if span not in link_spans]
         relative_target = LinkRenderer.relative_path(source_uri, target_uri)
         expected_targets = {
-            LinkRenderer._normalize_markdown_target(target_uri),
-            LinkRenderer._normalize_markdown_target(
+            LinkRenderer.normalize_markdown_target(target_uri),
+            LinkRenderer.normalize_markdown_target(
                 relative_target if relative_target is not None else target_uri
             ),
         }
@@ -222,7 +223,7 @@ class LinkRenderer:
                 continue
             if LinkRenderer._find_match_span(link.text, match_text) is None:
                 continue
-            if LinkRenderer._normalize_markdown_target(link.target) in expected_targets:
+            if LinkRenderer.normalize_markdown_target(link.target) in expected_targets:
                 return True
         return False
 

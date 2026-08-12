@@ -15,7 +15,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Mapping
-from urllib.parse import unquote
 
 from loguru import logger
 
@@ -1216,12 +1215,12 @@ class BotCompileService:
                 default=len(target),
             )
             raw_path, suffix = target[:suffix_at], target[suffix_at:]
-            decoded_path = unquote(raw_path)
-            resolved = posixpath.normpath(posixpath.join(source_dir, decoded_path))
+            normalized_path = LinkRenderer.normalize_markdown_target(raw_path)
+            resolved = posixpath.normpath(posixpath.join(source_dir, normalized_path))
             if resolved in known:
                 return original
 
-            name = posixpath.basename(decoded_path)
+            name = posixpath.basename(normalized_path)
             names = {name.casefold()}
             if not posixpath.splitext(name)[1]:
                 names.add(f"{name}.md".casefold())
