@@ -1,11 +1,136 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  buildResourceImportCommonBody,
   buildRemoteResourceRequest,
   buildUploadedResourceRequest,
 } from './resource-import-request'
+import type { ResourceImportFormState } from './resource-import-request'
+
+const BASE_FORM_STATE: ResourceImportFormState = {
+  additionalOptions: {
+    parseMode: 'default',
+    processingMode: 'semantic_and_vectors',
+    sourceName: '',
+    tagMode: 'replace',
+    tags: '',
+    timeout: '',
+    wait: false,
+  },
+  createParent: true,
+  destinationMode: 'parent',
+  directlyUploadMedia: true,
+  exclude: '',
+  ignoreDirs: '',
+  include: '',
+  instruction: '',
+  mode: 'remote',
+  reason: '',
+  remoteResourceKind: 'unknown',
+  sourceOptionState: {
+    feishu: { accessToken: '', authMode: 'app', refreshToken: '' },
+    git: {
+      authMode: 'public',
+      refMode: 'branch',
+      refValue: '',
+      supportsHttpAuth: true,
+      token: '',
+      username: 'oauth2',
+    },
+    watchEnabled: false,
+    web: {
+      allowExternalLinks: false,
+      depth: '1',
+      excludePaths: '',
+      includePaths: '',
+      maxPages: '50',
+      mode: 'auto',
+      skipDownloadLinks: true,
+    },
+  },
+  strict: false,
+  targetUri: 'viking://resources/',
+  watchEnabled: false,
+  watchInterval: '1440',
+}
 
 describe('resource import request builders', () => {
+  it('serializes native form options in one place', () => {
+    expect(
+      buildResourceImportCommonBody({
+        ...BASE_FORM_STATE,
+        additionalOptions: {
+          ...BASE_FORM_STATE.additionalOptions,
+          parseMode: 'no_split',
+          preserveStructure: true,
+          processingMode: 'vectors_only',
+          sourceName: 'docs',
+          tagMode: 'append',
+          tags: 'team=docs, env=test',
+          timeout: '12.5',
+          wait: true,
+        },
+        exclude: '**/dist/**',
+        ignoreDirs: '.git,node_modules',
+        include: '**/*.md',
+        instruction: ' Prefer API docs. ',
+        reason: ' Knowledge base ',
+        strict: true,
+        watchEnabled: true,
+        watchInterval: '60',
+      }),
+    ).toEqual({
+      args: { parse_mode: 'no_split' },
+      create_parent: true,
+      directly_upload_media: true,
+      exclude: '**/dist/**',
+      ignore_dirs: '.git,node_modules',
+      include: '**/*.md',
+      instruction: 'Prefer API docs.',
+      parent: 'viking://resources/',
+      preserve_structure: true,
+      processing_mode: 'vectors_only',
+      reason: 'Knowledge base',
+      source_name: 'docs',
+      strict: true,
+      tag_mode: 'append',
+      tags: ['team=docs', 'env=test'],
+      telemetry: true,
+      timeout: 12.5,
+      wait: true,
+      watch_interval: 60,
+    })
+  })
+
+  it('keeps TOS selectable but emits only its supported request fields', () => {
+    expect(
+      buildResourceImportCommonBody({
+        ...BASE_FORM_STATE,
+        additionalOptions: {
+          ...BASE_FORM_STATE.additionalOptions,
+          parseMode: 'no_split',
+          processingMode: 'vectors_only',
+          wait: true,
+        },
+        destinationMode: 'parent',
+        instruction: 'ignored',
+        remoteResourceKind: 'tos',
+        strict: true,
+        targetUri: ' viking://resources/tos-item ',
+        watchEnabled: true,
+      }),
+    ).toEqual({
+      add_type: 'tos',
+      create_parent: true,
+      directly_upload_media: true,
+      processing_mode: 'semantic_and_vectors',
+      strict: false,
+      telemetry: true,
+      to: 'viking://resources/tos-item',
+      wait: false,
+    })
+  })
+
   it('preserves source-specific remote options', () => {
     expect(
       buildRemoteResourceRequest(' https://example.feishu.cn/docx/doc ', {

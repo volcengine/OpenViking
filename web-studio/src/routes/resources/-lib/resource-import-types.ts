@@ -10,7 +10,7 @@ export type ResourceProcessingMode = 'semantic_and_vectors' | 'vectors_only'
 
 export type ResourceTagMode = 'replace' | 'append'
 
-export type AddResourceArgs = Record<string, unknown> & {
+export type ResourceImportArgs = Record<string, unknown> & {
   allow_external_links?: boolean
   auth_config?: Record<string, unknown>
   branch?: string
@@ -26,7 +26,11 @@ export type AddResourceArgs = Record<string, unknown> & {
   skip_download_links?: boolean
 }
 
-export type AddResourceRequest = {
+/**
+ * Web Studio resource-import payload. Keep compatibility with the currently
+ * deployed API here so feature code does not depend on regenerating a client.
+ */
+export type ResourceImportRequest = {
   path?: string
   temp_file_id?: string
   add_type?: string
@@ -44,7 +48,7 @@ export type AddResourceRequest = {
   exclude?: string
   directly_upload_media?: boolean
   preserve_structure?: boolean
-  args?: AddResourceArgs
+  args?: ResourceImportArgs
   telemetry?: boolean | Record<string, boolean>
   watch_interval?: number
   processing_mode?: ResourceProcessingMode
@@ -52,12 +56,12 @@ export type AddResourceRequest = {
   tag_mode?: ResourceTagMode
 }
 
-export type AddResourceCommonBody = Omit<
-  AddResourceRequest,
-  'path' | 'temp_file_id' | 'source_name'
+export type ResourceImportCommonBody = Omit<
+  ResourceImportRequest,
+  'path' | 'temp_file_id'
 >
 
-export type AddResourceResult = {
+export type ResourceImportResult = {
   errors?: string[]
   message?: string
   root_uri?: string

@@ -13,7 +13,7 @@ import {
 import type {
   ResourceProcessingMode,
   ResourceTagMode,
-} from '@ov-server/api/v1/resources'
+} from '../-lib/resource-import-types'
 
 export type ResourceParseMode = 'default' | 'no_split'
 

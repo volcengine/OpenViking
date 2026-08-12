@@ -9,7 +9,7 @@ import {
   parseOptionalNumber,
 } from './resource-option-values'
 import type { RemoteResourceKind } from './resource-source'
-import type { AddResourceCommonBody } from '@ov-server/api/v1/resources'
+import type { ResourceImportCommonBody } from './resource-import-types'
 
 type RemoteResourceCapabilities = {
   exactDestination: boolean
@@ -18,7 +18,7 @@ type RemoteResourceCapabilities = {
 }
 
 type RemoteSourceRequestOptions = Pick<
-  AddResourceCommonBody,
+  ResourceImportCommonBody,
   'add_type' | 'args' | 'exclude' | 'include'
 >
 

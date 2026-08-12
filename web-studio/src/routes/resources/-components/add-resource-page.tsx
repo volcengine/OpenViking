@@ -29,11 +29,8 @@ import { useResourceUpload } from '../-hooks/use-resource-upload'
 import type { RemoteStartResult } from '../-hooks/use-resource-upload'
 import { detectRemoteResourceKind } from '../-lib/resource-source'
 import type { RemoteResourceTypeSelection } from '../-lib/resource-source'
-import { parseResourceTags } from '../-lib/resource-option-values'
-import {
-  buildRemoteSourceRequestOptions,
-  getRemoteResourceCapabilities,
-} from '../-lib/resource-source-strategy'
+import { buildResourceImportCommonBody } from '../-lib/resource-import-request'
+import { getRemoteResourceCapabilities } from '../-lib/resource-source-strategy'
 import type { RemoteSourceOptionState } from '../-lib/resource-source-strategy'
 import { DirectoryPickerDialog } from './directory-picker-dialog'
 import { AdditionalResourceOptions } from './additional-resource-options'
@@ -50,7 +47,6 @@ import { UploadResourceFields } from './upload-resource-fields'
 import type { SelectedUploadFile } from './upload-resource-fields'
 import { WebResourceOptions } from './web-resource-options'
 import type { WebResourceOptionsValue } from './web-resource-options'
-import type { AddResourceCommonBody } from '@ov-server/api/v1/resources'
 
 type Mode = 'upload' | 'remote'
 
@@ -208,80 +204,25 @@ export function AddResourceForm({
     [resetRemote, resetRemoteSourceFields],
   )
 
-  const buildCommonBody = () => {
-    const tags = parseResourceTags(additionalOptions.tags)
-    const timeout = Number(additionalOptions.timeout)
-    const body: AddResourceCommonBody = {
-      [effectiveDestinationMode]: targetUri.trim() || undefined,
-      strict: sourceCapabilities.nativeOptions ? strict : false,
-      create_parent: createParent,
-      telemetry: true,
-      wait: sourceCapabilities.nativeOptions ? additionalOptions.wait : false,
-      ...(sourceCapabilities.nativeOptions &&
-      additionalOptions.wait &&
-      additionalOptions.timeout.trim()
-        ? { timeout }
-        : {}),
-      directly_upload_media: sourceCapabilities.nativeOptions
-        ? directlyUploadMedia
-        : true,
-      ...(sourceCapabilities.nativeOptions &&
-      additionalOptions.preserveStructure !== undefined
-        ? { preserve_structure: additionalOptions.preserveStructure }
-        : {}),
-      processing_mode: sourceCapabilities.nativeOptions
-        ? additionalOptions.processingMode
-        : 'semantic_and_vectors',
-      ...(tags.length ? { tags, tag_mode: additionalOptions.tagMode } : {}),
-      ...(mode === 'remote' &&
-      sourceCapabilities.nativeOptions &&
-      additionalOptions.sourceName.trim()
-        ? { source_name: additionalOptions.sourceName.trim() }
-        : {}),
-      ...(sourceCapabilities.nativeOptions &&
-      additionalOptions.parseMode === 'no_split'
-        ? { args: { parse_mode: 'no_split' } }
-        : {}),
-    }
-    if (reason.trim()) {
-      body.reason = reason.trim()
-    }
-    if (instruction.trim() && sourceCapabilities.nativeOptions) {
-      body.instruction = instruction.trim()
-    }
-    if (mode === 'remote') {
-      if (effectiveWatchEnabled) {
-        body.watch_interval = Number(watchInterval)
-      }
-      if (ignoreDirs.trim() && sourceCapabilities.nativeOptions) {
-        body.ignore_dirs = ignoreDirs.trim()
-      }
-      if (include.trim() && sourceCapabilities.nativeOptions) {
-        body.include = include.trim()
-      }
-      if (exclude.trim() && sourceCapabilities.nativeOptions) {
-        body.exclude = exclude.trim()
-      }
-      const sourceRequestOptions = buildRemoteSourceRequestOptions(
-        remoteResourceKind,
-        sourceOptionState,
-      )
-      if (sourceRequestOptions.add_type) {
-        body.add_type = sourceRequestOptions.add_type
-      }
-      if (sourceRequestOptions.include) {
-        body.include = sourceRequestOptions.include
-      }
-      if (sourceRequestOptions.exclude) {
-        body.exclude = sourceRequestOptions.exclude
-      }
-      body.args = { ...body.args, ...sourceRequestOptions.args }
-      if (Object.keys(body.args).length === 0) {
-        delete body.args
-      }
-    }
-    return body
-  }
+  const buildCommonBody = () =>
+    buildResourceImportCommonBody({
+      additionalOptions,
+      createParent,
+      destinationMode,
+      directlyUploadMedia,
+      exclude,
+      ignoreDirs,
+      include,
+      instruction,
+      mode,
+      reason,
+      remoteResourceKind,
+      sourceOptionState,
+      strict,
+      targetUri,
+      watchEnabled: effectiveWatchEnabled,
+      watchInterval,
+    })
 
   const handleSubmit = () => {
     if (mode === 'upload') {
