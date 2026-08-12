@@ -26,9 +26,7 @@ def is_large_image_by_size(
     config: ImageLimitConfig | None = None,
 ) -> bool:
     """Return whether image bytes exceed the configured large-image limits."""
-    max_file_size_mb = (
-        config.max_file_size_mb if config else DEFAULT_LARGE_IMAGE_MAX_FILE_SIZE_MB
-    )
+    max_file_size_mb = config.max_file_size_mb if config else DEFAULT_LARGE_IMAGE_MAX_FILE_SIZE_MB
     max_dimension_px = (
         config.large_image_threshold_dimension
         if config

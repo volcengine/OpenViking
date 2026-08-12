@@ -6,14 +6,12 @@ Embedding utilities for OpenViking.
 Common logic for creating Context objects and enqueuing them to EmbeddingQueue.
 """
 
-import io
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from charset_normalizer import from_bytes
-from PIL import Image, UnidentifiedImageError
 
 from openviking.core.context import Context, ContextLevel, ResourceContentType, Vectorize
 from openviking.core.namespace import (
@@ -33,9 +31,8 @@ from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConve
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.embedding_input import truncate_embedding_input
-from openviking.utils.image_search import image_bytes_to_data_uri
+from openviking.utils.image_search import image_bytes_to_model_data_uri
 from openviking.utils.ingest_options import IngestOptions
-from openviking.utils.media_limits import is_large_image_by_size
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.config import get_openviking_config
@@ -43,7 +40,6 @@ from openviking_cli.utils.config.embedding_config import (
     SUMMARY_TEXT_SOURCES,
     TEXT_SOURCE_SUMMARY_ONLY,
 )
-from openviking_cli.utils.config.parser_config import ImageConfig
 
 logger = get_logger(__name__)
 
@@ -282,42 +278,11 @@ async def _build_image_data_uri(
     """
     try:
         content = await viking_fs.read_file_bytes(file_path, ctx=ctx)
-        return _image_bytes_to_embedding_data_uri(content, file_name)
+        image_config = getattr(get_openviking_config(), "image", None)
+        return image_bytes_to_model_data_uri(content, file_name, config=image_config)
     except Exception as e:
         logger.warning(f"Failed to read image for multimodal vectorization {file_path}: {e}")
         return None
-
-
-def _image_bytes_to_embedding_data_uri(content: bytes, file_name: str) -> str:
-    """Convert image bytes to a data URI, downsampling large images in memory."""
-    try:
-        with Image.open(io.BytesIO(content)) as img:
-            width, height = img.size
-            image_config = getattr(get_openviking_config(), "image", ImageConfig())
-            if not is_large_image_by_size(
-                file_size_bytes=len(content),
-                width=width,
-                height=height,
-                config=image_config,
-            ):
-                return image_bytes_to_data_uri(content, file_name)
-
-            preview = img.copy()
-            if preview.mode in ("RGBA", "P"):
-                preview = preview.convert("RGB")
-
-            max_dimension = image_config.preview_max_dimension
-            if width > max_dimension or height > max_dimension:
-                ratio = min(max_dimension / width, max_dimension / height)
-                new_size = (max(1, int(width * ratio)), max(1, int(height * ratio)))
-                preview = preview.resize(new_size, Image.Resampling.LANCZOS)
-
-            buf = io.BytesIO()
-            preview.save(buf, format="JPEG", quality=85, optimize=True)
-            data = buf.getvalue()
-            return image_bytes_to_data_uri(data, "embedding_preview.jpg")
-    except (UnidentifiedImageError, OSError, ValueError):
-        return image_bytes_to_data_uri(content, file_name)
 
 
 async def _resolve_resource_content_type(
@@ -609,7 +574,9 @@ async def vectorize_file(
                     if summary:
                         context.set_vectorize(Vectorize(text=summary))
                     else:
-                        logger.warning(f"No summary available for {file_path}, skipping vectorization")
+                        logger.warning(
+                            f"No summary available for {file_path}, skipping vectorization"
+                        )
                         return False
                 else:
                     embedding_text = truncate_embedding_input(
