@@ -691,6 +691,8 @@ class AsyncHTTPClient:
         add_type: Optional[str] = None,
         tags: Optional[List[str]] = None,
         tag_mode: str = "replace",
+        create_parent: bool = False,
+        source_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         if add_type is not None:
             add_type = add_type.strip() or None
@@ -725,18 +727,26 @@ class AsyncHTTPClient:
             request_data["tag_mode"] = tag_mode
         if preserve_structure is not None:
             request_data["preserve_structure"] = preserve_structure
+        # Match CLI: only send create_parent when True so older servers that
+        # forbid unknown fields still accept the request.
+        if create_parent:
+            request_data["create_parent"] = True
+        if source_name is not None:
+            request_data["source_name"] = source_name
 
         path_obj = Path(path)
         if not add_type and path_obj.exists():
             if path_obj.is_dir():
-                request_data["source_name"] = path_obj.name
+                if source_name is None:
+                    request_data["source_name"] = path_obj.name
                 zip_path = self._zip_directory(path)
                 try:
                     request_data["temp_file_id"] = await self._upload_temp_file(zip_path)
                 finally:
                     Path(zip_path).unlink(missing_ok=True)
             elif path_obj.is_file():
-                request_data["source_name"] = path_obj.name
+                if source_name is None:
+                    request_data["source_name"] = path_obj.name
                 request_data["temp_file_id"] = await self._upload_temp_file(path)
             else:
                 request_data["path"] = path
@@ -771,10 +781,13 @@ class AsyncHTTPClient:
         timeout: Optional[float] = None,
         telemetry: Any = False,
         target_uri: Optional[str] = None,
+        source_metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         request_data = {"wait": wait, "timeout": timeout, "telemetry": telemetry}
         if target_uri is not None:
             request_data["target_uri"] = target_uri
+        if source_metadata is not None:
+            request_data["source_metadata"] = source_metadata
         if isinstance(data, str):
             path_obj = Path(data)
             if path_obj.exists():
@@ -1946,6 +1959,8 @@ class SyncHTTPClient:
         add_type: Optional[str] = None,
         tags: Optional[List[str]] = None,
         tag_mode: str = "replace",
+        create_parent: bool = False,
+        source_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.add_resource(
@@ -1968,6 +1983,8 @@ class SyncHTTPClient:
                 args=args,
                 tags=tags,
                 tag_mode=tag_mode,
+                create_parent=create_parent,
+                source_name=source_name,
                 telemetry=telemetry,
             )
         )
@@ -1989,6 +2006,7 @@ class SyncHTTPClient:
         timeout: Optional[float] = None,
         telemetry: Any = False,
         target_uri: Optional[str] = None,
+        source_metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.add_skill(
@@ -1997,6 +2015,7 @@ class SyncHTTPClient:
                 timeout=timeout,
                 telemetry=telemetry,
                 target_uri=target_uri,
+                source_metadata=source_metadata,
             )
         )
 
