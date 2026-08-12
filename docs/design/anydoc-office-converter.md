@@ -1,7 +1,7 @@
 # anydoc Office 转换层设计
 
 **范围**: 用 [firecrawl/anydoc](https://github.com/firecrawl/anydoc) 替换 OpenViking 内置 Office/EPUB 的「格式 → Markdown」转换层，并按现有媒体链路补齐嵌入图片落盘与 Markdown 引用。
-**状态**: 已评审，待实现。
+**状态**: 已实现。
 **日期**: 2026-08-12
 
 ---
