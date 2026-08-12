@@ -38,13 +38,6 @@ class QueueTaskMetadata:
     work_id: str
     account_id: str = ""
     user_id: str = ""
-    session_id: str = ""
-
-    @property
-    def session_key(self) -> Optional[tuple[str, str, str]]:
-        if not self.session_id:
-            return None
-        return self.account_id, self.user_id, self.session_id
 
 
 _current_task_context: ContextVar[Optional[TaskExecutionContext]] = ContextVar(
@@ -127,13 +120,7 @@ def prepare_task_payload(
     if account_id and user_id:
         payload.setdefault("account_id", account_id)
         payload.setdefault("user_id", user_id)
-    return payload, QueueTaskMetadata(
-        task_id,
-        work_id,
-        account_id,
-        user_id,
-        str(payload.get("session_id") or ""),
-    )
+    return payload, QueueTaskMetadata(task_id, work_id, account_id, user_id)
 
 
 def extract_task_metadata(message: Any) -> Optional[QueueTaskMetadata]:
@@ -150,13 +137,7 @@ def extract_task_metadata(message: Any) -> Optional[QueueTaskMetadata]:
     if not task_id or not work_id:
         return None
     account_id, user_id = _owner_from_payload(payload)
-    return QueueTaskMetadata(
-        str(task_id),
-        str(work_id),
-        account_id,
-        user_id,
-        str(payload.get("session_id") or ""),
-    )
+    return QueueTaskMetadata(str(task_id), str(work_id), account_id, user_id)
 
 
 class TaskWorkIndex:
@@ -165,7 +146,6 @@ class TaskWorkIndex:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._work: Dict[str, set[tuple[str, str]]] = {}
-        self._session_work: Dict[tuple[str, str, str], set[tuple[str, str]]] = {}
         self._active: Dict[str, set[asyncio.Task[Any]]] = {}
         self._failures: Dict[str, str] = {}
         self._finalize_before_ack: Optional[Callable[[QueueTaskMetadata], Awaitable[None]]] = None
@@ -186,22 +166,17 @@ class TaskWorkIndex:
     ) -> Dict[str, tuple[str, str]]:
         """Rebuild work from QueueFS and return owners needed to restore task records."""
         work: Dict[str, set[tuple[str, str]]] = {}
-        session_work: Dict[tuple[str, str, str], set[tuple[str, str]]] = {}
         owners: Dict[str, tuple[str, str]] = {}
         for queue_name, messages in snapshots.items():
             for message in messages:
                 metadata = extract_task_metadata(message)
                 if metadata is None:
                     continue
-                entry = (queue_name, metadata.work_id)
-                work.setdefault(metadata.task_id, set()).add(entry)
-                if metadata.session_key is not None:
-                    session_work.setdefault(metadata.session_key, set()).add(entry)
+                work.setdefault(metadata.task_id, set()).add((queue_name, metadata.work_id))
                 if metadata.account_id and metadata.user_id:
                     owners[metadata.task_id] = (metadata.account_id, metadata.user_id)
         with self._lock:
             self._work = work
-            self._session_work = session_work
             self._failures = {}
         return owners
 
@@ -212,10 +187,7 @@ class TaskWorkIndex:
         with self._lock:
             if self.cancellation_requested(metadata.task_id):
                 return False
-            entry = (queue_name, metadata.work_id)
-            self._work.setdefault(metadata.task_id, set()).add(entry)
-            if metadata.session_key is not None:
-                self._session_work.setdefault(metadata.session_key, set()).add(entry)
+            self._work.setdefault(metadata.task_id, set()).add((queue_name, metadata.work_id))
         return True
 
     def _remove_work(
@@ -233,12 +205,6 @@ class TaskWorkIndex:
                 entries.discard(entry)
                 if not entries:
                     self._work.pop(metadata.task_id, None)
-            if removed and metadata.session_key is not None:
-                session_entries = self._session_work.get(metadata.session_key)
-                if session_entries is not None:
-                    session_entries.discard(entry)
-                    if not session_entries:
-                        self._session_work.pop(metadata.session_key, None)
             became_idle = (
                 removed
                 and not self._work.get(metadata.task_id)
@@ -289,10 +255,7 @@ class TaskWorkIndex:
     def rollback_ack(self, queue_name: str, metadata: QueueTaskMetadata) -> None:
         """Restore provisionally removed work when finalization or ACK fails."""
         with self._lock:
-            entry = (queue_name, metadata.work_id)
-            self._work.setdefault(metadata.task_id, set()).add(entry)
-            if metadata.session_key is not None:
-                self._session_work.setdefault(metadata.session_key, set()).add(entry)
+            self._work.setdefault(metadata.task_id, set()).add((queue_name, metadata.work_id))
 
     def has_work(self, task_id: str, exclude_work_id: Optional[str] = None) -> bool:
         with self._lock:
@@ -302,11 +265,6 @@ class TaskWorkIndex:
                     for _queue_name, work_id in self._work.get(task_id, ())
                 )
             return bool(self._work.get(task_id) or self._active.get(task_id))
-
-    def has_session_work(self, account_id: str, user_id: str, session_id: str) -> bool:
-        """Return whether QueueFS contains work for this exact Session owner."""
-        with self._lock:
-            return bool(self._session_work.get((account_id, user_id, session_id)))
 
     def cancellation_requested(self, task_id: str) -> bool:
         callback = self._is_cancellation_requested

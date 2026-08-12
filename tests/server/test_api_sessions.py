@@ -433,17 +433,16 @@ async def test_get_session_context_includes_incomplete_archive_messages(
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
 
+    await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json=_message_request("user", content="Archived seed"),
+    )
+    commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
+    assert commit_resp.status_code == 200
+
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
     session = service.sessions.session(ctx, session_id)
     await session.load()
-    archived_messages = [
-        Message(
-            id="archived-seed",
-            role="user",
-            parts=[TextPart("Archived seed")],
-            peer_id=DEFAULT_USER.user_id,
-        )
-    ]
     pending_messages = [
         Message(
             id="pending-user",
@@ -458,11 +457,6 @@ async def test_get_session_context_includes_incomplete_archive_messages(
             peer_id="assistant-default",
         ),
     ]
-    await session._viking_fs.write_file(
-        uri=f"{session.uri}/history/archive_001/messages.jsonl",
-        content="\n".join(msg.to_jsonl() for msg in archived_messages) + "\n",
-        ctx=session.ctx,
-    )
     await session._viking_fs.write_file(
         uri=f"{session.uri}/history/archive_002/messages.jsonl",
         content="\n".join(msg.to_jsonl() for msg in pending_messages) + "\n",

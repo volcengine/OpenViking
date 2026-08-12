@@ -13,7 +13,6 @@ from openviking.models.vlm.base import ToolCall, VLMResponse
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session.memory.constants import AGENT_EVOLUTION_MEMORY_TYPES
 from openviking.session.session import Session, _ArchiveSummaryResult, _CheckpointRequest
-from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
 
 
 async def _write_archive(
@@ -298,94 +297,41 @@ async def test_phase2_defers_live_predecessor_and_skips_missing_queue_work(
 ):
     session = client(session_id="phase2_predecessor_queue_work_test")
     await session.ensure_exists()
-    first_task_id = str(uuid4())
-    next_task_id = str(uuid4())
-    user = session.ctx.user.to_dict()
-    first_message = SessionCommitMsg(
-        task_id=first_task_id,
-        session_id=session.session_id,
-        session_uri=session.uri,
-        archive_uri=f"{session.uri}/history/archive_001",
-        user=user,
-    )
-    first_uri = await _write_archive(
+    await _write_archive(
         session,
         1,
         [_text_message("u1", "user", "pending one")],
         meta={
             "phase1": {
                 "status": "ready",
-                "enqueued": True,
-                "queue_message": first_message.to_dict(),
+                "queue_message": {"task_id": "task-1"},
             }
         },
     )
-    await _write_archive(
+    second_uri = await _write_archive(
         session,
         2,
-        [_text_message("u2", "user", "completed two")],
-        overview="# Summary\n\ncomplete",
-        done={"starting_message_id": "u2", "ending_message_id": "u2"},
-    )
-    next_uri = f"{session.uri}/history/archive_003"
-    next_message = SessionCommitMsg(
-        task_id=next_task_id,
-        session_id=session.session_id,
-        session_uri=session.uri,
-        archive_uri=next_uri,
-        user=user,
-    )
-    await _write_archive(
-        session,
-        3,
-        [_text_message("u3", "user", "waiting three")],
+        [_text_message("u2", "user", "pending two")],
         meta={
             "phase1": {
                 "status": "ready",
-                "enqueued": False,
-                "queue_message": next_message.to_dict(),
+                "queue_message": {"task_id": "task-2"},
             }
         },
     )
     tracker = get_task_tracker()
-    await tracker.create(
-        "session_commit",
-        resource_id=session.session_id,
-        account_id=session.ctx.account_id,
-        user_id=session.ctx.user.user_id,
-        task_id=first_task_id,
-    )
-    await tracker.create(
-        "session_commit",
-        resource_id=session.session_id,
-        account_id=session.ctx.account_id,
-        user_id=session.ctx.user.user_id,
-        task_id=next_task_id,
-    )
-    live_work = {first_task_id}
-    monkeypatch.setattr(tracker, "has_work", lambda task_id: task_id in live_work)
-    queued: list[dict] = []
+    live_work = {"task-1", "task-2"}
+    monkeypatch.setattr(tracker, "has_work", live_work.__contains__)
 
-    class CapturingQueueManager:
-        async def enqueue(self, _queue_name, data):
-            queued.append(data)
+    assert not await session._can_run_archive(3)
 
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.get_queue_manager",
-        lambda: CapturingQueueManager(),
-    )
-
-    assert not await session._schedule_next_archive(next_message)
-    await session._schedule_next_archive()
-    assert queued == []
-
-    live_work.clear()
-    await session._schedule_next_archive()
+    live_work.remove("task-2")
+    assert await session._can_run_archive(3)
     failed = json.loads(
-        await session._viking_fs.read_file(f"{first_uri}/.failed.json", ctx=session.ctx)
+        await session._viking_fs.read_file(f"{second_uri}/.failed.json", ctx=session.ctx)
     )
     assert failed["stage"] == "queue_missing"
-    assert queued == [next_message.to_dict()]
+    assert not await session._viking_fs.exists(f"{session.uri}/history/archive_001/.failed.json")
 
 
 async def test_missing_previous_archive_directory_allows_phase2(
@@ -399,15 +345,7 @@ async def test_missing_previous_archive_directory_allows_phase2(
         [_text_message("u2", "user", "archive two")],
     )
 
-    message = SessionCommitMsg(
-        task_id=str(uuid4()),
-        session_id=session.session_id,
-        session_uri=session.uri,
-        archive_uri=f"{session.uri}/history/archive_002",
-        user=session.ctx.user.to_dict(),
-    )
-
-    assert await session._schedule_next_archive(message)
+    assert await session._can_run_archive(2)
 
 
 async def test_phase2_processes_only_current_archive(
@@ -1796,14 +1734,9 @@ async def test_phase1_enqueues_before_root_rewrite_and_publishes_ready_last(
     await session.ensure_exists()
     session.add_message("user", [TextPart("archive me")])
     observations: list[tuple[list[str], str]] = []
-    queued_task_ids: set[str] = set()
-    tracker = get_task_tracker()
-    existing_has_work = tracker.has_work
-    existing_has_session_work = tracker.has_session_work
 
     class InspectingQueueManager:
         async def enqueue(self, _queue_name, data):
-            queued_task_ids.add(data["task_id"])
             root = await session._read_live_messages_strict()
             archive_uri = data["archive_uri"]
             observations.append(
@@ -1817,26 +1750,16 @@ async def test_phase1_enqueues_before_root_rewrite_and_publishes_ready_last(
         "openviking.storage.queuefs.get_queue_manager",
         lambda: InspectingQueueManager(),
     )
-    monkeypatch.setattr(
-        tracker,
-        "has_work",
-        lambda task_id: task_id in queued_task_ids or existing_has_work(task_id),
-    )
-    monkeypatch.setattr(
-        tracker,
-        "has_session_work",
-        lambda account_id, user_id, session_id: bool(queued_task_ids)
-        if session_id == session.session_id
-        else existing_has_session_work(account_id, user_id, session_id),
-    )
+
     result = await session.commit_async()
     session.add_message("user", [TextPart("wait for predecessor")])
     second = await session.commit_async()
-    assert observations == [(["archive me"], "preparing")]
-    first_phase1 = await session._read_phase1_meta(result["archive_uri"])
-    second_phase1 = await session._read_phase1_meta(second["archive_uri"])
-    assert (first_phase1["status"], first_phase1["enqueued"]) == ("ready", True)
-    assert (second_phase1["status"], second_phase1["enqueued"]) == ("ready", False)
+    assert observations == [
+        (["archive me"], "preparing"),
+        (["wait for predecessor"], "preparing"),
+    ]
+    assert (await session._read_phase1_meta(result["archive_uri"]))["status"] == "ready"
+    assert (await session._read_phase1_meta(second["archive_uri"]))["status"] == "ready"
     assert await session._read_live_messages_strict() == []
 
 

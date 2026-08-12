@@ -45,10 +45,6 @@ class _MemoryVikingFS:
             raise FileNotFoundError(uri)
         return self.files[uri]
 
-    async def exists(self, uri, ctx=None):
-        prefix = f"{uri.rstrip('/')}/"
-        return uri in self.files or any(path.startswith(prefix) for path in self.files)
-
     async def write_file(self, uri, content, ctx=None, lease_ref=None):
         self.files[uri] = content
 

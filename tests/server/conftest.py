@@ -91,7 +91,6 @@ def _install_session_commit_queue_fallback(service: OpenVikingService, monkeypat
     queue_manager = get_queue_manager()
     original_enqueue = queue_manager.enqueue
     queued_commit_tasks: set[str] = set()
-    queued_commit_sessions: list[str] = []
     tracker = get_task_tracker()
     original_has_work = tracker.has_work
     monkeypatch.setattr(
@@ -99,18 +98,12 @@ def _install_session_commit_queue_fallback(service: OpenVikingService, monkeypat
         "has_work",
         lambda task_id: task_id in queued_commit_tasks or original_has_work(task_id),
     )
-    monkeypatch.setattr(
-        tracker,
-        "has_session_work",
-        lambda _account_id, _user_id, session_id: session_id in queued_commit_sessions,
-    )
 
     async def enqueue_with_session_commit_fallback(queue_name, data):
         if queue_name != QueueManager.SESSION_COMMIT:
             return await original_enqueue(queue_name, data)
 
         queued_commit_tasks.add(data["task_id"])
-        queued_commit_sessions.append(data["session_id"])
 
         async def process_commit() -> None:
             await asyncio.sleep(0)
@@ -134,10 +127,10 @@ def _install_session_commit_queue_fallback(service: OpenVikingService, monkeypat
                 await asyncio.sleep(0)
             await queued_session.load()
             try:
-                await queued_session.resume_queued_commit(msg)
+                while not await queued_session.resume_queued_commit(msg):
+                    await asyncio.sleep(0)
             finally:
                 queued_commit_tasks.discard(msg.task_id)
-                queued_commit_sessions.remove(msg.session_id)
 
         asyncio.create_task(process_commit())
         return data["task_id"]
