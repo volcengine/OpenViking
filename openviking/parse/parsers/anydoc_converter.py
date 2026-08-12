@@ -332,7 +332,8 @@ class _SerializeCtx:
             return any(name.replace("_", "").lower() in style_names for name in names)
 
         if enabled("code", "inline_code", "inlineCode"):
-            text = f"`{text.replace('`', r'\`')}`"
+            escaped = text.replace("`", "\\`")
+            text = f"`{escaped}`"
         if enabled("bold", "strong"):
             text = f"**{text}**"
         if enabled("italic", "emphasis"):
