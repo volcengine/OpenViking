@@ -520,3 +520,207 @@ async def test_grep_applies_node_limit_to_backend_results(monkeypatch, fs):
         "viking://resources/a.md",
         "viking://resources/b.md",
     ]
+
+
+# ---------------------------------------------------------------------------
+# Local keyword (FTS5) grep engine
+# ---------------------------------------------------------------------------
+
+
+def test_grep_config_engine_accepts_local():
+    assert GrepConfig(engine="local").engine == "local"
+    assert GrepConfig(engine="vikingdb").engine == "vikingdb"
+
+
+@pytest.mark.asyncio
+async def test_resolve_grep_engine_local_and_auto(monkeypatch, tmp_path):
+    from openviking.storage.keywordfs.keyword_fs import KeywordFS
+    from openviking_cli.utils.config.keyword_config import KeywordConfig
+
+    kfs = KeywordFS(tmp_path, KeywordConfig(enabled=True))
+    kfs.upsert("default", "viking://resources/a.md", "foo", level=2)
+    fs = VikingFS(
+        agfs=_DummyAgfs(),
+        grep_config=GrepConfig(engine="local"),
+        keyword_config=KeywordConfig(enabled=True),
+        keyword_fs=kfs,
+    )
+    monkeypatch.setattr(fs, "_get_vector_store", lambda: None)
+    assert await fs._resolve_grep_engine("local", "viking://resources", None) == "local_then_fs"
+    assert await fs._resolve_grep_engine("auto", "viking://resources", None) == "local_then_fs"
+    assert await fs._resolve_grep_engine("fs", "viking://resources", None) == "fs"
+
+
+@pytest.mark.asyncio
+async def test_resolve_grep_engine_local_disabled_falls_back_to_fs(monkeypatch, tmp_path):
+    from openviking.storage.keywordfs.keyword_fs import KeywordFS
+    from openviking_cli.utils.config.keyword_config import KeywordConfig
+
+    kfs = KeywordFS(tmp_path, KeywordConfig(enabled=True))
+    fs = VikingFS(
+        agfs=_DummyAgfs(),
+        grep_config=GrepConfig(engine="local"),
+        keyword_config=KeywordConfig(enabled=True),
+        keyword_fs=kfs,  # sidecar wired but not built -> not ready
+    )
+    monkeypatch.setattr(fs, "_get_vector_store", lambda: None)
+    assert await fs._resolve_grep_engine("local", "viking://resources", None) == "fs"
+
+
+@pytest.mark.asyncio
+async def test_resolve_grep_engine_auto_remote_preferred_when_ready(monkeypatch, tmp_path):
+    from openviking.storage.keywordfs.keyword_fs import KeywordFS
+    from openviking_cli.utils.config.keyword_config import KeywordConfig
+
+    kfs = KeywordFS(tmp_path, KeywordConfig(enabled=True))
+    fs = VikingFS(
+        agfs=_DummyAgfs(),
+        grep_config=GrepConfig(engine="auto", switch_to_remote_threshold=100),
+        keyword_config=KeywordConfig(enabled=True),
+        keyword_fs=kfs,
+    )
+    vector_store = _DummyVectorStore()
+    vector_store._backend_type = "vikingdb"
+    monkeypatch.setattr(fs, "_get_vector_store", lambda: vector_store)
+
+    async def fake_collection_has_fulltext(vector_store, ctx):
+        return True
+
+    async def fake_cached_count(uri, ctx):
+        return 500
+
+    monkeypatch.setattr(fs, "_collection_has_fulltext", fake_collection_has_fulltext)
+    monkeypatch.setattr(fs, "_get_cached_count", fake_cached_count)
+    assert (
+        await fs._resolve_grep_engine(
+            "auto", "viking://resources", None, switch_to_remote_threshold=100
+        )
+        == "vikingdb_then_fs"
+    )
+
+
+@pytest.mark.asyncio
+async def test_grep_local_then_fs_recalls_and_matches(monkeypatch, tmp_path):
+    from openviking.storage.keywordfs.keyword_fs import KeywordFS
+    from openviking_cli.utils.config.keyword_config import KeywordConfig
+
+    kfs = KeywordFS(tmp_path, KeywordConfig(enabled=True))
+    kfs.upsert(
+        "default",
+        "viking://resources/proj/a.md",
+        "OpenViking rollback runbook for version 2.4.1",
+        level=2,
+    )
+    kfs.upsert(
+        "default",
+        "viking://resources/proj/b.md",
+        "如何 使用 认证 接口 处理 单元圆",
+        level=2,
+    )
+    fs = VikingFS(
+        agfs=_DummyAgfs(),
+        grep_config=GrepConfig(engine="local"),
+        keyword_config=KeywordConfig(enabled=True, cjk_mode="char"),
+        keyword_fs=kfs,
+    )
+
+    file_contents = {
+        "viking://resources/proj/a.md": b"OpenViking rollback runbook\nfor version 2.4.1\n",
+        "viking://resources/proj/b.md": "认证 接口 处理 单元圆\n".encode("utf-8"),
+    }
+
+    async def fake_read(uri, offset=0, size=-1, ctx=None):
+        data = file_contents[uri]
+        return data[offset:size] if size != -1 else data[offset:]
+
+    monkeypatch.setattr(fs, "read", fake_read)
+
+    result = await fs._grep_local_then_fs(
+        uri="viking://resources/proj",
+        pattern="rollback",
+        exclude_uri=None,
+        case_insensitive=False,
+        node_limit=10,
+        level_limit=10,
+        ctx=None,
+    )
+    assert any("a.md" in m["uri"] for m in result["matches"]), result
+
+    result_cjk = await fs._grep_local_then_fs(
+        uri="viking://resources/proj",
+        pattern="单元圆",
+        exclude_uri=None,
+        case_insensitive=False,
+        node_limit=10,
+        level_limit=10,
+        ctx=None,
+    )
+    assert any("b.md" in m["uri"] for m in result_cjk["matches"]), result_cjk
+
+
+@pytest.mark.asyncio
+async def test_grep_local_then_fs_no_match_empty(monkeypatch, tmp_path):
+    from openviking.storage.keywordfs.keyword_fs import KeywordFS
+    from openviking_cli.utils.config.keyword_config import KeywordConfig
+
+    kfs = KeywordFS(tmp_path, KeywordConfig(enabled=True))
+    kfs.upsert("default", "viking://resources/proj/a.md", "OpenViking rollback", level=2)
+    fs = VikingFS(
+        agfs=_DummyAgfs(),
+        grep_config=GrepConfig(engine="local"),
+        keyword_config=KeywordConfig(enabled=True),
+        keyword_fs=kfs,
+    )
+
+    async def fake_read(uri, offset=0, size=-1, ctx=None):
+        return b"OpenViking rollback\n"
+
+    monkeypatch.setattr(fs, "read", fake_read)
+    result = await fs._grep_local_then_fs(
+        uri="viking://resources/proj",
+        pattern="nonexistenttoken12345",
+        exclude_uri=None,
+        case_insensitive=False,
+        node_limit=10,
+        level_limit=10,
+        ctx=None,
+    )
+    assert result == {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
+
+
+@pytest.mark.asyncio
+async def test_grep_local_then_fs_keyword_failure_falls_back_to_fs(monkeypatch, tmp_path):
+    from openviking.storage.keywordfs.keyword_fs import KeywordFS
+    from openviking_cli.utils.config.keyword_config import KeywordConfig
+
+    kfs = KeywordFS(tmp_path, KeywordConfig(enabled=True))
+    fs = VikingFS(
+        agfs=_DummyAgfs(),
+        grep_config=GrepConfig(engine="local"),
+        keyword_config=KeywordConfig(enabled=True),
+        keyword_fs=kfs,
+    )
+    # Break lookup to force fs fallback.
+    def broken_lookup(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(kfs, "lookup", broken_lookup)
+    monkeypatch.setattr(fs, "_keyword_available", lambda ctx=None: True)
+
+    calls = []
+
+    async def fake_grep_fs(**kwargs):
+        calls.append(kwargs)
+        return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
+
+    monkeypatch.setattr(fs, "_grep_fs", fake_grep_fs)
+    await fs._grep_local_then_fs(
+        uri="viking://resources",
+        pattern="needle",
+        exclude_uri=None,
+        case_insensitive=False,
+        node_limit=10,
+        level_limit=10,
+        ctx=None,
+    )
+    assert calls, "expected fallback to _grep_fs"

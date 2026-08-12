@@ -24,6 +24,7 @@ from .encryption_config import EncryptionConfig
 from .git_config import GitConfig
 from .grep_config import GrepConfig
 from .ingest_config import IngestConfig
+from .keyword_config import KeywordConfig
 from .log_config import LogConfig
 from .memory_config import MemoryConfig
 from .oauth_config import OAuthConfig
@@ -175,6 +176,11 @@ class OpenVikingConfig(BaseModel):
     grep: GrepConfig = Field(
         default_factory=GrepConfig,
         description="Grep engine configuration",
+    )
+
+    keyword: KeywordConfig = Field(
+        default_factory=KeywordConfig,
+        description="Local SQLite FTS5 keyword sidecar configuration",
     )
 
     # Encryption configuration

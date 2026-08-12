@@ -48,8 +48,9 @@ Optional sections use their defaults when omitted. Unknown fields are rejected.
 | `vlm` | object | empty config | Content understanding, summaries, and memory extraction; configure a working model before using these capabilities |
 | `query_planner` | object / `null` | `null` | Retrieval intent model; falls back to `vlm` |
 | `rerank` | object | disabled | Retrieval result reranking |
-| `retrieval` | object | see below | Ranking and intent-analysis behavior |
-| `grep` | object | built-in defaults | Text search engine |
+| `retrieval` | object | see below | Ranking, intent-analysis, and keyword/dense hybrid fusion |
+| `grep` | object | built-in defaults | Text search engine (`auto` / `fs` / `local` / `vikingdb`) |
+| `keyword` | object | disabled | Local SQLite FTS5 keyword sidecar for search-time BM25 recall |
 | `storage` | object | local | Workspace, file system, and vector database |
 | `queue_workers` | object | see below | Runtime concurrency for QueueFS consumer workers |
 | `server` | object | local development | HTTP, authentication, uploads, and observability |
@@ -154,7 +155,14 @@ Rerank has no separate `enabled` field. It becomes available when the required p
   "retrieval": {
     "hotness_alpha": 0,
     "score_propagation_alpha": 1,
-    "enable_intent": true
+    "enable_intent": true,
+    "hybrid": {
+      "enabled": false,
+      "fusion": "rrf",
+      "rrf_k": 60,
+      "keyword_weight": 0.3,
+      "min_token_query_len": 2
+    }
   }
 }
 ```
@@ -166,8 +174,44 @@ Rerank has no separate `enabled` field. It becomes available when the required p
 | `hotness_alpha` | number, `0`–`1` | `0` | Hotness score weight; `0` disables it |
 | `score_propagation_alpha` | number, `0`–`1` | `1` | Child-result score weight in hierarchical retrieval |
 | `enable_intent` | boolean | `true` | Run intent analysis/query planning when `session_id` is present |
+| `hybrid` | object | disabled | Keyword/dense fusion for `find`/`search` (see below) |
 
 Search and Find requests default to `limit: 10`; override the limit on each API or SDK request. `retrieval.enable_intent` controls LLM query planning for session-aware Search, while result reranking is enabled only when `rerank` has a usable provider configuration.
+
+When `keyword.enabled` is on and the sidecar is built, set `retrieval.hybrid.enabled: true` to fuse keyword candidates into `find`/`search` results (exact tokens like code names, acronyms, or version strings that dense retrieval handles poorly). `fusion: "rrf"` uses Reciprocal Rank Fusion; `"weighted"` blends normalized BM25 with the dense score using `keyword_weight`. A request may override this with the `hybrid` boolean field.
+
+### `keyword`
+
+```json
+{
+  "keyword": {
+    "enabled": false,
+    "tokenizer": "auto",
+    "content_source": "content",
+    "max_doc_bytes": 65536,
+    "cjk_mode": "char",
+    "respect_encryption": true
+  }
+}
+```
+
+| Field | Type / values | Default | Purpose |
+|---|---|---|---|
+| `enabled` | boolean | `false` | Master switch for the local FTS5 keyword sidecar |
+| `tokenizer` | `auto` / `char` / `jieba` | `auto` | CJK tokenization: `auto` uses optional `jieba`, falls back to char splitting |
+| `content_source` | `content` / `summary` / `both` | `content` | Text source indexed (currently indexes the same text that gets embedded) |
+| `max_doc_bytes` | integer | `65536` | Skip documents whose indexed text exceeds this size |
+| `cjk_mode` | `char` / `bigram` | `char` | CJK granularity when a word tokenizer is not used |
+| `respect_encryption` | boolean | `true` | Disable the sidecar when at-rest encryption is enabled (plaintext index) |
+
+The keyword sidecar is off by default. When enabled, leaf documents are indexed
+asynchronously alongside embedding, and `grep` (engine `auto` or `local`) uses
+search-time BM25 recall from the sidecar instead of a full filesystem scan on
+deployments without a remote VikingDB full-text index. The sidecar is a recall
+accelerator: final `grep` matching still runs against the on-disk content, and
+the index falls back to a filesystem scan when missing or incomplete. Sidecar
+databases live under `<workspace>/_system/keyword/<account>.sqlite3`. Health is
+exposed through `GET /api/v1/observer/keyword`.
 
 ## Storage Settings
 

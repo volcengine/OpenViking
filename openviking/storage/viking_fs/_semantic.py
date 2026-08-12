@@ -190,6 +190,7 @@ class _SemanticMixin:
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
         image_url: Optional[str] = None,
+        hybrid: Optional[bool] = None,
     ):
         """Semantic search.
 
@@ -258,15 +259,24 @@ class _SemanticMixin:
             level=level,
         )
 
+        matched_contexts = await self._maybe_hybrid_keyword(
+            query,
+            result.matched_contexts,
+            retrieval_targets.target_directories,
+            real_ctx,
+            limit,
+            override=hybrid,
+        )
+
         # Convert QueryResult to FindResult
         memories, resources, skills = [], [], []
-        for ctx in result.matched_contexts:
-            if ctx.context_type == ContextType.MEMORY:
-                memories.append(ctx)
-            elif ctx.context_type == ContextType.RESOURCE:
-                resources.append(ctx)
-            elif ctx.context_type == ContextType.SKILL:
-                skills.append(ctx)
+        for mc in matched_contexts:
+            if mc.context_type == ContextType.MEMORY:
+                memories.append(mc)
+            elif mc.context_type == ContextType.RESOURCE:
+                resources.append(mc)
+            elif mc.context_type == ContextType.SKILL:
+                skills.append(mc)
 
         find_result = FindResult(
             memories=memories,
@@ -287,6 +297,7 @@ class _SemanticMixin:
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
         image_url: Optional[str] = None,
+        hybrid: Optional[bool] = None,
     ):
         """Complex search with session context.
 
@@ -404,14 +415,25 @@ class _SemanticMixin:
 
         # Aggregate results to FindResult
         memories, resources, skills = [], [], []
+        flat = []
         for result in query_results:
-            for ctx in result.matched_contexts:
-                if ctx.context_type == ContextType.MEMORY:
-                    memories.append(ctx)
-                elif ctx.context_type == ContextType.RESOURCE:
-                    resources.append(ctx)
-                elif ctx.context_type == ContextType.SKILL:
-                    skills.append(ctx)
+            flat.extend(result.matched_contexts)
+        if flat:
+            flat = await self._maybe_hybrid_keyword(
+                query,
+                flat,
+                retrieval_targets.target_directories,
+                real_ctx,
+                limit,
+                override=hybrid,
+            )
+        for mc in flat:
+            if mc.context_type == ContextType.MEMORY:
+                memories.append(mc)
+            elif mc.context_type == ContextType.RESOURCE:
+                resources.append(mc)
+            elif mc.context_type == ContextType.SKILL:
+                skills.append(mc)
 
         find_result = FindResult(
             memories=memories,

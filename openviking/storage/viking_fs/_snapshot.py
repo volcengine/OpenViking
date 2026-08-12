@@ -617,6 +617,7 @@ class _SnapshotMixin:
 
         tasks = self._collect_restore_vector_tasks(written, deleted)
         if not tasks:
+            self._schedule_keyword_rebuild(written=written, deleted=deleted, ctx=ctx)
             return
 
         executor = get_reindex_executor()
@@ -625,6 +626,11 @@ class _SnapshotMixin:
                 self._run_vector_rebuild(executor, op, uri, level, ctx),
                 name=f"vikingfs-git-{op}:{uri}:{int(level)}",
             )
+
+        # Keep the keyword sidecar consistent with the restored tree: drop any
+        # pre-restore rows under the affected paths; the reindex above re-emits
+        # embedding messages that co-enqueue fresh keyword upserts afterwards.
+        self._schedule_keyword_rebuild(written=written, deleted=deleted, ctx=ctx)
 
     async def _run_restore_rebuild_tracked(
         self,

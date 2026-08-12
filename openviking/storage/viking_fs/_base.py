@@ -13,7 +13,13 @@ from openviking_cli.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
-    from openviking_cli.utils.config import GrepConfig, RerankConfig, RetrievalConfig
+    from openviking.storage.keywordfs.keyword_fs import KeywordFS
+    from openviking_cli.utils.config import (
+        GrepConfig,
+        KeywordConfig,
+        RerankConfig,
+        RetrievalConfig,
+    )
 
 logger = get_logger(__name__)
 
@@ -148,6 +154,8 @@ def init_viking_fs(
     vector_store: Optional["VikingVectorIndexBackend"] = None,
     retrieval_config: Optional["RetrievalConfig"] = None,
     grep_config: Optional["GrepConfig"] = None,
+    keyword_config: Optional["KeywordConfig"] = None,
+    keyword_fs: Optional["KeywordFS"] = None,
     timeout: int = 10,
     enable_recorder: bool = False,
     encryptor: Optional[Any] = None,
@@ -163,6 +171,8 @@ def init_viking_fs(
         vector_store: Vector store instance
         enable_recorder: Whether to enable IO recording
         encryptor: FileEncryptor instance for encryption/decryption
+        keyword_config: Local keyword sidecar configuration
+        keyword_fs: Local keyword sidecar instance
     """
     from openviking.storage.viking_fs import VikingFS
 
@@ -175,6 +185,8 @@ def init_viking_fs(
         vector_store=vector_store,
         retrieval_config=retrieval_config,
         grep_config=grep_config,
+        keyword_config=keyword_config,
+        keyword_fs=keyword_fs,
         encryptor=encryptor,
     )
 

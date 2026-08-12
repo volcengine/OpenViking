@@ -95,6 +95,7 @@ class OpenVikingService:
         self._watch_scheduler: Optional[WatchScheduler] = None
         self._session_auto_commit_scheduler: Optional[SessionAutoCommitScheduler] = None
         self._encryptor: Optional[Any] = None
+        self._keyword_fs: Optional[Any] = None
         self._privacy_config_service: Optional[UserPrivacyConfigService] = None
         self._data_dir_lock_acquired = False
         self._data_dir_lock_path: Optional[str] = None
@@ -186,9 +187,42 @@ class OpenVikingService:
         # in initialize(), so that recovered tasks don't race against VikingFS init.
         if self._queue_manager:
             self._queue_manager.setup_standard_queues(self._vikingdb_manager, start=False)
+            self._keyword_fs = self._build_keyword_fs()
+            if self._keyword_fs is not None:
+                self._queue_manager.setup_keyword_queue(
+                    self._keyword_fs,
+                    self._config.keyword,
+                    start=False,
+                )
 
         # PathLock has been moved to Rust ragfs; Python-layer LockManager is no longer needed.
         set_task_tracker(config.build_task_tracker(self._agfs_client))
+
+    def _build_keyword_fs(self) -> Optional[Any]:
+        """Build the keyword sidecar when enabled and safe; otherwise None.
+
+        Respects the at-rest encryption guard: the sidecar stores plaintext text,
+        so it is disabled on encrypted deployments unless ``respect_encryption``
+        is turned off.
+        """
+        from pathlib import Path
+
+        from openviking.storage.keywordfs.keyword_fs import KeywordFS
+
+        keyword_config = self._config.keyword
+        if not keyword_config.enabled:
+            return None
+        if keyword_config.respect_encryption and self._encryptor is not None:
+            logger.info("Keyword sidecar disabled: at-rest encryption is enabled")
+            return None
+        db_dir = keyword_config.db_dir or str(
+            Path(self._config.storage.workspace) / "_system" / "keyword"
+        )
+        try:
+            return KeywordFS(db_dir=db_dir, config=keyword_config)
+        except Exception as exc:
+            logger.warning(f"Failed to initialize keyword sidecar: {exc}")
+            return None
 
     def _build_ragfs_binding_config(self) -> Any:
         """Build the single runtime binding config from OpenViking storage + encryption settings."""
@@ -348,6 +382,8 @@ class OpenVikingService:
             vector_store=self._vikingdb_manager,
             retrieval_config=config.retrieval,
             grep_config=config.grep,
+            keyword_config=config.keyword,
+            keyword_fs=self._keyword_fs,
             enable_recorder=enable_recorder,
             encryptor=self._encryptor,
         )
@@ -529,6 +565,13 @@ class OpenVikingService:
             await asyncio.to_thread(self._queue_manager.stop)
             self._queue_manager = None
             logger.info("Queue manager stopped")
+
+        if self._keyword_fs is not None:
+            try:
+                self._keyword_fs.close()
+            except Exception:
+                logger.warning("Failed to close keyword sidecar", exc_info=True)
+            self._keyword_fs = None
 
         if self._vikingdb_manager:
             self._vikingdb_manager.mark_closing()
