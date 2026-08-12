@@ -98,8 +98,10 @@ async function onTriggerClick() {
     if (!widget) throw new Error('The VikingBot widget script did not register window.VikingBotWidget')
 
     if (widgetMounted) {
+      // No local state update here: toggle() emits open/close synchronously and
+      // onWidgetEvent is the single writer of isOpen. Flipping it here too
+      // would invert aria-expanded on every click.
       widget.toggle()
-      isOpen.value = !isOpen.value
       return
     }
 
@@ -111,7 +113,6 @@ async function onTriggerClick() {
       onEvent: onWidgetEvent
     })
     widgetMounted = true
-    isOpen.value = true
   } catch (error) {
     console.error(error)
     hasError.value = true
