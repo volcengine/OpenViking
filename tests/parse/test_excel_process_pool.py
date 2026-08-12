@@ -121,6 +121,20 @@ def test_truncate_excel_markdown_tables_without_sheet_heading():
     assert "After" in output
 
 
+def test_truncate_excel_markdown_tables_warns_when_sheet_table_is_not_recognized(caplog):
+    markdown = "## Sheet1\n\nconverted content is not a Markdown table\n"
+
+    excel_module.logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level("WARNING"):
+            output = truncate_excel_markdown_tables(markdown, 1)
+    finally:
+        excel_module.logger.removeHandler(caplog.handler)
+
+    assert output == markdown
+    assert "could not recognize a table" in caplog.text
+
+
 @pytest.mark.asyncio
 async def test_process_pool_forwards_no_split_layout_flag(
     monkeypatch: pytest.MonkeyPatch,

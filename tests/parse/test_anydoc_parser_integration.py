@@ -279,6 +279,7 @@ async def test_excel_parser_uses_anydoc_truncates_rows_and_allows_media_dir(tmp_
     parser = excel.ExcelParser(anydoc_config=AnydocConfig(), max_rows_per_sheet=1)
     seen = _stub_markdown_parse(parser)
     source = tmp_path / "book.ods"
+    import_root = tmp_path / "import"
     source.write_bytes(b"placeholder")
     monkeypatch.setattr(
         anydoc_converter.AnyDocConverter,
@@ -289,12 +290,25 @@ async def test_excel_parser_uses_anydoc_truncates_rows_and_allows_media_dir(tmp_
         ),
     )
 
-    result = await parser.parse(source, source_name="Budget.ods")
+    result = await parser.parse(
+        source,
+        source_name="Budget.ods",
+        enable_link_rewrite=True,
+        link_rewrite_root=str(import_root),
+        allowed_media_dirs=[import_root],
+        flatten_single_output=True,
+        split_content=False,
+    )
 
     assert parser.supported_extensions == [".xlsx", ".xls", ".xlsm", ".xlsb", ".ods", ".csv"]
     assert "|1|2|" in seen["content"]
     assert "|3|4|" not in seen["content"]
-    assert seen["kwargs"]["allowed_media_dirs"] == [storage.media_dir]
+    assert seen["kwargs"]["enable_link_rewrite"] is True
+    assert seen["kwargs"]["link_rewrite_root"] == str(import_root)
+    assert seen["kwargs"]["allowed_media_dirs"] == [import_root, storage.media_dir]
+    assert seen["kwargs"]["flatten_single_output"] is True
+    assert seen["kwargs"]["split_content"] is False
+    assert seen["kwargs"]["base_dir"] == source.parent
     assert result.source_format == "ods"
     assert result.parser_name == "ExcelParser"
 
