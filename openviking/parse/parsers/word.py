@@ -17,6 +17,8 @@ from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+_LEGACY_SUPPORTED_EXTENSIONS = frozenset({".docx", ".docm"})
+
 
 class WordParser(BaseParser):
     """
@@ -69,7 +71,10 @@ class WordParser(BaseParser):
                     markdown_content = conversion.markdown
                     source_format = conversion.source_format or source_format
                 except Exception:
-                    if not self.anydoc_config.fallback_to_legacy:
+                    if (
+                        not self.anydoc_config.fallback_to_legacy
+                        or path.suffix.lower() not in _LEGACY_SUPPORTED_EXTENSIONS
+                    ):
                         raise
                     logger.warning(
                         "[WordParser] anydoc conversion failed for %s; using legacy converter",
@@ -80,6 +85,11 @@ class WordParser(BaseParser):
                         path, resource_name=resource_name, storage=storage
                     )
             else:
+                if path.suffix.lower() not in _LEGACY_SUPPORTED_EXTENSIONS:
+                    raise RuntimeError(
+                        "anydoc conversion is disabled and no legacy converter is available "
+                        f"for {path.suffix.lower() or 'this format'}"
+                    )
                 markdown_content = await self._legacy_convert(
                     path, resource_name=resource_name, storage=storage
                 )

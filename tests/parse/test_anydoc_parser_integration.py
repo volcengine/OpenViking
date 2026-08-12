@@ -139,6 +139,48 @@ async def test_word_parser_falls_back_after_anydoc_failure(tmp_path, monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_word_parser_rejects_odt_when_anydoc_disabled(tmp_path, monkeypatch):
+    _patch_storage(monkeypatch, tmp_path)
+    parser = word.WordParser(anydoc_config=AnydocConfig(enable=False))
+    source = tmp_path / "report.odt"
+    source.write_bytes(b"placeholder")
+    monkeypatch.setattr(
+        parser,
+        "_legacy_convert",
+        lambda *args, **kwargs: pytest.fail("python-docx must not handle ODT"),
+    )
+
+    with pytest.raises(RuntimeError, match=r"anydoc.*disabled.*\.odt"):
+        await parser.parse(source)
+
+
+@pytest.mark.asyncio
+async def test_word_parser_reraises_anydoc_error_for_rtf_without_legacy_converter(
+    tmp_path, monkeypatch
+):
+    _patch_storage(monkeypatch, tmp_path)
+    parser = word.WordParser(anydoc_config=AnydocConfig(fallback_to_legacy=True))
+    source = tmp_path / "report.rtf"
+    source.write_bytes(b"placeholder")
+    anydoc_error = RuntimeError("conversion failed")
+    monkeypatch.setattr(
+        anydoc_converter.AnyDocConverter,
+        "convert",
+        lambda *args, **kwargs: (_ for _ in ()).throw(anydoc_error),
+    )
+    monkeypatch.setattr(
+        parser,
+        "_legacy_convert",
+        lambda *args, **kwargs: pytest.fail("python-docx must not handle RTF"),
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await parser.parse(source)
+
+    assert exc_info.value is anydoc_error
+
+
+@pytest.mark.asyncio
 async def test_legacy_doc_parser_uses_anydoc_for_real_doc(tmp_path, monkeypatch):
     storage = _patch_storage(monkeypatch, tmp_path)
     parser = legacy_doc.LegacyDocParser(anydoc_config=AnydocConfig())
