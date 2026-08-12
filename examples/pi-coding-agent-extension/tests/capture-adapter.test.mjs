@@ -72,3 +72,28 @@ test("extractBranchCapturePayloads faithful mode still skips commands and plugin
 
   assert.equal(result.payloads.length, 0);
 });
+
+test("tool-only payloads carry tool output once, not duplicated as text", () => {
+  const output = "z".repeat(5000);
+  const { payloads } = extractBranchCapturePayloads(
+    [
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "tool_result", tool_use_id: "call-dup-check", output },
+          ],
+        },
+      },
+    ],
+    0,
+    { captureAssistantTurns: true, captureToolMaxChars: 1000000 },
+  );
+
+  const parts = payloads.flatMap((payload) => payload.parts || []);
+  assert.equal(parts.filter((part) => part.type === "text").length, 0);
+  const toolParts = parts.filter((part) => part.type === "tool");
+  assert.equal(toolParts.length, 1);
+  assert.equal(toolParts[0].tool_output, output);
+});

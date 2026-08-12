@@ -112,16 +112,13 @@ function extractToolResultText(content) {
 }
 
 // Structured parts (parts-mode capture) — mirrors auto-capture.mjs. Tool calls /
-// results become dedicated `tool` parts instead of being inlined into content.
-const TOOL_OUTPUT_PART_MAX_CHARS = 2000;
-
+// results become dedicated `tool` parts instead of being inlined into content,
+// and tool_output is reported verbatim so the server can externalize it.
 function truncateToolOutput(s) {
   if (typeof s !== "string") s = String(s ?? "");
-  if (s.length <= TOOL_OUTPUT_PART_MAX_CHARS) return s;
-  return (
-    s.slice(0, TOOL_OUTPUT_PART_MAX_CHARS) +
-    `\n... [truncated, ${s.length - TOOL_OUTPUT_PART_MAX_CHARS} more chars]`
-  );
+  const max = cfg.captureToolMaxChars;
+  if (s.length <= max) return s;
+  return s.slice(0, max) + `\n... [truncated, ${s.length - max} more chars]`;
 }
 
 function collectToolNamesById(messages) {

@@ -165,7 +165,7 @@ async def test_trajectory_rollout_analyzer_extracts_and_persists_trajectory(monk
             parts=[
                 ToolPart(
                     tool_id="read-1",
-                    tool_name="read_experience",
+                    tool_name="read",
                     tool_input={"uri": "viking://user/u/memories/experiences/exchange.md"},
                     tool_output="experience body",
                     tool_status="completed",

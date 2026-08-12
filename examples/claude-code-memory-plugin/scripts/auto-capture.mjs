@@ -276,17 +276,14 @@ function extractToolResultText(content) {
 
 // Tool output retention for the part path. Unlike the legacy prose path
 // (TOOL_RESULT_MAX_CHARS, which drops outputs to keep the extractor's text
-// clean), results here land in a separable tool_output field, so we keep them —
-// bounded so we don't store whole files / web pages / command stdout verbatim.
-const TOOL_OUTPUT_PART_MAX_CHARS = 2000;
-
+// clean), results here land in a separable tool_output field and are reported
+// verbatim — the server externalizes anything oversized and leaves a stub plus
+// tool_output_ref, so truncating here would only destroy what it stores.
 function truncateToolOutput(s) {
   if (typeof s !== "string") s = String(s ?? "");
-  if (s.length <= TOOL_OUTPUT_PART_MAX_CHARS) return s;
-  return (
-    s.slice(0, TOOL_OUTPUT_PART_MAX_CHARS) +
-    `\n... [truncated, ${s.length - TOOL_OUTPUT_PART_MAX_CHARS} more chars]`
-  );
+  const max = cfg.captureToolMaxChars;
+  if (s.length <= max) return s;
+  return s.slice(0, max) + `\n... [truncated, ${s.length - max} more chars]`;
 }
 
 // tool_result blocks carry only tool_use_id, not the tool name. Pre-scan all

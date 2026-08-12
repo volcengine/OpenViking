@@ -46,8 +46,6 @@ Once installed, the plugin provides these agent tools:
 | `ov_read` | Read the full original content of one exact OpenViking URI |
 | `ov_multi_read` | Read the full original content of multiple OpenViking URIs |
 | `ov_list` | List OpenViking directories after search to inspect sibling chunks and overview files |
-| `search_experience` | Search reusable execution experiences for the current OpenViking user |
-| `read_experience` | Read one exact Experience returned by `search_experience` |
 | `openviking_tool_result_read` | Restore the full original content of an externalized tool result |
 | `openviking_tool_result_search` | Search inside an externalized tool result by keyword |
 | `openviking_tool_result_list` | List externalized tool results in the current session |
@@ -250,8 +248,6 @@ Beyond automatic behavior, the plugin exposes these tools directly:
 - `ov_read`: read one exact `viking://` URI returned by `ov_search` or `ov_list`
 - `ov_multi_read`: read multiple exact `viking://` URIs, useful for an overview plus sibling chunks
 - `ov_list`: list a hit's parent directory after `ov_search` to recover sibling chunks, `.overview.md`, and related split-document context
-- `search_experience`: search reusable execution experiences for the current OpenViking user
-- `read_experience`: read one exact Experience returned by `search_experience`
 
 They serve different roles:
 
@@ -265,7 +261,6 @@ They serve different roles:
 - `ov_read` turns a ranked hit into original evidence before answering precise documentation, codebase, configuration, or procedural questions
 - `ov_multi_read` reads overview and sibling chunks together when a split document needs more context than a single hit
 - `ov_list` complements `ov_search` when a ranked hit is only one chunk of a larger procedure or document
-- `search_experience` and `read_experience` provide the exact tool-call contract used by the bundled Experience Memory skill and usage reporting
 
 `ov_archive_expand` is especially important because `assemble()` normally returns archive summaries and indexes, not the full raw transcript.
 

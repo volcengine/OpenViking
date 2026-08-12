@@ -81,7 +81,7 @@ const DEFAULT_CONFIG: OVConfig = {
   captureToolResults: false,
   captureMode: "semantic",
   captureMaxLength: 24000,
-  captureToolMaxChars: 2000,
+  captureToolMaxChars: 1000000,
   captureAssistantTurns: true,
   bypassPatterns: [],
   logLevel: "error",
@@ -161,7 +161,7 @@ export function loadConfig(extensionDir: string): OVConfig {
   config.takeoverOverviewPollMs = clampInt(config.takeoverOverviewPollMs, 0, 60000, DEFAULT_CONFIG.takeoverOverviewPollMs);
   config.takeoverOverviewPollMax = clampInt(config.takeoverOverviewPollMax, 1, 120, DEFAULT_CONFIG.takeoverOverviewPollMax);
   config.captureMaxLength = clampInt(config.captureMaxLength, 200, 100000, DEFAULT_CONFIG.captureMaxLength);
-  config.captureToolMaxChars = clampInt(config.captureToolMaxChars, 200, 20000, DEFAULT_CONFIG.captureToolMaxChars);
+  config.captureToolMaxChars = clampInt(config.captureToolMaxChars, 200, 1000000, DEFAULT_CONFIG.captureToolMaxChars);
   config.captureMode = config.captureMode === "keyword" ? "keyword" : "semantic";
   config.recallPeerScope = config.recallPeerScope === "actor" ? "actor" : "all";
   config.recallQueryExpansion = config.recallQueryExpansion === "off" ? "off" : "auto";

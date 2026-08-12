@@ -22,11 +22,13 @@ const repoRoot = resolve(scriptsDir, "..", "..", "..");
 const catalogPath = join(repoRoot, ".agents", "plugins", "marketplace.json");
 const manifestPath = join(pluginDir, ".codex-plugin", "plugin.json");
 const mcpEndpointPath = join(repoRoot, "openviking", "server", "mcp_endpoint.py");
+const canonicalExperienceSkillPath = join(repoRoot, "examples", "skills", "ov-experience-memory", "SKILL.md");
+const packagedExperienceSkillPath = join(pluginDir, "skills", "ov-experience-memory", "SKILL.md");
 
 const PLUGIN_NAME = "openviking-memory";
 const REAL_MCP_TOOLS = [
-  "find", "search", "recall", "read", "list", "remember", "add_resource",
-  "list_watches", "cancel_watch", "grep", "glob", "forget", "health",
+  "find", "search", "recall", "read", "list", "tree", "remember", "write", "edit",
+  "add_resource", "list_watches", "cancel_watch", "grep", "glob", "forget", "health",
 ];
 const LEGACY_TOOL_NAMES = ["openviking_recall", "openviking_store", "openviking_forget", "openviking_health"];
 
@@ -113,33 +115,22 @@ test("examples/.agents catalog backs the directory-marketplace install path", ()
 });
 
 test("required plugin files are present", () => {
-  for (const rel of [".codex-plugin/plugin.json", ".mcp.json", "hooks/hooks.json"]) {
+  for (const rel of [
+    ".codex-plugin/plugin.json",
+    ".mcp.json",
+    "hooks/hooks.json",
+    "skills/ov-experience-memory/SKILL.md",
+  ]) {
     assert.ok(existsSync(join(pluginDir, rel)), `missing required plugin file: ${rel}`);
   }
 });
 
-test("plugin bundles the Experience Memory skill", () => {
-  const skillPath = join(pluginDir, "skills", "ov-experience-memory", "SKILL.md");
-  assert.ok(existsSync(skillPath), `missing bundled skill: ${skillPath}`);
-  const content = readFileSync(skillPath, "utf-8");
-  assert.match(content, /^---[\s\S]*name:\s*ov-experience-memory[\s\S]*---/);
-  assert.match(content, /`search_experience`/);
-  assert.match(content, /`read_experience`/);
-});
-
-test("Experience Memory skill examples match the search_experience input schema", () => {
-  const skillPaths = [
-    join(pluginDir, "skills", "ov-experience-memory", "SKILL.md"),
-    join(repoRoot, "examples", "skills", "ov-experience-memory", "SKILL.md"),
-  ];
-  for (const skillPath of skillPaths) {
-    const content = readFileSync(skillPath, "utf-8");
-    const section = content.match(/## Tool: search_experience([\s\S]*?)## Tool: read_experience/)?.[1];
-    assert.ok(section, `missing search_experience section in ${skillPath}`);
-    const inputExample = section.match(/Input schema:\s*```json\s*([\s\S]*?)```/)?.[1];
-    assert.ok(inputExample, `missing search_experience input example in ${skillPath}`);
-    assert.deepEqual(Object.keys(JSON.parse(inputExample)).sort(), ["limit", "query"]);
-  }
+test("marketplace package ships the canonical Experience skill", () => {
+  assert.equal(
+    readFileSync(packagedExperienceSkillPath, "utf-8"),
+    readFileSync(canonicalExperienceSkillPath, "utf-8"),
+    "packaged Experience skill must stay byte-identical to examples/skills/ov-experience-memory",
+  );
 });
 
 test("plugin.json does not describe legacy MCP tool names", () => {
@@ -180,10 +171,10 @@ test(".mcp.json starts the stdio MCP proxy from the plugin root", () => {
   execFileSync("node", ["--check", join(pluginDir, "servers", "mcp-proxy.mjs")], { stdio: "pipe" });
 });
 
-test("Codex MCP entrypoint wires the Experience tool provider", () => {
+test("Codex MCP entrypoint forwards only native OpenViking tools", () => {
   const entrypoint = readFileSync(join(pluginDir, "servers", "mcp-proxy.mjs"), "utf-8");
-  assert.match(entrypoint, /createExperienceToolProvider/);
-  assert.match(entrypoint, /localToolProvider/);
+  assert.doesNotMatch(entrypoint, /createExperienceToolProvider/);
+  assert.doesNotMatch(entrypoint, /localToolProvider/);
 });
 
 test("canonical MCP tool list matches server registrations", () => {

@@ -5,7 +5,7 @@ import { extractCaptureTurns } from "./capture-utils.mjs";
 
 const CAPTURE_CONFIG = {
   captureAssistantTurns: true,
-  captureToolMaxChars: 2000,
+  captureToolMaxChars: 1000000,
   captureMaxLength: 24000,
 };
 
@@ -261,7 +261,7 @@ test("captures Codex subagent messages and activity with identity", () => {
   ]);
 });
 
-test("captures Codex mcp_tool_call_end as standard tool parts", () => {
+test("captures generic OpenViking MCP calls as standard tool parts", () => {
   const results = {
     results: [
       {
@@ -279,8 +279,11 @@ test("captures Codex mcp_tool_call_end as standard tool parts", () => {
           call_id: "exec-search-1",
           invocation: {
             server: "openviking-memory",
-            tool: "search_experience",
-            arguments: { query: "无订单号换货" },
+            tool: "find",
+            arguments: {
+              query: "无订单号换货",
+              target_uri: "viking://user/test/memories/experiences/",
+            },
           },
           result: {
             Ok: {
@@ -296,14 +299,17 @@ test("captures Codex mcp_tool_call_end as standard tool parts", () => {
   assert.deepEqual(turns, [
     {
       role: "assistant",
-      text: "[tool-call search_experience] {\"query\":\"无订单号换货\"}",
+      text: "[tool-call find] {\"query\":\"无订单号换货\",\"target_uri\":\"viking://user/test/memories/experiences/\"}",
       parts: [
         {
           type: "tool",
           tool_id: "exec-search-1",
-          tool_name: "search_experience",
+          tool_name: "find",
           tool_status: "running",
-          tool_input: { query: "无订单号换货" },
+          tool_input: {
+            query: "无订单号换货",
+            target_uri: "viking://user/test/memories/experiences/",
+          },
         },
       ],
     },
@@ -314,9 +320,8 @@ test("captures Codex mcp_tool_call_end as standard tool parts", () => {
         {
           type: "tool",
           tool_id: "exec-search-1",
-          tool_name: "search_experience",
+          tool_name: "find",
           tool_status: "completed",
-          tool_input: { query: "无订单号换货" },
           tool_output: JSON.stringify(results),
         },
       ],
@@ -324,7 +329,7 @@ test("captures Codex mcp_tool_call_end as standard tool parts", () => {
   ]);
 });
 
-test("keeps MCP tool-level errors out of completed Experience tool parts", () => {
+test("keeps MCP tool-level errors out of completed generic read tool parts", () => {
   const uri = "viking://user/test/memories/experiences/a.md";
   const turns = extractCaptureTurns(
     [
@@ -335,7 +340,7 @@ test("keeps MCP tool-level errors out of completed Experience tool parts", () =>
           call_id: "exec-read-error",
           invocation: {
             server: "openviking-memory",
-            tool: "read_experience",
+            tool: "read",
             arguments: { uri },
           },
           result: {
@@ -355,7 +360,7 @@ test("keeps MCP tool-level errors out of completed Experience tool parts", () =>
   assert.equal(parts.some((part) => part.tool_status === "completed"), false);
 });
 
-test("preserves Experience usage metadata when Codex truncates a long MCP result", () => {
+test("preserves generic read input when Codex truncates a long MCP result", () => {
   const uri = "viking://user/test/memories/experiences/long-experience.md";
   const turns = extractCaptureTurns(
     [
@@ -366,7 +371,7 @@ test("preserves Experience usage metadata when Codex truncates a long MCP result
           call_id: "exec-read-long",
           invocation: {
             server: "openviking-memory",
-            tool: "read_experience",
+            tool: "read",
             arguments: { uri },
           },
           result: {
@@ -385,13 +390,13 @@ test("preserves Experience usage metadata when Codex truncates a long MCP result
     CAPTURE_CONFIG,
   );
 
-  const completed = turns
+  const running = turns
     .flatMap((turn) => turn.parts)
-    .find((part) => part.tool_status === "completed");
-  assert.deepEqual(completed.tool_input, { uri });
+    .find((part) => part.tool_status === "running");
+  assert.deepEqual(running.tool_input, { uri });
 });
 
-test("keeps search Experience URIs parseable when snippets exceed the capture limit", () => {
+test("keeps search Experience results parseable when snippets are long", () => {
   const uri = "viking://user/test/memories/experiences/long-search-result.md";
   const turns = extractCaptureTurns(
     [
@@ -402,7 +407,7 @@ test("keeps search Experience URIs parseable when snippets exceed the capture li
           call_id: "exec-search-long",
           invocation: {
             server: "openviking-memory",
-            tool: "search_experience",
+            tool: "find",
             arguments: { query: "换货" },
           },
           result: {
@@ -426,5 +431,69 @@ test("keeps search Experience URIs parseable when snippets exceed the capture li
   const completed = turns
     .flatMap((turn) => turn.parts)
     .find((part) => part.tool_status === "completed");
-  assert.deepEqual(JSON.parse(completed.tool_output), { results: [{ uri }] });
+  assert.deepEqual(JSON.parse(completed.tool_output), {
+    results: [{ uri, title: "换货经验", snippet: "x".repeat(3000) }],
+  });
+});
+
+test("reports tool output verbatim so the server can externalize it", () => {
+  const output = "x".repeat(50_000);
+  const turns = extractCaptureTurns(
+    [
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          call_id: "call-large-output",
+          name: "shell",
+          arguments: { command: "cat big.txt" },
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call-large-output",
+          output,
+        },
+      },
+    ],
+    CAPTURE_CONFIG,
+  );
+
+  const completed = turns
+    .flatMap((turn) => turn.parts)
+    .find((part) => part.tool_status === "completed");
+  assert.equal(completed.tool_output, output);
+});
+
+test("captureToolMaxChars still caps tool output when an operator lowers it", () => {
+  const turns = extractCaptureTurns(
+    [
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          call_id: "call-capped-output",
+          name: "shell",
+          arguments: { command: "cat big.txt" },
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call-capped-output",
+          output: "y".repeat(5000),
+        },
+      },
+    ],
+    { ...CAPTURE_CONFIG, captureToolMaxChars: 1000 },
+  );
+
+  const completed = turns
+    .flatMap((turn) => turn.parts)
+    .find((part) => part.tool_status === "completed");
+  assert.ok(completed.tool_output.length <= 1000);
+  assert.match(completed.tool_output, /\[truncated\]$/);
 });

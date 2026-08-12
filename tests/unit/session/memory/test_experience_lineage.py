@@ -1,6 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import pytest
+
 from openviking.message import Message, ToolPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOperations
@@ -20,8 +22,9 @@ def _ctx() -> RequestContext:
     return RequestContext(user=UserIdentifier("account", "alice"), role=Role.USER)
 
 
-def test_collect_read_experience_uris_only_keeps_completed_current_user_reads():
+def test_collect_read_experience_uris_supports_generic_openviking_reads():
     uri = "viking://user/alice/memories/experiences/order-exchange.md"
+    opencode_uri = "viking://user/alice/memories/experiences/opencode.md"
     messages = [
         Message(
             id="call",
@@ -29,13 +32,13 @@ def test_collect_read_experience_uris_only_keeps_completed_current_user_reads():
             parts=[
                 ToolPart(
                     tool_id="read-1",
-                    tool_name="read_experience",
+                    tool_name="mcp__openviking__read",
                     tool_input={"uri": uri},
                     tool_status="pending",
                 ),
                 ToolPart(
                     tool_id="search-1",
-                    tool_name="search_experience",
+                    tool_name="mcp__openviking__find",
                     tool_input={"query": "exchange"},
                     tool_status="completed",
                     tool_output='{"results":[{"uri":"%s"}]}' % uri,
@@ -48,19 +51,25 @@ def test_collect_read_experience_uris_only_keeps_completed_current_user_reads():
             parts=[
                 ToolPart(
                     tool_id="read-1",
-                    tool_name="read_experience",
+                    tool_name="mcp__openviking__read",
                     tool_status="completed",
                     tool_output='{"uri":"%s"}' % uri,
                 ),
                 ToolPart(
                     tool_id="read-2",
-                    tool_name="read_experience",
+                    tool_name="openviking_read",
                     tool_input={"uri": "viking://user/bob/memories/experiences/other.md"},
                     tool_status="completed",
                 ),
                 ToolPart(
+                    tool_id="read-2-current-user",
+                    tool_name="openviking_read",
+                    tool_input={"uri": opencode_uri},
+                    tool_status="completed",
+                ),
+                ToolPart(
                     tool_id="read-3",
-                    tool_name="read_experience",
+                    tool_name="read",
                     tool_input={"uri": uri},
                     tool_status="error",
                 ),
@@ -68,7 +77,53 @@ def test_collect_read_experience_uris_only_keeps_completed_current_user_reads():
         ),
     ]
 
-    assert collect_read_experience_uris(messages, ctx=_ctx()) == [uri]
+    assert collect_read_experience_uris(messages, ctx=_ctx()) == [uri, opencode_uri]
+
+
+@pytest.mark.parametrize("tool_name", ["multi_read", "openviking_multi_read"])
+def test_collect_read_experience_uris_filters_failed_multi_read_results(tool_name):
+    first_uri = "viking://user/alice/memories/experiences/first.md"
+    failed_uri = "viking://user/alice/memories/experiences/failed.md"
+    messages = [
+        Message(
+            id="multi-read",
+            role="user",
+            parts=[
+                ToolPart(
+                    tool_id="multi-read-1",
+                    tool_name=tool_name,
+                    tool_input={"uris": [first_uri, failed_uri]},
+                    tool_status="completed",
+                    tool_output=(
+                        '{"results":['
+                        f'{{"uri":"{first_uri}","success":true}},'
+                        f'{{"uri":"{failed_uri}","success":false}}]}}'
+                    ),
+                )
+            ],
+        )
+    ]
+
+    assert collect_read_experience_uris(messages, ctx=_ctx()) == [first_uri]
+
+
+def test_collect_read_experience_uris_ignores_removed_dedicated_tool():
+    messages = [
+        Message(
+            id="legacy-read",
+            role="user",
+            parts=[
+                ToolPart(
+                    tool_id="legacy-read-1",
+                    tool_name="read_experience",
+                    tool_input={"uri": "viking://user/alice/memories/experiences/legacy.md"},
+                    tool_status="completed",
+                )
+            ],
+        )
+    ]
+
+    assert collect_read_experience_uris(messages, ctx=_ctx()) == []
 
 
 def test_experience_source_tag_uses_experience_uri_as_key():

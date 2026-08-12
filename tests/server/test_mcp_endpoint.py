@@ -24,8 +24,10 @@ from openviking.server.mcp_endpoint import (
     _get_ctx,
     _IdentityASGIMiddleware,
     _mcp_ctx,
+    _resolve_mcp_workspace_uri,
     add_resource,
     cancel_watch,
+    edit,
     forget,
     glob,
     grep,
@@ -35,9 +37,17 @@ from openviking.server.mcp_endpoint import (
     recall,
     remember,
     search,
+    tree,
+    write,
 )
 from openviking.server.mcp_endpoint import ls as list_tool
-from openviking_cli.exceptions import FailedPreconditionError, UnauthenticatedError
+from openviking_cli.exceptions import (
+    AlreadyExistsError,
+    FailedPreconditionError,
+    InvalidArgumentError,
+    NotFoundError,
+    UnauthenticatedError,
+)
 from openviking_cli.session.user_id import UserIdentifier
 
 DEFAULT_CTX = RequestContext(
@@ -72,6 +82,42 @@ def test_get_ctx_raises_when_unset():
             _get_ctx()
     finally:
         _mcp_ctx.reset(token)
+
+
+@pytest.mark.parametrize(
+    ("uri", "expected"),
+    [
+        ("viking://user", "viking://user/test_user"),
+        ("viking://user/notes.md", "viking://user/test_user/notes.md"),
+        (
+            "viking://user/project/notes.md",
+            "viking://user/test_user/project/notes.md",
+        ),
+        (
+            "viking://user/test_user/project/notes.md",
+            "viking://user/test_user/project/notes.md",
+        ),
+        ("viking://resources/project/notes.md", "viking://resources/project/notes.md"),
+    ],
+)
+def test_resolve_mcp_workspace_uri_is_current_user_relative(uri, expected):
+    assert _resolve_mcp_workspace_uri(uri, DEFAULT_CTX) == expected
+
+
+def test_resolve_mcp_workspace_uri_supports_dotted_current_user_id():
+    ctx = RequestContext(
+        user=UserIdentifier.the_default_user("alice.smith@corp.com"),
+        role=Role.USER,
+    )
+
+    assert (
+        _resolve_mcp_workspace_uri("viking://user/alice.smith@corp.com/notes/todo.md", ctx)
+        == "viking://user/alice.smith@corp.com/notes/todo.md"
+    )
+    assert (
+        _resolve_mcp_workspace_uri("viking://user/notes/todo.md", ctx)
+        == "viking://user/alice.smith@corp.com/notes/todo.md"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +244,7 @@ async def test_find_tool_calls_lightweight_find(service, monkeypatch):
 
     result = await mcp_endpoint.find(
         query="fast lookup",
-        target_uri="viking://resources",
+        target_uri="viking://user/project",
         limit=2,
         min_score=0.2,
         context_type=["memory", "resource"],
@@ -207,7 +253,7 @@ async def test_find_tool_calls_lightweight_find(service, monkeypatch):
     assert result == "No matching context found."
     assert captured["query"] == "fast lookup"
     assert captured["ctx"] == DEFAULT_CTX
-    assert captured["target_uri"] == "viking://resources"
+    assert captured["target_uri"] == "viking://user/test_user/project"
     assert captured["limit"] == 2
     assert captured["score_threshold"] == 0.2
     assert captured["filter"] == {
@@ -244,7 +290,7 @@ async def test_search_tool_calls_context_aware_search_with_session(service, monk
 
     result = await search(
         query="deep lookup",
-        target_uri="viking://resources",
+        target_uri="viking://user/project",
         session_id="session-1",
         limit=4,
         min_score=0.1,
@@ -257,7 +303,7 @@ async def test_search_tool_calls_context_aware_search_with_session(service, monk
     assert captured["session_id"] == "session-1"
     assert captured["query"] == "deep lookup"
     assert captured["ctx"] == DEFAULT_CTX
-    assert captured["target_uri"] == "viking://resources"
+    assert captured["target_uri"] == "viking://user/test_user/project"
     assert captured["session"] == session
     assert captured["limit"] == 4
     assert captured["score_threshold"] == 0.1
@@ -397,15 +443,15 @@ async def test_mcp_middleware_rejects_invalid_actor_peer_header():
 
 
 async def test_read_nonexistent_uri(service):
-    result = await read("viking://user/default/memories/does_not_exist.md")
+    result = await read("viking://user/memories/does_not_exist.md")
     assert "nothing found" in result.lower()
 
 
 async def test_read_batch(service):
     result = await read(
         [
-            "viking://user/default/memories/does_not_exist_1.md",
-            "viking://user/default/memories/does_not_exist_2.md",
+            "viking://user/memories/does_not_exist_1.md",
+            "viking://user/memories/does_not_exist_2.md",
         ]
     )
     assert "===" in result
@@ -419,10 +465,12 @@ async def test_read_uses_public_content_projection(monkeypatch):
         "get_service",
         lambda: SimpleNamespace(fs=SimpleNamespace(read_visible=read_visible)),
     )
-    uri = "viking://user/default/memories/private.md"
+    uri = "viking://user/project/private.md"
 
     assert await read(uri) == "visible memory"
-    read_visible.assert_awaited_once_with(uri, ctx=DEFAULT_CTX)
+    read_visible.assert_awaited_once_with(
+        "viking://user/test_user/project/private.md", ctx=DEFAULT_CTX
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -438,9 +486,9 @@ async def test_list_root(service):
 async def test_list_empty_dir(service):
     ctx = DEFAULT_CTX
     await service.viking_fs.mkdir(
-        "viking://user/default/memories/empty_test", ctx=ctx, exist_ok=True
+        "viking://user/test_user/memories/empty_test", ctx=ctx, exist_ok=True
     )
-    result = await list_tool("viking://user/default/memories/empty_test")
+    result = await list_tool("viking://user/memories/empty_test")
     assert isinstance(result, str)
 
 
@@ -860,9 +908,10 @@ async def test_cancel_watch_not_found(service):
 
 async def test_forget_by_uri_deletes_memory(service):
     ctx = DEFAULT_CTX
-    uri = "viking://user/default/memories/test_forget.md"
-    await service.viking_fs.mkdir("viking://user/default/memories", ctx=ctx, exist_ok=True)
-    await service.viking_fs.write(uri, "test data", ctx=ctx)
+    uri = "viking://user/memories/test_forget.md"
+    canonical_uri = "viking://user/test_user/memories/test_forget.md"
+    await service.viking_fs.mkdir("viking://user/test_user/memories", ctx=ctx, exist_ok=True)
+    await service.viking_fs.write(canonical_uri, "test data", ctx=ctx)
 
     result = await forget(uri=uri)
     assert "deleted" in result.lower()
@@ -900,6 +949,208 @@ async def test_forget_directory_with_recursive_succeeds(service):
 
     result = await forget(uri=dir_uri, recursive=True)
     assert "deleted" in result.lower()
+
+
+# ---------------------------------------------------------------------------
+# write tool
+# ---------------------------------------------------------------------------
+
+
+async def test_write_creates_new_file_with_replace_default(service):
+    uri = "viking://resources/test_write/notes.md"
+    result = await write(uri=uri, content="# Notes\nhello world\n")
+    assert "notes.md" in result
+    assert "Wrote" in result
+    body = await service.fs.read(uri, ctx=DEFAULT_CTX)
+    assert body == "# Notes\nhello world\n"
+
+
+async def test_write_replace_overwrites_existing(service):
+    uri = "viking://resources/test_write_replace.md"
+    await write(uri=uri, content="v1")
+    result = await write(uri=uri, content="v2-content")
+    assert "mode=replace" in result
+    body = await service.fs.read(uri, ctx=DEFAULT_CTX)
+    assert body == "v2-content"
+
+
+async def test_write_create_fails_when_file_exists(service):
+    uri = "viking://resources/test_write_create_exists.md"
+    await write(uri=uri, content="v1")
+    with pytest.raises(AlreadyExistsError):
+        await write(uri=uri, content="v2", mode="create")
+
+
+async def test_write_append_appends_to_existing(service):
+    uri = "viking://resources/test_write_append.md"
+    await write(uri=uri, content="line1\n")
+    await write(uri=uri, content="line2\n", mode="append")
+    body = await service.fs.read(uri, ctx=DEFAULT_CTX)
+    assert body == "line1\nline2\n"
+
+
+async def test_write_append_missing_file_fails(service):
+    with pytest.raises(NotFoundError):
+        await write(
+            uri="viking://resources/test_write_append_missing.md", content="x", mode="append"
+        )
+
+
+async def test_write_create_rejects_disallowed_extension(service):
+    with pytest.raises(InvalidArgumentError):
+        await write(uri="viking://resources/test_write_ext.csv", content="a,b\n", mode="create")
+
+
+async def test_write_rejects_derived_semantic_file(service):
+    with pytest.raises(InvalidArgumentError):
+        await write(uri="viking://resources/test_write_derived/.abstract.md", content="x")
+
+
+async def test_write_read_tool_roundtrip(service):
+    uri = "viking://resources/test_write_roundtrip/profile.md"
+    await write(uri=uri, content="name: ada\n")
+    assert "name: ada" in await read(uris=uri)
+
+
+async def test_edit_replaces_unique_occurrence(service):
+    uri = "viking://resources/test_edit.md"
+    await write(uri=uri, content="alpha\nbeta\ngamma\n")
+    result = await edit(uri=uri, old_string="beta", new_string="BETA")
+    assert "Edited" in result
+    body = await service.fs.read(uri, ctx=DEFAULT_CTX)
+    assert body == "alpha\nBETA\ngamma\n"
+
+
+async def test_edit_sequential_edits_compose(service):
+    uri = "viking://resources/test_edit_order.md"
+    await write(uri=uri, content="foo bar baz\n")
+    await edit(uri=uri, old_string="bar", new_string="qux")
+    await edit(uri=uri, old_string="foo qux", new_string="hello")
+    body = await service.fs.read(uri, ctx=DEFAULT_CTX)
+    assert body == "hello baz\n"
+
+
+async def test_edit_requires_unique_match(service):
+    uri = "viking://resources/test_edit_multi.md"
+    await write(uri=uri, content="dup\ndup\n")
+    with pytest.raises(InvalidArgumentError, match="matches 2 locations"):
+        await edit(uri=uri, old_string="dup", new_string="x")
+
+
+async def test_edit_replace_all(service):
+    uri = "viking://resources/test_edit_all.md"
+    await write(uri=uri, content="dup\ndup\n")
+    await edit(uri=uri, old_string="dup", new_string="x", replace_all=True)
+    body = await service.fs.read(uri, ctx=DEFAULT_CTX)
+    assert body == "x\nx\n"
+
+
+async def test_edit_missing_old_string_fails(service):
+    uri = "viking://resources/test_edit_missing.md"
+    await write(uri=uri, content="alpha\n")
+    with pytest.raises(InvalidArgumentError, match="not found"):
+        await edit(uri=uri, old_string="zzz", new_string="x")
+
+
+async def test_edit_empty_old_string_fails(service):
+    uri = "viking://resources/test_edit_empty.md"
+    await write(uri=uri, content="alpha\n")
+    with pytest.raises(InvalidArgumentError, match="must not be empty"):
+        await edit(uri=uri, old_string="", new_string="x")
+
+
+async def test_edit_on_missing_file_fails(service):
+    with pytest.raises(NotFoundError):
+        await edit(uri="viking://resources/test_edit_ghost.md", old_string="a", new_string="b")
+
+
+async def test_edit_noop_reports_no_changes(service):
+    uri = "viking://resources/test_edit_noop.md"
+    await write(uri=uri, content="same\n")
+    result = await edit(uri=uri, old_string="same", new_string="same")
+    assert "No changes" in result
+
+
+async def test_edit_memory_file_preserves_metadata(service):
+    uri = "viking://user/memories/preferences/test_edit_memory.md"
+    await write(uri=uri, content="likes: tea\n")
+    raw_before = await service.fs.read(uri, ctx=DEFAULT_CTX)
+    assert "MEMORY_FIELDS" in raw_before
+
+    await edit(uri=uri, old_string="tea", new_string="coffee")
+
+    raw_after = await service.fs.read(uri, ctx=DEFAULT_CTX)
+    assert "MEMORY_FIELDS" in raw_after
+    assert "coffee" in raw_after
+    visible = await service.fs.read_visible(uri, ctx=DEFAULT_CTX)
+    assert visible.strip() == "likes: coffee"
+
+
+async def test_write_user_shorthand_uri(service):
+    uri = "viking://user/memories/preferences/shorthand_write.md"
+    result = await write(uri=uri, content="x")
+    assert "shorthand_write.md" in result
+    visible = await service.fs.read_visible(uri, ctx=DEFAULT_CTX)
+    assert visible.strip() == "x"
+
+
+async def test_write_user_root_file_via_shorthand(service):
+    # The first relative segment can be any file or directory name; MCP does
+    # not guess from a file-extension allowlist.
+    result = await write(uri="viking://user/project/zeus-persona.md", content="# Zeus persona\n")
+    assert "viking://user/test_user/project/zeus-persona.md" in result
+    body = await service.fs.read("viking://user/test_user/project/zeus-persona.md", ctx=DEFAULT_CTX)
+    assert body == "# Zeus persona\n"
+
+
+async def test_write_plain_file_directly_at_user_root(service):
+    # A file with no intermediate directory: the write coordinator anchors its
+    # refresh at the user root itself, which is the shape the shorthand exists for.
+    result = await write(uri="viking://user/persona.md", content="# Persona\n")
+    assert "viking://user/test_user/persona.md" in result
+    assert "# Persona" in await read(uris="viking://user/persona.md")
+
+
+async def test_write_user_root_subdirectory_file(service):
+    uri = "viking://user/test_user/notes/todo.md"
+    await write(uri=uri, content="- buy milk\n")
+    assert "- buy milk" in await read(uris=uri)
+
+
+async def test_edit_user_root_file_via_same_shorthand(service):
+    uri = "viking://user/project/editable.md"
+    await write(uri=uri, content="before\n")
+
+    result = await edit(uri=uri, old_string="before", new_string="after")
+
+    assert "viking://user/test_user/project/editable.md" in result
+    assert "after" in await read(uris=uri)
+
+
+async def test_write_user_managed_subtree_rejected(service):
+    with pytest.raises(InvalidArgumentError, match="user root"):
+        await write(uri="viking://user/test_user/sessions/fake-session.md", content="x")
+    with pytest.raises(InvalidArgumentError, match="user root"):
+        await write(uri="viking://user/test_user/skills/demo/SKILL.md", content="x")
+
+
+async def test_write_tool_schema_is_portable():
+    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+    props = tools["write"].inputSchema["properties"]
+    assert props["uri"]["type"] == "string"
+    assert props["content"]["type"] == "string"
+    assert props["mode"]["enum"] == ["replace", "append", "create"]
+    assert {"uri", "content"} <= set(tools["write"].inputSchema.get("required", []))
+
+
+async def test_edit_tool_schema_is_portable():
+    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+    props = tools["edit"].inputSchema["properties"]
+    assert props["uri"]["type"] == "string"
+    assert props["old_string"]["type"] == "string"
+    assert props["new_string"]["type"] == "string"
+    assert props["replace_all"]["type"] == "boolean"
+    assert {"uri", "old_string", "new_string"} <= set(tools["edit"].inputSchema.get("required", []))
 
 
 # ---------------------------------------------------------------------------
@@ -1037,3 +1288,52 @@ async def test_mcp_middleware_stamps_root_span_identity():
     assert response.status_code == 200
     assert root_attrs.account_id == "acct-1"
     assert root_attrs.user_id == "user-1"
+
+
+# ---- tree tool ----
+
+
+async def test_tree_renders_indented_hierarchy(service):
+    await write(uri="viking://resources/test_tree/top.md", content="top\n")
+    await write(uri="viking://resources/test_tree/sub/a.md", content="alpha\n")
+    await write(uri="viking://resources/test_tree/sub/deeper/b.md", content="beta\n")
+
+    result = await tree(uri="viking://resources/test_tree")
+
+    assert result.startswith("Tree of viking://resources/test_tree")
+    assert "\nsub/\n" in result
+    assert "\n  a.md (6 B)\n" in result
+    assert "\n  deeper/\n" in result
+    assert "\n    b.md (5 B)" in result
+    assert "\ntop.md (4 B)" in result
+
+
+async def test_tree_empty_directory(service):
+    result = await tree(uri="viking://resources/test_tree_nope")
+    assert result == "(nothing under viking://resources/test_tree_nope)"
+
+
+async def test_tree_respects_level_limit(service):
+    await write(uri="viking://resources/test_tree_depth/d1/d2/deep.md", content="x\n")
+
+    shallow = await tree(uri="viking://resources/test_tree_depth", level_limit=1)
+    assert "d1/" in shallow
+    assert "deep.md" not in shallow
+
+    full = await tree(uri="viking://resources/test_tree_depth", level_limit=10)
+    assert "\n    deep.md (2 B)" in full
+
+
+async def test_tree_node_limit_adds_truncation_note(service):
+    await write(uri="viking://resources/test_tree_limit/f1.md", content="1\n")
+    await write(uri="viking://resources/test_tree_limit/f2.md", content="2\n")
+
+    result = await tree(uri="viking://resources/test_tree_limit", node_limit=1)
+    assert "(truncated at node_limit=1" in result
+
+
+async def test_tree_include_abstract_still_renders(service):
+    await write(uri="viking://resources/test_tree_abs/note.md", content="hello tree\n")
+
+    result = await tree(uri="viking://resources/test_tree_abs", include_abstract=True)
+    assert "\nnote.md (11 B)" in result

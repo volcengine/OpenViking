@@ -116,11 +116,14 @@ const workspace = {
     refresh: '刷新',
     loading: '正在加载技能...',
     empty: '暂无可用技能',
-    emptyDescription: '添加技能后，会在这里按用户技能和共享技能统一展示。',
+    emptyDescription: '添加技能后，会按用户技能和共享技能分开展示。',
+    emptyScope: '暂无{{scope}}',
+    emptyScopeDescription: '添加对应作用域的技能后，会在这里展示。',
     loadFailed: '技能加载失败',
     networkError: '无法连接 OpenViking 服务，请检查服务地址和连接状态。',
     connectionSettings: '打开连接设置',
     detail: '详情',
+    openPlayground: '在 Playground 打开',
     viewDetail: '查看 {{name}} 详情',
     detailLoading: '正在加载技能详情...',
     detailLoadFailed: '技能详情加载失败',
@@ -141,6 +144,11 @@ const workspace = {
     scopes: {
       user: '用户技能',
       agent: '共享技能',
+    },
+    tabs: {
+      agent: '共享技能',
+      label: '技能作用域',
+      user: '用户技能',
     },
   },
   tasksPage: {

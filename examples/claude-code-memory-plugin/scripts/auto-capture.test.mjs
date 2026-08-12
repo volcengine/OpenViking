@@ -227,3 +227,92 @@ test("legacy advanced cursor rewinds when the server session is empty", async ()
     await rm(root, { recursive: true, force: true });
   }
 });
+
+async function captureToolResult(root, transcriptPath, sessionId, extraEnv = {}) {
+  const batches = [];
+  await withMockOpenViking(async (req, res) => {
+    const url = new URL(req.url, "http://127.0.0.1");
+    if (req.method === "GET" && url.pathname === "/health") {
+      writeJson(res, 200, { status: "ok", result: { healthy: true } });
+      return;
+    }
+    if (req.method === "POST" && url.pathname.endsWith("/messages/batch")) {
+      const body = await readRequestBody(req);
+      batches.push(body);
+      writeJson(res, 200, { status: "ok", result: { added: body.messages.length } });
+      return;
+    }
+    if (req.method === "GET" && url.pathname === `/api/v1/sessions/cc-${sessionId}`) {
+      writeJson(res, 200, {
+        status: "ok",
+        result: { message_count: 2, pending_tokens: 10, commit_count: 0 },
+      });
+      return;
+    }
+    writeJson(res, 404, { status: "error", error: { code: "NOT_FOUND" } });
+  }, async (baseUrl) => {
+    await runAutoCapture(
+      { session_id: sessionId, transcript_path: transcriptPath, cwd: root },
+      { ...hookEnv(root, baseUrl), ...extraEnv },
+    );
+  });
+  return batches
+    .flatMap((batch) => batch.messages)
+    .flatMap((message) => message.parts || [])
+    .filter((part) => part.type === "tool");
+}
+
+async function writeToolTranscript(path, output) {
+  await writeFile(
+    path,
+    [
+      JSON.stringify({ role: "user", content: "read the large fixture please" }),
+      JSON.stringify({
+        role: "assistant",
+        content: [{ type: "tool_use", id: "toolu_1", name: "Read", input: { file_path: "/big.txt" } }],
+      }),
+      JSON.stringify({
+        role: "user",
+        content: [{
+          type: "tool_result",
+          tool_use_id: "toolu_1",
+          content: [{ type: "text", text: output }],
+        }],
+      }),
+    ].join("\n"),
+  );
+}
+
+test("tool output is reported verbatim so the server can externalize it", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-toolout-"));
+  const transcriptPath = join(root, "transcript.jsonl");
+  const output = "x".repeat(50_000);
+
+  try {
+    await writeToolTranscript(transcriptPath, output);
+    const toolParts = await captureToolResult(root, transcriptPath, "capture-toolout");
+    const result = toolParts.find((part) => part.tool_status === "completed");
+    assert.equal(result.tool_name, "Read");
+    assert.equal(result.tool_output, output);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("captureToolMaxChars still caps tool output when an operator lowers it", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-toolcap-"));
+  const transcriptPath = join(root, "transcript.jsonl");
+  const output = "y".repeat(5_000);
+
+  try {
+    await writeToolTranscript(transcriptPath, output);
+    const toolParts = await captureToolResult(root, transcriptPath, "capture-toolcap", {
+      OPENVIKING_CAPTURE_TOOL_MAX_CHARS: "1000",
+    });
+    const result = toolParts.find((part) => part.tool_status === "completed");
+    assert.ok(result.tool_output.startsWith("y".repeat(1000)));
+    assert.match(result.tool_output, /\[truncated, 4000 more chars\]$/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

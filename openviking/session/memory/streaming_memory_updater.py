@@ -768,7 +768,7 @@ async def merge_one_memory_type_operations(
             delete_replacements={},
         )
 
-    fast_path, fast_path_reason = classify_memory_merge_mode(operations, schema=schema)
+    fast_path, fast_path_reason = await classify_memory_merge_mode(operations, schema=schema)
     if fast_path:
         tracer.info(
             "[streaming_memory_updater] memory_type merge decision "
@@ -815,11 +815,17 @@ async def merge_one_memory_type_operations(
         )
     )
     patches = [
-        operation_to_patch(op, schema=schema, extract_context=extract_context) for op in operations
-    ] + [
+        await operation_to_patch(
+            op=op,
+            schema=schema,
+            extract_context=extract_context,
+        )
+        for op in operations
+    ]
+    patches.extend(
         memory_file_to_delete_patch(df, schema=schema, extract_context=extract_context)
         for df in delete_files
-    ]
+    )
     provider = PatchMergeContextProvider(
         memory_type=memory_type,
         required_file_uris=required_file_uris,
@@ -935,14 +941,14 @@ def memory_file_to_delete_patch(
     )
 
 
-def operation_to_patch(
+async def operation_to_patch(
     op: ResolvedOperation,
     *,
     schema: MemoryTypeSchema,
     extract_context: ExtractContext,
 ) -> PatchMergePatch:
     old_file = getattr(op, "old_memory_file_content", None)
-    after_file = render_operation_after_file(
+    after_file = await render_operation_after_file(
         op,
         schema=schema,
         extract_context=extract_context,
@@ -953,13 +959,13 @@ def operation_to_patch(
     )
 
 
-def render_operation_after_file(
+async def render_operation_after_file(
     op: ResolvedOperation,
     *,
     schema: MemoryTypeSchema,
     extract_context: ExtractContext,
 ) -> MemoryFile:
-    after_content = render_operation_after_file_content(
+    after_content = await render_operation_after_file_content(
         op,
         schema=schema,
         extract_context=extract_context,
@@ -967,7 +973,7 @@ def render_operation_after_file(
     return MemoryFileUtils.read(after_content, uri=_first_uri(getattr(op, "uris", []) or []))
 
 
-def render_operation_after_file_content(
+async def render_operation_after_file_content(
     op: ResolvedOperation,
     *,
     schema: MemoryTypeSchema,
@@ -991,7 +997,7 @@ def render_operation_after_file_content(
         else:
             current_value = old_content.extra_fields.get(field_def.name)
         try:
-            metadata[field_def.name] = MergeOpFactory.from_field(field_def).apply(
+            metadata[field_def.name] = await MergeOpFactory.from_field(field_def).apply(
                 current_value,
                 metadata[field_def.name],
             )
@@ -1026,7 +1032,7 @@ def render_operation_after_file_content(
     )
 
 
-def classify_memory_merge_mode(
+async def classify_memory_merge_mode(
     operations: list[ResolvedOperation],
     *,
     schema: MemoryTypeSchema | None = None,
@@ -1062,7 +1068,7 @@ def classify_memory_merge_mode(
     old_plain_content = old_file.plain_content().strip()
     if schema is not None:
         try:
-            after_content = render_operation_after_file_content(
+            after_content = await render_operation_after_file_content(
                 op,
                 schema=schema,
                 extract_context=ExtractContext([]),

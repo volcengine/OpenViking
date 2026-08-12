@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Iterable
 
 from openviking.core.namespace import canonicalize_uri, uri_parts
@@ -13,6 +14,15 @@ from openviking.server.identity import RequestContext
 from openviking.utils.tags import normalize_search_tag
 
 _EXPERIENCE_SIDECAR_FILENAMES = {".abstract.md", ".overview.md", ".relations.json"}
+_READ_TOOL_OPERATIONS = {
+    "read": "read",
+    "multi_read": "multi_read",
+    "openviking_read": "read",
+    "openviking_multi_read": "multi_read",
+    "ov_read": "read",
+    "ov_multi_read": "multi_read",
+}
+_MCP_OPENVIKING_READ_RE = re.compile(r"^mcp__openviking__(read|multi_read)$")
 TRAJECTORY_OUTCOMES = ("success", "failure", "partial", "unknown", "unfinished")
 
 
@@ -112,28 +122,106 @@ def collect_read_experience_uris(
         for part in message.parts:
             if not isinstance(part, ToolPart):
                 continue
-            if part.tool_name != "read_experience" or part.tool_status != "completed":
+            operation = _read_operation(part.tool_name)
+            if operation is None or part.tool_status != "completed":
                 continue
             tool_input = part.tool_input if isinstance(part.tool_input, dict) else {}
             if not tool_input and part.tool_id:
                 tool_input = tool_inputs.get((part.tool_id, part.tool_name), {})
-            output = _load_mapping(part.tool_output)
-            uri = tool_input.get("uri") or output.get("uri")
-            canonical_uri = canonical_experience_uri(str(uri or ""), ctx)
-            if not canonical_uri or canonical_uri in seen:
-                continue
-            seen.add(canonical_uri)
-            result.append(canonical_uri)
+            output = _load_value(part.tool_output)
+            candidates = list(_iter_named_uris(tool_input))
+            if not candidates:
+                candidates.extend(_iter_named_uris(output))
+            statuses = _read_result_statuses(output) if operation == "multi_read" else {}
+            texts = list(_iter_text_fields(output))
+            for raw_uri in candidates:
+                uri = str(raw_uri or "").strip()
+                canonical_uri = canonical_experience_uri(uri, ctx)
+                if (
+                    not canonical_uri
+                    or canonical_uri in seen
+                    or statuses.get(uri) is False
+                    or _read_failed_in_text(uri, texts)
+                ):
+                    continue
+                seen.add(canonical_uri)
+                result.append(canonical_uri)
     return result
 
 
-def _load_mapping(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
+def _read_operation(tool_name: str) -> str | None:
+    name = str(tool_name or "").strip()
+    operation = _READ_TOOL_OPERATIONS.get(name)
+    if operation is not None:
+        return operation
+    match = _MCP_OPENVIKING_READ_RE.fullmatch(name)
+    return match.group(1) if match is not None else None
+
+
+def _load_value(value: Any) -> Any:
+    if isinstance(value, (dict, list)):
         return value
     if isinstance(value, str) and value.strip():
         try:
-            parsed = json.loads(value)
+            return json.loads(value)
         except json.JSONDecodeError:
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
-    return {}
+            return value
+    return value
+
+
+def _iter_named_uris(value: Any) -> Iterable[str]:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key in {"uri", "uris"}:
+                if isinstance(child, str):
+                    yield child
+                elif isinstance(child, list):
+                    yield from (item for item in child if isinstance(item, str))
+            if isinstance(child, (dict, list)):
+                yield from _iter_named_uris(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _iter_named_uris(child)
+
+
+def _read_result_statuses(value: Any) -> dict[str, bool]:
+    statuses: dict[str, bool] = {}
+    if isinstance(value, dict):
+        uri = value.get("uri")
+        success = value.get("success")
+        if isinstance(uri, str) and isinstance(success, bool):
+            statuses[uri.strip()] = success
+        for child in value.values():
+            if isinstance(child, (dict, list)):
+                statuses.update(_read_result_statuses(child))
+    elif isinstance(value, list):
+        for child in value:
+            statuses.update(_read_result_statuses(child))
+    return statuses
+
+
+def _iter_text_fields(value: Any) -> Iterable[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for key, child in value.items():
+            if key == "text" and isinstance(child, str):
+                yield child
+            elif isinstance(child, (dict, list)):
+                yield from _iter_text_fields(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _iter_text_fields(child)
+
+
+def _read_failed_in_text(uri: str, texts: Iterable[str]) -> bool:
+    missing_marker = f"(nothing found at {uri})"
+    for text in texts:
+        if missing_marker in text:
+            return True
+        section_marker = f"--- START OF {uri} ---"
+        if section_marker in text:
+            section = text.split(section_marker, 1)[1].split(f"--- END OF {uri} ---", 1)[0]
+            if section.lstrip().startswith("ERROR:"):
+                return True
+    return False

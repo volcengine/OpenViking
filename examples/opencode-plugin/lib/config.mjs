@@ -45,7 +45,7 @@ const DEFAULT_CONFIG = {
   captureMode: "semantic",
   captureMaxLength: 24000,
   captureAssistantTurns: true,
-  captureToolMaxChars: 2000,
+  captureToolMaxChars: 1000000,
   commitTokenThreshold: 20000,
   commitKeepRecentCount: 10,
   profileTokenBudget: 10000,
@@ -261,7 +261,7 @@ function normalizeConfig(config) {
   config.recallPeerScope = config.recallPeerScope === "actor" ? "actor" : "all"
   config.recallQueryExpansion = config.recallQueryExpansion === "off" ? "off" : "auto"
   config.captureMaxLength = Math.max(200, Math.min(100000, Math.round(Number(config.captureMaxLength) || 24000)))
-  config.captureToolMaxChars = Math.max(200, Math.min(20000, Math.round(Number(config.captureToolMaxChars) || 2000)))
+  config.captureToolMaxChars = Math.max(200, Math.min(1000000, Math.round(Number(config.captureToolMaxChars) || 1000000)))
   config.commitTokenThreshold = Math.max(1000, Math.round(Number(config.commitTokenThreshold) || 20000))
   const rawCommitKeepRecentCount = config.commitKeepRecentCount
   const commitKeepRecentCount = rawCommitKeepRecentCount == null ||

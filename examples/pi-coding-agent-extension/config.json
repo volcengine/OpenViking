@@ -21,7 +21,7 @@
   "captureToolResults": false,
   "captureMode": "semantic",
   "captureMaxLength": 24000,
-  "captureToolMaxChars": 2000,
+  "captureToolMaxChars": 1000000,
   "captureAssistantTurns": true,
   "bypassPatterns": [],
   "logLevel": "error"

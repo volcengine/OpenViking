@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Hourly rotating key-value usage log sink."""
+"""Hourly rotating usage event log sink."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Iterator
 if TYPE_CHECKING:
     from .models import UsageEvent
 
-_COUNT_NAMES = {
+_EVENT_NAMES = {
     "memory.recalled": "experience.recall.count",
     "memory.injected": "experience.inject.count",
 }
@@ -119,79 +119,55 @@ class _ProcessSafeTimedRotatingFileHandler(TimedRotatingFileHandler):
             self.rolloverAt = self.computeRollover(int(path_stat.st_mtime))
 
 
-def _timestamp_millis(value: str) -> int:
+def _format_event_time(value: str) -> str:
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
-    return int(parsed.timestamp() * 1000)
+    return parsed.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _to_count_record(event: UsageEvent, *, resource_id: str) -> dict[str, Any]:
-    record = event.to_dict()
-    event_type = str(record.get("event_type") or "")
-    try:
-        count_name = _COUNT_NAMES[event_type]
-    except KeyError as exc:
-        raise ValueError(f"unsupported usage event type: {event_type}") from exc
-
-    evidence = record.get("evidence")
-    evidence = evidence if isinstance(evidence, dict) else {}
-    attributes = record.get("attributes")
-    attributes = attributes if isinstance(attributes, dict) else {}
-
-    extra = {key: value for key, value in evidence.items() if value not in (None, "")}
-    session_id = str(record.get("session_id") or "")
-    if session_id:
-        extra["session_id"] = session_id
-    task_id = record.get("task_id")
-    if task_id not in (None, ""):
-        extra["task_id"] = task_id
-    if attributes:
-        extra["attributes"] = attributes
-
-    unique_id = str(record.get("event_id") or "").strip()
-    if not unique_id:
-        raise ValueError("event_id is required")
-
-    count_record = {
-        "count_name": count_name,
-        "op_type": "add",
-        "amount": 1.0,
-        "timestamp": _timestamp_millis(str(record.get("occurred_at") or "")),
-        "unique_id": unique_id,
-        "tags": {
-            "account_id": str(record.get("account_id") or ""),
-            "user_id": str(record.get("user_id") or ""),
-            "resource_uri": str(record.get("resource_uri") or ""),
-            "resource_type": str(record.get("resource_type") or ""),
-        },
-        "extra": extra,
-    }
-    count_record["prefix"] = resource_id
-    return count_record
-
-
-def _build_message_key(record: dict[str, Any]) -> str:
-    tags = record.get("tags")
-    tags = tags if isinstance(tags, dict) else {}
-    extra = record.get("extra")
-    extra = extra if isinstance(extra, dict) else {}
-    target = str(tags.get("resource_uri") or extra.get("session_id") or "")
-    return "|".join(
-        (
-            str(record.get("prefix") or ""),
-            str(tags.get("account_id") or ""),
-            str(tags.get("user_id") or ""),
-            target,
-        )
+def _build_tenant_id(
+    *,
+    resource_id: str,
+    account_id: str,
+    user_id: str,
+    resource_uri: str,
+) -> str:
+    return (
+        f"resource_id:{resource_id};account_id:{account_id};"
+        f"user_id:{user_id};resource_uri:{resource_uri}"
     )
 
 
 def _to_log_record(event: UsageEvent, *, resource_id: str) -> dict[str, Any]:
-    value = _to_count_record(event, resource_id=resource_id)
+    record = event.to_dict()
+    event_type = str(record.get("event_type") or "")
+    try:
+        event_name = _EVENT_NAMES[event_type]
+    except KeyError as exc:
+        raise ValueError(f"unsupported usage event type: {event_type}") from exc
+
+    object_id = str(record.get("event_id") or "").strip()
+    if not object_id:
+        raise ValueError("event_id is required")
+
+    account_id = str(record.get("account_id") or "")
+    user_id = str(record.get("user_id") or "")
+    resource_uri = str(record.get("resource_uri") or "")
     return {
-        "key": _build_message_key(value),
-        "value": value,
+        "event_time": _format_event_time(str(record.get("occurred_at") or "")),
+        "tenant_id": _build_tenant_id(
+            resource_id=resource_id,
+            account_id=account_id,
+            user_id=user_id,
+            resource_uri=resource_uri,
+        ),
+        "event_name": event_name,
+        "object_id": object_id,
+        "count": 1,
+        "tags": {
+            "resource_type": str(record.get("resource_type") or ""),
+        },
     }
 
 

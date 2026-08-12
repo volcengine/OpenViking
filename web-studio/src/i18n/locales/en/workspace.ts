@@ -119,12 +119,16 @@ const workspace = {
     loading: 'Loading skills...',
     empty: 'No skills available',
     emptyDescription:
-      'User and shared skills will appear here after they are added.',
+      'User and shared skills will appear in separate tabs after they are added.',
+    emptyScope: 'No {{scope}} available',
+    emptyScopeDescription:
+      'Skills in this scope will appear here after they are added.',
     loadFailed: 'Could not load skills',
     networkError:
       'Could not connect to the OpenViking service. Check the server URL and connection status.',
     connectionSettings: 'Open connection settings',
     detail: 'Details',
+    openPlayground: 'Open in Playground',
     viewDetail: 'View {{name}} details',
     detailLoading: 'Loading skill details...',
     detailLoadFailed: 'Could not load skill details',
@@ -145,6 +149,11 @@ const workspace = {
     scopes: {
       user: 'User skill',
       agent: 'Shared skill',
+    },
+    tabs: {
+      agent: 'Shared skills',
+      label: 'Skill scope',
+      user: 'User skills',
     },
   },
   tasksPage: {

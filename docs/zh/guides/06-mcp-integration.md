@@ -121,7 +121,7 @@ claude mcp add --transport http openviking \
 
 ## 可用的 MCP 工具
 
-连接后，OpenViking MCP 端点暴露 13 个工具：
+连接后，OpenViking MCP 端点暴露 16 个工具：
 
 | 工具 | 说明 | 主要参数 |
 |------|------|----------|
@@ -130,7 +130,10 @@ claude mcp add --transport http openviking \
 | `recall` | 按记忆类别配额召回，服务端组装为带 URI 的扁平 `<memory>` 块 | `query`, `quotas`(可选), `max_chars`, `min_score`, `peer_scope`, `other_peer_penalty`(可选), `session_id`(可选), `detail`(可选), `max_tokens`(可选), `rewrite`(可选) |
 | `read` | 读取一个或多个 `viking://` URI 的内容 | `uris`（单个字符串或数组） |
 | `list` | 列出 `viking://` 目录下的条目 | `uri`, `recursive`(可选) |
+| `tree` | 以缩进形式展示 `viking://` URI 下的递归目录树——当需要全面了解文件树结构时使用（单层列表用 `list`，按文件名查找用 `glob`） | `uri`(可选), `level_limit`(默认 3), `node_limit`(默认 1000), `include_abstract`(可选——同时展示每个文件的摘要) |
 | `remember` | 存储消息到长期记忆（触发记忆提取） | `messages`（`{role, content}` 列表） |
+| `write` | 向 `viking://` 文件写入文本（创建/覆盖/追加）。自动创建缺失的父目录；覆盖前请先用 `read` 查看当前内容；只改文件局部时优先用 `edit` | `uri`, `content`, `mode`(可选:默认 `replace` — 文件不存在时自动创建,`append` 追加,`create` — 已存在则失败), `wait`(可选,阻塞直到重建索引完成), `timeout`(可选) |
+| `edit` | 在已有 `viking://` 文件中把精确字符串替换为新文本——用于局部修改，避免整文件重写。若 `old_string` 找不到、或匹配多处且 `replace_all` 为 false，则编辑失败且文件保持不变 | `uri`, `old_string`, `new_string`, `replace_all`(可选), `wait`(可选,阻塞直到重建索引完成), `timeout`(可选) |
 | `add_resource` | 添加本地文件或 URL 作为资源(本地文件触发渐进式上传流) | `path`, `temp_file_id`(可选), `description`(可选), `watch_interval`(可选,分钟数 — 远程 URL 的自动刷新周期), `processing_mode`(可选：默认 `semantic_and_vectors`；传 `vectors_only` 时跳过 VLM 语义理解，只向量化当前文件), `to`(可选,目标 `viking://resources/...` URI；`watch_interval > 0` 时若省略 `to`,watch 将自动绑定到本次 add 创建的资源 URI), `args`(可选,特定 parser 参数，包括 `{"parse_mode":"no_split"}` 用于正常解析但每个源文档只生成一个 Markdown 正文、飞书一次性用户 token 导入使用 `{"feishu_access_token":"u-..."}`，或飞书用户 token watch 使用 `{"feishu_access_token":"u-...","feishu_refresh_token":"r-..."}`) |
 | `list_watches` | 列出当前 Agent 可见的 watch 任务（自动刷新订阅），每行显示目标 URI、刷新间隔（分钟）、active/paused 状态以及下一次调度时间 | 无 |
 | `cancel_watch` | 按目标 URI 取消（删除）watch 任务。若需调整刷新周期或临时暂停，请取消后使用新的 `watch_interval` 重新添加 | `to_uri`（必须匹配 watch 任务的 `to` 值，例如 `viking://resources/...`） |
@@ -138,6 +141,11 @@ claude mcp add --transport http openviking \
 | `glob` | 按 glob 模式匹配文件 | `pattern`, `uri`(可选范围), `node_limit` |
 | `forget` | 删除任意 `viking://` URI（先用 `search` 查找；删除目录需 `recursive=true`） | `uri`, `recursive`(可选) |
 | `health` | 检查 OpenViking 服务健康状态 | 无 |
+
+在 MCP 工具中，`viking://user` 表示当前认证用户的工作区。例如，
+`viking://user/notes/todo.md` 会解析成
+`viking://user/<当前用户>/notes/todo.md`，不依赖文件名或扩展名判断。工具返回的、
+包含当前用户 ID 的 canonical URI 也可以直接使用；这套简写不用于跨用户访问。
 
 > **注**：MCP 仅暴露 watch 管理的最小闭包（`list_watches` + `cancel_watch`）。pause / resume / trigger 和统一的 `update` 动作刻意不在此处暴露，请通过 REST `/api/v1/watches/*` 接口或 `ov task watch` CLI 使用上述操作。
 

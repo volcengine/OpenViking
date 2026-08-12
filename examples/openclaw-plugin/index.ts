@@ -19,7 +19,6 @@ import { registerOpenVikingCommands } from "./plugin/command-registration.js";
 import { registerRecallTraceRoutes as registerRecallTraceRouteAdapters } from "./plugin/recall-trace-routes.js";
 import { createOpenVikingService } from "./plugin/openviking-services.js";
 import { registerOpenVikingArchiveTools } from "./plugin/openviking-archive-tools.js";
-import { registerOpenVikingExperienceTools } from "./plugin/openviking-experience-tools.js";
 import { createOpenVikingImportRuntime } from "./plugin/openviking-import-runtime.js";
 import { registerOpenVikingImportTools } from "./plugin/openviking-import-tools.js";
 import { registerOpenVikingLifecycleHooks } from "./plugin/openviking-lifecycle-hooks.js";
@@ -279,15 +278,6 @@ const contextEnginePlugin = {
       resolvePluginSessionRouting,
       isBypassedSession,
       makeBypassedToolResult,
-    });
-
-    registerOpenVikingExperienceTools({
-      registerTool: registerOpenVikingTool,
-      getClient,
-      resolvePluginSessionRouting,
-      isBypassedSession,
-      makeBypassedToolResult,
-      userId: cfg.userId,
     });
 
     registerOpenVikingMemoryRecallTools({

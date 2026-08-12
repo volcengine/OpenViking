@@ -181,18 +181,47 @@ The official Docker image bundles VikingBot and starts it by default alongside t
 
 For production, run OpenViking as a standalone HTTP service — see [Server deployment](https://docs.openviking.ai/en/getting-started/03-quickstart-server) and the [Deployment guide](https://docs.openviking.ai/en/guides/03-deployment).
 
-Prefer not to operate it yourself? OpenViking Personal is officially hosted and ready to use, scales far beyond local hardware with VikingDB, and includes a free trial for up to 50 files; existing open-source users can move over with the migration tool. → [openviking.ai](https://www.openviking.ai)
+## Commercial editions
 
-## Managed Services
+**The open-source edition is not crippled.** OpenViking in this repo is fully open source under AGPLv3: no feature gates, no account required, no activation key. Follow [Deploy in production](#deploy-in-production) above and run it in production yourself — and that will stay true.
 
-### Volcano Engine (China Region)
-Officially hosted on Volcano Engine, available in China.
-- Product page: [www.volcengine.com/product/openviking-service](https://www.volcengine.com/product/openviking-service)
-- Documentation: [docs.volcengine.com/docs/84313/2374478](https://docs.volcengine.com/docs/84313/2374478)
+The two editions below answer "who operates it and where it runs", not "can I use it".
 
-### Coming Soon
-- Global hosting service on [BytePlus](https://www.byteplus.com) (for regions outside China)
-- Private distributed enterprise edition (deployed via activation code, supports BYOC)
+<table>
+<tr>
+<td width="50%" valign="top">
+
+<img src="docs/images/commercial-saas.png" alt="Managed SaaS" width="100%" />
+
+<h3>☁️ Managed SaaS</h3>
+<p>Officially hosted on <b>Volcano Engine</b>. Nothing to set up, nothing to operate.</p>
+<ul>
+<li><b>Personal</b> — for individual developers. Free trial for up to 50 files, and scales far beyond local hardware with VikingDB.</li>
+<li><b>Enterprise</b> — multi-user context management, team collaboration and permissions, enterprise SLA and support.</li>
+</ul>
+<p>Existing open-source users can move over with the migration tool.</p>
+<p><a href="https://www.volcengine.com/product/openviking-service"><b>→ Volcano Engine product page</b></a> · <a href="https://docs.volcengine.com/docs/84313/2374478">Documentation</a></p>
+<p><sub>Global hosting for regions outside China is coming to <a href="https://www.byteplus.com">BytePlus</a>.</sub></p>
+
+</td>
+<td width="50%" valign="top">
+
+<img src="docs/images/commercial-self-hosted.png" alt="Self-Managed" width="100%" />
+
+<h3>🏢 Self-Managed</h3>
+<p>Runs <b>inside your own environment</b>. Data never leaves it.</p>
+<ul>
+<li><b>Online</b> — deployed into your own cloud account / VPC, BYOC supported, with outbound access for updates and licensing.</li>
+<li><b>Offline</b> — fully air-gapped environments with no internet access, for regulated industries.</li>
+</ul>
+<p>Adds distributed deployment and official support on top of the open-source edition, activated by license key.</p>
+<p><a href="https://docs.google.com/forms/d/e/1FAIpQLScQqwsm7fvKdjtNiW5rWNXJjoHPtedVzLsKSMJgObtsj2_udA/viewform"><b>→ Talk to us about self-managed deployment</b></a></p>
+
+</td>
+</tr>
+</table>
+
+> Just want to run the open-source edition? Go ahead — you don't need to contact anyone. Head to [Quick start](#quick-start).
 
 ## Research
 

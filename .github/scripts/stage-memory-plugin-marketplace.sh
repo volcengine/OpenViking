@@ -21,6 +21,8 @@ cp -R \
   "${STAGE}/"
 
 for required in \
+  claude-code-memory-plugin/skills/ov-experience-memory/SKILL.md \
+  codex-memory-plugin/skills/ov-experience-memory/SKILL.md \
   cursor-memory-plugin/.cursor-plugin/plugin.json \
   cursor-memory-plugin/hooks/hooks.json \
   cursor-memory-plugin/.mcp.json \

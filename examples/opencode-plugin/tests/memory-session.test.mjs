@@ -215,6 +215,96 @@ test("assistant messages are captured even when finish is not stop", async () =>
   })
 })
 
+test("OpenCode tool parts preserve completed and error state fields", async () => {
+  await withCaptureServer(async ({ endpoint, requests }) => {
+    await withTempDir("ov-oc-session-", async (dir) => {
+      const manager = createMemorySessionManager({ config: baseConfig(endpoint), pluginRoot: dir })
+      const sessionID = "oc-tool-parts"
+      const uri = "viking://user/test/memories/experiences/exchange.md"
+
+      await manager.init()
+      for (const [messageID, part] of [
+        [
+          "msg-tool-completed",
+          {
+            id: "part-tool-completed",
+            sessionID,
+            messageID: "msg-tool-completed",
+            type: "tool",
+            callID: "call-tool-completed",
+            tool: "openviking_read",
+            state: {
+              status: "completed",
+              input: { uris: uri },
+              output: "experience contents",
+            },
+          },
+        ],
+        [
+          "msg-tool-error",
+          {
+            id: "part-tool-error",
+            sessionID,
+            messageID: "msg-tool-error",
+            type: "tool",
+            callID: "call-tool-error",
+            tool: "openviking_read",
+            state: {
+              status: "error",
+              input: { uris: uri },
+              error: "OpenViking request failed",
+            },
+          },
+        ],
+      ]) {
+        await manager.handleEvent({
+          type: "message.updated",
+          properties: { info: { id: messageID, sessionID, role: "assistant" } },
+        })
+        await manager.handleEvent({
+          type: "message.part.updated",
+          properties: { part },
+        })
+      }
+
+      await manager.handleEvent({ type: "session.idle", properties: { sessionID } })
+
+      const addMessage = requests.find((request) => request.url === "/api/v1/sessions/oc-oc-tool-parts/messages/batch")
+      assert.ok(addMessage, "session.idle should capture OpenCode tool parts")
+      const body = JSON.parse(addMessage.body)
+      assert.deepEqual(body.messages, [
+        {
+          role: "assistant",
+          parts: [
+            {
+              type: "tool",
+              tool_id: "call-tool-completed",
+              tool_name: "openviking_read",
+              tool_status: "completed",
+              tool_input: { uris: uri },
+              tool_output: "experience contents",
+            },
+          ],
+        },
+        {
+          role: "assistant",
+          parts: [
+            {
+              type: "tool",
+              tool_id: "call-tool-error",
+              tool_name: "openviking_read",
+              tool_status: "error",
+              tool_input: { uris: uri },
+              tool_output: "OpenViking request failed",
+            },
+          ],
+        },
+      ])
+      await manager.flushAll({ commit: false })
+    })
+  })
+})
+
 test("concurrent saves never race the shared state file (#3877)", async (t) => {
   // Widen the race window: concurrent saveState() calls share the same
   // `${statePath}.tmp` temp file. A slow writeFile keeps the shared .tmp

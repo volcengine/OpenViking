@@ -30,8 +30,7 @@
       "Pre-compaction memory extraction",
       "Session archive search and original-text read-back",
       "Resource ingestion for RAG (add_resource)",
-      "Explicit MCP tools for retrieval, memory, resources, watches, filesystem, and code navigation",
-      "Experience Memory skill with dedicated search_experience and read_experience tools"
+      "Explicit MCP tools for retrieval, memory, resources, watches, filesystem, and code navigation"
     ],
     "websiteURL": "https://github.com/volcengine/OpenViking"
   }

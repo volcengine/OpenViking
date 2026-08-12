@@ -237,7 +237,7 @@ export function loadConfig() {
     captureTimeoutMs,
     captureToolMaxChars: Math.max(200, Math.floor(num(
       process.env.OPENVIKING_CAPTURE_TOOL_MAX_CHARS,
-      num(cx.captureToolMaxChars, 2000),
+      num(cx.captureToolMaxChars, 1000000),
     ))),
     writePathAsync: envBool("OPENVIKING_WRITE_PATH_ASYNC") ?? (cx.writePathAsync !== false),
     // Default true: a "memory plugin" without assistant-side capture only sees half the

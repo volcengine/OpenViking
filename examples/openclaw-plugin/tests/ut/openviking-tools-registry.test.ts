@@ -15,8 +15,6 @@ const DEFAULT_TOOL_NAMES = [
   "ov_read",
   "ov_multi_read",
   "ov_list",
-  "search_experience",
-  "read_experience",
   "memory_recall",
   "ov_recall_trace",
   "memory_store",
@@ -46,7 +44,7 @@ describe("openviking tool registry", () => {
       default: DEFAULT_TOOL_NAMES,
       memory: ["memory_recall", "memory_store", "memory_forget"],
       resource_query: ["ov_search", "ov_read", "ov_multi_read", "ov_list"],
-      experience: ["search_experience", "read_experience"],
+      experience: ["ov_search", "ov_read"],
       import: ["add_resource", "add_skill"],
       recall_trace: ["ov_recall_trace"],
       archive: ["ov_archive_search", "ov_archive_expand"],
@@ -66,12 +64,5 @@ describe("openviking tool registry", () => {
 
     expect(memoryOpenVikingConfigSchema.parse({}).enabledTools).not.toContain("add_resource");
     expect(memoryOpenVikingConfigSchema.parse({ enableAddResourceTool: true }).enabledTools).toContain("add_resource");
-  });
-
-  it("allows both Experience tools to be disabled as one group", () => {
-    const config = memoryOpenVikingConfigSchema.parse({ disabledTools: ["experience"] });
-
-    expect(config.enabledTools).not.toContain("search_experience");
-    expect(config.enabledTools).not.toContain("read_experience");
   });
 });

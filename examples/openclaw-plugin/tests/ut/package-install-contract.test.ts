@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "../..");
+const repoRoot = join(rootDir, "../..");
 
 function readJson(path: string): any {
   return JSON.parse(readFileSync(join(rootDir, path), "utf8"));
@@ -84,13 +85,18 @@ describe("OpenClaw plugin package and install contract", () => {
     ]));
   });
 
-  it("ships the Experience Memory skill with source installs", () => {
+  it("ships and registers the canonical Experience skill", () => {
+    const pluginManifest = readJson("openclaw.plugin.json");
     const installManifest = readJson("install-manifest.json");
-    const installHelper = readFileSync(join(rootDir, "setup-helper/install.js"), "utf8");
+    const packagedSkillPath = join(rootDir, "skills/ov-experience-memory/SKILL.md");
+    const canonicalSkillPath = join(repoRoot, "examples/skills/ov-experience-memory/SKILL.md");
 
+    expect(pluginManifest.skills).toContain("./skills/ov-experience-memory");
     expect(installManifest.files.optional).toContain("skills/ov-experience-memory/SKILL.md");
-    expect(existsSync(join(rootDir, "skills/ov-experience-memory/SKILL.md"))).toBe(true);
-    expect(installHelper).toContain('"skills/ov-experience-memory/SKILL.md"');
+    expect(existsSync(packagedSkillPath)).toBe(true);
+    expect(readFileSync(packagedSkillPath, "utf8")).toBe(
+      readFileSync(canonicalSkillPath, "utf8"),
+    );
   });
 
   it("keeps runtime dependencies and overrides available for installed plugin loading", () => {

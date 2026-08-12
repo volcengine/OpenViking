@@ -322,6 +322,13 @@ export function loadConfig() {
       process.env.OPENVIKING_CAPTURE_MAX_LENGTH,
       num(cc.captureMaxLength, 24000),
     ))),
+    // Tool output is reported verbatim; the server owns truncation via
+    // tool_output_externalization (threshold_chars, default 20000). This cap only
+    // guards against pathological payloads.
+    captureToolMaxChars: Math.max(200, Math.floor(num(
+      process.env.OPENVIKING_CAPTURE_TOOL_MAX_CHARS,
+      num(cc.captureToolMaxChars, 1000000),
+    ))),
     captureTimeoutMs,
     // Default true: a "memory plugin" without assistant-side capture only sees half the
     // conversation, which makes extraction noticeably worse. Subagent capture has always

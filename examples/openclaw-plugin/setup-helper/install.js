@@ -78,7 +78,6 @@ const FALLBACK_CURRENT = {
     "session-transcript-repair.ts",
     "runtime-utils.ts",
     "commands/setup.ts",
-    "skills/ov-experience-memory/SKILL.md",
     "tsconfig.json",
     "package-lock.json",
     ".gitignore",

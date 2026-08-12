@@ -1651,7 +1651,7 @@ openviking add-resource ./docs --exclude "*.tmp"
 
 ### Usage Reporter
 
-可选的 Usage Reporter 从已 commit session 的 tool parts 中抽取记忆使用事件。内置文件日志 Sink 将每个事件写成一行 `{"key": ..., "value": ...}` JSON envelope，并按小时滚动专用日志文件：
+可选的 Usage Reporter 从已 commit session 的 tool parts 中抽取记忆使用事件。内置文件日志 Sink 将每个事件写成一行扁平 JSON，并按小时滚动专用日志文件：
 
 ```json
 {
@@ -1679,9 +1679,15 @@ openviking add-resource ./docs --exclude "*.tmp"
 `"type": "http"` 的部署需要迁移为 `file_log` 并采集专用日志文件，或配置实现
 原投递协议的 `custom` Sink。
 
-启动服务前，需要设置 `resource_id_env` 指定的环境变量。Sink 会自动创建父目录、立即追加事件、按 UTC 每小时滚动文件，并保留 `backup_count` 个历史文件；它不会写入 OpenViking 默认 stdout 日志。
+启动服务前需要设置 `resource_id_env` 指定的环境变量。该变量的值用于标识当前部署的 OpenViking 资源，隔离 account、user 和 URI 相同但 resource 不同的数据。Sink 会自动创建父目录、立即追加事件、按 UTC 每小时滚动文件，并保留 `backup_count` 个历史文件；它不会写入 OpenViking 默认 stdout 日志。
 
-每行是包含 `key` 和 `value` 字段的 JSON envelope。`key` 与原 Kafka 消息键一致，格式为 `resource_id|account_id|user_id|resource_uri`；`resource_uri` 为空时使用 `session_id`。`value` 是原 Kafka 消息的完整对象，包含 `count_name`、`op_type`、`amount`、`timestamp`、`unique_id`、`tags`、`extra` 和 `prefix`。JSON envelope 能完整保留 key 内部的分隔符。文件采集和下游投递仍为 best-effort，消费端应按 `value.unique_id` 去重。
+每行格式如下：
+
+```json
+{"event_time":"2026-08-05 11:30:00","tenant_id":"resource_id:ov-example;account_id:default;user_id:default;resource_uri:viking://user/default/memories/experiences/example.md","event_name":"experience.recall.count","object_id":"ue_<sha256>","count":1,"tags":{"resource_type":"experience"}}
+```
+
+`event_time` 使用 UTC 时间。`tenant_id` 由部署 resource ID、事件所属的 account、user 和 Experience URI 拼接。`memory.recalled` 映射为 `experience.recall.count`，`memory.injected` 映射为 `experience.inject.count`。`object_id` 是稳定的 Usage Event ID。下游必须使用 `(tenant_id, object_id)` 复合键去重，不能跨 tenant 仅按 `object_id` 全局去重。查询时按 `tenant_id`、`event_name` 和 `event_time` 范围过滤，再通过 `sum(count)` 汇总。文件采集和下游投递仍为 best-effort。
 
 支持的 add target URI：
 

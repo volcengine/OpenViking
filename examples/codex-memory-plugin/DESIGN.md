@@ -259,7 +259,7 @@ Env var overrides for tuning without rebuilding:
 | `OPENVIKING_RESUME_ARCHIVE_INJECT` | `1` | inject latest archive summary on `source=resume` when no live OV session is open |
 | `OPENVIKING_RESUME_ARCHIVE_TOKEN_BUDGET` | `32000` | token budget for `/sessions/{id}/context` on resume |
 | `OPENVIKING_RESUME_ARCHIVE_MAX_CHARS` | `6000` | max chars injected from latest archive overview |
-| `OPENVIKING_CAPTURE_TOOL_MAX_CHARS` | `2000` | max chars retained per compressed tool call/result |
+| `OPENVIKING_CAPTURE_TOOL_MAX_CHARS` | `1000000` | guard cap on one tool part's `tool_output`; the server externalizes anything over `tool_output_externalization.threshold_chars` (default 20000) |
 | `OPENVIKING_DEBUG` | `0` | enable hook debug log |
 
 ## Resume context inject

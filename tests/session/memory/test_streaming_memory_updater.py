@@ -179,7 +179,7 @@ def _peer_note_op(name: str, peer_id: str) -> ResolvedOperation:
     return op
 
 
-def test_operation_to_patch_omits_raw_operation_metadata():
+async def test_operation_to_patch_omits_raw_operation_metadata():
     schema = _registry().get("notes")
     old_file = MemoryFile(
         uri="viking://user/u/memories/notes/note.md",
@@ -199,13 +199,13 @@ def test_operation_to_patch_omits_raw_operation_metadata():
         },
     )
 
-    patch = operation_to_patch(op, schema=schema, extract_context=ExtractContext([]))
+    patch = await operation_to_patch(op, schema=schema, extract_context=ExtractContext([]))
 
     assert patch.metadata == {}
     assert patch.after_file.content == "new content"
 
 
-def test_operation_to_patch_raises_when_after_file_preview_rendering_fails(monkeypatch):
+async def test_operation_to_patch_raises_when_after_file_preview_rendering_fails(monkeypatch):
     schema = _registry().get("notes")
     op = _note_op("note_render_failure")
 
@@ -218,10 +218,10 @@ def test_operation_to_patch_raises_when_after_file_preview_rendering_fails(monke
     )
 
     with pytest.raises(RuntimeError, match="template render failed"):
-        operation_to_patch(op, schema=schema, extract_context=ExtractContext([]))
+        await operation_to_patch(op, schema=schema, extract_context=ExtractContext([]))
 
 
-def test_operation_to_patch_skips_failed_field_preview_update():
+async def test_operation_to_patch_skips_failed_field_preview_update():
     schema = MemoryTypeSchema(
         memory_type="notes",
         description="note memory",
@@ -270,7 +270,7 @@ def test_operation_to_patch_skips_failed_field_preview_update():
         },
     )
 
-    patch = operation_to_patch(op, schema=schema, extract_context=ExtractContext([]))
+    patch = await operation_to_patch(op, schema=schema, extract_context=ExtractContext([]))
 
     assert patch.after_file.content == "new content"
     assert patch.after_file.extra_fields["summary"] == "old summary"
@@ -877,17 +877,19 @@ async def test_streaming_memory_updater_applies_cross_group_links_after_all_grou
     assert peer_file.backlinks[0]["from_uri"] == self_op.uris[0]
 
 
-def test_classify_memory_merge_mode_forces_cross_extraction_merge():
+async def test_classify_memory_merge_mode_forces_cross_extraction_merge():
     op1 = _note_op_with_source("note_a", "extract_a")
     op2 = _note_op_with_source("note_b", "extract_b")
 
-    fast_path, reason = classify_memory_merge_mode([op1, op2], schema=_registry().get("notes"))
+    fast_path, reason = await classify_memory_merge_mode(
+        [op1, op2], schema=_registry().get("notes")
+    )
 
     assert fast_path is False
     assert reason == "cross_extraction_batch"
 
 
-def test_classify_memory_merge_mode_treats_noop_str_patch_as_unchanged():
+async def test_classify_memory_merge_mode_treats_noop_str_patch_as_unchanged():
     old_file = MemoryFile(
         uri="viking://user/u/memories/notes/note.md",
         content="old content",
@@ -906,13 +908,13 @@ def test_classify_memory_merge_mode_treats_noop_str_patch_as_unchanged():
         },
     )
 
-    fast_path, reason = classify_memory_merge_mode([op], schema=_registry().get("notes"))
+    fast_path, reason = await classify_memory_merge_mode([op], schema=_registry().get("notes"))
 
     assert fast_path is True
     assert reason == "single_existing_content_unchanged"
 
 
-def test_classify_memory_merge_mode_detects_changed_str_patch_after_preview():
+async def test_classify_memory_merge_mode_detects_changed_str_patch_after_preview():
     old_file = MemoryFile(
         uri="viking://user/u/memories/notes/note.md",
         content="old content",
@@ -931,7 +933,7 @@ def test_classify_memory_merge_mode_detects_changed_str_patch_after_preview():
         },
     )
 
-    fast_path, reason = classify_memory_merge_mode([op], schema=_registry().get("notes"))
+    fast_path, reason = await classify_memory_merge_mode([op], schema=_registry().get("notes"))
 
     assert fast_path is False
     assert reason == "single_existing_content_changed"
@@ -990,12 +992,12 @@ async def test_streaming_memory_updater_persists_source_extraction_id_trace_id_a
     assert "last_update_trace_id" not in read_result
 
 
-def test_render_operation_after_file_content_persists_source_trace_id():
+async def test_render_operation_after_file_content_persists_source_trace_id():
     schema = _registry().get("notes")
     op = _note_op("note_trace")
     op.source = MemoryOperationSource(extraction_id="extract_2", trace_id="trace_2")
 
-    rendered = render_operation_after_file_content(
+    rendered = await render_operation_after_file_content(
         op,
         schema=schema,
         extract_context=ExtractContext([]),

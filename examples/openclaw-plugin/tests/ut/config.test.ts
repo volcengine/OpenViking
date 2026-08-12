@@ -81,6 +81,14 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.disabledTools).toEqual(["memory_forget", "add_resource"]);
   });
 
+  it("rejects unpublished experience tool selectors", () => {
+    for (const selector of ["experience", "search_experience", "read_experience"]) {
+      expect(() =>
+        memoryOpenVikingConfigSchema.parse({ enabledTools: [selector] }),
+      ).toThrow("unknown tool selectors");
+    }
+  });
+
   it("does not expose add_resource through enabledTools without enableAddResourceTool", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({ enabledTools: "all" });
     expect(cfg.enabledTools).not.toContain("add_resource");
@@ -520,4 +528,3 @@ describe("memoryOpenVikingConfigSchema.parse() — apiKey SecretRef (#3522)", ()
     expect(cfg2.apiKey).toBe("fallback-key");
   });
 });
-
