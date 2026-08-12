@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use rand::Rng;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
 use uuid::Uuid;
@@ -41,6 +42,48 @@ impl Default for PathLockConfig {
             lock_timeout_secs: 0.0,
             lock_expire_secs: 30.0,
         }
+    }
+}
+
+/// Lock-poll backoff constants used by conflict-retry loops.
+///
+/// Keep the first retry no faster than the previous fixed 50 ms poll, then
+/// spread waiters with bounded jitter while backing off to 500 ms.
+const INITIAL_POLL_INTERVAL_MS: u64 = 50;
+const MAX_POLL_INTERVAL_MS: u64 = 500;
+const POLL_BACKOFF_NUMERATOR: u64 = 3;
+const POLL_BACKOFF_DENOMINATOR: u64 = 2;
+const POLL_JITTER_PERCENT: u64 = 20;
+
+impl PathLockManager {
+    fn poll_interval_bounds(attempt: u32) -> (u64, u64) {
+        let mut base_ms = INITIAL_POLL_INTERVAL_MS;
+        for _ in 0..attempt {
+            if base_ms >= MAX_POLL_INTERVAL_MS {
+                break;
+            }
+            base_ms = base_ms
+                .saturating_mul(POLL_BACKOFF_NUMERATOR)
+                .saturating_add(POLL_BACKOFF_DENOMINATOR - 1)
+                / POLL_BACKOFF_DENOMINATOR;
+        }
+        base_ms = base_ms.min(MAX_POLL_INTERVAL_MS);
+
+        let jitter_ms = base_ms.saturating_mul(POLL_JITTER_PERCENT) / 100;
+        let lower_ms = base_ms
+            .saturating_sub(jitter_ms)
+            .max(INITIAL_POLL_INTERVAL_MS);
+        let upper_ms = base_ms.saturating_add(jitter_ms).min(MAX_POLL_INTERVAL_MS);
+        (lower_ms, upper_ms)
+    }
+
+    fn poll_interval_for_attempt(attempt: u32) -> Duration {
+        let (lower_ms, upper_ms) = Self::poll_interval_bounds(attempt);
+        Duration::from_millis(rand::thread_rng().gen_range(lower_ms..=upper_ms))
+    }
+
+    fn retry_delay(attempt: u32, remaining: Duration) -> Duration {
+        Self::poll_interval_for_attempt(attempt).min(remaining)
     }
 }
 
@@ -661,6 +704,7 @@ impl PathLockManager {
         let start = Instant::now();
         let mut acquired_lock_paths: Vec<(String, AcquisitionChange)> = Vec::new();
         let mut is_waiting = false;
+        let mut retry_attempt: u32 = 0;
 
         loop {
             let mut conflict: Option<PathLockError> = None;
@@ -814,7 +858,9 @@ impl PathLockManager {
                     }
                 }
 
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                let remaining = timeout.saturating_sub(start.elapsed());
+                tokio::time::sleep(Self::retry_delay(retry_attempt, remaining)).await;
+                retry_attempt = retry_attempt.saturating_add(1);
                 continue;
             }
 
@@ -916,7 +962,9 @@ impl PathLockManager {
                     });
                 }
 
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                let remaining = timeout.saturating_sub(start.elapsed());
+                tokio::time::sleep(Self::retry_delay(retry_attempt, remaining)).await;
+                retry_attempt = retry_attempt.saturating_add(1);
                 continue;
             }
 
@@ -1934,6 +1982,97 @@ mod tests {
         }
     }
 
+    /// Alternate conflicts before acquisition and during post-verification.
+    ///
+    /// Every call to `try_create_token` is one real acquire-loop probe. Odd
+    /// probes fail there with Busy; even probes create a token, then the next
+    /// read exposes a synthetic ancestor Tree token so post-verification fails.
+    struct RetryLoopCountingProvider {
+        inner: crate::lock::provider::MemoryPathLockProvider,
+        create_probes: AtomicUsize,
+        pre_acquire_conflicts: AtomicUsize,
+        post_verify_conflicts: AtomicUsize,
+        inject_post_verify_conflict: AtomicBool,
+    }
+
+    impl RetryLoopCountingProvider {
+        fn new() -> Self {
+            Self {
+                inner: crate::lock::provider::MemoryPathLockProvider::new(),
+                create_probes: AtomicUsize::new(0),
+                pre_acquire_conflicts: AtomicUsize::new(0),
+                post_verify_conflicts: AtomicUsize::new(0),
+                inject_post_verify_conflict: AtomicBool::new(false),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl PathLockProvider for RetryLoopCountingProvider {
+        fn name(&self) -> &'static str {
+            "retry-loop-counting"
+        }
+
+        async fn read_token(&self, lock_path: &str) -> PathLockResult<Option<LockToken>> {
+            if self
+                .inject_post_verify_conflict
+                .swap(false, Ordering::SeqCst)
+            {
+                self.post_verify_conflicts.fetch_add(1, Ordering::SeqCst);
+                return Ok(Some(LockToken {
+                    owner_id: "post-verify-blocker".to_string(),
+                    time_ns: PathLockManager::now_ns(),
+                    lock_type: PathLockKind::Tree,
+                }));
+            }
+            self.inner.read_token(lock_path).await
+        }
+
+        async fn try_create_token(&self, lock_path: &str, token: &LockToken) -> PathLockResult<()> {
+            let probe = self.create_probes.fetch_add(1, Ordering::SeqCst);
+            if probe.is_multiple_of(2) {
+                self.pre_acquire_conflicts.fetch_add(1, Ordering::SeqCst);
+                return Err(PathLockError::Busy {
+                    lock_path: lock_path.to_string(),
+                    operation: "injected pre-acquire conflict".to_string(),
+                });
+            }
+
+            self.inner.try_create_token(lock_path, token).await?;
+            self.inject_post_verify_conflict
+                .store(true, Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn compare_and_write_token(
+            &self,
+            lock_path: &str,
+            expected: &LockToken,
+            replacement: &LockToken,
+        ) -> PathLockResult<bool> {
+            self.inner
+                .compare_and_write_token(lock_path, expected, replacement)
+                .await
+        }
+
+        async fn refresh_token(
+            &self,
+            lock_path: &str,
+            owner_id: &str,
+            time_ns: u128,
+        ) -> PathLockResult<bool> {
+            self.inner.refresh_token(lock_path, owner_id, time_ns).await
+        }
+
+        async fn remove_token(&self, lock_path: &str, owner_id: &str) -> PathLockResult<bool> {
+            self.inner.remove_token(lock_path, owner_id).await
+        }
+
+        async fn scan_descendant_locks(&self, root: &str) -> PathLockResult<Vec<String>> {
+            self.inner.scan_descendant_locks(root).await
+        }
+    }
+
     /// Build a manager backed by the real in-memory filesystem.
     async fn make_manager() -> PathLockManager {
         make_manager_with_config(PathLockConfig::default()).await
@@ -2415,5 +2554,127 @@ mod tests {
 
         assert_eq!(provider.busy_remove_count.load(Ordering::SeqCst), 1);
         mgr.release(&lease).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn contending_waiters_eventually_acquire_with_backoff() {
+        let mgr = Arc::new(make_manager().await);
+        let holder = mgr
+            .acquire_tree("/data/sub", Duration::ZERO, None)
+            .await
+            .unwrap();
+
+        let mut waiters = Vec::new();
+        for _ in 0..4 {
+            let waiter_mgr = mgr.clone();
+            waiters.push(tokio::spawn(async move {
+                let lease = waiter_mgr
+                    .acquire_tree("/data/sub", Duration::from_secs(5), None)
+                    .await?;
+                waiter_mgr.release(&lease).await
+            }));
+        }
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if mgr.metrics_snapshot().await.waiting_lock_count == 4 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("all waiters should enter the conflict/backoff path");
+        mgr.release(&holder).await.unwrap();
+
+        for waiter in waiters {
+            tokio::time::timeout(Duration::from_secs(5), waiter)
+                .await
+                .expect("waiter should complete after holder release")
+                .unwrap()
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn poll_interval_bounds_back_off_and_saturate() {
+        assert_eq!(PathLockManager::poll_interval_bounds(0), (50, 60));
+        assert_eq!(PathLockManager::poll_interval_bounds(1), (60, 90));
+        assert_eq!(PathLockManager::poll_interval_bounds(2), (91, 135));
+        assert_eq!(PathLockManager::poll_interval_bounds(3), (136, 204));
+        assert_eq!(PathLockManager::poll_interval_bounds(4), (204, 306));
+        assert_eq!(PathLockManager::poll_interval_bounds(5), (307, 459));
+        assert_eq!(PathLockManager::poll_interval_bounds(6), (400, 500));
+        assert_eq!(PathLockManager::poll_interval_bounds(u32::MAX), (400, 500));
+    }
+
+    #[test]
+    fn poll_interval_samples_stay_within_deterministic_bounds() {
+        for attempt in [0, 1, 2, 3, 4, 5, 6, 50, u32::MAX] {
+            let (lower_ms, upper_ms) = PathLockManager::poll_interval_bounds(attempt);
+            for _ in 0..100 {
+                let ms = PathLockManager::poll_interval_for_attempt(attempt).as_millis() as u64;
+                assert!(
+                    (lower_ms..=upper_ms).contains(&ms),
+                    "attempt {attempt} produced {ms}ms outside [{lower_ms}, {upper_ms}]"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn retry_delay_does_not_overshoot_remaining_timeout() {
+        let remaining = Duration::from_millis(7);
+        assert_eq!(PathLockManager::retry_delay(0, remaining), remaining);
+        assert_eq!(PathLockManager::retry_delay(u32::MAX, remaining), remaining);
+    }
+
+    #[tokio::test]
+    async fn real_retry_loop_stays_within_ten_second_probe_budget() {
+        let fs = Arc::new(MemFileSystem::new());
+        fs.mkdir("/data", 0o755).await.unwrap();
+        let provider = Arc::new(RetryLoopCountingProvider::new());
+        let mgr = PathLockManager::new(
+            fs,
+            provider.clone(),
+            PathLockConfig {
+                lock_expire_secs: 60.0,
+                ..PathLockConfig::default()
+            },
+        );
+        let requests = [PathLockRequest {
+            path: "/data/file.txt".to_string(),
+            kind: PathLockKind::Exact,
+        }];
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(12),
+            mgr.acquire_batch(&requests, Duration::from_secs(10), None),
+        )
+        .await
+        .expect("acquire loop should honor its ten-second timeout");
+
+        assert!(matches!(result, Err(PathLockError::Timeout { .. })));
+        let total_probes = provider.create_probes.load(Ordering::SeqCst);
+        let retry_probes = total_probes.saturating_sub(1);
+        let pre_acquire_conflicts = provider.pre_acquire_conflicts.load(Ordering::SeqCst);
+        let post_verify_conflicts = provider.post_verify_conflicts.load(Ordering::SeqCst);
+        assert!(
+            retry_probes <= 29,
+            "ten-second acquire exceeded retry probe budget: total={total_probes}, retries={retry_probes}"
+        );
+        assert!(
+            pre_acquire_conflicts > 0,
+            "test must exercise the acquisition conflict branch"
+        );
+        assert!(
+            post_verify_conflicts > 0,
+            "test must exercise the post-verification conflict branch"
+        );
+        assert_eq!(
+            pre_acquire_conflicts + post_verify_conflicts,
+            total_probes,
+            "every acquire-loop probe must terminate in one of the two conflict branches"
+        );
     }
 }
