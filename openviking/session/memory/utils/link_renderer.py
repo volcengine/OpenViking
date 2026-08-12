@@ -8,7 +8,7 @@ from openviking.core.namespace import uri_parts
 
 
 @dataclass(frozen=True, slots=True)
-class _MarkdownLink:
+class MarkdownLink:
     start: int
     end: int
     text: str
@@ -100,7 +100,8 @@ class LinkRenderer:
         return None
 
     @staticmethod
-    def _iter_markdown_links(content: str) -> Iterator[_MarkdownLink]:
+    def iter_markdown_links(content: str) -> Iterator[MarkdownLink]:
+        """Yield parsed inline Markdown links with their source spans."""
         position = 0
         while opener := LinkRenderer._LINK_START_RE.search(content, position):
             parsed = LinkRenderer._parse_inline_markdown_link(content, opener.end())
@@ -108,14 +109,14 @@ class LinkRenderer:
                 position = opener.start() + 1
                 continue
             target, end = parsed
-            yield _MarkdownLink(opener.start(), end, opener.group("text"), target)
+            yield MarkdownLink(opener.start(), end, opener.group("text"), target)
             position = end
 
     @staticmethod
-    def _replace_markdown_links(content: str, replacement: Callable[[_MarkdownLink], str]) -> str:
+    def _replace_markdown_links(content: str, replacement: Callable[[MarkdownLink], str]) -> str:
         result: List[str] = []
         position = 0
-        for link in LinkRenderer._iter_markdown_links(content):
+        for link in LinkRenderer.iter_markdown_links(content):
             result.append(content[position : link.start])
             result.append(replacement(link))
             position = link.end
@@ -125,7 +126,7 @@ class LinkRenderer:
     @staticmethod
     def protected_markdown_spans(content: str) -> List[tuple[int, int]]:
         """Return spans where Compile must never insert a generated WikiLink."""
-        spans = [(link.start, link.end) for link in LinkRenderer._iter_markdown_links(content)]
+        spans = [(link.start, link.end) for link in LinkRenderer.iter_markdown_links(content)]
         spans.extend(
             (m.start(), m.end())
             for m in re.finditer(r"(?ms)^(?:```|~~~).*?^(?:```|~~~)[ \t]*$", content)
@@ -149,7 +150,7 @@ class LinkRenderer:
         # inside one is already linked, so wrapping it again would produce a broken
         # nested link like "[[Frank](..) Ocean](..)"; skip those candidates.
         linked_spans = protected_spans or [
-            (link.start, link.end) for link in LinkRenderer._iter_markdown_links(content)
+            (link.start, link.end) for link in LinkRenderer.iter_markdown_links(content)
         ]
 
         def _overlaps_protected_span(start: int, end: int) -> bool:
@@ -201,7 +202,7 @@ class LinkRenderer:
         if LinkRenderer._find_match_span(content, match_text, protected_spans) is not None:
             return True
 
-        markdown_links = list(LinkRenderer._iter_markdown_links(content))
+        markdown_links = list(LinkRenderer.iter_markdown_links(content))
         link_spans = {(link.start, link.end) for link in markdown_links}
         non_link_protected = [span for span in protected_spans if span not in link_spans]
         relative_target = LinkRenderer.relative_path(source_uri, target_uri)
@@ -294,7 +295,7 @@ class LinkRenderer:
         External links, viking:// links, anchor links, and absolute-path links are preserved.
         """
 
-        def _replace_link(link: _MarkdownLink) -> str:
+        def _replace_link(link: MarkdownLink) -> str:
             target = link.target
             if target.startswith("<") and target.endswith(">"):
                 target = target[1:-1]

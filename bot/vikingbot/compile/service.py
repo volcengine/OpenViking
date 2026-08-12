@@ -21,7 +21,7 @@ from loguru import logger
 
 from openviking.core.namespace import classify_uri, relative_uri_path, uri_parts
 from openviking.core.skill_loader import SkillLoader
-from openviking.session.memory.utils.link_renderer import LinkRenderer
+from openviking.session.memory.utils.link_renderer import LinkRenderer, MarkdownLink
 from openviking.utils.path_safety import (
     safe_join_viking_uri,
     sanitize_relative_viking_path,
@@ -85,9 +85,6 @@ _CATALOG_EXCLUDED_FILES = _SKILL_EXCLUDED_FILES
 _CATALOG_FRONTMATTER_LINES = 128
 _TARGET_CATALOG_QUERY_CHARS = 40_000
 _REQUIREMENT_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
-_SALVAGE_LINK_RE = re.compile(
-    r"(?P<image>!?)\[(?P<label>[^\]\n]*)\]\((?P<target><[^>\n]+>|[^()\s\n]+)\)"
-)
 _WIKI_SEARCH_TAG = "ov.kind=wiki"
 _WORKSPACE_SUBMISSION_RULE_WITH_EXEC = (
     "Generate every artifact file in the task workspace with write_file or exec, then submit "
@@ -1186,10 +1183,8 @@ class BotCompileService:
         for path in known:
             paths_by_name.setdefault(posixpath.basename(path).casefold(), set()).add(path)
 
-        link_spans = {
-            (match.start() + bool(match.group("image")), match.end())
-            for match in _SALVAGE_LINK_RE.finditer(content)
-        }
+        links = list(LinkRenderer.iter_markdown_links(content))
+        link_spans = {(link.start, link.end) for link in links}
         protected = [
             span
             for span in LinkRenderer.protected_markdown_spans(content)
@@ -1197,17 +1192,22 @@ class BotCompileService:
         ]
         source_dir = posixpath.dirname(source_path)
 
-        def replace(match: re.Match[str]) -> str:
-            if any(not (match.end() <= start or match.start() >= end) for start, end in protected):
-                return match.group(0)
+        def replace(link: MarkdownLink, *, image: bool) -> str:
+            start = link.start - int(image)
+            original = content[start : link.end]
+            if any(
+                not (link.end <= span_start or start >= span_end)
+                for span_start, span_end in protected
+            ):
+                return original
 
-            target = match.group("target").strip()
+            target = link.target.strip()
             if (
                 not target
                 or target.startswith(("#", "?", "/"))
                 or re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", target)
             ):
-                return match.group(0)
+                return original
             if target.startswith("<") and target.endswith(">"):
                 target = target[1:-1]
 
@@ -1219,7 +1219,7 @@ class BotCompileService:
             decoded_path = unquote(raw_path)
             resolved = posixpath.normpath(posixpath.join(source_dir, decoded_path))
             if resolved in known:
-                return match.group(0)
+                return original
 
             name = posixpath.basename(decoded_path)
             names = {name.casefold()}
@@ -1232,18 +1232,28 @@ class BotCompileService:
                 if path.casefold() != source_path.casefold()
             }
             if len(candidates) != 1:
-                return match.group("label")
+                return link.text
             candidate = next(iter(candidates))
 
             corrected = posixpath.relpath(candidate, source_dir or ".")
             if corrected == ".":
-                return match.group("label")
+                return link.text
             if "/" not in corrected and not corrected.startswith("."):
                 corrected = f"./{corrected}"
             corrected = corrected.replace(" ", "%20").replace("(", "%28").replace(")", "%29")
-            return f"{match.group('image')}[{match.group('label')}]({corrected}{suffix})"
+            image_marker = "!" if image else ""
+            return f"{image_marker}[{link.text}]({corrected}{suffix})"
 
-        return _SALVAGE_LINK_RE.sub(replace, content)
+        result: list[str] = []
+        position = 0
+        for link in links:
+            image = link.start > 0 and content[link.start - 1] == "!"
+            start = link.start - int(image)
+            result.append(content[position:start])
+            result.append(replace(link, image=image))
+            position = link.end
+        result.append(content[position:])
+        return "".join(result)
 
     @staticmethod
     async def _tag_wiki_files(

@@ -573,7 +573,7 @@ v1 先使用集中定义、可测试的 `CompileLimits`，不把常量散落在 
 | tool URI count / 单次结果 / 任务累计结果 | 32 / 1 MiB / 8 MiB |
 | output pages / files / combined operations / 最终总大小 | 128 / 128 / 256 / 4 MiB |
 | concurrent Compile tasks / task runtime maximum and default | 10 / 40 min |
-| salvage / cleanup grace | 30 sec / 10 sec |
+| salvage / cleanup grace | 120 sec / 40 sec |
 | accepted tasks（全局 / 单 principal）/ queue wait | 40 / 10 / 60 min |
 | terminal task retention / records | 24 h / 1,000 |
 

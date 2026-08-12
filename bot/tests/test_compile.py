@@ -122,8 +122,8 @@ def test_compile_limit_defaults_match_the_resource_envelope():
     assert limits.accepted_tasks_per_principal == 10
     assert limits.queue_wait_seconds == 60 * 60
     assert limits.task_runtime_seconds == 40 * 60
-    assert limits.salvage_grace_seconds == 30
-    assert limits.cleanup_grace_seconds == 10
+    assert limits.salvage_grace_seconds == 120
+    assert limits.cleanup_grace_seconds == 40
     assert limits.target_inventory_entries == 2000
     assert limits.target_catalog_pages == 10
     assert limits.output_pages == 128
@@ -2844,6 +2844,24 @@ async def test_timeout_salvage_copies_workspace_and_repairs_links(tmp_path: Path
     assert "`[Code](missing.md)`" in topic
     assert result.warnings and "partial output" in result.warnings[0]
     assert any("Skipped" in warning for warning in result.warnings)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        '[Missing](missing.md "title")',
+        "[Missing](missing(1).md)",
+    ],
+)
+def test_timeout_salvage_removes_unresolved_complex_markdown_links(content: str):
+    assert (
+        BotCompileService._repair_salvaged_markdown(
+            content,
+            source_path="guide/topic.md",
+            known_paths={"guide/topic.md"},
+        )
+        == "Missing"
+    )
 
 
 @pytest.mark.asyncio
