@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from openviking.parse.base import NodeType, ResourceNode, create_parse_result
-from openviking.parse.parsers import anydoc_converter, legacy_doc, word
+from openviking.parse.parsers import anydoc_converter, epub, legacy_doc, powerpoint, word
 from openviking.parse.registry import ParserRegistry
 from openviking_cli.utils.config.parser_config import AnydocConfig, ParserConfig
 
@@ -205,9 +205,7 @@ async def test_legacy_doc_parser_uses_anydoc_for_real_doc(tmp_path, monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_legacy_doc_parser_uses_ole_extractor_when_anydoc_disabled(
-    tmp_path, monkeypatch
-):
+async def test_legacy_doc_parser_uses_ole_extractor_when_anydoc_disabled(tmp_path, monkeypatch):
     parser = legacy_doc.LegacyDocParser(anydoc_config=AnydocConfig(enable=False))
     seen = _stub_markdown_parse(parser)
     source = tmp_path / "legacy.doc"
@@ -224,15 +222,94 @@ async def test_legacy_doc_parser_uses_ole_extractor_when_anydoc_disabled(
     assert seen["content"] == "# ole fallback"
 
 
-def test_registry_passes_anydoc_config_to_word_and_legacy_doc():
+@pytest.mark.asyncio
+async def test_powerpoint_parser_uses_anydoc_and_allows_media_dir(tmp_path, monkeypatch):
+    storage = _patch_storage(monkeypatch, tmp_path)
+    parser = powerpoint.PowerPointParser(anydoc_config=AnydocConfig())
+    seen = _stub_markdown_parse(parser)
+    source = tmp_path / "slides.pps"
+    source.write_bytes(b"placeholder")
+    monkeypatch.setattr(
+        anydoc_converter.AnyDocConverter,
+        "convert",
+        lambda self, path, **kwargs: SimpleNamespace(
+            markdown="# converted slides\n\n## Notes\n\nPresenter note",
+            source_format="pps",
+        ),
+    )
+
+    result = await parser.parse(source)
+
+    assert parser.supported_extensions == [
+        ".pptx",
+        ".ppt",
+        ".pptm",
+        ".pps",
+        ".ppsx",
+        ".ppsm",
+        ".pot",
+        ".odp",
+    ]
+    assert seen["content"] == "# converted slides\n\n## Notes\n\nPresenter note"
+    assert seen["kwargs"]["allowed_media_dirs"] == [storage.media_dir]
+    assert result.source_format == "pps"
+    assert result.parser_name == "PowerPointParser"
+
+
+@pytest.mark.asyncio
+async def test_powerpoint_parser_rejects_ppt_when_anydoc_disabled(tmp_path, monkeypatch):
+    _patch_storage(monkeypatch, tmp_path)
+    parser = powerpoint.PowerPointParser(anydoc_config=AnydocConfig(enable=False))
+    source = tmp_path / "legacy.ppt"
+    source.write_bytes(b"placeholder")
+    monkeypatch.setattr(
+        parser,
+        "_legacy_convert",
+        lambda *args, **kwargs: pytest.fail("python-pptx must not handle PPT"),
+        raising=False,
+    )
+
+    with pytest.raises(RuntimeError, match=r"anydoc.*disabled.*\.ppt"):
+        await parser.parse(source)
+
+
+@pytest.mark.asyncio
+async def test_epub_parser_uses_anydoc_and_allows_media_dir(tmp_path, monkeypatch):
+    storage = _patch_storage(monkeypatch, tmp_path)
+    parser = epub.EPubParser(anydoc_config=AnydocConfig())
+    seen = _stub_markdown_parse(parser)
+    source = tmp_path / "book.epub"
+    source.write_bytes(b"placeholder")
+    monkeypatch.setattr(
+        anydoc_converter.AnyDocConverter,
+        "convert",
+        lambda self, path, **kwargs: SimpleNamespace(
+            markdown="# converted book",
+            source_format="epub",
+        ),
+    )
+
+    result = await parser.parse(source)
+
+    assert seen["content"] == "# converted book"
+    assert seen["kwargs"]["allowed_media_dirs"] == [storage.media_dir]
+    assert result.source_format == "epub"
+    assert result.parser_name == "EPubParser"
+
+
+def test_registry_passes_anydoc_config_to_office_parsers():
     anydoc_config = AnydocConfig(enable=False, fallback_to_legacy=True)
     registry = ParserRegistry(
         parser_configs={
             "word": ParserConfig(),
             "legacy_doc": ParserConfig(),
+            "powerpoint": ParserConfig(),
+            "epub": ParserConfig(),
             "anydoc": anydoc_config,
         }
     )
 
     assert registry._parsers["word"].anydoc_config is anydoc_config
     assert registry._parsers["legacy_doc"].anydoc_config is anydoc_config
+    assert registry._parsers["powerpoint"].anydoc_config is anydoc_config
+    assert registry._parsers["epub"].anydoc_config is anydoc_config

@@ -12,6 +12,7 @@ import pytest
 
 from openviking.parse.base import NodeType, ResourceNode, create_parse_result
 from openviking.parse.parsers import anydoc_converter, epub, excel, legacy_doc, powerpoint, word
+from openviking_cli.utils.config.parser_config import AnydocConfig
 
 
 def _stub_markdown_parse(parser) -> dict[str, Any]:
@@ -175,7 +176,7 @@ async def test_excel_parser_offloads_xls_conversion(monkeypatch, tmp_path: Path)
 
 @pytest.mark.asyncio
 async def test_powerpoint_parser_offloads_pptx_conversion(monkeypatch, tmp_path: Path):
-    parser = powerpoint.PowerPointParser()
+    parser = powerpoint.PowerPointParser(anydoc_config=AnydocConfig(enable=False))
     seen = _stub_markdown_parse(parser)
     calls = _patch_to_thread(monkeypatch, powerpoint)
     fake_pptx = SimpleNamespace()
@@ -199,7 +200,7 @@ async def test_powerpoint_parser_offloads_pptx_conversion(monkeypatch, tmp_path:
 
 @pytest.mark.asyncio
 async def test_epub_parser_offloads_epub_conversion(monkeypatch, tmp_path: Path):
-    parser = epub.EPubParser()
+    parser = epub.EPubParser(anydoc_config=AnydocConfig(enable=False))
     seen = _stub_markdown_parse(parser)
     calls = _patch_to_thread(monkeypatch, epub)
 

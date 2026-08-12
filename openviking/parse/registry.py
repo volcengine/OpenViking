@@ -75,10 +75,20 @@ class ParserRegistry:
             ),
         )
         self._register(
-            "powerpoint", PowerPointParser(config=self._parser_configs.get("powerpoint"))
+            "powerpoint",
+            PowerPointParser(
+                config=self._parser_configs.get("powerpoint"),
+                anydoc_config=self._parser_configs.get("anydoc"),
+            ),
         )
         self._register("excel", ExcelParser(config=self._parser_configs.get("excel")))
-        self._register("epub", EPubParser(config=self._parser_configs.get("epub")))
+        self._register(
+            "epub",
+            EPubParser(
+                config=self._parser_configs.get("epub"),
+                anydoc_config=self._parser_configs.get("anydoc"),
+            ),
+        )
         self._register("zip", ZipParser())
         self._register("directory", DirectoryParser())
 
