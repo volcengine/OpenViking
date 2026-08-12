@@ -24,6 +24,7 @@ func (c *Client) AddResource(ctx context.Context, path string, opts *AddResource
 	}
 	setString(payload, "to", opts.To)
 	setString(payload, "parent", opts.Parent)
+	setAny(payload, "create_parent", opts.CreateParent)
 	setString(payload, "ignore_dirs", opts.IgnoreDirs)
 	setString(payload, "include", opts.Include)
 	setString(payload, "exclude", opts.Exclude)
@@ -47,6 +48,9 @@ func (c *Client) AddResource(ctx context.Context, path string, opts *AddResource
 		}
 	}
 	if err := c.addLocalUpload(ctx, payload, path, true); err != nil {
+		return nil, err
+	}
+	if err := mergeExtra(payload, opts.Extra); err != nil {
 		return nil, err
 	}
 	var result map[string]any

@@ -121,10 +121,12 @@ client.initialize()
 healthy = client.health()
 print("health:", healthy)
 
-session = client.create_session("demo-session")
+session = client.create_session({"session_id": "demo-session"})
 print("session:", session)
 
-client.session("demo-session").add_message("user", "hello from sdk")
+client.session("demo-session").add_message(
+    {"role": "user", "content": "hello from sdk"}
+)
 context = client.session("demo-session").get_session_context(token_budget=4096)
 print("context:", context)
 
@@ -149,11 +151,13 @@ async def main() -> None:
     healthy = await client.health()
     print("health:", healthy)
 
-    session = await client.create_session("demo-session-async")
+    session = await client.create_session({"session_id": "demo-session-async"})
     print("session:", session)
 
     session_client = client.session("demo-session-async")
-    await session_client.add_message("user", "hello from async sdk")
+    await session_client.add_message(
+        {"role": "user", "content": "hello from async sdk"}
+    )
     context = await session_client.get_session_context(token_budget=4096)
     print("context:", context)
 
@@ -178,21 +182,29 @@ event_config = {
     }
 }
 result = client.create_session(
-    "demo-session",
-    memory_extraction_config=event_config,
+    {
+        "session_id": "demo-session",
+        "memory_extraction_config": event_config,
+    }
 )
 # 创建时显式传 None，可覆盖服务端默认并禁用自动提交。
-client.create_session("manual-session", auto_commit_policy=None)
+client.create_session(
+    {"session_id": "manual-session", "auto_commit_policy": None}
+)
 client.update_session_config(
     "demo-session",
-    auto_commit_policy={"message_count_threshold": 25},
-    memory_extraction_config={
-        "events": {"tags": ["team=search", "channel=app"]}
+    {
+        "auto_commit_policy": {"message_count_threshold": 25},
+        "memory_extraction_config": {
+            "events": {"tags": ["team=search", "channel=app"]}
+        },
     },
 )
 # 显式传 None 会禁用自动 commit；省略参数则保持不变。
-client.update_session_config("demo-session", auto_commit_policy=None)
-client.session("demo-session").commit(event_tags=["team=search", "channel=web"])
+client.update_session_config("demo-session", {"auto_commit_policy": None})
+client.session("demo-session").commit(
+    {"event_tags": ["team=search", "channel=web"]}
+)
 # 单次 commit 传 event_tags=[] 可显式跳过 session 默认 tags。
 print(result)
 ```
@@ -209,9 +221,11 @@ client.initialize()
 
 result = client.add_resource(
     "/path/to/notes.md",
-    to="viking://resources/demo-notes",
-    reason="knowledge import",
-    wait=True,
+    {
+        "to": "viking://resources/demo-notes",
+        "reason": "knowledge import",
+        "wait": True,
+    },
 )
 print(result)
 ```
@@ -222,9 +236,11 @@ print(result)
 ```python
 result = client.add_resource(
     "/path/to/notes.md",
-    to="viking://resources/demo-notes",
-    processing_mode="vectors_only",
-    wait=True,
+    {
+        "to": "viking://resources/demo-notes",
+        "processing_mode": "vectors_only",
+        "wait": True,
+    },
 )
 ```
 
@@ -249,15 +265,28 @@ from openviking_sdk import SyncHTTPClient
 client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
 client.initialize()
 
-result = client.find("hello", limit=5)
+result = client.find("hello", {"limit": 5})
 print(result)
 ```
 
 图片搜索也使用同一组方法。`image` 支持本地路径、bytes、data URI、HTTP URL 或 `viking://` URI；服务端需要使用 multimodal embedding 模型。
 
 ```python
-result = client.find(image="/path/to/photo.png", limit=5)
-result = client.search("similar poster", image="viking://resources/poster.png")
+result = client.find("", {"image": "/path/to/photo.png", "limit": 5})
+result = client.search(
+    "similar poster",
+    {"image": "viking://resources/poster.png"},
+)
+```
+
+复杂请求统一使用带类型提示的 Options 字典。只有服务端已经增加、当前 SDK
+版本尚未正式暴露的字段才通过 `extra` 临时传递：
+
+```python
+result = client.find(
+    "authentication",
+    {"limit": 10, "extra": {"future_server_field": False}},
+)
 ```
 
 ## 管理员操作

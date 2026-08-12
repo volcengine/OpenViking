@@ -118,11 +118,12 @@ _, err = client.UpdateSessionConfig(ctx, "demo-session", &openviking.UpdateSessi
 _, err = client.UpdateSessionConfig(ctx, "demo-session", &openviking.UpdateSessionConfigOptions{
 	AutoCommitPolicy: openviking.Map(nil), // explicit JSON null disables auto-commit
 })
-_, err = client.AddMessage(ctx, "demo-session", "user", openviking.AddMessageOptions{
+_, err = client.AddMessage(ctx, "demo-session", openviking.Message{
+	Role:    "user",
 	Content: openviking.String("remember this deployment decision"),
 })
 commit, err := client.CommitSession(ctx, "demo-session", &openviking.CommitSessionOptions{
-	KeepRecentCount: 2,
+	KeepRecentCount: openviking.Int(2),
 	EventTags:       []string{"team=search", "channel=web"},
 })
 

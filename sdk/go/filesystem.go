@@ -2,6 +2,7 @@ package openviking
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/url"
 )
@@ -132,6 +133,39 @@ func (c *Client) Read(ctx context.Context, uri string, offset int, limit int) (s
 	return result, err
 }
 
+// DownloadBytes downloads raw stored bytes.
+func (c *Client) DownloadBytes(ctx context.Context, uri string) ([]byte, error) {
+	query := url.Values{"uri": []string{NormalizeURI(uri)}}
+	req, err := c.newRequest(ctx, http.MethodGet, "/api/v1/content/download", query, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		env, decodeErr := decodeEnvelope(resp.StatusCode, data)
+		if decodeErr != nil {
+			return nil, decodeErr
+		}
+		if env.Error != nil {
+			return nil, apiError(resp.StatusCode, env.Error)
+		}
+		return nil, &Error{
+			Code:       "UNKNOWN",
+			Message:    envelopeDetail(env, resp.StatusCode, data),
+			StatusCode: resp.StatusCode,
+		}
+	}
+	return data, nil
+}
+
 // Abstract reads L0 abstract content.
 func (c *Client) Abstract(ctx context.Context, uri string) (string, error) {
 	query := url.Values{"uri": []string{NormalizeURI(uri)}}
@@ -151,22 +185,51 @@ func (c *Client) Overview(ctx context.Context, uri string) (string, error) {
 // Write writes text content and refreshes related semantics/vectors.
 func (c *Client) Write(ctx context.Context, uri string, content string, opts *WriteOptions) (map[string]any, error) {
 	if opts == nil {
-		opts = &WriteOptions{Mode: "replace"}
-	}
-	mode := opts.Mode
-	if mode == "" {
-		mode = "replace"
+		opts = &WriteOptions{}
 	}
 	payload := map[string]any{
 		"uri":     NormalizeURI(uri),
 		"content": content,
-		"mode":    mode,
-		"wait":    opts.Wait,
 	}
+	setString(payload, "mode", opts.Mode)
+	setAny(payload, "wait", opts.Wait)
 	setFloatPtr(payload, "timeout", opts.Timeout)
 	setAny(payload, "telemetry", opts.Telemetry)
+	setString(payload, "processing_mode", opts.ProcessingMode)
+	if err := mergeExtra(payload, opts.Extra); err != nil {
+		return nil, err
+	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/content/write", nil, payload, &result)
+	return result, err
+}
+
+// BatchWrite applies preconditioned file writes in one request.
+func (c *Client) BatchWrite(
+	ctx context.Context,
+	rootURI string,
+	operations []BatchWriteOperation,
+	opts *BatchWriteOptions,
+) (map[string]any, error) {
+	normalized := make([]BatchWriteOperation, len(operations))
+	copy(normalized, operations)
+	for i := range normalized {
+		normalized[i].URI = NormalizeURI(normalized[i].URI)
+	}
+	payload := map[string]any{
+		"root_uri":   NormalizeURI(rootURI),
+		"operations": normalized,
+	}
+	if opts != nil {
+		setAny(payload, "wait", opts.Wait)
+		setFloatPtr(payload, "timeout", opts.Timeout)
+		setAny(payload, "telemetry", opts.Telemetry)
+		if err := mergeExtra(payload, opts.Extra); err != nil {
+			return nil, err
+		}
+	}
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/content/batch-write", nil, payload, &result)
 	return result, err
 }
 

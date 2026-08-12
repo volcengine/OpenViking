@@ -124,10 +124,12 @@ client.initialize()
 healthy = client.health()
 print("health:", healthy)
 
-session = client.create_session("demo-session")
+session = client.create_session({"session_id": "demo-session"})
 print("session:", session)
 
-client.session("demo-session").add_message("user", "hello from sdk")
+client.session("demo-session").add_message(
+    {"role": "user", "content": "hello from sdk"}
+)
 context = client.session("demo-session").get_session_context(token_budget=4096)
 print("context:", context)
 
@@ -152,11 +154,13 @@ async def main() -> None:
     healthy = await client.health()
     print("health:", healthy)
 
-    session = await client.create_session("demo-session-async")
+    session = await client.create_session({"session_id": "demo-session-async"})
     print("session:", session)
 
     session_client = client.session("demo-session-async")
-    await session_client.add_message("user", "hello from async sdk")
+    await session_client.add_message(
+        {"role": "user", "content": "hello from async sdk"}
+    )
     context = await session_client.get_session_context(token_budget=4096)
     print("context:", context)
 
@@ -181,21 +185,29 @@ event_config = {
     }
 }
 result = client.create_session(
-    "demo-session",
-    memory_extraction_config=event_config,
+    {
+        "session_id": "demo-session",
+        "memory_extraction_config": event_config,
+    }
 )
 # Explicit None disables a server-wide auto-commit default at creation time.
-client.create_session("manual-session", auto_commit_policy=None)
+client.create_session(
+    {"session_id": "manual-session", "auto_commit_policy": None}
+)
 client.update_session_config(
     "demo-session",
-    auto_commit_policy={"message_count_threshold": 25},
-    memory_extraction_config={
-        "events": {"tags": ["team=search", "channel=app"]}
+    {
+        "auto_commit_policy": {"message_count_threshold": 25},
+        "memory_extraction_config": {
+            "events": {"tags": ["team=search", "channel=app"]}
+        },
     },
 )
 # Explicit None disables automatic commits; omitting the argument leaves it unchanged.
-client.update_session_config("demo-session", auto_commit_policy=None)
-client.session("demo-session").commit(event_tags=["team=search", "channel=web"])
+client.update_session_config("demo-session", {"auto_commit_policy": None})
+client.session("demo-session").commit(
+    {"event_tags": ["team=search", "channel=web"]}
+)
 # Use event_tags=[] to skip the session defaults for one commit.
 print(result)
 ```
@@ -212,9 +224,11 @@ client.initialize()
 
 result = client.add_resource(
     "/path/to/notes.md",
-    to="viking://resources/demo-notes",
-    reason="knowledge import",
-    wait=True,
+    {
+        "to": "viking://resources/demo-notes",
+        "reason": "knowledge import",
+        "wait": True,
+    },
 )
 print(result)
 ```
@@ -226,9 +240,11 @@ or refresh `.abstract.md` / `.overview.md`.
 ```python
 result = client.add_resource(
     "/path/to/notes.md",
-    to="viking://resources/demo-notes",
-    processing_mode="vectors_only",
-    wait=True,
+    {
+        "to": "viking://resources/demo-notes",
+        "processing_mode": "vectors_only",
+        "wait": True,
+    },
 )
 ```
 
@@ -253,15 +269,28 @@ from openviking_sdk import SyncHTTPClient
 client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
 client.initialize()
 
-result = client.find("hello", limit=5)
+result = client.find("hello", {"limit": 5})
 print(result)
 ```
 
 Image search uses the same methods. Pass a local path, bytes, data URI, HTTP URL, or `viking://` URI with `image`. The server must use a multimodal embedding model.
 
 ```python
-result = client.find(image="/path/to/photo.png", limit=5)
-result = client.search("similar poster", image="viking://resources/poster.png")
+result = client.find("", {"image": "/path/to/photo.png", "limit": 5})
+result = client.search(
+    "similar poster",
+    {"image": "viking://resources/poster.png"},
+)
+```
+
+Complex requests use typed Options dictionaries. Use the `extra` key only for
+server fields that the installed SDK version does not yet expose:
+
+```python
+result = client.find(
+    "authentication",
+    {"limit": 10, "extra": {"future_server_field": False}},
+)
 ```
 
 ## Admin Operations

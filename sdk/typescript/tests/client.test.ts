@@ -58,7 +58,155 @@ describe("OpenVikingClient", () => {
     });
   });
 
-  it("uses the Python/Go empty default retrieval target", async () => {
+  it("assembles context with dedicated options and rejects mode override", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        ok({ rendered: "<memory />", entries: [], stats: {} }),
+      );
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await expect(
+      client.searchContext("continue refactor", {
+        sessionId: "session-1",
+        purpose: "coding",
+        maxTokens: 3000,
+        dedupTurns: 5,
+      }),
+    ).resolves.toMatchObject({ rendered: "<memory />" });
+
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
+      query: "continue refactor",
+      mode: "context",
+      session_id: "session-1",
+      purpose: "coding",
+      max_tokens: 3000,
+      dedup_turns: 5,
+    });
+    await expect(
+      client.searchContext("query", { extra: { mode: "list" } }),
+    ).rejects.toThrow(/mode/);
+  });
+
+  it("sends latest session message and retention fields", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => ok({}));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await client.addMessage("session-1", {
+      role: "assistant",
+      content: "done",
+      turnId: "turn-1",
+      messageKind: "assistant_step",
+      sourceMessageIds: ["user-1"],
+    });
+    await client.commitSession("session-1", {
+      retentionMode: "turn_budget",
+      keepRecentTurnCount: 3,
+      retainedMessageTokenBudget: 12_000,
+      minRawTailSteps: 1,
+    });
+
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
+      role: "assistant",
+      content: "done",
+      turn_id: "turn-1",
+      message_kind: "assistant_step",
+      source_message_ids: ["user-1"],
+    });
+    expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toEqual({
+      retention_mode: "turn_budget",
+      keep_recent_turn_count: 3,
+      retained_message_token_budget: 12_000,
+      min_raw_tail_steps: 1,
+    });
+  });
+
+  it("queries Agent Evolution trajectories and outcomes", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => ok({}));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await client.listExperienceTrajectories("user/memories/experiences/a.md", {
+      limit: 25,
+      offset: 50,
+      startDate: "2026-08-01",
+      endDate: "2026-08-10",
+    });
+    await client.getExperienceOutcomes("user/memories/experiences/a.md", {
+      startDate: "2026-08-01",
+      endDate: "2026-08-10",
+    });
+
+    const first = new URL(String(fetcher.mock.calls[0]![0]));
+    const second = new URL(String(fetcher.mock.calls[1]![0]));
+    expect(first.pathname).toBe(
+      "/api/v1/agent-evolution/experiences/trajectories",
+    );
+    expect(first.searchParams.get("experience_uri")).toBe(
+      "viking://user/memories/experiences/a.md",
+    );
+    expect(first.searchParams.get("limit")).toBe("25");
+    expect(first.searchParams.get("offset")).toBe("50");
+    expect(first.searchParams.get("start_date")).toBe("2026-08-01");
+    expect(first.searchParams.get("end_date")).toBe("2026-08-10");
+    expect(second.pathname).toBe(
+      "/api/v1/agent-evolution/experiences/outcomes",
+    );
+    expect(second.searchParams.get("start_date")).toBe("2026-08-01");
+    expect(second.searchParams.get("end_date")).toBe("2026-08-10");
+  });
+
+  it("resolves and preflights OpenViking Assets with latest Git fields", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => ok({}));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await client.resolveOpenVikingAssets("protocol: openviking-assets/1", {
+      manifestLabel: "custom.yaml",
+      extra: { future_flag: false },
+    });
+    await client.preflightOpenVikingAsset(
+      "private-repo",
+      "https://github.com/example/private.git",
+      {
+        branch: "main",
+        commit: "0123456789abcdef",
+        authConfig: { username: "oauth2", token: "secret" },
+      },
+    );
+
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
+      manifest_yaml: "protocol: openviking-assets/1",
+      manifest_label: "custom.yaml",
+      future_flag: false,
+    });
+    expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toEqual({
+      name: "private-repo",
+      connector: "git",
+      repo_url: "https://github.com/example/private.git",
+      branch: "main",
+      commit: "0123456789abcdef",
+      auth_config: { username: "oauth2", token: "secret" },
+    });
+  });
+
+  it("omits unset retrieval options and uses server defaults", async () => {
     const fetcher = vi
       .fn<typeof fetch>()
       .mockResolvedValue(ok({ resources: [] }));
@@ -69,8 +217,27 @@ describe("OpenVikingClient", () => {
 
     await client.search("hello");
 
-    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toMatchObject({
-      target_uri: "",
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
+      query: "hello",
+    });
+  });
+
+  it("preserves explicit zero and empty retrieval options", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(ok({ resources: [] }));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await client.find("hello", { limit: 0, tags: [], level: [] });
+
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
+      query: "hello",
+      limit: 0,
+      tags: [],
+      level: [],
     });
   });
 
@@ -156,12 +323,60 @@ describe("OpenVikingClient", () => {
 
     const [url, init] = fetcher.mock.calls[0]!;
     expect(String(url)).toBe("https://example.com/api/v1/content/write");
-    expect(JSON.parse(String(init?.body))).toMatchObject({
+    expect(JSON.parse(String(init?.body))).toEqual({
       uri: "viking://resources/demo.md",
       content: "updated",
-      mode: "replace",
       processing_mode: "vectors_only",
       wait: true,
+    });
+  });
+
+  it("supports batch write, byte download, and resource extra", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementationOnce(async () => ok({}))
+      .mockImplementationOnce(
+        async () =>
+          new Response(new Uint8Array([1, 2, 3]), {
+            status: 200,
+            headers: { "Content-Type": "application/octet-stream" },
+          }),
+      )
+      .mockImplementationOnce(async () => ok({}));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await client.batchWrite(
+      "resources/project",
+      [
+        {
+          uri: "resources/project/a.txt",
+          content: "hello",
+          precondition: { kind: "create_if_absent" },
+        },
+      ],
+      { extra: { future_flag: 0 } },
+    );
+    await expect(
+      client.downloadBytes("resources/project/a.txt"),
+    ).resolves.toEqual(new Uint8Array([1, 2, 3]));
+    await client.addResource("https://example.com/a.md", {
+      createParent: false,
+      extra: { future_flag: false },
+    });
+
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toMatchObject({
+      root_uri: "viking://resources/project",
+      future_flag: 0,
+    });
+    expect(
+      new URL(String(fetcher.mock.calls[1]![0])).searchParams.get("uri"),
+    ).toBe("viking://resources/project/a.txt");
+    expect(JSON.parse(String(fetcher.mock.calls[2]![1]?.body))).toMatchObject({
+      create_parent: false,
+      future_flag: false,
     });
   });
 
@@ -331,7 +546,9 @@ describe("OpenVikingClient", () => {
   });
 
   it("sends event memory tag configuration for session APIs", async () => {
-    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => ok({}));
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => ok({}));
     const client = new OpenVikingClient({
       baseUrl: "https://example.com",
       fetch: fetcher,
@@ -345,7 +562,10 @@ describe("OpenVikingClient", () => {
       memoryExtractionConfig,
       autoCommitPolicy: { message_count_threshold: 25 },
     });
-    await client.commitSession("tagged", 0, undefined, []);
+    await client.commitSession("tagged", {
+      keepRecentCount: 0,
+      eventTags: [],
+    });
 
     expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
       session_id: "tagged",

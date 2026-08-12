@@ -51,8 +51,11 @@ await client.updateSessionConfig("s1", {
   },
 });
 await client.updateSessionConfig("s1", { autoCommitPolicy: null });
-await client.commitSession("s1", 0, undefined, ["team=search", "channel=web"]);
-await client.commitSession("s1", 0, undefined, []);
+await client.commitSession("s1", {
+  keepRecentCount: 0,
+  eventTags: ["team=search", "channel=web"],
+});
+await client.commitSession("s1", { keepRecentCount: 0, eventTags: [] });
 ```
 
 使用共享临时存储的部署可设置 `uploadMode: "shared"`；服务端也接受 `"local"`（默认值）。

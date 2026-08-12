@@ -24,6 +24,7 @@ type Config struct {
 type AddResourceOptions struct {
 	To                  string
 	Parent              string
+	CreateParent        *bool
 	Reason              string
 	Instruction         string
 	Wait                bool
@@ -39,6 +40,7 @@ type AddResourceOptions struct {
 	Tags                []string
 	TagMode             string
 	Telemetry           any
+	Extra               map[string]any
 }
 
 // AddSkillOptions controls AddSkill.
@@ -46,6 +48,7 @@ type AddSkillOptions struct {
 	Wait      bool
 	Timeout   *float64
 	Telemetry any
+	Extra     map[string]any
 	// TargetURI scopes the operation to a skills root such as
 	// "viking://agent/skills" (account-shared) or a per-user root. A nil
 	// value omits target_uri and lets the server use its default root.
@@ -108,6 +111,7 @@ type UpdateSkillOptions struct {
 	SourceMetadata map[string]any
 	Telemetry      any
 	TargetURI      any
+	Extra          map[string]any
 }
 
 // DeleteSkillOptions controls DeleteSkill.
@@ -172,10 +176,34 @@ type RemoveOptions struct {
 
 // WriteOptions controls Write.
 type WriteOptions struct {
-	Mode      string
-	Wait      bool
+	Mode           string
+	Wait           *bool
+	Timeout        *float64
+	Telemetry      any
+	ProcessingMode string
+	Extra          map[string]any
+}
+
+// BatchWritePrecondition protects one batch write operation.
+type BatchWritePrecondition struct {
+	Kind     string  `json:"kind"`
+	BaseHash *string `json:"base_hash,omitempty"`
+}
+
+// BatchWriteOperation is one preconditioned file write.
+type BatchWriteOperation struct {
+	URI           string                 `json:"uri"`
+	Content       *string                `json:"content,omitempty"`
+	ContentBase64 *string                `json:"content_base64,omitempty"`
+	Precondition  BatchWritePrecondition `json:"precondition"`
+}
+
+// BatchWriteOptions controls BatchWrite.
+type BatchWriteOptions struct {
+	Wait      *bool
 	Timeout   *float64
 	Telemetry any
+	Extra     map[string]any
 }
 
 // SetTagsOptions controls SetTags.
@@ -198,49 +226,70 @@ type ReindexOptions struct {
 
 // FindOptions controls Find.
 type FindOptions struct {
-	TargetURI      any
-	Image          string
-	Limit          int
-	NodeLimit      *int
-	ScoreThreshold *float64
-	Filter         map[string]any
-	ContextType    any
-	Telemetry      any
-	Since          string
-	Until          string
-	TimeField      string
-	Level          []int
-	Tags           []string
+	TargetURI         any
+	Image             string
+	Limit             *int
+	NodeLimit         *int
+	ScoreThreshold    *float64
+	Filter            map[string]any
+	ContextType       any
+	IncludeProvenance *bool
+	Telemetry         any
+	Since             string
+	Until             string
+	TimeField         string
+	Level             []int
+	Tags              []string
+	Extra             map[string]any
 }
 
 // SearchOptions controls Search.
 type SearchOptions struct {
-	TargetURI      any
-	Image          string
-	SessionID      string
-	Limit          int
-	NodeLimit      *int
-	ScoreThreshold *float64
-	Filter         map[string]any
-	ContextType    any
-	Telemetry      any
-	Since          string
-	Until          string
-	TimeField      string
-	Level          []int
-	Tags           []string
+	TargetURI         any
+	Image             string
+	SessionID         string
+	Limit             *int
+	NodeLimit         *int
+	ScoreThreshold    *float64
+	Filter            map[string]any
+	ContextType       any
+	IncludeProvenance *bool
+	Telemetry         any
+	Since             string
+	Until             string
+	TimeField         string
+	Level             []int
+	Tags              []string
+	Extra             map[string]any
 }
 
-// RecallOptions controls Recall. Zero-valued fields fall back to server-side
-// defaults for that field.
-type RecallOptions struct {
-	Quotas           map[string]int
-	MaxChars         *int
-	MinScore         *float64
-	PeerScope        string
-	OtherPeerPenalty any
-	Render           *bool
-	Telemetry        any
+// SearchContextOptions controls server-side context assembly.
+type SearchContextOptions struct {
+	Image             string
+	SessionID         string
+	Limit             *int
+	NodeLimit         *int
+	ScoreThreshold    *float64
+	Filter            map[string]any
+	ContextType       any
+	IncludeProvenance *bool
+	Tags              []string
+	Since             string
+	Until             string
+	TimeField         string
+	QueryExpansion    string
+	MaxTokens         *int
+	Quotas            map[string]int
+	Purpose           string
+	Detail            any
+	DedupTurns        *int
+	ExcludeURIs       []string
+	PeerScope         string
+	OtherPeerPenalty  any
+	Rewrite           any
+	RewriteMaxBullets *int
+	Telemetry         any
+	Extra             map[string]any
 }
 
 // GrepOptions controls Grep.
@@ -264,6 +313,7 @@ type CreateSessionOptions struct {
 	DisableAutoCommit      bool
 	MemoryExtractionConfig map[string]any
 	Telemetry              any
+	Extra                  map[string]any
 }
 
 // GetSessionOptions controls GetSession.
@@ -276,36 +326,74 @@ type UpdateSessionConfigOptions struct {
 	MemoryExtractionConfig map[string]any
 	AutoCommitPolicy       *map[string]any
 	Telemetry              any
-}
-
-// AddMessageOptions controls AddMessage.
-type AddMessageOptions struct {
-	Content   *string
-	Parts     []map[string]any
-	CreatedAt string
-	PeerID    string
-	Telemetry any
+	Extra                  map[string]any
 }
 
 // Message is one session message payload for BatchAddMessages.
 type Message struct {
-	Role      string           `json:"role"`
-	Content   *string          `json:"content,omitempty"`
-	Parts     []map[string]any `json:"parts,omitempty"`
-	CreatedAt string           `json:"created_at,omitempty"`
-	PeerID    string           `json:"peer_id,omitempty"`
+	Role             string           `json:"role"`
+	Content          *string          `json:"content,omitempty"`
+	Parts            []map[string]any `json:"parts,omitempty"`
+	CreatedAt        string           `json:"created_at,omitempty"`
+	PeerID           string           `json:"peer_id,omitempty"`
+	TurnID           string           `json:"turn_id,omitempty"`
+	MessageKind      string           `json:"message_kind,omitempty"`
+	SourceMessageIDs []string         `json:"source_message_ids,omitempty"`
+	Telemetry        any              `json:"telemetry,omitempty"`
 }
 
 // BatchAddMessagesOptions controls BatchAddMessages.
 type BatchAddMessagesOptions struct {
 	Telemetry any
+	Extra     map[string]any
 }
 
 // CommitSessionOptions controls CommitSession.
 type CommitSessionOptions struct {
-	KeepRecentCount int
-	Telemetry       any
-	EventTags       []string
+	KeepRecentCount            *int
+	RetentionMode              string
+	KeepRecentTurnCount        *int
+	RetainedMessageTokenBudget *int
+	MinRawTailSteps            *int
+	Telemetry                  any
+	EventTags                  []string
+	Extra                      map[string]any
+}
+
+// ExperienceTrajectoryOptions controls trajectory pagination and date filters.
+type ExperienceTrajectoryOptions struct {
+	Limit     *int
+	Offset    *int
+	StartDate string
+	EndDate   string
+}
+
+// ExperienceOutcomeOptions controls outcome date filters.
+type ExperienceOutcomeOptions struct {
+	StartDate string
+	EndDate   string
+}
+
+// ResolveAssetsOptions controls OpenViking Assets manifest resolution.
+type ResolveAssetsOptions struct {
+	CatalogYAML   string
+	ManifestLabel string
+	CatalogLabel  string
+	Extra         map[string]any
+}
+
+// AssetGitAuth is one-shot Git authentication for asset preflight.
+type AssetGitAuth struct {
+	Username string `json:"username,omitempty"`
+	Token    string `json:"token,omitempty"`
+}
+
+// PreflightAssetOptions controls Git asset access checks.
+type PreflightAssetOptions struct {
+	Branch     string
+	Commit     string
+	AuthConfig *AssetGitAuth
+	Extra      map[string]any
 }
 
 // ListTasksOptions controls ListTasks.
@@ -340,6 +428,24 @@ type FindResult struct {
 	QueryPlan    *QueryPlan       `json:"query_plan,omitempty"`
 	QueryResults []map[string]any `json:"query_results,omitempty"`
 	Total        int              `json:"total,omitempty"`
+}
+
+// SearchContextEntry is one assembled context entry.
+type SearchContextEntry struct {
+	URI      string  `json:"uri,omitempty"`
+	Category string  `json:"category,omitempty"`
+	Score    float64 `json:"score,omitempty"`
+	Detail   string  `json:"detail,omitempty"`
+	Text     string  `json:"text,omitempty"`
+	Origin   string  `json:"origin,omitempty"`
+}
+
+// SearchContextResult is an injection-ready context response.
+type SearchContextResult struct {
+	Entries  []SearchContextEntry `json:"entries,omitempty"`
+	Rendered string               `json:"rendered,omitempty"`
+	Digest   string               `json:"digest,omitempty"`
+	Stats    map[string]any       `json:"stats,omitempty"`
 }
 
 // MatchedContext is one retrieval hit. Only the fields the retrieval pipeline

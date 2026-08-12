@@ -48,6 +48,18 @@ func setFloatPtr(m map[string]any, key string, value *float64) {
 	}
 }
 
+func mergeExtra(payload map[string]any, extra map[string]any) error {
+	for key, value := range extra {
+		if _, exists := payload[key]; exists {
+			return fmt.Errorf("openviking: extra cannot override %q", key)
+		}
+		if value != nil {
+			payload[key] = value
+		}
+	}
+	return nil
+}
+
 func boolValue(ptr *bool, fallback bool) bool {
 	if ptr == nil {
 		return fallback

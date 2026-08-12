@@ -8,8 +8,15 @@ import {
 import { OpenVikingTransport, type TransportOptions } from "./transport.js";
 import type {
   AddResourceOptions,
+  BatchAddMessagesOptions,
+  BatchWriteOperation,
+  BatchWriteOptions,
   ClientConfig,
+  CommitSessionOptions,
   CreateSessionOptions,
+  ExperienceOutcomeOptions,
+  ExperienceTrajectoryOptions,
+  FindOptions,
   FindResult,
   GitBlob,
   GitCommitOptions,
@@ -20,8 +27,11 @@ import type {
   GrepOptions,
   ImportPackOptions,
   Message,
-  RecallOptions,
+  PreflightAssetOptions,
   RequestOptions,
+  ResolveAssetsOptions,
+  SearchContextOptions,
+  SearchContextResult,
   SearchOptions,
   TaskListOptions,
   TreeOptions,
@@ -37,6 +47,17 @@ const compact = (value: JsonObject): JsonObject =>
       ([, item]) => item !== undefined && item !== null,
     ),
   );
+const mergeExtra = (
+  body: JsonObject,
+  extra: JsonObject | undefined,
+): JsonObject => {
+  for (const [key, value] of Object.entries(extra ?? {})) {
+    if (key in body)
+      throw new TypeError(`OpenViking: extra cannot override ${key}`);
+    if (value !== undefined && value !== null) body[key] = value;
+  }
+  return body;
+};
 const pathPart = (value: string): string => encodeURIComponent(value);
 
 /** Normalize a short OpenViking URI to the canonical `viking://` form. */
@@ -111,17 +132,18 @@ export class OpenVikingClient {
     const body: JsonObject = compact({
       to: options.to,
       parent: options.parent,
+      create_parent: options.createParent,
       reason: options.reason,
       instruction: options.instruction,
-      wait: options.wait ?? false,
+      wait: options.wait,
       timeout: options.timeout,
-      strict: options.strict ?? false,
+      strict: options.strict,
       ignore_dirs: options.ignoreDirs,
       include: options.include,
       exclude: options.exclude,
-      directly_upload_media: options.directlyUploadMedia ?? true,
+      directly_upload_media: options.directlyUploadMedia,
       preserve_structure: options.preserveStructure,
-      watch_interval: options.watchInterval ?? 0,
+      watch_interval: options.watchInterval,
       processing_mode: options.processingMode,
       args:
         options.args && Object.keys(options.args).length
@@ -136,13 +158,15 @@ export class OpenVikingClient {
       body.temp_file_id = await this.upload(local.blob, local.filename);
       body.source_name = local.sourceName;
     } else body.path = source;
-    return this.request("POST", "/api/v1/resources", { body });
+    return this.request("POST", "/api/v1/resources", {
+      body: mergeExtra(body, options.extra),
+    });
   }
 
   /** Install a skill from inline data or an existing Node.js path. */
   async addSkill(
     source: unknown,
-    options: WaitOptions & { targetUri?: string } = {},
+    options: WaitOptions & { targetUri?: string; extra?: JsonObject } = {},
   ): Promise<JsonObject> {
     const body: JsonObject = compact({
       wait: options.wait ?? false,
@@ -155,7 +179,9 @@ export class OpenVikingClient {
     if (local)
       body.temp_file_id = await this.upload(local.blob, local.filename);
     else body.data = source;
-    return this.request("POST", "/api/v1/skills", { body });
+    return this.request("POST", "/api/v1/skills", {
+      body: mergeExtra(body, options.extra),
+    });
   }
   /** List installed skills. */
   listSkills(
@@ -229,6 +255,7 @@ export class OpenVikingClient {
     options: WaitOptions & {
       sourceMetadata?: JsonObject;
       targetUri?: string;
+      extra?: JsonObject;
     } = {},
   ): Promise<JsonObject> {
     const body: JsonObject = compact({
@@ -243,7 +270,9 @@ export class OpenVikingClient {
     if (local)
       body.temp_file_id = await this.upload(local.blob, local.filename);
     else body.data = source;
-    return this.request("PUT", `/api/v1/skills/${pathPart(name)}`, { body });
+    return this.request("PUT", `/api/v1/skills/${pathPart(name)}`, {
+      body: mergeExtra(body, options.extra),
+    });
   }
   /** Delete an installed skill. */
   deleteSkill(name: string, targetUri?: string): Promise<JsonObject> {
@@ -318,7 +347,7 @@ export class OpenVikingClient {
   }
 
   /** Find relevant content without session context. */
-  async find(query: string, options: SearchOptions = {}): Promise<FindResult> {
+  async find(query: string, options: FindOptions = {}): Promise<FindResult> {
     return this.searchRequest("find", query, options);
   }
   /** Search relevant content with optional session context. */
@@ -328,50 +357,76 @@ export class OpenVikingClient {
   ): Promise<FindResult> {
     return this.searchRequest("search", query, options);
   }
-  /** Recall type-quota memory as injection-ready context. */
-  async recall(
-    query: string,
-    options: RecallOptions = {},
-  ): Promise<JsonObject> {
-    return this.request("POST", "/api/v1/search/recall", {
-      body: compact({
-        query,
-        quotas: options.quotas,
-        max_chars: options.maxChars,
-        min_score: options.minScore,
-        peer_scope: options.peerScope,
-        other_peer_penalty: options.otherPeerPenalty,
-        render: options.render,
-        telemetry: options.telemetry,
-      }),
-    });
-  }
   private async searchRequest(
     kind: "find" | "search",
     query: string,
-    options: SearchOptions,
+    options: FindOptions | SearchOptions,
   ): Promise<FindResult> {
     let imageUrl: string | undefined;
     if (typeof options.image === "string") {
       imageUrl = (await nodeImagePathToDataURI(options.image)) ?? options.image;
     }
+    const body = compact({
+      query,
+      target_uri: options.targetUri,
+      image_url: imageUrl,
+      session_id:
+        kind === "search" ? (options as SearchOptions).sessionId : undefined,
+      limit: options.limit,
+      node_limit: options.nodeLimit,
+      score_threshold: options.scoreThreshold,
+      filter: options.filter,
+      context_type: options.contextType,
+      telemetry: options.telemetry,
+      since: options.since,
+      until: options.until,
+      time_field: options.timeField,
+      level: options.level,
+      tags: options.tags,
+      include_provenance: options.includeProvenance,
+    });
     return this.request("POST", `/api/v1/search/${kind}`, {
-      body: compact({
-        query,
-        target_uri: options.targetUri ?? "",
-        image_url: imageUrl,
-        session_id: kind === "search" ? options.sessionId : undefined,
-        limit: options.nodeLimit ?? options.limit ?? 10,
-        score_threshold: options.scoreThreshold,
-        filter: options.filter,
-        context_type: options.contextType,
-        telemetry: options.telemetry,
-        since: options.since,
-        until: options.until,
-        time_field: options.timeField,
-        level: options.level,
-        tags: options.tags,
-      }),
+      body: mergeExtra(body, options.extra),
+    });
+  }
+  /** Assemble injection-ready context on the server. */
+  async searchContext(
+    query: string,
+    options: SearchContextOptions = {},
+  ): Promise<SearchContextResult> {
+    let imageUrl: string | undefined;
+    if (typeof options.image === "string")
+      imageUrl = (await nodeImagePathToDataURI(options.image)) ?? options.image;
+    const body = compact({
+      query,
+      mode: "context",
+      image_url: imageUrl,
+      session_id: options.sessionId,
+      limit: options.limit,
+      node_limit: options.nodeLimit,
+      score_threshold: options.scoreThreshold,
+      filter: options.filter,
+      context_type: options.contextType,
+      include_provenance: options.includeProvenance,
+      tags: options.tags,
+      since: options.since,
+      until: options.until,
+      time_field: options.timeField,
+      query_expansion: options.queryExpansion,
+      max_tokens: options.maxTokens,
+      quotas: options.quotas,
+      purpose: options.purpose,
+      detail: options.detail,
+      dedup_turns: options.dedupTurns,
+      exclude_uris: options.excludeUris,
+      peer_scope: options.peerScope,
+      other_peer_penalty: options.otherPeerPenalty,
+      rewrite: options.rewrite,
+      rewrite_max_bullets: options.rewriteMaxBullets,
+      telemetry: options.telemetry,
+    });
+    return this.request("POST", "/api/v1/search/search", {
+      body: mergeExtra(body, options.extra),
     });
   }
   /** Search file contents by pattern. */
@@ -476,6 +531,22 @@ export class OpenVikingClient {
       query: { uri: normalizeURI(uri), offset, limit },
     });
   }
+  /** Download raw stored bytes. */
+  downloadBytes(uri: string): Promise<Uint8Array> {
+    return this.transport.consume(
+      "GET",
+      "/api/v1/content/download",
+      { query: { uri: normalizeURI(uri) } },
+      async (response) => {
+        if (
+          !response.ok ||
+          response.headers.get("content-type")?.includes("json")
+        )
+          return this.transport.parseResponse<never>(response);
+        return new Uint8Array(await response.arrayBuffer());
+      },
+    );
+  }
   /** Read L0 abstract content. */
   abstract(uri: string): Promise<string> {
     return this.request("GET", "/api/v1/content/abstract", {
@@ -494,16 +565,44 @@ export class OpenVikingClient {
     content: string,
     options: WriteOptions = {},
   ): Promise<JsonObject> {
+    const body = compact({
+      uri: normalizeURI(uri),
+      content,
+      mode: options.mode,
+      processing_mode: options.processingMode,
+      wait: options.wait,
+      timeout: options.timeout,
+      telemetry: options.telemetry,
+    });
     return this.request("POST", "/api/v1/content/write", {
-      body: compact({
-        uri: normalizeURI(uri),
-        content,
-        mode: options.mode ?? "replace",
-        processing_mode: options.processingMode,
-        wait: options.wait ?? false,
-        timeout: options.timeout,
-        telemetry: options.telemetry,
-      }),
+      body: mergeExtra(body, options.extra),
+    });
+  }
+  /** Apply preconditioned file writes in one request. */
+  batchWrite(
+    rootUri: string,
+    operations: BatchWriteOperation[],
+    options: BatchWriteOptions = {},
+  ): Promise<JsonObject> {
+    const body = compact({
+      root_uri: normalizeURI(rootUri),
+      operations: operations.map((operation) =>
+        compact({
+          uri: normalizeURI(operation.uri),
+          content: operation.content,
+          content_base64: operation.contentBase64,
+          precondition: compact({
+            kind: operation.precondition.kind,
+            base_hash: operation.precondition.baseHash,
+          }),
+        }),
+      ),
+      wait: options.wait,
+      timeout: options.timeout,
+      telemetry: options.telemetry,
+    });
+    return this.request("POST", "/api/v1/content/batch-write", {
+      body: mergeExtra(body, options.extra),
     });
   }
   /** Set retrieval tags. */
@@ -556,7 +655,7 @@ export class OpenVikingClient {
     if ("autoCommitPolicy" in options)
       body.auto_commit_policy = options.autoCommitPolicy ?? null;
     return this.request("POST", "/api/v1/sessions", {
-      body,
+      body: mergeExtra(body, options.extra),
     });
   }
   /** List sessions visible to the caller. */
@@ -584,7 +683,7 @@ export class OpenVikingClient {
       "PATCH",
       `/api/v1/sessions/${pathPart(sessionId)}/config`,
       {
-        body,
+        body: mergeExtra(body, options.extra),
       },
     );
   }
@@ -637,6 +736,9 @@ export class OpenVikingClient {
           parts: message.parts?.length ? message.parts : undefined,
           created_at: message.createdAt,
           peer_id: message.peerId,
+          turn_id: message.turnId,
+          message_kind: message.messageKind,
+          source_message_ids: message.sourceMessageIds,
           telemetry: message.telemetry,
         }),
       },
@@ -646,51 +748,60 @@ export class OpenVikingClient {
   batchAddMessages(
     sessionId: string,
     messages: Message[],
-    telemetry?: unknown,
+    options: BatchAddMessagesOptions = {},
   ): Promise<JsonObject> {
     return this.request(
       "POST",
       `/api/v1/sessions/${pathPart(sessionId)}/messages/batch`,
       {
-        body: compact({
-          messages: messages.map((message) => {
-            if (message.content === undefined && !message.parts?.length) {
-              throw new TypeError(
-                "OpenViking: each message requires content or parts",
-              );
-            }
-            const parts = message.parts?.length ? message.parts : undefined;
-            return compact({
-              role: message.role,
-              content: parts ? undefined : message.content,
-              parts,
-              created_at: message.createdAt,
-              peer_id: message.peerId,
-            });
+        body: mergeExtra(
+          compact({
+            messages: messages.map((message) => {
+              if (message.content === undefined && !message.parts?.length) {
+                throw new TypeError(
+                  "OpenViking: each message requires content or parts",
+                );
+              }
+              const parts = message.parts?.length ? message.parts : undefined;
+              return compact({
+                role: message.role,
+                content: parts ? undefined : message.content,
+                parts,
+                created_at: message.createdAt,
+                peer_id: message.peerId,
+                turn_id: message.turnId,
+                message_kind: message.messageKind,
+                source_message_ids: message.sourceMessageIds,
+              });
+            }),
+            telemetry: options.telemetry,
           }),
-          telemetry,
-        }),
+          options.extra,
+        ),
       },
     );
   }
   /** Commit a session and extract memories. */
   commitSession(
     sessionId: string,
-    keepRecentCount = 0,
-    telemetry?: unknown,
-    eventTags?: string[],
+    options: CommitSessionOptions = {},
   ): Promise<JsonObject> {
+    const body = compact({
+      keep_recent_count: options.keepRecentCount,
+      retention_mode: options.retentionMode,
+      keep_recent_turn_count: options.keepRecentTurnCount,
+      retained_message_token_budget: options.retainedMessageTokenBudget,
+      min_raw_tail_steps: options.minRawTailSteps,
+      extraction_metadata:
+        options.eventTags === undefined
+          ? undefined
+          : { event: { tags: options.eventTags } },
+      telemetry: options.telemetry,
+    });
     return this.request(
       "POST",
       `/api/v1/sessions/${pathPart(sessionId)}/commit`,
-      {
-        body: compact({
-          keep_recent_count: keepRecentCount,
-          telemetry,
-          extraction_metadata:
-            eventTags === undefined ? undefined : { event: { tags: eventTags } },
-        }),
-      },
+      { body: mergeExtra(body, options.extra) },
     );
   }
   /** Export a resource subtree to a local OVPack file. */
@@ -1048,5 +1159,70 @@ export class OpenVikingClient {
       `/api/v1/admin/accounts/${pathPart(accountId)}/settings`,
       { body: { agent_evolution: { enabled } } },
     );
+  }
+  /** List trajectories that consumed an Experience. */
+  listExperienceTrajectories(
+    experienceUri: string,
+    options: ExperienceTrajectoryOptions = {},
+  ): Promise<JsonObject> {
+    return this.request(
+      "GET",
+      "/api/v1/agent-evolution/experiences/trajectories",
+      {
+        query: {
+          experience_uri: normalizeURI(experienceUri),
+          limit: options.limit,
+          offset: options.offset,
+          start_date: options.startDate,
+          end_date: options.endDate,
+        },
+      },
+    );
+  }
+  /** Return the outcome distribution for an Experience. */
+  getExperienceOutcomes(
+    experienceUri: string,
+    options: ExperienceOutcomeOptions = {},
+  ): Promise<JsonObject> {
+    return this.request("GET", "/api/v1/agent-evolution/experiences/outcomes", {
+      query: {
+        experience_uri: normalizeURI(experienceUri),
+        start_date: options.startDate,
+        end_date: options.endDate,
+      },
+    });
+  }
+  /** Parse and validate an OpenViking Assets manifest. */
+  resolveOpenVikingAssets(
+    manifestYaml: string,
+    options: ResolveAssetsOptions = {},
+  ): Promise<JsonObject> {
+    const body = compact({
+      manifest_yaml: manifestYaml,
+      catalog_yaml: options.catalogYaml,
+      manifest_label: options.manifestLabel,
+      catalog_label: options.catalogLabel,
+    });
+    return this.request("POST", "/api/v1/openviking-assets/resolve", {
+      body: mergeExtra(body, options.extra),
+    });
+  }
+  /** Verify read access to one Git asset. */
+  preflightOpenVikingAsset(
+    name: string,
+    repoUrl: string,
+    options: PreflightAssetOptions = {},
+  ): Promise<JsonObject> {
+    const body = compact({
+      name,
+      connector: "git",
+      repo_url: repoUrl,
+      branch: options.branch,
+      commit: options.commit,
+      auth_config: options.authConfig,
+    });
+    return this.request("POST", "/api/v1/openviking-assets/preflight", {
+      body: mergeExtra(body, options.extra),
+    });
   }
 }

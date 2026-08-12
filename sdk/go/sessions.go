@@ -23,6 +23,12 @@ func (c *Client) CreateSession(ctx context.Context, opts *CreateSessionOptions) 
 	}
 	setAny(payload, "memory_extraction_config", opts.MemoryExtractionConfig)
 	setAny(payload, "telemetry", opts.Telemetry)
+	if err := mergeExtra(payload, opts.Extra); err != nil {
+		return nil, err
+	}
+	if err := mergeExtra(payload, opts.Extra); err != nil {
+		return nil, err
+	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/sessions", nil, payload, &result)
 	return result, err
@@ -57,6 +63,9 @@ func (c *Client) UpdateSessionConfig(ctx context.Context, sessionID string, opts
 		payload["auto_commit_policy"] = *opts.AutoCommitPolicy
 	}
 	setAny(payload, "telemetry", opts.Telemetry)
+	if err := mergeExtra(payload, opts.Extra); err != nil {
+		return nil, err
+	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPatch, "/api/v1/sessions/"+url.PathEscape(sessionID)+"/config", nil, payload, &result)
 	return result, err
@@ -99,18 +108,23 @@ func (c *Client) DeleteSession(ctx context.Context, sessionID string) error {
 }
 
 // AddMessage appends a message to a session.
-func (c *Client) AddMessage(ctx context.Context, sessionID, role string, opts AddMessageOptions) (map[string]any, error) {
-	payload := map[string]any{"role": role}
-	if len(opts.Parts) > 0 {
-		payload["parts"] = opts.Parts
-	} else if opts.Content != nil {
-		payload["content"] = *opts.Content
+func (c *Client) AddMessage(ctx context.Context, sessionID string, message Message) (map[string]any, error) {
+	payload := map[string]any{"role": message.Role}
+	if len(message.Parts) > 0 {
+		payload["parts"] = message.Parts
+	} else if message.Content != nil {
+		payload["content"] = *message.Content
 	} else {
 		return nil, fmt.Errorf("openviking: AddMessage requires Content or Parts")
 	}
-	setString(payload, "created_at", opts.CreatedAt)
-	setString(payload, "peer_id", opts.PeerID)
-	setAny(payload, "telemetry", opts.Telemetry)
+	setString(payload, "created_at", message.CreatedAt)
+	setString(payload, "peer_id", message.PeerID)
+	setString(payload, "turn_id", message.TurnID)
+	setString(payload, "message_kind", message.MessageKind)
+	if message.SourceMessageIDs != nil {
+		payload["source_message_ids"] = message.SourceMessageIDs
+	}
+	setAny(payload, "telemetry", message.Telemetry)
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/sessions/"+url.PathEscape(sessionID)+"/messages", nil, payload, &result)
 	return result, err
@@ -121,6 +135,9 @@ func (c *Client) BatchAddMessages(ctx context.Context, sessionID string, message
 	payload := map[string]any{"messages": messages}
 	if opts != nil {
 		setAny(payload, "telemetry", opts.Telemetry)
+		if err := mergeExtra(payload, opts.Extra); err != nil {
+			return nil, err
+		}
 	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/sessions/"+url.PathEscape(sessionID)+"/messages/batch", nil, payload, &result)
@@ -132,14 +149,22 @@ func (c *Client) CommitSession(ctx context.Context, sessionID string, opts *Comm
 	if opts == nil {
 		opts = &CommitSessionOptions{}
 	}
-	payload := map[string]any{
-		"keep_recent_count": opts.KeepRecentCount,
+	payload := map[string]any{}
+	if opts.KeepRecentCount != nil {
+		payload["keep_recent_count"] = *opts.KeepRecentCount
 	}
+	setString(payload, "retention_mode", opts.RetentionMode)
+	setAny(payload, "keep_recent_turn_count", opts.KeepRecentTurnCount)
+	setAny(payload, "retained_message_token_budget", opts.RetainedMessageTokenBudget)
+	setAny(payload, "min_raw_tail_steps", opts.MinRawTailSteps)
 	setAny(payload, "telemetry", opts.Telemetry)
 	if opts.EventTags != nil {
 		payload["extraction_metadata"] = map[string]any{
 			"event": map[string]any{"tags": opts.EventTags},
 		}
+	}
+	if err := mergeExtra(payload, opts.Extra); err != nil {
+		return nil, err
 	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/sessions/"+url.PathEscape(sessionID)+"/commit", nil, payload, &result)
