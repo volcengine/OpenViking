@@ -11,7 +11,7 @@ from typing import Any, Callable
 import pytest
 
 from openviking.parse.base import NodeType, ResourceNode, create_parse_result
-from openviking.parse.parsers import epub, excel, legacy_doc, powerpoint, word
+from openviking.parse.parsers import anydoc_converter, epub, excel, legacy_doc, powerpoint, word
 
 
 def _stub_markdown_parse(parser) -> dict[str, Any]:
@@ -54,28 +54,27 @@ async def test_word_parser_offloads_docx_conversion(monkeypatch, tmp_path: Path)
     parser = word.WordParser()
     seen = _stub_markdown_parse(parser)
     calls = _patch_to_thread(monkeypatch, word)
-    fake_docx = SimpleNamespace()
-    monkeypatch.setitem(sys.modules, "docx", fake_docx)
 
-    def convert(path: Path, docx_module, resource_name=None, storage=None) -> str:
-        assert docx_module is fake_docx
-        return "# converted docx"
+    def convert(self, path: Path, *, resource_name, storage):
+        return SimpleNamespace(
+            markdown="# converted docx",
+            source_format="docx",
+        )
 
-    monkeypatch.setattr(parser, "_convert_to_markdown", convert)
+    monkeypatch.setattr(anydoc_converter.AnyDocConverter, "convert", convert)
     source = tmp_path / "sample.docx"
     source.write_bytes(b"placeholder")
 
     result = await parser.parse(source)
 
-    # #2429 added resource_name/storage to the offloaded conversion call; assert
-    # the conversion was offloaded with the doc + docx module, without pinning the
-    # identity of the storage singleton.
     assert len(calls) == 1
-    func, args, _ = calls[0]
-    assert func is convert
-    assert args[0] == source
-    assert args[1] is fake_docx
+    func, args, call_kwargs = calls[0]
+    assert func.__func__ is convert
+    assert args == (source,)
+    assert call_kwargs["resource_name"] == "sample"
+    storage = call_kwargs["storage"]
     assert seen["content"] == "# converted docx"
+    assert seen["kwargs"]["allowed_media_dirs"] == [storage.media_dir]
     assert result.source_format == "docx"
     assert result.parser_name == "WordParser"
 
@@ -89,8 +88,14 @@ async def test_word_parser_forwards_original_name_to_markdown(monkeypatch, tmp_p
     parser = word.WordParser()
     seen = _stub_markdown_parse(parser)
     _patch_to_thread(monkeypatch, word)
-    monkeypatch.setitem(sys.modules, "docx", SimpleNamespace())
-    monkeypatch.setattr(parser, "_convert_to_markdown", lambda *args, **kwargs: "# converted docx")
+    monkeypatch.setattr(
+        anydoc_converter.AnyDocConverter,
+        "convert",
+        lambda *args, **kwargs: SimpleNamespace(
+            markdown="# converted docx",
+            source_format="docx",
+        ),
+    )
 
     upload = tmp_path / "upload_abc123.docx"
     upload.write_bytes(b"placeholder")
@@ -106,8 +111,14 @@ async def test_word_parser_forwards_no_split_to_markdown(monkeypatch, tmp_path: 
     parser = word.WordParser()
     seen = _stub_markdown_parse(parser)
     _patch_to_thread(monkeypatch, word)
-    monkeypatch.setitem(sys.modules, "docx", SimpleNamespace())
-    monkeypatch.setattr(parser, "_convert_to_markdown", lambda *args, **kwargs: "# converted docx")
+    monkeypatch.setattr(
+        anydoc_converter.AnyDocConverter,
+        "convert",
+        lambda *args, **kwargs: SimpleNamespace(
+            markdown="# converted docx",
+            source_format="docx",
+        ),
+    )
 
     upload = tmp_path / "screenplay.docx"
     upload.write_bytes(b"placeholder")
@@ -208,22 +219,31 @@ async def test_epub_parser_offloads_epub_conversion(monkeypatch, tmp_path: Path)
 
 
 @pytest.mark.asyncio
-async def test_legacy_doc_parser_offloads_doc_extraction(monkeypatch, tmp_path: Path):
+async def test_legacy_doc_parser_offloads_anydoc_conversion(monkeypatch, tmp_path: Path):
     parser = legacy_doc.LegacyDocParser()
     seen = _stub_markdown_parse(parser)
     calls = _patch_to_thread(monkeypatch, legacy_doc)
 
-    def extract(path: Path) -> str:
-        return "# converted doc"
+    def convert(self, path: Path, *, resource_name, storage):
+        return SimpleNamespace(
+            markdown="# converted doc",
+            source_format="doc",
+        )
 
-    monkeypatch.setattr(parser, "_extract_text", extract)
+    monkeypatch.setattr(anydoc_converter.AnyDocConverter, "convert", convert)
     source = tmp_path / "sample.doc"
     source.write_bytes(b"placeholder")
 
     result = await parser.parse(source)
 
-    assert calls == [(extract, (source,), {})]
+    assert len(calls) == 1
+    func, args, call_kwargs = calls[0]
+    assert func.__func__ is convert
+    assert args == (source,)
+    assert call_kwargs["resource_name"] == "sample"
+    storage = call_kwargs["storage"]
     assert seen["content"] == "# converted doc"
+    assert seen["kwargs"]["allowed_media_dirs"] == [storage.media_dir]
     assert result.source_format == "doc"
     assert result.parser_name == "LegacyDocParser"
 

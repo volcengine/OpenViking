@@ -1,10 +1,9 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 """
-Word document (.docx) parser for OpenViking.
+Word document parser for OpenViking.
 
 Converts Word documents to Markdown then parses using MarkdownParser.
-Inspired by microsoft/markitdown approach.
 """
 
 import asyncio
@@ -13,7 +12,7 @@ from typing import List, Optional, Union
 
 from openviking.parse.base import ParseResult
 from openviking.parse.parsers.base_parser import BaseParser
-from openviking_cli.utils.config.parser_config import ParserConfig
+from openviking_cli.utils.config.parser_config import AnydocConfig, ParserConfig
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -23,38 +22,68 @@ class WordParser(BaseParser):
     """
     Word document parser for OpenViking.
 
-    Supports: .docx
+    Supports: .docx, .docm, .odt, .rtf
 
-    Converts Word documents to Markdown using python-docx,
-    then delegates to MarkdownParser for tree structure creation.
+    Converts Word documents to Markdown using anydoc, then delegates to
+    MarkdownParser for tree structure creation. The python-docx converter remains
+    available when anydoc is disabled or legacy fallback is configured.
     """
 
-    def __init__(self, config: Optional[ParserConfig] = None):
+    def __init__(
+        self,
+        config: Optional[ParserConfig] = None,
+        anydoc_config: Optional[AnydocConfig] = None,
+    ):
         """Initialize Word parser."""
         from openviking.parse.parsers.markdown import MarkdownParser
 
         self._md_parser = MarkdownParser(config=config)
         self.config = config or ParserConfig()
+        self.anydoc_config = anydoc_config or AnydocConfig()
 
     @property
     def supported_extensions(self) -> List[str]:
-        return [".docx"]
+        return [".docx", ".docm", ".odt", ".rtf"]
 
     async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:
         """Parse Word document from file path."""
         path = Path(source)
 
         if path.exists():
-            import docx
-
             from openviking_cli.utils.storage import get_storage
 
             storage = get_storage()
             resource_name = kwargs.get("resource_name") or kwargs.get("source_name") or path.stem
+            source_format = path.suffix.lstrip(".").lower() or "docx"
 
-            markdown_content = await asyncio.to_thread(
-                self._convert_to_markdown, path, docx, resource_name, storage
-            )
+            if self.anydoc_config.enable:
+                from openviking.parse.parsers.anydoc_converter import AnyDocConverter
+
+                try:
+                    conversion = await asyncio.to_thread(
+                        AnyDocConverter().convert,
+                        path,
+                        resource_name=resource_name,
+                        storage=storage,
+                    )
+                    markdown_content = conversion.markdown
+                    source_format = conversion.source_format or source_format
+                except Exception:
+                    if not self.anydoc_config.fallback_to_legacy:
+                        raise
+                    logger.warning(
+                        "[WordParser] anydoc conversion failed for %s; using legacy converter",
+                        path.name,
+                        exc_info=True,
+                    )
+                    markdown_content = await self._legacy_convert(
+                        path, resource_name=resource_name, storage=storage
+                    )
+            else:
+                markdown_content = await self._legacy_convert(
+                    path, resource_name=resource_name, storage=storage
+                )
+
             result = await self._md_parser.parse_content(
                 markdown_content,
                 source_path=str(path),
@@ -71,6 +100,7 @@ class WordParser(BaseParser):
                 allowed_media_dirs=[storage.media_dir],
                 split_content=kwargs.get("split_content", True),
             )
+            result.source_format = source_format
         else:
             result = await self._md_parser.parse_content(
                 str(source),
@@ -79,9 +109,21 @@ class WordParser(BaseParser):
                 source_name=kwargs.get("source_name"),
                 split_content=kwargs.get("split_content", True),
             )
-        result.source_format = "docx"
+            result.source_format = "docx"
         result.parser_name = "WordParser"
         return result
+
+    async def _legacy_convert(self, path: Path, *, resource_name: str, storage) -> str:
+        """Run the pre-anydoc python-docx converter off the event loop."""
+        import docx
+
+        return await asyncio.to_thread(
+            self._convert_to_markdown,
+            path,
+            docx,
+            resource_name,
+            storage,
+        )
 
     async def parse_content(
         self, content: str, source_path: Optional[str] = None, instruction: str = "", **kwargs

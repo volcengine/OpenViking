@@ -1,0 +1,196 @@
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from openviking.parse.base import NodeType, ResourceNode, create_parse_result
+from openviking.parse.parsers import anydoc_converter, legacy_doc, word
+from openviking.parse.registry import ParserRegistry
+from openviking_cli.utils.config.parser_config import AnydocConfig, ParserConfig
+
+
+class FakeStorage:
+    def __init__(self, media_dir: Path):
+        self.media_dir = media_dir
+        self.saved = []
+
+    def save_image(self, resource_name, image_data, filename=None, extension=".png"):
+        path = self.media_dir / resource_name / "images" / f"{filename}{extension}"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(image_data)
+        self.saved.append(path)
+        return path
+
+
+def _stub_markdown_parse(parser):
+    seen = {}
+
+    async def parse_content(content, source_path=None, instruction="", **kwargs):
+        seen.update(
+            content=content,
+            source_path=source_path,
+            instruction=instruction,
+            kwargs=kwargs,
+        )
+        return create_parse_result(
+            root=ResourceNode(type=NodeType.ROOT),
+            source_path=source_path,
+            source_format="markdown",
+            parser_name="MarkdownParser",
+        )
+
+    parser._md_parser.parse_content = parse_content
+    return seen
+
+
+def _patch_storage(monkeypatch, tmp_path):
+    storage = FakeStorage(tmp_path / "media")
+    monkeypatch.setattr("openviking_cli.utils.storage.get_storage", lambda: storage)
+    return storage
+
+
+@pytest.mark.asyncio
+async def test_word_parser_anydoc_rewrites_image_and_allows_media_dir(tmp_path, monkeypatch):
+    storage = _patch_storage(monkeypatch, tmp_path)
+    parser = word.WordParser(anydoc_config=AnydocConfig())
+    seen = _stub_markdown_parse(parser)
+    source = tmp_path / "report.docm"
+    source.write_bytes(b"placeholder")
+
+    asset = SimpleNamespace(
+        id=0,
+        media_type="image/png",
+        origin_part="word/media/chart.png",
+        bytes=b"\x89PNG\r\n\x1a\n",
+    )
+    image = SimpleNamespace(
+        kind="image",
+        alt="chart",
+        source=SimpleNamespace(kind="asset", asset_id=0),
+    )
+    document = SimpleNamespace(
+        blocks=[SimpleNamespace(kind="paragraph", content=[image])],
+        notes=[],
+        assets=[asset],
+    )
+    monkeypatch.setattr(
+        anydoc_converter,
+        "_load_document",
+        lambda path, format_hint=None: ("docm", document),
+    )
+
+    result = await parser.parse(source, source_name="Quarterly Report.docm")
+
+    assert parser.supported_extensions == [".docx", ".docm", ".odt", ".rtf"]
+    assert "image1.png" in seen["content"]
+    assert seen["kwargs"]["allowed_media_dirs"] == [storage.media_dir]
+    assert result.source_format == "docm"
+    assert result.parser_name == "WordParser"
+    assert storage.saved
+
+
+@pytest.mark.asyncio
+async def test_word_parser_uses_legacy_conversion_when_anydoc_disabled(tmp_path, monkeypatch):
+    _patch_storage(monkeypatch, tmp_path)
+    parser = word.WordParser(anydoc_config=AnydocConfig(enable=False))
+    seen = _stub_markdown_parse(parser)
+    source = tmp_path / "report.docx"
+    source.write_bytes(b"placeholder")
+    fake_docx = SimpleNamespace()
+    monkeypatch.setitem(__import__("sys").modules, "docx", fake_docx)
+    monkeypatch.setattr(
+        parser,
+        "_convert_to_markdown",
+        lambda path, docx_module, resource_name=None, storage=None: "# legacy",
+    )
+    monkeypatch.setattr(
+        anydoc_converter.AnyDocConverter,
+        "convert",
+        lambda *args, **kwargs: pytest.fail("anydoc must not run"),
+    )
+
+    await parser.parse(source)
+
+    assert seen["content"] == "# legacy"
+
+
+@pytest.mark.asyncio
+async def test_word_parser_falls_back_after_anydoc_failure(tmp_path, monkeypatch):
+    _patch_storage(monkeypatch, tmp_path)
+    parser = word.WordParser(anydoc_config=AnydocConfig(fallback_to_legacy=True))
+    seen = _stub_markdown_parse(parser)
+    source = tmp_path / "report.docx"
+    source.write_bytes(b"placeholder")
+    monkeypatch.setitem(__import__("sys").modules, "docx", SimpleNamespace())
+    monkeypatch.setattr(
+        anydoc_converter.AnyDocConverter,
+        "convert",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("conversion failed")),
+    )
+    monkeypatch.setattr(
+        parser,
+        "_convert_to_markdown",
+        lambda *args, **kwargs: "# legacy fallback",
+    )
+
+    await parser.parse(source)
+
+    assert seen["content"] == "# legacy fallback"
+
+
+@pytest.mark.asyncio
+async def test_legacy_doc_parser_uses_anydoc_for_real_doc(tmp_path, monkeypatch):
+    storage = _patch_storage(monkeypatch, tmp_path)
+    parser = legacy_doc.LegacyDocParser(anydoc_config=AnydocConfig())
+    seen = _stub_markdown_parse(parser)
+    source = tmp_path / "legacy.doc"
+    source.write_bytes(b"\xd0\xcf\x11\xe0placeholder")
+    monkeypatch.setattr(
+        anydoc_converter.AnyDocConverter,
+        "convert",
+        lambda self, path, **kwargs: SimpleNamespace(
+            markdown="# converted doc",
+            source_format="doc",
+        ),
+    )
+
+    result = await parser.parse(source)
+
+    assert seen["content"] == "# converted doc"
+    assert seen["kwargs"]["allowed_media_dirs"] == [storage.media_dir]
+    assert result.source_format == "doc"
+    assert result.parser_name == "LegacyDocParser"
+
+
+@pytest.mark.asyncio
+async def test_legacy_doc_parser_uses_ole_extractor_when_anydoc_disabled(
+    tmp_path, monkeypatch
+):
+    parser = legacy_doc.LegacyDocParser(anydoc_config=AnydocConfig(enable=False))
+    seen = _stub_markdown_parse(parser)
+    source = tmp_path / "legacy.doc"
+    source.write_bytes(b"\xd0\xcf\x11\xe0placeholder")
+    monkeypatch.setattr(parser, "_extract_text", lambda path: "# ole fallback")
+    monkeypatch.setattr(
+        anydoc_converter.AnyDocConverter,
+        "convert",
+        lambda *args, **kwargs: pytest.fail("anydoc must not run"),
+    )
+
+    await parser.parse(source)
+
+    assert seen["content"] == "# ole fallback"
+
+
+def test_registry_passes_anydoc_config_to_word_and_legacy_doc():
+    anydoc_config = AnydocConfig(enable=False, fallback_to_legacy=True)
+    registry = ParserRegistry(
+        parser_configs={
+            "word": ParserConfig(),
+            "legacy_doc": ParserConfig(),
+            "anydoc": anydoc_config,
+        }
+    )
+
+    assert registry._parsers["word"].anydoc_config is anydoc_config
+    assert registry._parsers["legacy_doc"].anydoc_config is anydoc_config

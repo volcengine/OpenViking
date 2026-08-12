@@ -3,8 +3,8 @@
 """
 Legacy Word document (.doc) parser for OpenViking.
 
-Extracts text from OLE2 compound binary .doc files using olefile,
-then delegates to MarkdownParser for tree structure creation.
+Converts OLE2 compound binary .doc files through anydoc, retaining the olefile
+extractor as a configurable legacy fallback.
 """
 
 import asyncio
@@ -15,7 +15,7 @@ from typing import List, Optional, Union
 
 from openviking.parse.base import ParseResult
 from openviking.parse.parsers.base_parser import BaseParser
-from openviking_cli.utils.config.parser_config import ParserConfig
+from openviking_cli.utils.config.parser_config import AnydocConfig, ParserConfig
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -32,16 +32,21 @@ class LegacyDocParser(BaseParser):
     """
     Legacy .doc (OLE2 binary) parser.
 
-    Extracts text content from Word 97-2003 (.doc) files using olefile
-    to read the WordDocument and table streams, then delegates to
-    MarkdownParser for tree structure.
+    Converts Word 97-2003 (.doc) files through anydoc, then delegates to
+    MarkdownParser for tree structure. The olefile extractor remains available
+    when anydoc is disabled or legacy fallback is configured.
     """
 
-    def __init__(self, config: Optional[ParserConfig] = None):
+    def __init__(
+        self,
+        config: Optional[ParserConfig] = None,
+        anydoc_config: Optional[AnydocConfig] = None,
+    ):
         from openviking.parse.parsers.markdown import MarkdownParser
 
         self._md_parser = MarkdownParser(config=config)
         self.config = config or ParserConfig()
+        self.anydoc_config = anydoc_config or AnydocConfig()
 
     @property
     def supported_extensions(self) -> List[str]:
@@ -66,7 +71,10 @@ class LegacyDocParser(BaseParser):
                         "Detected OOXML Word content in %s; routing to WordParser",
                         path.name,
                     )
-                    return await WordParser(config=self.config).parse(
+                    return await WordParser(
+                        config=self.config,
+                        anydoc_config=self.anydoc_config,
+                    ).parse(
                         path,
                         instruction=instruction,
                         **kwargs,
@@ -74,15 +82,51 @@ class LegacyDocParser(BaseParser):
 
                 raise ValueError(f"{path.name} is a ZIP package, not a legacy Word .doc file")
 
-            text = await asyncio.to_thread(self._extract_text, path)
+            source_format = "doc"
+            markdown_kwargs = dict(kwargs)
+            if self.anydoc_config.enable:
+                from openviking.parse.parsers.anydoc_converter import AnyDocConverter
+                from openviking_cli.utils.storage import get_storage
+
+                storage = get_storage()
+                resource_name = (
+                    kwargs.get("resource_name") or kwargs.get("source_name") or path.stem
+                )
+                try:
+                    conversion = await asyncio.to_thread(
+                        AnyDocConverter().convert,
+                        path,
+                        resource_name=resource_name,
+                        storage=storage,
+                    )
+                    text = conversion.markdown
+                    source_format = conversion.source_format or source_format
+                    markdown_kwargs["allowed_media_dirs"] = [storage.media_dir]
+                except Exception:
+                    if not self.anydoc_config.fallback_to_legacy:
+                        raise
+                    logger.warning(
+                        "[LegacyDocParser] anydoc conversion failed for %s; "
+                        "using legacy extractor",
+                        path.name,
+                        exc_info=True,
+                    )
+                    text = await asyncio.to_thread(self._extract_text, path)
+            else:
+                text = await asyncio.to_thread(self._extract_text, path)
+
             result = await self._md_parser.parse_content(
-                text, source_path=str(path), instruction=instruction, **kwargs
+                text,
+                source_path=str(path),
+                instruction=instruction,
+                **markdown_kwargs,
             )
+            result.source_format = source_format
         else:
             result = await self._md_parser.parse_content(
                 str(source), instruction=instruction, **kwargs
             )
-        result.source_format = "doc"
+            result.source_format = "doc"
         result.parser_name = "LegacyDocParser"
         return result
 
