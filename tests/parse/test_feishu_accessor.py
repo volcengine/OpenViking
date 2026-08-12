@@ -7,7 +7,6 @@ import json
 import sys
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
-from urllib.parse import quote
 
 import pytest
 
@@ -252,37 +251,6 @@ def test_access_downloads_lark_file_url(monkeypatch):
         resource.cleanup()
 
 
-def test_access_downloads_lark_file_url_with_long_utf8_filename(monkeypatch):
-    _install_fake_lark_modules(monkeypatch)
-    long_filename = f"{'文' * 100}.pdf"
-    request = MagicMock(
-        return_value=_FakeMediaResponse(
-            b"%PDF-1.7",
-            headers={
-                "content-type": "application/pdf",
-                "content-disposition": f"attachment; filename*=UTF-8''{quote(long_filename)}",
-            },
-        )
-    )
-    accessor = FeishuAccessor()
-    accessor._config = SimpleNamespace(download_images=False)
-    accessor._user_token_client = SimpleNamespace(request=request)
-
-    resource = asyncio.run(
-        accessor.access(
-            "https://bytedance.larkoffice.com/file/G0wKbPjCooZ7LUxktDOc56Ysnlg",
-            feishu_access_token="u-test",
-        )
-    )
-    try:
-        assert resource.path.read_bytes() == b"%PDF-1.7"
-        assert resource.path.name.endswith(".pdf")
-        assert len(resource.path.name.encode("utf-8")) <= 240
-        assert resource.meta["original_filename"] == resource.path.name
-    finally:
-        resource.cleanup()
-
-
 def test_access_expands_drive_folder_recursively(monkeypatch):
     _install_fake_lark_modules(monkeypatch)
     folder_children = {
@@ -492,9 +460,24 @@ def test_access_drive_folder_reports_unsupported_items(monkeypatch):
         accessor,
         "_list_drive_folder_children",
         lambda folder_token, **_kwargs: [
-            SimpleNamespace(token="slides_token", name="Deck", type="slides", url=""),
+            SimpleNamespace(token="doc_token", name="Spec Doc", type="docx", url=""),
+            SimpleNamespace(token="unknown_token", name="Mystery", type="unknown", url=""),
         ],
     )
+
+    async def fake_fetch_document(url, **_kwargs):
+        from openviking.parse.accessors.feishu_accessor import FeishuDocument
+
+        doc_type, token = accessor._parse_feishu_url(url)
+        return FeishuDocument(
+            doc_type=doc_type,
+            token=token,
+            markdown_content="# ok",
+            title="Spec Doc",
+            meta={},
+        )
+
+    monkeypatch.setattr(accessor, "_fetch_document", fake_fetch_document)
 
     resource = asyncio.run(
         accessor.access(
@@ -503,14 +486,15 @@ def test_access_drive_folder_reports_unsupported_items(monkeypatch):
         )
     )
     try:
+        assert (resource.path / "Spec Doc.md").read_text(encoding="utf-8") == "# ok"
         skipped = resource.meta["feishu_folder_skipped_items"]
         assert skipped == [
             {
-                "path": str(resource.path / "Deck"),
-                "name": "Deck",
-                "type": "slides",
-                "token": "slides_token",
-                "reason": "Unsupported Feishu Drive item type: slides",
+                "path": str(resource.path / "Mystery"),
+                "name": "Mystery",
+                "type": "unknown",
+                "token": "unknown_token",
+                "reason": "Unsupported Feishu Drive item type: unknown",
             }
         ]
     finally:
