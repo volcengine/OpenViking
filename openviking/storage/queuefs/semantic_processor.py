@@ -6,7 +6,6 @@ import asyncio
 import re
 import threading
 from contextlib import nullcontext
-from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from openviking.observability.context import (
@@ -40,7 +39,7 @@ from openviking.storage.queuefs.semantic_lock import SemanticLockScope
 from openviking.storage.queuefs.semantic_msg import SemanticMsg, build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_queue import is_semantic_msg_stale
 from openviking.storage.queuefs.semantic_sidecar import write_semantic_sidecars
-from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
+from openviking.storage.viking_fs import LS_ALL_NODES, SyncDiff, get_viking_fs
 from openviking.telemetry import bind_telemetry, bind_telemetry_stage, resolve_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.span_models import create_root_span_attributes
@@ -57,24 +56,6 @@ from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
-
-
-@dataclass
-class DiffResult:
-    """Directory diff result for sync operations."""
-
-    added_files: List[str] = field(default_factory=list)
-    deleted_files: List[str] = field(default_factory=list)
-    updated_files: List[str] = field(default_factory=list)
-    added_dirs: List[str] = field(default_factory=list)
-    deleted_dirs: List[str] = field(default_factory=list)
-
-    def to_changes(self) -> Dict[str, List[str]]:
-        return {
-            "added": self.added_files + self.added_dirs,
-            "modified": self.updated_files,
-            "deleted": self.deleted_files + self.deleted_dirs,
-        }
 
 
 class RequestQueueStats:
@@ -208,24 +189,6 @@ class SemanticProcessor(DequeueHandlerBase):
 
         # Default to other
         return FILE_TYPE_OTHER
-
-    async def _check_file_content_changed(
-        self, file_path: str, target_file: str, ctx: Optional[RequestContext] = None
-    ) -> bool:
-        """Check if file content has changed compared to target file."""
-        viking_fs = get_viking_fs()
-        try:
-            current_stat = await viking_fs.stat(file_path, ctx=ctx)
-            target_stat = await viking_fs.stat(target_file, ctx=ctx)
-            current_size = current_stat.get("size") if isinstance(current_stat, dict) else None
-            target_size = target_stat.get("size") if isinstance(target_stat, dict) else None
-            if current_size is not None and target_size is not None and current_size != target_size:
-                return True
-            current_content = await viking_fs.read_file(file_path, ctx=ctx)
-            target_content = await viking_fs.read_file(target_file, ctx=ctx)
-            return current_content != target_content
-        except Exception:
-            return True
 
     async def _reenqueue_semantic_msg(self, msg: SemanticMsg) -> None:
         """Re-enqueue a semantic message for later processing.
@@ -744,203 +707,39 @@ class SemanticProcessor(DequeueHandlerBase):
         ctx: Optional[RequestContext] = None,
         file_change_status: Optional[Dict[str, bool]] = None,
         lock: Optional[Dict[str, Any]] = None,
-    ) -> DiffResult:
+    ) -> SyncDiff:
+        """Merge a temp/staging source tree into the target via VikingFS.sync_tree.
+
+        The pure filesystem diff-and-move is delegated to
+        :py:meth:`VikingFS.sync_tree`; this wrapper carries over parser
+        sidecars (``.image_mappings.json``) and rewrites markdown image
+        references once the visible files have been moved into place.
+        Hidden entries are skipped by ``sync_tree``, which is why the
+        sidecar handling lives here rather than in the FS layer.
+        """
         viking_fs = get_viking_fs()
         if not await viking_fs.exists(root_uri, ctx=ctx):
             raise FileNotFoundError(
                 f"Semantic source no longer exists; refusing to sync into {target_uri}: {root_uri}"
             )
-        diff = DiffResult()
-
-        async def list_children(dir_uri: str) -> Tuple[Dict[str, str], Dict[str, str]]:
-            files: Dict[str, str] = {}
-            dirs: Dict[str, str] = {}
-            entries = await viking_fs.ls(
-                dir_uri, show_all_hidden=True, node_limit=LS_ALL_NODES, ctx=ctx
-            )
-
-            for entry in entries:
-                name = entry.get("name", "")
-                if not name or name in [".", ".."]:
-                    continue
-                if name.startswith("."):
-                    continue
-                item_uri = VikingURI(dir_uri).join(name).uri
-                if entry.get("isDir", False):
-                    dirs[name] = item_uri
-                else:
-                    files[name] = item_uri
-            return files, dirs
-
-        async def sync_dir(root_dir: str, target_dir: str) -> None:
-            root_files, root_dirs = await list_children(root_dir)
-            target_files, target_dirs = await list_children(target_dir)
-
-            file_names = set(root_files.keys()) | set(target_files.keys())
-            for name in sorted(file_names):
-                root_file = root_files.get(name)
-                target_file = target_files.get(name)
-
-                if root_file and name in target_dirs:
-                    target_conflict_dir = target_dirs[name]
-                    try:
-                        await viking_fs.rm(
-                            target_conflict_dir,
-                            recursive=True,
-                            ctx=ctx,
-                            lease_ref=lock,
-                        )
-                        diff.deleted_dirs.append(target_conflict_dir)
-                        target_dirs.pop(name, None)
-                    except Exception as e:
-                        logger.error(
-                            f"[SyncDiff] Failed to delete directory for file conflict: {target_conflict_dir}, error={e}"
-                        )
-                    target_file = None
-
-                if target_file and name in root_dirs and not root_file:
-                    try:
-                        await viking_fs.rm(target_file, ctx=ctx, lease_ref=lock)
-                        diff.deleted_files.append(target_file)
-                        target_files.pop(name, None)
-                    except Exception as e:
-                        logger.error(
-                            f"[SyncDiff] Failed to delete file for dir conflict: {target_file}, error={e}"
-                        )
-                    continue
-
-                if target_file and not root_file:
-                    try:
-                        await viking_fs.rm(target_file, ctx=ctx, lease_ref=lock)
-                        diff.deleted_files.append(target_file)
-                    except Exception as e:
-                        logger.error(f"[SyncDiff] Failed to delete file: {target_file}, error={e}")
-                    continue
-
-                if root_file and target_file:
-                    changed = False
-                    if file_change_status and root_file in file_change_status:
-                        changed = file_change_status[root_file]
-                    else:
-                        try:
-                            changed = await self._check_file_content_changed(
-                                root_file, target_file, ctx=ctx
-                            )
-                        except Exception as e:
-                            logger.error(
-                                f"[SyncDiff] Failed to compare file content for {root_file}: {e}, treating as unchanged"
-                            )
-                            changed = False
-                    if changed:
-                        diff.updated_files.append(target_file)
-                        try:
-                            await viking_fs.rm(target_file, ctx=ctx, lease_ref=lock)
-                        except Exception as e:
-                            logger.error(
-                                f"[SyncDiff] Failed to remove old file before update: {target_file}, error={e}"
-                            )
-                        try:
-                            await viking_fs.mv(
-                                root_file,
-                                target_file,
-                                ctx=ctx,
-                                lease_ref=lock,
-                            )
-                        except Exception as e:
-                            logger.error(
-                                f"[SyncDiff] Failed to move updated file: {root_file} -> {target_file}, error={e}"
-                            )
-                    continue
-
-                if root_file and not target_file:
-                    target_file_uri = VikingURI(target_dir).join(name).uri
-                    diff.added_files.append(target_file_uri)
-                    try:
-                        await viking_fs.mv(
-                            root_file,
-                            target_file_uri,
-                            ctx=ctx,
-                            lease_ref=lock,
-                        )
-                    except Exception as e:
-                        logger.error(
-                            f"[SyncDiff] Failed to move added file: {root_file} -> {target_file_uri}, error={e}"
-                        )
-
-            dir_names = set(root_dirs.keys()) | set(target_dirs.keys())
-            for name in sorted(dir_names):
-                root_subdir = root_dirs.get(name)
-                target_subdir = target_dirs.get(name)
-
-                if root_subdir and name in target_files:
-                    target_conflict_file = target_files[name]
-                    try:
-                        await viking_fs.rm(
-                            target_conflict_file,
-                            ctx=ctx,
-                            lease_ref=lock,
-                        )
-                        diff.deleted_files.append(target_conflict_file)
-                        target_files.pop(name, None)
-                    except Exception as e:
-                        logger.error(
-                            f"[SyncDiff] Failed to delete file for dir conflict: {target_conflict_file}, error={e}"
-                        )
-                    target_subdir = None
-
-                if target_subdir and not root_subdir:
-                    try:
-                        await viking_fs.rm(
-                            target_subdir,
-                            recursive=True,
-                            ctx=ctx,
-                            lease_ref=lock,
-                        )
-                        diff.deleted_dirs.append(target_subdir)
-                    except Exception as e:
-                        logger.error(
-                            f"[SyncDiff] Failed to delete directory: {target_subdir}, error={e}"
-                        )
-                    continue
-
-                if root_subdir and not target_subdir:
-                    target_subdir_uri = VikingURI(target_dir).join(name).uri
-                    diff.added_dirs.append(target_subdir_uri)
-                    try:
-                        await viking_fs.mv(
-                            root_subdir,
-                            target_subdir_uri,
-                            ctx=ctx,
-                            lease_ref=lock,
-                        )
-                    except Exception as e:
-                        logger.error(
-                            f"[SyncDiff] Failed to move added directory: {root_subdir} -> {target_subdir_uri}, error={e}"
-                        )
-                    continue
-
-                if root_subdir and target_subdir:
-                    await sync_dir(root_subdir, target_subdir)
 
         target_exists = await viking_fs.exists(target_uri, ctx=ctx)
+        diff = await viking_fs.sync_tree(
+            root_uri,
+            target_uri,
+            ctx=ctx,
+            file_change_status=file_change_status,
+            lease_ref=lock,
+            delete_temp_after=False,
+        )
+
         if not target_exists:
-            parent_uri = VikingURI(target_uri).parent
-            if parent_uri:
-                await viking_fs.mkdir(
-                    parent_uri.uri,
-                    exist_ok=True,
-                    ctx=ctx,
-                    lease_ref=lock,
-                )
-            diff.added_dirs.append(target_uri)
-            await viking_fs.mv(root_uri, target_uri, ctx=ctx, lease_ref=lock)
             # The whole temp tree (including the hidden .image_mappings.json
             # sidecar) was moved into the target; rewrite local image paths now.
             await self._rewrite_target_image_uris(root_uri, target_uri, ctx=ctx, lock=lock)
             return diff
 
-        await sync_dir(root_uri, target_uri)
-        # sync_dir skips hidden files, so the .image_mappings.json sidecar is
+        # sync_tree skips hidden files, so the .image_mappings.json sidecar is
         # still at the temp root. Carry it over and rewrite the synced markdown
         # before the temp tree is deleted below.
         await self._rewrite_target_image_uris(root_uri, target_uri, ctx=ctx, lock=lock)
