@@ -131,7 +131,7 @@ async def test_word_parser_forwards_no_split_to_markdown(monkeypatch, tmp_path: 
 
 @pytest.mark.asyncio
 async def test_excel_parser_offloads_xlsx_conversion(monkeypatch, tmp_path: Path):
-    parser = excel.ExcelParser()
+    parser = excel.ExcelParser(anydoc_config=AnydocConfig(enable=False))
     seen = _stub_markdown_parse(parser)
     calls = _patch_to_thread(monkeypatch, excel)
     fake_openpyxl = SimpleNamespace()
@@ -155,7 +155,7 @@ async def test_excel_parser_offloads_xlsx_conversion(monkeypatch, tmp_path: Path
 
 @pytest.mark.asyncio
 async def test_excel_parser_offloads_xls_conversion(monkeypatch, tmp_path: Path):
-    parser = excel.ExcelParser()
+    parser = excel.ExcelParser(anydoc_config=AnydocConfig(enable=False))
     seen = _stub_markdown_parse(parser)
     calls = _patch_to_thread(monkeypatch, excel)
 

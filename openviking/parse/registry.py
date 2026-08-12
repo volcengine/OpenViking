@@ -81,7 +81,13 @@ class ParserRegistry:
                 anydoc_config=self._parser_configs.get("anydoc"),
             ),
         )
-        self._register("excel", ExcelParser(config=self._parser_configs.get("excel")))
+        self._register(
+            "excel",
+            ExcelParser(
+                config=self._parser_configs.get("excel"),
+                anydoc_config=self._parser_configs.get("anydoc"),
+            ),
+        )
         self._register(
             "epub",
             EPubParser(

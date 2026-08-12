@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from openviking.parse.base import NodeType, ResourceNode, create_parse_result
-from openviking.parse.parsers import anydoc_converter, epub, legacy_doc, powerpoint, word
+from openviking.parse.parsers import anydoc_converter, epub, excel, legacy_doc, powerpoint, word
 from openviking.parse.registry import ParserRegistry
 from openviking_cli.utils.config.parser_config import AnydocConfig, ParserConfig
 
@@ -274,6 +274,48 @@ async def test_powerpoint_parser_rejects_ppt_when_anydoc_disabled(tmp_path, monk
 
 
 @pytest.mark.asyncio
+async def test_excel_parser_uses_anydoc_truncates_rows_and_allows_media_dir(tmp_path, monkeypatch):
+    storage = _patch_storage(monkeypatch, tmp_path)
+    parser = excel.ExcelParser(anydoc_config=AnydocConfig(), max_rows_per_sheet=1)
+    seen = _stub_markdown_parse(parser)
+    source = tmp_path / "book.ods"
+    source.write_bytes(b"placeholder")
+    monkeypatch.setattr(
+        anydoc_converter.AnyDocConverter,
+        "convert",
+        lambda self, path, **kwargs: SimpleNamespace(
+            markdown="## Sheet1\n\n|a|b|\n|---|---|\n|1|2|\n|3|4|\n",
+            source_format="ods",
+        ),
+    )
+
+    result = await parser.parse(source, source_name="Budget.ods")
+
+    assert parser.supported_extensions == [".xlsx", ".xls", ".xlsm", ".xlsb", ".ods", ".csv"]
+    assert "|1|2|" in seen["content"]
+    assert "|3|4|" not in seen["content"]
+    assert seen["kwargs"]["allowed_media_dirs"] == [storage.media_dir]
+    assert result.source_format == "ods"
+    assert result.parser_name == "ExcelParser"
+
+
+@pytest.mark.asyncio
+async def test_excel_parser_rejects_ods_when_anydoc_disabled(tmp_path, monkeypatch):
+    _patch_storage(monkeypatch, tmp_path)
+    parser = excel.ExcelParser(anydoc_config=AnydocConfig(enable=False))
+    source = tmp_path / "book.ods"
+    source.write_bytes(b"placeholder")
+    monkeypatch.setattr(
+        parser,
+        "_convert_to_markdown",
+        lambda *args, **kwargs: pytest.fail("openpyxl must not handle ODS"),
+    )
+
+    with pytest.raises(RuntimeError, match=r"anydoc.*disabled.*\.ods"):
+        await parser.parse(source)
+
+
+@pytest.mark.asyncio
 async def test_epub_parser_uses_anydoc_and_allows_media_dir(tmp_path, monkeypatch):
     storage = _patch_storage(monkeypatch, tmp_path)
     parser = epub.EPubParser(anydoc_config=AnydocConfig())
@@ -304,6 +346,7 @@ def test_registry_passes_anydoc_config_to_office_parsers():
             "word": ParserConfig(),
             "legacy_doc": ParserConfig(),
             "powerpoint": ParserConfig(),
+            "excel": ParserConfig(),
             "epub": ParserConfig(),
             "anydoc": anydoc_config,
         }
@@ -312,4 +355,5 @@ def test_registry_passes_anydoc_config_to_office_parsers():
     assert registry._parsers["word"].anydoc_config is anydoc_config
     assert registry._parsers["legacy_doc"].anydoc_config is anydoc_config
     assert registry._parsers["powerpoint"].anydoc_config is anydoc_config
+    assert registry._parsers["excel"].anydoc_config is anydoc_config
     assert registry._parsers["epub"].anydoc_config is anydoc_config
