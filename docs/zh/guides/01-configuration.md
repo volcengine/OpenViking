@@ -850,6 +850,36 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 需要 GitHub、GitLab 或 Azure DevOps 专属 URL 语义时，应配置到对应的平台字段；
 其他 Git 主机统一添加到 `code_hosting_domains`。
 
+### pdf
+
+PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru`（远程 MinerU API）、`auto`（先本地、失败回退 MinerU）。
+
+```json
+{
+  "pdf": {
+    "strategy": "auto",
+    "mineru_endpoint": "http://127.0.0.1:8000",
+    "mineru_api_key": "your-api-key",
+    "mineru_timeout": 300.0,
+    "mineru_bodys": {
+      "backend": "hybrid-auto-engine",
+      "lang_list": ["ch"],
+      "parse_method": "auto"
+    }
+  }
+}
+```
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `strategy` | str | 解析策略：`local` / `mineru` / `auto`（默认 `auto`） |
+| `mineru_endpoint` | str | MinerU API **base URL**（如 `http://127.0.0.1:8000`） |
+| `mineru_api_key` | str | MinerU API 认证密钥（可选） |
+| `mineru_timeout` | float | 请求超时秒数（默认 `300.0`） |
+| `mineru_bodys` | dict | MinerU API multipart form 参数 |
+
+**MinerU 协议**：同步调用 `POST {mineru_endpoint}/file_parse`，multipart 文件字段为 `files`，form 参数由 `mineru_bodys` 透传。
+
 ### rerank
 
 用于搜索结果精排的 Rerank 模型。支持 VikingDB (火山引擎)、Cohere 和 OpenAI 兼容接口。

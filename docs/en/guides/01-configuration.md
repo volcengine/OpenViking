@@ -882,6 +882,36 @@ Use `github_domains`, `gitlab_domains`, or `azure_devops_domains` when the host
 needs those platform-specific URL semantics. Add other Git hosts to
 `code_hosting_domains`.
 
+### pdf
+
+PDF parsing configuration. Three strategies are supported: `local` (local pdfplumber), `mineru` (remote MinerU API), and `auto` (try local first, fall back to MinerU).
+
+```json
+{
+  "pdf": {
+    "strategy": "auto",
+    "mineru_endpoint": "http://127.0.0.1:8000",
+    "mineru_api_key": "your-api-key",
+    "mineru_timeout": 300.0,
+    "mineru_bodys": {
+      "backend": "hybrid-auto-engine",
+      "lang_list": ["ch"],
+      "parse_method": "auto"
+    }
+  }
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `strategy` | str | Parsing strategy: `local` / `mineru` / `auto` (default `auto`) |
+| `mineru_endpoint` | str | MinerU API **base URL** (e.g. `http://127.0.0.1:8000`) |
+| `mineru_api_key` | str | MinerU API authentication key (optional) |
+| `mineru_timeout` | float | Request timeout in seconds (default `300.0`) |
+| `mineru_bodys` | dict | MinerU API multipart form fields |
+
+**MinerU protocol**: a synchronous `POST {mineru_endpoint}/file_parse` request with the PDF as the multipart `files` field; form parameters are passed through from `mineru_bodys`.
+
 ### rerank
 
 Reranking model for search result refinement. Supports VikingDB (Volcengine), Cohere, and OpenAI-compatible APIs.
