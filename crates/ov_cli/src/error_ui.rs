@@ -98,16 +98,22 @@ pub(crate) fn print_runtime_error(
 }
 
 fn render_json_error(error: &Error, compact: bool) -> String {
-    let (message, details): (String, Option<&Value>) = match error {
+    let (message, details, http_status): (String, Option<&Value>, Option<u16>) = match error {
         Error::Api {
-            message, details, ..
-        } => (message.clone(), details.as_ref()),
-        _ => (error.to_string(), None),
+            message, details, status, ..
+        } => (message.clone(), details.as_ref(), *status),
+        _ => (error.to_string(), None, None),
     };
 
     let mut body = Map::new();
     body.insert("code".to_string(), Value::String(error.code().to_string()));
     body.insert("message".to_string(), Value::String(message));
+    // Transparently surface the real backend HTTP status so machine consumers
+    // (agents, IDE integrations) can discriminate backend error types instead
+    // of guessing from the rendered text. See #3255.
+    if let Some(status) = http_status {
+        body.insert("http_status".to_string(), Value::Number(status.into()));
+    }
     if let Some(details) = details {
         body.insert("details".to_string(), details.clone());
     }
@@ -227,6 +233,316 @@ pub(crate) fn report_for_plain_help_error(
     )])
 }
 
+// ============ Backend error discrimination (#3255) ============
+//
+// The CLI used to render several distinct backend conditions (path-lock
+// contention, queue backpressure, server-side timeout, real transport
+// failure) as a single misleading "Cannot connect to OpenViking" card whose
+// next-step hints all pointed at config/URL problems. These helpers classify
+// an `Error` into a backend error kind and render each kind with its own
+// title, a transparent passthrough of the real code/status/message, and a
+// targeted next-step hint. Genuine connection-establishment failures keep the
+// legacy "Cannot connect" message so existing parsers/scripts keep working.
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BackendErrorKind {
+    /// Server queue is overloaded (`RESOURCE_EXHAUSTED` or `DEADLINE_EXCEEDED`
+    /// with a "queue" hint). Hint: `ov observer queue`.
+    QueueBackpressure,
+    /// Another op holds a lock on the target subtree ("path_lock",
+    /// "waiting for lock"). Hint: `ov status --verbose`.
+    PathLockContention,
+    /// Target resource being modified concurrently (`CONFLICT: Resource is
+    /// busy`). Hint: wait + retry with backoff.
+    ResourceBusy,
+    /// Request exceeded its time budget. On a healthy server this is usually
+    /// queue/lock pressure rather than a network outage.
+    ProcessingTimeout,
+    /// Server was reachable but dropped the connection before responding
+    /// (connection reset / broken pipe / empty reply). Distinct from "server
+    /// is down": the URL is correct, the request just failed mid-flight.
+    RequestAborted,
+}
+
+/// Build a transparent detail string that surfaces the real backend code,
+/// HTTP status, message and structured details so agents/humans can diagnose
+/// the actual failure instead of a generic "cannot connect".
+fn transparent_detail(error: &Error) -> String {
+    let code = error.code();
+    match error {
+        Error::Api {
+            message, details, status, ..
+        } => {
+            let base = if message.is_empty() {
+                status
+                    .map(|s| format!("HTTP {s}"))
+                    .unwrap_or_else(|| "OpenViking returned an error".to_string())
+            } else {
+                message.clone()
+            };
+            let mut out = match status {
+                Some(s) if *s >= 400 => format!("[{code}] (HTTP {s}) {base}"),
+                _ => format!("[{code}] {base}"),
+            };
+            if let Some(details) = details {
+                if !details.is_null() {
+                    out.push_str(" | details: ");
+                    out.push_str(&details.to_string());
+                }
+            }
+            out
+        }
+        Error::Timeout(message) | Error::Network(message) => format!("[{code}] {message}"),
+        _ => format!("[{code}] {error}"),
+    }
+}
+
+/// Classify a structured `Error::Api` into a backend kind. Returns `None` for
+/// codes/messages that should keep their existing generic rendering.
+fn classify_api_error(error: &Error) -> Option<BackendErrorKind> {
+    let (code, message) = match error {
+        Error::Api { code, message, .. } => (code.as_deref().unwrap_or(""), message.to_lowercase()),
+        _ => return None,
+    };
+
+    if message.contains("waiting for lock")
+        || message.contains("lock on")
+        || message.contains("path_lock")
+        || message.contains("lock contention")
+        || message.contains("lock timeout")
+    {
+        return Some(BackendErrorKind::PathLockContention);
+    }
+    if message.contains("resource is busy") || message.contains("resource busy") {
+        return Some(BackendErrorKind::ResourceBusy);
+    }
+    if code == "RESOURCE_EXHAUSTED" || message.contains("queue") {
+        return Some(BackendErrorKind::QueueBackpressure);
+    }
+    if code == "DEADLINE_EXCEEDED"
+        || message.contains("timed out")
+        || message.contains("deadline")
+    {
+        return Some(BackendErrorKind::ProcessingTimeout);
+    }
+    // Only surface CONFLICT as "resource busy" when the message actually hints
+    // at concurrency; a plain "already exists" conflict keeps the generic card.
+    if code == "CONFLICT"
+        && (message.contains("busy")
+            || message.contains("concurrent")
+            || message.contains("in progress")
+            || message.contains("in-flight")
+            || message.contains("lock"))
+    {
+        return Some(BackendErrorKind::ResourceBusy);
+    }
+    None
+}
+
+/// Render a classified backend error with a specific title, a transparent
+/// detail line and targeted next-step actions.
+fn backend_error_report(
+    command: &str,
+    kind: BackendErrorKind,
+    detail: String,
+    language: Language,
+) -> ErrorReport {
+    let (title_en, title_zh, message_en, message_zh, actions): (
+        &str,
+        &str,
+        &str,
+        &str,
+        Vec<ErrorAction>,
+    ) = match kind {
+        BackendErrorKind::QueueBackpressure => (
+            "Processing Timeout (queue busy)",
+            "处理超时（队列繁忙）",
+            "The server is reachable but busy processing queued work and could not finish this request in time. Wait for the queue to drain, then retry.",
+            "服务器可达，但正在处理排队中的任务，未能在此请求内完成。请等待队列排空后重试。",
+            vec![
+                ErrorAction::new(
+                    "ov observer queue",
+                    copy(language, "Inspect queue depth and pending work", "查看队列深度与积压任务"),
+                ),
+                ErrorAction::new(
+                    command,
+                    copy(language, "Retry once the queue drains", "待队列排空后重试"),
+                ),
+            ],
+        ),
+        BackendErrorKind::PathLockContention => (
+            "Path Lock Contention",
+            "目录锁冲突",
+            "Another operation holds a lock on the target subtree. The server is reachable; wait for the other operation to finish or inspect stale locks.",
+            "另一操作正持有目标子树的锁。服务器可达，请等待该操作完成或检查残留锁。",
+            vec![
+                ErrorAction::new(
+                    "ov status --verbose",
+                    copy(language, "Find stale path locks (grep lock)", "查找残留目录锁（grep lock）"),
+                ),
+                ErrorAction::new(
+                    command,
+                    copy(language, "Retry after the lock is released", "锁释放后重试"),
+                ),
+            ],
+        ),
+        BackendErrorKind::ResourceBusy => (
+            "Resource Busy",
+            "资源忙（并发冲突）",
+            "The target resource is being modified by another concurrent operation. Wait briefly and retry with backoff.",
+            "目标资源正被另一并发操作修改。请稍候并以退避方式重试。",
+            vec![
+                ErrorAction::new(
+                    command,
+                    copy(language, "Retry with backoff", "以退避方式重试"),
+                ),
+                ErrorAction::new(
+                    "ov observer queue",
+                    copy(language, "Check in-flight work", "查看进行中的任务"),
+                ),
+            ],
+        ),
+        BackendErrorKind::ProcessingTimeout => (
+            "Processing Timeout",
+            "处理超时",
+            "The request exceeded its time budget. On a healthy server this usually means queue backpressure or a held lock, not a network outage.",
+            "请求超出时间预算。在服务器健康的情况下，通常是队列繁忙或锁未释放，而非网络中断。",
+            vec![
+                ErrorAction::new(
+                    "ov observer queue",
+                    copy(language, "Check queue depth", "查看队列深度"),
+                ),
+                ErrorAction::new(
+                    "ov status --verbose",
+                    copy(language, "Check for stale locks", "检查残留锁"),
+                ),
+                ErrorAction::new(
+                    "ov config",
+                    copy(language, "Increase the request timeout", "提高请求超时时间"),
+                ),
+            ],
+        ),
+        BackendErrorKind::RequestAborted => (
+            "Request Aborted Mid-Flight",
+            "请求中途断开",
+            "The server was reachable but dropped the connection before responding — usually a server-side timeout under load, not a wrong URL. Check queue/lock state before assuming an outage.",
+            "服务器可达，但在响应前断开了连接——通常是负载下的服务端超时，而非 URL 错误。请先检查队列/锁状态，再判断是否为服务中断。",
+            vec![
+                ErrorAction::new(
+                    "ov health",
+                    copy(language, "Confirm the server is still healthy", "确认服务器仍健康"),
+                ),
+                ErrorAction::new(
+                    "ov observer queue",
+                    copy(language, "Check queue/lock pressure", "查看队列/锁压力"),
+                ),
+                ErrorAction::new(
+                    command,
+                    copy(language, "Retry after a brief wait", "稍候重试"),
+                ),
+            ],
+        ),
+    };
+
+    ErrorReport::new(copy(language, title_en, title_zh), copy(language, message_en, message_zh))
+        .with_command(command.to_string())
+        .with_detail(detail)
+        .with_actions(actions)
+}
+
+/// Legacy "cannot connect" card for genuine connection-establishment
+/// failures. Kept verbatim for backward compatibility (scripts that grep for
+/// the old message still match real outages).
+fn legacy_connection_report(command: &str, error: &Error, language: Language) -> ErrorReport {
+    let detail = match error {
+        Error::Network(message) => message.to_string(),
+        _ => error.to_string(),
+    };
+    ErrorReport::new(
+        copy(language, "Connection Error", "连接错误"),
+        copy(
+            language,
+            "Could not reach OpenViking. The server may be offline, or this config points to the wrong URL.",
+            "无法连接 OpenViking。服务器可能未启动，或当前配置指向了错误的 URL。",
+        ),
+    )
+    .with_command(command.to_string())
+    .with_detail(detail)
+    .with_actions(vec![
+        ErrorAction::new(
+            "ov config validate",
+            copy(language, "Check the active config", "检查当前配置"),
+        ),
+        ErrorAction::new(
+            "ov health",
+            copy(language, "Run a quick server health check", "快速检查服务器健康状态"),
+        ),
+        ErrorAction::new(
+            "ov config switch",
+            copy(language, "Switch to another config", "切换到其他配置"),
+        ),
+    ])
+}
+
+fn timeout_report(command: &str, error: &Error, language: Language) -> ErrorReport {
+    let message = match error {
+        Error::Timeout(message) | Error::Network(message) => message.to_lowercase(),
+        _ => String::new(),
+    };
+    let kind = if message.contains("waiting for lock")
+        || message.contains("lock on")
+        || message.contains("path_lock")
+    {
+        BackendErrorKind::PathLockContention
+    } else if message.contains("queue") {
+        BackendErrorKind::QueueBackpressure
+    } else {
+        BackendErrorKind::ProcessingTimeout
+    };
+    backend_error_report(command, kind, transparent_detail(error), language)
+}
+
+fn network_report(command: &str, error: &Error, language: Language) -> ErrorReport {
+    let message = match error {
+        Error::Network(message) => message,
+        _ => return legacy_connection_report(command, error, language),
+    };
+    let lower = message.to_lowercase();
+
+    // Genuine connection-establishment failures keep the legacy card.
+    let is_connect_failure = lower.contains("refused")
+        || lower.contains("resolve")
+        || lower.contains("dns")
+        || lower.contains("not known")
+        || lower.contains("no such host")
+        || lower.contains("network is unreachable")
+        || lower.contains("connect error")
+        || lower.contains("unreachable");
+
+    // Mid-flight aborts: server was reached but dropped/timed out the request.
+    // These are reclassified away from "cannot connect" because the URL is
+    // correct and the failure is usually server-side load/timeout.
+    let is_midflight_abort = lower.contains("reset")
+        || lower.contains("broken pipe")
+        || lower.contains("connection closed")
+        || lower.contains("empty reply")
+        || lower.contains("timed out")
+        || lower.contains("timeout");
+
+    if !is_connect_failure && is_midflight_abort {
+        let kind = if lower.contains("lock") {
+            BackendErrorKind::PathLockContention
+        } else if lower.contains("queue") {
+            BackendErrorKind::QueueBackpressure
+        } else {
+            BackendErrorKind::RequestAborted
+        };
+        return backend_error_report(command, kind, transparent_detail(error), language);
+    }
+
+    legacy_connection_report(command, error, language)
+}
+
 pub(crate) fn report_for_runtime_error(command: impl Into<String>, error: &Error) -> ErrorReport {
     let language = Language::current();
     let command = command.into();
@@ -253,35 +569,8 @@ pub(crate) fn report_for_runtime_error(command: impl Into<String>, error: &Error
                 ErrorAction::new("ov language en", copy(language, "Use English", "使用英文")),
                 ErrorAction::new("ov language zh-CN", copy(language, "Use Simplified Chinese", "使用简体中文")),
             ]),
-        Error::Timeout(message) => ErrorReport::new(
-            copy(language, "Request Timeout", "请求超时"),
-            copy(
-                language,
-                "OpenViking did not respond before the configured timeout expired.",
-                "OpenViking 未在配置的超时时间内响应。",
-            ),
-        )
-        .with_command(command)
-        .with_detail(message)
-        .with_actions(vec![
-            ErrorAction::new("ov config", copy(language, "Increase the request timeout", "提高请求超时时间")),
-            ErrorAction::new("ov config show", copy(language, "Show the active config", "查看当前配置")),
-        ]),
-        Error::Network(message) => ErrorReport::new(
-            copy(language, "Connection Error", "连接错误"),
-            copy(
-                language,
-                "Could not reach OpenViking. The server may be offline, or this config points to the wrong URL.",
-                "无法连接 OpenViking。服务器可能未启动，或当前配置指向了错误的 URL。",
-            ),
-        )
-        .with_command(command)
-        .with_detail(message)
-        .with_actions(vec![
-            ErrorAction::new("ov config validate", copy(language, "Check the active config", "检查当前配置")),
-            ErrorAction::new("ov health", copy(language, "Run a quick server health check", "快速检查服务器健康状态")),
-            ErrorAction::new("ov config switch", copy(language, "Switch to another config", "切换到其他配置")),
-        ]),
+        Error::Timeout(_) => timeout_report(&command, error, language),
+        Error::Network(_) => network_report(&command, error, language),
         Error::Api {
             message, details, ..
         } if error.code() == "REFRESH_FAILED" => {
@@ -324,15 +613,19 @@ pub(crate) fn report_for_runtime_error(command: impl Into<String>, error: &Error
             ErrorAction::new("ov config switch", copy(language, "Use another config", "使用其他配置")),
         ]),
         Error::Api { message, details, .. } => {
-            let mut report = ErrorReport::new(
-                copy(language, "OpenViking API Error", "OpenViking API 错误"),
-                api_error_message(error.code(), message),
-            )
-            .with_command(command);
-            if let Some(details) = details {
-                report = report.with_detail(details.to_string());
+            if let Some(kind) = classify_api_error(error) {
+                backend_error_report(&command, kind, transparent_detail(error), language)
+            } else {
+                let mut report = ErrorReport::new(
+                    copy(language, "OpenViking API Error", "OpenViking API 错误"),
+                    api_error_message(error.code(), message),
+                )
+                .with_command(command);
+                if let Some(details) = details {
+                    report = report.with_detail(details.to_string());
+                }
+                report
             }
-            report
         }
         Error::Client(message) => ErrorReport::new(
             copy(language, "Command Error", "命令错误"),
@@ -1284,5 +1577,249 @@ Usage: ov config [OPTIONS] [COMMAND]
                 "line exceeded narrow width: {line:?}"
             );
         }
+    }
+
+    // ---- Backend error discrimination (#3255) ----
+
+    fn api_error(code: &str, message: &str, status: u16) -> Error {
+        Error::api_response(
+            Some(code.to_string()),
+            message.to_string(),
+            None,
+            status,
+        )
+    }
+
+    #[test]
+    fn classify_api_error_maps_known_backend_conditions() {
+        use super::{classify_api_error, BackendErrorKind};
+
+        let queue = api_error(
+            "DEADLINE_EXCEEDED",
+            "Queue processing timed out after 30.0s",
+            504,
+        );
+        assert_eq!(
+            classify_api_error(&queue),
+            Some(BackendErrorKind::QueueBackpressure)
+        );
+
+        let lock = api_error(
+            "ABORTED",
+            "[TREE] Timeout waiting for lock on: /local/default/user/hermes/memories/tools",
+            409,
+        );
+        assert_eq!(
+            classify_api_error(&lock),
+            Some(BackendErrorKind::PathLockContention)
+        );
+
+        let busy = api_error(
+            "CONFLICT",
+            "Resource is busy: viking://resources/myproj/newfile.md",
+            409,
+        );
+        assert_eq!(
+            classify_api_error(&busy),
+            Some(BackendErrorKind::ResourceBusy)
+        );
+
+        let exhausted = api_error("RESOURCE_EXHAUSTED", "queue full", 429);
+        assert_eq!(
+            classify_api_error(&exhausted),
+            Some(BackendErrorKind::QueueBackpressure)
+        );
+
+        // A plain duplicate-resource conflict must NOT be misclassified as
+        // "resource busy" — it keeps the generic API card.
+        let plain_conflict = api_error("CONFLICT", "Resource already exists", 409);
+        assert_eq!(classify_api_error(&plain_conflict), None);
+
+        // Unrelated structured errors are not reclassified.
+        let precondition =
+            api_error("FAILED_PRECONDITION", "Apply permission at https://example/auth", 412);
+        assert_eq!(classify_api_error(&precondition), None);
+    }
+
+    #[test]
+    fn deadline_exceeded_queue_timeout_is_not_connection_error() {
+        let error = api_error(
+            "DEADLINE_EXCEEDED",
+            "Queue processing timed out after 30.0s",
+            504,
+        );
+        let report = report_for_runtime_error("ov add-resource", &error);
+        let rendered = strip_ansi(&render_report(&report, false));
+
+        assert!(rendered.contains("Processing Timeout (queue busy)"));
+        assert!(rendered.contains("ov observer queue"));
+        // Must not collapse to the misleading connection message.
+        assert!(!rendered.contains("Connection Error"));
+        assert!(!rendered.contains("Could not reach OpenViking"));
+        assert!(!rendered.contains("ov config validate"));
+    }
+
+    #[test]
+    fn path_lock_contention_is_distinct_from_connection_error() {
+        let error = api_error(
+            "ABORTED",
+            "Timeout waiting for lock on: /local/default/user/hermes/memories/tools",
+            409,
+        );
+        let report = report_for_runtime_error("ov rm", &error);
+        let rendered = strip_ansi(&render_report(&report, false));
+
+        assert!(rendered.contains("Path Lock Contention"));
+        assert!(rendered.contains("ov status --verbose"));
+        assert!(rendered.contains("grep lock"));
+        assert!(!rendered.contains("Could not reach OpenViking"));
+        assert!(!rendered.contains("ov config switch"));
+    }
+
+    #[test]
+    fn conflict_resource_busy_is_distinct_from_connection_error() {
+        let error = api_error(
+            "CONFLICT",
+            "Resource is busy: viking://resources/myproj/newfile.md",
+            409,
+        );
+        let report = report_for_runtime_error("ov add-resource", &error);
+        let rendered = strip_ansi(&render_report(&report, false));
+
+        assert!(rendered.contains("Resource Busy"));
+        assert!(rendered.contains("backoff"));
+        assert!(!rendered.contains("Could not reach OpenViking"));
+    }
+
+    #[test]
+    fn three_backend_errors_render_distinct_titles() {
+        // Verification signal from #3255: the three reproducers must produce
+        // three DIFFERENT error titles instead of one generic connection card.
+        let queue = report_for_runtime_error(
+            "ov add-resource",
+            &api_error(
+                "DEADLINE_EXCEEDED",
+                "Queue processing timed out after 30.0s",
+                504,
+            ),
+        );
+        let lock = report_for_runtime_error(
+            "ov rm",
+            &api_error(
+                "ABORTED",
+                "Timeout waiting for lock on: /local/default/x",
+                409,
+            ),
+        );
+        let busy = report_for_runtime_error(
+            "ov add-resource",
+            &api_error(
+                "CONFLICT",
+                "Resource is busy: viking://resources/myproj/x",
+                409,
+            ),
+        );
+
+        let queue_text = strip_ansi(&render_report(&queue, false));
+        let lock_text = strip_ansi(&render_report(&lock, false));
+        let busy_text = strip_ansi(&render_report(&busy, false));
+
+        // Each rendering mentions its own distinct title.
+        assert!(queue_text.contains("Processing Timeout (queue busy)"));
+        assert!(lock_text.contains("Path Lock Contention"));
+        assert!(busy_text.contains("Resource Busy"));
+        // None of them collapse to the generic connection card.
+        for text in [queue_text, lock_text, busy_text] {
+            assert!(!text.contains("Connection Error"));
+            assert!(!text.contains("Could not reach OpenViking"));
+        }
+    }
+
+    #[test]
+    fn backend_error_passthrough_detail_surfaces_real_code_status_and_message() {
+        use super::transparent_detail;
+        let error = api_error(
+            "DEADLINE_EXCEEDED",
+            "Queue processing timed out after 30.0s",
+            504,
+        );
+
+        // The transparent detail helper surfaces real code + HTTP status +
+        // message so agents can diagnose the actual backend failure.
+        let detail = transparent_detail(&error);
+        assert!(detail.contains("[DEADLINE_EXCEEDED]"));
+        assert!(detail.contains("(HTTP 504)"));
+        assert!(detail.contains("Queue processing timed out after 30.0s"));
+
+        // And the detail is rendered in verbose mode. Strip card borders and
+        // padding (which are not whitespace) before substring-checking a phrase
+        // that may wrap across lines.
+        let report = report_for_runtime_error("ov add-resource", &error);
+        let rendered = strip_ansi(&render_report(&report, true));
+        let stripped: String = rendered
+            .chars()
+            .filter(|c| !matches!(c, '│' | '╭' | '╮' | '╰' | '╯' | '─'))
+            .collect();
+        let flat: String = stripped.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(flat.contains("[DEADLINE_EXCEEDED] (HTTP 504) Queue processing timed out after 30.0s"));
+    }
+
+    #[test]
+    fn genuine_connection_refused_keeps_legacy_message() {
+        // Backward compatibility: a real transport failure still renders the
+        // original "cannot connect" card with config-oriented hints.
+        let error = Error::Network("HTTP request failed: connection refused".to_string());
+        let report = report_for_runtime_error("ov status", &error);
+        let rendered = strip_ansi(&render_report(&report, false));
+
+        assert!(rendered.contains("Connection Error"));
+        assert!(rendered.contains("Could not reach OpenViking"));
+        assert!(rendered.contains("ov config validate"));
+        assert!(rendered.contains("ov health"));
+        assert!(rendered.contains("ov config switch"));
+    }
+
+    #[test]
+    fn midflight_connection_reset_is_not_painted_as_outage() {
+        // A connection reset after the request was sent means the server was
+        // reachable (URL is correct); it should not say "cannot connect".
+        let error =
+            Error::Network("HTTP request failed: connection reset by peer".to_string());
+        let report = report_for_runtime_error("ov add-resource", &error);
+        let rendered = strip_ansi(&render_report(&report, false));
+
+        assert!(!rendered.contains("Could not reach OpenViking"));
+        assert!(rendered.contains("Request Aborted Mid-Flight"));
+        assert!(rendered.contains("ov health"));
+        assert!(rendered.contains("ov observer queue"));
+    }
+
+    #[test]
+    fn client_timeout_points_at_queue_and_lock_not_just_config() {
+        let error = Error::Timeout("add-resource: request timed out".to_string());
+        let report = report_for_runtime_error("ov add-resource", &error);
+        let rendered = strip_ansi(&render_report(&report, false));
+
+        assert!(rendered.contains("Processing Timeout"));
+        assert!(rendered.contains("ov observer queue"));
+        assert!(rendered.contains("ov status --verbose"));
+        // Still offers the "raise timeout" escape hatch for legit short budgets.
+        assert!(rendered.contains("ov config"));
+        assert!(!rendered.contains("Could not reach OpenViking"));
+    }
+
+    #[test]
+    fn json_error_envelope_includes_real_http_status() {
+        let error = api_error(
+            "DEADLINE_EXCEEDED",
+            "Queue processing timed out after 30.0s",
+            504,
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(&render_json_error(&error, true)).unwrap();
+
+        assert_eq!(json["error"]["code"], "DEADLINE_EXCEEDED");
+        assert_eq!(json["error"]["http_status"], 504);
+        assert_eq!(json["error"]["message"], "Queue processing timed out after 30.0s");
     }
 }
