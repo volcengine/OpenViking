@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import { buildProfileBlock } from "./shared/profile-inject.mjs";
 import { buildRecallBlock } from "./shared/recall-core.mjs";
 import { deriveHarnessSessionId } from "./shared/session-model.mjs";
@@ -191,14 +191,14 @@ export class OpenVikingRuntime {
 }
 
 function pluginMessage(content, form) {
-  return {
-    id: randomUUID(),
-    role: "user",
+  // dsh's own constructor: identity, normalization, and any future Message
+  // invariants come from the pinned peer instead of a hand-built object.
+  return createUserMessage({
     content: [{ type: "text", text: content }],
     source: {
       kind: "plugin",
       plugin: OPENVIKING_PLUGIN_SOURCE,
       form,
     },
-  };
+  });
 }

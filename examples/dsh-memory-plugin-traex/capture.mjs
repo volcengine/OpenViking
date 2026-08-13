@@ -15,10 +15,11 @@ export function captureEvent(event, config, toolNames = new Map()) {
 
   const message = eventMessage(event);
   if (!message) return null;
-  if (message.source?.kind === "plugin"
-    && message.source.plugin === OPENVIKING_PLUGIN_SOURCE) {
-    return null;
-  }
+  // Whitelist by source: plugin-injected user messages (this plugin's recall
+  // blocks, time-context snapshots, any other plugin's context) are model
+  // input, not human input — mirroring them would launder synthetic text
+  // into memory as if a person said it.
+  if (message.source?.kind === "plugin") return null;
   if (message.role === "assistant" && config.captureAssistantTurns === false) {
     return null;
   }

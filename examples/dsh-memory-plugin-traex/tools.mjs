@@ -1,3 +1,5 @@
+import { defineTool } from "@deepseek-ai/dsh-tools";
+
 export function registerOpenVikingTools(ctx, client, runtime) {
   ctx.tools.register(textTool({
     name: "viking_search",
@@ -174,28 +176,38 @@ export function registerOpenVikingTools(ctx, client, runtime) {
   }));
 }
 
+/** Presentation identity per tool: pending-card kind and title verb. */
+const TOOL_PRESENTATION = {
+  viking_search: { kind: "read", title: args => `OpenViking search: ${args.query}` },
+  viking_read: { kind: "read", title: args => `OpenViking read: ${args.uri}` },
+  viking_browse: { kind: "read", title: args => `OpenViking browse: ${args.uri ?? "viking://"}` },
+  viking_remember: { kind: "other", title: () => "OpenViking remember" },
+  viking_forget: { kind: "other", title: args => `OpenViking forget: ${args.uri ?? args.query ?? ""}` },
+  viking_add_resource: { kind: "other", title: args => `OpenViking ingest: ${args.url}` },
+  viking_archive_expand: { kind: "read", title: () => "OpenViking archive expand" },
+};
+
+/**
+ * All seven tools return model-facing text; `defineTool` owns parameter and
+ * output JSON-schema conversion, validation wiring, and reserved-name checks,
+ * so the definitions here stay declarative and track dsh's ToolDefinition
+ * contract through the pinned peer instead of a hand-built structure.
+ */
 function textTool(definition) {
-  const required = [];
-  const properties = Object.fromEntries(
-    Object.entries(definition.parameters).map(([name, property]) => {
-      const { required: isRequired, ...schema } = property;
-      if (isRequired) required.push(name);
-      return [name, schema];
-    }),
-  );
-  return {
+  const presentation = TOOL_PRESENTATION[definition.name];
+  return defineTool({
     ...definition,
-    parameters: {
-      type: "object",
-      additionalProperties: false,
-      properties,
-      ...(required.length > 0 ? { required } : {}),
-    },
     output: {
       schema: { type: "string" },
       render: (_args, value) => [{ type: "text", text: value }],
     },
-  };
+    presentCall: args => ({
+      card: "generic",
+      kind: presentation.kind,
+      title: presentation.title(args),
+      rawInput: args,
+    }),
+  });
 }
 
 async function peerFor(runtime, exec) {

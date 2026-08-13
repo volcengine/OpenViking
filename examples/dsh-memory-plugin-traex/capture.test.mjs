@@ -35,6 +35,18 @@ test("captures DSH message events without recapturing injected context", () => {
     },
   }, CONFIG);
   assert.equal(injected, null);
+
+  // Every plugin's injections stay out of memory, not just this plugin's:
+  // synthetic context mirrored as human input would poison extraction.
+  const otherPlugin = captureEvent({
+    type: "user/message",
+    data: {
+      role: "user",
+      content: [{ type: "text", text: "Time sampled while preparing turn 3" }],
+      source: { kind: "plugin", plugin: "time-context", form: "snapshot" },
+    },
+  }, CONFIG);
+  assert.equal(otherPlugin, null);
 });
 
 test("preserves DSH tool call identity in captured tool results", () => {

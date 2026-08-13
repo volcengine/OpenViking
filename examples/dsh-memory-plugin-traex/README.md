@@ -8,10 +8,25 @@ An installable DeepSeek Harness bundle that adds OpenViking auto-recall, session
 - Node.js `^22.19.0` or `>=24`
 - A reachable OpenViking server
 
-The bundle has no npm dependencies and uses only the DSH public plugin, event,
-message, and ToolDefinition contracts. It is tested against `0.1.0-rc.6`;
-install that exact DSH release because prerelease package dist-tags are not
-synchronized across the package family.
+The bundle has no runtime npm dependencies. Its tool and message structures
+come from the DSH constructors (`defineTool` from `@deepseek-ai/dsh-tools`,
+`createUserMessage` from `@deepseek-ai/dsh-llm`) behind exact-pinned
+peerDependencies that a DSH installation heals at plugin-install time, so
+the definitions track DSH's contracts instead of hand-built object shapes.
+It is tested against `0.1.0-rc.6`; install that exact DSH release because
+prerelease package dist-tags are not synchronized across the package family.
+
+## Why injection uses pre-step user messages, not the system prompt
+
+Recall and profile context enter through the `agent/pre-step` waterfall as
+durable, source-attributed user messages (`source: { kind: 'plugin', … }`).
+They are deliberately **not** added to the system prompt: a DSH preset whose
+persona declares `complete: true` (the stock `minimal` preset does) restores
+that persona as the sole prompt section after assembly, silently discarding
+every other contribution — a system-prompt-based memory plugin loses its
+context under such presets with no error. Pre-step injection also makes each
+injection a session event that replays, is visible to compaction, and never
+reaches `request/header`.
 
 ## Install
 
@@ -99,3 +114,16 @@ The bundle registers:
 - `viking_archive_expand`
 
 `viking_forget` performs permanent deletion. The calling model should use it only when the user explicitly requests deletion.
+
+## Testing
+
+```bash
+npm ci          # installs the exact-pinned dsh devDependencies the tests exercise
+npm test        # node --test *.test.mjs — runs in the repo's PR workflow
+```
+
+`live-recall.test.mjs` is an opt-in end-to-end gate against a real OpenViking
+server: it stores a sentinel memory through a session commit, waits for
+extraction, and asserts recall returns that sentinel — the property no stub
+can certify. Enable it with `OPENVIKING_E2E=1` plus the normal credential
+chain; it skips otherwise (including in CI until a server secret exists).
