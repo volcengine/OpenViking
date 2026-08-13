@@ -2,8 +2,11 @@
 # SPDX-License-Identifier: AGPL-3.0
 """VLM base interface and abstract classes"""
 
+import asyncio
 import logging
 import re
+import threading
+import weakref
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,6 +24,38 @@ from .token_usage import TokenUsageTracker
 
 _THINK_TAG_RE = re.compile(r"<think>[\s\S]*?</think>")
 logger = get_logger(__name__)
+
+# Process-wide registry of shared concurrency semaphores for VLM completion
+# calls, keyed by (event_loop, max_concurrent). An asyncio.Semaphore is bound to
+# the event loop that created it, so — like the embedder semaphore
+# (openviking/models/embedder/base.py) — we key by loop and lazily create the
+# semaphore inside the running loop. Because get_vlm_instance() returns a single
+# cached VLM instance per process, all memory-extraction paths (summary /
+# long-term / execution) and all concurrently-committing sessions funnel through
+# the same semaphore, bounding the in-flight get_completion_async call count to
+# ``vlm.max_concurrent`` and preventing 429 rate-limit bursts (issue #3008).
+_ASYNC_VLM_SEMAPHORES: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, Dict[int, asyncio.Semaphore]]" = (
+    weakref.WeakKeyDictionary()
+)
+_ASYNC_VLM_SEMAPHORE_LOCK = threading.Lock()
+
+
+def _get_async_vlm_semaphore(limit: int) -> asyncio.Semaphore:
+    """Return the shared, per-event-loop VLM completion semaphore for ``limit``.
+
+    Mirrors ``_get_async_embed_semaphore``: one ``asyncio.Semaphore(limit)`` per
+    (event loop, limit) pair, shared across every VLM instance and backend on
+    that loop. Created lazily inside the running loop.
+    """
+    loop = asyncio.get_running_loop()
+    normalized_limit = max(1, limit)
+    with _ASYNC_VLM_SEMAPHORE_LOCK:
+        semaphores_by_limit = _ASYNC_VLM_SEMAPHORES.setdefault(loop, {})
+        semaphore = semaphores_by_limit.get(normalized_limit)
+        if semaphore is None:
+            semaphore = asyncio.Semaphore(normalized_limit)
+            semaphores_by_limit[normalized_limit] = semaphore
+        return semaphore
 
 
 class UnsupportedMediaInputError(RuntimeError):
@@ -77,9 +112,25 @@ class VLMBase(ABC):
         self.extra_request_body = dict(config.get("extra_request_body") or {})
         self.stream = config.get("stream", False)
         self.thinking = config.get("thinking", False)
+        # Cap on in-flight async completion calls. ``vlm.max_concurrent`` is the
+        # value configured on VLMConfig (default 32) and threaded into the VLM
+        # instance config; 0 / unset means unbounded (backward compatible).
+        self.max_concurrent = int(config.get("max_concurrent", 0) or 0)
 
         # Token usage tracking
         self._token_tracker = TokenUsageTracker()
+
+    def _get_completion_semaphore(self) -> Optional[asyncio.Semaphore]:
+        """Shared semaphore bounding concurrent async VLM completion calls.
+
+        Returns ``None`` when ``max_concurrent <= 0`` (unbounded, the historical
+        behavior). Otherwise returns the process-wide semaphore shared across all
+        VLM instances on the current event loop, so memory-extraction bursts and
+        cross-session concurrent extractions share a single concurrency budget.
+        """
+        if self.max_concurrent <= 0:
+            return None
+        return _get_async_vlm_semaphore(self.max_concurrent)
 
     @abstractmethod
     def get_completion(
