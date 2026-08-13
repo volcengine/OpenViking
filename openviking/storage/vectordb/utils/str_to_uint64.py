@@ -7,4 +7,7 @@ def str_to_uint64(input_string: str) -> int:
     """
     Generate a 64-bit unsigned integer hash from a string using xxHash.
     """
-    return xxhash.xxh64(input_string).intdigest()
+    # xxhash >= 3.x requires bytes input; passing a str raises
+    # "TypeError: Strings must be encoded before hashing" on every
+    # vectordb upsert/get partial-update path.
+    return xxhash.xxh64(input_string.encode("utf-8")).intdigest()
