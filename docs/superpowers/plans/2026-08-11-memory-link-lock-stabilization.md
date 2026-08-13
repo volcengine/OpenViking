@@ -242,7 +242,7 @@ from the endpoints produced by `remap_stored_links`, not the original request
 endpoints. `filter_valid_links` may reduce that set but cannot introduce an
 endpoint outside it.
 
-- [ ] **Step 1: Add the failing regression test**
+- [x] **Step 1: Add the failing regression test**
 
 Create a grouped-link scenario with original lower-case endpoint URIs and
 `result.operations.delete_replacements` mapping them to differently cased
@@ -250,18 +250,18 @@ replacement URIs. Use the pathlock-aware VikingFS fake so a write outside the
 active lease raises the real coverage-style error. Assert the replacement
 paths are acquired and the remapped endpoint files are updated.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run only the new test and confirm it fails because the old implementation locks
 the original paths before remapping.
 
-- [ ] **Step 3: Implement the ordering fix**
+- [x] **Step 3: Implement the ordering fix**
 
 Move `remap_stored_links` before `_uri_lock_paths` in
 `_apply_post_group_links`. Keep merge, filtering, result accounting, timeout,
 and lease release behavior unchanged.
 
-- [ ] **Step 4: Verify GREEN and focused regressions**
+- [x] **Step 4: Verify GREEN and focused regressions**
 
 Run the new test, the existing post-group link tests, the focused streaming
 memory updater suite, Ruff checks for the touched Python files, and

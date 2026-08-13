@@ -118,6 +118,17 @@ class PathlockedInMemoryVikingFS(InMemoryVikingFS):
         return await super().write_file(uri, content, ctx=ctx, lease_ref=lease_ref)
 
 
+class LeaseCheckingPathlockedInMemoryVikingFS(PathlockedInMemoryVikingFS):
+    async def write_file(self, uri: str, content: str, ctx=None, lease_ref=None):
+        acquired_paths = next(event[1] for event in reversed(self.events) if event[0] == "acquire")
+        if (
+            lease_ref != self._async_agfs.active_lease
+            or self._uri_to_path(uri, ctx) not in acquired_paths
+        ):
+            raise RuntimeError("pathlock lease does not cover the requested operation")
+        return await super().write_file(uri, content, ctx=ctx, lease_ref=lease_ref)
+
+
 class ChangingReadPathlockedInMemoryVikingFS(PathlockedInMemoryVikingFS):
     def __init__(
         self,
@@ -784,6 +795,92 @@ async def test_post_group_links_hold_one_lease_across_endpoint_updates(monkeypat
     )
     assert fs.events[-1] == ("release", lease)
     assert all(event[-1] == lease for event in fs.events[1:-1])
+
+
+@pytest.mark.asyncio
+async def test_post_group_links_lock_remapped_endpoint_paths(monkeypatch):
+    original_left_uri = "viking://user/u/memories/notes/left.md"
+    original_right_uri = "viking://user/u/memories/notes/right.md"
+    replacement_left_uri = "viking://user/u/memories/notes/Left.md"
+    replacement_right_uri = "viking://user/u/memories/notes/Right.md"
+    fs = LeaseCheckingPathlockedInMemoryVikingFS(
+        {
+            replacement_left_uri: MemoryFileUtils.write(
+                MemoryFile(
+                    uri=replacement_left_uri,
+                    content="left",
+                    memory_type="notes",
+                    extra_fields={"note_name": "Left"},
+                )
+            ),
+            replacement_right_uri: MemoryFileUtils.write(
+                MemoryFile(
+                    uri=replacement_right_uri,
+                    content="right",
+                    memory_type="notes",
+                    extra_fields={"note_name": "Right"},
+                )
+            ),
+        }
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.get_viking_fs",
+        lambda: fs,
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.memory_updater.get_viking_fs",
+        lambda: fs,
+    )
+    link = StoredLink(
+        from_uri=original_left_uri,
+        to_uri=original_right_uri,
+        link_type="related_to",
+        weight=0.8,
+    )
+    request_operations = ResolvedOperations(
+        upsert_operations=[],
+        delete_file_contents=[],
+        errors=[],
+        resolved_links=[link],
+    )
+    result_operations = ResolvedOperations(
+        upsert_operations=[],
+        delete_file_contents=[],
+        errors=[],
+        delete_replacements={
+            original_left_uri: replacement_left_uri,
+            original_right_uri: replacement_right_uri,
+        },
+    )
+    request = MemoryUpdateRequest(
+        operations=request_operations,
+        messages=[Message(id="m1", role="user", parts=[TextPart("link notes")])],
+        ctx=_ctx(),
+    )
+    result = StreamingMemoryUpdateResult(
+        operations=result_operations,
+        apply_result=MemoryUpdateResult(),
+        request_count=1,
+    )
+
+    await StreamingMemoryUpdater(registry=_registry())._apply_post_group_links(request, result)
+
+    assert fs.events[0] == (
+        "acquire",
+        (
+            "/user/u/memories/notes/Left.md",
+            "/user/u/memories/notes/Right.md",
+        ),
+        300.0,
+    )
+    stored_left = MemoryFileUtils.read(fs.files[replacement_left_uri], uri=replacement_left_uri)
+    stored_right = MemoryFileUtils.read(fs.files[replacement_right_uri], uri=replacement_right_uri)
+    assert [(stored["from_uri"], stored["to_uri"]) for stored in stored_left.links] == [
+        (replacement_left_uri, replacement_right_uri)
+    ]
+    assert [(stored["from_uri"], stored["to_uri"]) for stored in stored_right.backlinks] == [
+        (replacement_left_uri, replacement_right_uri)
+    ]
 
 
 @pytest.mark.asyncio

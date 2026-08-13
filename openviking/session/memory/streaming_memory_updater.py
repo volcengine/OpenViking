@@ -236,6 +236,9 @@ class StreamingMemoryUpdater:
         links = merge_link_lists(list(getattr(request.operations, "resolved_links", []) or []))
         if not links:
             return
+        links = remap_stored_links(
+            links, dict(getattr(result.operations, "delete_replacements", {}) or {})
+        )
         viking_fs = safe_get_viking_fs()
         lock_paths = _uri_lock_paths(_link_endpoint_uri_set(links), viking_fs, request.ctx)
         async with self._apply_lock:
@@ -246,9 +249,6 @@ class StreamingMemoryUpdater:
                     timeout_secs=_MEMORY_APPLY_LOCK_TIMEOUT_SECONDS,
                 )
             try:
-                links = remap_stored_links(
-                    links, dict(getattr(result.operations, "delete_replacements", {}) or {})
-                )
                 valid_links = await filter_valid_links(
                     links,
                     upsert_operations=result.operations.upsert_operations,

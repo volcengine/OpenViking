@@ -156,11 +156,25 @@ async def write_stored_links(
 
 def _remap_link_dict(link: Dict[str, Any], uri_remap: Dict[str, str]) -> Dict[str, Any]:
     remapped = dict(link or {})
-    if remapped.get("from_uri") in uri_remap:
-        remapped["from_uri"] = uri_remap[remapped["from_uri"]]
-    if remapped.get("to_uri") in uri_remap:
-        remapped["to_uri"] = uri_remap[remapped["to_uri"]]
+    remapped["from_uri"] = _resolve_replacement_uri(remapped.get("from_uri"), uri_remap)
+    remapped["to_uri"] = _resolve_replacement_uri(remapped.get("to_uri"), uri_remap)
     return remapped
+
+
+def _resolve_replacement_uri(uri: str | None, uri_remap: Dict[str, str]) -> str | None:
+    if not uri:
+        return uri
+    original_uri = uri
+    seen: set[str] = set()
+    while uri in uri_remap:
+        if uri in seen:
+            return original_uri
+        seen.add(uri)
+        replacement_uri = uri_remap[uri]
+        if not replacement_uri:
+            return uri
+        uri = replacement_uri
+    return uri
 
 
 def remap_stored_links(links: List[StoredLink], uri_remap: Dict[str, str]) -> List[StoredLink]:
@@ -168,8 +182,8 @@ def remap_stored_links(links: List[StoredLink], uri_remap: Dict[str, str]) -> Li
         return list(links or [])
     remapped_links: List[StoredLink] = []
     for link in links:
-        from_uri = uri_remap.get(link.from_uri, link.from_uri)
-        to_uri = uri_remap.get(link.to_uri, link.to_uri)
+        from_uri = _resolve_replacement_uri(link.from_uri, uri_remap)
+        to_uri = _resolve_replacement_uri(link.to_uri, uri_remap)
         if from_uri == to_uri:
             continue
         remapped_links.append(link.model_copy(update={"from_uri": from_uri, "to_uri": to_uri}))
@@ -1273,6 +1287,7 @@ class MemoryUpdater:
                     ].append(remapped)
 
         written_or_edited = set(result.written_uris + result.edited_uris)
+        stale_uris = set(uri_remap)
         for uri, link_groups in inherited_by_uri.items():
             if uri in uri_remap:
                 continue
@@ -1283,6 +1298,20 @@ class MemoryUpdater:
                 if not content:
                     continue
                 mf = MemoryFileUtils.read(content, uri=uri)
+                # Remapped links have different dedup keys, so remove the old
+                # endpoints before merging to avoid retaining dangling aliases.
+                mf.links = [
+                    link
+                    for link in mf.links
+                    if link.get("from_uri") not in stale_uris
+                    and link.get("to_uri") not in stale_uris
+                ]
+                mf.backlinks = [
+                    link
+                    for link in mf.backlinks
+                    if link.get("from_uri") not in stale_uris
+                    and link.get("to_uri") not in stale_uris
+                ]
                 if link_groups["links"]:
                     mf.links = merge_links(mf.links, link_groups["links"])
                 if link_groups["backlinks"]:
