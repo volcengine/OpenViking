@@ -1,0 +1,81 @@
+bot/tests/test_compile.py
+  s_0f06dbc1fcc61b::t_22985cc898a7ed 13,17,27-31,243-251,284,291,304,318,330,850-859,861,867,876-881,883,891-898,901,913,925-926,935-940,999-1007,1009,1017,1025,1036,1057-1061,1123,1125,1174,1176,1212-1213,1228-1237,1256,1266-1322,1373-1374,1902-1904,1906-1908,1921-1926,1930-1935,1995,2279-2286,2855-2901,2931-2934,3003-3006,3278-3279,3385-3389,3451-3458,3497-3501,3512-3514,3516-3518,3563,3565-3573,3615-3630,3642,3646-3679
+bot/tests/test_compile_coverage.py
+  s_0f06dbc1fcc61b::t_0029ee4dc4bb8d 1-509
+bot/tests/test_compile_coverage_integration.py
+  s_0f06dbc1fcc61b::t_d2a7afb48d4ffd 1-678
+bot/tests/test_compile_judge.py
+  s_622f1bb8a4b861::t_65307aca42265d 1-452
+bot/vikingbot/agent/loop.py
+  s_0f06dbc1fcc61b::t_2a851d7c5b2704 130,189-190,997,1011-1030,1121-1129,1149-1150
+bot/vikingbot/agent/tools/base.py
+  s_0b9ef8ac8072cd::t_694ccd45e3985d 56-57
+bot/vikingbot/agent/tools/compile.py
+  s_0f06dbc1fcc61b::t_0714aaa0f00e36 6-7,16,26,71-81,101-103,110-112,154-159,161-186,188-190,192-195,197-258,274-290,293-533,549-552,569-570,574-587,690-713,717-719,721,724-733,736-740,747-750,754-819,917,924,942,950-953,966,968,982,1082,1103-1104,1107,1109-1136,1198-1203
+bot/vikingbot/agent/tools/registry.py
+  s_0f06dbc1fcc61b::t_88c59672b2ba53 24,28,151-152,191-192,242-253,255-259
+bot/vikingbot/compile/adapters.py
+  s_0f06dbc1fcc61b::t_ca24505641bcea 1-564
+bot/vikingbot/compile/coverage.py
+  s_622f1bb8a4b861::t_d7f7dda98b9efd 1-764
+bot/vikingbot/compile/judge.py
+  s_0f06dbc1fcc61b::t_eeecfff800d549 1-330
+bot/vikingbot/compile/models.py
+  s_0f06dbc1fcc61b::t_5134a016b48960 20,28,38,50-52,214-222,228-230,233-236,251-258,262-269,281
+bot/vikingbot/compile/service.py
+  s_0f06dbc1fcc61b::t_d0cefc5904d2e4 13,33-38,40-42,51,65-66,156-163,558,561-566,606,608-609,649-652,704,716-727,730,738-743,755-756,775-820,826,828-838,875-878,883-884,887,892-895,925-951,971-1012,1019-1024,1042-1043,1046,1050-1055,1068-1069,1088-1127,1188-1189,1216-1219,1259-1263,1769-1774,1813-2001,2132-2137,2139,2143-2146,2163-2165,2169-2217,2230-2231,2236-2276,2303-2308,2322,2357,2393-2412,2419
+bot/vikingbot/openviking_mount/ov_server.py
+  s_0f06dbc1fcc61b::t_25e694cd403fb6 594,599-604
+crates/ov_cli/src/client.rs
+  s_158003f351971d::t_e2b0b9e8edbeba 159-184
+crates/ov_cli/src/commands/compile.rs
+  s_0f06dbc1fcc61b::t_7594ec88ca528a 1,6,8,50-57,59,101,104-141,143-149,154-184,200-253
+docs/design/ov-compile-design.md
+  s_0f06dbc1fcc61b::t_073d44d3fb54ef 5,7,28,81-82,85-90,92,95,97,119-120,123,158-159,166-167,229-232,257-258,282,284-290,330-341,358-361,370-371,390-394,432,436,474,590-591,596,600,611,619,636-637,645,671-673,696,700,702-705
+docs/en/api/24-vikingbot.md
+  s_0f06dbc1fcc61b::t_9846b9a9d2e801 179-181,244-254
+docs/zh/api/24-vikingbot.md
+  s_0f06dbc1fcc61b::t_c38ff2043bc32e 176-178,241-251
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "86e7904685323cac232f25a53b0edca8664b15c6",
+  "prompts": {},
+  "sessions": {
+    "s_0b9ef8ac8072cd": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff93a-ef06-72f1-9a77-a0820440da40",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    },
+    "s_0f06dbc1fcc61b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff90a-dbd1-79e2-ba0e-ad8539d69479",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    },
+    "s_158003f351971d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff93a-ff34-7041-9474-54ff5874efa9",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    },
+    "s_622f1bb8a4b861": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff93b-0c55-78a0-9b5f-3f2c08ac6a71",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
