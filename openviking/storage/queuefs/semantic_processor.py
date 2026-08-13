@@ -292,6 +292,12 @@ class SemanticProcessor(DequeueHandlerBase):
 
             assert data is not None
             msg = SemanticMsg.from_dict(data)
+            if VikingURI(msg.uri).parent is None:
+                logger.warning("Skipping semantic generation for root URI: %s", msg.uri)
+                if msg.telemetry_id and msg.id:
+                    get_request_wait_tracker().mark_semantic_done(msg.telemetry_id, msg.id)
+                self.report_success()
+                return None
             if is_semantic_msg_stale(msg):
                 logger.info(
                     "Skipping stale semantic message: uri=%s version=%s",

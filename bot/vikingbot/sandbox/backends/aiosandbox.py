@@ -1,5 +1,6 @@
 """AIO Sandbox backend implementation using agent-sandbox SDK."""
 
+import posixpath
 from pathlib import Path
 from typing import Any
 
@@ -7,7 +8,7 @@ from loguru import logger
 
 from vikingbot.config.schema import SandboxConfig, SessionKey
 from vikingbot.sandbox.backends import register_backend
-from vikingbot.sandbox.base import SandboxBackend, SandboxNotStartedError
+from vikingbot.sandbox.base import SandboxBackend, SandboxFileInfo, SandboxNotStartedError
 
 
 @register_backend("aiosandbox")
@@ -101,17 +102,38 @@ class AioSandboxBackend(SandboxBackend):
         """Get the current working directory inside the sandbox."""
         return "/home/gem"
 
+    def _sandbox_path(self, path: str) -> str:
+        if path.startswith("/"):
+            return path
+        relative = self._normalize_workspace_path(path)
+        return self.sandbox_cwd if not relative else f"{self.sandbox_cwd}/{relative}"
+
+    async def _list_path(self, path: str) -> list[Any]:
+        if not self._client:
+            raise SandboxNotStartedError()
+        result = await self._client.file.list_path(
+            path=self._sandbox_path(path),
+            recursive=False,
+            show_hidden=True,
+            include_size=True,
+        )
+        data = getattr(result, "data", result)
+        return list(getattr(data, "files", None) or [])
+
+    @staticmethod
+    def _file_info_size(file_info: Any, path: str) -> int:
+        size = getattr(file_info, "size", None)
+        if not isinstance(size, int) or size < 0:
+            raise IOError(f"Sandbox did not report a valid file size: {path}")
+        return size
+
     async def read_file(self, path: str) -> str:
         """Read file from AIO Sandbox using SDK."""
         if not self._client:
             raise SandboxNotStartedError()
 
         try:
-            sandbox_path = path
-            if not path.startswith("/"):
-                sandbox_path = f"/home/gem/{path}"
-
-            result = await self._client.file.read_file(file=sandbox_path)
+            result = await self._client.file.read_file(file=self._sandbox_path(path))
             if hasattr(result, "data") and hasattr(result.data, "content"):
                 return result.data.content
             return str(result)
@@ -125,11 +147,9 @@ class AioSandboxBackend(SandboxBackend):
             raise SandboxNotStartedError()
 
         try:
-            sandbox_path = path
-            if not path.startswith("/"):
-                sandbox_path = f"/home/gem/{path}"
-
-            result = await self._client.file.write_file(file=sandbox_path, content=content)
+            result = await self._client.file.write_file(
+                file=self._sandbox_path(path), content=content
+            )
             if not result.success:
                 raise Exception(f"Write failed: {result.message}")
         except Exception as e:
@@ -138,25 +158,83 @@ class AioSandboxBackend(SandboxBackend):
 
     async def list_dir(self, path: str) -> list[tuple[str, bool]]:
         """List directory in AIO Sandbox using SDK."""
-        if not self._client:
-            raise SandboxNotStartedError()
-
         try:
-            sandbox_path = path
-            if not path.startswith("/"):
-                sandbox_path = f"/home/gem/{path}"
-
-            # Use find_files with "*" glob to list directory
-            result = await self._client.file.find_files(path=sandbox_path, glob="*")
-
-            items = []
-            if hasattr(result, "data") and hasattr(result.data, "files"):
-                for file_info in result.data.files:
-                    if hasattr(file_info, "name") and hasattr(file_info, "type"):
-                        is_dir = file_info.type == "directory"
-                        items.append((file_info.name, is_dir))
-
-            return items
+            return sorted(
+                (
+                    (str(file_info.name), bool(file_info.is_directory))
+                    for file_info in await self._list_path(path)
+                ),
+                key=lambda item: item[0],
+            )
         except Exception as e:
             logger.error(f"[AioSandbox] Failed to list directory {path}: {e}")
             raise
+
+    async def list_files(
+        self,
+        path: str = ".",
+        *,
+        max_entries: int,
+    ) -> list[SandboxFileInfo]:
+        """Recursively enumerate the remote AIO workspace with a server-side bound."""
+        if not self._client:
+            raise SandboxNotStartedError()
+        self._validate_max_entries(max_entries)
+        root = self._normalize_workspace_path(path)
+        sandbox_root = self._sandbox_path(root or ".")
+        result = await self._client.file.glob_files(
+            path=sandbox_root,
+            pattern="**",
+            include_hidden=True,
+            files_only=False,
+            include_metadata=True,
+            max_results=max_entries + 1,
+            sort_by="path",
+        )
+        data = getattr(result, "data", result)
+        entries = list(getattr(data, "files", None) or [])
+        total_count = getattr(data, "total_count", None)
+        normalized_entries = []
+        for entry in entries:
+            remote_path = str(getattr(entry, "path", ""))
+            if not remote_path.startswith("/"):
+                remote_path = posixpath.join(sandbox_root, remote_path)
+            normalized_entries.append((entry, posixpath.normpath(remote_path)))
+        root_entries = sum(remote_path == sandbox_root for _, remote_path in normalized_entries)
+        if (
+            bool(getattr(data, "truncated", False))
+            or len(entries) - root_entries > max_entries
+            or (isinstance(total_count, int) and total_count - root_entries > max_entries)
+        ):
+            raise ValueError(f"Sandbox workspace inventory exceeds {max_entries} entries")
+
+        workspace_prefix = self.sandbox_cwd.rstrip("/") + "/"
+        root_prefix = sandbox_root.rstrip("/") + "/"
+        files: list[SandboxFileInfo] = []
+        seen: set[str] = set()
+        for file_info, remote_path in normalized_entries:
+            if remote_path != sandbox_root and not remote_path.startswith(root_prefix):
+                raise IOError("Sandbox returned a path outside the requested workspace root")
+            if remote_path == self.sandbox_cwd.rstrip("/"):
+                continue
+            if not remote_path.startswith(workspace_prefix):
+                raise IOError("Sandbox returned a path outside the workspace")
+            relative = self._normalize_workspace_path(remote_path.removeprefix(workspace_prefix))
+            if not relative or relative in seen or bool(getattr(file_info, "is_directory", False)):
+                continue
+            seen.add(relative)
+            files.append(
+                SandboxFileInfo(
+                    path=relative,
+                    size=self._file_info_size(file_info, relative),
+                )
+            )
+        return sorted(files, key=lambda item: item.path)
+
+    async def read_file_bytes(self, path: str, *, max_bytes: int | None = None) -> bytes:
+        """Stream bytes from the remote workspace, retaining at most limit + 1 bytes."""
+        if not self._client:
+            raise SandboxNotStartedError()
+        self._validate_max_bytes(max_bytes)
+        stream = self._client.file.download_file(path=self._sandbox_path(path))
+        return await self._collect_stream_bytes(stream, path, max_bytes)

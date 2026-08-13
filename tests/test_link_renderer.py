@@ -63,6 +63,105 @@ class TestRelativePath:
         assert result == ""
 
 
+class TestLinkSatisfaction:
+    source_uri = "viking://resources/wiki/overview.md"
+    target_uri = "viking://resources/wiki/tags.md"
+
+    def test_unprotected_anchor_can_be_linked(self):
+        assert LinkRenderer.can_render_link(
+            "Read the behavior tags.",
+            "behavior tags",
+            self.source_uri,
+            self.target_uri,
+        )
+
+    def test_existing_link_to_target_is_already_satisfied(self):
+        assert LinkRenderer.can_render_link(
+            "参见 [L2 行为标签库](./tags.md)。",
+            "行为标签库",
+            self.source_uri,
+            self.target_uri,
+        )
+
+    def test_existing_link_with_title_is_already_satisfied(self):
+        assert LinkRenderer.can_render_link(
+            'See [Tags](./tags.md "details").',
+            "Tags",
+            self.source_uri,
+            self.target_uri,
+        )
+
+    def test_existing_link_with_angle_destination_and_title_is_satisfied(self):
+        assert LinkRenderer.can_render_link(
+            "See [Tags](<./tags.md> 'details').",
+            "Tags",
+            self.source_uri,
+            self.target_uri,
+        )
+
+    def test_existing_link_with_balanced_parentheses_is_satisfied(self):
+        assert LinkRenderer.can_render_link(
+            "See [Version](../meta/foo(1).md).",
+            "Version",
+            "viking://resources/wiki/guide/overview.md",
+            "viking://resources/wiki/meta/foo(1).md",
+        )
+
+    def test_existing_link_with_escaped_parentheses_is_satisfied(self):
+        assert LinkRenderer.can_render_link(
+            r"See [Version](../meta/foo\(1\).md).",
+            "Version",
+            "viking://resources/wiki/guide/overview.md",
+            "viking://resources/wiki/meta/foo(1).md",
+        )
+
+    def test_literal_space_destination_with_title_remains_supported(self):
+        assert LinkRenderer.can_render_link(
+            'See [Tag Notes](./tag notes.md "details").',
+            "Tag Notes",
+            self.source_uri,
+            "viking://resources/wiki/tag notes.md",
+        )
+
+    def test_equivalent_encoded_target_with_fragment_is_satisfied(self):
+        assert LinkRenderer.can_render_link(
+            "See [ByteDance](../concepts/byte%20dance.md#facts).",
+            "ByteDance",
+            "viking://resources/wiki/sections/overview.md",
+            "viking://resources/wiki/concepts/byte dance.md",
+        )
+
+    def test_existing_link_to_other_target_is_not_satisfied(self):
+        assert not LinkRenderer.can_render_link(
+            "参见 [行为标签库](./other.md)。",
+            "行为标签库",
+            self.source_uri,
+            self.target_uri,
+        )
+
+    def test_title_and_parentheses_do_not_hide_wrong_targets(self):
+        assert not LinkRenderer.can_render_link(
+            'See [Tags](./other.md "details").',
+            "Tags",
+            self.source_uri,
+            self.target_uri,
+        )
+        assert not LinkRenderer.can_render_link(
+            "See [Version](../meta/foo(2).md).",
+            "Version",
+            "viking://resources/wiki/guide/overview.md",
+            "viking://resources/wiki/meta/foo(1).md",
+        )
+
+    def test_link_syntax_in_code_is_not_satisfied(self):
+        assert not LinkRenderer.can_render_link(
+            "`[行为标签库](./tags.md)`",
+            "行为标签库",
+            self.source_uri,
+            self.target_uri,
+        )
+
+
 class TestRenderLinks:
     def test_single_link(self):
         content = "Caroline attended a support group meeting."
@@ -329,6 +428,25 @@ class TestRenderLinks:
         )
         assert result == content
 
+    def test_skip_match_inside_existing_link_with_parenthesized_target(self):
+        content = "See [Version](../meta/foo(1).md)."
+        links = [
+            {
+                "from_uri": "viking://resources/wiki/guide/overview.md",
+                "to_uri": "viking://resources/wiki/meta/foo(1).md",
+                "weight": 1.0,
+                "match_text": "Version",
+            }
+        ]
+
+        result = LinkRenderer.render_links(
+            content,
+            "viking://resources/wiki/guide/overview.md",
+            links,
+        )
+
+        assert result == content
+
     def test_render_link_with_space_in_target_is_percent_encoded(self):
         # Generated links should escape spaces in their target so the markdown
         # link is portable across renderers. We always emit `%20`, while still
@@ -407,6 +525,21 @@ class TestStripLinks:
         content = "See [Frank Ocean](entities/frank%20ocean.md) for details."
         result = LinkRenderer.strip_links(content)
         assert result == "See Frank Ocean for details."
+
+    def test_strip_relative_link_with_title(self):
+        content = 'See [Tags](./tags.md "details") for details.'
+        result = LinkRenderer.strip_links(content)
+        assert result == "See Tags for details."
+
+    def test_strip_relative_link_with_parentheses_in_target(self):
+        content = "See [Version](../meta/foo(1).md) for details."
+        result = LinkRenderer.strip_links(content)
+        assert result == "See Version for details."
+
+    def test_keep_angle_bracket_external_link_with_title(self):
+        content = 'Visit [docs](<https://example.com/docs> "Documentation").'
+        result = LinkRenderer.strip_links(content)
+        assert result == content
 
     def test_keep_absolute_link(self):
         content = "Visit [docs](https://example.com/docs) for more."

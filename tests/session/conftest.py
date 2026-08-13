@@ -12,6 +12,7 @@ import pytest_asyncio
 from openviking.message import TextPart, ToolPart
 from openviking.server.identity import RequestContext
 from openviking.service.core import OpenVikingService
+from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
 from openviking.storage.queuefs import QueueManager, SessionCommitMsg, get_queue_manager
 from openviking.utils.time_utils import get_current_timestamp
@@ -28,10 +29,21 @@ async def client(
     queue_manager = get_queue_manager()
     original_enqueue = queue_manager.enqueue
     commit_tasks = []
+    queued_commit_tasks: set[str] = set()
+    tracker = get_task_tracker()
+    original_has_work = tracker.has_work
+
+    monkeypatch.setattr(
+        tracker,
+        "has_work",
+        lambda task_id: task_id in queued_commit_tasks or original_has_work(task_id),
+    )
 
     async def enqueue_with_session_commit_fallback(queue_name, data):
         if queue_name != QueueManager.SESSION_COMMIT:
             return await original_enqueue(queue_name, data)
+
+        queued_commit_tasks.add(data["task_id"])
 
         async def process_commit():
             message = SessionCommitMsg(**data)
@@ -49,7 +61,11 @@ async def client(
                     break
                 await asyncio.sleep(0)
             await queued_session.load()
-            await queued_session.resume_queued_commit(message)
+            try:
+                while not await queued_session.resume_queued_commit(message):
+                    await asyncio.sleep(0)
+            finally:
+                queued_commit_tasks.discard(message.task_id)
 
         commit_tasks.append(asyncio.create_task(process_commit()))
         return data["task_id"]

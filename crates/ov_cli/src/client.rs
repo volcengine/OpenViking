@@ -164,6 +164,8 @@ struct CompileCreateRequest<'a> {
     skill: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    runtime_timeout_seconds: Option<f64>,
 }
 
 // ============ HttpClient ============
@@ -356,12 +358,14 @@ impl HttpClient {
         to: &str,
         skill: &str,
         reason: Option<&str>,
+        runtime_timeout_seconds: Option<f64>,
     ) -> Result<CompileAccepted> {
         let body = CompileCreateRequest {
             from_uris,
             to,
             skill,
             reason,
+            runtime_timeout_seconds,
         };
         self.post("/bot/v1/compile", &body).await
     }
@@ -2267,7 +2271,9 @@ mod tests {
         tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.expect("request should arrive");
             let mut buffer = vec![0; 4096];
-            let _ = stream.read(&mut buffer).await.expect("request should read");
+            let read = stream.read(&mut buffer).await.expect("request should read");
+            let request = String::from_utf8_lossy(&buffer[..read]);
+            assert!(request.contains(r#""runtime_timeout_seconds":86400.0"#));
             let body = r#"{"status":"ok","result":{"task_id":"cmp_1","status":"accepted","to":"viking://resources/wiki"}}"#;
             let response = format!(
                 "HTTP/1.1 202 Accepted\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
@@ -2295,6 +2301,7 @@ mod tests {
                 "viking://resources/wiki",
                 "viking://agent/skills/wiki",
                 None,
+                Some(86_400.0),
             )
             .await
             .expect("202 response body should deserialize");

@@ -86,6 +86,16 @@ class _PlainTextFinal:
     content: str | None = None
 
 
+class AgentIterationLimitExceeded(RuntimeError):
+    """A structured task used every available AgentLoop iteration without submitting."""
+
+    def __init__(self, max_iterations: int):
+        self.max_iterations = max_iterations
+        super().__init__(
+            f"Agent reached its {max_iterations}-iteration limit without submitting a valid bundle"
+        )
+
+
 class AgentLoop:
     """
     The agent loop is the core processing engine.
@@ -1335,6 +1345,8 @@ class AgentLoop:
         submit_tool = tool_registry.get("submit_wiki_bundle")
         bundle = getattr(submit_tool, "bundle", None)
         if bundle is None:
+            if iteration >= self.max_iterations:
+                raise AgentIterationLimitExceeded(self.max_iterations)
             raise ValueError("AGENT_OUTPUT_INVALID: Agent did not submit a valid Wiki bundle")
         return bundle, tools_used, token_usage, iteration
 

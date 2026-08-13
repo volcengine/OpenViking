@@ -352,7 +352,7 @@ Each operation contains:
 
 **Notes**
 
-- A request supports at most 128 operations, 8 MiB per file, and 16 MiB total.
+- A request supports at most 256 operations, 8 MiB per file, and 16 MiB total.
 - All targets must be files below `root_uri`, use the same context type, and have unique canonical URIs.
 - Resource targets may use any safe file extension; Memory targets retain the text extension allowlist and do not accept binary content.
 - Every non-idempotent precondition is checked under the target tree lock before the first new write. A mismatch returns `409 Conflict`.

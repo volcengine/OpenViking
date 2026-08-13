@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
+import posixpath
 import re
 import shlex
 import shutil
@@ -16,11 +18,16 @@ from typing import Any, Mapping
 
 from loguru import logger
 
-from openviking.core.namespace import classify_uri, uri_parts
+from openviking.core.namespace import classify_uri, relative_uri_path, uri_parts
 from openviking.core.skill_loader import SkillLoader
-from openviking.utils.path_safety import sanitize_relative_viking_path
+from openviking.session.memory.utils.link_renderer import LinkRenderer, MarkdownLink
+from openviking.utils.path_safety import (
+    safe_join_viking_uri,
+    sanitize_relative_viking_path,
+    validate_safe_viking_uri_path,
+)
 from openviking_cli.exceptions import OpenVikingError
-from vikingbot.agent.loop import AgentLoop
+from vikingbot.agent.loop import AgentIterationLimitExceeded, AgentLoop
 from vikingbot.agent.skills import SkillsLoader
 from vikingbot.agent.tools.compile import CompileScopedTool, SubmitWikiBundleTool
 from vikingbot.agent.tools.registry import ToolRegistry
@@ -42,6 +49,7 @@ from vikingbot.compile.models import (
 )
 from vikingbot.compile.renderer import (
     WikiRenderer,
+    content_hash,
     has_unclosed_frontmatter,
     validate_declared_okf_markdown,
 )
@@ -49,6 +57,7 @@ from vikingbot.compile.store import CompileTaskStore
 from vikingbot.config.schema import SandboxBackend, SandboxMode, SessionKey
 from vikingbot.openviking_mount.ov_server import VikingClient
 from vikingbot.sandbox import SandboxManager
+from vikingbot.sandbox.base import SandboxBackend as WorkspaceSandbox
 
 _OV_READ_TOOLS = frozenset(
     {
@@ -71,7 +80,7 @@ _COMPILE_ISOLATED_EXEC_BACKENDS = frozenset(
 _SKILL_EXCLUDED_FILES = frozenset(
     {".abstract.md", ".overview.md", ".relations.json", ".source.json"}
 )
-_CATALOG_EXCLUDED_FILES = _SKILL_EXCLUDED_FILES 
+_CATALOG_EXCLUDED_FILES = _SKILL_EXCLUDED_FILES
 _CATALOG_FRONTMATTER_LINES = 128
 _TARGET_CATALOG_QUERY_CHARS = 40_000
 _REQUIREMENT_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
@@ -84,6 +93,47 @@ _WORKSPACE_SUBMISSION_RULE_WITHOUT_EXEC = (
     "Generate every artifact file in the task workspace with write_file, then submit it through "
     "submit_wiki_bundle using workspace_path; never inline artifact content."
 )
+
+
+def _consume_background_result(future: asyncio.Future[Any], *, label: str) -> None:
+    try:
+        future.result()
+    except asyncio.CancelledError:
+        pass
+    except Exception as exc:
+        logger.warning("Compile {} failed after its grace deadline: {}", label, exc)
+
+
+async def _await_with_hard_timeout(
+    awaitable: Awaitable[Any],
+    *,
+    timeout: float,
+    label: str,
+) -> Any:
+    """Give bounded fallback work its full grace period, but never wait past it."""
+    future = asyncio.ensure_future(awaitable)
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        remaining = max(0.0, deadline - asyncio.get_running_loop().time())
+        try:
+            done, _pending = await asyncio.wait({future}, timeout=remaining)
+        except asyncio.CancelledError:
+            # The task runtime may expire while an iteration-limit salvage is
+            # already underway. Preserve the independent grace period.
+            continue
+        except BaseException:
+            future.cancel()
+            future.add_done_callback(
+                lambda completed: _consume_background_result(completed, label=label)
+            )
+            raise
+        if future in done:
+            return future.result()
+        future.cancel()
+        future.add_done_callback(
+            lambda completed: _consume_background_result(completed, label=label)
+        )
+        raise asyncio.TimeoutError
 
 
 @dataclass(frozen=True)
@@ -252,6 +302,16 @@ class BotCompileService:
         *,
         connection: Mapping[str, Any],
     ) -> SanitizedCompileRequest:
+        if (
+            request.runtime_timeout_seconds is not None
+            and request.runtime_timeout_seconds > self.limits.task_runtime_seconds
+        ):
+            raise CompileFailure(
+                "RESOURCE_EXHAUSTED",
+                "Compile runtime_timeout_seconds exceeds the server limit of "
+                f"{self.limits.task_runtime_seconds:g} seconds.",
+                stage="queued",
+            )
         raw_sources = [str(value).strip() for value in request.from_]
         if not raw_sources or any(not value for value in raw_sources):
             raise CompileFailure(
@@ -333,6 +393,7 @@ class BotCompileService:
                 "to": target,
                 "reason": (request.reason or "").strip() or DEFAULT_COMPILE_REASON,
                 "skill": canonical_skill,
+                "runtime_timeout_seconds": request.runtime_timeout_seconds,
             }
         )
 
@@ -452,9 +513,19 @@ class BotCompileService:
                 return
 
             try:
+                runtime_timeout = min(
+                    request.runtime_timeout_seconds or self.limits.task_runtime_seconds,
+                    self.limits.task_runtime_seconds,
+                )
+                runtime_deadline = asyncio.get_running_loop().time() + runtime_timeout
                 await asyncio.wait_for(
-                    self._execute_task(task_id, request, connection),
-                    timeout=self.limits.task_runtime_seconds,
+                    self._execute_task(
+                        task_id,
+                        request,
+                        connection,
+                        runtime_deadline=runtime_deadline,
+                    ),
+                    timeout=runtime_timeout,
                 )
             except asyncio.TimeoutError:
                 task = await self.store.get(task_id)
@@ -485,8 +556,11 @@ class BotCompileService:
         task_id: str,
         request: SanitizedCompileRequest,
         connection: dict[str, Any],
+        *,
+        runtime_deadline: float | None = None,
     ) -> None:
         capabilities = self._compile_capabilities()
+        target_type = classify_uri(request.to).context_type
         session_key = SessionKey(type="compile", channel_id=task_id, chat_id=task_id)
         task_config = self.config.model_copy(
             update={
@@ -499,6 +573,10 @@ class BotCompileService:
         sandbox_manager = SandboxManager(task_config, workspace_parent, task_config.workspace_path)
         workspace = sandbox_manager.get_workspace_path(session_key)
         client: VikingClient | None = None
+        sandbox: WorkspaceSandbox | None = None
+        workspace_baseline: set[str] | None = None
+        submit_tool: Any = None
+        salvage_allowed = False
         try:
             await self._set_state(task_id, status="running", stage="loading_skill")
             client = await VikingClient.create(connection=connection, config=self.config)
@@ -531,10 +609,14 @@ class BotCompileService:
                 workspace=workspace,
                 skill_name=skill_name,
             )
+            sandbox = (
+                await sandbox_manager.get_sandbox(session_key)
+                if target_type == "resource"
+                else None
+            )
 
             await self._set_state(task_id, status="running", stage="collecting_context")
             sources = await self._build_sources(client, request.from_)
-            target_type = classify_uri(request.to).context_type
             is_skill_target = target_type == "skill"
             if is_skill_target:
                 catalog: list[dict[str, Any]] = []
@@ -589,11 +671,12 @@ class BotCompileService:
             )
             workspace_baseline = (
                 {
-                    path.relative_to(workspace).as_posix()
-                    for path in workspace.rglob("*")
-                    if path.is_file()
+                    entry.path
+                    for entry in await sandbox.list_files(
+                        max_entries=self.limits.target_inventory_entries
+                    )
                 }
-                if target_type == "resource"
+                if sandbox is not None
                 else None
             )
             registry, ov_names = self._build_compile_registry(
@@ -607,6 +690,7 @@ class BotCompileService:
                 wiki_uri_resolver=resolve_wiki_uri,
                 capabilities=capabilities,
             )
+            submit_tool = registry.get("submit_wiki_bundle")
             system_prompt, user_prompt = self._build_prompts(
                 request=request,
                 skill_name=skill_name,
@@ -623,6 +707,7 @@ class BotCompileService:
                 )
 
             await self._set_state(task_id, status="running", stage="agent")
+            salvage_allowed = True
             try:
                 bundle, _tools, _usage, _iterations = await request_loop.run_structured_task(
                     system_prompt=system_prompt,
@@ -633,11 +718,27 @@ class BotCompileService:
                     stop_tool_names=["submit_wiki_bundle"],
                     openviking_connection=connection,
                 )
+            except AgentIterationLimitExceeded as exc:
+                salvage_allowed = False
+                if target_type != "resource":
+                    raise CompileFailure("AGENT_OUTPUT_INVALID", str(exc), stage="agent") from exc
+                assert sandbox is not None
+                await self._complete_salvaged_task(
+                    task_id=task_id,
+                    client=client,
+                    request=request,
+                    sandbox=sandbox,
+                    workspace_baseline=workspace_baseline,
+                    reason=f"reached its {exc.max_iterations}-iteration limit",
+                    failure_code="AGENT_OUTPUT_INVALID",
+                )
+                return
             except ValueError as exc:
+                salvage_allowed = False
                 raise CompileFailure("AGENT_OUTPUT_INVALID", str(exc), stage="agent") from exc
 
+            salvage_allowed = False
             await self._set_state(task_id, status="running", stage="rendering")
-            submit_tool = registry.get("submit_wiki_bundle")
             file_payloads = list(getattr(submit_tool, "file_payloads", []))
             if is_skill_target:
                 await self._set_state(task_id, status="committing", stage="writing")
@@ -775,11 +876,383 @@ class BotCompileService:
                 task.error = None
 
             await self.store.update(task_id, complete)
+        except asyncio.CancelledError:
+            if (
+                runtime_deadline is None
+                or asyncio.get_running_loop().time() < runtime_deadline
+                or client is None
+                or target_type != "resource"
+                or not salvage_allowed
+                or getattr(submit_tool, "bundle", None) is not None
+            ):
+                raise
+            task = await self.store.get(task_id)
+            if task is None or task.status in TERMINAL_STATUSES or task.stage != "agent":
+                raise
+            assert sandbox is not None
+            await self._complete_salvaged_task(
+                task_id=task_id,
+                client=client,
+                request=request,
+                sandbox=sandbox,
+                workspace_baseline=workspace_baseline,
+                reason="reached its runtime deadline",
+                failure_code="DEADLINE_EXCEEDED",
+            )
         finally:
-            await sandbox_manager.cleanup_session(session_key)
-            if client is not None:
-                await client.close()
-            shutil.rmtree(workspace_parent, ignore_errors=True)
+            await self._cleanup_execution_resources(
+                sandbox_manager=sandbox_manager,
+                session_key=session_key,
+                client=client,
+                workspace_parent=workspace_parent,
+            )
+
+    async def _cleanup_execution_resources(
+        self,
+        *,
+        sandbox_manager: SandboxManager,
+        session_key: SessionKey,
+        client: VikingClient | None,
+        workspace_parent: Path,
+    ) -> None:
+        async def cleanup() -> None:
+            try:
+                await sandbox_manager.cleanup_session(session_key)
+            finally:
+                try:
+                    if client is not None:
+                        await client.close()
+                finally:
+                    await asyncio.to_thread(
+                        shutil.rmtree,
+                        workspace_parent,
+                        ignore_errors=True,
+                    )
+
+        try:
+            await _await_with_hard_timeout(
+                cleanup(),
+                timeout=self.limits.cleanup_grace_seconds,
+                label="cleanup",
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Compile cleanup exceeded its {}-second grace limit",
+                self.limits.cleanup_grace_seconds,
+            )
+
+    async def _complete_salvaged_task(
+        self,
+        *,
+        task_id: str,
+        client: VikingClient,
+        request: SanitizedCompileRequest,
+        sandbox: WorkspaceSandbox,
+        workspace_baseline: set[str] | None,
+        reason: str,
+        failure_code: str,
+    ) -> None:
+        async def salvage_and_complete() -> CompileResult | None:
+            await self._set_state(task_id, status="committing", stage="salvaging")
+            result = await self._salvage_workspace(
+                client=client,
+                request=request,
+                sandbox=sandbox,
+                workspace_baseline=workspace_baseline,
+                reason=reason,
+            )
+            if result is None:
+                return None
+
+            def complete(task: CompileTask) -> None:
+                if task.status in TERMINAL_STATUSES:
+                    return
+                task.status = "completed"
+                task.stage = "salvaged"
+                task.result = result
+                task.error = None
+
+            await self.store.update(task_id, complete)
+            return result
+
+        try:
+            result = await _await_with_hard_timeout(
+                salvage_and_complete(),
+                timeout=self.limits.salvage_grace_seconds,
+                label="salvage",
+            )
+        except asyncio.TimeoutError as exc:
+            raise CompileFailure(
+                failure_code,
+                f"Compile {reason} and fallback saving exceeded its "
+                f"{self.limits.salvage_grace_seconds:g}-second grace limit.",
+                stage="salvaging",
+            ) from exc
+        except Exception as exc:
+            raise CompileFailure(
+                failure_code,
+                f"Compile {reason} and fallback saving failed: {exc}",
+                stage="salvaging",
+            ) from exc
+        if result is None:
+            raise CompileFailure(
+                failure_code,
+                f"Compile {reason} before producing files to save.",
+                stage="agent",
+            )
+
+    async def _salvage_workspace(
+        self,
+        *,
+        client: VikingClient,
+        request: SanitizedCompileRequest,
+        sandbox: WorkspaceSandbox,
+        workspace_baseline: set[str] | None,
+        reason: str = "reached its runtime deadline",
+    ) -> CompileResult | None:
+        files: dict[str, bytes] = {}
+        page_paths: set[str] = set()
+        total_bytes = 0
+        skipped_files = 0
+        page_files = 0
+        artifact_files = 0
+        output_keys: set[str] = set()
+        staging_prefix = f"{COMPILE_STAGING_ROOT}/"
+        wiki_prefix = f"{COMPILE_WIKI_PAGE_ROOT}/"
+        baseline = workspace_baseline or set()
+        entries = sorted(
+            await sandbox.list_files(max_entries=self.limits.target_inventory_entries),
+            key=lambda entry: (
+                entry.path.startswith(staging_prefix),
+                entry.path,
+            ),
+        )
+        for entry in entries:
+            relative = entry.path
+            if relative in baseline:
+                continue
+            if relative.split("/", 1)[0].casefold() == "skills":
+                continue
+            is_page = relative.startswith(wiki_prefix)
+            if relative.startswith(staging_prefix) and not is_page:
+                continue
+            output_path = relative.removeprefix(wiki_prefix)
+            try:
+                output_path = sanitize_relative_viking_path(output_path)
+                validate_safe_viking_uri_path(safe_join_viking_uri(request.to, output_path))
+            except ValueError:
+                skipped_files += 1
+                continue
+            output_key = output_path.casefold()
+            if (
+                output_key in output_keys
+                or (is_page and page_files >= self.limits.output_pages)
+                or (not is_page and artifact_files >= self.limits.output_files)
+                or len(files) >= self.limits.output_operations
+                or entry.size < 0
+                or entry.size > self.limits.output_total_bytes - total_bytes
+            ):
+                skipped_files += 1
+                continue
+            try:
+                payload = await sandbox.read_file_bytes(
+                    relative,
+                    max_bytes=self.limits.output_total_bytes - total_bytes,
+                )
+            except Exception:
+                skipped_files += 1
+                continue
+            files[output_path] = payload
+            output_keys.add(output_key)
+            total_bytes += len(payload)
+            page_files += is_page
+            artifact_files += not is_page
+            if is_page:
+                page_paths.add(output_path)
+
+        if not files:
+            return None
+
+        entries = await client.tree(
+            request.to,
+            node_limit=self.limits.target_inventory_entries + 1,
+        )
+        if len(entries) > self.limits.target_inventory_entries:
+            raise ValueError(
+                f"Compile target inventory exceeds {self.limits.target_inventory_entries} entries"
+            )
+        existing: dict[str, str] = {}
+        existing_by_case: dict[str, list[str]] = {}
+        existing_sizes: dict[str, int] = {}
+        for entry in entries:
+            if not isinstance(entry, Mapping) or entry.get("isDir", entry.get("is_dir", False)):
+                continue
+            uri = str(entry.get("uri") or "").rstrip("/")
+            relative = relative_uri_path(request.to, uri)
+            if relative:
+                existing[relative] = uri
+                existing_by_case.setdefault(relative.casefold(), []).append(uri)
+                size = entry.get("size")
+                if isinstance(size, int) and size >= 0:
+                    existing_sizes[uri] = size
+
+        known_paths = {*files, *existing}
+        for path in page_paths:
+            payload = files[path]
+            try:
+                content = payload.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            repaired = self._repair_salvaged_markdown(
+                content, source_path=path, known_paths=known_paths
+            ).encode("utf-8")
+            repaired_total = total_bytes - len(payload) + len(repaired)
+            if repaired_total <= self.limits.output_total_bytes:
+                files[path] = repaired
+                total_bytes = repaired_total
+
+        operations = []
+        saved_page_paths = set(page_paths)
+        for path, payload in files.items():
+            existing_uri = existing.get(path)
+            if existing_uri is None:
+                matches = existing_by_case.get(path.casefold(), [])
+                existing_uri = matches[0] if len(matches) == 1 else None
+            if existing_uri is None:
+                uri = safe_join_viking_uri(request.to, path).rstrip("/")
+                precondition = {"kind": "create_if_absent"}
+            else:
+                uri = existing_uri
+                size = existing_sizes.get(uri)
+                if size is None:
+                    stat = await client.stat(uri)
+                    size = stat.get("size")
+                if not isinstance(size, int) or size < 0 or size > self.limits.output_total_bytes:
+                    skipped_files += 1
+                    saved_page_paths.discard(path)
+                    continue
+                current = await client.download_bytes(uri)
+                precondition = {
+                    "kind": "replace_if_hash",
+                    "base_hash": content_hash(current),
+                }
+            operations.append(
+                {
+                    "uri": uri,
+                    "content_base64": base64.b64encode(payload).decode("ascii"),
+                    "precondition": precondition,
+                }
+            )
+
+        if not operations:
+            return None
+        batch_result = await client.batch_write(
+            root_uri=request.to,
+            operations=operations,
+            wait=False,
+        )
+        warnings = [
+            f"Compile {reason}; workspace files were saved before cleanup. "
+            "This partial output did not pass the normal bundle validation."
+        ]
+        if skipped_files:
+            warnings.append(
+                f"Skipped {skipped_files} unsafe, duplicate, unreadable, or over-limit file(s)."
+            )
+        return CompileResult(
+            from_=request.from_,
+            to=request.to,
+            skill=request.skill,
+            created=list(batch_result.get("created", [])),
+            updated=list(batch_result.get("updated", [])),
+            unchanged=list(batch_result.get("unchanged", [])),
+            page_count=len(saved_page_paths),
+            warnings=warnings,
+        )
+
+    @staticmethod
+    def _repair_salvaged_markdown(
+        content: str,
+        *,
+        source_path: str,
+        known_paths: set[str],
+    ) -> str:
+        known = {path for path in known_paths if path}
+        paths_by_name: dict[str, set[str]] = {}
+        for path in known:
+            paths_by_name.setdefault(posixpath.basename(path).casefold(), set()).add(path)
+
+        links = list(LinkRenderer.iter_markdown_links(content))
+        link_spans = {(link.start, link.end) for link in links}
+        protected = [
+            span
+            for span in LinkRenderer.protected_markdown_spans(content)
+            if span not in link_spans
+        ]
+        source_dir = posixpath.dirname(source_path)
+
+        def replace(link: MarkdownLink, *, image: bool) -> str:
+            start = link.start - int(image)
+            original = content[start : link.end]
+            if any(
+                not (link.end <= span_start or start >= span_end)
+                for span_start, span_end in protected
+            ):
+                return original
+
+            target = link.target.strip()
+            if (
+                not target
+                or target.startswith(("#", "?", "/"))
+                or re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", target)
+            ):
+                return original
+            if target.startswith("<") and target.endswith(">"):
+                target = target[1:-1]
+
+            suffix_at = min(
+                (index for token in "#?" if (index := target.find(token)) >= 0),
+                default=len(target),
+            )
+            raw_path, suffix = target[:suffix_at], target[suffix_at:]
+            normalized_path = LinkRenderer.normalize_markdown_target(raw_path)
+            resolved = posixpath.normpath(posixpath.join(source_dir, normalized_path))
+            if resolved in known:
+                return original
+
+            name = posixpath.basename(normalized_path)
+            names = {name.casefold()}
+            if not posixpath.splitext(name)[1]:
+                names.add(f"{name}.md".casefold())
+            candidates = {
+                path
+                for name in names
+                for path in paths_by_name.get(name, set())
+                if path.casefold() != source_path.casefold()
+            }
+            if len(candidates) != 1:
+                return link.text
+            candidate = next(iter(candidates))
+
+            corrected = posixpath.relpath(candidate, source_dir or ".")
+            if corrected == ".":
+                return link.text
+            if "/" not in corrected and not corrected.startswith("."):
+                corrected = f"./{corrected}"
+            corrected = corrected.replace(" ", "%20").replace("(", "%28").replace(")", "%29")
+            image_marker = "!" if image else ""
+            return f"{image_marker}[{link.text}]({corrected}{suffix})"
+
+        result: list[str] = []
+        position = 0
+        for link in links:
+            image = link.start > 0 and content[link.start - 1] == "!"
+            start = link.start - int(image)
+            result.append(content[position:start])
+            result.append(replace(link, image=image))
+            position = link.end
+        result.append(content[position:])
+        return "".join(result)
 
     @staticmethod
     async def _tag_wiki_files(
@@ -1389,6 +1862,8 @@ Selected Skill:
 
     async def _fail(self, task_id: str, failure: CompileFailure) -> None:
         def mutate(task: CompileTask) -> None:
+            if task.status in TERMINAL_STATUSES:
+                return
             task.status = "failed"
             task.stage = failure.stage
             task.result = None

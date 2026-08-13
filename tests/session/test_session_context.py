@@ -44,10 +44,21 @@ async def client(
 
     queue_manager = get_queue_manager()
     original_enqueue = queue_manager.enqueue
+    commit_tasks: list[asyncio.Task] = []
+    queued_commit_tasks: set[str] = set()
+    tracker = get_task_tracker()
+    original_has_work = tracker.has_work
+    monkeypatch.setattr(
+        tracker,
+        "has_work",
+        lambda task_id: task_id in queued_commit_tasks or original_has_work(task_id),
+    )
 
     async def enqueue_with_session_commit_fallback(queue_name, data):
         if queue_name != QueueManager.SESSION_COMMIT:
             return await original_enqueue(queue_name, data)
+
+        queued_commit_tasks.add(data["task_id"])
 
         async def process_commit():
             message = SessionCommitMsg(**data)
@@ -58,13 +69,19 @@ async def client(
                     break
                 await asyncio.sleep(0)
             await queued_session.load()
-            await queued_session.resume_queued_commit(message)
+            try:
+                while not await queued_session.resume_queued_commit(message):
+                    await asyncio.sleep(0)
+            finally:
+                queued_commit_tasks.discard(message.task_id)
 
-        asyncio.create_task(process_commit())
+        commit_tasks.append(asyncio.create_task(process_commit()))
         return data["task_id"]
 
     monkeypatch.setattr(queue_manager, "enqueue", enqueue_with_session_commit_fallback)
     yield client
+    if commit_tasks:
+        await asyncio.gather(*commit_tasks, return_exceptions=True)
 
 
 def _estimate_tokens(text: str) -> int:

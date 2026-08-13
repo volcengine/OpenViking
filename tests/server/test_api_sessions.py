@@ -1170,7 +1170,8 @@ async def test_delete_session(client: httpx.AsyncClient):
         json=_message_request("user", content="ensure persisted"),
     )
     # Compress to persist
-    await client.post(f"/api/v1/sessions/{session_id}/commit")
+    commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
+    await _wait_for_task(client, commit_resp.json()["result"]["task_id"])
 
     resp = await client.delete(f"/api/v1/sessions/{session_id}")
     assert resp.status_code == 200

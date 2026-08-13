@@ -314,7 +314,7 @@ class FSService:
         if context_type != "resource":
             return None
         parent = VikingURI(uri).parent
-        return parent.uri if parent else None
+        return parent.uri if parent and parent.scope else None
 
     @staticmethod
     def _memory_overview_parent_uri(uri: str, context_type: str) -> Optional[str]:

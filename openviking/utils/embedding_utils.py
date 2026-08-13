@@ -31,7 +31,7 @@ from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConve
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.embedding_input import truncate_embedding_input
-from openviking.utils.image_search import image_bytes_to_data_uri
+from openviking.utils.image_search import image_bytes_to_model_data_uri
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.utils import VikingURI, get_logger
@@ -272,11 +272,14 @@ async def _build_image_data_uri(
 ) -> Optional[str]:
     """Read an image file and encode it as a base64 ``data:`` URI.
 
+    Oversized images are downsampled only for the embedding request. The
+    original resource bytes in VikingFS are left unchanged.
     Returns None if the image cannot be read.
     """
     try:
         content = await viking_fs.read_file_bytes(file_path, ctx=ctx)
-        return image_bytes_to_data_uri(content, file_name)
+        image_config = getattr(get_openviking_config(), "image", None)
+        return image_bytes_to_model_data_uri(content, file_name, config=image_config)
     except Exception as e:
         logger.warning(f"Failed to read image for multimodal vectorization {file_path}: {e}")
         return None
@@ -571,7 +574,9 @@ async def vectorize_file(
                     if summary:
                         context.set_vectorize(Vectorize(text=summary))
                     else:
-                        logger.warning(f"No summary available for {file_path}, skipping vectorization")
+                        logger.warning(
+                            f"No summary available for {file_path}, skipping vectorization"
+                        )
                         return False
                 else:
                     embedding_text = truncate_embedding_input(

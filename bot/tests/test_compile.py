@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from vikingbot.agent.loop import AgentLoop
+from vikingbot.agent.loop import AgentIterationLimitExceeded, AgentLoop
 from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.agent.tools.compile import CompileScopedTool, SubmitWikiBundleTool
 from vikingbot.agent.tools.registry import ToolRegistry
@@ -15,6 +15,7 @@ from vikingbot.compile.models import (
     CompileFailure,
     CompileLimits,
     CompileRequest,
+    CompileResult,
     CompileTask,
     SanitizedCompileRequest,
     WikiBundleDraft,
@@ -23,7 +24,16 @@ from vikingbot.compile.models import (
 from vikingbot.compile.renderer import WikiRenderer, content_hash, wiki_page_path_from_title
 from vikingbot.compile.service import BotCompileService, CompileCapabilities
 from vikingbot.compile.store import CompileTaskStore
-from vikingbot.config.schema import DirectBackendConfig, SandboxBackend, SessionKey
+from vikingbot.config.schema import (
+    DirectBackendConfig,
+    SandboxBackend,
+    SandboxConfig,
+    SandboxMode,
+    SessionKey,
+)
+from vikingbot.sandbox import SandboxManager
+from vikingbot.sandbox.backends.srt import SrtBackend
+from vikingbot.sandbox.base import SandboxFileInfo
 
 from openviking.core.skill_loader import SkillLoader
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
@@ -107,10 +117,42 @@ def test_compile_bundle_schema_distinguishes_wiki_pages_and_artifact_files():
 def test_compile_limit_defaults_match_the_resource_envelope():
     limits = CompileLimits()
 
-    assert limits.concurrent_tasks == 2
+    assert limits.concurrent_tasks == 10
+    assert limits.accepted_tasks == 40
+    assert limits.accepted_tasks_per_principal == 10
+    assert limits.queue_wait_seconds == 60 * 60
+    assert limits.task_runtime_seconds == 40 * 60
+    assert limits.salvage_grace_seconds == 120
+    assert limits.cleanup_grace_seconds == 40
     assert limits.target_inventory_entries == 2000
     assert limits.target_catalog_pages == 10
+    assert limits.output_pages == 128
+    assert limits.output_files == 128
+    assert limits.output_operations == 256
     assert DirectBackendConfig().allow_compile_exec is False
+
+
+def test_compile_request_schema_defers_runtime_max_but_requires_positive_finite_seconds():
+    request = CompileRequest.model_validate(
+        {
+            "from": ["viking://resources/source"],
+            "to": "viking://resources/wiki",
+            "skill": "viking://agent/skills/wiki",
+            "runtime_timeout_seconds": 24 * 60 * 60,
+        }
+    )
+    assert request.runtime_timeout_seconds == 24 * 60 * 60
+
+    for invalid in (0, float("inf"), float("nan")):
+        with pytest.raises(ValueError):
+            CompileRequest.model_validate(
+                {
+                    "from": ["viking://resources/source"],
+                    "to": "viking://resources/wiki",
+                    "skill": "viking://agent/skills/wiki",
+                    "runtime_timeout_seconds": invalid,
+                }
+            )
 
 
 def test_wiki_page_requires_exactly_one_body_source():
@@ -321,6 +363,38 @@ def test_renderer_creates_okf_pages_links_and_citations():
     assert "[1] [source](viking://resources/source)" in first["content"]
 
 
+def test_renderer_preserves_existing_link_and_keeps_relationship():
+    bundle = WikiBundleDraft.model_validate(
+        {
+            "pages": [
+                _page(
+                    1,
+                    "Overview",
+                    body_markdown='Read [Details](./details.md "details") next.',
+                ),
+                _page(2, "Details"),
+            ],
+            "links": [{"f": 1, "t": 2, "match_text": "Details"}],
+        }
+    )
+
+    rendered = WikiRenderer().render(
+        bundle=bundle,
+        target_uri="viking://resources/wiki",
+        source_roots={"src_1": "viking://resources/source"},
+        catalog_uris=set(),
+        existing_raw={},
+    )
+    operations = {operation["uri"]: operation["content"] for operation in rendered.operations}
+
+    assert (
+        operations["viking://resources/wiki/overview.md"].count('[Details](./details.md "details")')
+        == 1
+    )
+    assert "- [Overview](./overview.md)" in operations["viking://resources/wiki/details.md"]
+    assert rendered.link_count == 0
+
+
 def test_wiki_page_title_path_normalizes_spaced_dashes_only():
     assert (
         wiki_page_path_from_title("Experimental Designs - Residual Networks")
@@ -416,6 +490,37 @@ def test_renderer_adds_raw_text_and_workspace_binary_to_same_bundle():
         "viking://resources/wiki/evidence/figures/figure1.png",
     ]
     assert rendered.wiki_uris == ["viking://resources/wiki/overview.md"]
+
+
+@pytest.mark.asyncio
+async def test_compile_rejects_combined_output_operation_overflow():
+    limits = CompileLimits(output_pages=2, output_files=2, output_operations=3)
+    bundle_data = {
+        "pages": [_page(1, "One"), _page(2, "Two")],
+        "files": [
+            {"path": "one.txt", "content": "one"},
+            {"path": "two.txt", "content": "two"},
+        ],
+    }
+    tool = SubmitWikiBundleTool(
+        source_ids={"src_1"},
+        catalog_uris=set(),
+        target_uri="viking://resources/wiki",
+        limits=limits,
+    )
+
+    result = await tool.execute(ToolContext(), **bundle_data)
+
+    assert "combined output operation limit exceeded" in result
+    bundle = WikiBundleDraft.model_validate(bundle_data)
+    with pytest.raises(ValueError, match="combined output operation limit"):
+        WikiRenderer(limits).render(
+            bundle=bundle,
+            target_uri="viking://resources/wiki",
+            source_roots={"src_1": "viking://resources/source"},
+            catalog_uris=set(),
+            existing_raw={},
+        )
 
 
 def test_renderer_accepts_minimal_okf_artifact_with_unknown_fields():
@@ -759,6 +864,51 @@ async def test_submit_tool_rejects_protected_anchor_and_path_collision():
 
 
 @pytest.mark.asyncio
+async def test_submit_tool_accepts_existing_link_only_when_target_matches():
+    tool = SubmitWikiBundleTool(
+        source_ids={"src_1"},
+        catalog_uris=set(),
+        target_uri="viking://resources/wiki",
+        limits=CompileLimits(),
+    )
+    context = ToolContext()
+
+    accepted = await tool.execute(
+        context,
+        pages=[
+            _page(1, "One", body_markdown="参见 [L2 行为标签库](./two.md)。"),
+            _page(2, "Two"),
+        ],
+        links=[{"f": 1, "t": 2, "match_text": "行为标签库"}],
+    )
+    assert accepted.startswith("Wiki bundle accepted")
+    assert tool.bundle is not None and len(tool.bundle.links) == 1
+
+    accepted = await tool.execute(
+        context,
+        pages=[
+            _page(1, "One", body_markdown="See [Version](./foo(1).md)."),
+            _page(2, "Version", path_hint="foo(1).md"),
+        ],
+        links=[{"f": 1, "t": 2, "match_text": "Version"}],
+    )
+    assert accepted.startswith("Wiki bundle accepted")
+    assert tool.bundle is not None and len(tool.bundle.links) == 1
+
+    rejected = await tool.execute(
+        context,
+        pages=[
+            _page(1, "One", body_markdown="参见 [行为标签库](./three.md)。"),
+            _page(2, "Two"),
+            _page(3, "Three"),
+        ],
+        links=[{"f": 1, "t": 2, "match_text": "行为标签库"}],
+    )
+    assert "unsatisfied anchor '行为标签库'" in rejected
+    assert tool.bundle is None
+
+
+@pytest.mark.asyncio
 async def test_submit_tool_checks_size_before_parsing_okf_artifact():
     tool = SubmitWikiBundleTool(
         source_ids={"src_1"},
@@ -869,8 +1019,8 @@ async def test_submit_tool_reports_all_invalid_links():
     )
 
     assert result.startswith("Error: Invalid Wiki bundle: 2 invalid link(s):")
-    assert "links[0] from page 1 has non-linkable anchor 'Missing One'" in result
-    assert "links[1] from page 1 has non-linkable anchor 'Missing Two'" in result
+    assert "links[0] from page 1 has unsatisfied anchor 'Missing One'" in result
+    assert "links[1] from page 1 has unsatisfied anchor 'Missing Two'" in result
     assert tool.bundle is None
 
 
@@ -1278,6 +1428,42 @@ async def test_structured_wrapper_delegates_to_only_existing_loop_without_fallba
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("iteration", "error"),
+    [(1, ValueError), (50, AgentIterationLimitExceeded)],
+)
+async def test_structured_wrapper_distinguishes_iteration_exhaustion(iteration, error):
+    registry = ToolRegistry()
+    registry.register(
+        SubmitWikiBundleTool(
+            source_ids=set(),
+            catalog_uris=set(),
+            target_uri="viking://resources/wiki",
+            limits=CompileLimits(),
+        )
+    )
+
+    class FakeLoop:
+        max_iterations = 50
+
+        async def _run_agent_loop(self, **kwargs):
+            del kwargs
+            return None, None, [], {}, iteration
+
+    with pytest.raises(error):
+        await AgentLoop.run_structured_task(
+            FakeLoop(),
+            system_prompt="system",
+            user_prompt="user",
+            session_key=SessionKey(type="compile", channel_id="cmp", chat_id="cmp"),
+            tool_registry=registry,
+            openviking_tool_names=set(),
+            stop_tool_names=["submit_wiki_bundle"],
+            openviking_connection=None,
+        )
+
+
+@pytest.mark.asyncio
 async def test_request_normalization_uses_default_reason_and_canonical_skill(monkeypatch):
     class Client:
         created = set()
@@ -1320,6 +1506,7 @@ async def test_request_normalization_uses_default_reason_and_canonical_skill(mon
                 "to": "viking://resources/wiki",
                 "skill": "viking://agent/skills/wiki/SKILL.md",
                 "reason": "   ",
+                "runtime_timeout_seconds": 20 * 60,
             }
         ),
         connection={"api_key": "secret"},
@@ -1328,6 +1515,7 @@ async def test_request_normalization_uses_default_reason_and_canonical_skill(mon
     assert normalized.to == "viking://resources/wiki"
     assert normalized.skill == "viking://agent/skills/wiki"
     assert normalized.reason == DEFAULT_COMPILE_REASON
+    assert normalized.runtime_timeout_seconds == 20 * 60
 
     Client.created.clear()
     Client.skill_content = "---\nname: wiki\n---\nCompile it"
@@ -1344,6 +1532,34 @@ async def test_request_normalization_uses_default_reason_and_canonical_skill(mon
         )
     assert raised.value.code == "SKILL_INVALID"
     assert Client.created == set()
+
+
+@pytest.mark.asyncio
+async def test_request_normalization_rejects_runtime_above_server_limit_before_io(monkeypatch):
+    async def create_client(**kwargs):
+        raise AssertionError(f"client must not be created: {kwargs}")
+
+    monkeypatch.setattr("vikingbot.compile.service.VikingClient.create", create_client)
+    service = object.__new__(BotCompileService)
+    service.config = None
+    service.limits = CompileLimits(task_runtime_seconds=10)
+
+    with pytest.raises(CompileFailure) as raised:
+        await service._normalize_request(
+            CompileRequest.model_validate(
+                {
+                    "from": ["viking://resources/source"],
+                    "to": "viking://resources/wiki",
+                    "skill": "viking://agent/skills/wiki",
+                    "runtime_timeout_seconds": 11,
+                }
+            ),
+            connection={"api_key": "secret"},
+        )
+
+    assert raised.value.code == "RESOURCE_EXHAUSTED"
+    assert raised.value.stage == "queued"
+    assert "server limit of 10 seconds" in str(raised.value)
 
 
 def test_compile_target_accepts_only_exact_skill_namespaces():
@@ -1474,7 +1690,9 @@ async def test_execute_skill_target_skips_recursive_catalog_and_completes(
             self.bot_data_path = tmp_path
             self.workspace_path = tmp_path / "host-workspace"
             self.skills = []
-            self.sandbox = SimpleNamespace(mode=None, model_copy=lambda *, deep: SimpleNamespace(mode=None))
+            self.sandbox = SimpleNamespace(
+                mode=None, model_copy=lambda *, deep: SimpleNamespace(mode=None)
+            )
 
         def model_copy(self, *, update):
             copy = TaskConfig()
@@ -2197,6 +2415,33 @@ def _sanitized_compile_request() -> SanitizedCompileRequest:
     )
 
 
+class _FakeWorkspaceSandbox:
+    def __init__(
+        self,
+        files: dict[str, bytes],
+        *,
+        sizes: dict[str, int] | None = None,
+    ):
+        self.files = files
+        self.sizes = sizes or {}
+        self.reads: list[tuple[str, int | None]] = []
+
+    async def list_files(self, path=".", *, max_entries):
+        assert path == "."
+        inventory = {name: len(payload) for name, payload in self.files.items()}
+        inventory.update(self.sizes)
+        assert len(inventory) <= max_entries
+        return [SandboxFileInfo(path=name, size=size) for name, size in inventory.items()]
+
+    async def read_file_bytes(self, path, *, max_bytes=None):
+        self.reads.append((path, max_bytes))
+        if path not in self.files:
+            raise AssertionError(f"metadata-only file must not be read: {path}")
+        payload = self.files[path]
+        assert max_bytes is None or len(payload) <= max_bytes
+        return payload
+
+
 @pytest.mark.parametrize(
     ("backend", "allow_compile_exec", "expected"),
     [
@@ -2445,6 +2690,734 @@ async def test_compile_queue_wait_has_a_deadline(tmp_path: Path):
     assert failed.error is not None
     assert failed.error.code == "DEADLINE_EXCEEDED"
     assert service._target_locks == {}
+
+
+@pytest.mark.asyncio
+async def test_compile_uses_request_runtime_timeout(monkeypatch, tmp_path: Path):
+    service = _compile_service(
+        tmp_path,
+        auth_mode="api_key",
+        backend=SandboxBackend.AIOSANDBOX,
+    )
+    request = _sanitized_compile_request().model_copy(update={"runtime_timeout_seconds": 0.01})
+    task = CompileTask(
+        task_id="cmp_runtime",
+        principal_scope="owner",
+        sanitized_request=request,
+        status="accepted",
+        stage="queued",
+        created_at=utc_now(),
+        updated_at=utc_now(),
+    )
+    await service.store.create(task)
+    observed = []
+
+    async def execute(*args, runtime_deadline, **kwargs):
+        del args, kwargs
+        observed.append(runtime_deadline - asyncio.get_running_loop().time())
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(service, "_execute_task", execute)
+    await service._run_task(task.task_id, request, {"api_key": "secret"})
+
+    failed = await service.store.get(task.task_id)
+    assert observed and 0 < observed[0] <= 0.02
+    assert failed is not None and failed.status == "failed"
+    assert failed.error is not None and failed.error.code == "DEADLINE_EXCEEDED"
+
+
+@pytest.mark.asyncio
+async def test_timeout_salvage_copies_workspace_and_repairs_links(tmp_path: Path):
+    service = _compile_service(
+        tmp_path,
+        auth_mode="api_key",
+        backend=SandboxBackend.DIRECT,
+    )
+    files = {
+        "__compile_staging__/wiki_pages/home.md": b"# Home\n",
+        "__compile_staging__/wiki_pages/guide/topic.md": "\n".join(
+            [
+                "[Home](home.md#top)",
+                "[Meta](meta/readme.md)",
+                "[Existing](../existing.md)",
+                "[Missing](missing.md)",
+                "![Missing image](missing.png)",
+                '[Titled](../meta/title.md "Title")',
+                "[Paren](../meta/foo(1).md)",
+                "[Web](https://example.com)",
+                "[Source](viking://resources/source)",
+                "[Anchor](#local)",
+                "`[Code](missing.md)`",
+            ]
+        ).encode(),
+        "meta/readme.md": b"# Meta\n",
+        "meta/title.md": b"# Title\n",
+        "meta/foo(1).md": b"# Paren\n",
+        "meta/events.jsonl": b"",
+        "artifact.bin": b"\x00\x01",
+        "home.md": b"# Artifact Home\n",
+        "roadmap.md": b"[Roadmap](future.md)\n",
+        "caseonly.md": b"case mismatch",
+        "Foo.md": b"first",
+        "foo.md": b"duplicate",
+        "bad#name.txt": b"unsafe URI",
+        "__compile_staging__/work/notes.txt": b"notes",
+        "__compile_staging__/tmp/check.txt": b"check",
+        "skills/wiki/SKILL.md": b"do not copy",
+        "sandboxes/cmp-srt-settings.json": b'{"filesystem": "/private/host/path"}',
+    }
+
+    class Client:
+        operations = []
+
+        async def tree(self, uri, *, node_limit):
+            assert uri == "viking://resources/wiki"
+            assert node_limit == service.limits.target_inventory_entries + 1
+            return [
+                {"uri": f"{uri}/existing.md", "isDir": False, "size": 1},
+                {"uri": f"{uri}/CaseOnly.md", "isDir": False, "size": 8},
+                {"uri": f"{uri}/meta/events.jsonl", "isDir": False, "size": 3},
+            ]
+
+        async def download_bytes(self, uri):
+            return {
+                "viking://resources/wiki/CaseOnly.md": b"old case",
+                "viking://resources/wiki/meta/events.jsonl": b"old",
+            }[uri]
+
+        async def batch_write(self, *, root_uri, operations, wait):
+            assert root_uri == "viking://resources/wiki"
+            assert wait is False
+            self.operations = operations
+            updated = [
+                operation["uri"]
+                for operation in operations
+                if operation["precondition"]["kind"] == "replace_if_hash"
+            ]
+            created = [
+                operation["uri"]
+                for operation in operations
+                if operation["precondition"]["kind"] == "create_if_absent"
+            ]
+            return {"created": created, "updated": updated, "unchanged": []}
+
+    client = Client()
+    sandbox = _FakeWorkspaceSandbox(files)
+    result = await service._salvage_workspace(
+        client=client,
+        request=_sanitized_compile_request(),
+        sandbox=sandbox,
+        workspace_baseline={"sandboxes/cmp-srt-settings.json"},
+    )
+
+    assert result is not None
+    payloads = {
+        operation["uri"].removeprefix("viking://resources/wiki/"): base64.b64decode(
+            operation["content_base64"]
+        )
+        for operation in client.operations
+    }
+    assert "skills/wiki/SKILL.md" not in payloads
+    assert "empty" not in payloads
+    assert "__compile_staging__/wiki_pages/home.md" not in payloads
+    assert payloads["home.md"] == b"# Artifact Home\n"
+    assert payloads["roadmap.md"] == b"[Roadmap](future.md)\n"
+    assert payloads["artifact.bin"] == b"\x00\x01"
+    assert payloads["CaseOnly.md"] == b"case mismatch"
+    assert payloads["meta/events.jsonl"] == b""
+    assert "__compile_staging__/work/notes.txt" not in payloads
+    assert "__compile_staging__/tmp/check.txt" not in payloads
+    assert "sandboxes/cmp-srt-settings.json" not in payloads
+    assert "sandboxes/cmp-srt-settings.json" not in {path for path, _limit in sandbox.reads}
+    assert sum(path.casefold() == "foo.md" for path in payloads) == 1
+    assert "bad#name.txt" not in payloads
+    topic = payloads["guide/topic.md"].decode()
+    assert "[Home](../home.md#top)" in topic
+    assert "[Meta](../meta/readme.md)" in topic
+    assert "[Existing](../existing.md)" in topic
+    assert "Missing\nMissing image" in topic
+    assert '[Titled](../meta/title.md "Title")' in topic
+    assert "[Paren](../meta/foo(1).md)" in topic
+    assert "[Web](https://example.com)" in topic
+    assert "[Source](viking://resources/source)" in topic
+    assert "[Anchor](#local)" in topic
+    assert "`[Code](missing.md)`" in topic
+    assert result.warnings and "partial output" in result.warnings[0]
+    assert any("Skipped" in warning for warning in result.warnings)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        '[Missing](missing.md "title")',
+        "[Missing](missing(1).md)",
+    ],
+)
+def test_timeout_salvage_removes_unresolved_complex_markdown_links(content: str):
+    assert (
+        BotCompileService._repair_salvaged_markdown(
+            content,
+            source_path="guide/topic.md",
+            known_paths={"guide/topic.md"},
+        )
+        == "Missing"
+    )
+
+
+def test_timeout_salvage_preserves_existing_escaped_parenthesis_link():
+    content = r"[Paren](../meta/foo\(1\).md)"
+
+    assert (
+        BotCompileService._repair_salvaged_markdown(
+            content,
+            source_path="guide/topic.md",
+            known_paths={"meta/foo(1).md"},
+        )
+        == content
+    )
+
+
+@pytest.mark.asyncio
+async def test_timeout_salvage_ignores_preexisting_srt_settings(tmp_path: Path):
+    service = _compile_service(
+        tmp_path,
+        auth_mode="api_key",
+        backend=SandboxBackend.SRT,
+    )
+    settings_path = "sandboxes/cmp-srt-settings.json"
+
+    class Client:
+        async def tree(self, uri, *, node_limit):
+            raise AssertionError(f"target must not be read: {uri}, {node_limit}")
+
+    result = await service._salvage_workspace(
+        client=Client(),
+        request=_sanitized_compile_request(),
+        sandbox=_FakeWorkspaceSandbox({}, sizes={settings_path: 128}),
+        workspace_baseline={settings_path},
+    )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_srt_settings_created_by_manager_are_in_the_workspace_baseline(
+    monkeypatch, tmp_path: Path
+):
+    async def start_without_process(self):
+        self.workspace.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(SrtBackend, "start", start_without_process)
+    config = SimpleNamespace(
+        sandbox=SandboxConfig(backend=SandboxBackend.SRT, mode=SandboxMode.PER_SESSION),
+        skills=[],
+    )
+    manager = SandboxManager(config, tmp_path / "workspaces", tmp_path / "source")
+    session_key = SessionKey(type="compile", channel_id="cmp", chat_id="cmp")
+
+    sandbox = await manager.get_sandbox(session_key)
+    baseline = {
+        entry.path
+        for entry in await sandbox.list_files(max_entries=CompileLimits().target_inventory_entries)
+    }
+
+    workspace_id = manager.to_workspace_id(session_key)
+    assert baseline == {f"sandboxes/{workspace_id}-srt-settings.json"}
+
+
+@pytest.mark.asyncio
+async def test_timeout_salvage_skips_oversized_file_before_reading(tmp_path: Path):
+    limits = CompileLimits(output_total_bytes=4)
+    service = _compile_service(
+        tmp_path,
+        auth_mode="api_key",
+        backend=SandboxBackend.AIOSANDBOX,
+        limits=limits,
+    )
+
+    class Client:
+        operations = []
+
+        async def tree(self, uri, *, node_limit):
+            del node_limit
+            return [
+                {
+                    "uri": f"{uri}/existing.txt",
+                    "isDir": False,
+                    "size": 1024 * 1024 * 1024,
+                }
+            ]
+
+        async def download_bytes(self, uri):
+            raise AssertionError(f"oversized target must not be downloaded: {uri}")
+
+        async def batch_write(self, *, root_uri, operations, wait):
+            del root_uri, wait
+            self.operations = operations
+            return {
+                "created": [operation["uri"] for operation in operations],
+                "updated": [],
+                "unchanged": [],
+            }
+
+    sandbox = _FakeWorkspaceSandbox(
+        {"existing.txt": b"ok", "small.txt": b"ok"},
+        sizes={"huge.bin": 1024 * 1024 * 1024},
+    )
+    client = Client()
+    result = await service._salvage_workspace(
+        client=client,
+        request=_sanitized_compile_request(),
+        sandbox=sandbox,
+        workspace_baseline=set(),
+    )
+
+    assert result is not None
+    assert sandbox.reads == [
+        ("existing.txt", limits.output_total_bytes),
+        ("small.txt", limits.output_total_bytes - 2),
+    ]
+    assert [operation["uri"] for operation in client.operations] == [
+        "viking://resources/wiki/small.txt"
+    ]
+    assert any("Skipped 2" in warning for warning in result.warnings)
+
+
+@pytest.mark.asyncio
+async def test_timeout_salvage_grace_returns_when_cancellation_is_suppressed(
+    monkeypatch, tmp_path: Path
+):
+    service = _compile_service(
+        tmp_path,
+        auth_mode="api_key",
+        backend=SandboxBackend.AIOSANDBOX,
+        limits=CompileLimits(salvage_grace_seconds=0.01),
+    )
+    request = _sanitized_compile_request()
+    task = CompileTask(
+        task_id="cmp_stubborn_salvage",
+        principal_scope="owner",
+        sanitized_request=request,
+        status="running",
+        stage="agent",
+        created_at=utc_now(),
+        updated_at=utc_now(),
+    )
+    await service.store.create(task)
+    cancelled = asyncio.Event()
+    release = asyncio.Event()
+
+    async def stubborn_salvage(**kwargs):
+        del kwargs
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            await release.wait()
+
+    monkeypatch.setattr(service, "_salvage_workspace", stubborn_salvage)
+    loop = asyncio.get_running_loop()
+    started_at = loop.time()
+    try:
+        with pytest.raises(CompileFailure) as raised:
+            await asyncio.wait_for(
+                service._complete_salvaged_task(
+                    task_id=task.task_id,
+                    client=object(),
+                    request=request,
+                    sandbox=object(),
+                    workspace_baseline=set(),
+                    reason="reached its runtime deadline",
+                    failure_code="DEADLINE_EXCEEDED",
+                ),
+                timeout=0.2,
+            )
+        assert raised.value.code == "DEADLINE_EXCEEDED"
+        assert raised.value.stage == "salvaging"
+        assert "grace limit" in str(raised.value)
+        assert loop.time() - started_at < 0.2
+        await asyncio.wait_for(cancelled.wait(), timeout=0.1)
+    finally:
+        release.set()
+        await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_salvage_keeps_its_grace_period_when_parent_runtime_expires(
+    monkeypatch, tmp_path: Path
+):
+    service = _compile_service(
+        tmp_path,
+        auth_mode="api_key",
+        backend=SandboxBackend.AIOSANDBOX,
+        limits=CompileLimits(salvage_grace_seconds=0.2),
+    )
+    request = _sanitized_compile_request()
+    task = CompileTask(
+        task_id="cmp_cancelled_salvage",
+        principal_scope="owner",
+        sanitized_request=request,
+        status="running",
+        stage="agent",
+        created_at=utc_now(),
+        updated_at=utc_now(),
+    )
+    await service.store.create(task)
+    started = asyncio.Event()
+
+    async def salvage(**kwargs):
+        del kwargs
+        started.set()
+        await asyncio.sleep(0.02)
+        return CompileResult(
+            from_=request.from_,
+            to=request.to,
+            skill=request.skill,
+            created=[f"{request.to}/partial.md"],
+        )
+
+    monkeypatch.setattr(service, "_salvage_workspace", salvage)
+    runner = asyncio.create_task(
+        service._complete_salvaged_task(
+            task_id=task.task_id,
+            client=object(),
+            request=request,
+            sandbox=object(),
+            workspace_baseline=set(),
+            reason="reached its iteration limit",
+            failure_code="AGENT_OUTPUT_INVALID",
+        )
+    )
+    await started.wait()
+    runner.cancel()
+    await asyncio.wait_for(runner, timeout=0.2)
+
+    completed = await service.store.get(task.task_id)
+    assert completed is not None
+    assert completed.status == "completed"
+    assert completed.stage == "salvaged"
+
+
+@pytest.mark.asyncio
+async def test_cleanup_grace_releases_execution_slot_and_target_lock(tmp_path: Path):
+    service = _compile_service(
+        tmp_path,
+        auth_mode="api_key",
+        backend=SandboxBackend.DIRECT,
+        limits=CompileLimits(
+            concurrent_tasks=1,
+            cleanup_grace_seconds=0.01,
+            task_runtime_seconds=1,
+        ),
+    )
+    request = _sanitized_compile_request()
+    cleanup_started = asyncio.Event()
+    cleanup_cancelled = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    cleanup_finished = asyncio.Event()
+    second_started = asyncio.Event()
+
+    class StubbornManager:
+        async def cleanup_session(self, session_key):
+            del session_key
+            cleanup_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cleanup_cancelled.set()
+                await release_cleanup.wait()
+            cleanup_finished.set()
+
+    async def execute(task_id, _request, connection, *, runtime_deadline):
+        del connection, runtime_deadline
+        if task_id == "cmp_first":
+            await service._cleanup_execution_resources(
+                sandbox_manager=StubbornManager(),
+                session_key=SessionKey(type="compile", channel_id=task_id, chat_id=task_id),
+                client=None,
+                workspace_parent=tmp_path / task_id,
+            )
+        else:
+            second_started.set()
+
+    service._execute_task = execute
+    first = asyncio.create_task(service._run_task("cmp_first", request, {}))
+    await cleanup_started.wait()
+    second = asyncio.create_task(service._run_task("cmp_second", request, {}))
+    try:
+        await asyncio.wait_for(cleanup_cancelled.wait(), timeout=0.2)
+        await asyncio.wait_for(second_started.wait(), timeout=0.2)
+        await asyncio.gather(first, second)
+        assert service._semaphore._value == 1
+        assert service._target_locks == {}
+    finally:
+        release_cleanup.set()
+        await asyncio.wait_for(cleanup_finished.wait(), timeout=0.2)
+
+
+@pytest.mark.asyncio
+async def test_timeout_salvage_respects_combined_output_operation_limit(tmp_path: Path):
+    limits = CompileLimits(output_pages=2, output_files=2, output_operations=3)
+    service = _compile_service(
+        tmp_path,
+        auth_mode="api_key",
+        backend=SandboxBackend.DIRECT,
+        limits=limits,
+    )
+    files = {
+        "a.txt": b"a",
+        "b.txt": b"b",
+        "__compile_staging__/wiki_pages/c.md": b"c",
+        "__compile_staging__/wiki_pages/d.md": b"d",
+    }
+
+    class Client:
+        operations = []
+
+        async def tree(self, uri, *, node_limit):
+            del uri, node_limit
+            return []
+
+        async def batch_write(self, *, root_uri, operations, wait):
+            del root_uri, wait
+            self.operations = operations
+            return {
+                "created": [operation["uri"] for operation in operations],
+                "updated": [],
+                "unchanged": [],
+            }
+
+    client = Client()
+    result = await service._salvage_workspace(
+        client=client,
+        request=_sanitized_compile_request(),
+        sandbox=_FakeWorkspaceSandbox(files),
+        workspace_baseline=set(),
+    )
+
+    assert result is not None
+    assert len(client.operations) == limits.output_operations
+    assert result.warnings and any("Skipped 1" in warning for warning in result.warnings)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cutoff", ["runtime", "iterations", "accepted", "rendering"])
+async def test_compile_cutoff_salvages_before_workspace_cleanup(
+    monkeypatch, tmp_path: Path, cutoff: str
+):
+    observed = []
+    remote_files = {}
+
+    sandbox = _FakeWorkspaceSandbox(remote_files)
+
+    class TaskConfig:
+        def __init__(self):
+            self.bot_data_path = tmp_path
+            self.workspace_path = tmp_path / "host-workspace"
+            self.skills = []
+            self.sandbox = SimpleNamespace(
+                mode=None, model_copy=lambda *, deep: SimpleNamespace(mode=None)
+            )
+
+        def model_copy(self, *, update):
+            copy = TaskConfig()
+            for key, value in update.items():
+                setattr(copy, key, value)
+            return copy
+
+    class FakeSandboxManager:
+        def __init__(self, config, workspace_parent, workspace_path):
+            del config, workspace_path
+            self.workspace = workspace_parent / "workspace"
+            self.workspace.mkdir(parents=True)
+
+        def get_workspace_path(self, session_key):
+            del session_key
+            return self.workspace
+
+        async def get_sandbox(self, session_key):
+            del session_key
+            return sandbox
+
+        async def cleanup_session(self, session_key):
+            del session_key
+            observed.append("cleanup")
+
+    class FakeSkillsLoader:
+        def __init__(self, workspace, *, builtin_skills_dir):
+            del workspace, builtin_skills_dir
+
+        def load_skills_for_context(self, names):
+            assert names == ["wiki"]
+            return "Write Wiki pages."
+
+        def _get_skill_meta(self, name):
+            assert name == "wiki"
+            return {}
+
+    class FakeRequestLoop:
+        def __init__(self, **kwargs):
+            self.workspace = kwargs["workspace"]
+
+        async def run_structured_task(self, **kwargs):
+            del kwargs
+            remote_files["output.md"] = b"partial"
+            if cutoff == "iterations":
+                raise AgentIterationLimitExceeded(1)
+            if cutoff == "accepted":
+                submit_tool.bundle = WikiBundleDraft.model_validate({"pages": []})
+                await asyncio.Event().wait()
+            if cutoff == "rendering":
+                return (
+                    WikiBundleDraft.model_validate(
+                        {
+                            "pages": [
+                                _page(
+                                    1,
+                                    "Guide",
+                                    update_uri="viking://resources/wiki/guide.md",
+                                    path_hint=None,
+                                )
+                            ]
+                        }
+                    ),
+                    [],
+                    {},
+                    1,
+                )
+            await asyncio.Event().wait()
+
+    class Client:
+        async def get_skill(self, skill_name, *, target_uri):
+            assert skill_name == "wiki"
+            assert target_uri == "viking://agent/skills"
+            return {
+                "root_uri": "viking://agent/skills/wiki",
+                "content": "---\nname: wiki\ndescription: Write Wiki\n---\nWrite it.",
+                "files": [],
+            }
+
+        async def read_raw(self, uri):
+            assert cutoff == "rendering"
+            assert uri == "viking://resources/wiki/guide.md"
+            await asyncio.Event().wait()
+
+        async def close(self):
+            return None
+
+    async def create_client(**kwargs):
+        del kwargs
+        return Client()
+
+    async def no_op(*args, **kwargs):
+        del args, kwargs
+
+    async def build_sources(*args, **kwargs):
+        del args, kwargs
+        return []
+
+    async def build_catalog(*args, **kwargs):
+        del args, kwargs
+        return [], {}
+
+    async def salvage(*, client, request, sandbox, workspace_baseline, reason):
+        del client
+        assert workspace_baseline == set()
+        assert request.to == "viking://resources/wiki"
+        assert await sandbox.read_file_bytes("output.md") == b"partial"
+        assert ("runtime deadline" if cutoff == "runtime" else "1-iteration limit") in reason
+        observed.append("salvage")
+        return CompileResult(
+            **{
+                "from": request.from_,
+                "to": request.to,
+                "skill": request.skill,
+                "created": [f"{request.to}/output.md"],
+                "page_count": 1,
+                "warnings": ["partial output"],
+            }
+        )
+
+    monkeypatch.setattr("vikingbot.compile.service.SandboxManager", FakeSandboxManager)
+    monkeypatch.setattr("vikingbot.compile.service.SkillsLoader", FakeSkillsLoader)
+    monkeypatch.setattr("vikingbot.compile.service.AgentLoop", FakeRequestLoop)
+    monkeypatch.setattr("vikingbot.compile.service.VikingClient.create", create_client)
+
+    host_loop = SimpleNamespace(
+        config=TaskConfig(),
+        bus=None,
+        provider=None,
+        model=None,
+        temperature=0,
+        max_iterations=1,
+        memory_window=1,
+        brave_api_key=None,
+        exa_api_key=None,
+        gen_image_model=None,
+        exec_config=None,
+    )
+    service = BotCompileService(agent_loop=host_loop)
+    monkeypatch.setattr(service, "_materialize_skill", no_op)
+    monkeypatch.setattr(service, "_check_requirements", no_op)
+    monkeypatch.setattr(service, "_build_sources", build_sources)
+    monkeypatch.setattr(service, "_build_catalog", build_catalog)
+    submit_tool = SimpleNamespace(file_payloads=[])
+    registry = SimpleNamespace(get=lambda name: submit_tool)
+    monkeypatch.setattr(
+        service, "_build_compile_registry", lambda *args, **kwargs: (registry, set())
+    )
+    monkeypatch.setattr(service, "_salvage_workspace", salvage)
+
+    request = _sanitized_compile_request()
+    task = CompileTask(
+        task_id=f"cmp_{cutoff}",
+        principal_scope="owner",
+        sanitized_request=request,
+        status="accepted",
+        stage="queued",
+        created_at=utc_now(),
+        updated_at=utc_now(),
+    )
+    await service.store.create(task)
+    loop = asyncio.get_running_loop()
+    execute = service._execute_task(
+        task.task_id,
+        request,
+        {"api_key": "secret"},
+        runtime_deadline=loop.time()
+        + (0.01 if cutoff in {"runtime", "accepted", "rendering"} else 60),
+    )
+    if cutoff in {"accepted", "rendering"}:
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(execute, timeout=0.01)
+    elif cutoff == "runtime":
+        await asyncio.wait_for(execute, timeout=0.01)
+    else:
+        await execute
+
+    completed = await service.store.get(task.task_id)
+    assert completed is not None
+    if cutoff in {"accepted", "rendering"}:
+        assert completed.status == "running"
+        assert completed.stage == cutoff.replace("accepted", "agent")
+        assert completed.result is None
+        assert observed == ["cleanup"]
+        return
+    assert completed.status == "completed"
+    assert completed.stage == "salvaged"
+    assert completed.result is not None
+    assert completed.result.created == ["viking://resources/wiki/output.md"]
+    assert observed == ["salvage", "cleanup"]
+    assert not (tmp_path / "compile_workspaces" / task.task_id).exists()
+
+    await service._fail(
+        task.task_id,
+        CompileFailure("INTERNAL", "late cleanup failure", stage="salvaging"),
+    )
+    still_completed = await service.store.get(task.task_id)
+    assert still_completed is not None
+    assert still_completed.status == "completed"
+    assert still_completed.result is not None
 
 
 @pytest.mark.asyncio

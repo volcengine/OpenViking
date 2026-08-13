@@ -35,6 +35,7 @@ class _TaskStore:
 class _MemoryVikingFS:
     def __init__(self, files):
         self.files = files
+        self._async_agfs = AsyncMock()
 
     def _uri_to_path(self, uri, ctx=None):
         return "/local/session-1"
@@ -44,7 +45,7 @@ class _MemoryVikingFS:
             raise FileNotFoundError(uri)
         return self.files[uri]
 
-    async def write_file(self, uri, content, ctx=None):
+    async def write_file(self, uri, content, ctx=None, lease_ref=None):
         self.files[uri] = content
 
 
@@ -72,6 +73,7 @@ async def test_resume_queued_commit_continues_phase2(monkeypatch):
         session_uri=session_uri,
         archive_uri=archive_uri,
         user={"account_id": "default", "user_id": "default"},
+        memory_policy={"memory_types": []},
     )
 
     try:

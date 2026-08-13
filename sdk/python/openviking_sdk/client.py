@@ -68,7 +68,6 @@ GATEWAY_TOKEN_HEADER = "X-Gateway-Token"
 _SESSION_CONFIG_UNSET = object()
 
 
-
 def _image_mime_type(file_name: str = "") -> str:
     mime_type, _ = mimetypes.guess_type(file_name or "")
     if mime_type and mime_type.startswith("image/"):
@@ -517,6 +516,12 @@ class AsyncHTTPClient:
         retry_headers = dict(headers)
         retry_headers[GATEWAY_TOKEN_HEADER] = self._gateway_token
         return await self._send_http_request(method, url, retry_headers, request_kwargs)
+
+    def _wait_request_kwargs(self, *, wait: bool, timeout: Optional[float]) -> Dict[str, Any]:
+        if not wait or timeout is None:
+            return {}
+        read_timeout = max(self._timeout, timeout + 30.0)
+        return {"timeout": httpx.Timeout(self._timeout, read=read_timeout)}
 
     async def close(self) -> None:
         if self._http:
@@ -1207,6 +1212,7 @@ class AsyncHTTPClient:
                 "timeout": timeout,
                 "telemetry": telemetry,
             },
+            **self._wait_request_kwargs(wait=wait, timeout=timeout),
         )
         return self._handle_response_data(response).get("result", {})
 

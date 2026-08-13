@@ -22,8 +22,9 @@ from openviking_cli.session.user_id import UserIdentifier
 
 
 class _FakeSession:
-    def __init__(self, captured: dict) -> None:
+    def __init__(self, captured: dict, processed: bool = True) -> None:
         self._captured = captured
+        self._processed = processed
 
     async def exists(self) -> bool:
         return True
@@ -31,18 +32,20 @@ class _FakeSession:
     async def load(self) -> None:
         return None
 
-    async def resume_queued_commit(self, msg) -> None:
+    async def resume_queued_commit(self, msg) -> bool:
         root = get_root_observability_context()
         self._captured["account_id"] = root.account_id if root else None
         self._captured["user_id"] = root.user_id if root else None
+        return self._processed
 
 
 class _FakeSessionService:
-    def __init__(self, captured: dict) -> None:
+    def __init__(self, captured: dict, processed: bool = True) -> None:
         self._captured = captured
+        self._processed = processed
 
     def session(self, ctx, session_id, session_uri=None):
-        return _FakeSession(self._captured)
+        return _FakeSession(self._captured, self._processed)
 
 
 class _MemoryVikingFS:
@@ -88,15 +91,26 @@ async def test_process_binds_committing_identity_to_root_context():
     assert captured["user_id"] == "alice"
 
 
-async def test_process_resets_root_context_after_completion():
+async def test_process_requeues_deferred_commit_and_resets_root_context(monkeypatch):
+    queued = []
+
+    class _QueueManager:
+        async def enqueue(self, queue_name, data):
+            queued.append((queue_name, data))
+
     processor = SessionCommitProcessor(
-        _FakeSessionService({}),
+        _FakeSessionService({}, processed=False),
         asyncio.get_running_loop(),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        lambda: _QueueManager(),
     )
     ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
     await processor._process(_make_msg(), ctx)
 
+    assert queued == [("SessionCommit", _make_msg().to_dict())]
     assert get_root_observability_context() is None
 
 

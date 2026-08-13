@@ -68,7 +68,6 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-_ARCHIVE_WAIT_POLL_SECONDS = 0.1
 _PHASE2_QUEUE_WAIT_TIMEOUT_SECONDS = 1800.0
 _MEMORY_EXTRACTION_MAX_RETRIES = 3
 _MEMORY_EXTRACTION_RETRY_BASE_DELAY_SECONDS = 1.0
@@ -639,8 +638,6 @@ class Session:
         self._agent_evolution_enabled_provider = agent_evolution_enabled_provider
         self._usage_reporter = usage_reporter
 
-        logger.info(f"Session created: {self.session_id} for user {self.user}")
-
     async def load(self):
         """Load session data from storage."""
         if self._loaded:
@@ -655,28 +652,10 @@ class Session:
                 for line in content.strip().split("\n")
                 if line.strip()
             ]
-            logger.info(f"Session loaded: {self.session_id} ({len(self._messages)} messages)")
         except Exception as exc:
             if not _is_storage_not_found(exc):
                 raise
             logger.debug(f"Session {self.session_id} not found, starting fresh")
-
-        # Restore compression_index (scan history directory)
-        try:
-            history_items = await self._viking_fs.ls(f"{self._session_uri}/history", ctx=self.ctx)
-            archive_indices = [
-                int(match.group(1))
-                for item in history_items
-                if (match := re.fullmatch(r"archive_(\d+)", item["name"]))
-            ]
-            if archive_indices:
-                max_index = max(archive_indices)
-                self._compression.compression_index = max_index
-                self._stats.compression_count = len(archive_indices)
-                logger.debug(f"Restored compression_index: {max_index}")
-        except Exception as exc:
-            if not _is_storage_not_found(exc):
-                raise
 
         # Load .meta.json
         try:
@@ -684,10 +663,27 @@ class Session:
                 f"{self._session_uri}/.meta.json", ctx=self.ctx
             )
             self._meta = SessionMeta.from_dict(json.loads(meta_content))
+            self._compression.compression_index = max(0, int(self._meta.commit_count))
+            self._stats.compression_count = self._compression.compression_index
         except Exception as exc:
             if not _is_storage_not_found(exc):
                 raise
             # Old session without meta — derive from existing data
+            try:
+                history_items = await self._viking_fs.ls(
+                    f"{self._session_uri}/history", ctx=self.ctx
+                )
+                archive_indices = [
+                    int(match.group(1))
+                    for item in history_items
+                    if (match := re.fullmatch(r"archive_(\d+)", item["name"]))
+                ]
+                if archive_indices:
+                    self._compression.compression_index = max(archive_indices)
+                    self._stats.compression_count = len(archive_indices)
+            except Exception as exc:
+                if not _is_storage_not_found(exc):
+                    raise
             self._meta.commit_count = self._compression.compression_index
             self._meta.total_message_count = None
 
@@ -1681,6 +1677,28 @@ class Session:
             if await self._archive_file_exists(archive_uri, ".failed.json"):
                 return False
 
+            queue_message = marker.get("queue_message")
+            task_id = queue_message.get("task_id") if isinstance(queue_message, dict) else None
+            from openviking.service.task_tracker import get_task_tracker
+
+            tracker = get_task_tracker()
+            if not task_id or not tracker.has_work(str(task_id)):
+                error = "Phase 1 has no QueueFS work to resume"
+                await self._write_failed_marker(
+                    archive_uri,
+                    stage="phase1_recovery",
+                    error=error,
+                    lease_ref=lease,
+                )
+                if task_id:
+                    await tracker.fail(
+                        str(task_id),
+                        error,
+                        account_id=self.ctx.account_id,
+                        user_id=self.ctx.user.user_id,
+                    )
+                return False
+
             try:
                 if not marker:
                     raise ValueError("Phase 1 metadata is missing")
@@ -1788,7 +1806,7 @@ class Session:
 
         Phase 1 (Archive prep, path-lock protected): Split messages into
         archive/retain parts, persist a recoverable intent and archive raw,
-        enqueue Phase 2, then atomically publish the retained root state with
+        enqueue Phase 2, then publish the retained root state with
         ``phase1.status=ready``. Uses a distributed filesystem lock across
         workers and processes.
         Phase 2 (Memory extraction): Runs through the persistent QueueFS queue.
@@ -1936,11 +1954,19 @@ class Session:
                     effective_memory_types=set(effective_memory_types),
                 )
 
-            archive_refs = await self._list_archive_refs()
             self._compression.compression_index = max(
-                [archive["index"] for archive in archive_refs],
-                default=0,
+                self._compression.compression_index,
+                int(self._meta.commit_count),
             )
+            while await self._viking_fs.exists(
+                (
+                    f"{self._session_uri}/history/"
+                    f"archive_{self._compression.compression_index + 1:03d}"
+                ),
+                ctx=self.ctx,
+            ):
+                self._compression.compression_index += 1
+
             if not self._messages:
                 self._meta.pending_tokens = 0
                 self._remember_retention_policy(
@@ -2036,9 +2062,6 @@ class Session:
             )
             phase1_stage = "phase1_persist"
             try:
-                # Persist the full intent before any root rewrite. Queueing while
-                # holding the same session lock lets a consumer either observe
-                # final ready metadata or recover the exact interrupted state.
                 await self._write_phase1_marker(
                     archive_uri,
                     queue_message=queue_msg.to_dict(),
@@ -2085,11 +2108,6 @@ class Session:
                     queue_msg.to_dict(),
                 )
 
-                # Register after the durable queue write but before publishing
-                # ready. The consumer is blocked by this session lock until
-                # ready, so it cannot complete the task before registration;
-                # if registration fails, the queued consumer will observe the
-                # Phase 1 failure marker and create/fail the task itself.
                 phase1_stage = "task_tracker_create"
                 await get_task_tracker().create(
                     "session_commit",
@@ -2175,7 +2193,7 @@ class Session:
             error="session commit cancelled",
         )
 
-    async def resume_queued_commit(self, msg: "SessionCommitMsg") -> None:
+    async def resume_queued_commit(self, msg: "SessionCommitMsg") -> bool:
         """Run one durable Phase 2 job from its archived messages."""
         from openviking.service.task_tracker import get_task_tracker
 
@@ -2195,14 +2213,14 @@ class Session:
                 raise
         else:
             if task.status.value == "completed":
-                return
+                return True
             await tracker.complete(
                 msg.task_id,
                 {"session_id": self.session_id, "archive_uri": msg.archive_uri},
                 account_id=self.ctx.account_id,
                 user_id=self.ctx.user.user_id,
             )
-            return
+            return True
 
         try:
             failed = json.loads(
@@ -2218,7 +2236,7 @@ class Session:
                 account_id=self.ctx.account_id,
                 user_id=self.ctx.user.user_id,
             )
-            return
+            return True
 
         if not await self._ensure_phase1_ready(msg.archive_uri):
             try:
@@ -2237,7 +2255,10 @@ class Session:
                 account_id=self.ctx.account_id,
                 user_id=self.ctx.user.user_id,
             )
-            return
+            return True
+
+        if not await self._can_run_archive(self._archive_index_from_uri(msg.archive_uri)):
+            return False
 
         archive_error = ""
         try:
@@ -2262,7 +2283,7 @@ class Session:
                 account_id=self.ctx.account_id,
                 user_id=self.ctx.user.user_id,
             )
-            return
+            return True
 
         queued_policy = MemoryPolicy.from_dict(msg.memory_policy)
         archive_meta = await self._read_archive_meta(msg.archive_uri)
@@ -2306,6 +2327,7 @@ class Session:
             record_auto_commit_success=msg.record_auto_commit_success,
             event_search_tags=list(msg.event_search_tags or []),
         )
+        return True
 
     async def _run_usage_reporting(
         self,
@@ -2363,7 +2385,6 @@ class Session:
         archive_index = self._archive_index_from_uri(archive_uri)
 
         try:
-            await self._wait_for_previous_archive_done(archive_index)
             (
                 messages,
                 coverage_start_archive,
@@ -2637,11 +2658,10 @@ class Session:
                             *extraction_tasks,
                             return_exceptions=True,
                         )
-                        # The archive outcome is binary: if ANY Phase 2 step
-                        # still fails after retries, no .done coverage is
-                        # published. Successful memory steps keep a message-ID
-                        # progress marker solely to make later raw replay
-                        # idempotent.
+                        # The archive outcome is binary: if any Phase 2 step
+                        # still fails after retries, no .done marker is
+                        # published. Successful steps retain message IDs so the
+                        # same archive can resume without repeating them.
                         extraction_error: Optional[BaseException] = None
                         for label, result in zip(extraction_labels, _results, strict=True):
                             if isinstance(result, Exception):
@@ -3029,9 +3049,7 @@ class Session:
         ``failed`` archive no longer replays its raw messages. Cumulative v2
         checkpoints are restored from the terminal archive alone; only a
         terminal legacy v1 delta checkpoint invokes an older-history compatibility
-        scan. Phase 2 coverage bookkeeping is unaffected because it keeps using
-        the full ``_scan_archive_states()`` scan. Public
-        ``pre_archive_abstracts`` stay empty; abstracts are not read.
+        scan. Public ``pre_archive_abstracts`` stay empty; abstracts are not read.
         """
         archive_refs = await self._list_archive_refs()
         newer_pending: List[Dict[str, Any]] = []
@@ -3850,10 +3868,8 @@ class Session:
     ) -> List[Message]:
         """Return pending/failed raw messages not covered by a completed archive.
 
-        Kept as the RFC #3330 recovery helper. ``get_session_context`` no longer
-        calls it because that read path stops at the newest terminal archive
-        instead of walking the full history; Phase 2 roll-forward still replays
-        uncovered failed archives through ``_prepare_phase2_archive_messages``.
+        Kept as the RFC #3330 compatibility helper. Current context assembly
+        and Phase 2 both skip failed archive raw messages.
         """
         states = states if states is not None else await self._scan_archive_states()
         covered = self._covered_archive_ids(states)
@@ -3884,116 +3900,72 @@ class Session:
             raise ValueError(f"Invalid archive URI: {archive_uri}")
         return int(match.group(1))
 
-    async def _wait_for_previous_archive_done(self, archive_index: int) -> bool:
-        """Wait until every earlier archive reaches a terminal state."""
+    async def _can_run_archive(self, archive_index: int) -> bool:
+        """Resolve an orphaned direct predecessor before this Archive runs."""
         if archive_index <= 1 or not self._viking_fs:
             return True
 
-        while True:
-            earlier_states = [
-                state for state in await self._scan_archive_states() if state.index < archive_index
-            ]
-            pending_states = [state for state in earlier_states if state.state == "pending"]
-            if not pending_states:
-                non_completed = [state for state in earlier_states if state.state == "failed"]
-                if non_completed:
-                    logger.info(
-                        "Earlier archives reached terminal non-completed states; "
-                        "continuing with raw replay: %s",
-                        [state.archive_id for state in non_completed],
-                    )
-                return True
+        predecessor_uri = (
+            f"{self._session_uri}/history/archive_{archive_index - 1:03d}"
+        )
+        if not await self._viking_fs.exists(predecessor_uri, ctx=self.ctx):
+            return True
+        if await self._archive_terminal_state(predecessor_uri) != "pending":
+            return True
 
-            # A new-format intent without ready status may be left by a
-            # process interruption. Reconcile it under the session lock rather
-            # than waiting forever for a queue item that may never have existed.
-            reconciled = False
-            for state in pending_states:
-                phase1 = await self._read_phase1_meta(state.archive_uri)
-                if not phase1 or phase1.get("status") == "ready":
-                    continue
-                await self._ensure_phase1_ready(state.archive_uri)
-                reconciled = True
-            if reconciled:
-                continue
-            await asyncio.sleep(_ARCHIVE_WAIT_POLL_SECONDS)
+        phase1 = await self._read_phase1_meta(predecessor_uri)
+        if not phase1:
+            return False
+        if phase1.get("status") != "ready":
+            return not await self._ensure_phase1_ready(predecessor_uri)
+
+        queue_message = phase1.get("queue_message")
+        task_id = queue_message.get("task_id") if isinstance(queue_message, dict) else None
+        if not task_id:
+            return False
+
+        from openviking.service.task_tracker import get_task_tracker
+
+        tracker = get_task_tracker()
+        if tracker.has_work(str(task_id)):
+            return False
+
+        error = "Session commit queue work is missing"
+        await self._write_failed_marker(
+            predecessor_uri,
+            stage="queue_missing",
+            error=error,
+        )
+        await tracker.fail(
+            str(task_id),
+            error,
+            account_id=self.ctx.account_id,
+            user_id=self.ctx.user.user_id,
+        )
+        logger.warning(
+            "Skipped orphaned Session archive without QueueFS work: %s",
+            predecessor_uri,
+        )
+        return True
 
     async def _prepare_phase2_archive_messages(
         self,
         archive_uri: str,
         current_messages: List[Message],
     ) -> tuple[List[Message], str, str, List[str], Dict[str, set[str]]]:
-        """Roll earlier failed raw archives into current Phase 2 input.
-
-        Pending archives are never replayed: their own Phase 2 job still owns
-        them, and this method is called only after all earlier directories have
-        reached a terminal state.
-        """
-        current_index = self._archive_index_from_uri(archive_uri)
-        states = await self._scan_archive_states()
-        covered = self._covered_archive_ids(states)
-        replay_states = [
-            state
-            for state in states
-            if state.index < current_index
-            and state.archive_id not in covered
-            and state.state == "failed"
-        ]
-
-        combined: List[Message] = []
+        """Prepare only the current archive, preserving its retry progress."""
+        current_archive_id = archive_uri.rstrip("/").split("/")[-1]
         completed_memory_steps: Dict[str, set[str]] = {}
-        for state in replay_states:
-            # A terminally-failed earlier archive can have a missing or corrupt
-            # messages.jsonl (legacy "no messages" data, or #3417's own
-            # archive_read terminal path). Tolerate that exactly like
-            # _get_uncovered_archive_messages does, otherwise every subsequent
-            # commit's Phase 2 re-raises here and stays permanently poisoned.
-            # Real storage failures still propagate.
-            try:
-                replayed = await self._read_archive_messages(state.archive_uri)
-            except _ArchiveMessagesCorruptError:
-                logger.warning(
-                    "Skipping failed archive %s in Phase-2 replay: messages.jsonl is corrupt",
-                    state.archive_uri,
-                )
-                continue
-            except Exception as exc:
-                if not _is_storage_not_found(exc):
-                    raise
-                logger.warning(
-                    "Skipping failed archive %s in Phase-2 replay: messages.jsonl is missing",
-                    state.archive_uri,
-                )
-                continue
-            combined.extend(replayed)
-            marker = state.failed
-            self._merge_completed_memory_steps(
-                completed_memory_steps,
-                marker.get("completed_memory_steps") if marker else None,
-            )
-            state_meta = await self._read_archive_meta(state.archive_uri)
-            self._merge_completed_memory_steps(
-                completed_memory_steps,
-                state_meta.get("completed_memory_steps"),
-            )
-        combined.extend(current_messages)
-        combined = self._stable_deduplicate_messages(combined)
-
-        # A restarted queue item can resume the current archive after a process
-        # died between a successful memory step and the final .done write.
         current_meta = await self._read_archive_meta(archive_uri)
         self._merge_completed_memory_steps(
             completed_memory_steps,
             current_meta.get("completed_memory_steps"),
         )
-
-        coverage_start_index = min([current_index] + [state.index for state in replay_states])
-        covered_failed = [state.archive_id for state in replay_states if state.state == "failed"]
         return (
-            combined,
-            f"archive_{coverage_start_index:03d}",
-            f"archive_{current_index:03d}",
-            covered_failed,
+            current_messages,
+            current_archive_id,
+            current_archive_id,
+            [],
             completed_memory_steps,
         )
 

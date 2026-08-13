@@ -962,6 +962,24 @@ async def test_rm_uses_delete_request_with_timeout_when_provided():
 
 
 @pytest.mark.asyncio
+async def test_batch_write_http_timeout_outlives_server_wait_timeout():
+    client = AsyncHTTPClient(url="http://localhost:1933", timeout=180.0)
+    client._request = AsyncMock(return_value=object())
+    client._handle_response_data = lambda _response: {"result": {}}
+
+    await client.batch_write(
+        "viking://resources/wiki",
+        [],
+        wait=True,
+        timeout=300.0,
+    )
+
+    request_timeout = client._request.await_args.kwargs["timeout"]
+    assert request_timeout.read == 330.0
+    assert request_timeout.connect == 180.0
+
+
+@pytest.mark.asyncio
 async def test_link_normalizes_single_and_multiple_target_uris():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))

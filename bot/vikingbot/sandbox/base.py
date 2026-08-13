@@ -1,9 +1,22 @@
 """Abstract interface for sandbox backends."""
 
 import asyncio
+import os
+import posixpath
 from abc import ABC, abstractmethod
+from collections import deque
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+
+@dataclass(frozen=True)
+class SandboxFileInfo:
+    """A regular file in the sandbox workspace."""
+
+    path: str
+    size: int
 
 
 class SandboxBackend(ABC):
@@ -74,11 +87,80 @@ class SandboxBackend(ABC):
             return self.workspace / path.lstrip("/")
         return self.workspace / path
 
-    async def read_file_bytes(self, path: str) -> bytes:
+    @staticmethod
+    def _normalize_workspace_path(path: str) -> str:
+        """Normalize a workspace-relative path used by bounded file APIs."""
+        value = str(path)
+        if value in {"", ".", "./"}:
+            return ""
+        candidate = Path(value)
+        if candidate.is_absolute() or ".." in candidate.parts:
+            raise ValueError(f"Path must be relative to the sandbox workspace: {path}")
+        return candidate.as_posix().removeprefix("./")
+
+    @staticmethod
+    def _join_workspace_path(directory: str, name: str) -> str:
+        if not name or name in {".", ".."} or "/" in name:
+            raise IOError(f"Invalid sandbox directory entry: {name!r}")
+        return posixpath.join(directory, name) if directory else name
+
+    @staticmethod
+    def _validate_max_bytes(max_bytes: int | None) -> None:
+        if max_bytes is not None and max_bytes < 0:
+            raise ValueError("max_bytes must be non-negative")
+
+    @staticmethod
+    def _validate_max_entries(max_entries: int) -> None:
+        if max_entries <= 0:
+            raise ValueError("max_entries must be positive")
+
+    @staticmethod
+    def _read_local_bytes(path: Path, original_path: str, max_bytes: int | None) -> bytes:
+        if not path.exists():
+            raise FileNotFoundError(f"File not found: {original_path}")
+        if not path.is_file():
+            raise IOError(f"Not a file: {original_path}")
+        with path.open("rb") as stream:
+            data = stream.read() if max_bytes is None else stream.read(max_bytes + 1)
+        if max_bytes is not None and len(data) > max_bytes:
+            raise ValueError(f"File exceeds the {max_bytes}-byte read limit: {original_path}")
+        return data
+
+    @staticmethod
+    async def _collect_stream_bytes(
+        stream: AsyncIterator[bytes],
+        original_path: str,
+        max_bytes: int | None,
+    ) -> bytes:
+        """Collect a byte stream while retaining at most ``max_bytes + 1`` bytes."""
+        limit = None if max_bytes is None else max_bytes + 1
+        data = bytearray()
+        try:
+            async for chunk in stream:
+                if limit is None:
+                    data.extend(chunk)
+                    continue
+                remaining = limit - len(data)
+                if remaining <= 0:
+                    break
+                data.extend(chunk[:remaining])
+                if len(data) >= limit:
+                    break
+        finally:
+            close = getattr(stream, "aclose", None)
+            if close is not None:
+                await close()
+        if max_bytes is not None and len(data) > max_bytes:
+            raise ValueError(f"File exceeds the {max_bytes}-byte read limit: {original_path}")
+        return bytes(data)
+
+    async def read_file_bytes(self, path: str, *, max_bytes: int | None = None) -> bytes:
         """Read file bytes from sandbox (default implementation: host filesystem).
 
         Args:
             path: Path to file (absolute or relative to sandbox_cwd)
+            max_bytes: Optional hard read limit. At most ``max_bytes + 1``
+                bytes are read before an oversized file is rejected.
 
         Returns:
             File content as bytes
@@ -88,13 +170,62 @@ class SandboxBackend(ABC):
             IOError: If read fails
             PermissionError: If path outside workspace and restriction is enabled
         """
+        self._validate_max_bytes(max_bytes)
         sandbox_path = self._resolve_path(path)
         self._check_path_restriction(sandbox_path)
-        if not sandbox_path.exists():
-            raise FileNotFoundError(f"File not found: {path}")
-        if not sandbox_path.is_file():
-            raise IOError(f"Not a file: {path}")
-        return await asyncio.to_thread(sandbox_path.read_bytes)
+        return await asyncio.to_thread(self._read_local_bytes, sandbox_path, path, max_bytes)
+
+    async def list_files(
+        self,
+        path: str = ".",
+        *,
+        max_entries: int,
+    ) -> list[SandboxFileInfo]:
+        """Recursively list regular files without unbounded workspace traversal.
+
+        Returned paths are relative to the sandbox workspace, including ``path``
+        when a subdirectory is requested. Directories and files both consume the
+        inventory budget so a deep directory-only tree is bounded as well.
+        """
+        self._validate_max_entries(max_entries)
+        root = self._normalize_workspace_path(path)
+        root_path = self._resolve_path(root)
+        self._check_path_restriction(root_path)
+
+        def inventory() -> list[SandboxFileInfo]:
+            pending = deque([(root, root_path)])
+            files: list[SandboxFileInfo] = []
+            visited = 0
+            while pending:
+                directory, local_directory = pending.popleft()
+                try:
+                    stream = os.scandir(local_directory)
+                except FileNotFoundError:
+                    continue
+                with stream:
+                    for entry in stream:
+                        visited += 1
+                        if visited > max_entries:
+                            raise ValueError(
+                                f"Sandbox workspace inventory exceeds {max_entries} entries"
+                            )
+                        relative = self._join_workspace_path(directory, entry.name)
+                        try:
+                            if entry.is_dir(follow_symlinks=False):
+                                pending.append((relative, Path(entry.path)))
+                            elif entry.is_file(follow_symlinks=False):
+                                files.append(
+                                    SandboxFileInfo(
+                                        path=relative,
+                                        size=entry.stat(follow_symlinks=False).st_size,
+                                    )
+                                )
+                        except FileNotFoundError:
+                            # The Agent may still be writing while salvage takes its snapshot.
+                            continue
+            return sorted(files, key=lambda item: item.path)
+
+        return await asyncio.to_thread(inventory)
 
     async def read_file(self, path: str) -> str:
         """Read file from sandbox (default implementation: host filesystem).

@@ -14,6 +14,7 @@ pub async fn run(
     reason: Option<String>,
     wait: bool,
     timeout: Option<f64>,
+    runtime_timeout: Option<f64>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -28,7 +29,7 @@ pub async fn run(
         .map(str::trim)
         .filter(|value| !value.is_empty());
     let accepted = client
-        .create_compile(&sources, to.trim(), skill.trim(), reason)
+        .create_compile(&sources, to.trim(), skill.trim(), reason, runtime_timeout)
         .await?;
     if !wait {
         render_accepted(&accepted, output_format, compact);
