@@ -35,7 +35,7 @@ Configuration is saved to Hermes's `config.yaml` and `.env` files.
 hermes memory status
 ```
 
-Once configured, Hermes automatically uses OpenViking for long-term memory — `viking_remember`, `viking_recall`, and other memory tools become available to the agent.
+Once configured, Hermes uses the OpenViking memory provider to inject context, prefetch relevant memories, and sync and extract memories after sessions. Available tools include `viking_search`, `viking_read`, `viking_browse`, `viking_remember`, `viking_forget`, and `viking_add_resource`.
 
 ## See also
 

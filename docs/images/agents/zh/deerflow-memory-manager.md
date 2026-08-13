@@ -2,78 +2,89 @@ DeerFlow 支持通过 MemoryManager 接入 OpenViking 作为长期记忆后端�
 
 ## 步骤 1：配置 OpenViking 鉴权信息
 
-在启动 DeerFlow 的环境中配置 OpenViking 服务地址和 API Key：
+在 DeerFlow 项目根目录下编辑 `.env` 文件，添加 OpenViking USER API Key：
 
 ```bash
-export OPENVIKING_BASE_URL="https://api.vikingdb.cn-beijing.volces.com/openviking"
-export OPENVIKING_API_KEY="ZGVm***YxZA"
+OPENVIKING_API_KEY=[TODO]your-api-key
 ```
-
-如果使用 `.env` 或部署平台的环境变量管理能力，请写入同名变量，并确认 DeerFlow 进程启动时能够读取到。
 
 ## 步骤 2：修改 DeerFlow 的 memory 配置
 
-在 DeerFlow 的配置文件中启用 MemoryManager，并将 provider 指向 OpenViking：
+打开项目根目录下的 `config.yaml`，找到 `memory:` 配置段，将默认的 DeerMem 配置替换为 OpenViking 配置：
 
 ```yaml
 memory:
   enabled: true
-  provider: openviking
-  openviking:
-    base_url: ${OPENVIKING_BASE_URL}
-    api_key: ZGVm***YxZA
-    auto_write: true
-    auto_recall: true
-    inject_recalled_memory: true
+  injection_enabled: true
+  shutdown_flush_timeout_seconds: 30
+  manager_class: openviking
+  mode: middleware
+  backend_config:
+    base_url: [TODO]openviking-base-url
+    owner_user_id: default
+    api_key_env: OPENVIKING_API_KEY
+    startup_policy: fail_fast
+    failure_policy:
+      read: fail_open
+      write: log_and_drop
+    retrieval:
+      top_k: 8
+      score_threshold: 0.25
+      max_injection_chars: 12000
+      content_mode: overview
+      injection_query: >-
+        user profile preferences important entities events ongoing goals
+        constraints and prior decisions
 ```
-
-建议同时开启写入、召回和注入，确保 DeerFlow 能够在对话过程中持续沉淀长期记忆，并在后续任务中自动使用相关记忆。
 
 ## 步骤 3：重启 DeerFlow
 
-保存配置后重启 DeerFlow，使新的 memory 配置生效：
+保存 `.env` 和 `config.yaml` 后，重新启动 DeerFlow：
 
 ```bash
-pnpm dev
+make dev
 ```
-
-如果你通过 Docker、进程管理器或云服务部署 DeerFlow，请使用对应的重启方式，并确认新的环境变量已注入到运行时。
 
 ## 步骤 4：验证 OpenViking 是否接入成功
 
-启动后检查 DeerFlow 日志，确认 MemoryManager 初始化成功，且没有出现 OpenViking 鉴权或网络错误。
-
-也可以直接检查 OpenViking 服务连通性：
+在项目根目录下查看 Gateway 日志：
 
 ```bash
-curl -H "Authorization: Bearer ZGVm***YxZA" \
-  "${OPENVIKING_BASE_URL}/health"
+grep -i "memory manager resolved\|openviking\|deermem" logs/gateway.log
 ```
 
-返回服务状态信息即表示 OpenViking 服务可访问。
-
-## 步骤 5：验证记忆写入与召回是否正常
-
-在 DeerFlow 中发起一轮包含稳定事实的对话，例如：
+成功日志示例：
 
 ```text
-请记住：我的 DeerFlow 测试项目使用 OpenViking 作为长期记忆后端。
+Memory manager resolved: OpenVikingMemoryManager (manager_class='openviking')
+HTTP Request: GET [TODO]openviking-base-url/health "HTTP/1.1 200 OK"
 ```
 
-随后开启一轮新对话并询问：
+## 步骤 5：验证写入与召回
+
+可通过以下日志确认写入和召回是否正常：
+
+```bash
+grep -Ei "messages/batch|commit|search/find|has_memory" logs/gateway.log | tail -100
+```
+
+成功日志示例：
 
 ```text
-我的 DeerFlow 测试项目使用什么作为长期记忆后端？
+/messages/batch "HTTP/1.1 200 OK"
+/commit "HTTP/1.1 200 OK"
+/search/find "HTTP/1.1 200 OK"
+has_memory=True
 ```
-
-如果 DeerFlow 能够回答 OpenViking，说明记忆写入、召回和上下文注入链路已经生效。
 
 ## 故障排查
 
-| 现象 | 处理方式 |
-|------|----------|
-| MemoryManager 初始化失败 | 检查 `memory.enabled`、`provider` 和 OpenViking 配置项是否已写入 DeerFlow 实际加载的配置文件 |
-| OpenViking 返回 401 / 403 | 检查 `OPENVIKING_API_KEY` 是否正确、是否过期，以及请求头是否带有 `Bearer` 前缀 |
-| 记忆没有写入 | 确认 `auto_write` 已开启，并检查 DeerFlow 日志中是否有写入失败信息 |
-| 记忆无法召回 | 确认 `auto_recall` 和 `inject_recalled_memory` 已开启，并确保 OpenViking 中已有相关记忆 |
-| 本地可用、部署后不可用 | 检查部署环境是否正确注入 `OPENVIKING_BASE_URL` 和 `OPENVIKING_API_KEY` |
+| 现象 | 原因 | 修复 |
+|------|------|------|
+| DeerFlow 启动失败，提示 OpenViking 配置错误 | `config.yaml` 中 OpenViking 配置不完整或格式错误 | 检查 `config.yaml` 中是否已配置 `manager_class: openviking`，并确认 `base_url`、`api_key_env` 等字段正确 |
+| DeerFlow 未接入 OpenViking | `memory.manager_class` 未改为 `openviking`，或修改配置后未重启服务 | 保存配置后重新启动 DeerFlow，并确认日志中出现 `OpenVikingMemoryManager` |
+| 远程认证失败，返回 401 或 403 | OpenViking API Key 缺失、错误或无权限 | 检查 `.env` 中的 `OPENVIKING_API_KEY` 是否正确 |
+| 检索失败，但 DeerFlow 仍继续回复 | 当前配置采用 `read: fail_open`，属于预期行为 | OpenViking 检索失败时不会注入记忆，但不会影响主 Agent 正常回复 |
+| 回复已生成，但记忆写入失败 | 当前配置采用 `write: log_and_drop`，写入失败会被记录到日志中 | 检查并修复 OpenViking 服务、网络和鉴权配置，后续新消息可继续写入 |
+| 已写入消息，但页面未立即看到记忆 | OpenViking 的摘要和记忆提取是异步完成的 | 等待后台任务完成后再查看 |
+| 服务关闭时仍有记忆操作未完成 | 系统会在 `shutdown_flush_timeout_seconds` 配置的时间内等待其完成 | 若等待超时，或 OpenViking 在关闭期间不可用，部分记忆写入可能无法完成。可适当调大该配置，并检查关闭期间 OpenViking 的网络和服务状态 |

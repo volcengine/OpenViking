@@ -2,72 +2,54 @@ DeerFlow can connect to OpenViking through an MCP Server. MCP integration lets D
 
 ## Step 1: Configure OpenViking credentials
 
-Set the OpenViking base URL and API key in the environment that starts DeerFlow:
+Edit the `.env` file in the DeerFlow project root and add the OpenViking USER API Key:
 
 ```bash
-export OPENVIKING_BASE_URL="https://api.vikingdb.cn-beijing.volces.com/openviking"
-export OPENVIKING_API_KEY="ZGVm***YxZA"
+OPENVIKING_API_KEY=[TODO]your-api-key
 ```
-
-If DeerFlow uses a `.env` file, add the same variables there and confirm that the startup command loads it.
 
 ## Step 2: Create an MCP configuration file
 
-Create an MCP configuration file in the DeerFlow project, for example `mcp.json`:
+Copy `extensions_config.example.json` to `extensions_config.json` in the project root. DeerFlow uses this file to load MCP Servers:
+
+```bash
+cp extensions_config.example.json extensions_config.json
+```
+
+## Step 3: Configure the OpenViking MCP Server
+
+Open `extensions_config.json` in the project root and add OpenViking under `mcpServers`:
 
 ```json
 {
   "mcpServers": {
     "openviking": {
-      "url": "${OPENVIKING_BASE_URL}/mcp",
+      "enabled": true,
+      "type": "http",
+      "url": "[TODO]openviking-base-url/mcp",
       "headers": {
-        "Authorization": "Bearer ZGVm***YxZA"
+        "X-API-Key": "$OPENVIKING_API_KEY"
       }
     }
   }
 }
 ```
 
-If DeerFlow already has a standard MCP config path, merge this server into the existing file.
-
-## Step 3: Configure the OpenViking MCP Server
-
-Enable this MCP Server in the DeerFlow agent or tool configuration, and keep the server name aligned with `openviking` in the MCP config file.
-
-Allow DeerFlow to use OpenViking search, read, browse, and health-check tools to cover common memory retrieval and knowledge lookup scenarios.
-
 ## Step 4: Restart DeerFlow
 
-Save the MCP configuration and restart DeerFlow:
+Save `.env` and `extensions_config.json`, then restart DeerFlow:
 
 ```bash
-pnpm dev
+make dev
 ```
-
-After restart, check the logs and confirm that the `openviking` MCP Server is loaded and its tools are available.
-
-## Step 5: Verify MCP tools
-
-Ask DeerFlow to check the OpenViking service status:
-
-```text
-Use the OpenViking MCP tools to check whether the current service is available.
-```
-
-You can also ask DeerFlow to search for an existing memory or resource:
-
-```text
-Search OpenViking for memories related to the current project.
-```
-
-If the agent can call OpenViking MCP tools and return results, MCP integration is working.
 
 ## Troubleshooting
 
-| Symptom | Fix |
-|---------|-----|
-| MCP Server is not loaded | Check whether DeerFlow reads the MCP config path and whether the server name is configured consistently |
-| Connection fails or times out | Confirm the runtime can access `api.vikingdb.cn-beijing.volces.com`; configure proxy or network allowlists if needed |
-| OpenViking returns 401 / 403 | Verify `OPENVIKING_API_KEY` and make sure the request header is `Authorization: Bearer <API Key>` |
-| Agent does not call tools | Explicitly allow OpenViking MCP tool usage in the DeerFlow system prompt or tool policy |
-| Search results are empty | Confirm OpenViking already has related memories or knowledge resources, and try broader search keywords |
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| DeerFlow does not load the OpenViking MCP Server after startup | `extensions_config.json` is missing, malformed, or `enabled` is not set to `true` | Check `mcpServers.openviking` and make sure the JSON format is valid |
+| OpenViking MCP tools do not appear in the Agent tool list | The MCP configuration did not take effect, or the service was not restarted | Save the configuration and restart DeerFlow, or refresh the MCP configuration cache |
+| Calling OpenViking MCP tools fails with 401 or 403 | API Key is missing, incorrect, or unauthorized | Check whether `OPENVIKING_API_KEY` is correctly set in `.env` and confirm the header uses `X-API-Key` |
+| MCP Server connection fails | The `url` is incorrect, or DeerFlow Gateway cannot access the OpenViking MCP Server | Check the OpenViking MCP Server address, network connectivity, and Docker network configuration |
+| Old credentials are still used after modifying `.env` | Environment variables were not reloaded, or the MCP configuration cache was not refreshed | Restart DeerFlow, or call `/api/mcp/cache/reset` to refresh the cache |
+| Agent does not actively call OpenViking tools | MCP tools are invoked by the model on demand and are not an automatic memory backend | Explicitly ask the Agent to use OpenViking tools in the prompt, or use MemoryManager integration for automatic recall |

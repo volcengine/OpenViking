@@ -2,72 +2,54 @@ DeerFlow 支持通过 MCP Server 接入 OpenViking。MCP 接入的核心价值�
 
 ## 步骤 1：配置 OpenViking 鉴权信息
 
-在启动 DeerFlow 的环境中配置 OpenViking 服务地址和 API Key：
+在 DeerFlow 项目根目录下编辑 `.env` 文件，添加 OpenViking USER API Key：
 
 ```bash
-export OPENVIKING_BASE_URL="https://api.vikingdb.cn-beijing.volces.com/openviking"
-export OPENVIKING_API_KEY="ZGVm***YxZA"
+OPENVIKING_API_KEY=[TODO]your-api-key
 ```
-
-如果 DeerFlow 使用 `.env` 文件，请写入同名变量，并确认启动命令会加载该文件。
 
 ## 步骤 2：创建 MCP 配置文件
 
-在 DeerFlow 项目中创建 MCP 配置文件，例如 `mcp.json`：
+复制 `extensions_config.example.json` 到项目根目录下的 `extensions_config.json`，用于配置 DeerFlow 可加载的 MCP Server：
+
+```bash
+cp extensions_config.example.json extensions_config.json
+```
+
+## 步骤 3：配置 OpenViking MCP Server
+
+打开项目根目录下的 `extensions_config.json`，在 `mcpServers` 中添加 OpenViking 配置：
 
 ```json
 {
   "mcpServers": {
     "openviking": {
-      "url": "${OPENVIKING_BASE_URL}/mcp",
+      "enabled": true,
+      "type": "http",
+      "url": "[TODO]openviking-base-url/mcp",
       "headers": {
-        "Authorization": "Bearer ZGVm***YxZA"
+        "X-API-Key": "$OPENVIKING_API_KEY"
       }
     }
   }
 }
 ```
 
-如果 DeerFlow 的 MCP 配置文件路径已有约定，请将以上配置合并到现有文件中。
-
-## 步骤 3：配置 OpenViking MCP Server
-
-在 DeerFlow 的 Agent 或工具配置中启用该 MCP Server，并确保 server 名称与 MCP 配置文件中的 `openviking` 保持一致。
-
-建议允许 DeerFlow 使用 OpenViking 的搜索、读取、目录浏览和健康检查工具，以覆盖常见的记忆检索与知识读取场景。
-
 ## 步骤 4：重启 DeerFlow
 
-保存 MCP 配置后重启 DeerFlow：
+保存 `.env` 和 `extensions_config.json` 后，重新启动 DeerFlow：
 
 ```bash
-pnpm dev
+make dev
 ```
-
-重启后检查日志，确认 `openviking` MCP Server 已成功加载，且工具列表可以正常获取。
-
-## 步骤 5：验证 MCP 工具是否可用
-
-在 DeerFlow 中发起任务，让 Agent 主动检查 OpenViking 连接状态：
-
-```text
-请使用 OpenViking MCP 工具检查当前服务是否可用。
-```
-
-也可以让 DeerFlow 搜索一条已存在的记忆或资源：
-
-```text
-请从 OpenViking 中搜索和当前项目相关的记忆。
-```
-
-如果 Agent 能够调用 OpenViking MCP 工具并返回结果，说明 MCP 接入成功。
 
 ## 故障排查
 
-| 现象 | 处理方式 |
-|------|----------|
-| MCP Server 未加载 | 检查 MCP 配置文件路径是否被 DeerFlow 读取，server 名称是否配置一致 |
-| 连接失败或超时 | 确认网络可访问 `api.vikingdb.cn-beijing.volces.com`，必要时配置代理或网络白名单 |
-| OpenViking 返回 401 / 403 | 检查 `OPENVIKING_API_KEY` 是否正确、是否过期，以及请求头是否为 `Authorization: Bearer <API Key>` |
-| Agent 不主动调用工具 | 在 DeerFlow 的系统提示词或工具策略中明确允许使用 OpenViking MCP 工具 |
-| 搜索结果为空 | 确认 OpenViking 中已有相关记忆或知识资源，并尝试放宽搜索关键词 |
+| 现象 | 原因 | 修复 |
+|------|------|------|
+| DeerFlow 启动后未加载 OpenViking MCP Server | `extensions_config.json` 未配置、配置格式错误，或 `enabled` 未设置为 `true` | 检查 `mcpServers.openviking` 配置，并确认 JSON 格式正确 |
+| OpenViking MCP 工具未出现在 Agent 可用工具中 | MCP 配置未生效，或服务未重启 | 保存配置后重启 DeerFlow，或刷新 MCP 配置缓存 |
+| 调用 OpenViking MCP 工具失败，返回 401 或 403 | API Key 缺失、错误或无权限 | 检查 `.env` 中的 `OPENVIKING_API_KEY` 是否正确，并确认 Header 使用 `X-API-Key` |
+| MCP Server 连接失败 | `url` 配置错误，或 DeerFlow Gateway 无法访问 OpenViking MCP Server | 检查 OpenViking MCP Server 地址、网络连通性和 Docker 网络配置 |
+| 修改 `.env` 后仍然使用旧鉴权信息 | 环境变量未重新加载，或 MCP 配置缓存未刷新 | 重启 DeerFlow，或调用 `/api/mcp/cache/reset` 刷新缓存 |
+| Agent 没有主动调用 OpenViking 工具 | MCP 工具由模型按需调用，不是自动记忆后端 | 在提示词中明确要求使用 OpenViking 工具，或改用 MemoryManager 接入实现自动召回 |
