@@ -430,6 +430,8 @@ def parse_json_with_stability(
 
     # Filter to only expected fields if provided
     if expected_fields:
+        if parsed_data and not any(key in expected_fields for key in parsed_data):
+            return None, "No recognized fields in non-empty JSON object"
         filtered_data = {}
         for k, v in parsed_data.items():
             if k in expected_fields:

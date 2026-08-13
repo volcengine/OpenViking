@@ -4,6 +4,7 @@
 Tests for memory ExtractLoop orchestrator.
 """
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -247,6 +248,93 @@ class TestExtractLoopFinalJsonRetry:
             "delete_ids": [],
             "preferences": [],
         }
+
+    @pytest.mark.asyncio
+    async def test_pseudo_tool_json_retries_before_accepting_empty_operations(self, monkeypatch):
+        class FakeVLM:
+            model = "test-model"
+
+            def __init__(self):
+                self.responses = iter(
+                    [
+                        '{"tool_call_name":"search","args":{"query":"Melanie pottery"}}',
+                        '{"preferences":[],"delete_ids":[]}',
+                    ]
+                )
+                self.seen_messages = []
+
+            async def get_completion_async(self, **kwargs):
+                self.seen_messages.append(list(kwargs["messages"]))
+                return next(self.responses)
+
+        class FakeContextProvider:
+            read_file_contents = {}
+
+            def get_memory_schemas(self, ctx):
+                return [
+                    MemoryTypeSchema(
+                        memory_type="preferences",
+                        description="Preferences",
+                        directory="viking://user/{user_space}/memories/preferences",
+                        filename_template="{topic}.md",
+                        fields=[],
+                    )
+                ]
+
+            def get_tools(self):
+                return []
+
+            def get_extract_context(self):
+                return MagicMock()
+
+            def get_output_language(self):
+                return "en"
+
+            def instruction(self):
+                return "Extract memory operations."
+
+            async def prefetch(self):
+                return []
+
+        vlm = FakeVLM()
+        isolation_handler = MagicMock()
+        isolation_handler.get_read_scope.return_value = None
+        extract_loop = ExtractLoop(
+            vlm=vlm,
+            viking_fs=MagicMock(),
+            context_provider=FakeContextProvider(),
+            isolation_handler=isolation_handler,
+            max_iterations=1,
+        )
+        config = SimpleNamespace(memory=SimpleNamespace(link_enabled=False))
+        monkeypatch.setattr(
+            "openviking.session.memory.extract_loop.get_openviking_config",
+            lambda: config,
+        )
+        monkeypatch.setattr(
+            "openviking_cli.utils.config.get_openviking_config",
+            lambda: config,
+        )
+        resolved = ResolvedOperations(
+            upsert_operations=[],
+            delete_file_contents=[],
+            errors=[],
+        )
+        extract_loop.resolve_operations = AsyncMock(return_value=(resolved, []))
+        extract_loop._check_unread_existing_files = AsyncMock(return_value={})
+        extract_loop._validate_patch_operations = MagicMock(return_value=[])
+        extract_loop.finalize_operations = AsyncMock()
+
+        operations, tools_used = await extract_loop.run()
+
+        assert len(vlm.seen_messages) == 2
+        assert operations.upsert_operations == []
+        assert operations.delete_file_contents == []
+        assert tools_used == []
+        assert any(
+            "previous output could not be parsed as valid JSON" in message.get("content", "")
+            for message in vlm.seen_messages[1]
+        )
 
     @pytest.mark.asyncio
     async def test_final_unparseable_response_raises_instead_of_empty_success(self):
