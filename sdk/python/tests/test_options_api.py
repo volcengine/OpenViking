@@ -159,6 +159,94 @@ async def test_add_message_keeps_content_when_parts_is_null():
 
 
 @pytest.mark.asyncio
+async def test_add_message_uses_content_when_parts_is_empty():
+    client, post = _client()
+
+    await client.add_message(
+        "session-1",
+        {
+            "role": "assistant",
+            "content": "fallback text",
+            "parts": [],
+        },
+    )
+
+    post.assert_awaited_once_with(
+        "/api/v1/sessions/session-1/messages",
+        json={
+            "role": "assistant",
+            "content": "fallback text",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_add_message_rejects_empty_parts_without_content():
+    client, post = _client()
+
+    with pytest.raises(ValueError, match="Either content or non-empty parts"):
+        await client.add_message(
+            "session-1",
+            {
+                "role": "assistant",
+                "parts": [],
+            },
+        )
+
+    post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_batch_add_messages_normalizes_empty_and_nonempty_parts():
+    client, post = _client()
+
+    await client.batch_add_messages(
+        "session-1",
+        [
+            {
+                "role": "user",
+                "content": "keep content",
+                "parts": [],
+            },
+            {
+                "role": "assistant",
+                "content": "drop content",
+                "parts": [{"type": "text", "text": "structured"}],
+            },
+        ],
+    )
+
+    post.assert_awaited_once_with(
+        "/api/v1/sessions/session-1/messages/batch",
+        json={
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "keep content",
+                },
+                {
+                    "role": "assistant",
+                    "parts": [{"type": "text", "text": "structured"}],
+                },
+            ],
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_batch_add_messages_rejects_empty_parts_without_content():
+    client, post = _client()
+
+    with pytest.raises(ValueError, match="Either content or non-empty parts"):
+        await client.batch_add_messages(
+            "session-1",
+            [{"role": "user", "parts": []}],
+        )
+
+    post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_write_uses_options_and_extra():
     client, post = _client()
 

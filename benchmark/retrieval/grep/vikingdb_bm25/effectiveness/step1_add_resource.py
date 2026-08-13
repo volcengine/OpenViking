@@ -53,11 +53,13 @@ def main():
             if exc.code != "ALREADY_EXISTS":
                 raise
         result = client.add_resource(
-            path=source,
-            parent=args.parent,
-            reason="benchmark effectiveness",
-            wait=True,
-            processing_mode="semantic_and_vectors",
+            source,
+            {
+                "parent": args.parent,
+                "reason": "benchmark effectiveness",
+                "wait": True,
+                "processing_mode": "semantic_and_vectors",
+            },
         )
         elapsed = time.monotonic() - t0
         root_uri = result.get("root_uri", "?")

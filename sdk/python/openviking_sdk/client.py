@@ -474,6 +474,17 @@ class AsyncHTTPClient:
         return compacted
 
     @classmethod
+    def _normalize_message_payload(cls, message: Mapping[str, Any]) -> Dict[str, Any]:
+        payload = dict(message)
+        if payload.get("parts"):
+            payload.pop("content", None)
+        else:
+            payload.pop("parts", None)
+            if payload.get("content") is None:
+                raise ValueError("Either content or non-empty parts must be provided")
+        return cls._compact_request_body(payload)
+
+    @classmethod
     def _build_options_payload(
         cls,
         options: Optional[Mapping[str, Any]],
@@ -704,10 +715,11 @@ class AsyncHTTPClient:
         options: Optional[BatchAddMessagesOptions] = None,
     ) -> Dict[str, Any]:
         session_path = self._path_segment(session_id)
+        normalized_messages = [self._normalize_message_payload(message) for message in messages]
         payload = self._build_options_payload(
             options,
             BatchAddMessagesOptions,
-            fixed={"messages": messages},
+            fixed={"messages": normalized_messages},
         )
         response = await self._request(
             "POST",
@@ -1371,12 +1383,7 @@ class AsyncHTTPClient:
         session_id: str,
         message: Message,
     ) -> Dict[str, Any]:
-        payload = dict(message)
-        if "content" not in payload and "parts" not in payload:
-            raise ValueError("Either content or parts must be provided")
-        if "content" in payload and payload.get("parts") is not None:
-            payload.pop("content")
-        payload = self._compact_request_body(payload)
+        payload = self._normalize_message_payload(message)
         session_path = self._path_segment(session_id)
         response = await self._request(
             "POST", f"/api/v1/sessions/{session_path}/messages", json=payload
