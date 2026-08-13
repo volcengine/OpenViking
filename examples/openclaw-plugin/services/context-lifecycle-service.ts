@@ -368,11 +368,17 @@ export async function commitOpenVikingSession({
     });
     const memCount = totalExtractedMemories(commitResult.memories_extracted);
     if (commitResult.status === "failed") {
-      logger.warn?.(`openviking: commit Phase 2 failed for session=${sessionId}: ${commitResult.error ?? "unknown"}`);
+      logger.warn?.(
+        `openviking: commit Phase 2 failed for session=${sessionId}: ${commitResult.error ?? "unknown"}, ` +
+          `trace_id=${commitResult.trace_id ?? "none"}`,
+      );
       return false;
     }
     if (commitResult.status === "timeout") {
-      logger.warn?.(`openviking: commit Phase 2 timed out for session=${sessionId}, task_id=${commitResult.task_id ?? "none"}`);
+      logger.warn?.(
+        `openviking: commit Phase 2 timed out for session=${sessionId}, ` +
+          `task_id=${commitResult.task_id ?? "none"}, trace_id=${commitResult.trace_id ?? "none"}`,
+      );
       return false;
     }
     logger.info(
@@ -1069,7 +1075,8 @@ export async function compactOpenVikingSession({
 
     if (commitResult.status === "failed") {
       logger.warn?.(
-        `openviking: compact commit Phase 2 failed for session=${ovSessionId}: ${commitResult.error ?? "unknown"}`,
+        `openviking: compact commit Phase 2 failed for session=${ovSessionId}: ` +
+          `${commitResult.error ?? "unknown"}, trace_id=${commitResult.trace_id ?? "none"}`,
       );
       diag("compact_result", ovSessionId, {
         ok: false,
@@ -1085,7 +1092,8 @@ export async function compactOpenVikingSession({
 
     if (commitResult.status === "timeout") {
       logger.warn?.(
-        `openviking: compact commit Phase 2 timed out for session=${ovSessionId}, task_id=${commitResult.task_id ?? "none"}`,
+        `openviking: compact commit Phase 2 timed out for session=${ovSessionId}, ` +
+          `task_id=${commitResult.task_id ?? "none"}, trace_id=${commitResult.trace_id ?? "none"}`,
       );
       diag("compact_result", ovSessionId, {
         ok: false,

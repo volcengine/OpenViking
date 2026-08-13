@@ -61,6 +61,27 @@ export interface OVSessionContext {
   };
 }
 
+export interface OVCommitResult {
+  task_id?: string;
+  archive_uri?: string;
+  trace_id?: string;
+}
+
+export interface OVCommitResponse {
+  result: OVCommitResult | null;
+  traceId?: string;
+  error?: any;
+  status?: number;
+}
+
+export interface OVResponse<T> {
+  ok: boolean;
+  result: T | null;
+  error?: any;
+  status?: number;
+  traceId?: string;
+}
+
 export class OVClient {
   private baseUrl: string;
   private apiKey: string;
@@ -97,7 +118,7 @@ export class OVClient {
   }
 
   /** Core fetch wrapper. Returns { ok, result } after parsing OV's { status, result } envelope. */
-  async fetchJSON<T>(path: string, init?: RequestInit, timeoutMs = 10000): Promise<{ ok: boolean; result: T | null; error?: any; status?: number }> {
+  async fetchJSON<T>(path: string, init?: RequestInit, timeoutMs = 10000): Promise<OVResponse<T>> {
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -108,10 +129,17 @@ export class OVClient {
       });
       clearTimeout(timer);
       const body = await resp.json().catch(() => ({}));
+      const traceId = body?.result?.trace_id || body?.error?.trace_id || body?.trace_id || undefined;
       if (!resp.ok || body.status === "error") {
-        return { ok: false, result: null, status: resp.status, error: body.error || { message: `HTTP ${resp.status}` } };
+        return {
+          ok: false,
+          result: null,
+          status: resp.status,
+          error: body.error || { message: `HTTP ${resp.status}` },
+          traceId,
+        };
       }
-      return { ok: true, result: (body.result ?? body) as T };
+      return { ok: true, result: (body.result ?? body) as T, traceId };
     } catch (err: any) {
       return { ok: false, result: null, status: 0, error: { message: err?.message || String(err) } };
     }
@@ -185,16 +213,31 @@ export class OVClient {
   }
 
   /** POST /api/v1/sessions/{id}/commit — commit session for archiving + extraction */
-  async commitSession(
+  async commitSessionResponse(
     sessionId: string,
     keepRecentCount = this.cfg.commitKeepRecentCount,
-  ): Promise<{ task_id: string; archive_uri: string } | null> {
-    const res = await this.fetchJSON<{ task_id: string; archive_uri: string }>(
+  ): Promise<OVCommitResponse> {
+    const res = await this.fetchJSON<OVCommitResult>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`,
       { method: "POST", body: JSON.stringify({ keep_recent_count: keepRecentCount }) },
       30000,
     );
-    return res.ok ? res.result : null;
+    if (res.ok && res.result && !res.result.trace_id && res.traceId) {
+      res.result.trace_id = res.traceId;
+    }
+    return {
+      result: res.ok ? res.result : null,
+      traceId: res.traceId,
+      error: res.error,
+      status: res.status,
+    };
+  }
+
+  async commitSession(
+    sessionId: string,
+    keepRecentCount = this.cfg.commitKeepRecentCount,
+  ): Promise<OVCommitResult | null> {
+    return (await this.commitSessionResponse(sessionId, keepRecentCount)).result;
   }
 
   /** DELETE /api/v1/sessions/{id} */

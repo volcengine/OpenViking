@@ -1,4 +1,6 @@
 import type { OVClient } from "./client.js";
+import { appendFileSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import type { OVConfig } from "./config.js";
 import { deriveHarnessSessionId } from "./shared/session-model.mjs";
 import { enqueue, listPending, replayPending } from "./shared/pending-queue.mjs";
@@ -16,6 +18,17 @@ export interface SyncBranchResult {
   added: number;
   tokens: number;
   allDelivered: boolean;
+}
+
+function debugLog(message: string): void {
+  const file = process.env.OV_DEBUG_LOG;
+  if (!file) return;
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    appendFileSync(file, `${new Date().toISOString()} ${message}\n`);
+  } catch {
+    // Best effort; logging must never affect pi.
+  }
 }
 
 export class SyncManager {
@@ -49,7 +62,8 @@ export class SyncManager {
     if (!this.client.connected) return;
     await replayPending(
       (path: string, init?: any) => this.client.fetchJSON(path, init, 10000),
-      () => {},
+      (stage: string, data: unknown) =>
+        debugLog(`${stage}: ${JSON.stringify(data)}`),
     );
   }
 
@@ -103,11 +117,17 @@ export class SyncManager {
 
   async commit(opts: { queueOnFailure?: boolean; keepRecentCount?: number } = {}): Promise<any | null> {
     if (!this.ovSessionId) return null;
-    const result = await this.client.commitSession(
+    const response = await this.client.commitSessionResponse(
       this.ovSessionId,
       opts.keepRecentCount,
     );
+    const result = response.result;
     if (!result) {
+      debugLog(
+        `commit: session=${this.ovSessionId} ok=false status=${response.status ?? 0} ` +
+          `trace_id=${response.traceId || "none"} ` +
+          `error=${response.error?.message || response.error?.code || "unknown"}`,
+      );
       if (opts.queueOnFailure !== false) {
         await enqueue("commitSession", this.ovSessionId, {
           keep_recent_count: opts.keepRecentCount ?? this.config.commitKeepRecentCount,
@@ -115,6 +135,9 @@ export class SyncManager {
       }
       return null;
     }
+    debugLog(
+      `commit: session=${this.ovSessionId} ok=true trace_id=${result.trace_id || "none"}`,
+    );
     return result;
   }
 

@@ -148,7 +148,7 @@ async function main() {
       const { captured, ...nextState } = applyZcodeCaptureResult(state, plan, result);
       let nextCount = Number(state.capturedSinceCommit || 0) + captured;
       if (captured > 0) {
-        const committed = await commitAgentSession(fetchJSON, sessionId);
+        const committed = await commitAgentSession(fetchJSON, sessionId, log);
         if (committed.ok) nextCount = 0;
       }
       await writeHookState("zcode", nativeSessionId, {

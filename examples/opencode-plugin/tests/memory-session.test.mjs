@@ -6,6 +6,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createMemorySessionManager } from "../lib/memory-session.mjs"
+import { initLogger } from "../lib/utils.mjs"
 
 async function withTempDir(prefix, fn) {
   const dir = await mkdtemp(join(tmpdir(), prefix))
@@ -373,4 +374,42 @@ test("concurrent saves never race the shared state file (#3877)", async (t) => {
     // shared `.tmp` file. With serialized saves no ENOENT can occur.
     assert.equal(raceDetected, false)
   })
+})
+
+test("explicit commit writes the response trace_id to the plugin log", async () => {
+  const requests = []
+  const server = createServer(async (req, res) => {
+    let body = ""
+    req.setEncoding("utf8")
+    for await (const chunk of req) body += chunk
+    requests.push({ method: req.method, url: req.url, body })
+    res.setHeader("Content-Type", "application/json")
+    res.end(JSON.stringify({
+      status: "ok",
+      result: {
+        status: "accepted",
+        task_id: "task-opencode-trace",
+        trace_id: "trace-opencode-commit",
+      },
+    }))
+  })
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve))
+  try {
+    await withTempDir("ov-oc-session-trace-", async (dir) => {
+      const { port } = server.address()
+      initLogger(dir)
+      const manager = createMemorySessionManager({
+        config: { ...baseConfig(`http://127.0.0.1:${port}`), autoCapture: false },
+        pluginRoot: dir,
+      })
+
+      const result = await manager.commitSession("oc-explicit-trace")
+      assert.equal(result.traceId, "trace-opencode-commit")
+      assert.equal(requests[0].url, "/api/v1/sessions/oc-explicit-trace/commit")
+      const raw = await fs.promises.readFile(join(dir, "openviking-memory.log"), "utf8")
+      assert.match(raw, /"trace_id":"trace-opencode-commit"/)
+    })
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+  }
 })

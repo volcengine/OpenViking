@@ -710,6 +710,7 @@ async function main() {
   // OV's Session._auto_commit_threshold is not consumed by addMessage, so we
   // poll pending_tokens ourselves and commit when the threshold is crossed.
   let committed = false;
+  let commitTraceId = "";
   let pendingTokens = 0;
   let commitCount = 0;
   let totalMessageCount = 0;
@@ -724,10 +725,12 @@ async function main() {
         keep_recent_count: cfg.commitKeepRecentCount,
       });
       committed = commitRes.ok;
+      commitTraceId = commitRes.traceId || commitRes.result?.trace_id || "";
       if (committed) commitCount += 1;
       log("commit", {
         ovSessionId,
         ok: commitRes.ok,
+        trace_id: commitTraceId || undefined,
         pending: pendingTokens,
         keepRecentCount: cfg.commitKeepRecentCount,
       });
@@ -764,7 +767,9 @@ async function main() {
   if (result.ok > 0) {
     approve(
       `captured ${result.ok} turns to ov session ${ovSessionId}` +
-      (committed ? " (committed)" : ""),
+      (committed
+        ? ` (committed${commitTraceId ? `; trace_id=${commitTraceId}` : ""})`
+        : ""),
     );
   } else {
     approve();

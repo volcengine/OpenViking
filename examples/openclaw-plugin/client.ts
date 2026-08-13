@@ -378,13 +378,17 @@ export class OpenVikingClient {
       const payload = (await response.json().catch(() => ({}))) as {
         status?: string;
         result?: T;
-        error?: { code?: string; message?: string };
+        error?: { code?: string; message?: string; trace_id?: string };
       };
 
       if (!response.ok || payload.status === "error") {
         const code = payload.error?.code ? ` [${payload.error.code}]` : "";
         const message = payload.error?.message ?? `HTTP ${response.status}`;
-        throw new Error(`OpenViking request failed${code}: ${message}`);
+        const traceId = payload.error?.trace_id;
+        throw new Error(
+          `OpenViking request failed${code}: ${message}` +
+            (traceId ? ` (trace_id=${traceId})` : ""),
+        );
       }
 
       return (payload.result ?? payload) as T;

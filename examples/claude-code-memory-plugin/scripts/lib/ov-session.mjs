@@ -43,6 +43,10 @@ export function deriveOvSessionId(ccSessionId, suffix = "") {
   return deriveHarnessSessionId("cc-", ccSessionId, suffix);
 }
 
+function responseTraceId(body) {
+  return body?.result?.trace_id || body?.error?.trace_id || body?.trace_id || undefined;
+}
+
 /**
  * Build a fetchJSON closure tied to a given config. Callers pass their own cfg
  * (from scripts/config.mjs loadConfig()) so the timeout can vary per hook.
@@ -63,10 +67,16 @@ export function makeFetchJSON(cfg, timeoutKey = "timeoutMs") {
       if (cfg.userAgent) headers["User-Agent"] = cfg.userAgent;
       const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
       const body = await res.json().catch(() => ({}));
+      const traceId = responseTraceId(body);
       if (!res.ok || body.status === "error") {
-        return { ok: false, status: res.status, error: body.error || { message: `HTTP ${res.status}` } };
+        return {
+          ok: false,
+          status: res.status,
+          error: body.error || { message: `HTTP ${res.status}` },
+          traceId,
+        };
       }
-      return { ok: true, result: body.result ?? body };
+      return { ok: true, result: body.result ?? body, traceId };
     } catch (err) {
       return { ok: false, error: { message: err?.message || String(err) } };
     } finally {
