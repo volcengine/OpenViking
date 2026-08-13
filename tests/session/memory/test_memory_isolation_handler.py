@@ -6,6 +6,8 @@ Tests for MemoryIsolationHandler.
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from openviking.message.message import Message
 from openviking.message.part import TextPart
 from openviking.server.identity import RequestContext, Role
@@ -46,6 +48,39 @@ def create_mock_extract_context(messages):
     mock_ctx = MagicMock()
     mock_ctx.messages = messages
     return mock_ctx
+
+
+def calculate_event_range_uris(messages, ranges, allowed_peer_ids):
+    """Resolve an event range with deterministic URI generation."""
+    from openviking.session.memory.dataclass import MemoryTypeSchema, ResolvedOperation
+    from openviking.session.memory.memory_updater import ExtractContext
+
+    extract_ctx = ExtractContext(messages, split_long_text_messages=False)
+    handler = MemoryIsolationHandler(
+        create_ctx(user_id="support_bot"),
+        extract_ctx,
+        allow_self=True,
+        allowed_peer_ids=allowed_peer_ids,
+    )
+    schema = MemoryTypeSchema(
+        memory_type="events",
+        filename_template="demo.md",
+        directory="viking://user/{user_space}/memories/events",
+    )
+    operation = ResolvedOperation(
+        old_memory_file_content=None,
+        memory_fields={"event_name": "demo", "ranges": ranges},
+        memory_type="events",
+        uris=[],
+    )
+
+    with patch(
+        "openviking.session.memory.memory_isolation_handler.generate_uri",
+        side_effect=lambda **kwargs: (
+            f"viking://user/{kwargs.get('user_space')}/memories/events/demo"
+        ),
+    ):
+        return handler.calculate_memory_uris(schema, operation, extract_ctx)
 
 
 class TestGetReadScope:
@@ -542,6 +577,69 @@ class TestCalculateMemoryUris:
         assert uris == ["viking://user/support_bot/peers/web-visitor-alice/memories/events/demo"]
         assert operation.memory_fields["user_id"] == "support_bot"
         assert "peer_id" not in operation.memory_fields
+
+    @pytest.mark.parametrize(
+        ("ranges", "include_second_peer", "expected_uris"),
+        [
+            (
+                "1",
+                False,
+                ["viking://user/support_bot/peers/web-visitor-alice/memories/events/demo"],
+            ),
+            (
+                "0",
+                False,
+                ["viking://user/support_bot/peers/web-visitor-alice/memories/events/demo"],
+            ),
+            (
+                "0-1",
+                False,
+                ["viking://user/support_bot/peers/web-visitor-alice/memories/events/demo"],
+            ),
+            ("1,3", True, []),
+            (
+                "99",
+                False,
+                ["viking://user/support_bot/peers/web-visitor-alice/memories/events/demo"],
+            ),
+            ("not-a-range", False, []),
+        ],
+        ids=[
+            "assistant-only-single-peer",
+            "user-only",
+            "mixed-role",
+            "assistant-only-multi-peer",
+            "out-of-range-single-peer",
+            "malformed-range",
+        ],
+    )
+    def test_calculate_memory_uris_ranges_route_conservatively(
+        self,
+        ranges,
+        include_second_peer,
+        expected_uris,
+    ):
+        messages = [
+            create_message("user", "request", peer_id="web-visitor-alice"),
+            create_message("assistant", "completed", peer_id="web-visitor-alice"),
+        ]
+        allowed_peer_ids = {"web-visitor-alice"}
+        if include_second_peer:
+            messages.extend(
+                [
+                    create_message("user", "second request", peer_id="web-visitor-bob"),
+                    create_message("assistant", "second result", peer_id="web-visitor-bob"),
+                ]
+            )
+            allowed_peer_ids.add("web-visitor-bob")
+
+        uris = calculate_event_range_uris(
+            messages,
+            ranges,
+            allowed_peer_ids,
+        )
+
+        assert uris == expected_uris
 
     @patch("openviking.session.memory.memory_isolation_handler.generate_uri")
     def test_calculate_memory_uris_unallowed_peer_id_does_not_fallback(self, mock_generate_uri):
