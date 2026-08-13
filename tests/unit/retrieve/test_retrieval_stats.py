@@ -11,7 +11,7 @@ class TestRetrievalStats:
         stats = RetrievalStats()
         assert stats.total_queries == 0
         assert stats.avg_results_per_query == 0.0
-        assert stats.zero_result_rate == 0.0
+        assert stats.total_errors == 0
         assert stats.avg_score == 0.0
         assert stats.avg_latency_ms == 0.0
 
@@ -34,13 +34,12 @@ class TestRetrievalStatsCollector:
         stats = collector.snapshot()
         assert stats.total_queries == 1
         assert stats.total_results == 3
-        assert stats.zero_result_queries == 0
         assert stats.max_score == 0.9
         assert stats.min_score == 0.5
         assert stats.queries_by_type == {"memory": 1}
         assert stats.avg_latency_ms == 42.0
 
-    def test_record_zero_result_query(self):
+    def test_record_empty_query_as_success(self):
         collector = RetrievalStatsCollector()
         collector.record_query(
             context_type="resource",
@@ -50,8 +49,8 @@ class TestRetrievalStatsCollector:
         )
         stats = collector.snapshot()
         assert stats.total_queries == 1
-        assert stats.zero_result_queries == 1
-        assert stats.zero_result_rate == 1.0
+        assert stats.total_results == 0
+        assert stats.total_errors == 0
 
     def test_record_multiple_queries(self):
         collector = RetrievalStatsCollector()
@@ -62,7 +61,6 @@ class TestRetrievalStatsCollector:
         stats = collector.snapshot()
         assert stats.total_queries == 3
         assert stats.total_results == 3
-        assert stats.zero_result_queries == 1
         assert stats.queries_by_type == {"memory": 2, "resource": 1}
         assert stats.avg_latency_ms == (30 + 20 + 5) / 3
 
@@ -134,35 +132,22 @@ class TestRetrievalObserver:
         assert observer.is_healthy() is True
         assert observer.has_errors() is False
 
-    def test_unhealthy_with_many_zero_results(self):
+    def test_healthy_with_only_empty_results(self):
         collector = self._setup_collector()
-        for _ in range(8):
+        for _ in range(10):
             collector.record_query("memory", 0, [])
-        for _ in range(2):
-            collector.record_query("memory", 1, [0.5])
-        observer = RetrievalObserver()
-        # 80% zero-result rate > 50% threshold
-        assert observer.is_healthy() is False
-        assert observer.has_errors() is True
-
-    def test_healthy_with_sparse_fan_out_yield(self):
-        collector = self._setup_collector()
-        for _ in range(6):
-            collector.record_query("unknown", 0, [])
-        for _ in range(4):
-            collector.record_query("unknown", 3, [0.9, 0.8, 0.7])
-
         observer = RetrievalObserver()
         assert observer.is_healthy() is True
         assert observer.has_errors() is False
 
-    def test_no_errors_below_min_queries(self):
+    def test_unhealthy_with_retrieval_error(self):
         collector = self._setup_collector()
-        # Only 3 queries (below the 5-query minimum for error flagging)
-        for _ in range(3):
-            collector.record_query("memory", 0, [])
+        collector.record_error(RuntimeError("backend unavailable"))
+
         observer = RetrievalObserver()
-        assert observer.has_errors() is False
+        assert observer.is_healthy() is False
+        assert observer.has_errors() is True
+        assert "RuntimeError: backend unavailable" in observer.get_status_table()
 
     def test_status_table_no_data(self):
         self._setup_collector()
@@ -177,6 +162,8 @@ class TestRetrievalObserver:
         observer = RetrievalObserver()
         table = observer.get_status_table()
         assert "Total Queries" in table
+        assert "Total Errors" in table
+        assert "Zero-Result" not in table
         assert "memory" in table
         assert "resource" in table
 

@@ -3,8 +3,7 @@
 """
 RetrievalObserver: Retrieval system observability tool.
 
-Provides methods to observe and report retrieval quality metrics
-accumulated by the HierarchicalRetriever.
+Provides retrieval diagnostics and reports actual execution errors.
 """
 
 from openviking.storage.observers.base_observer import BaseObserver
@@ -17,15 +16,9 @@ class RetrievalObserver(BaseObserver):
     """
     RetrievalObserver: System observability tool for retrieval quality.
 
-    Reads accumulated statistics from the global RetrievalStatsCollector
-    and formats them for display via the observer API.
+    Empty retrievals are valid outcomes. Health reflects execution errors,
+    while result counts and scores remain diagnostics only.
     """
-
-    # A zero-result rate at or above this threshold is suspicious.
-    UNHEALTHY_ZERO_RESULT_RATE = 0.5
-    # Sparse fan-out may include expected empty branches. Treat it as unhealthy
-    # only when the aggregate workload returns fewer than one result per query.
-    MIN_HEALTHY_AVG_RESULTS_PER_QUERY = 1.0
 
     @staticmethod
     def _get_collector():
@@ -44,18 +37,14 @@ class RetrievalObserver(BaseObserver):
 
         stats = self._get_collector().snapshot()
 
-        if stats.total_queries == 0:
+        if stats.total_queries == 0 and stats.total_errors == 0:
             return "No retrieval queries recorded."
 
         summary = [
             {"Metric": "Total Queries", "Value": stats.total_queries},
             {"Metric": "Total Results", "Value": stats.total_results},
             {"Metric": "Avg Results/Query", "Value": f"{stats.avg_results_per_query:.1f}"},
-            {"Metric": "Zero-Result Queries", "Value": stats.zero_result_queries},
-            {
-                "Metric": "Zero-Result Rate",
-                "Value": f"{stats.zero_result_rate:.1%}",
-            },
+            {"Metric": "Total Errors", "Value": stats.total_errors},
             {"Metric": "Avg Score", "Value": f"{stats.avg_score:.4f}"},
             {
                 "Metric": "Score Range",
@@ -68,6 +57,8 @@ class RetrievalObserver(BaseObserver):
             {"Metric": "Avg Latency (ms)", "Value": f"{stats.avg_latency_ms:.1f}"},
             {"Metric": "Max Latency (ms)", "Value": f"{stats.max_latency_ms:.1f}"},
         ]
+        if stats.last_error:
+            summary.append({"Metric": "Last Error", "Value": stats.last_error})
 
         lines = [tabulate(summary, headers="keys", tablefmt="pretty")]
 
@@ -87,24 +78,10 @@ class RetrievalObserver(BaseObserver):
     def __str__(self) -> str:
         return self.get_status_table()
 
-    @classmethod
-    def _has_unhealthy_yield(cls, stats) -> bool:
-        """Return whether empty branches coincide with low aggregate yield."""
-        return (
-            stats.zero_result_rate >= cls.UNHEALTHY_ZERO_RESULT_RATE
-            and stats.avg_results_per_query < cls.MIN_HEALTHY_AVG_RESULTS_PER_QUERY
-        )
-
     def is_healthy(self) -> bool:
-        """Retrieval is healthy when empty branches still produce useful yield."""
-        stats = self._get_collector().snapshot()
-        if stats.total_queries == 0:
-            return True
-        return not self._has_unhealthy_yield(stats)
+        """Retrieval is healthy when no execution errors have been recorded."""
+        return not self.has_errors()
 
     def has_errors(self) -> bool:
-        """Errors are flagged when empty branches also have low aggregate yield."""
-        stats = self._get_collector().snapshot()
-        if stats.total_queries < 5:
-            return False
-        return self._has_unhealthy_yield(stats)
+        """Return whether retrieval execution errors have been recorded."""
+        return self._get_collector().snapshot().total_errors > 0
