@@ -1839,7 +1839,7 @@ class ResourceService:
                 result["task_id"] = task.task_id
                 if telemetry_id:
                     monitor_started = True
-                    asyncio.create_task(
+                    monitor_task = asyncio.create_task(
                         self._monitor_queue_processing(
                             task.task_id,
                             telemetry_id,
@@ -1847,6 +1847,11 @@ class ResourceService:
                             ctx.user.user_id,
                         )
                     )
+                    # Retain a strong ref so the task isn't GC'd mid-flight
+                    # (asyncio only tracks tasks weakly). close_background_tasks
+                    # drains this set on shutdown.
+                    self._background_tasks.add(monitor_task)
+                    monitor_task.add_done_callback(self._background_tasks.discard)
                 else:
                     await task_tracker.start(
                         task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id

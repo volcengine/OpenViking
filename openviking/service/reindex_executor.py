@@ -50,6 +50,13 @@ REINDEX_TASK_TYPE = "admin_reindex"
 PRUNE_ORPHAN_CANDIDATE_LIMIT = 100000
 PRUNE_OUTPUT_FIELDS = ["id", "uri", "level", "context_type", "account_id", "owner_user_id"]
 
+# Strong refs for in-flight fire-and-forget reindex tasks. Python asyncio only
+# keeps weak references to tasks created via asyncio.create_task, so a task
+# without an external strong reference can be garbage-collected mid-execution
+# and silently aborted — leaving the task-tracker entry stuck "in progress"
+# forever. Mirrors the pattern in openviking/server/routers/watches.py.
+_BACKGROUND_REINDEX_TASKS: set[asyncio.Task] = set()
+
 
 # Trailing markers VikingFS appends when a directory has no generated .abstract.md/.overview.md
 # (see openviking/storage/viking_fs.py). The rendered value is a placeholder, not semantic
@@ -187,7 +194,7 @@ class ReindexExecutor:
                 details={"uri": uri},
             )
 
-        asyncio.create_task(
+        reindex_task = asyncio.create_task(
             self._run_tracked(
                 task.task_id,
                 uri=uri,
@@ -197,6 +204,8 @@ class ReindexExecutor:
                 ctx=ctx,
             )
         )
+        _BACKGROUND_REINDEX_TASKS.add(reindex_task)
+        reindex_task.add_done_callback(_BACKGROUND_REINDEX_TASKS.discard)
         return {
             "task_id": task.task_id,
             "status": "accepted",
