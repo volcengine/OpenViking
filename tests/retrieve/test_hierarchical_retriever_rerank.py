@@ -14,7 +14,7 @@ from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever, Re
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.abstract_overview import render_abstract_overview
 from openviking.utils.token_estimation import estimate_text_tokens
-from openviking_cli.retrieve.types import ContextType, TypedQuery
+from openviking_cli.retrieve.types import ContextType, TraceEventType, TypedQuery
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import RerankConfig, RetrievalConfig
 
@@ -271,6 +271,76 @@ async def test_retrieve_uses_rerank_scores_in_thinking_mode(monkeypatch):
     assert fake_client.calls[0] == ("hello", ["root A", "root B"])
     assert fake_client.calls[1] == ("hello", ["child A", "child B"])
     assert storage.search_calls[0]["level"] == [0, 1]
+
+
+@pytest.mark.asyncio
+async def test_thinking_mode_returns_actual_directories_and_deterministic_trace(monkeypatch):
+    fake_client = FakeRerankClient([0.95, 0.05, 0.11, 0.95])
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
+        lambda config: fake_client,
+    )
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=DummyEmbedder(),
+        rerank_config=_config(),
+    )
+    query = _query()
+    query.target_directories = ["viking://resources"]
+
+    result = await retriever.retrieve(
+        query, ctx=_ctx(), limit=2, mode=RetrieverMode.THINKING
+    )
+
+    assert result.searched_directories == [
+        "viking://resources/root-a",
+        "viking://resources/root-b",
+        "viking://resources",
+    ]
+
+    events = result.thinking_trace.events
+    directory_results = [
+        event.data["uri"]
+        for event in events
+        if event.event_type == TraceEventType.SEARCH_DIRECTORY_RESULT
+    ]
+    assert directory_results == result.searched_directories
+
+    selected = next(
+        event
+        for event in events
+        if event.event_type == TraceEventType.CANDIDATE_SELECTED
+    )
+    assert selected.data == {
+        "directory": "viking://resources",
+        "count": 2,
+        "candidates": [
+            {"uri": "viking://resources/file-a", "score": pytest.approx(0.11)},
+            {"uri": "viking://resources/file-b", "score": pytest.approx(0.95)},
+        ],
+    }
+
+    convergence = next(
+        event
+        for event in events
+        if event.event_type == TraceEventType.CONVERGENCE_CHECK
+    )
+    assert convergence.data == {
+        "round": 1,
+        "candidate_pool_size": 2,
+        "topk_count": 2,
+        "stable_topk_rounds": 0,
+        "stagnant_rounds": 0,
+        "queued_directories": 0,
+    }
+    assert result.thinking_trace.get_statistics() == {
+        "total_events": len(events),
+        "duration_seconds": pytest.approx(events[-1].timestamp, abs=0.0001),
+        "directories_searched": 3,
+        "candidates_collected": 2,
+        "candidates_excluded": 0,
+        "convergence_rounds": 1,
+    }
 
 
 @pytest.mark.asyncio
