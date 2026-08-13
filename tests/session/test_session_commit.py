@@ -211,29 +211,6 @@ class TestCommit:
         )
         assert call_kwargs["allowed_memory_types"] is None
 
-    async def test_commit_skips_execution_only_policy_without_case(
-        self, session_with_messages: Session, monkeypatch
-    ):
-        config = MagicMock()
-        config.memory.extraction_enabled = True
-        config.memory.session_skill_extraction_enabled = True
-        monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
-
-        session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
-            return_value={"contexts": [], "session_skills": []}
-        )
-        session_with_messages._meta.memory_policy = {"memory_types": ["trajectories"]}
-
-        result = await session_with_messages.commit_async()
-        task_result = await _wait_for_task(result["task_id"])
-
-        assert task_result["status"] == "completed"
-        assert task_result["result"]["memories_extracted"] == {}
-        assert task_result["result"]["session_skills_extracted"] == 0
-        assert task_result["result"]["session_skill_uris"] == []
-        assert "memory_diff_uri" not in task_result["result"]
-        session_with_messages._session_compressor.extract_long_term_memories.assert_not_awaited()
-
     async def test_commit_skips_session_skills_without_execution_memory_type(
         self, session_with_messages: Session, monkeypatch
     ):

@@ -95,22 +95,18 @@ def test_memory_policy_rejects_invalid_memory_types():
     with pytest.raises(InvalidArgumentError, match="missing"):
         policy.validate_memory_types({"profile"})
 
-
-def test_experiences_enable_the_complete_agent_evolution_pipeline():
-    policy = MemoryPolicy.from_dict({"memory_types": ["profile", "experiences"]})
-
-    assert policy.memory_types == {
+    evolution_policy = MemoryPolicy.from_dict({"memory_types": ["profile", "experiences"]})
+    assert evolution_policy.memory_types == {
         "profile",
         "cases",
         "trajectories",
         "experiences",
     }
 
-
-def test_case_and_trajectory_types_are_ignored_without_experiences():
-    policy = MemoryPolicy.from_dict({"memory_types": ["profile", "cases", "trajectories"]})
-
-    assert policy.memory_types == {"profile"}
+    incomplete_policy = MemoryPolicy.from_dict(
+        {"memory_types": ["profile", "cases", "trajectories"]}
+    )
+    assert incomplete_policy.memory_types == {"profile"}
 
 
 async def test_initialize_memory_files_respects_memory_type_filter(monkeypatch):

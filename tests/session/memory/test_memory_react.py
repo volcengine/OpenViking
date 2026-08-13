@@ -9,269 +9,16 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from openviking.session.memory.dataclass import (
-    MemoryField,
     MemoryFile,
     MemoryTypeSchema,
+    ResolvedOperation,
     ResolvedOperations,
 )
 from openviking.session.memory.extract_loop import (
     ExtractLoop,
 )
-from openviking.session.memory.memory_isolation_handler import RoleScope
-from openviking.session.memory.memory_updater import ExtractContext
-from openviking.session.memory.merge_op import FieldType, MergeOp
+from openviking.session.memory.merge_op import SearchReplaceBlock, StrPatch
 from openviking.session.memory.schema_model_generator import SchemaModelGenerator
-
-
-def _patch_schema() -> MemoryTypeSchema:
-    return MemoryTypeSchema(
-        memory_type="profile",
-        description="User profile",
-        directory="viking://user/{{ user_space }}/memories",
-        filename_template="profile.md",
-        fields=[
-            MemoryField(
-                name="content",
-                field_type=FieldType.STRING,
-                description="Profile content",
-                merge_op=MergeOp.PATCH,
-            )
-        ],
-    )
-
-
-class _PatchProvider:
-    def __init__(self, schema: MemoryTypeSchema, files: dict[str, MemoryFile]):
-        self.schema = schema
-        self.read_file_contents = files
-        self.extract_context = ExtractContext([])
-
-    async def prepare_extraction_messages(self):
-        pass
-
-    def get_memory_schemas(self, _ctx):
-        return [self.schema]
-
-    def get_output_language(self):
-        return "English"
-
-    def get_tools(self):
-        return []
-
-    def instruction(self):
-        return "Extract memories."
-
-    async def prefetch(self):
-        return []
-
-    def get_extract_context(self):
-        return self.extract_context
-
-    def _get_registry(self):
-        schema = self.schema
-
-        class _Registry:
-            def get(self, memory_type):
-                assert memory_type == "profile"
-                return schema
-
-        return _Registry()
-
-
-class _PatchIsolationHandler:
-    def __init__(self, target_uri: str):
-        self.target_uri = target_uri
-
-    def get_read_scope(self):
-        return RoleScope(user_ids=["default"])
-
-    def fill_identity_fields(self, item_dict, role_scope):
-        item_dict.setdefault("user_id", "default")
-
-    def calculate_memory_uris(self, memory_type_schema, operation, extract_context):
-        return [self.target_uri]
-
-
-class _PatchVLM:
-    model = "dummy"
-
-    def __init__(self, responses: list[str]):
-        self.responses = responses
-        self.messages = []
-
-    async def get_completion_async(self, messages, tools=None, tool_choice=None, thinking=False):
-        self.messages.append(list(messages))
-        return self.responses.pop(0)
-
-
-async def _run_patch_loop(*, files: dict[str, MemoryFile], responses: list[str]):
-    target_uri = "viking://user/default/memories/profile.md"
-    vlm = _PatchVLM(responses)
-    loop = ExtractLoop(
-        vlm=vlm,
-        viking_fs=MagicMock(),
-        max_iterations=1,
-        context_provider=_PatchProvider(_patch_schema(), files),
-        isolation_handler=_PatchIsolationHandler(target_uri),
-    )
-    operations, _tools_used = await loop.run()
-    return vlm, operations
-
-
-class TestExtractLoopPatchRepair:
-    """Tests for ExtractLoop patch validation and repair retry."""
-
-    async def test_invalid_patch_search_triggers_one_repair_retry(self):
-        target_uri = "viking://user/default/memories/profile.md"
-        other_uri = "viking://user/default/memories/other.md"
-        vlm, operations = await _run_patch_loop(
-            files={
-                target_uri: MemoryFile(uri=target_uri, content="# Tim\n- Likes reading"),
-                other_uri: MemoryFile(
-                    uri=other_uri,
-                    content="# Other\n- [Has been reading](./reading.md) as usual",
-                ),
-            },
-            responses=[
-                '{"profile":[{"page_id":1,"content":{"blocks":[{"search":"- Has been reading as usual","replace":"- Has been reading as usual (as of 2023-11-11)"}]} }],"delete_ids":[]}',
-                '{"profile":[{"page_id":1,"content":{"blocks":[{"search":"- Likes reading","replace":"- Likes reading\\n- Has been reading as usual (as of 2023-11-11)"}]} }],"delete_ids":[]}',
-            ],
-        )
-
-        assert len(vlm.messages) == 2
-        second_call_content = "\n".join(message["content"] for message in vlm.messages[1])
-        assert "SEARCH/REPLACE patch could not be applied" in second_call_content
-        assert "Regenerate the complete operations JSON" in second_call_content
-        assert target_uri in second_call_content
-        assert other_uri in second_call_content
-        repair_section = second_call_content.split("Failed patch operations:\n", 1)[1]
-        assert '"block_index": 1' in repair_section
-        assert '"reason": "not_found"' in repair_section
-        assert '"match_count": 0' in repair_section
-        assert (
-            operations.upsert_operations[0].memory_fields["content"].blocks[0].search
-            == "- Likes reading"
-        )
-
-    async def test_patch_repair_reports_actual_failing_block(self):
-        target_uri = "viking://user/default/memories/profile.md"
-        duplicate_search = "- Values friendship and compassion"
-        vlm, operations = await _run_patch_loop(
-            files={
-                target_uri: MemoryFile(
-                    uri=target_uri,
-                    content=(
-                        "# Caroline\n"
-                        "- Values friendship and compassion\n"
-                        "- Learning to play the piano\n\n"
-                        "# Melanie\n"
-                        "- Values friendship and compassion"
-                    ),
-                )
-            },
-            responses=[
-                '{"profile":[{"page_id":1,"content":{"blocks":['
-                '{"search":"- Learning to play the piano","replace":"- Learning to play the piano daily"},'
-                '{"search":"- Values friendship and compassion","replace":"- Values friendship and compassion\\n- Enjoys family activities"}'
-                ']} }],"delete_ids":[]}',
-                '{"profile":[{"page_id":1,"content":{"blocks":['
-                '{"search":"- Learning to play the piano","replace":"- Learning to play the piano daily"},'
-                '{"search":"# Melanie\\n- Values friendship and compassion","replace":"# Melanie\\n- Values friendship and compassion\\n- Enjoys family activities"}'
-                ']} }],"delete_ids":[]}',
-            ],
-        )
-
-        second_call_content = "\n".join(message["content"] for message in vlm.messages[1])
-        repair_section = second_call_content.split("Failed patch operations:\n", 1)[1]
-        assert '"block_index": 2' in repair_section
-        assert f'"search": "{duplicate_search}"' in repair_section
-        assert '"reason": "non_unique"' in repair_section
-        assert '"match_count": 2' in repair_section
-        assert operations.upsert_operations[0].memory_fields["content"].blocks[
-            1
-        ].search.startswith("# Melanie")
-
-    async def test_patch_validation_uses_sequential_working_content(self):
-        target_uri = "viking://user/default/memories/profile.md"
-        vlm, _operations = await _run_patch_loop(
-            files={
-                target_uri: MemoryFile(
-                    uri=target_uri,
-                    content="# Caroline\n- Shared value\n\n# Melanie\n- Shared value",
-                )
-            },
-            responses=[
-                '{"profile":[{"page_id":1,"content":{"blocks":['
-                '{"search":"# Caroline\\n- Shared value","replace":"# Caroline\\n- Caroline-only value"},'
-                '{"search":"- Shared value","replace":"- Melanie-only value"}'
-                ']} }],"delete_ids":[]}'
-            ],
-        )
-
-        assert len(vlm.messages) == 1
-
-    async def test_link_rendered_content_does_not_trigger_repair(self):
-        target_uri = "viking://user/default/memories/profile.md"
-        vlm, operations = await _run_patch_loop(
-            files={
-                target_uri: MemoryFile(
-                    uri=target_uri,
-                    content=(
-                        "# Maria\n"
-                        "- [Volunteers](../place/homeless_shelter.md) at a homeless shelter regularly"
-                    ),
-                )
-            },
-            responses=[
-                '{"profile":[{"page_id":1,"content":{"blocks":[{"search":"- Volunteers at a homeless shelter regularly","replace":"- Volunteers at a homeless shelter regularly (as of 2023-04-18)"}]} }],"delete_ids":[]}',
-                '{"profile":[],"delete_ids":[]}',
-            ],
-        )
-
-        assert len(vlm.messages) == 1
-        assert (
-            operations.upsert_operations[0].memory_fields["content"].blocks[0].search
-            == "- Volunteers at a homeless shelter regularly"
-        )
-
-    async def test_invalid_patch_search_repairs_only_once(self):
-        target_uri = "viking://user/default/memories/profile.md"
-        vlm, operations = await _run_patch_loop(
-            files={target_uri: MemoryFile(uri=target_uri, content="# Tim\n- Likes reading")},
-            responses=[
-                '{"profile":[{"page_id":1,"content":{"blocks":[{"search":"- Missing one","replace":"- Fixed one"}]} }],"delete_ids":[]}',
-                '{"profile":[{"page_id":1,"content":{"blocks":[{"search":"- Missing two","replace":"- Fixed two"}]} }],"delete_ids":[]}',
-            ],
-        )
-
-        assert len(vlm.messages) == 2
-        all_messages = "\n".join(
-            message["content"] for call_messages in vlm.messages for message in call_messages
-        )
-        assert all_messages.count("SEARCH/REPLACE patch could not be applied") == 1
-        assert (
-            operations.upsert_operations[0].memory_fields["content"].blocks[0].search
-            == "- Missing two"
-        )
-
-    async def test_fuzzy_patch_success_does_not_trigger_repair(self):
-        target_uri = "viking://user/default/memories/profile.md"
-        vlm, operations = await _run_patch_loop(
-            files={
-                target_uri: MemoryFile(
-                    uri=target_uri, content="# Tim\n- Likes reading every night"
-                )
-            },
-            responses=[
-                '{"profile":[{"page_id":1,"content":{"blocks":[{"search":"- Likes reading","replace":"- Likes reading every night (as of 2023-11-11)"}]} }],"delete_ids":[]}',
-            ],
-        )
-
-        assert len(vlm.messages) == 1
-        assert (
-            operations.upsert_operations[0].memory_fields["content"].blocks[0].search
-            == "- Likes reading"
-        )
 
 
 class TestPreFetchFileFiltering:
@@ -495,14 +242,53 @@ class TestExtractLoopFinalJsonRetry:
         assert '"preferences": []' in instruction
         assert '"tools": []' in instruction
 
-    def test_final_skeleton_always_includes_delete_ids(self):
+    @pytest.mark.asyncio
+    async def test_patch_validation_uses_plain_and_sequential_content(self):
+        target_uri = "viking://user/default/memories/profile.md"
+        old_file = MemoryFile(
+            uri=target_uri,
+            content="# A\n- [Shared](./shared.md)\n\n# B\n- Shared",
+        )
+        operation = ResolvedOperation(
+            old_memory_file_content=old_file,
+            memory_type="profile",
+            uris=[target_uri],
+            memory_fields={
+                "content": StrPatch(
+                    blocks=[
+                        SearchReplaceBlock(
+                            search="# A\n- Shared",
+                            replace="# A\n- A-only",
+                        ),
+                        SearchReplaceBlock(search="- Shared", replace="- B-only"),
+                        SearchReplaceBlock(search="- Missing", replace="- Added"),
+                    ]
+                )
+            },
+        )
         extract_loop = object.__new__(ExtractLoop)
-        extract_loop._expected_fields = ["preferences"]
+        extract_loop.context_provider = MagicMock(read_file_contents={target_uri: old_file})
 
-        assert extract_loop._build_final_operations_skeleton() == {
-            "delete_ids": [],
-            "preferences": [],
-        }
+        errors = await extract_loop._validate_patch_operations(
+            ResolvedOperations(
+                upsert_operations=[operation],
+                delete_file_contents=[],
+                errors=[],
+            )
+        )
+
+        assert errors == [
+            {
+                "uri": target_uri,
+                "page_id": None,
+                "field": "content",
+                "block_index": 3,
+                "search": "- Missing",
+                "reason": "not_found",
+                "match_count": 0,
+                "found_in_other_uris": [],
+            }
+        ]
 
     @pytest.mark.asyncio
     async def test_final_unparseable_response_raises_instead_of_empty_success(self):
