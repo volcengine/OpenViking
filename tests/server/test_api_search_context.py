@@ -5,7 +5,6 @@ import json
 
 import httpx
 
-from openviking.retrieve.retrieval_stats import get_stats_collector
 from openviking.server.identity import RequestContext, Role
 from openviking_cli.retrieve import ContextType, MatchedContext
 from openviking_cli.session.user_id import UserIdentifier
@@ -206,8 +205,7 @@ async def test_context_mode_degrades_a_retrieval_failure(
         del kwargs
         raise RuntimeError("embedder unreachable")
 
-    get_stats_collector().reset()
-    monkeypatch.setattr(service.viking_fs, "find", fake_find)
+    monkeypatch.setattr(service.search, "find", fake_find)
     response = await client.post(
         "/api/v1/search/search",
         json={"query": "still a valid request", "mode": "context"},
@@ -215,10 +213,6 @@ async def test_context_mode_degrades_a_retrieval_failure(
 
     assert response.status_code == 200
     assert response.json()["result"]["stats"]["retrieval_errors"]
-    retrieval_status = (await client.get("/api/v1/observer/retrieval")).json()["result"]
-    assert retrieval_status["is_healthy"] is False
-    assert retrieval_status["has_errors"] is True
-    assert "RuntimeError: embedder unreachable" in retrieval_status["status"]
 
 
 async def test_list_mode_response_is_unchanged(

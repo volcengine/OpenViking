@@ -3,7 +3,7 @@
 """
 RetrievalObserver: Retrieval system observability tool.
 
-Provides retrieval diagnostics and reports actual execution errors.
+Provides retrieval diagnostics accumulated by the HierarchicalRetriever.
 """
 
 from openviking.storage.observers.base_observer import BaseObserver
@@ -16,8 +16,8 @@ class RetrievalObserver(BaseObserver):
     """
     RetrievalObserver: System observability tool for retrieval quality.
 
-    Empty retrievals are valid outcomes. Health reflects execution errors,
-    while result counts and scores remain diagnostics only.
+    Empty retrievals are valid outcomes. Result counts and scores are
+    diagnostics only and do not determine component health.
     """
 
     @staticmethod
@@ -37,14 +37,18 @@ class RetrievalObserver(BaseObserver):
 
         stats = self._get_collector().snapshot()
 
-        if stats.total_queries == 0 and stats.total_errors == 0:
+        if stats.total_queries == 0:
             return "No retrieval queries recorded."
 
         summary = [
             {"Metric": "Total Queries", "Value": stats.total_queries},
             {"Metric": "Total Results", "Value": stats.total_results},
             {"Metric": "Avg Results/Query", "Value": f"{stats.avg_results_per_query:.1f}"},
-            {"Metric": "Total Errors", "Value": stats.total_errors},
+            {"Metric": "Zero-Result Queries", "Value": stats.zero_result_queries},
+            {
+                "Metric": "Zero-Result Rate",
+                "Value": f"{stats.zero_result_rate:.1%}",
+            },
             {"Metric": "Avg Score", "Value": f"{stats.avg_score:.4f}"},
             {
                 "Metric": "Score Range",
@@ -57,8 +61,6 @@ class RetrievalObserver(BaseObserver):
             {"Metric": "Avg Latency (ms)", "Value": f"{stats.avg_latency_ms:.1f}"},
             {"Metric": "Max Latency (ms)", "Value": f"{stats.max_latency_ms:.1f}"},
         ]
-        if stats.last_error:
-            summary.append({"Metric": "Last Error", "Value": stats.last_error})
 
         lines = [tabulate(summary, headers="keys", tablefmt="pretty")]
 
@@ -79,9 +81,9 @@ class RetrievalObserver(BaseObserver):
         return self.get_status_table()
 
     def is_healthy(self) -> bool:
-        """Retrieval is healthy when no execution errors have been recorded."""
-        return not self.has_errors()
+        """Retrieval result diagnostics do not indicate component availability."""
+        return True
 
     def has_errors(self) -> bool:
-        """Return whether retrieval execution errors have been recorded."""
-        return self._get_collector().snapshot().total_errors > 0
+        """Empty retrieval results are valid outcomes, not errors."""
+        return False

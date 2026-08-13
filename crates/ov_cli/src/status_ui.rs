@@ -646,9 +646,11 @@ fn retrieval_summary(status: Option<&str>) -> String {
         return "unknown".to_string();
     };
     let queries = metric_value(status, "Total Queries");
-    let errors = metric_value(status, "Total Errors");
-    match (queries, errors) {
-        (Some(queries), Some(errors)) => format!("{queries} queries, {errors} errors"),
+    let zero_rate = metric_value(status, "Zero-Result Rate");
+    match (queries, zero_rate) {
+        (Some(queries), Some(zero_rate)) => {
+            format!("{queries} queries, {zero_rate} zero-result rate")
+        }
         _ => "unknown".to_string(),
     }
 }
@@ -818,12 +820,12 @@ mod tests {
                     "is_healthy": true,
                     "has_errors": false,
                     "status": "\
-        +---------------+-------+\n\
-        |    Metric     | Value |\n\
-        +---------------+-------+\n\
-        | Total Queries |  121  |\n\
-        | Total Errors  |   0   |\n\
-        +---------------+-------+"
+        +---------------------+-----------------+\n\
+        |       Metric        |      Value      |\n\
+        +---------------------+-----------------+\n\
+        |    Total Queries    |       121       |\n\
+        | Zero-Result Rate   |      28.9%      |\n\
+        +---------------------+-----------------+"
                 },
                 "filesystem": {
                     "name": "filesystem",

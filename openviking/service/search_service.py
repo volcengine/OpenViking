@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_optional_viking_uris
-from openviking.retrieve.retrieval_stats import get_stats_collector
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import VikingFS
 from openviking.utils.image_search import (
@@ -19,11 +18,7 @@ from openviking.utils.image_search import (
     is_http_url,
     is_viking_uri,
 )
-from openviking_cli.exceptions import (
-    InvalidArgumentError,
-    NotInitializedError,
-    PermissionDeniedError,
-)
+from openviking_cli.exceptions import InvalidArgumentError, NotInitializedError
 from openviking_cli.utils import get_logger
 
 if TYPE_CHECKING:
@@ -118,23 +113,17 @@ class SearchService:
         if session is not None and self.is_intent_enabled() and not resolved_image_url:
             session_info = await session.get_context_for_search(query)
 
-        try:
-            result = await viking_fs.search(
-                query=query,
-                ctx=ctx,
-                target_uri=target_uri,
-                session_info=session_info,
-                limit=limit,
-                score_threshold=score_threshold,
-                filter=filter,
-                level=level,
-                image_url=resolved_image_url,
-            )
-        except (InvalidArgumentError, PermissionDeniedError):
-            raise
-        except Exception as exc:
-            get_stats_collector().record_error(exc)
-            raise
+        result = await viking_fs.search(
+            query=query,
+            ctx=ctx,
+            target_uri=target_uri,
+            session_info=session_info,
+            limit=limit,
+            score_threshold=score_threshold,
+            filter=filter,
+            level=level,
+            image_url=resolved_image_url,
+        )
         return result
 
     async def find(
@@ -165,20 +154,14 @@ class SearchService:
         _ensure_non_empty_query(query, resolved_image_url)
         target_uri = validate_optional_viking_uris(target_uri, field_name="target_uri")
         viking_fs = self._ensure_initialized()
-        try:
-            result = await viking_fs.find(
-                query=query,
-                ctx=ctx,
-                target_uri=target_uri,
-                limit=limit,
-                score_threshold=score_threshold,
-                filter=filter,
-                level=level,
-                image_url=resolved_image_url,
-            )
-        except (InvalidArgumentError, PermissionDeniedError):
-            raise
-        except Exception as exc:
-            get_stats_collector().record_error(exc)
-            raise
+        result = await viking_fs.find(
+            query=query,
+            ctx=ctx,
+            target_uri=target_uri,
+            limit=limit,
+            score_threshold=score_threshold,
+            filter=filter,
+            level=level,
+            image_url=resolved_image_url,
+        )
         return result

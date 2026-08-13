@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Thread-safe retrieval statistics accumulator.
 
-Collects per-query metrics from the ``HierarchicalRetriever`` and retrieval
-errors from the service boundary for the observer API.
+Collects per-query metrics from the ``HierarchicalRetriever`` so that
+the ``RetrievalObserver`` can report aggregate health and quality data
+via the observer API.
 """
 
 import threading
@@ -21,8 +22,7 @@ class RetrievalStats:
 
     total_queries: int = 0
     total_results: int = 0
-    total_errors: int = 0
-    last_error: str | None = None
+    zero_result_queries: int = 0
     total_score_sum: float = 0.0
     max_score: float = 0.0
     min_score: float = float("inf")
@@ -37,6 +37,12 @@ class RetrievalStats:
         if self.total_queries == 0:
             return 0.0
         return self.total_results / self.total_queries
+
+    @property
+    def zero_result_rate(self) -> float:
+        if self.total_queries == 0:
+            return 0.0
+        return self.zero_result_queries / self.total_queries
 
     @property
     def avg_score(self) -> float:
@@ -55,8 +61,8 @@ class RetrievalStats:
         return {
             "total_queries": self.total_queries,
             "total_results": self.total_results,
-            "total_errors": self.total_errors,
-            "last_error": self.last_error,
+            "zero_result_queries": self.zero_result_queries,
+            "zero_result_rate": round(self.zero_result_rate, 4),
             "avg_results_per_query": round(self.avg_results_per_query, 2),
             "avg_score": round(self.avg_score, 4),
             "max_score": round(self.max_score, 4) if self.total_results > 0 else 0.0,
@@ -108,6 +114,9 @@ class RetrievalStatsCollector:
             self._stats.total_queries += 1
             self._stats.total_results += result_count
 
+            if result_count == 0:
+                self._stats.zero_result_queries += 1
+
             for s in scores:
                 self._stats.total_score_sum += s
                 if s > self._stats.max_score:
@@ -140,12 +149,6 @@ class RetrievalStatsCollector:
             )
         except Exception:
             pass
-
-    def record_error(self, error: Exception) -> None:
-        """Record a retrieval execution error observed by the service layer."""
-        with self._lock:
-            self._stats.total_errors += 1
-            self._stats.last_error = f"{type(error).__name__}: {error}"[:200]
 
     def snapshot(self) -> RetrievalStats:
         """Return a copy of the current stats."""

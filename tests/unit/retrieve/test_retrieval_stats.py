@@ -11,7 +11,7 @@ class TestRetrievalStats:
         stats = RetrievalStats()
         assert stats.total_queries == 0
         assert stats.avg_results_per_query == 0.0
-        assert stats.total_errors == 0
+        assert stats.zero_result_rate == 0.0
         assert stats.avg_score == 0.0
         assert stats.avg_latency_ms == 0.0
 
@@ -34,6 +34,7 @@ class TestRetrievalStatsCollector:
         stats = collector.snapshot()
         assert stats.total_queries == 1
         assert stats.total_results == 3
+        assert stats.zero_result_queries == 0
         assert stats.max_score == 0.9
         assert stats.min_score == 0.5
         assert stats.queries_by_type == {"memory": 1}
@@ -50,7 +51,8 @@ class TestRetrievalStatsCollector:
         stats = collector.snapshot()
         assert stats.total_queries == 1
         assert stats.total_results == 0
-        assert stats.total_errors == 0
+        assert stats.zero_result_queries == 1
+        assert stats.zero_result_rate == 1.0
 
     def test_record_multiple_queries(self):
         collector = RetrievalStatsCollector()
@@ -61,6 +63,7 @@ class TestRetrievalStatsCollector:
         stats = collector.snapshot()
         assert stats.total_queries == 3
         assert stats.total_results == 3
+        assert stats.zero_result_queries == 1
         assert stats.queries_by_type == {"memory": 2, "resource": 1}
         assert stats.avg_latency_ms == (30 + 20 + 5) / 3
 
@@ -139,15 +142,7 @@ class TestRetrievalObserver:
         observer = RetrievalObserver()
         assert observer.is_healthy() is True
         assert observer.has_errors() is False
-
-    def test_unhealthy_with_retrieval_error(self):
-        collector = self._setup_collector()
-        collector.record_error(RuntimeError("backend unavailable"))
-
-        observer = RetrievalObserver()
-        assert observer.is_healthy() is False
-        assert observer.has_errors() is True
-        assert "RuntimeError: backend unavailable" in observer.get_status_table()
+        assert "Zero-Result Rate" in observer.get_status_table()
 
     def test_status_table_no_data(self):
         self._setup_collector()
@@ -162,8 +157,7 @@ class TestRetrievalObserver:
         observer = RetrievalObserver()
         table = observer.get_status_table()
         assert "Total Queries" in table
-        assert "Total Errors" in table
-        assert "Zero-Result" not in table
+        assert "Zero-Result Rate" in table
         assert "memory" in table
         assert "resource" in table
 
