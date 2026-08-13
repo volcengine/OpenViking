@@ -26,6 +26,7 @@ const TARGETS = [
   { dir: join(ROOT, "examples", "claude-code-memory-plugin", "scripts", "shared"), files: OPENCODE_SHARED_FILES },
   { dir: join(ROOT, "examples", "codex-memory-plugin", "scripts", "shared"), files: OPENCODE_SHARED_FILES },
   { dir: join(ROOT, "examples", "opencode-plugin", "lib", "shared"), files: OPENCODE_SHARED_FILES },
+  { dir: join(ROOT, "examples", "dsh-memory-plugin-traex", "shared"), files: HARNESS_SHARED_FILES },
   { dir: join(ROOT, "examples", "pi-coding-agent-extension", "shared"), files: HARNESS_SHARED_FILES },
   { dir: join(ROOT, "examples", "zcode-memory-plugin", "scripts", "shared") },
 ];
