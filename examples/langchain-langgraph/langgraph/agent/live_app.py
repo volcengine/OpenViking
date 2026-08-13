@@ -41,10 +41,10 @@ def build_context_client():
 
 
 def seed_context(client, session_id: str, code: str) -> None:
-    client.create_session({"session_id": session_id})
+    client.create_session(options={"session_id": session_id})
     client.add_message(
-        session_id,
-        {
+        session_id=session_id,
+        message={
             "role": "user",
             "parts": [
                 {
@@ -58,8 +58,8 @@ def seed_context(client, session_id: str, code: str) -> None:
         },
     )
     client.add_message(
-        session_id,
-        {
+        session_id=session_id,
+        message={
             "role": "assistant",
             "parts": [
                 {
@@ -181,12 +181,12 @@ def main() -> str:
         print(answer)
         if code not in answer.lower():
             raise RuntimeError(f"Expected {code!r} in live answer: {answer!r}")
-        commit = client.commit_session(session_id)
+        commit = client.commit_session(session_id=session_id)
         wait_for_commit_task(client, commit)
         return answer
     finally:
         try:
-            client.delete_session(session_id)
+            client.delete_session(session_id=session_id)
         except Exception:
             pass
 
@@ -198,7 +198,7 @@ def wait_for_commit_task(client, commit: dict[str, object]) -> None:
     deadline = time.monotonic() + timeout
     last_task = None
     while time.monotonic() < deadline:
-        task = client.get_task(str(commit["task_id"]))
+        task = client.get_task(task_id=str(commit["task_id"]))
         last_task = task
         if task and task.get("status") == "completed":
             return

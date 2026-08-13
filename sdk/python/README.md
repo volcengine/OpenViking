@@ -96,7 +96,7 @@ client = SyncHTTPClient(
 client.initialize()
 
 with use_actor_peer("assistant-a"):
-    memories = client.find("deployment preference")
+    memories = client.find(query="deployment preference")
 ```
 
 The scope is isolated with Python `ContextVar`, so concurrent async tasks and
@@ -124,13 +124,13 @@ client.initialize()
 healthy = client.health()
 print("health:", healthy)
 
-session = client.create_session({"session_id": "demo-session"})
+session = client.create_session(options={"session_id": "demo-session"})
 print("session:", session)
 
-client.session("demo-session").add_message(
-    {"role": "user", "content": "hello from sdk"}
+client.session(session_id="demo-session").add_message(
+    message={"role": "user", "content": "hello from sdk"}
 )
-context = client.session("demo-session").get_session_context(token_budget=4096)
+context = client.session(session_id="demo-session").get_session_context(token_budget=4096)
 print("context:", context)
 
 client.close()
@@ -154,12 +154,12 @@ async def main() -> None:
     healthy = await client.health()
     print("health:", healthy)
 
-    session = await client.create_session({"session_id": "demo-session-async"})
+    session = await client.create_session(options={"session_id": "demo-session-async"})
     print("session:", session)
 
-    session_client = client.session("demo-session-async")
+    session_client = client.session(session_id="demo-session-async")
     await session_client.add_message(
-        {"role": "user", "content": "hello from async sdk"}
+        message={"role": "user", "content": "hello from async sdk"}
     )
     context = await session_client.get_session_context(token_budget=4096)
     print("context:", context)
@@ -185,18 +185,18 @@ event_config = {
     }
 }
 result = client.create_session(
-    {
+    options={
         "session_id": "demo-session",
         "memory_extraction_config": event_config,
-    }
+    },
 )
 # Explicit None disables a server-wide auto-commit default at creation time.
 client.create_session(
-    {"session_id": "manual-session", "auto_commit_policy": None}
+    options={"session_id": "manual-session", "auto_commit_policy": None}
 )
 client.update_session_config(
-    "demo-session",
-    {
+    session_id="demo-session",
+    options={
         "auto_commit_policy": {"message_count_threshold": 25},
         "memory_extraction_config": {
             "events": {"tags": ["team=search", "channel=app"]}
@@ -204,9 +204,12 @@ client.update_session_config(
     },
 )
 # Explicit None disables automatic commits; omitting the argument leaves it unchanged.
-client.update_session_config("demo-session", {"auto_commit_policy": None})
-client.session("demo-session").commit(
-    {"event_tags": ["team=search", "channel=web"]}
+client.update_session_config(
+    session_id="demo-session",
+    options={"auto_commit_policy": None},
+)
+client.session(session_id="demo-session").commit(
+    options={"event_tags": ["team=search", "channel=web"]}
 )
 # Use event_tags=[] to skip the session defaults for one commit.
 print(result)
@@ -223,8 +226,8 @@ client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
 client.initialize()
 
 result = client.add_resource(
-    "/path/to/notes.md",
-    {
+    path="/path/to/notes.md",
+    options={
         "to": "viking://resources/demo-notes",
         "reason": "knowledge import",
         "wait": True,
@@ -239,8 +242,8 @@ or refresh `.abstract.md` / `.overview.md`.
 
 ```python
 result = client.add_resource(
-    "/path/to/notes.md",
-    {
+    path="/path/to/notes.md",
+    options={
         "to": "viking://resources/demo-notes",
         "processing_mode": "vectors_only",
         "wait": True,
@@ -256,9 +259,9 @@ from openviking_sdk import SyncHTTPClient
 client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
 client.initialize()
 
-client.mkdir("viking://resources/demo-dir")
-print(client.ls("viking://resources"))
-print(client.read("viking://resources/demo-dir/example.md"))
+client.mkdir(uri="viking://resources/demo-dir")
+print(client.ls(uri="viking://resources"))
+print(client.read(uri="viking://resources/demo-dir/example.md"))
 ```
 
 ### Retrieval
@@ -269,17 +272,17 @@ from openviking_sdk import SyncHTTPClient
 client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
 client.initialize()
 
-result = client.find("hello", {"limit": 5})
+result = client.find(query="hello", options={"limit": 5})
 print(result)
 ```
 
 Image search uses the same methods. Pass a local path, bytes, data URI, HTTP URL, or `viking://` URI with `image`. The server must use a multimodal embedding model.
 
 ```python
-result = client.find("", {"image": "/path/to/photo.png", "limit": 5})
+result = client.find(query="", options={"image": "/path/to/photo.png", "limit": 5})
 result = client.search(
-    "similar poster",
-    {"image": "viking://resources/poster.png"},
+    query="similar poster",
+    options={"image": "viking://resources/poster.png"},
 )
 ```
 
@@ -288,8 +291,8 @@ server fields that the installed SDK version does not yet expose:
 
 ```python
 result = client.find(
-    "authentication",
-    {"limit": 10, "extra": {"future_server_field": False}},
+    query="authentication",
+    options={"limit": 10, "extra": {"future_server_field": False}},
 )
 ```
 
@@ -359,7 +362,7 @@ client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
 client.initialize()
 
 try:
-    print(client.read("viking://resources/not-exists.md"))
+    print(client.read(uri="viking://resources/not-exists.md"))
 except OpenVikingError as exc:
     print(type(exc).__name__, exc)
 ```

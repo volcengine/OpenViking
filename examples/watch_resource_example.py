@@ -42,8 +42,8 @@ Version: 1.0
 
         print("\nAdding resource with watch_interval=60.0 minutes...")
         result = await client.add_resource(
-            str(test_file),
-            {
+            path=str(test_file),
+            options={
                 "to": to_uri,
                 "reason": "Example: monitoring a document",
                 "instruction": "Check for updates and re-index",
@@ -67,12 +67,12 @@ async def example_update_watch_interval():
 
         print("\nUpdating watch interval by canceling then re-creating...")
         await client.add_resource(
-            str(test_file),
-            {"to": to_uri, "watch_interval": 0},
+            path=str(test_file),
+            options={"to": to_uri, "watch_interval": 0},
         )
         await client.add_resource(
-            str(test_file),
-            {
+            path=str(test_file),
+            options={
                 "to": to_uri,
                 "reason": "Updated: more frequent monitoring",
                 "watch_interval": 120.0,
@@ -93,8 +93,8 @@ async def example_cancel_watch():
 
         print("\nCancelling watch by setting interval to 0...")
         await client.add_resource(
-            str(test_file),
-            {"to": to_uri, "watch_interval": 0},
+            path=str(test_file),
+            options={"to": to_uri, "watch_interval": 0},
         )
         print("Watch task cancelled successfully!")
     finally:
@@ -111,16 +111,16 @@ async def example_handle_conflict():
 
         print("\nCreating first watch task...")
         await client.add_resource(
-            str(test_file),
-            {"to": to_uri, "watch_interval": 30.0},
+            path=str(test_file),
+            options={"to": to_uri, "watch_interval": 30.0},
         )
         print("  First watch task created successfully")
 
         print("\nAttempting to create second watch task for same URI...")
         try:
             await client.add_resource(
-                str(test_file),
-                {"to": to_uri, "watch_interval": 60.0},
+                path=str(test_file),
+                options={"to": to_uri, "watch_interval": 60.0},
             )
             print("  ERROR: This should not happen!")
         except ConflictError as e:

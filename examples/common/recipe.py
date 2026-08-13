@@ -72,8 +72,8 @@ class Recipe:
         # Search all resources or specific target
         # `find` has better performance, but not so smart
         results = self.client.search(
-            query,
-            {
+            query=query,
+            options={
                 "target_uri": target_uri,
                 "score_threshold": score_threshold,
             },

@@ -68,10 +68,13 @@ async def test():
     # add_resource expects a file path or URL
     sample = Path("./encrypted-sample.txt")
     sample.write_text("Hello, encrypted world!", encoding="utf-8")
-    await client.add_resource(str(sample), {"reason": "Test encryption"})
+    await client.add_resource(
+        path=str(sample),
+        options={"reason": "Test encryption"},
+    )
 
     # Read resource (automatically decrypted)
-    results = await client.find("encrypted")
+    results = await client.find(query="encrypted")
     print(f"Found {len(results)} results")
 
     await client.close()

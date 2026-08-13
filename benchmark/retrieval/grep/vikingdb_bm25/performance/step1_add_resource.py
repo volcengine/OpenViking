@@ -111,13 +111,13 @@ def main():
             t0 = time.monotonic()
             try:
                 try:
-                    client.mkdir(parent_uri)
+                    client.mkdir(uri=parent_uri)
                 except OpenVikingError as exc:
                     if exc.code != "ALREADY_EXISTS":
                         raise
                 result = client.add_resource(
-                    dir_path,
-                    {
+                    path=dir_path,
+                    options={
                         "parent": parent_uri,
                         "reason": f"benchmark perf: {rel_dir}",
                         "wait": True,

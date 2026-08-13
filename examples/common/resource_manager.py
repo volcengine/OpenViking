@@ -60,7 +60,7 @@ def add_resource(
                 return False
 
         # Add resource
-        result = client.add_resource(resource_path)
+        result = client.add_resource(path=resource_path)
 
         # Check result
         if result and "root_uri" in result:

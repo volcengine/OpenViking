@@ -49,8 +49,8 @@ class VikingStoreWrapper:
 
             if common_ancestor:
                 result = self.client.add_resource(
-                    common_ancestor,
-                    {"wait": True, "telemetry": True},
+                    path=common_ancestor,
+                    options={"wait": True, "telemetry": True},
                 )
                 telemetry = result.get("telemetry", {})
                 summary = telemetry.get("summary", {})
@@ -63,8 +63,8 @@ class VikingStoreWrapper:
             else:
                 for sample in samples:
                     result = self.client.add_resource(
-                        sample.doc_path,
-                        {"wait": True, "telemetry": True},
+                        path=sample.doc_path,
+                        options={"wait": True, "telemetry": True},
                     )
                     telemetry = result.get("telemetry", {})
                     summary = telemetry.get("summary", {})
@@ -77,8 +77,8 @@ class VikingStoreWrapper:
         else:
             for sample in samples:
                 result = self.client.add_resource(
-                    sample.doc_path,
-                    {"wait": True, "telemetry": True},
+                    path=sample.doc_path,
+                    options={"wait": True, "telemetry": True},
                 )
                 telemetry = result.get("telemetry", {})
                 summary = telemetry.get("summary", {})
@@ -98,7 +98,10 @@ class VikingStoreWrapper:
 
     def retrieve(self, query: str, topk: int, target_uri: str = "viking://resources"):
         """Execute retrieval"""
-        return self.client.find(query, {"limit": topk, "target_uri": target_uri})
+        return self.client.find(
+            query=query,
+            options={"limit": topk, "target_uri": target_uri},
+        )
 
     def read_resource(self, uri: str) -> str:
         """Read resource content"""

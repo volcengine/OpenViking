@@ -18,7 +18,7 @@ Read the L0 abstract (an approximately 100-token summary), excluding the OKF hea
 **Python SDK**
 
 ```python
-abstract = client.abstract("viking://resources/docs/")
+abstract = client.abstract(uri="viking://resources/docs/")
 print(f"Abstract: {abstract}")
 # Output: "Documentation for the project API, covering authentication, endpoints..."
 ```
@@ -84,7 +84,7 @@ Read the L1 overview for a directory, excluding the OKF header.
 **Python SDK**
 
 ```python
-overview = client.overview("viking://resources/docs/")
+overview = client.overview(uri="viking://resources/docs/")
 print(f"Overview:\n{overview}")
 ```
 
@@ -157,7 +157,7 @@ Read the complete text of an L0, L1, or L2 file.
 **Python SDK**
 
 ```python
-content = client.read("viking://resources/docs/api.md")
+content = client.read(uri="viking://resources/docs/api.md")
 print(f"Content:\n{content}")
 ```
 
@@ -235,9 +235,9 @@ Update an existing file, or create a new one when `mode="create"`, and automatic
 
 ```python
 result = client.write(
-    "viking://resources/docs/api.md",
-    "# Updated API\n\nFresh content.",
-    {"mode": "replace", "wait": True},
+    uri="viking://resources/docs/api.md",
+    content="# Updated API\n\nFresh content.",
+    options={"mode": "replace", "wait": True},
 )
 print(result["root_uri"])
 ```
@@ -475,9 +475,9 @@ Set explicit `k=v` tags used by retrieval filters. `replace` replaces existing t
 
 ```python
 result = client.set_tags(
-    "viking://resources/project/",
-    ["team=search", "env=prod"],
-    {"mode": "replace", "recursive": True},
+    uri="viking://resources/project/",
+    tags=["team=search", "env=prod"],
+    options={"mode": "replace", "recursive": True},
 )
 ```
 
@@ -623,8 +623,8 @@ Subtree reindex is not transactional. Records skipped because no semantic source
 
 ```python
 result = client.reindex(
-    "viking://resources",
-    {
+    uri="viking://resources",
+    options={
         "mode": "vectors_only",
         "wait": True,
         "tags": ["team=search", "env=prod"],
@@ -636,16 +636,16 @@ print(result)
 
 ```python
 result = client.reindex(
-    "viking://user/default/skills",
-    {"mode": "semantic_and_vectors", "wait": False},
+    uri="viking://user/default/skills",
+    options={"mode": "semantic_and_vectors", "wait": False},
 )
 print(result["status"])
 ```
 
 ```python
 result = client.reindex(
-    "viking://resources",
-    {"mode": "prune_orphans", "dry_run": True},
+    uri="viking://resources",
+    options={"mode": "prune_orphans", "dry_run": True},
 )
 print(result["would_delete_records"])
 ```

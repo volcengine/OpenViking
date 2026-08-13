@@ -188,28 +188,31 @@ try:
     # Wait until semantic processing completes before inspecting the resource.
     print("Wait for semantic processing...")
     add_result = client.add_resource(
-        "https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md",
-        {"wait": True},
+        path="https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md",
+        options={"wait": True},
     )
     root_uri = add_result['root_uri']
 
     # Explore the resource tree structure
-    ls_result = client.ls(root_uri)
+    ls_result = client.ls(uri=root_uri)
     print(f"Directory structure:\n{ls_result}\n")
 
     # Use glob to find markdown files
     glob_result = client.glob(pattern="**/*.md", uri=root_uri)
     if glob_result['matches']:
-        content = client.read(glob_result['matches'][0])
+        content = client.read(uri=glob_result["matches"][0])
         print(f"Content preview: {content[:200]}...\n")
 
     # Get abstract and overview of the resource
-    abstract = client.abstract(root_uri)
-    overview = client.overview(root_uri)
+    abstract = client.abstract(uri=root_uri)
+    overview = client.overview(uri=root_uri)
     print(f"Abstract:\n{abstract}\n\nOverview:\n{overview}\n")
 
     # Perform semantic search
-    results = client.find("what is openviking", {"target_uri": root_uri})
+    results = client.find(
+        query="what is openviking",
+        options={"target_uri": root_uri},
+    )
     print("Search results:")
     for result in results.get("resources", []):
         print(f"  {result['uri']} (score: {result.get('score', 0.0):.4f})")

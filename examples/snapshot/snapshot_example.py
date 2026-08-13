@@ -33,20 +33,23 @@ def short_oid(commit_oid: str | None) -> str:
 
 def write_text(client: Any, uri: str, content: str, mode: str) -> None:
     result = client.write(
-        uri,
-        content,
-        {"mode": mode, "wait": True, "timeout": WAIT_TIMEOUT},
+        uri=uri,
+        content=content,
+        options={"mode": mode, "wait": True, "timeout": WAIT_TIMEOUT},
     )
     print(f"write: {uri} (mode={result.get('mode')}, bytes={result.get('written_bytes')})")
 
 
 def remove_resource(client: Any, uri: str) -> None:
-    client.rm(uri, wait=True, timeout=WAIT_TIMEOUT)
+    client.rm(uri=uri, wait=True, timeout=WAIT_TIMEOUT)
     print(f"rm: {uri}")
 
 
 def print_find(client: Any, query: str, root_uri: str) -> None:
-    results = client.find(query, {"target_uri": root_uri, "limit": 10})
+    results = client.find(
+        query=query,
+        options={"target_uri": root_uri, "limit": 10},
+    )
     resources = results.get("resources", [])
     if not resources:
         print(f"find {query!r}: (no matches)")
@@ -57,7 +60,7 @@ def print_find(client: Any, query: str, root_uri: str) -> None:
 
 
 def print_read(client: Any, uri: str) -> None:
-    content = client.read(uri)
+    content = client.read(uri=uri)
     first_line = content.splitlines()[0] if content else ""
     print(f"read {uri}: {len(content)} chars | {first_line}")
 
@@ -87,7 +90,7 @@ def wait_for_task(
         return
     deadline = time.time() + timeout
     while True:
-        task = client.get_task(task_id) or {}
+        task = client.get_task(task_id=task_id) or {}
         status = task.get("status")
         if status in ("completed", "failed"):
             print(f"wait_for_task {task_id[:12]}: {status}")
@@ -117,8 +120,8 @@ def main() -> None:
         print_section("setup")
         print(f"server: {OPENVIKING_URL}")
         print(f"workspace: {root_uri}")
-        client.mkdir(root_uri)
-        client.mkdir(f"{root_uri}/notes")
+        client.mkdir(uri=root_uri)
+        client.mkdir(uri=f"{root_uri}/notes")
         print(f"mkdir: {root_uri}, {root_uri}/notes")
 
         print_section("v1 initial import")
@@ -143,7 +146,7 @@ def main() -> None:
         print_find(client, changelog, root_uri)
 
         print_section("v3 second changes")
-        client.mkdir(f"{root_uri}/archive")
+        client.mkdir(uri=f"{root_uri}/archive")
         print(f"mkdir: {root_uri}/archive")
         write_text(
             client,
@@ -178,7 +181,7 @@ def main() -> None:
             f"written={len(restore.get('written_paths') or [])} deleted={len(restore.get('deleted_paths') or [])}"
         )
         wait_for_task(client, restore.get("task_id"))
-        entries = client.ls(root_uri, recursive=True)
+        entries = client.ls(uri=root_uri, recursive=True)
         print(f"ls after restore: {len(entries)} entry(ies)")
         for entry in entries:
             print(f"  {entry.get('uri') if isinstance(entry, dict) else entry}")

@@ -18,7 +18,7 @@
 **Python SDK**
 
 ```python
-abstract = client.abstract("viking://resources/docs/")
+abstract = client.abstract(uri="viking://resources/docs/")
 print(f"Abstract: {abstract}")
 # Output: "Documentation for the project API, covering authentication, endpoints..."
 ```
@@ -84,7 +84,7 @@ openviking abstract viking://resources/docs/
 **Python SDK**
 
 ```python
-overview = client.overview("viking://resources/docs/")
+overview = client.overview(uri="viking://resources/docs/")
 print(f"Overview:\n{overview}")
 ```
 
@@ -157,7 +157,7 @@ openviking overview viking://resources/docs/
 **Python SDK**
 
 ```python
-content = client.read("viking://resources/docs/api.md")
+content = client.read(uri="viking://resources/docs/api.md")
 print(f"Content:\n{content}")
 ```
 
@@ -235,9 +235,9 @@ openviking read viking://resources/docs/api.md
 
 ```python
 result = client.write(
-    "viking://resources/docs/api.md",
-    "# Updated API\n\nFresh content.",
-    {"mode": "replace", "wait": True},
+    uri="viking://resources/docs/api.md",
+    content="# Updated API\n\nFresh content.",
+    options={"mode": "replace", "wait": True},
 )
 print(result["root_uri"])
 ```
@@ -475,9 +475,9 @@ Content-Disposition: attachment; filename*=UTF-8''logo.png
 
 ```python
 result = client.set_tags(
-    "viking://resources/project/",
-    ["team=search", "env=prod"],
-    {"mode": "replace", "recursive": True},
+    uri="viking://resources/project/",
+    tags=["team=search", "env=prod"],
+    options={"mode": "replace", "recursive": True},
 )
 ```
 
@@ -623,8 +623,8 @@ session 子树会被跳过。
 
 ```python
 result = client.reindex(
-    "viking://resources",
-    {
+    uri="viking://resources",
+    options={
         "mode": "vectors_only",
         "wait": True,
         "tags": ["team=search", "env=prod"],
@@ -636,16 +636,16 @@ print(result)
 
 ```python
 result = client.reindex(
-    "viking://user/default/skills",
-    {"mode": "semantic_and_vectors", "wait": False},
+    uri="viking://user/default/skills",
+    options={"mode": "semantic_and_vectors", "wait": False},
 )
 print(result["status"])
 ```
 
 ```python
 result = client.reindex(
-    "viking://resources",
-    {"mode": "prune_orphans", "dry_run": True},
+    uri="viking://resources",
+    options={"mode": "prune_orphans", "dry_run": True},
 )
 print(result["would_delete_records"])
 ```
