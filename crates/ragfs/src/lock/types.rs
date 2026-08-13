@@ -73,10 +73,6 @@ pub struct BorrowedPathLockLease {
 /// Serializable handoff payload for cross-queue / cross-worker lock transfer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PathLockHandoffRef {
-    /// Original lease reference, used to locate the same-process registry entry.
-    /// Optional only for backward compatibility with historic queue payloads.
-    #[serde(default)]
-    pub lease_ref: Option<String>,
     /// Owner identity (preserved across handoff).
     pub owner_id: String,
     /// Lock-file paths held.
@@ -87,7 +83,7 @@ pub struct PathLockHandoffRef {
 }
 
 /// A single lock request for batch acquire.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PathLockRequest {
     /// Target path.
     pub path: String,
