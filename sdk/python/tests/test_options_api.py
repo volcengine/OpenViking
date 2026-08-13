@@ -102,6 +102,18 @@ async def test_extra_cannot_override_official_or_fixed_fields():
         await client.find("query", {"limit": 5, "extra": {"limit": 10}})
 
     with pytest.raises(ValueError, match="mode"):
+        await client.reindex(
+            "viking://resources",
+            {"extra": {"mode": "prune_orphans"}},
+        )
+
+    with pytest.raises(ValueError, match="tags"):
+        await client.reindex(
+            "viking://resources",
+            {"extra": {"tags": ["team=search"]}},
+        )
+
+    with pytest.raises(ValueError, match="mode"):
         await client.search_context("query", {"extra": {"mode": "list"}})
 
     with pytest.raises(ValueError, match="extraction_metadata"):

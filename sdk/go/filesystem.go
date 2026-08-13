@@ -285,6 +285,9 @@ func (c *Client) Reindex(ctx context.Context, uri string, opts *ReindexOptions) 
 		}
 		payload["tag_mode"] = tagMode
 	}
+	if err := mergeExtraProtected(payload, opts.Extra, "tags", "tag_mode"); err != nil {
+		return nil, err
+	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/content/reindex", nil, payload, &result)
 	return result, err

@@ -222,6 +222,7 @@ type ReindexOptions struct {
 	DryRun  bool
 	Tags    []string
 	TagMode string
+	Extra   map[string]any
 }
 
 // FindOptions controls Find.

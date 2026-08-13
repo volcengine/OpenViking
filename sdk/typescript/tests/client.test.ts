@@ -286,6 +286,29 @@ describe("OpenVikingClient", () => {
     });
   });
 
+  it("sends reindex extra fields and rejects official-field overrides", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(ok({ status: "completed" }));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await client.reindex("resources", {
+      extra: { future_flag: false },
+    });
+
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toMatchObject({
+      future_flag: false,
+    });
+    expect(() =>
+      client.reindex("resources", {
+        extra: { tags: ["team=search"] },
+      }),
+    ).toThrow("extra cannot override tags");
+  });
+
   it("sends processing_mode for addResource requests", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(ok({}));
     const client = new OpenVikingClient({

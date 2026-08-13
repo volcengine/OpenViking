@@ -114,6 +114,15 @@ export interface BatchWriteOperation {
 export interface BatchWriteOptions extends WaitOptions {
   extra?: JsonObject;
 }
+/** Reindex request options. */
+export interface ReindexOptions {
+  mode?: string;
+  wait?: boolean;
+  dryRun?: boolean;
+  tags?: string[];
+  tagMode?: "replace" | "append";
+  extra?: JsonObject;
+}
 /** Semantic retrieval options shared by find and search. */
 export interface FindOptions {
   targetUri?: TargetURI;

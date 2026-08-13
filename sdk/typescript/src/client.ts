@@ -28,6 +28,7 @@ import type {
   ImportPackOptions,
   Message,
   PreflightAssetOptions,
+  ReindexOptions,
   RequestOptions,
   ResolveAssetsOptions,
   SearchContextOptions,
@@ -50,9 +51,11 @@ const compact = (value: JsonObject): JsonObject =>
 const mergeExtra = (
   body: JsonObject,
   extra: JsonObject | undefined,
+  protectedKeys: readonly string[] = [],
 ): JsonObject => {
+  const protectedFields = new Set(protectedKeys);
   for (const [key, value] of Object.entries(extra ?? {})) {
-    if (key in body)
+    if (key in body || protectedFields.has(key))
       throw new TypeError(`OpenViking: extra cannot override ${key}`);
     if (value !== undefined && value !== null) body[key] = value;
   }
@@ -622,25 +625,18 @@ export class OpenVikingClient {
     });
   }
   /** Rebuild indexes for a URI. */
-  reindex(
-    uri: string,
-    options: {
-      mode?: string;
-      wait?: boolean;
-      dryRun?: boolean;
-      tags?: string[];
-      tagMode?: "replace" | "append";
-    } = {},
-  ): Promise<JsonObject> {
+  reindex(uri: string, options: ReindexOptions = {}): Promise<JsonObject> {
+    const body = compact({
+      uri: normalizeURI(uri),
+      mode: options.mode ?? "vectors_only",
+      wait: options.wait ?? true,
+      dry_run: options.dryRun ?? false,
+      tags: options.tags,
+      tag_mode:
+        options.tags === undefined ? undefined : (options.tagMode ?? "replace"),
+    });
     return this.request("POST", "/api/v1/content/reindex", {
-      body: compact({
-        uri: normalizeURI(uri),
-        mode: options.mode ?? "vectors_only",
-        wait: options.wait ?? true,
-        dry_run: options.dryRun ?? false,
-        tags: options.tags,
-        tag_mode: options.tags === undefined ? undefined : options.tagMode ?? "replace",
-      }),
+      body: mergeExtra(body, options.extra, ["tags", "tag_mode"]),
     });
   }
 
