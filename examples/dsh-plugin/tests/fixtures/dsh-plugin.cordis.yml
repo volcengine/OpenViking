@@ -1,0 +1,33 @@
+# Test composition: a real Loader tree with a mock LLM and the OpenViking
+# plugin pointed at the in-driver stub server (OV_STUB_URL).
+- id: mock-llm
+  name: './mock-llm.ts'
+
+- id: openviking
+  name: '../../src/index.ts'
+  config:
+    baseUrl: !!js process.env.OV_STUB_URL
+    commitMinIntervalMs: 0
+    scoreThreshold: 0
+    sessionSeed: false
+    workspacePeer: false
+
+- id: agent-spine
+  name: '@deepseek-ai/dsh-agent-spine-demo'
+  config:
+    agents:
+      - id: main
+        provider: ov-plugin-mock
+        model: ov-plugin-mock
+        cwd: !!js process.cwd()
+    persona: 'Test the OpenViking plugin.'
+    workspaceContext: false
+
+- id: persistence
+  name: '@deepseek-ai/dsh-session-persistence-jsonl'
+  config:
+    root: './.sessions'
+    compression: 'none'
+
+- id: checkpoint-policy
+  name: '@deepseek-ai/dsh-session-checkpoint-policy'

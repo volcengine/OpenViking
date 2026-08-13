@@ -1,0 +1,9 @@
+# Composed into the dsh profile when this bundle is added with
+# `dsh plugin --profile <name> add @openviking/dsh-plugin`.
+# Connection falls back to OPENVIKING_BASE_URL / OPENVIKING_API_KEY,
+# then ~/.openviking/ovcli.conf; override per-deployment via the profile's
+# own cordis.patch.yml (patches replace a row's whole config).
+- insert:
+    - id: openviking
+      name: '@openviking/dsh-plugin'
+      config: {}

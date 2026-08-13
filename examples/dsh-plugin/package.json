@@ -1,0 +1,66 @@
+{
+  "name": "@openviking/dsh-plugin",
+  "version": "0.2.0",
+  "description": "OpenViking memory & context plugin for deepseek-harness (dsh): auto-captures conversation into OpenViking sessions, auto-recalls relevant memories into agent steps, and exposes OpenViking search/read tools.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "shared",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('lib', { recursive: true, force: true })\" && tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --config vitest.config.ts",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/volcengine/OpenViking.git",
+    "directory": "examples/dsh-plugin"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-agent": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-llm": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-session": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-tools": "0.1.0-rc.6",
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-agent": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-agent-spine-demo": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-app-boot": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-llm": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-loader-smoke": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-session": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-session-checkpoint-policy": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-session-persistence-jsonl": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-tools": "0.1.0-rc.6",
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.0",
+    "vitest": "^4.1.8"
+  },
+  "engines": {
+    "node": ">=22.16.0"
+  }
+}
