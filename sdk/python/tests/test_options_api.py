@@ -434,6 +434,80 @@ async def test_unknown_official_option_suggests_extra():
         await client.find("query", {"future_field": True})  # type: ignore[typeddict-unknown-key]
 
 
+@pytest.mark.asyncio
+async def test_legacy_keyword_options_are_merged_into_find_payload():
+    client, post = _client()
+
+    await client.find(
+        "query",
+        {"target_uri": "/resources", "limit": 0},
+        level=2,
+        tags=[],
+    )
+
+    post.assert_awaited_once_with(
+        "/api/v1/search/find",
+        json={
+            "query": "query",
+            "target_uri": "viking://resources",
+            "limit": 0,
+            "level": 2,
+            "tags": [],
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_legacy_keyword_options_reject_unknown_and_duplicate_fields():
+    client, post = _client()
+
+    with pytest.raises(TypeError, match=r"unsupported option 'limti'.*options\[\"extra\"\]"):
+        await client.find("query", limti=5)
+
+    with pytest.raises(ValueError, match=r"'limit'.*both options and kwargs"):
+        await client.find("query", {"limit": 5}, limit=10)
+
+    post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_legacy_keyword_options_preserve_session_null_and_message_fields():
+    client, post = _client()
+
+    await client.create_session(auto_commit_policy=None, session_id="session-1")
+    await client.add_message(
+        "session-1",
+        role="assistant",
+        content="fallback text",
+        parts=[],
+        turn_id="turn-1",
+    )
+
+    assert post.await_args_list[0].kwargs["json"] == {
+        "auto_commit_policy": None,
+        "session_id": "session-1",
+    }
+    assert post.await_args_list[1].kwargs["json"] == {
+        "role": "assistant",
+        "content": "fallback text",
+        "turn_id": "turn-1",
+    }
+
+
+def test_sync_client_forwards_legacy_keyword_options():
+    client = SyncHTTPClient(url="http://localhost:1933")
+    client._async_client.find = AsyncMock(return_value={"total": 1})
+
+    assert client.find("query", limit=0, level=2) == {"total": 1}
+
+    client._async_client.find.assert_awaited_once_with(
+        "query",
+        None,
+        limit=0,
+        level=2,
+    )
+
+
 def test_sync_client_forwards_options_without_rebuilding_payload():
     client = SyncHTTPClient(url="http://localhost:1933")
     client._async_client.find = AsyncMock(return_value={"total": 1})
