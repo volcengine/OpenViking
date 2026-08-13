@@ -1,5 +1,8 @@
 """Tests for reindex admin endpoint and executor behavior."""
 
+import asyncio
+from types import SimpleNamespace
+
 import httpx
 import pytest
 
@@ -26,6 +29,18 @@ def _make_reindex_run(ctx, counters):
     from openviking.service.reindex_executor import _ReindexRunContext
 
     return _ReindexRunContext(ctx=ctx, counters=counters)
+
+
+def _patch_reindex_config(monkeypatch, *, concurrency: int = 8, max_concurrency: int = 64):
+    monkeypatch.setattr(
+        "openviking.service.reindex_executor.get_openviking_config",
+        lambda: SimpleNamespace(
+            reindex=SimpleNamespace(
+                vector_enqueue_concurrency=concurrency,
+                max_vector_enqueue_concurrency=max_concurrency,
+            )
+        ),
+    )
 
 
 async def test_reindex_requires_admin_role(admin_client: httpx.AsyncClient):
@@ -2294,6 +2309,109 @@ async def test_reindex_resource_vectors_accepts_single_file_uri(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_reindex_resource_vectors_processes_files_concurrently(monkeypatch):
+    from openviking.service.reindex_executor import ReindexExecutor, _ReindexCounters
+
+    entered = 0
+    both_entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fake_best_file_summary(self, uri, *, ctx):
+        return f"summary:{uri.rsplit('/', 1)[-1]}"
+
+    async def fake_best_resource_file_vector_text(self, uri, summary, ctx):
+        return summary
+
+    async def fake_upsert_context(self, **kwargs):
+        nonlocal entered
+        entered += 1
+        if entered == 2:
+            both_entered.set()
+        await release.wait()
+
+    _patch_reindex_config(monkeypatch)
+    monkeypatch.setattr(ReindexExecutor, "_best_file_summary", fake_best_file_summary)
+    monkeypatch.setattr(
+        ReindexExecutor,
+        "_best_resource_file_vector_text",
+        fake_best_resource_file_vector_text,
+    )
+    monkeypatch.setattr(ReindexExecutor, "_upsert_context", fake_upsert_context)
+
+    service = ReindexExecutor()
+    counters = _ReindexCounters()
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="alice"),
+        role=Role.ROOT,
+    )
+
+    task = asyncio.create_task(
+        service._reindex_resource_vectors_from_entries(
+            root_uri="viking://resources/demo",
+            directories=[],
+            files=[
+                "viking://resources/demo/a.txt",
+                "viking://resources/demo/b.txt",
+            ],
+            counters=counters,
+            ctx=ctx,
+        )
+    )
+    try:
+        await asyncio.wait_for(both_entered.wait(), timeout=0.2)
+    finally:
+        release.set()
+    await task
+
+    assert counters.scanned_records == 2
+    assert counters.rebuilt_records == 2
+
+
+@pytest.mark.asyncio
+async def test_reindex_resource_vectors_preserves_warning_order_when_concurrent(monkeypatch):
+    from openviking.service.reindex_executor import ReindexExecutor, _ReindexCounters
+
+    async def fake_best_file_summary(self, uri, *, ctx):
+        if uri.endswith("first.txt"):
+            await asyncio.sleep(0.05)
+        return ""
+
+    async def fake_best_resource_file_vector_text(self, uri, summary, ctx):
+        return ""
+
+    _patch_reindex_config(monkeypatch)
+    monkeypatch.setattr(ReindexExecutor, "_best_file_summary", fake_best_file_summary)
+    monkeypatch.setattr(
+        ReindexExecutor,
+        "_best_resource_file_vector_text",
+        fake_best_resource_file_vector_text,
+    )
+
+    counters = _ReindexCounters()
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="alice"),
+        role=Role.ROOT,
+    )
+
+    await ReindexExecutor()._reindex_resource_vectors_from_entries(
+        root_uri="viking://resources/demo",
+        directories=[],
+        files=[
+            "viking://resources/demo/first.txt",
+            "viking://resources/demo/second.txt",
+        ],
+        counters=counters,
+        ctx=ctx,
+    )
+
+    assert counters.unsupported_records == 2
+    assert counters.warnings == [
+        "No vector source found for viking://resources/demo/first.txt",
+        "No vector source found for viking://resources/demo/second.txt",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_reindex_memory_l2_falls_back_to_body_when_abstract_missing(monkeypatch):
     from openviking.service.reindex_executor import (
         ReindexExecutor,
@@ -2342,6 +2460,94 @@ async def test_reindex_memory_l2_falls_back_to_body_when_abstract_missing(monkey
     )
 
     assert seen["viking://user/default/memories/events/item.md"]["abstract"] == "memory body text"
+
+
+@pytest.mark.asyncio
+async def test_reindex_memory_vectors_processes_files_concurrently(monkeypatch):
+    from openviking.service.reindex_executor import (
+        ReindexExecutor,
+        _PruneSourceRead,
+        _ReindexCounters,
+    )
+
+    class FakeVikingFS:
+        async def exists(self, uri, ctx=None):
+            return True
+
+        async def stat(self, uri, ctx=None):
+            return {"isDir": True}
+
+        async def tree(
+            self,
+            uri,
+            output="original",
+            show_all_hidden=False,
+            node_limit=1000,
+            level_limit=3,
+            ctx=None,
+        ):
+            return [
+                {"uri": "viking://user/default/memories/events/a.md", "isDir": False},
+                {"uri": "viking://user/default/memories/events/b.md", "isDir": False},
+            ]
+
+    entered = 0
+    both_entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fake_read_directory_abstract(self, uri, *, ctx):
+        return ""
+
+    async def fake_read_directory_overview(self, uri, *, ctx):
+        return ""
+
+    async def fake_read_memory_body(self, uri, *, ctx):
+        return _PruneSourceRead(exists=True, text=f"memory body {uri.rsplit('/', 1)[-1]}")
+
+    async def fake_fetch_existing_record(self, *, uri, level, ctx):
+        return None
+
+    async def fake_best_file_summary(self, uri, *, ctx):
+        return ""
+
+    async def fake_upsert_context(self, **kwargs):
+        nonlocal entered
+        entered += 1
+        if entered == 2:
+            both_entered.set()
+        await release.wait()
+
+    _patch_reindex_config(monkeypatch)
+    monkeypatch.setattr("openviking.service.reindex_executor.get_viking_fs", lambda: FakeVikingFS())
+    monkeypatch.setattr(ReindexExecutor, "_read_directory_abstract", fake_read_directory_abstract)
+    monkeypatch.setattr(ReindexExecutor, "_read_directory_overview", fake_read_directory_overview)
+    monkeypatch.setattr(ReindexExecutor, "_read_memory_body", fake_read_memory_body)
+    monkeypatch.setattr(ReindexExecutor, "_fetch_existing_record", fake_fetch_existing_record)
+    monkeypatch.setattr(ReindexExecutor, "_best_file_summary", fake_best_file_summary)
+    monkeypatch.setattr(ReindexExecutor, "_upsert_context", fake_upsert_context)
+
+    service = ReindexExecutor()
+    counters = _ReindexCounters()
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="alice"),
+        role=Role.ROOT,
+    )
+
+    task = asyncio.create_task(
+        service._reindex_memory_vectors(
+            uri="viking://user/default/memories/events",
+            counters=counters,
+            ctx=ctx,
+        )
+    )
+    try:
+        await asyncio.wait_for(both_entered.wait(), timeout=0.2)
+    finally:
+        release.set()
+    await task
+
+    assert counters.scanned_records == 3
+    assert counters.rebuilt_records == 2
 
 
 @pytest.mark.asyncio

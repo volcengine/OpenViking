@@ -21,6 +21,7 @@ from openviking_cli.utils.config.config_loader import (
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfig, ParserApiConfig
 from openviking_cli.utils.config.parser_config import CodeHostingConfig
 from openviking_cli.utils.config.queue_worker_config import QueueWorkersConfig
+from openviking_cli.utils.config.reindex_config import ReindexConfig
 
 
 class TestResolveConfigPath:
@@ -143,6 +144,35 @@ def test_queue_worker_concurrency_accepts_separate_values():
     assert config.queue_workers.external_parse.max_concurrent == 9
     assert config.queue_workers.add_resource.max_concurrent == 7
     assert config.queue_workers.session_commit.max_concurrent == 50
+
+
+def test_reindex_config_defaults_to_conservative_vector_enqueue_concurrency():
+    config = OpenVikingConfig.from_dict({})
+
+    assert config.reindex.vector_enqueue_concurrency == 8
+    assert config.reindex.max_vector_enqueue_concurrency == 64
+
+
+def test_reindex_config_accepts_vector_enqueue_concurrency():
+    config = OpenVikingConfig.from_dict(
+        {
+            "reindex": {
+                "vector_enqueue_concurrency": 12,
+                "max_vector_enqueue_concurrency": 32,
+            }
+        }
+    )
+
+    assert config.reindex.vector_enqueue_concurrency == 12
+    assert config.reindex.max_vector_enqueue_concurrency == 32
+
+
+@pytest.mark.parametrize("field_name", ["vector_enqueue_concurrency", "max_vector_enqueue_concurrency"])
+def test_reindex_config_rejects_non_positive_concurrency(field_name):
+    with pytest.raises(ValueError) as exc_info:
+        ReindexConfig(**{field_name: 0})
+
+    assert exc_info.value.errors()[0]["type"] == "greater_than"
 
 
 @pytest.mark.parametrize("value", [0, -1])
