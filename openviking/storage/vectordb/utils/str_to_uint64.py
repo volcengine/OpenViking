@@ -7,4 +7,8 @@ def str_to_uint64(input_string: str) -> int:
     """
     Generate a 64-bit unsigned integer hash from a string using xxHash.
     """
-    return xxhash.xxh64(input_string).intdigest()
+    if isinstance(input_string, bytes):
+        data = input_string
+    else:
+        data = input_string.encode("utf-8", "surrogatepass")
+    return xxhash.xxh64(data).intdigest()
