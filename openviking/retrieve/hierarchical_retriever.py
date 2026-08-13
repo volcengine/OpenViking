@@ -37,6 +37,9 @@ from openviking_cli.retrieve.types import (
     ContextType,
     MatchedContext,
     QueryResult,
+    ScoreDistribution,
+    ThinkingTrace,
+    TraceEventType,
     TypedQuery,
 )
 from openviking_cli.utils.config import RerankConfig, RetrievalConfig
@@ -122,6 +125,8 @@ class HierarchicalRetriever:
         t0 = time.monotonic()
         telemetry = get_current_telemetry()
         effective_threshold = self._resolve_threshold(score_threshold)
+        thinking_trace = ThinkingTrace()
+        searched_directories: List[str] = []
         image_query = bool(getattr(query, "image_query", False))
         if mode is None:
             mode = RetrieverMode.QUICK if not self._rerank_client else RetrieverMode.THINKING
@@ -274,12 +279,50 @@ class HierarchicalRetriever:
                     )
 
             # Step 3: Pick recursive entry points from directory hits and explicit roots.
-            directory_scores = [self._finite_score(r.get("_score", 0.0)) for r in global_results]
+            vector_directory_scores = [
+                self._finite_score(r.get("_score", 0.0)) for r in global_results
+            ]
+            directory_scores = vector_directory_scores
+            thinking_trace.add_event(
+                TraceEventType.EMBEDDING_SCORES,
+                "Scored global directory candidates with vector search",
+                {
+                    "scope": "global",
+                    "distribution": self._score_distribution(
+                        [
+                            (r.get("uri", ""), score)
+                            for r, score in zip(
+                                global_results, vector_directory_scores, strict=True
+                            )
+                            if r.get("uri")
+                        ],
+                        effective_threshold,
+                        score_gte,
+                    ),
+                },
+            )
             if self._rerank_client and mode == RetrieverMode.THINKING:
                 directory_scores = await self._rerank_scores(
                     query.query,
                     [str(r.get("abstract", "")) for r in global_results],
                     directory_scores,
+                )
+                thinking_trace.add_event(
+                    TraceEventType.RERANK_SCORES,
+                    "Reranked global directory candidates",
+                    {
+                        "scope": "global",
+                        "fallback_to_vector_scores": directory_scores is vector_directory_scores,
+                        "distribution": self._score_distribution(
+                            [
+                                (r.get("uri", ""), score)
+                                for r, score in zip(global_results, directory_scores, strict=True)
+                                if r.get("uri")
+                            ],
+                            effective_threshold,
+                            score_gte,
+                        ),
+                    },
                 )
 
             starting_points = []
@@ -295,6 +338,15 @@ class HierarchicalRetriever:
                 if uri not in seen_starting_uris:
                     starting_points.append((uri, 0.0))
                     seen_starting_uris.add(uri)
+
+            thinking_trace.add_event(
+                TraceEventType.DIRECTORY_QUEUED,
+                f"Queued {len(starting_points)} directories for hierarchical search",
+                {
+                    "count": len(starting_points),
+                    "directories": [{"uri": uri, "score": score} for uri, score in starting_points],
+                },
+            )
 
             # Add directory hits to the result pool only when explicitly requested.
             initial_candidates = list(leaf_results)
@@ -323,6 +375,8 @@ class HierarchicalRetriever:
                     scope_dsl=scope_dsl,
                     initial_candidates=initial_candidates,
                     level=level,
+                    thinking_trace=thinking_trace,
+                    searched_directories=searched_directories,
                 )
             apply_hotness = True
             rerank_used = self._rerank_client is not None and mode == RetrieverMode.THINKING
@@ -347,7 +401,10 @@ class HierarchicalRetriever:
         return QueryResult(
             query=query,
             matched_contexts=final,
-            searched_directories=root_uris,
+            searched_directories=searched_directories
+            if mode == RetrieverMode.THINKING
+            else root_uris,
+            thinking_trace=thinking_trace,
         )
 
     def _resolve_threshold(self, threshold: Optional[float]) -> float:
@@ -367,6 +424,20 @@ class HierarchicalRetriever:
         if score_gte:
             return score >= threshold
         return score > threshold
+
+    @classmethod
+    def _score_distribution(
+        cls,
+        uri_scores: List[Tuple[str, float]],
+        threshold: float,
+        score_gte: bool,
+    ) -> Dict[str, Any]:
+        distribution = ScoreDistribution.from_scores(uri_scores, threshold=threshold).to_dict()
+        distribution["above_threshold"] = sum(
+            1 for _, score in uri_scores if cls._passes_threshold(score, threshold, score_gte)
+        )
+        distribution["threshold_operator"] = ">=" if score_gte else ">"
+        return distribution
 
     async def _rerank_scores(
         self,
@@ -434,6 +505,8 @@ class HierarchicalRetriever:
         scope_dsl: Optional[FilterExpr | Dict[str, Any]] = None,
         initial_candidates: Optional[List[Dict[str, Any]]] = None,
         level: Optional[List[int]] = None,
+        thinking_trace: Optional[ThinkingTrace] = None,
+        searched_directories: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Recursive search with directory priority return and score propagation.
@@ -455,6 +528,7 @@ class HierarchicalRetriever:
         prev_pool_size = 0
         convergence_rounds = 0
         stagnant_rounds = 0
+        search_round = 0
 
         # Add initial candidates that match the requested level.
         if initial_candidates:
@@ -495,6 +569,7 @@ class HierarchicalRetriever:
         parallelism = max(1, self.MAX_PARALLEL_CHILD_SEARCHES)
 
         while dir_queue:
+            search_round += 1
             batch: List[Tuple[str, float]] = []
             while dir_queue and len(batch) < parallelism:
                 temp_score, current_uri = heapq.heappop(dir_queue)
@@ -504,6 +579,18 @@ class HierarchicalRetriever:
                 visited.add(current_uri)
                 logger.info(f"[RecursiveSearch] Entering URI: {current_uri}")
                 batch.append((current_uri, current_score))
+                if searched_directories is not None:
+                    searched_directories.append(current_uri)
+                if thinking_trace is not None:
+                    thinking_trace.add_event(
+                        TraceEventType.SEARCH_DIRECTORY_START,
+                        f"Searching directory {current_uri}",
+                        {
+                            "uri": current_uri,
+                            "score": current_score,
+                            "round": search_round,
+                        },
+                    )
 
             if not batch:
                 continue
@@ -513,19 +600,69 @@ class HierarchicalRetriever:
             )
 
             telemetry = get_current_telemetry()
-            for (_, current_score), results in zip(batch, batch_results, strict=True):
+            for (current_uri, current_score), results in zip(batch, batch_results, strict=True):
                 telemetry.count("vector.searches", 1)
                 telemetry.count("vector.scored", len(results))
                 telemetry.count("vector.scanned", len(results))
 
                 if not results:
+                    if thinking_trace is not None:
+                        thinking_trace.add_event(
+                            TraceEventType.SEARCH_DIRECTORY_RESULT,
+                            f"Directory {current_uri} returned no candidates",
+                            {
+                                "uri": current_uri,
+                                "result_count": 0,
+                                "selected_count": 0,
+                                "round": search_round,
+                            },
+                        )
                     continue
 
-                query_scores = [self._finite_score(r.get("_score", 0.0)) for r in results]
+                vector_scores = [self._finite_score(r.get("_score", 0.0)) for r in results]
+                query_scores = vector_scores
+                if thinking_trace is not None:
+                    thinking_trace.add_event(
+                        TraceEventType.EMBEDDING_SCORES,
+                        f"Scored {len(results)} candidates in {current_uri}",
+                        {
+                            "directory": current_uri,
+                            "distribution": self._score_distribution(
+                                [
+                                    (r.get("uri", ""), score)
+                                    for r, score in zip(results, vector_scores, strict=True)
+                                    if r.get("uri")
+                                ],
+                                effective_threshold,
+                                score_gte,
+                            ),
+                        },
+                    )
                 if self._rerank_client and mode == RetrieverMode.THINKING:
                     documents = [str(r.get("abstract", "")) for r in results]
                     query_scores = await self._rerank_scores(query, documents, query_scores)
+                    if thinking_trace is not None:
+                        thinking_trace.add_event(
+                            TraceEventType.RERANK_SCORES,
+                            f"Reranked {len(results)} candidates in {current_uri}",
+                            {
+                                "directory": current_uri,
+                                "fallback_to_vector_scores": query_scores is vector_scores,
+                                "distribution": self._score_distribution(
+                                    [
+                                        (r.get("uri", ""), score)
+                                        for r, score in zip(results, query_scores, strict=True)
+                                        if r.get("uri")
+                                    ],
+                                    effective_threshold,
+                                    score_gte,
+                                ),
+                            },
+                        )
 
+                selected = []
+                excluded = []
+                queued = []
                 for r, score in zip(results, query_scores, strict=True):
                     uri = r.get("uri", "")
                     final_score = (
@@ -535,6 +672,13 @@ class HierarchicalRetriever:
                     if not self._passes_threshold(final_score, effective_threshold, score_gte):
                         logger.debug(
                             f"[RecursiveSearch] URI {uri} score {final_score} did not pass threshold {effective_threshold}"
+                        )
+                        excluded.append(
+                            {
+                                "uri": uri,
+                                "score": final_score,
+                                "reason": "below_threshold",
+                            }
                         )
                         continue
 
@@ -550,10 +694,72 @@ class HierarchicalRetriever:
                                 uri,
                                 final_score,
                             )
+                            selected.append({"uri": uri, "score": final_score})
+                        else:
+                            excluded.append(
+                                {
+                                    "uri": uri,
+                                    "score": final_score,
+                                    "reason": "lower_scored_duplicate",
+                                }
+                            )
+                    else:
+                        excluded.append(
+                            {
+                                "uri": uri,
+                                "score": final_score,
+                                "reason": "level_filter",
+                            }
+                        )
 
                     # Only recurse into directories (L0/L1). L2 files are terminal hits.
                     if uri not in visited and r.get("level", 2) != 2:
                         heapq.heappush(dir_queue, (-final_score, uri))
+                        queued.append({"uri": uri, "score": final_score})
+
+                if thinking_trace is not None:
+                    if selected:
+                        thinking_trace.add_event(
+                            TraceEventType.CANDIDATE_SELECTED,
+                            f"Selected {len(selected)} candidates from {current_uri}",
+                            {
+                                "directory": current_uri,
+                                "count": len(selected),
+                                "candidates": selected,
+                            },
+                        )
+                    if excluded:
+                        thinking_trace.add_event(
+                            TraceEventType.CANDIDATE_EXCLUDED,
+                            f"Excluded {len(excluded)} candidates from {current_uri}",
+                            {
+                                "directory": current_uri,
+                                "count": len(excluded),
+                                "candidates": excluded,
+                            },
+                        )
+                    if queued:
+                        thinking_trace.add_event(
+                            TraceEventType.DIRECTORY_QUEUED,
+                            f"Queued {len(queued)} child directories from {current_uri}",
+                            {
+                                "directory": current_uri,
+                                "count": len(queued),
+                                "directories": queued,
+                            },
+                        )
+                    thinking_trace.add_event(
+                        TraceEventType.SEARCH_DIRECTORY_RESULT,
+                        f"Directory {current_uri} returned {len(results)} candidates",
+                        {
+                            "uri": current_uri,
+                            "result_count": len(results),
+                            "selected_count": len(selected),
+                            "excluded_count": len(excluded),
+                            "queued_count": len(queued),
+                            "round": search_round,
+                        },
+                    )
 
             # Convergence check after each parallel expansion round.
             current_topk = sorted(
@@ -563,28 +769,64 @@ class HierarchicalRetriever:
             )[:limit]
             current_topk_uris = {c.get("uri", "") for c in current_topk}
             current_pool_size = len(collected_by_uri)
+            convergence_reason = None
 
             if current_topk_uris == prev_topk_uris and len(current_topk_uris) >= limit:
                 convergence_rounds += 1
 
                 if convergence_rounds >= self.MAX_CONVERGENCE_ROUNDS:
-                    break
+                    convergence_reason = "stable_topk"
             elif current_pool_size == prev_pool_size:
                 stagnant_rounds += 1
 
                 if stagnant_rounds >= self.MAX_CONVERGENCE_ROUNDS:
-                    break
+                    convergence_reason = "stagnant_pool"
             else:
                 convergence_rounds = 0
                 stagnant_rounds = 0
                 prev_topk_uris = current_topk_uris
                 prev_pool_size = current_pool_size
 
+            if thinking_trace is not None:
+                convergence_data = {
+                    "round": search_round,
+                    "candidate_pool_size": current_pool_size,
+                    "topk_count": len(current_topk_uris),
+                    "stable_topk_rounds": convergence_rounds,
+                    "stagnant_rounds": stagnant_rounds,
+                    "queued_directories": len(dir_queue),
+                }
+                thinking_trace.add_event(
+                    TraceEventType.CONVERGENCE_CHECK,
+                    f"Checked convergence after search round {search_round}",
+                    convergence_data,
+                )
+                if convergence_reason is not None:
+                    thinking_trace.add_event(
+                        TraceEventType.SEARCH_CONVERGED,
+                        f"Search converged after {search_round} rounds",
+                        {**convergence_data, "reason": convergence_reason},
+                    )
+
+            if convergence_reason is not None:
+                break
+
         collected = sorted(
             collected_by_uri.values(),
             key=lambda x: x.get("_final_score", 0),
             reverse=True,
         )
+        if thinking_trace is not None:
+            thinking_trace.add_event(
+                TraceEventType.SEARCH_SUMMARY,
+                (f"Searched {len(visited)} directories and collected {len(collected)} candidates"),
+                {
+                    "directories_searched": len(visited),
+                    "candidates_collected": len(collected),
+                    "rounds": search_round,
+                    "returned": min(len(collected), limit),
+                },
+            )
         return collected[:limit]
 
     async def _convert_to_matched_contexts(
@@ -647,9 +889,7 @@ class HierarchicalRetriever:
                     abstract=abstract,
                     category=c.get("category", ""),
                     score=final_score,
-                    search_tags=normalize_search_tags(
-                        c.get("search_tags"), discard_invalid=True
-                    ),
+                    search_tags=normalize_search_tags(c.get("search_tags"), discard_invalid=True),
                 )
             )
 
