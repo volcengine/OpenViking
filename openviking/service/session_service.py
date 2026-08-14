@@ -252,7 +252,10 @@ class SessionService:
             else:
                 session.meta.auto_commit_policy = None
             if event_tags is not None:
-                session.meta.event_search_tags = normalize_search_tags(event_tags)
+                session.meta.event_search_tags = normalize_search_tags(
+                    event_tags,
+                    discard_invalid=True,
+                )
             await session.ensure_exists()
             self._record_lifecycle_metric("create", "ok")
             return session
@@ -507,7 +510,9 @@ class SessionService:
         self._ensure_initialized()
         session = await self.get(session_id, ctx)
         normalized_event_tags = (
-            normalize_search_tags(event_tags) if event_tags is not None else None
+            normalize_search_tags(event_tags, discard_invalid=True)
+            if event_tags is not None
+            else None
         )
         if normalized_event_tags is not None or update_auto_commit_policy:
             await session.update_config(

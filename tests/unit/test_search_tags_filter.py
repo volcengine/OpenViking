@@ -1,7 +1,10 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import logging
+
 from openviking.server.routers.search import _resolve_search_filter
+from openviking.utils import tags as tags_module
 from openviking.utils.tags import build_search_tags_filter, normalize_search_tags
 
 
@@ -25,6 +28,26 @@ def test_search_tags_filter_dedupes_before_building_and_filter():
 
 def test_search_tags_duplicate_keys_keep_last_value():
     assert normalize_search_tags(["channel=web", "channel=app"]) == ["channel=app"]
+
+
+def test_discard_invalid_search_tags_logs_one_warning_for_batch(caplog):
+    tags_module.logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.WARNING, logger="openviking.utils.tags"):
+            result = normalize_search_tags(
+                ["bad-one", "also-bad", "team=search"],
+                discard_invalid=True,
+            )
+    finally:
+        tags_module.logger.removeHandler(caplog.handler)
+
+    assert result == ["team=search"]
+    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert warnings[0].invalid_tags == ["bad-one", "also-bad"]
+    assert "Discarded invalid search tags" in warnings[0].message
+    assert "bad-one" in warnings[0].message
+    assert "also-bad" in warnings[0].message
 
 
 def test_find_tags_filter_requires_all_tags():

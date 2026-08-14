@@ -59,14 +59,18 @@ async def test_session_config_updates_event_tags_and_auto_commit_policy(
     assert disabled.json()["result"]["auto_commit_policy"] is None
 
 
-async def test_session_event_tags_reject_invalid_values(client: httpx.AsyncClient):
+async def test_session_event_tags_discard_invalid_values(client: httpx.AsyncClient):
     response = await client.post(
         "/api/v1/sessions",
-        json={"memory_extraction_config": {"events": {"tags": ["missing-equals"]}}},
+        json={
+            "memory_extraction_config": {
+                "events": {"tags": ["missing-equals", "channel=web"]}
+            }
+        },
     )
 
-    assert response.status_code == 400
-    assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
+    assert response.status_code == 200
+    assert _event_tags(response) == ["channel=web"]
 
 
 async def test_create_session_duplicate_event_tag_keys_keep_last_value(
