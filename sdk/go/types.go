@@ -211,6 +211,7 @@ type SetTagsOptions struct {
 	Mode      string
 	Recursive bool
 	Telemetry any
+	Extra     map[string]any
 }
 
 // ReindexOptions controls Reindex.

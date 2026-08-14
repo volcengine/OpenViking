@@ -257,6 +257,9 @@ func (c *Client) SetTags(ctx context.Context, uri string, tags []string, opts *S
 		"recursive": opts.Recursive,
 	}
 	setAny(payload, "telemetry", opts.Telemetry)
+	if err := mergeExtraProtected(payload, opts.Extra, "uri", "tags", "mode", "recursive", "telemetry"); err != nil {
+		return nil, err
+	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/fs/attrs/set_tags", nil, payload, &result)
 	return result, err

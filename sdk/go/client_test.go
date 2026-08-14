@@ -1612,6 +1612,28 @@ func TestSetTagsDefaultsModeAndOmitsTelemetry(t *testing.T) {
 	}
 }
 
+func TestSetTagsForwardsExtraAndRejectsOfficialFields(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		if got := body["future_flag"]; got != false {
+			t.Fatalf("future_flag = %#v", got)
+		}
+		writeOK(t, w, map[string]any{"updated": 1})
+	}))
+	defer closeServer()
+
+	if _, err := client.SetTags(context.Background(), "resources/docs", []string{"team=infra"}, &SetTagsOptions{
+		Extra: map[string]any{"future_flag": false},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.SetTags(context.Background(), "resources/docs", []string{"team=infra"}, &SetTagsOptions{
+		Extra: map[string]any{"uri": "viking://other"},
+	}); err == nil {
+		t.Fatal("expected extra to reject uri override")
+	}
+}
+
 func TestGrepForwardsLevelLimit(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method+" "+r.URL.Path != "POST /api/v1/search/grep" {

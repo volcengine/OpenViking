@@ -34,6 +34,7 @@ import type {
   SearchContextOptions,
   SearchContextResult,
   SearchOptions,
+  SetTagsOptions,
   TaskListOptions,
   TreeOptions,
   UpdateSessionConfigOptions,
@@ -612,16 +613,23 @@ export class OpenVikingClient {
   setTags(
     uri: string,
     tags: string[],
-    options: { mode?: string; recursive?: boolean; telemetry?: unknown } = {},
+    options: SetTagsOptions = {},
   ): Promise<JsonObject> {
+    const body = compact({
+      uri: normalizeURI(uri),
+      tags,
+      mode: options.mode ?? "replace",
+      recursive: options.recursive ?? false,
+      telemetry: options.telemetry,
+    });
     return this.request("POST", "/api/v1/fs/attrs/set_tags", {
-      body: compact({
-        uri: normalizeURI(uri),
-        tags,
-        mode: options.mode ?? "replace",
-        recursive: options.recursive ?? false,
-        telemetry: options.telemetry,
-      }),
+      body: mergeExtra(body, options.extra, [
+        "uri",
+        "tags",
+        "mode",
+        "recursive",
+        "telemetry",
+      ]),
     });
   }
   /** Rebuild indexes for a URI. */

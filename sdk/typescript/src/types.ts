@@ -114,6 +114,13 @@ export interface BatchWriteOperation {
 export interface BatchWriteOptions extends WaitOptions {
   extra?: JsonObject;
 }
+/** Retrieval tag update options. */
+export interface SetTagsOptions {
+  mode?: "replace" | "append";
+  recursive?: boolean;
+  telemetry?: unknown;
+  extra?: JsonObject;
+}
 /** Reindex request options. */
 export interface ReindexOptions {
   mode?: string;
