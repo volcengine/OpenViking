@@ -859,7 +859,6 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
   "pdf": {
     "strategy": "auto",
     "mineru_endpoint": "http://127.0.0.1:8000",
-    "mineru_api_key": "your-api-key",
     "mineru_timeout": 300.0,
     "mineru_bodys": {
       "backend": "hybrid-auto-engine",
@@ -874,7 +873,6 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
 |------|------|------|
 | `strategy` | str | 解析策略：`local` / `mineru` / `auto`（默认 `auto`） |
 | `mineru_endpoint` | str | MinerU API **base URL**（如 `http://127.0.0.1:8000`） |
-| `mineru_api_key` | str | MinerU API 认证密钥（可选） |
 | `mineru_timeout` | float | 请求超时秒数（默认 `300.0`） |
 | `mineru_bodys` | dict | MinerU API multipart form 参数 |
 

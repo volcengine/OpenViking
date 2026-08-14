@@ -891,7 +891,6 @@ PDF parsing configuration. Three strategies are supported: `local` (local pdfplu
   "pdf": {
     "strategy": "auto",
     "mineru_endpoint": "http://127.0.0.1:8000",
-    "mineru_api_key": "your-api-key",
     "mineru_timeout": 300.0,
     "mineru_bodys": {
       "backend": "hybrid-auto-engine",
@@ -906,7 +905,6 @@ PDF parsing configuration. Three strategies are supported: `local` (local pdfplu
 |-----------|------|-------------|
 | `strategy` | str | Parsing strategy: `local` / `mineru` / `auto` (default `auto`) |
 | `mineru_endpoint` | str | MinerU API **base URL** (e.g. `http://127.0.0.1:8000`) |
-| `mineru_api_key` | str | MinerU API authentication key (optional) |
 | `mineru_timeout` | float | Request timeout in seconds (default `300.0`) |
 | `mineru_bodys` | dict | MinerU API multipart form fields |
 

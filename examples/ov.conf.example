@@ -229,7 +229,6 @@
             "section_size_flexibility": 0.3,
             "max_section_chars": 6000,
             "mineru_endpoint": "http://127.0.0.1:8000",
-            "mineru_api_key": "{your-mineru-api-key}",
             "mineru_timeout": 300.0,
             "mineru_bodys": {
                 "backend": "hybrid-auto-engine",

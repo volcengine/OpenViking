@@ -59,8 +59,7 @@ class PDFParser(BaseParser):
         >>> # Remote API parsing
         >>> config = PDFConfig(
         ...     strategy="mineru",
-        ...     mineru_endpoint="http://127.0.0.1:8000",
-        ...     mineru_api_key="key"
+        ...     mineru_endpoint="http://127.0.0.1:8000"
         ... )
         >>> parser = PDFParser(config)
         >>> result = await parser.parse("document.pdf")
@@ -728,11 +727,6 @@ class PDFParser(BaseParser):
                 with open(pdf_path, "rb") as f:
                     files = {"files": (pdf_path.name, f, "application/pdf")}
 
-                    # Prepare headers
-                    headers = {}
-                    if self.config.mineru_api_key:
-                        headers["Authorization"] = f"Bearer {self.config.mineru_api_key}"
-
                     # Prepare Form fields
                     data: Dict[str, Any] = dict(self.config.mineru_bodys or {})
 
@@ -745,7 +739,6 @@ class PDFParser(BaseParser):
                         url,
                         files=files,
                         data=data,
-                        headers=headers,
                     )
                     response.raise_for_status()
 
