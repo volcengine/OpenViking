@@ -69,6 +69,7 @@ class TestMockAgfsPathlockContract:
         assert lease["lease_ref"]
         assert lease["ownership_ref"]
         assert lease["owner_id"]
+        assert lease["lock_paths"] == ["/local/test/a.txt"]
 
     def test_release_frees_lock(self, tmp_path):
         mock = _make_mock(tmp_path)
@@ -110,11 +111,56 @@ class TestMockAgfsPathlockContract:
         mock = _make_mock(tmp_path)
         owned = mock.pathlock_acquire_exact(None, "/local/test/a.txt")
         handoff = mock.pathlock_to_handoff(None, owned)
+        assert handoff["lease_ref"] == owned["lease_ref"]
         assert handoff["lock_paths"]
         mock.pathlock_handoff(None, owned)
+        assert mock.pathlock_is_locked(None, "/local/test/a.txt") is True
+        with pytest.raises(ValueError):
+            mock.pathlock_release(None, owned)
         adopted = mock.pathlock_adopt(None, handoff)
         assert adopted["owned"] is True
+        assert adopted["lease_ref"] != owned["lease_ref"]
+        assert mock.pathlock_is_locked(None, "/local/test/a.txt") is True
         mock.pathlock_release(None, adopted)
+
+    def test_adopt_requires_pending_handoff(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        owned = mock.pathlock_acquire_exact(None, "/local/test/a.txt")
+        handoff = mock.pathlock_to_handoff(None, owned)
+        with pytest.raises(ValueError):
+            mock.pathlock_adopt(None, handoff)
+        mock.pathlock_release(None, owned)
+
+    def test_adopt_rejects_forged_lock_paths(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        owned = mock.pathlock_acquire_exact(None, "/local/test/a.txt")
+        handoff = mock.pathlock_to_handoff(None, owned)
+        mock.pathlock_handoff(None, owned)
+        handoff["lock_paths"] = ["/local/test/b.txt"]
+        with pytest.raises(ValueError):
+            mock.pathlock_adopt(None, handoff)
+        assert mock.pathlock_is_locked(None, "/local/test/a.txt") is True
+        handoff["lock_paths"] = ["/local/test/a.txt"]
+        adopted = mock.pathlock_adopt(None, handoff)
+        mock.pathlock_release(None, adopted)
+
+    def test_adopt_rejects_forged_owner(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        owned = mock.pathlock_acquire_exact(None, "/local/test/a.txt")
+        handoff = mock.pathlock_to_handoff(None, owned)
+        mock.pathlock_handoff(None, owned)
+        handoff["owner_id"] = "forged-owner"
+        with pytest.raises(ValueError):
+            mock.pathlock_adopt(None, handoff)
+
+    def test_adopt_rejects_forged_coverage(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        owned = mock.pathlock_acquire_exact(None, "/local/test/a.txt")
+        handoff = mock.pathlock_to_handoff(None, owned)
+        mock.pathlock_handoff(None, owned)
+        handoff["covered_paths"] = [{"path": "/local/test/b.txt", "kind": "exact"}]
+        with pytest.raises(ValueError):
+            mock.pathlock_adopt(None, handoff)
 
     def test_release_selected_keeps_others(self, tmp_path):
         mock = _make_mock(tmp_path)

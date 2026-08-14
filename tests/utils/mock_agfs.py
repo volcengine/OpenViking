@@ -30,6 +30,7 @@ class MockLocalAGFS:
         self._pathlocks_guard = threading.Lock()
         self._pathlocks = {}
         self._pathlock_leases = {}
+        self._pathlock_handoffs = {}
         self._queue_guard = threading.Lock()
         self._queues = {}
         self._queue_processing = {}
@@ -375,7 +376,7 @@ class MockLocalAGFS:
             "ownership_ref": str(uuid.uuid4()),
             "owner_id": "mock-local-agfs",
             "owned": True,
-            "lock_paths": [{"path": p, "kind": "exact"} for p in paths],
+            "lock_paths": list(paths),
         }
         with self._pathlocks_guard:
             self._pathlock_leases[lease_ref] = dict(locks)
@@ -447,7 +448,9 @@ class MockLocalAGFS:
         if not owned_lease_ref.get("owned", True):
             raise ValueError("cannot release a borrowed lease")
         with self._pathlocks_guard:
-            locks = self._pathlock_leases.pop(lease_ref)
+            locks = self._pathlock_leases.pop(lease_ref, None)
+        if locks is None:
+            raise ValueError("cannot release an unknown lease")
         if not isinstance(locks, dict):
             locks = {owned_lease_ref.get("lease_ref", ""): locks}
         for lock in reversed(list(locks.values())):
@@ -486,8 +489,12 @@ class MockLocalAGFS:
             if lease_ref not in self._pathlock_leases:
                 raise ValueError("cannot hand off an unknown lease")
         return {
+            "lease_ref": lease_ref,
             "owner_id": owned_lease_ref.get("owner_id") or "mock-local-agfs",
             "lock_paths": owned_lease_ref.get("lock_paths", []),
+            "covered_paths": [
+                {"path": path, "kind": "exact"} for path in owned_lease_ref.get("lock_paths", [])
+            ],
         }
 
     def pathlock_handoff(self, ctx, owned_lease_ref):
@@ -495,19 +502,41 @@ class MockLocalAGFS:
         lease_ref = owned_lease_ref["lease_ref"]
         with self._pathlocks_guard:
             locks = self._pathlock_leases.pop(lease_ref, None)
-        if locks is None:
-            raise ValueError("cannot hand off an unknown lease")
-        if isinstance(locks, dict):
-            for lock in reversed(list(locks.values())):
-                if lock.locked():
-                    lock.release()
+            if locks is None:
+                raise ValueError("cannot hand off an unknown lease")
+            self._pathlock_handoffs[lease_ref] = {
+                "locks": locks,
+                "owner_id": owned_lease_ref.get("owner_id"),
+                "lock_paths": list(owned_lease_ref.get("lock_paths", [])),
+                "covered_paths": [
+                    {"path": path, "kind": "exact"}
+                    for path in owned_lease_ref.get("lock_paths", [])
+                ],
+            }
 
     def pathlock_adopt(self, ctx, handoff_ref):
+        del ctx
+        lease_ref = handoff_ref.get("lease_ref")
         lock_paths = handoff_ref.get("lock_paths", [])
-        if not lock_paths:
-            raise ValueError("handoff has no lock paths to adopt")
-        paths = [lp["path"] for lp in lock_paths]
-        return self.pathlock_acquire_exact_batch(ctx, paths)
+        owner_id = handoff_ref.get("owner_id") or handoff_ref.get("handle_id")
+        if not lease_ref or not owner_id or not lock_paths:
+            raise ValueError("handoff requires lease_ref, owner_id, and lock_paths")
+        paths = [lp["path"] if isinstance(lp, dict) else lp for lp in lock_paths]
+        covered_paths = handoff_ref.get("covered_paths", [])
+        with self._pathlocks_guard:
+            pending = self._pathlock_handoffs.pop(lease_ref, None)
+        if pending is None:
+            raise ValueError("cannot adopt a lease that is not pending handoff")
+        if (
+            owner_id != pending["owner_id"]
+            or paths != pending["lock_paths"]
+            or covered_paths != pending["covered_paths"]
+        ):
+            with self._pathlocks_guard:
+                self._pathlock_handoffs[lease_ref] = pending
+            raise ValueError("handoff metadata does not match the pending lease")
+        locks = pending["locks"]
+        return self._make_owned_lease(list(locks.items()), paths)
 
     def pathlock_is_locked(self, ctx, path, ignore_stale=True):
         del ctx, ignore_stale
