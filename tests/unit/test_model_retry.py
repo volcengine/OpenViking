@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for shared model retry helpers."""
 
+import asyncio
+import time
+
 import pytest
 
 from openviking.utils.exceptions import AllCredentialsFailedError
@@ -14,6 +17,7 @@ from openviking.utils.model_retry import (
     ERROR_CLASS_TRANSIENT,
     classify_api_error,
     retry_async,
+    retry_deadline_seconds,
     retry_sync,
 )
 
@@ -175,6 +179,69 @@ async def test_retry_async_does_not_retry_quota_exceeded():
         await retry_async(_call, max_retries=5)
 
     assert attempts["count"] == 1
+
+
+def test_retry_deadline_seconds_covers_first_call_and_retries():
+    assert retry_deadline_seconds(10.0, 3) == 40.0
+    assert retry_deadline_seconds(600.0, 0) == 600.0
+
+
+def test_retry_deadline_seconds_rejects_non_positive_timeout():
+    with pytest.raises(ValueError, match="attempt_timeout must be positive"):
+        retry_deadline_seconds(0, 3)
+
+
+@pytest.mark.asyncio
+async def test_retry_async_cancels_hanging_attempt_when_timeout_expires():
+    attempts = {"count": 0}
+
+    async def _call():
+        attempts["count"] += 1
+        await asyncio.sleep(10)
+        return "ok"
+
+    started = time.monotonic()
+    with pytest.raises(TimeoutError, match="timed out after 0.2s"):
+        await retry_async(_call, max_retries=3, timeout=0.2, jitter=False)
+    elapsed = time.monotonic() - started
+
+    assert attempts["count"] == 1
+    assert elapsed < 2.0
+
+
+@pytest.mark.asyncio
+async def test_retry_async_expires_when_a_later_attempt_hangs():
+    attempts = {"count": 0}
+
+    async def _call():
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise RuntimeError("Connection error")
+        await asyncio.sleep(10)
+        return "ok"
+
+    started = time.monotonic()
+    with pytest.raises(TimeoutError, match="timed out after 0.3s"):
+        await retry_async(
+            _call,
+            max_retries=3,
+            timeout=0.3,
+            base_delay=0.01,
+            max_delay=0.01,
+            jitter=False,
+        )
+    elapsed = time.monotonic() - started
+
+    assert attempts["count"] == 2
+    assert elapsed < 2.0
+
+
+@pytest.mark.asyncio
+async def test_retry_async_omitting_timeout_keeps_success_path():
+    async def _call():
+        return "ok"
+
+    assert await retry_async(_call, max_retries=3) == "ok"
 
 
 def test_quota_exceeded_case_insensitive():

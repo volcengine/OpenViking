@@ -11,14 +11,24 @@ OpenAI and LiteLLM clients.
 
 from unittest import mock
 
+import httpx
 import pytest
 from pydantic import ValidationError
 
 from openviking.models.vlm.backends.openai_vlm import (
+    DEFAULT_OPENAI_CONNECT_TIMEOUT_SECONDS,
     OpenAIVLM,
     _build_openai_client_kwargs,
+    _build_openai_http_timeout,
 )
 from openviking_cli.utils.config.vlm_config import VLMConfig
+
+
+def _assert_openai_timeout(value, *, read: float) -> None:
+    assert isinstance(value, httpx.Timeout)
+    assert value.read == read
+    assert value.write == read
+    assert value.connect == min(read, DEFAULT_OPENAI_CONNECT_TIMEOUT_SECONDS)
 
 
 def test_vlm_config_accepts_timeout():
@@ -38,7 +48,7 @@ def test_vlm_config_rejects_non_positive_timeout():
 
 def test_build_openai_client_kwargs_default_timeout():
     kwargs = _build_openai_client_kwargs("openai", "sk-x", "https://example.invalid", None, None)
-    assert kwargs["timeout"] == 600.0
+    _assert_openai_timeout(kwargs["timeout"], read=600.0)
 
 
 def test_build_openai_client_kwargs_custom_timeout():
@@ -50,7 +60,19 @@ def test_build_openai_client_kwargs_custom_timeout():
         None,
         timeout=120.0,
     )
-    assert kwargs["timeout"] == 120.0
+    _assert_openai_timeout(kwargs["timeout"], read=120.0)
+
+
+def test_build_openai_http_timeout_caps_connect_below_long_read():
+    timeout = _build_openai_http_timeout(600.0)
+    _assert_openai_timeout(timeout, read=600.0)
+    assert timeout.connect == DEFAULT_OPENAI_CONNECT_TIMEOUT_SECONDS
+
+
+def test_build_openai_http_timeout_does_not_exceed_short_read():
+    timeout = _build_openai_http_timeout(10.0)
+    _assert_openai_timeout(timeout, read=10.0)
+    assert timeout.connect == 10.0
 
 
 def test_openai_vlm_propagates_config_timeout():
@@ -67,7 +89,7 @@ def test_openai_vlm_propagates_config_timeout():
 
     with mock.patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI") as fake:
         vlm.get_client()
-    assert fake.call_args.kwargs.get("timeout") == 120.0
+    _assert_openai_timeout(fake.call_args.kwargs.get("timeout"), read=120.0)
 
 
 def test_openai_vlm_defaults_to_600_timeout_when_config_omits_it():
@@ -83,7 +105,7 @@ def test_openai_vlm_defaults_to_600_timeout_when_config_omits_it():
 
     with mock.patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI") as fake:
         vlm.get_client()
-    assert fake.call_args.kwargs.get("timeout") == 600.0
+    _assert_openai_timeout(fake.call_args.kwargs.get("timeout"), read=600.0)
 
 
 def test_litellm_build_kwargs_includes_timeout():
@@ -136,4 +158,18 @@ def test_codex_vlm_propagates_config_timeout():
         )
         assert vlm.get_completion("hello") == "timeout ok"
 
-    assert fake.call_args.kwargs.get("timeout") == 45.0
+    _assert_openai_timeout(fake.call_args.kwargs.get("timeout"), read=45.0)
+
+
+def test_openai_vlm_retry_deadline_scales_with_attempts():
+    vlm = OpenAIVLM(
+        {
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "api_key": "sk-x",
+            "api_base": "https://example.invalid",
+            "timeout": 10.0,
+            "max_retries": 3,
+        }
+    )
+    assert vlm._retry_timeout_seconds() == 40.0

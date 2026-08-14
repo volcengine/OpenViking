@@ -365,6 +365,18 @@ def retry_sync(
             attempt += 1
 
 
+def retry_deadline_seconds(attempt_timeout: float, max_retries: int) -> float:
+    """Return an overall retry budget covering the first call and each retry."""
+    if attempt_timeout <= 0:
+        raise ValueError("attempt_timeout must be positive")
+    attempts = max(int(max_retries), 0) + 1
+    return float(attempt_timeout) * attempts
+
+
+def _timeout_error(operation_name: str, timeout: float) -> TimeoutError:
+    return TimeoutError(f"{operation_name} timed out after {timeout:.1f}s")
+
+
 async def retry_async(
     func: Callable[[], Awaitable[T]],
     *,
@@ -375,13 +387,34 @@ async def retry_async(
     is_retryable: Callable[[Exception], bool] = is_retryable_api_error,
     logger=None,
     operation_name: str = "operation",
+    timeout: float | None = None,
 ) -> T:
-    """Retry an async function on known transient errors."""
+    """Retry an async function on known transient errors.
+
+    ``timeout`` is an optional overall deadline in seconds for the whole retry
+    loop, including backoff sleeps. When it expires, the in-flight attempt is
+    cancelled and ``TimeoutError`` is raised without further retries. Existing
+    callers that omit it keep the previous unbounded behavior.
+    """
+    if timeout is not None and timeout <= 0:
+        raise ValueError("timeout must be positive")
+
+    deadline = None if timeout is None else time.monotonic() + timeout
     attempt = 0
 
     while True:
+        remaining = None if deadline is None else deadline - time.monotonic()
+        if remaining is not None and remaining <= 0:
+            raise _timeout_error(operation_name, timeout)
+
         try:
-            return await func()
+            if remaining is None:
+                return await func()
+            return await asyncio.wait_for(func(), timeout=remaining)
+        except asyncio.TimeoutError as exc:
+            if timeout is None:
+                raise
+            raise _timeout_error(operation_name, timeout) from exc
         except Exception as e:
             if max_retries <= 0 or attempt >= max_retries or not is_retryable(e):
                 raise
@@ -392,6 +425,11 @@ async def retry_async(
                 max_delay=max_delay,
                 jitter=jitter,
             )
+            if deadline is not None:
+                remaining_after = deadline - time.monotonic()
+                if remaining_after <= 0:
+                    raise _timeout_error(operation_name, timeout)
+                delay = min(delay, remaining_after)
             if logger:
                 logger.warning(
                     "%s failed with retryable error (retry %d/%d): %s; retrying in %.2fs",
