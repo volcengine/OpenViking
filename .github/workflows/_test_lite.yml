@@ -86,4 +86,5 @@ jobs:
         uv run pytest -q -o addopts='' \
           tests/vectordb/test_cuvs_config.py \
           tests/vectordb/test_cuvs_index.py \
-          tests/vectordb/test_cuvs_collection.py
+          tests/vectordb/test_cuvs_collection.py \
+          tests/vectordb/test_str_to_uint64.py
