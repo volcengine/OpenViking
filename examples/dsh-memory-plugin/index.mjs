@@ -5,7 +5,7 @@ import { OpenVikingRuntime } from "./runtime.mjs";
 import { registerOpenVikingTools } from "./tools.mjs";
 import { guardVikingUri } from "./uri-guard.mjs";
 
-export const name = "openviking-memory-traex";
+export const name = "openviking-memory";
 export const inject = ["agents", "sessions", "tools"];
 
 export function apply(ctx, input = {}) {
@@ -13,11 +13,19 @@ export function apply(ctx, input = {}) {
   const client = new OpenVikingClient(config);
   const runtime = new OpenVikingRuntime(client, config, ctx.logger);
   ctx.provide("openvikingMemory", runtime);
+  ctx.effect(
+    () => () => runtime.disposeAll(),
+    "openvikingMemory.disposeAll()",
+  );
 
   registerOpenVikingTools(ctx, client, runtime);
 
-  ctx.on("agent/session-start", async ({ agent }) => {
-    await injectStartupProfile(agent, runtime);
+  ctx.on("agent/session-start", ({ agent }) => {
+    agent.ctx.effect(
+      () => () => runtime.dispose(agent.session),
+      "openvikingMemory.disposeSession()",
+    );
+    return injectStartupProfile(agent, runtime);
   });
 
   // prepend: downstream waterfall listeners run first, so this plugin sees
@@ -27,7 +35,7 @@ export function apply(ctx, input = {}) {
     if (decision.kind !== "enter" || signal.aborted) return decision;
     const profile = await runtime.profileMessage(agent);
     if (signal.aborted) return decision;
-    const recall = await runtime.recallMessage(agent, messages);
+    const recall = await runtime.recallMessage(agent, decision.messages);
     if (signal.aborted) return decision;
     const additions = [profile, recall].filter(Boolean);
     return additions.length > 0
@@ -40,12 +48,8 @@ export function apply(ctx, input = {}) {
     runtime.maybeCommit(session, event);
   });
 
-  ctx.on("session/flush", async () => {
-    await runtime.flush();
-  });
-
-  ctx.on("session/disposed", session => {
-    runtime.dispose(session);
+  ctx.on("session/flush", async session => {
+    await runtime.flush(session);
   });
 
   ctx.on("tools/pre-execute", guardVikingUri);

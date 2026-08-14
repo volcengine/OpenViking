@@ -88,6 +88,71 @@ test("existing OpenViking sessions are reusable on DSH resume", async () => {
   assert.equal(await client.ensureSession("dsh-resume"), true);
 });
 
+test("directory listing requests the raw array contract", async () => {
+  let seenUrl;
+  globalThis.fetch = async (url) => {
+    seenUrl = url;
+    return new Response(JSON.stringify({
+      status: "ok",
+      result: [{ name: "notes.md", isDir: false }],
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  const client = new OpenVikingClient({
+    endpoint: "http://127.0.0.1:1933",
+    apiKey: "",
+    account: "",
+    user: "",
+    peerId: "",
+    userAgent: "",
+    requestTimeoutMs: 1000,
+    commitKeepRecentCount: 10,
+  });
+
+  assert.deepEqual(await client.list("viking://resources"), [
+    { name: "notes.md", isDir: false },
+  ]);
+  assert.equal(
+    seenUrl,
+    "http://127.0.0.1:1933/api/v1/fs/ls?uri=viking%3A%2F%2Fresources&output=original",
+  );
+});
+
+test("archive lookup uses the dedicated session archive endpoint", async () => {
+  let seenUrl;
+  globalThis.fetch = async (url) => {
+    seenUrl = url;
+    return new Response(JSON.stringify({
+      status: "ok",
+      result: { archive_id: "archive_001", messages: [] },
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  const client = new OpenVikingClient({
+    endpoint: "http://127.0.0.1:1933",
+    apiKey: "",
+    account: "",
+    user: "",
+    peerId: "",
+    userAgent: "",
+    requestTimeoutMs: 1000,
+    commitKeepRecentCount: 10,
+  });
+
+  assert.deepEqual(
+    await client.getSessionArchive("dsh session", "archive/001"),
+    { archive_id: "archive_001", messages: [] },
+  );
+  assert.equal(
+    seenUrl,
+    "http://127.0.0.1:1933/api/v1/sessions/dsh%20session/archives/archive%2F001",
+  );
+});
+
 test("client normalizes non-2xx OpenViking envelopes", async () => {
   globalThis.fetch = async () => new Response(JSON.stringify({
     status: "error",

@@ -1,5 +1,5 @@
 {
-  "name": "@openviking/dsh-memory-plugin-traex",
+  "name": "@openviking/dsh-memory-plugin",
   "version": "0.1.0",
   "description": "OpenViking memory and context bundle for DeepSeek Harness",
   "type": "module",
@@ -45,7 +45,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/volcengine/OpenViking.git",
-    "directory": "examples/dsh-memory-plugin-traex"
+    "directory": "examples/dsh-memory-plugin"
   },
   "keywords": [
     "deepseek-harness",

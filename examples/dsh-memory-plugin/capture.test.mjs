@@ -31,7 +31,7 @@ test("captures DSH message events without recapturing injected context", () => {
     data: {
       role: "user",
       content: [{ type: "text", text: "<openviking-context>blue</openviking-context>" }],
-      source: { kind: "plugin", plugin: "openviking-memory-traex", form: "recall" },
+      source: { kind: "plugin", plugin: "openviking-memory", form: "recall" },
     },
   }, CONFIG);
   assert.equal(injected, null);
@@ -76,6 +76,48 @@ test("preserves DSH tool call identity in captured tool results", () => {
   assert.equal(captured.parts[0].tool_id, "call-1");
   assert.equal(captured.parts[0].tool_name, "bash");
   assert.match(captured.parts[0].tool_output, /workspace/);
+  assert.equal(names.size, 0);
+});
+
+test("does not retain tool call names when tool-result capture is disabled", () => {
+  const names = new Map();
+  const config = { ...CONFIG, captureToolResults: false };
+  captureEvent({
+    type: "tool/call",
+    data: { callId: "call-disabled", name: "bash" },
+  }, config, names);
+  assert.equal(names.size, 0);
+});
+
+test("releases tool call names even when a tool result has no capturable content", () => {
+  const names = new Map([["call-empty", "bash"]]);
+  const captured = captureEvent({
+    type: "tool/result",
+    data: {
+      message: {
+        role: "user",
+        content: [],
+        source: { kind: "tool", callId: "call-empty" },
+      },
+    },
+  }, CONFIG, names);
+
+  assert.equal(captured, null);
+  assert.equal(names.size, 0);
+});
+
+test("preserves DSH event time so identical offline messages do not deduplicate", () => {
+  const captured = captureEvent({
+    type: "user/message",
+    time: 1_786_681_234_567,
+    data: {
+      role: "user",
+      content: [{ type: "text", text: "Repeat this exact fact." }],
+      source: { kind: "user" },
+    },
+  }, CONFIG);
+
+  assert.equal(captured.created_at, "2026-08-14T04:20:34.567Z");
 });
 
 test("builds recall queries from current input while excluding its own context", () => {
@@ -88,7 +130,7 @@ test("builds recall queries from current input while excluding its own context",
     {
       role: "user",
       content: [{ type: "text", text: "old recall" }],
-      source: { kind: "plugin", plugin: "openviking-memory-traex" },
+      source: { kind: "plugin", plugin: "openviking-memory" },
     },
     {
       role: "user",

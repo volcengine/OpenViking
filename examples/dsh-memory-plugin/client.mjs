@@ -61,18 +61,27 @@ export class OpenVikingClient {
   }
 
   async health() {
+    return (await this.healthResult()).ok;
+  }
+
+  async healthResult() {
     const response = await this.fetchJSON("/health", {}, { timeoutMs: 5000 });
     this.connected = response.ok;
-    return response.ok;
+    return response;
   }
 
   async ensureSession(sessionId, actorPeerId) {
+    const response = await this.ensureSessionResult(sessionId, actorPeerId);
+    return response.ok
+      || (response.status === 409 && response.error?.code === "ALREADY_EXISTS");
+  }
+
+  async ensureSessionResult(sessionId, actorPeerId) {
     const response = await this.fetchJSON("/api/v1/sessions", {
       method: "POST",
       body: JSON.stringify({ session_id: sessionId }),
     }, { actorPeerId });
-    return response.ok
-      || (response.status === 409 && response.error?.code === "ALREADY_EXISTS");
+    return response;
   }
 
   async getSession(sessionId, actorPeerId) {
@@ -80,6 +89,15 @@ export class OpenVikingClient {
       `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
       {},
       { timeoutMs: 5000, actorPeerId },
+    );
+    return response.ok ? response.result : null;
+  }
+
+  async getSessionArchive(sessionId, archiveId, actorPeerId) {
+    const response = await this.fetchJSON(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/archives/${encodeURIComponent(archiveId)}`,
+      {},
+      { actorPeerId },
     );
     return response.ok ? response.result : null;
   }
@@ -95,14 +113,14 @@ export class OpenVikingClient {
     );
   }
 
-  async commitSession(sessionId, actorPeerId) {
+  async commitSession(sessionId, actorPeerId, options = {}) {
     return this.fetchJSON(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`,
       {
         method: "POST",
         body: JSON.stringify({ keep_recent_count: this.config.commitKeepRecentCount }),
       },
-      { timeoutMs: 30000, actorPeerId },
+      { timeoutMs: options.timeoutMs ?? 30000, actorPeerId },
     );
   }
 
@@ -151,7 +169,7 @@ export class OpenVikingClient {
 
   async list(uri, actorPeerId) {
     const response = await this.fetchJSON(
-      `/api/v1/fs/ls?uri=${encodeURIComponent(uri)}`,
+      `/api/v1/fs/ls?uri=${encodeURIComponent(uri)}&output=original`,
       {},
       { actorPeerId },
     );

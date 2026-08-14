@@ -157,21 +157,27 @@ export function registerOpenVikingTools(ctx, client, runtime) {
 
   ctx.tools.register(textTool({
     name: "viking_archive_expand",
-    description: "Read an archived OpenViking session overview or history.",
+    description: "Read original messages from one archive in the current DSH session.",
     parameters: {
-      session_id: { type: "string", description: "OpenViking session id." },
-      archive_id: { type: "string", description: "Archive id when session_id is unavailable." },
+      archive_id: { type: "string", required: true, description: "Archive id such as archive_001." },
     },
     async execute(args, exec) {
-      const actorPeerId = await peerFor(runtime, exec);
-      const sessionId = args.session_id || args.archive_id;
-      if (!sessionId) return "Provide session_id or archive_id.";
-      const metadata = await client.getSession(sessionId, actorPeerId);
-      const uri = metadata?.uri || `viking://session/${sessionId}`;
-      const overview = await client.read(uri, "overview", actorPeerId);
-      if (overview) return overview;
-      const history = await client.read(`${uri}/history`, "overview", actorPeerId);
-      return history || `Archive not found: ${sessionId}`;
+      if (!exec.agent) throw new Error("viking_archive_expand requires a calling agent");
+      const state = await runtime.initialize(exec.agent);
+      const archive = await client.getSessionArchive(
+        state.ovSessionId,
+        args.archive_id,
+        state.config.peerId,
+      );
+      if (!archive) return `Archive not found: ${args.archive_id}`;
+      const messages = Array.isArray(archive.messages) ? archive.messages : [];
+      const header = [
+        `## ${archive.archive_id || args.archive_id}`,
+        archive.abstract ? `**Summary**: ${archive.abstract}` : "",
+        `**Messages**: ${messages.length}`,
+      ].filter(Boolean).join("\n");
+      const body = messages.map(formatArchiveMessage).join("\n\n");
+      return body ? `${header}\n\n${body}` : header;
     },
   }));
 }
@@ -213,4 +219,28 @@ function textTool(definition) {
 async function peerFor(runtime, exec) {
   if (!exec.agent) return undefined;
   return (await runtime.initialize(exec.agent)).config.peerId;
+}
+
+function formatArchiveMessage(message) {
+  const role = String(message?.role || "unknown");
+  const parts = Array.isArray(message?.parts) ? message.parts : [];
+  const body = parts.map(formatArchivePart).filter(Boolean).join("\n");
+  return `[${role}]: ${body || "(empty)"}`;
+}
+
+function formatArchivePart(part) {
+  if (!part || typeof part !== "object") return "";
+  if (part.type === "text") return String(part.text || "");
+  if (part.type === "context") {
+    return `[Context: ${part.uri || "unknown"}]\n${part.abstract || ""}`.trim();
+  }
+  if (part.type === "tool") {
+    const lines = [`[Tool: ${part.tool_name || "unknown"}]`];
+    if (part.tool_input !== undefined) {
+      lines.push(`Input: ${JSON.stringify(part.tool_input)}`);
+    }
+    if (part.tool_output) lines.push(`Output: ${part.tool_output}`);
+    return lines.join("\n");
+  }
+  return `[${part.type || "unknown"}]: ${JSON.stringify(part)}`;
 }

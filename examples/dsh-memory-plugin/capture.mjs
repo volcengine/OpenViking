@@ -4,17 +4,30 @@ import {
   shouldCaptureText,
 } from "./shared/capture-utils.mjs";
 
-export const OPENVIKING_PLUGIN_SOURCE = "openviking-memory-traex";
+export const OPENVIKING_PLUGIN_SOURCE = "openviking-memory";
 
 export function captureEvent(event, config, toolNames = new Map()) {
   if (!event || typeof event !== "object") return null;
   if (event.type === "tool/call") {
-    toolNames.set(String(event.data.callId), event.data.name);
+    if (config.captureToolResults === true) {
+      toolNames.set(String(event.data.callId), event.data.name);
+    }
     return null;
   }
 
   const message = eventMessage(event);
   if (!message) return null;
+  const toolCallId = event.type === "tool/result"
+    ? String(message.source?.callId || message.content?.[0]?.toolCallId || "")
+    : "";
+  try {
+    return captureMessage(event, message, config, toolNames);
+  } finally {
+    if (toolCallId) toolNames.delete(toolCallId);
+  }
+}
+
+function captureMessage(event, message, config, toolNames) {
   // Whitelist by source: plugin-injected user messages (this plugin's recall
   // blocks, time-context snapshots, any other plugin's context) are model
   // input, not human input — mirroring them would launder synthetic text
@@ -50,6 +63,8 @@ export function captureEvent(event, config, toolNames = new Map()) {
   const payload = bodyParts.length > 0
     ? { role, parts: bodyParts }
     : { role, content: decision.text };
+  const createdAt = eventCreatedAt(event);
+  if (createdAt) payload.created_at = createdAt;
   if (config.peerId) payload.peer_id = config.peerId;
   return payload;
 }
@@ -75,5 +90,15 @@ function eventMessage(event) {
       return event.data?.message;
     default:
       return null;
+  }
+}
+
+function eventCreatedAt(event) {
+  const time = Number(event?.time);
+  if (!Number.isFinite(time) || time < 0) return "";
+  try {
+    return new Date(time).toISOString();
+  } catch {
+    return "";
   }
 }

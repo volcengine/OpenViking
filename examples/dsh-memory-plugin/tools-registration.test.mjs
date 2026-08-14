@@ -31,7 +31,7 @@ test("all seven tools register as valid dsh ToolDefinitions", () => {
       viking_remember: { content: "fact" },
       viking_forget: { uri: "viking://x" },
       viking_add_resource: { url: "https://y" },
-      viking_archive_expand: { session_id: "s" },
+      viking_archive_expand: { archive_id: "archive_001" },
     };
     const view = definition.presentCall(VALID_ARGS[definition.name]);
     assert.equal(view.card, "generic", `${definition.name} presentCall card`);

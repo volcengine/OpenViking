@@ -11,7 +11,7 @@ An installable DeepSeek Harness bundle that adds OpenViking auto-recall, session
 The bundle has no runtime npm dependencies. Its tool and message structures
 come from the DSH constructors (`defineTool` from `@deepseek-ai/dsh-tools`,
 `createUserMessage` from `@deepseek-ai/dsh-llm`) behind exact-pinned
-peerDependencies that a DSH installation heals at plugin-install time, so
+peerDependencies that DSH exposes through its profile fallback at boot time, so
 the definitions track DSH's contracts instead of hand-built object shapes.
 It is tested against `0.1.0-rc.6`; install that exact DSH release because
 prerelease package dist-tags are not synchronized across the package family.
@@ -33,13 +33,13 @@ reaches `request/header`.
 From the OpenViking repository:
 
 ```bash
-dsh plugin --profile default add ./examples/dsh-memory-plugin-traex
+dsh plugin --profile default add ./examples/dsh-memory-plugin
 ```
 
 Or install the published package:
 
 ```bash
-dsh plugin --profile default add @openviking/dsh-memory-plugin-traex
+dsh plugin --profile default add @openviking/dsh-memory-plugin
 ```
 
 Confirm that the profile includes the bundle:
@@ -74,14 +74,14 @@ The patch can also carry plugin config:
 
 ```yaml
 - insert:
-    - id: openviking-memory-traex
+    - id: openviking-memory
       name: '@deepseek-ai/cordis-plugin-group'
       group: true
       isolate:
         openvikingMemory: true
       config:
-        - id: openviking-memory-runtime-traex
-          name: '@openviking/dsh-memory-plugin-traex'
+        - id: openviking-memory-runtime
+          name: '@openviking/dsh-memory-plugin'
           config:
             endpoint: http://127.0.0.1:1933
             recallTokenBudget: 2000
