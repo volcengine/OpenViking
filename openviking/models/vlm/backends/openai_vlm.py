@@ -9,8 +9,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse
 
-import httpx
-
 from openviking.telemetry import tracer
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking.utils.multimodal import redact_image_data_urls
@@ -36,13 +34,6 @@ _DASHSCOPE_HOSTS = {
 
 
 _REASONING_MODEL_PREFIXES = ("gpt-5", "o1", "o3", "o4")
-DEFAULT_OPENAI_CONNECT_TIMEOUT_SECONDS = 30.0
-
-
-def _build_openai_http_timeout(timeout: float) -> httpx.Timeout:
-    """Keep the configured read/write budget and cap TCP connect separately."""
-    connect = min(float(timeout), DEFAULT_OPENAI_CONNECT_TIMEOUT_SECONDS)
-    return httpx.Timeout(timeout, connect=connect)
 
 
 def _is_reasoning_model(model: Optional[str]) -> bool:
@@ -72,11 +63,11 @@ def _build_openai_client_kwargs(
             "api_key": api_key,
             "azure_endpoint": api_base,
             "api_version": api_version or DEFAULT_AZURE_API_VERSION,
-            "timeout": _build_openai_http_timeout(timeout),
+            "timeout": timeout,
         }
     else:
         kwargs = {"api_key": api_key, "base_url": api_base}
-    kwargs["timeout"] = _build_openai_http_timeout(timeout)
+    kwargs["timeout"] = timeout
     # OpenViking owns provider retry/backoff via retry_sync/retry_async.
     kwargs["max_retries"] = 0
     if extra_headers:
@@ -94,8 +85,12 @@ class OpenAIVLM(VLMBase):
         self.api_version = config.get("api_version")
         self.reasoning_effort = config.get("reasoning_effort", "low")
 
-    def _retry_timeout_seconds(self) -> float:
-        """Overall async retry budget: first attempt plus each configured retry."""
+    def _retry_timeout_seconds(self) -> float | None:
+        """Return the retry budget for cancellation-cooperative async clients."""
+        if self.provider == "openai-codex":
+            # Codex delegates to a sync request in asyncio.to_thread, which
+            # cannot be stopped through asyncio cancellation.
+            return None
         return retry_deadline_seconds(self.timeout, self.max_retries)
 
     def get_client(self):

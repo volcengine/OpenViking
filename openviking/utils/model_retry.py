@@ -6,7 +6,7 @@ import random
 import re
 import threading
 import time
-from typing import Awaitable, Callable, TypeVar
+from typing import Awaitable, Callable, TypeVar, cast
 
 from openviking.utils.exceptions import AllCredentialsFailedError
 
@@ -377,6 +377,31 @@ def _timeout_error(operation_name: str, timeout: float) -> TimeoutError:
     return TimeoutError(f"{operation_name} timed out after {timeout:.1f}s")
 
 
+class _RetryDeadlineExpired(Exception):
+    """Internal signal that the overall retry deadline expired."""
+
+
+async def _capture_attempt(awaitable: Awaitable[T]) -> tuple[T | None, Exception | None]:
+    """Capture child exceptions so only ``wait_for`` can signal deadline expiry."""
+    try:
+        return await awaitable, None
+    except Exception as error:
+        return None, error
+
+
+async def _await_attempt_with_timeout(awaitable: Awaitable[T], timeout: float) -> T:
+    """Apply a cooperative timeout while preserving child exception identity."""
+    try:
+        result, error = await asyncio.wait_for(_capture_attempt(awaitable), timeout=timeout)
+    except asyncio.TimeoutError:
+        raise _RetryDeadlineExpired from None
+
+    if error is not None:
+        raise error
+
+    return cast(T, result)
+
+
 async def retry_async(
     func: Callable[[], Awaitable[T]],
     *,
@@ -392,29 +417,31 @@ async def retry_async(
     """Retry an async function on known transient errors.
 
     ``timeout`` is an optional overall deadline in seconds for the whole retry
-    loop, including backoff sleeps. When it expires, the in-flight attempt is
-    cancelled and ``TimeoutError`` is raised without further retries. Existing
-    callers that omit it keep the previous unbounded behavior.
+    loop, including backoff sleeps. At expiry, asyncio cancellation is requested;
+    cancellation-cooperative awaitables raise ``TimeoutError`` after cancellation
+    completes. An awaitable that suppresses cancellation, or work delegated to a
+    thread, may outlive the deadline. Existing callers that omit ``timeout`` keep
+    the previous unbounded behavior and exception retry semantics.
     """
     if timeout is not None and timeout <= 0:
         raise ValueError("timeout must be positive")
 
-    deadline = None if timeout is None else time.monotonic() + timeout
+    loop = asyncio.get_running_loop()
+    timeout_seconds = 0.0 if timeout is None else float(timeout)
+    deadline = None if timeout is None else loop.time() + timeout_seconds
     attempt = 0
 
     while True:
-        remaining = None if deadline is None else deadline - time.monotonic()
+        remaining = None if deadline is None else deadline - loop.time()
         if remaining is not None and remaining <= 0:
-            raise _timeout_error(operation_name, timeout)
+            raise _timeout_error(operation_name, timeout_seconds)
 
         try:
             if remaining is None:
                 return await func()
-            return await asyncio.wait_for(func(), timeout=remaining)
-        except asyncio.TimeoutError as exc:
-            if timeout is None:
-                raise
-            raise _timeout_error(operation_name, timeout) from exc
+            return await _await_attempt_with_timeout(func(), remaining)
+        except _RetryDeadlineExpired:
+            raise _timeout_error(operation_name, timeout_seconds) from None
         except Exception as e:
             if max_retries <= 0 or attempt >= max_retries or not is_retryable(e):
                 raise
@@ -426,9 +453,9 @@ async def retry_async(
                 jitter=jitter,
             )
             if deadline is not None:
-                remaining_after = deadline - time.monotonic()
+                remaining_after = deadline - loop.time()
                 if remaining_after <= 0:
-                    raise _timeout_error(operation_name, timeout)
+                    raise _timeout_error(operation_name, timeout_seconds)
                 delay = min(delay, remaining_after)
             if logger:
                 logger.warning(

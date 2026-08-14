@@ -244,6 +244,64 @@ async def test_retry_async_omitting_timeout_keeps_success_path():
     assert await retry_async(_call, max_retries=3) == "ok"
 
 
+@pytest.mark.asyncio
+async def test_retry_async_without_deadline_retries_inner_timeout_error():
+    attempts = {"count": 0}
+
+    async def _call():
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise asyncio.TimeoutError("timeout while reading provider response")
+        return "ok"
+
+    result = await retry_async(
+        _call,
+        max_retries=1,
+        base_delay=0,
+        max_delay=0,
+        jitter=False,
+    )
+
+    assert result == "ok"
+    assert attempts["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_retry_async_with_deadline_retries_inner_timeout_error():
+    attempts = {"count": 0}
+
+    async def _call():
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise asyncio.TimeoutError("timeout while reading provider response")
+        return "ok"
+
+    result = await retry_async(
+        _call,
+        max_retries=1,
+        timeout=1,
+        base_delay=0,
+        max_delay=0,
+        jitter=False,
+    )
+
+    assert result == "ok"
+    assert attempts["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_retry_async_with_deadline_preserves_inner_timeout_error():
+    error = asyncio.TimeoutError("timeout while reading provider response")
+
+    async def _call():
+        raise error
+
+    with pytest.raises(asyncio.TimeoutError) as exc_info:
+        await retry_async(_call, max_retries=0, timeout=1)
+
+    assert exc_info.value is error
+
+
 def test_quota_exceeded_case_insensitive():
     """Quota detection is case-insensitive."""
     assert classify_api_error(RuntimeError("QUOTA LIMIT")) == ERROR_CLASS_QUOTA_EXCEEDED

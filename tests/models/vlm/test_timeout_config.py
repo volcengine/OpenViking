@@ -9,26 +9,19 @@ These tests lock in that the config value flows through to the underlying
 OpenAI and LiteLLM clients.
 """
 
+import asyncio
 from unittest import mock
 
 import httpx
+import openai
 import pytest
 from pydantic import ValidationError
 
 from openviking.models.vlm.backends.openai_vlm import (
-    DEFAULT_OPENAI_CONNECT_TIMEOUT_SECONDS,
     OpenAIVLM,
     _build_openai_client_kwargs,
-    _build_openai_http_timeout,
 )
 from openviking_cli.utils.config.vlm_config import VLMConfig
-
-
-def _assert_openai_timeout(value, *, read: float) -> None:
-    assert isinstance(value, httpx.Timeout)
-    assert value.read == read
-    assert value.write == read
-    assert value.connect == min(read, DEFAULT_OPENAI_CONNECT_TIMEOUT_SECONDS)
 
 
 def test_vlm_config_accepts_timeout():
@@ -48,7 +41,7 @@ def test_vlm_config_rejects_non_positive_timeout():
 
 def test_build_openai_client_kwargs_default_timeout():
     kwargs = _build_openai_client_kwargs("openai", "sk-x", "https://example.invalid", None, None)
-    _assert_openai_timeout(kwargs["timeout"], read=600.0)
+    assert kwargs["timeout"] == 600.0
 
 
 def test_build_openai_client_kwargs_custom_timeout():
@@ -60,19 +53,7 @@ def test_build_openai_client_kwargs_custom_timeout():
         None,
         timeout=120.0,
     )
-    _assert_openai_timeout(kwargs["timeout"], read=120.0)
-
-
-def test_build_openai_http_timeout_caps_connect_below_long_read():
-    timeout = _build_openai_http_timeout(600.0)
-    _assert_openai_timeout(timeout, read=600.0)
-    assert timeout.connect == DEFAULT_OPENAI_CONNECT_TIMEOUT_SECONDS
-
-
-def test_build_openai_http_timeout_does_not_exceed_short_read():
-    timeout = _build_openai_http_timeout(10.0)
-    _assert_openai_timeout(timeout, read=10.0)
-    assert timeout.connect == 10.0
+    assert kwargs["timeout"] == 120.0
 
 
 def test_openai_vlm_propagates_config_timeout():
@@ -89,7 +70,7 @@ def test_openai_vlm_propagates_config_timeout():
 
     with mock.patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI") as fake:
         vlm.get_client()
-    _assert_openai_timeout(fake.call_args.kwargs.get("timeout"), read=120.0)
+    assert fake.call_args.kwargs.get("timeout") == 120.0
 
 
 def test_openai_vlm_defaults_to_600_timeout_when_config_omits_it():
@@ -105,7 +86,7 @@ def test_openai_vlm_defaults_to_600_timeout_when_config_omits_it():
 
     with mock.patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI") as fake:
         vlm.get_client()
-    _assert_openai_timeout(fake.call_args.kwargs.get("timeout"), read=600.0)
+    assert fake.call_args.kwargs.get("timeout") == 600.0
 
 
 def test_litellm_build_kwargs_includes_timeout():
@@ -158,7 +139,23 @@ def test_codex_vlm_propagates_config_timeout():
         )
         assert vlm.get_completion("hello") == "timeout ok"
 
-    _assert_openai_timeout(fake.call_args.kwargs.get("timeout"), read=45.0)
+    assert fake.call_args.kwargs.get("timeout") == 45.0
+
+
+def test_codex_vlm_skips_asyncio_deadline_for_threaded_requests():
+    from openviking.models.vlm.backends.codex_vlm import CodexVLM
+
+    vlm = CodexVLM(
+        {
+            "provider": "openai-codex",
+            "model": "gpt-5.3-codex",
+            "api_key": "oauth-token",
+            "api_base": "https://example.invalid/codex",
+            "timeout": 45.0,
+        }
+    )
+
+    assert vlm._retry_timeout_seconds() is None
 
 
 def test_openai_vlm_retry_deadline_scales_with_attempts():
@@ -173,3 +170,46 @@ def test_openai_vlm_retry_deadline_scales_with_attempts():
         }
     )
     assert vlm._retry_timeout_seconds() == 40.0
+
+
+@pytest.mark.asyncio
+async def test_openai_vlm_retry_deadline_cancels_async_transport(monkeypatch):
+    request_started = asyncio.Event()
+    cancellation_seen = asyncio.Event()
+
+    async def handle_request(_request: httpx.Request) -> httpx.Response:
+        request_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancellation_seen.set()
+            raise
+        raise AssertionError("unreachable")
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handle_request))
+    client = openai.AsyncOpenAI(
+        api_key="sk-x",
+        base_url="https://example.invalid/v1",
+        http_client=http_client,
+        max_retries=0,
+    )
+    vlm = OpenAIVLM(
+        {
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "api_key": "sk-x",
+            "api_base": "https://example.invalid/v1",
+            "timeout": 1.0,
+            "max_retries": 0,
+        }
+    )
+    monkeypatch.setattr(vlm, "get_async_client", lambda: client)
+
+    try:
+        with pytest.raises(TimeoutError, match="timed out after 1.0s"):
+            await vlm.get_completion_async("hello")
+    finally:
+        await client.close()
+
+    assert request_started.is_set()
+    assert cancellation_seen.is_set()
