@@ -18,6 +18,7 @@ from openviking.core.context import (
 )
 from openviking.core.namespace import (
     classify_uri,
+    content_owner_context_for_uri,
     context_type_for_uri,
     is_session_uri,
     owner_fields_for_uri,
@@ -135,15 +136,7 @@ class ReindexExecutor:
         Reindex authorization and task ownership use the actor ctx, but semantic
         and vector records should retain ownership from the target URI.
         """
-        owner = owner_fields_for_uri(uri, ctx=ctx).get("owner_user_id")
-        if not owner or owner == ctx.user.user_id:
-            return ctx
-        return RequestContext(
-            user=UserIdentifier(ctx.account_id, owner),
-            role=ctx.role,
-            actor_peer_id=ctx.actor_peer_id,
-            from_oauth=ctx.from_oauth,
-        )
+        return content_owner_context_for_uri(uri, ctx)
 
     async def execute(
         self,
