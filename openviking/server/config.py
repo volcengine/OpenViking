@@ -154,6 +154,15 @@ class OTelExporterConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class TraceConfig(OTelExporterConfig):
+    """Trace exporter configuration, including optional diagnostic content."""
+
+    capture_content: bool = False
+    content_max_length: int = Field(default=4096, gt=0, le=65_536)
+
+    model_config = {"extra": "forbid"}
+
+
 class MetricsExportersConfig(BaseModel):
     """Metrics exporters configuration."""
 
@@ -234,7 +243,7 @@ class ObservabilityConfig(BaseModel):
 
     metrics: MetricsConfig = Field(default_factory=MetricsConfig)
     usage_audit: UsageAuditConfig = Field(default_factory=UsageAuditConfig)
-    traces: OTelExporterConfig = Field(default_factory=OTelExporterConfig)
+    traces: TraceConfig = Field(default_factory=TraceConfig)
     logs: OTelExporterConfig = Field(default_factory=OTelExporterConfig)
     dump_body: TraceDumpBodyConfig = Field(default_factory=TraceDumpBodyConfig)
 

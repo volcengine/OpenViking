@@ -240,7 +240,9 @@ On the machine running OpenViking Server, edit `~/.openviking/ov.conf` (or the c
         "service_name": "openviking-server",
         "local_path": "~/.openviking/logs/traces.jsonl",
         "local_rotation_mb": 40,
-        "local_backup_count": 2
+        "local_backup_count": 2,
+        "capture_content": false,
+        "content_max_length": 4096
       }
     }
   }
@@ -252,6 +254,13 @@ Restart OpenViking Server after editing the config. The default local trace file
 ```text
 ~/.openviking/logs/traces.jsonl
 ```
+
+Diagnostic messages are recorded under the stable `openviking.log` event name, but
+their text is omitted by default. Set `capture_content` to `true` only when message
+content is required for troubleshooting. Exported text is subject to best-effort
+credential and inline-image redaction, then limited to `content_max_length` characters
+(1-65536). It can still contain user data or other sensitive values, so restrict access
+to trace exports and remove them when the investigation is complete.
 
 When the file reaches `local_rotation_mb`, it rotates like this:
 
@@ -331,7 +340,9 @@ The upload tool reads the current environment's `ov.conf` as the **upload target
         },
         "endpoint": "otel-collector:4317",
         "service_name": "openviking-server",
-        "headers": {}
+        "headers": {},
+        "capture_content": false,
+        "content_max_length": 4096
       }
     }
   }
