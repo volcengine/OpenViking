@@ -514,6 +514,10 @@ class VikingAddResourceTool(OVFileTool):
             "properties": {
                 "path": {"type": "string", "description": "Url or local file path"},
                 "description": {"type": "string", "description": "Description of the resource"},
+                "to": {
+                    "type": "string",
+                    "description": "Optional exact target URI under viking://resources/. When omitted, OpenViking chooses the resource URI.",
+                },
             },
             "required": ["path", "description"],
         }
@@ -523,6 +527,7 @@ class VikingAddResourceTool(OVFileTool):
         tool_context: "ToolContext",
         path: str,
         description: str,
+        to: Optional[str] = None,
         **kwargs: Any,
     ) -> str:
         client = None
@@ -535,7 +540,7 @@ class VikingAddResourceTool(OVFileTool):
                     return f"Error: Not a file: {path}"
 
             client = await self._get_client(tool_context)
-            result = await client.add_resource(path, description)
+            result = await client.add_resource(path, description, to=to)
 
             if result:
                 root_uri = result.get("root_uri", "")
