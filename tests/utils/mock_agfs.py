@@ -29,6 +29,8 @@ class MockLocalAGFS:
         self.root.mkdir(parents=True, exist_ok=True)
         self._pathlocks_guard = threading.Lock()
         self._pathlocks = {}
+        self._pathlock_owner_ids = {}
+        self._pathlock_refcounts = {}
         self._pathlock_leases = {}
         self._pathlock_handoffs = {}
         self._queue_guard = threading.Lock()
@@ -346,25 +348,47 @@ class MockLocalAGFS:
             raise TimeoutError(f"timed out acquiring test path lock: {path}")
         return lock
 
-    def _acquire_paths(self, paths, timeout_secs):
-        ordered = sorted(set(paths))
-        locks = []
+    def _acquire_requests(self, requests, timeout_secs, owner_lease_ref=None):
+        normalized = {}
+        for request in requests:
+            path = request["path"]
+            current = normalized.get(path)
+            if current is None or request["kind"] == "tree":
+                normalized[path] = dict(request)
+        ordered = sorted(normalized.values(), key=lambda request: request["path"])
+        if owner_lease_ref is None:
+            owner_id = str(uuid.uuid4())
+        else:
+            _, owner_entry = self._require_owned_lease(owner_lease_ref)
+            owner_id = owner_entry["owner_id"]
+        acquired = []
         try:
-            for path in ordered:
-                locks.append((path, self._acquire_lock(path, timeout_secs)))
+            for request in ordered:
+                path = request["path"]
+                with self._pathlocks_guard:
+                    lock = self._pathlocks.setdefault(path, threading.Lock())
+                    current_owner = self._pathlock_owner_ids.get(path)
+                    if lock.locked() and current_owner == owner_id:
+                        self._pathlock_refcounts[path] += 1
+                        acquired.append((path, lock))
+                        continue
+                acquired.append((path, self._acquire_lock(path, timeout_secs)))
+                with self._pathlocks_guard:
+                    self._pathlock_owner_ids[path] = owner_id
+                    self._pathlock_refcounts[path] = 1
         except BaseException:
-            for _, lock in reversed(locks):
-                lock.release()
+            self._release_lock_refs(dict(acquired), owner_id)
             raise
-        return locks
+        return acquired, ordered, owner_id
 
-    def _make_owned_lease(self, locks, paths):
+    def _make_owned_lease(self, locks, requests, owner_id):
         lease_ref = str(uuid.uuid4())
         ownership_ref = str(uuid.uuid4())
+        paths = [request["path"] for request in requests]
         lease = {
             "lease_ref": lease_ref,
             "ownership_ref": ownership_ref,
-            "owner_id": "mock-local-agfs",
+            "owner_id": owner_id,
             "owned": True,
             "lock_paths": list(paths),
         }
@@ -374,9 +398,23 @@ class MockLocalAGFS:
                 "locks": dict(locks),
                 "owner_id": lease["owner_id"],
                 "lock_paths": list(paths),
-                "covered_paths": [{"path": path, "kind": "exact"} for path in paths],
+                "covered_paths": [dict(request) for request in requests],
             }
         return lease
+
+    def _release_lock_refs(self, locks, owner_id):
+        for path, lock in reversed(list(locks.items())):
+            with self._pathlocks_guard:
+                if self._pathlock_owner_ids.get(path) != owner_id:
+                    continue
+                remaining = self._pathlock_refcounts[path] - 1
+                if remaining:
+                    self._pathlock_refcounts[path] = remaining
+                    continue
+                self._pathlock_refcounts.pop(path, None)
+                self._pathlock_owner_ids.pop(path, None)
+            if lock.locked():
+                lock.release()
 
     def _require_owned_lease(self, owned_lease_ref):
         if isinstance(owned_lease_ref, str):
@@ -394,52 +432,64 @@ class MockLocalAGFS:
         return lease_ref, entry
 
     def pathlock_acquire_exact(self, ctx, path, timeout_secs=0.0, owner_lease_ref=None):
-        del ctx, owner_lease_ref
-        locks = self._acquire_paths([path], timeout_secs)
-        return self._make_owned_lease(locks, [path])
+        del ctx
+        requests = [{"path": path, "kind": "exact"}]
+        locks, requests, owner_id = self._acquire_requests(requests, timeout_secs, owner_lease_ref)
+        return self._make_owned_lease(locks, requests, owner_id)
 
-    pathlock_acquire_tree = pathlock_acquire_exact
+    def pathlock_acquire_tree(self, ctx, path, timeout_secs=0.0, owner_lease_ref=None):
+        del ctx
+        requests = [{"path": path, "kind": "tree"}]
+        locks, requests, owner_id = self._acquire_requests(requests, timeout_secs, owner_lease_ref)
+        return self._make_owned_lease(locks, requests, owner_id)
 
     def pathlock_acquire_exact_batch(self, ctx, paths, timeout_secs=0.0, owner_lease_ref=None):
-        del ctx, owner_lease_ref
-        ordered = sorted(set(paths))
-        locks = self._acquire_paths(ordered, timeout_secs)
-        return self._make_owned_lease(locks, ordered)
+        del ctx
+        requests = [{"path": path, "kind": "exact"} for path in paths]
+        locks, requests, owner_id = self._acquire_requests(requests, timeout_secs, owner_lease_ref)
+        return self._make_owned_lease(locks, requests, owner_id)
 
-    pathlock_acquire_tree_batch = pathlock_acquire_exact_batch
+    def pathlock_acquire_tree_batch(self, ctx, paths, timeout_secs=0.0, owner_lease_ref=None):
+        del ctx
+        requests = [{"path": path, "kind": "tree"} for path in paths]
+        locks, requests, owner_id = self._acquire_requests(requests, timeout_secs, owner_lease_ref)
+        return self._make_owned_lease(locks, requests, owner_id)
 
     def pathlock_acquire_exact_tree_batch(
         self, ctx, exact_paths, tree_paths, timeout_secs=0.0, owner_lease_ref=None
     ):
-        del ctx, owner_lease_ref
-        ordered = sorted(set(exact_paths) | set(tree_paths))
-        locks = self._acquire_paths(ordered, timeout_secs)
-        return self._make_owned_lease(locks, ordered)
+        del ctx
+        requests = [
+            *({"path": path, "kind": "exact"} for path in exact_paths),
+            *({"path": path, "kind": "tree"} for path in tree_paths),
+        ]
+        locks, requests, owner_id = self._acquire_requests(requests, timeout_secs, owner_lease_ref)
+        return self._make_owned_lease(locks, requests, owner_id)
 
     def pathlock_acquire_batch(self, ctx, requests, timeout_secs=0.0, owner_lease_ref=None):
-        del owner_lease_ref
+        del ctx
         if not requests:
             raise ValueError("pathlock request batch must not be empty")
-        paths = []
         for request in requests:
             path = request.get("path")
             if not path or not path.startswith("/"):
                 raise ValueError("pathlock request.path must be an absolute path")
             if request.get("kind") not in {"exact", "tree"}:
                 raise ValueError("pathlock request.kind must be 'exact' or 'tree'")
-            paths.append(path)
-        return self.pathlock_acquire_exact_batch(ctx, paths, timeout_secs)
+        locks, requests, owner_id = self._acquire_requests(requests, timeout_secs, owner_lease_ref)
+        return self._make_owned_lease(locks, requests, owner_id)
 
     def pathlock_as_borrowed(self, ctx, owned_lease_ref):
         del ctx
         lease_ref = owned_lease_ref["lease_ref"]
         with self._pathlocks_guard:
-            if lease_ref not in self._pathlock_leases:
+            entry = self._pathlock_leases.get(lease_ref)
+            if entry is None:
                 raise ValueError("cannot borrow an unknown lease")
         return {
             "lease_ref": lease_ref,
-            "ownership_ref": owned_lease_ref.get("ownership_ref"),
-            "owner_id": owned_lease_ref.get("owner_id"),
+            "owner_id": entry["owner_id"],
+            "lock_paths": list(entry["lock_paths"]),
             "owned": False,
         }
 
@@ -454,9 +504,7 @@ class MockLocalAGFS:
         with self._pathlocks_guard:
             self._pathlock_leases.pop(lease_ref)
         locks = entry["locks"]
-        for lock in reversed(list(locks.values())):
-            if lock.locked():
-                lock.release()
+        self._release_lock_refs(locks, entry["owner_id"])
 
     def pathlock_release_selected(self, ctx, owned_lease_ref, lock_paths):
         del ctx
@@ -466,8 +514,8 @@ class MockLocalAGFS:
         released = []
         for path in selected:
             lock = locks.pop(path, None)
-            if lock is not None and lock.locked():
-                lock.release()
+            if lock is not None:
+                self._release_lock_refs({path: lock}, entry["owner_id"])
                 released.append(path)
         if locks:
             entry["locks"] = locks
@@ -524,7 +572,9 @@ class MockLocalAGFS:
                 self._pathlock_handoffs[lease_ref] = pending
             raise ValueError("handoff metadata does not match the pending lease")
         locks = pending["locks"]
-        return self._make_owned_lease(list(locks.items()), paths)
+        return self._make_owned_lease(
+            list(locks.items()), pending["covered_paths"], pending["owner_id"]
+        )
 
     def pathlock_is_locked(self, ctx, path, ignore_stale=True):
         del ctx, ignore_stale

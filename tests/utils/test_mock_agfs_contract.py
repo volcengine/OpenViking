@@ -97,11 +97,61 @@ class TestMockAgfsPathlockContract:
         assert mock.pathlock_is_locked(None, "/local/test/a.txt") is False
         assert mock.pathlock_is_locked(None, "/local/test/b.txt") is False
 
+    def test_reentrant_acquire_reuses_owner_and_reference_counts(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        path = "/local/test/a.txt"
+        outer = mock.pathlock_acquire_exact(None, path)
+        nested = mock.pathlock_acquire_exact(None, path, owner_lease_ref=outer)
+        assert nested["owner_id"] == outer["owner_id"]
+        assert nested["lease_ref"] != outer["lease_ref"]
+
+        mock.pathlock_release(None, outer)
+        assert mock.pathlock_is_locked(None, path) is True
+        mock.pathlock_release(None, nested)
+        assert mock.pathlock_is_locked(None, path) is False
+
+    def test_reentrant_acquire_rejects_forged_owner_capability(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        outer = mock.pathlock_acquire_exact(None, "/local/test/a.txt")
+        forged = dict(outer, ownership_ref="attacker-value")
+        with pytest.raises(ValueError, match="capability does not match"):
+            mock.pathlock_acquire_exact(
+                None,
+                "/local/test/a.txt",
+                owner_lease_ref=forged,
+            )
+        mock.pathlock_release(None, outer)
+
+    def test_tree_handoff_preserves_covered_path_kind(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        lease = mock.pathlock_acquire_tree(None, "/local/test/tree")
+        handoff = mock.pathlock_to_handoff(None, lease)
+        assert handoff["covered_paths"] == [{"path": "/local/test/tree", "kind": "tree"}]
+        mock.pathlock_release(None, lease)
+
+    def test_mixed_batch_preserves_kinds_and_prefers_tree_for_same_path(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        lease = mock.pathlock_acquire_exact_tree_batch(
+            None,
+            ["/local/test/exact", "/local/test/shared"],
+            ["/local/test/tree", "/local/test/shared"],
+        )
+        handoff = mock.pathlock_to_handoff(None, lease)
+        assert handoff["covered_paths"] == [
+            {"path": "/local/test/exact", "kind": "exact"},
+            {"path": "/local/test/shared", "kind": "tree"},
+            {"path": "/local/test/tree", "kind": "tree"},
+        ]
+        mock.pathlock_release(None, lease)
+
     def test_borrowed_lease_cannot_release(self, tmp_path):
         mock = _make_mock(tmp_path)
         owned = mock.pathlock_acquire_exact(None, "/local/test/a.txt")
         borrowed = mock.pathlock_as_borrowed(None, owned)
         assert borrowed["owned"] is False
+        assert borrowed["owner_id"] == owned["owner_id"]
+        assert borrowed["lock_paths"] == owned["lock_paths"]
+        assert "ownership_ref" not in borrowed
         with pytest.raises(ValueError):
             mock.pathlock_release(None, borrowed)
         with pytest.raises((TypeError, ValueError)):
