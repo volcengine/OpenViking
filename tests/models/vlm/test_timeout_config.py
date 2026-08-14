@@ -1,12 +1,14 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Tests for ``vlm.timeout`` configuration propagation.
+"""Tests for ``vlm.timeout`` propagation and derived async retry deadlines.
 
 Before this was wired through, ``_build_openai_client_kwargs`` exposed a
 ``timeout`` parameter (#1208) but callers never passed it, so the default
 timeout was always used and end users could not override it via ``ov.conf``.
 These tests lock in that the config value flows through to the underlying
-OpenAI and LiteLLM clients.
+OpenAI and LiteLLM clients. They also cover the cancellation-cooperative retry
+deadline derived by OpenAI-compatible async backends and the threaded Codex
+exception to that policy.
 """
 
 import asyncio

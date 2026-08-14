@@ -186,9 +186,20 @@ def test_retry_deadline_seconds_covers_first_call_and_retries():
     assert retry_deadline_seconds(600.0, 0) == 600.0
 
 
-def test_retry_deadline_seconds_rejects_non_positive_timeout():
+@pytest.mark.parametrize("attempt_timeout", [0, -1])
+def test_retry_deadline_seconds_rejects_non_positive_timeout(attempt_timeout):
     with pytest.raises(ValueError, match="attempt_timeout must be positive"):
-        retry_deadline_seconds(0, 3)
+        retry_deadline_seconds(attempt_timeout, 3)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timeout", [0, -1])
+async def test_retry_async_rejects_non_positive_timeout(timeout):
+    async def _call():
+        return "unreachable"
+
+    with pytest.raises(ValueError, match="timeout must be positive"):
+        await retry_async(_call, max_retries=0, timeout=timeout)
 
 
 @pytest.mark.asyncio
@@ -234,6 +245,27 @@ async def test_retry_async_expires_when_a_later_attempt_hangs():
 
     assert attempts["count"] == 2
     assert elapsed < 2.0
+
+
+@pytest.mark.asyncio
+async def test_retry_async_deadline_includes_backoff_sleep():
+    attempts = {"count": 0}
+
+    async def _call():
+        attempts["count"] += 1
+        raise RuntimeError("Connection error")
+
+    with pytest.raises(TimeoutError, match="timed out after 0.1s"):
+        await retry_async(
+            _call,
+            max_retries=3,
+            timeout=0.1,
+            base_delay=10,
+            max_delay=10,
+            jitter=False,
+        )
+
+    assert attempts["count"] == 1
 
 
 @pytest.mark.asyncio
@@ -300,6 +332,57 @@ async def test_retry_async_with_deadline_preserves_inner_timeout_error():
         await retry_async(_call, max_retries=0, timeout=1)
 
     assert exc_info.value is error
+
+
+@pytest.mark.asyncio
+async def test_retry_async_preserves_caller_cancellation_racing_attempt_completion():
+    async def _run_once():
+        attempt_started = asyncio.Event()
+        release_attempt = asyncio.Event()
+
+        async def _call():
+            attempt_started.set()
+            await release_attempt.wait()
+            return "ok"
+
+        task = asyncio.create_task(retry_async(_call, max_retries=0, timeout=10))
+        await attempt_started.wait()
+
+        release_attempt.set()
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    for _ in range(20):
+        await _run_once()
+
+
+@pytest.mark.asyncio
+async def test_retry_async_preserves_caller_cancellation_during_deadline_cleanup():
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    attempt_finished = asyncio.Event()
+
+    async def _call():
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cleanup_started.set()
+            await release_cleanup.wait()
+            return "late"
+        finally:
+            attempt_finished.set()
+
+    task = asyncio.create_task(retry_async(_call, max_retries=0, timeout=0.01))
+    await cleanup_started.wait()
+
+    task.cancel()
+    release_cleanup.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await attempt_finished.wait()
 
 
 def test_quota_exceeded_case_insensitive():
