@@ -1,7 +1,7 @@
 /**
  * Conformance checks for the OpenViking Agent Plugins 1.0 package.
  *
- * Zero-dependency, runs with `node --test examples/agent-plugin/plugin.test.mjs`.
+ * Zero-dependency, runs with `node --test agent-plugin/plugin.test.mjs`.
  * Validates the manifests against the Agent Plugins 1.0 spec
  * (https://agent-plugins.org/specification), skill frontmatter against the
  * Agent Skills spec, and that every referenced/vendored .mjs file exists and

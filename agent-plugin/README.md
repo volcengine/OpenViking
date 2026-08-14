@@ -47,7 +47,7 @@ This package is the portable recall + write surface: skills plus MCP tools, driv
 
 If your client has a proprietary hook system, use the corresponding per-client plugin for full auto-capture:
 
-- [claude-code-memory-plugin](../claude-code-memory-plugin/) (Claude Code)
+- [claude-code-memory-plugin](examples/claude-code-memory-plugin/) (Claude Code)
 - [codex-memory-plugin](../codex-memory-plugin/) (Codex)
 - [opencode-plugin](../opencode-plugin/) (OpenCode)
 - [cursor-memory-plugin](../cursor-memory-plugin/), [trae-memory-hooks](../trae-memory-hooks/), [zcode-memory-plugin](../zcode-memory-plugin/), ...
@@ -57,7 +57,7 @@ Per the spec, client-specific integrations may later be embedded in this package
 ## Development
 
 ```bash
-node --test examples/agent-plugin/plugin.test.mjs
+node --test agent-plugin/plugin.test.mjs
 ```
 
-`servers/shared/*.mjs` are vendored, verbatim copies from `examples/memory-plugin-shared/lib`, carrying the same `GENERATED FROM ...` header that `sync.mjs` emits — do not edit them here; refresh them from the shared lib (or add `examples/agent-plugin/servers/shared` to `sync.mjs` TARGETS to automate it). `servers/config.mjs`, `servers/debug-log.mjs`, and `servers/mcp-proxy.mjs` are adapted from `examples/claude-code-memory-plugin` — when changing proxy behavior there, mirror it here.
+`servers/shared/*.mjs` are vendored, verbatim copies from `examples/memory-plugin-shared/lib`, carrying the same `GENERATED FROM ...` header that `sync.mjs` emits — do not edit them here; refresh them from the shared lib (or add `agent-plugin/servers/shared` to `sync.mjs` TARGETS to automate it). `servers/config.mjs`, `servers/debug-log.mjs`, and `servers/mcp-proxy.mjs` are adapted from `examples/claude-code-memory-plugin` — when changing proxy behavior there, mirror it here.
