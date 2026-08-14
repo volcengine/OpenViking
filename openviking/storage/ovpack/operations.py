@@ -116,9 +116,43 @@ async def _ensure_parent_exists(viking_fs, parent: str, ctx: RequestContext) -> 
         await viking_fs.mkdir(parent, ctx=ctx)
 
 
+_PROTECTED_SCOPE_ROOTS = frozenset({"viking://agent", "viking://user"})
+
+
+def _is_protected_scope_root(uri: str) -> bool:
+    return uri.rstrip("/") in _PROTECTED_SCOPE_ROOTS
+
+
+async def _clear_protected_root(viking_fs, root_uri: str, ctx: RequestContext) -> None:
+    """Remove a protected namespace's children while preserving its virtual root."""
+    while True:
+        try:
+            entries = await viking_fs.ls(root_uri, show_all_hidden=True, ctx=ctx)
+        except (NotFoundError, FileNotFoundError):
+            return
+        if not entries:
+            return
+
+        children: list[str] = []
+        prefix = f"{root_uri.rstrip('/')}/"
+        for entry in entries:
+            child_uri = entry.get("uri") if isinstance(entry, dict) else None
+            if not isinstance(child_uri, str) or not child_uri.startswith(prefix):
+                raise InvalidArgumentError(
+                    "Protected scope listing returned an invalid child",
+                    details={"root": root_uri, "child": child_uri},
+                )
+            children.append(child_uri)
+        for child_uri in children:
+            await viking_fs.rm(child_uri, recursive=True, ctx=ctx)
+
+
 async def _remove_existing_root(viking_fs, root_uri: str, ctx: RequestContext) -> None:
     if not hasattr(viking_fs, "rm"):
         logger.warning(f"[ovpack] Cannot remove existing resource without rm(): {root_uri}")
+        return
+    if _is_protected_scope_root(root_uri):
+        await _clear_protected_root(viking_fs, root_uri, ctx)
         return
     try:
         await viking_fs.rm(root_uri, recursive=True, ctx=ctx)
@@ -679,7 +713,9 @@ async def restore_ovpack(
             if kind in {"manifest", "internal"} or rel_path == "":
                 continue
             if kind == "directory":
-                await viking_fs.mkdir(join_uri(root_uri, rel_path), exist_ok=True, ctx=ctx)
+                target_uri = join_uri(root_uri, rel_path)
+                if not _is_protected_scope_root(target_uri):
+                    await viking_fs.mkdir(target_uri, exist_ok=True, ctx=ctx)
                 continue
 
             data = zf.read(safe_zip_path)
