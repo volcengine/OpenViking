@@ -87,11 +87,11 @@ def merge_search_tags(existing: Iterable[str] | None, incoming: Iterable[str] | 
     """Merge normalized search tags by key, replacing old values with incoming ones."""
     ordered: OrderedDict[str, str] = OrderedDict()
 
-    for item in normalize_search_tags(existing):
+    for item in normalize_search_tags(existing, discard_invalid=True):
         key, value = item.split("=", 1)
         ordered[key] = value
 
-    for item in normalize_search_tags(incoming):
+    for item in normalize_search_tags(incoming, discard_invalid=True):
         key, value = item.split("=", 1)
         ordered[key] = value
 
