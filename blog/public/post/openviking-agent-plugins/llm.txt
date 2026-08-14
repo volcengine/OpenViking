@@ -1,0 +1,36 @@
+# OpenViking Now Supports Agent Plugins 1.0
+
+OpenViking now ships as an Agent Plugins 1.0 package: one directory, installed the same way in ChatGPT, Codex, Cursor, GitHub Copilot, Kiro, and VS Code, giving each of them long-term memory.
+
+Until recently, equipping an AI coding agent with long-term memory via OpenViking meant installing a client-specific plugin — one for Claude Code, another for Codex, yet another for Cursor. They all did the same fundamental job, but each had to be packaged, installed, and maintained separately.
+
+[Agent Plugins 1.0](https://agent-plugins.org/specification) changes the distribution side of this. It is an open packaging standard from the Agentic AI Foundation (backed by Amazon, Cursor, Google, Microsoft, OpenAI, Vercel, and others). A plugin is just a plain directory: a `plugin.json` manifest, Agent Skills under `skills/`, and MCP server declarations in `mcp.json`. Any compatible client discovers and loads it the same way. See the [specification](https://agent-plugins.org/specification) and the [AAIF announcement](https://aaif.io/blog/from-skills-and-tools-to-portable-agent-plugins) for format details.
+
+**OpenViking now ships an Agent Plugins 1.0 package**, under [`agent-plugins/`](https://github.com/volcengine/OpenViking/tree/main/agent-plugins) in the repository:
+
+```
+agent-plugins/
+  plugin.json          # manifest
+  skills/
+    openviking-memory/ # when to recall, when to remember
+  mcp.json             # OpenViking MCP toolset (stdio proxy)
+```
+
+A single installation equips any supported environment with two capabilities:
+
+- **The `openviking-memory` skill**: process knowledge that stays resident in the model's context and teaches the agent *when* to act — recall relevant memories with `find`/`search` at the start of a substantial task, and persist durable facts with `remember`/`write` when key decisions, user preferences, or hard-won root causes emerge.
+- **The complete OpenViking MCP toolset**: `find`, `search`, `read`, `tree`, `grep`, `remember`, `write`, `add_resource`, and more, exposed through a stdio proxy. The specification forbids hardcoding credentials in static manifests, and every OpenViking deployment has its own endpoint — so the proxy resolves your server URL and API key locally at runtime, from the same sources as the `ov` CLI. Install the package and it works with your existing setup.
+
+## What the Portable Package Doesn't Do — Yet
+
+Agent Plugins 1.0 deliberately limits its scope to Skills and MCP. Hooks — the mechanism OpenViking's per-client plugins use for automatic conversation capture and pre-turn memory recall — are excluded from this first version of the specification, because their semantics still vary too widely across clients.
+
+As a result, the portable package operates within a strictly defined scope: memory recall and writes are entirely model-driven. They rely on the agent following the skill's instructions, without the safety net of background hooks. If the model doesn't proactively decide to save something, it won't be saved.
+
+## So Which One Should You Install?
+
+The short answer: if your client has a [dedicated plugin](https://docs.openviking.ai/en/agent-integrations/01-overview) — Claude Code, Codex, Cursor, ZCode, or DeepSeek harness — install that one. Hooks give it automatic conversation capture and pre-turn memory recall, so the loop closes even when the model never thinks about saving. That is the recommended experience and the one optimized first, and these plugins will keep being maintained.
+
+The portable package covers everywhere else. If you work in ChatGPT, GitHub Copilot, Kiro, or VS Code, there was previously no way to bring OpenViking along at all — now there is. And it will grow: the specification's roadmap explicitly reserves hooks and other extension types for future versions. The day Agent Plugins standardizes hooks, the package you already have picks up automatic capture and recall through a simple update, and the maintenance matrix of N clients × M plugins finally collapses into a single package.
+
+Until then: dedicated plugins where they exist, one portable directory everywhere else — and an agent that remembers either way. Try it out from [`agent-plugins/`](https://github.com/volcengine/OpenViking/tree/main/agent-plugins), and let us know what breaks.
