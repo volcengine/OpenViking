@@ -1,0 +1,115 @@
+bot/tests/test_agent_loop_outcome.py
+  s_56e5aba811403b::t_6bdc638f4a45a3 1,45-56,122-152
+bot/tests/test_compile.py
+  s_56e5aba811403b::t_2989444326bfd9 118-119,136-143,1008,1238,1277-1325,1371,1962-1963,3680
+bot/tests/test_compile_adapter_streaming.py
+  s_56e5aba811403b::t_ad585a468f5971 1-189
+bot/tests/test_compile_context_compaction.py
+  s_56e5aba811403b::t_d1ccb38e1ab940 1-255
+bot/tests/test_compile_coverage_hierarchy.py
+  s_56e5aba811403b::t_f68dba9664a740 1-339
+bot/tests/test_compile_coverage_integration.py
+  s_56e5aba811403b::t_86c6b6778fc412 22,29,85-274,288,354,368-369,377,379,391,393,422,425,461,482,486-489,494-561,598-599,622,847-850,852-873,875-901
+bot/tests/test_compile_source_pipeline.py
+  s_56e5aba811403b::t_835e90a836f83f 1-685
+bot/tests/test_compile_source_scheduler.py
+  s_56e5aba811403b::t_e0b6e7ee049b6b 1-349
+bot/tests/test_compile_source_stream.py
+  s_56e5aba811403b::t_443152dd57c40a 1-402
+bot/vikingbot/agent/loop.py
+  s_56e5aba811403b::t_0dd76557a4e267 38,337-370,977-978,1036-1037,1039-1041,1044,1051,1059,1066-1085,1095-1114,1375,1409-1410,1443-1444
+bot/vikingbot/agent/tools/compile.py
+  s_56e5aba811403b::t_f1a511d3cda456 26,31,103,113-114,171-184,189-200,202-206,208-215,217-240,242-271,308-429,437-454,479,543,558,561,581-582,702,721,740-809,923,1194-1201,1203-1209
+bot/vikingbot/compile/adapters.py
+  s_56e5aba811403b::t_cdb5eba1e63f6f 13,47-56,59-62,65-68,70-71,82-83,85-86,88-89,91-92,95,101-103,167-268,274-477,488-523,753-754,797,898-899,936,938-939,942-944
+bot/vikingbot/compile/context_compaction.py
+  s_56e5aba811403b::t_10765c4a9c1b6f 1-379
+bot/vikingbot/compile/coverage.py
+  s_46d176d51be1f9::t_c7df177809793d 13-14,99-121,131-135,152-164,189-212,216,243-269,285,293-298,310-312,323-329,355-357,401-413,472-527,532,536-545,559,569,635,659,667-668,679,691,708,710,723,740-744,750,763-764,768-769,801-802,809-810,848,856-861,916-934,964
+bot/vikingbot/compile/models.py
+  s_56e5aba811403b::t_171e4bad0e4026 5-6,25-44,61-74,135,141-142,152-154,162,202,318
+bot/vikingbot/compile/service.py
+  s_56e5aba811403b::t_c39df91bf198ce 40-44,59,73-75,168,170-172,660-668,743,783-801,810-814,816,819-823,840-841,848,865,924,981,1098,1865-1870,1874,1878-1879,1887-1995,1997,2022-2030,2039,2065,2085-2088,2094-2096,2290,2389,2464-2465,2467
+bot/vikingbot/compile/source_pipeline.py
+  s_56e5aba811403b::t_b69023c2a3b21d 1-804
+bot/vikingbot/compile/source_scheduler.py
+  s_56e5aba811403b::t_fb8dffac0e4269 1-445
+bot/vikingbot/compile/source_stream.py
+  s_56e5aba811403b::t_c535a9fa5f1f65 1-757
+bot/vikingbot/openviking_mount/ov_server.py
+  s_56e5aba811403b::t_7a202f020e1c21 15,623-636,1060
+bot/vikingbot/providers/base.py
+  s_56e5aba811403b::t_dcea84924f6a34 199-212
+bot/vikingbot/providers/vlm_adapter.py
+  s_56e5aba811403b::t_8f7f056a350ecb 9,31-43,73-93,124-141,144,408
+bot/vikingbot/tests/unit/test_bot_provider_thinking.py
+  s_56e5aba811403b::t_655d06f43dafd7 188-335
+openviking/models/vlm/backends/litellm_vlm.py
+  s_56e5aba811403b::t_b183d167b89a90 430,449,453-454,466
+openviking/models/vlm/backends/openai_vlm.py
+  s_56e5aba811403b::t_50afbbbf15f6df 332,338-342
+openviking/models/vlm/backends/volcengine_vlm.py
+  s_56e5aba811403b::t_b3f7cf1ec635e9 181-182,194,206-208,232-233
+openviking/models/vlm/base.py
+  s_56e5aba811403b::t_6c6c6302e3b757 5,27-50,140,513,530,601,611,891,977,987
+openviking/server/routers/content.py
+  s_49aee34362c35e::t_f7a689dbada0fe 31,171-220
+openviking/service/fs_service.py
+  s_56e5aba811403b::t_f7e710e65fe605 10-11,34-39,44-55,664-715
+openviking_cli/client/_http_compat.py
+  s_56e5aba811403b::t_137864d2bf16fb 9,11,39,43-88,219-281,409-424
+sdk/python/openviking_sdk/__init__.py
+  s_56e5aba811403b::t_467aad51b6588e 2,17
+sdk/python/openviking_sdk/client.py
+  s_56e5aba811403b::t_44af42ea35c4d0 10,13,70-123,459,478,1195-1237,2327-2342,2962
+sdk/python/tests/test_range_read.py
+  s_a3d4129c0f13af::t_4597a9e446b297 1-109
+tests/client/test_http_compat_old_sdk.py
+  s_56e5aba811403b::t_720e04987f3b10 1-132
+tests/server/test_content_range.py
+  s_56e5aba811403b::t_e9c28164289481 1-236
+tests/unit/test_vikingbot_vlm_adapter_retry.py
+  s_56e5aba811403b::t_ea956494a15308 31-45,52-82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "f0e57c51afca6dbb4f533e7eb58e0034fc73195c",
+  "prompts": {},
+  "sessions": {
+    "s_46d176d51be1f9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ffa7d-1d34-7c01-97ff-fca837c61152",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    },
+    "s_49aee34362c35e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ffa6e-6812-7510-8a3e-686fa6264fa7",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    },
+    "s_56e5aba811403b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ffa0a-d9a4-7592-a6bf-9ecc55106b48",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    },
+    "s_a3d4129c0f13af": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ffa95-089c-7de2-a385-46244476cfc9",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
