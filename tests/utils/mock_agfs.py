@@ -167,17 +167,8 @@ class MockLocalAGFS:
             raw = content.decode("utf-8") if isinstance(content, bytes) else str(content)
             with self._queue_guard:
                 if operation == "enqueue":
-                    try:
-                        parsed = json.loads(raw)
-                    except (ValueError, TypeError):
-                        parsed = None
-                    if isinstance(parsed, dict):
-                        message = dict(parsed)
-                        message.setdefault("id", str(uuid.uuid4()))
-                        message_id = message["id"]
-                    else:
-                        message_id = str(uuid.uuid4())
-                        message = {"id": message_id, "data": raw}
+                    message_id = str(uuid.uuid4())
+                    message = {"id": message_id, "data": raw}
                     self._queues.setdefault(queue_name, []).append(message)
                     return message_id
                 if operation == "ack":
@@ -233,11 +224,9 @@ class MockLocalAGFS:
     def cat(self, path, ctx=None, **kwargs):
         return self.read_file(path, ctx, **kwargs)
 
-    def rm(self, path, recursive=False, force=True, ctx=None):
+    def rm(self, path, recursive=False, ctx=None):
         p = self._resolve(path)
         if not p.exists():
-            if force:
-                return {"removed": path}
             raise FileNotFoundError(path)
         if p.is_dir():
             if recursive:
@@ -246,7 +235,7 @@ class MockLocalAGFS:
                 p.rmdir()
         else:
             p.unlink()
-        return {"removed": path}
+        return {"message": "deleted"}
 
     def delete_temp(self, path, ctx=None):
         self.rm(path, recursive=True, ctx=ctx)
@@ -371,16 +360,38 @@ class MockLocalAGFS:
 
     def _make_owned_lease(self, locks, paths):
         lease_ref = str(uuid.uuid4())
+        ownership_ref = str(uuid.uuid4())
         lease = {
             "lease_ref": lease_ref,
-            "ownership_ref": str(uuid.uuid4()),
+            "ownership_ref": ownership_ref,
             "owner_id": "mock-local-agfs",
             "owned": True,
             "lock_paths": list(paths),
         }
         with self._pathlocks_guard:
-            self._pathlock_leases[lease_ref] = dict(locks)
+            self._pathlock_leases[lease_ref] = {
+                "ownership_ref": ownership_ref,
+                "locks": dict(locks),
+                "owner_id": lease["owner_id"],
+                "lock_paths": list(paths),
+                "covered_paths": [{"path": path, "kind": "exact"} for path in paths],
+            }
         return lease
+
+    def _require_owned_lease(self, owned_lease_ref):
+        if isinstance(owned_lease_ref, str):
+            raise TypeError("owned lease operations require a lease ref dict")
+        if not owned_lease_ref.get("owned", False):
+            raise ValueError("owned lease operation requires an owned lease")
+        lease_ref = owned_lease_ref.get("lease_ref")
+        ownership_ref = owned_lease_ref.get("ownership_ref")
+        if not lease_ref or not ownership_ref:
+            raise ValueError("owned lease requires lease_ref and ownership_ref")
+        with self._pathlocks_guard:
+            entry = self._pathlock_leases.get(lease_ref)
+        if entry is None or entry["ownership_ref"] != ownership_ref:
+            raise ValueError(f"owned lease capability does not match ref '{lease_ref}'")
+        return lease_ref, entry
 
     def pathlock_acquire_exact(self, ctx, path, timeout_secs=0.0, owner_lease_ref=None):
         del ctx, owner_lease_ref
@@ -434,40 +445,23 @@ class MockLocalAGFS:
 
     def pathlock_refresh(self, ctx, owned_lease_ref):
         del ctx
-        lease_ref = owned_lease_ref["lease_ref"]
-        with self._pathlocks_guard:
-            if lease_ref not in self._pathlock_leases:
-                return "lost"
+        self._require_owned_lease(owned_lease_ref)
         return "refreshed"
 
     def pathlock_release(self, ctx, owned_lease_ref):
         del ctx
-        if isinstance(owned_lease_ref, str):
-            raise TypeError("pathlock_release requires a lease ref dict, not a raw string")
-        lease_ref = owned_lease_ref["lease_ref"]
-        if not owned_lease_ref.get("owned", True):
-            raise ValueError("cannot release a borrowed lease")
+        lease_ref, entry = self._require_owned_lease(owned_lease_ref)
         with self._pathlocks_guard:
-            locks = self._pathlock_leases.pop(lease_ref, None)
-        if locks is None:
-            raise ValueError("cannot release an unknown lease")
-        if not isinstance(locks, dict):
-            locks = {owned_lease_ref.get("lease_ref", ""): locks}
+            self._pathlock_leases.pop(lease_ref)
+        locks = entry["locks"]
         for lock in reversed(list(locks.values())):
             if lock.locked():
                 lock.release()
 
     def pathlock_release_selected(self, ctx, owned_lease_ref, lock_paths):
         del ctx
-        lease_ref = owned_lease_ref["lease_ref"]
-        if not owned_lease_ref.get("owned", True):
-            raise ValueError("cannot release a borrowed lease")
-        with self._pathlocks_guard:
-            locks = self._pathlock_leases.get(lease_ref)
-        if locks is None:
-            raise ValueError("cannot release an unknown lease")
-        if not isinstance(locks, dict):
-            locks = {lease_ref: locks}
+        lease_ref, entry = self._require_owned_lease(owned_lease_ref)
+        locks = entry["locks"]
         selected = set(lock_paths)
         released = []
         for path in selected:
@@ -476,7 +470,11 @@ class MockLocalAGFS:
                 lock.release()
                 released.append(path)
         if locks:
-            self._pathlock_leases[lease_ref] = locks
+            entry["locks"] = locks
+            entry["lock_paths"] = [path for path in entry["lock_paths"] if path not in selected]
+            entry["covered_paths"] = [
+                request for request in entry["covered_paths"] if request["path"] not in selected
+            ]
         else:
             with self._pathlocks_guard:
                 self._pathlock_leases.pop(lease_ref, None)
@@ -484,34 +482,24 @@ class MockLocalAGFS:
 
     def pathlock_to_handoff(self, ctx, owned_lease_ref):
         del ctx
-        lease_ref = owned_lease_ref["lease_ref"]
-        with self._pathlocks_guard:
-            if lease_ref not in self._pathlock_leases:
-                raise ValueError("cannot hand off an unknown lease")
+        lease_ref, entry = self._require_owned_lease(owned_lease_ref)
         return {
             "lease_ref": lease_ref,
-            "owner_id": owned_lease_ref.get("owner_id") or "mock-local-agfs",
-            "lock_paths": owned_lease_ref.get("lock_paths", []),
-            "covered_paths": [
-                {"path": path, "kind": "exact"} for path in owned_lease_ref.get("lock_paths", [])
-            ],
+            "owner_id": entry["owner_id"],
+            "lock_paths": list(entry["lock_paths"]),
+            "covered_paths": list(entry["covered_paths"]),
         }
 
     def pathlock_handoff(self, ctx, owned_lease_ref):
         del ctx
-        lease_ref = owned_lease_ref["lease_ref"]
+        lease_ref, entry = self._require_owned_lease(owned_lease_ref)
         with self._pathlocks_guard:
-            locks = self._pathlock_leases.pop(lease_ref, None)
-            if locks is None:
-                raise ValueError("cannot hand off an unknown lease")
+            self._pathlock_leases.pop(lease_ref)
             self._pathlock_handoffs[lease_ref] = {
-                "locks": locks,
-                "owner_id": owned_lease_ref.get("owner_id"),
-                "lock_paths": list(owned_lease_ref.get("lock_paths", [])),
-                "covered_paths": [
-                    {"path": path, "kind": "exact"}
-                    for path in owned_lease_ref.get("lock_paths", [])
-                ],
+                "locks": entry["locks"],
+                "owner_id": entry["owner_id"],
+                "lock_paths": list(entry["lock_paths"]),
+                "covered_paths": list(entry["covered_paths"]),
             }
 
     def pathlock_adopt(self, ctx, handoff_ref):

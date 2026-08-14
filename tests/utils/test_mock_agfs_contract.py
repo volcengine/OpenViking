@@ -107,6 +107,34 @@ class TestMockAgfsPathlockContract:
         with pytest.raises((TypeError, ValueError)):
             mock.pathlock_release(None, borrowed["lease_ref"])
 
+    @pytest.mark.parametrize(
+        "operation",
+        [
+            lambda mock, lease: mock.pathlock_refresh(None, lease),
+            lambda mock, lease: mock.pathlock_release(None, lease),
+            lambda mock, lease: mock.pathlock_release_selected(None, lease, ["/local/test/a.txt"]),
+            lambda mock, lease: mock.pathlock_to_handoff(None, lease),
+            lambda mock, lease: mock.pathlock_handoff(None, lease),
+        ],
+    )
+    def test_owned_lifecycle_rejects_forged_ownership_ref(self, tmp_path, operation):
+        mock = _make_mock(tmp_path)
+        owned = mock.pathlock_acquire_exact(None, "/local/test/a.txt")
+        forged = dict(owned, ownership_ref="attacker-value")
+        with pytest.raises(ValueError, match="capability does not match"):
+            operation(mock, forged)
+        assert mock.pathlock_is_locked(None, "/local/test/a.txt") is True
+        mock.pathlock_release(None, owned)
+
+    def test_handoff_uses_canonical_lease_metadata(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        owned = mock.pathlock_acquire_exact(None, "/local/test/a.txt")
+        forged = dict(owned, owner_id="forged-owner", lock_paths=["/local/test/b.txt"])
+        handoff = mock.pathlock_to_handoff(None, forged)
+        assert handoff["owner_id"] == owned["owner_id"]
+        assert handoff["lock_paths"] == owned["lock_paths"]
+        mock.pathlock_release(None, owned)
+
     def test_handoff_and_adopt_roundtrip(self, tmp_path):
         mock = _make_mock(tmp_path)
         owned = mock.pathlock_acquire_exact(None, "/local/test/a.txt")
@@ -189,7 +217,8 @@ class TestMockAgfsPathlockContract:
         owned = mock.pathlock_acquire_exact(None, "/local/test/a.txt")
         assert mock.pathlock_refresh(None, owned) == "refreshed"
         mock.pathlock_release(None, owned)
-        assert mock.pathlock_refresh(None, owned) == "lost"
+        with pytest.raises(ValueError, match="capability does not match"):
+            mock.pathlock_refresh(None, owned)
 
 
 class TestMockAgfsFileContract:
@@ -210,15 +239,12 @@ class TestMockAgfsFileContract:
         assert mock.read("/local/test/a.txt") == b"hello"
         assert mock.cat("/local/test/a.txt") == b"hello"
 
-    def test_rm_force_and_recursive(self, tmp_path):
+    def test_rm_and_recursive(self, tmp_path):
         mock = _make_mock(tmp_path)
         mock.write("/local/test/file.txt", b"x")
         assert isinstance(mock.rm("/local/test/file.txt"), dict)
-        assert (
-            mock.rm("/local/test/missing.txt", force=True)["removed"] == "/local/test/missing.txt"
-        )
         with pytest.raises(FileNotFoundError):
-            mock.rm("/local/test/missing.txt", force=False)
+            mock.rm("/local/test/missing.txt")
 
         mock.mkdir("/local/test/dir")
         mock.write("/local/test/dir/f.txt", b"x")
@@ -262,33 +288,39 @@ class TestMockAgfsQueueContract:
     def test_enqueue_dequeue_roundtrip(self, tmp_path):
         mock = _make_mock(tmp_path)
         queue_path = "/queue/TestQueue"
-        msg_id = mock.writeto(f"{queue_path}/enqueue", b'{"id": "m1", "data": "hello"}')
+        payload = '{"task_id":"abc"}'
+        msg_id = mock.writeto(f"{queue_path}/enqueue", payload.encode())
         assert msg_id
         raw = mock.read_file(f"{queue_path}/dequeue")
         import json as json_mod
 
         message = json_mod.loads(raw)
-        assert message["id"] == "m1"
-        assert message["data"] == "hello"
+        assert message["id"] == msg_id
+        assert message["data"] == payload
+        assert message["id"] != "abc"
 
     def test_queue_size_and_messages(self, tmp_path):
         mock = _make_mock(tmp_path)
         queue_path = "/queue/TestQueue"
-        mock.writeto(f"{queue_path}/enqueue", b'{"id": "m1"}')
-        mock.writeto(f"{queue_path}/enqueue", b'{"id": "m2"}')
+        first_id = mock.writeto(f"{queue_path}/enqueue", b'{"id": "business-1"}')
+        second_id = mock.writeto(f"{queue_path}/enqueue", b'{"id": "business-2"}')
         assert int(mock.read_file(f"{queue_path}/size")) == 2
         snapshot = mock.read_file(f"{queue_path}/messages")
         import json as json_mod
 
         messages = json_mod.loads(snapshot)
-        assert {m["id"] for m in messages} == {"m1", "m2"}
+        assert {m["id"] for m in messages} == {first_id, second_id}
+        assert {m["data"] for m in messages} == {
+            '{"id": "business-1"}',
+            '{"id": "business-2"}',
+        }
 
     def test_ack_removes_processing_message(self, tmp_path):
         mock = _make_mock(tmp_path)
         queue_path = "/queue/TestQueue"
-        mock.writeto(f"{queue_path}/enqueue", b'{"id": "m1"}')
+        msg_id = mock.writeto(f"{queue_path}/enqueue", b'{"id": "business-id"}')
         mock.read_file(f"{queue_path}/dequeue")
-        mock.writeto(f"{queue_path}/ack", b"m1")
+        mock.writeto(f"{queue_path}/ack", msg_id.encode())
         snapshot = mock.read_file(f"{queue_path}/messages")
         import json as json_mod
 
