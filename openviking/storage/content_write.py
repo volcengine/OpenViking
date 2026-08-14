@@ -594,7 +594,7 @@ class ContentWriteCoordinator:
             raise InvalidArgumentError(str(exc)) from exc
 
         self._validate_tag_mode(mode)
-        normalized_tags = normalize_search_tags(tags)
+        normalized_tags = normalize_search_tags(tags, discard_invalid=True)
         stat = await self._safe_stat(normalized_uri, ctx=ctx)
         if stat.get("isDir"):
             return await self._set_directory_tags(

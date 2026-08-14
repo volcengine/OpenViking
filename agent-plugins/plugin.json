@@ -1,0 +1,21 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "openviking",
+  "version": "0.1.0",
+  "description": "Semantic long-term memory and context engine for coding agents. Recall prior knowledge with the find/search/read MCP tools and persist durable facts with remember/write, backed by an OpenViking server.",
+  "author": {
+    "name": "Volcano Engine",
+    "url": "https://github.com/volcengine"
+  },
+  "homepage": "https://github.com/volcengine/OpenViking",
+  "repository": "https://github.com/volcengine/OpenViking",
+  "license": "AGPL-3.0",
+  "keywords": [
+    "memory",
+    "long-term-memory",
+    "context-engine",
+    "semantic-search",
+    "mcp",
+    "openviking"
+  ]
+}

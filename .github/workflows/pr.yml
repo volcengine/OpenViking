@@ -66,7 +66,8 @@ jobs:
             examples/dsh-memory-plugin/*.test.mjs \
             examples/opencode-plugin/tests/*.test.mjs \
             examples/opencode-plugin/servers/mcp-proxy.test.mjs \
-            examples/pi-coding-agent-extension/tests/*.test.mjs
+            examples/pi-coding-agent-extension/tests/*.test.mjs \
+            agent-plugins/plugin.test.mjs
 
       - name: Check installer scripts parse
         run: |

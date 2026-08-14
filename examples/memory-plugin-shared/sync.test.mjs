@@ -19,6 +19,12 @@ const HARNESS_SHARED_FILES = [
   "uri-guard.mjs",
 ];
 const OPENCODE_SHARED_FILES = [...HARNESS_SHARED_FILES, "mcp-proxy-core.mjs", "async-writer.mjs", "batch-send.mjs"];
+const AGENT_PLUGINS_SHARED_FILES = [
+  "credentials.mjs",
+  "debug-log.mjs",
+  "mcp-proxy-core.mjs",
+  "workspace-peer.mjs",
+];
 const TARGETS = [
   { dir: join(ROOT, "examples", "claude-code-memory-plugin", "scripts", "shared"), files: OPENCODE_SHARED_FILES },
   { dir: join(ROOT, "examples", "codex-memory-plugin", "scripts", "shared"), files: OPENCODE_SHARED_FILES },
@@ -26,6 +32,7 @@ const TARGETS = [
   { dir: join(ROOT, "examples", "dsh-memory-plugin", "shared"), files: HARNESS_SHARED_FILES },
   { dir: join(ROOT, "examples", "pi-coding-agent-extension", "shared"), files: HARNESS_SHARED_FILES },
   { dir: join(ROOT, "examples", "zcode-memory-plugin", "scripts", "shared") },
+  { dir: join(ROOT, "agent-plugins", "servers", "shared"), files: AGENT_PLUGINS_SHARED_FILES },
 ];
 const GENERATED_HEADER = "// GENERATED FROM examples/memory-plugin-shared/lib. DO NOT EDIT.\n";
 

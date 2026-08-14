@@ -37,8 +37,14 @@ async def _marker_exists(session, archive_uri: str, name: str) -> bool:
 class TestCommit:
     """Test commit"""
 
-    async def test_commit_success(self, session_with_messages: Session):
-        """Test successful commit returns accepted with task_id"""
+    async def test_commit_preserves_unicode_separators_and_accepts_later_messages(
+        self, session_with_messages: Session
+    ):
+        """Unicode separators inside a message must not split its JSONL record."""
+        unicode_text = "before\u2028middle\u2029after\u0085tail"
+        session_with_messages.add_message("assistant", [TextPart(unicode_text)])
+        session_with_messages.add_message("user", [TextPart("continue")])
+
         result = await session_with_messages.commit_async()
 
         assert isinstance(result, dict)
@@ -47,6 +53,19 @@ class TestCommit:
         assert result.get("task_id") is not None
         assert "memory_diff_uri" not in result
         assert "memories_extracted" not in result
+        archive_content = await session_with_messages._viking_fs.read_file(
+            f"{result['archive_uri']}/messages.jsonl",
+            ctx=session_with_messages.ctx,
+        )
+        archived_messages = [
+            json.loads(line) for line in archive_content.split("\n") if line.strip()
+        ]
+        assert unicode_text in {
+            part["text"]
+            for message in archived_messages
+            for part in message["parts"]
+            if part["type"] == "text"
+        }
 
     async def test_commit_extracts_memories(
         self,

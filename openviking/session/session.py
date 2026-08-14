@@ -3984,7 +3984,13 @@ class Session:
             ctx=self.ctx,
         )
         messages: List[Message] = []
-        for line_number, line in enumerate(content.splitlines(), start=1):
+        # Split on "\n" only, not str.splitlines(): the latter also treats
+        # U+2028 / U+2029 / NEL (\x85) / \r / \v / \f as line boundaries, which
+        # would cut a JSONL record in half when those characters appear inside a
+        # JSON string value (e.g. assistant tool_output) and break json.loads()
+        # with "Unterminated string". Normalize CRLF first so a trailing "\r"
+        # does not leak into the record. See issue #3984.
+        for line_number, line in enumerate(content.replace("\r\n", "\n").split("\n"), start=1):
             if not line.strip():
                 continue
             try:

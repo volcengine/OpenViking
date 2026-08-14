@@ -1313,7 +1313,7 @@ async def test_set_tags_append_merges_existing_tags(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_set_tags_rejects_non_kv_tags(monkeypatch):
+async def test_set_tags_discards_non_kv_tags(monkeypatch):
     file_uri = "viking://resources/demo/doc.md"
     root_uri = "viking://resources/demo"
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
@@ -1321,12 +1321,24 @@ async def test_set_tags_rejects_non_kv_tags(monkeypatch):
     coordinator = ContentWriteCoordinator(viking_fs=fake_vfs)
 
     class _FakeVectorStore:
-        async def update_search_tags(self, uri: str, tags, *, mode: str, levels=None, ctx=None):
-            raise AssertionError("invalid tags must fail before store update")
+        def __init__(self):
+            self.update_calls = []
 
-    fake_vfs.vector_store = _FakeVectorStore()
-    with pytest.raises(InvalidArgumentError, match="k=v"):
-        await coordinator.set_tags(uri=file_uri, tags=["project-a"], ctx=ctx)
+        async def update_search_tags(self, uri: str, tags, *, mode: str, levels=None, ctx=None):
+            del levels, ctx
+            self.update_calls.append((uri, list(tags), mode))
+            return [{"uri": uri}]
+
+    fake_store = _FakeVectorStore()
+    fake_vfs.vector_store = fake_store
+    result = await coordinator.set_tags(
+        uri=file_uri,
+        tags=["project-a", "team=search"],
+        ctx=ctx,
+    )
+
+    assert result["tags"] == ["team=search"]
+    assert fake_store.update_calls == [(file_uri, ["team=search"], "replace")]
 
 
 @pytest.mark.asyncio
