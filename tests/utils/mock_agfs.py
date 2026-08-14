@@ -1,3 +1,4 @@
+import json
 import shutil
 import threading
 import uuid
@@ -19,6 +20,16 @@ class MockLocalAGFS:
         self._pathlocks_guard = threading.Lock()
         self._pathlocks = {}
         self._pathlock_leases = {}
+        self._queue_guard = threading.Lock()
+        self._queues = {}
+        self._queue_processing = {}
+
+    @staticmethod
+    def _queue_operation(path):
+        parts = str(path).strip("/").split("/")
+        if len(parts) >= 3 and parts[-3] == "queue":
+            return parts[-2], parts[-1]
+        return None
 
     def _resolve(self, path):
         if str(path).startswith("viking://"):
@@ -87,6 +98,23 @@ class MockLocalAGFS:
         }
 
     def writeto(self, path, content, ctx=None, **kwargs):
+        queue_operation = self._queue_operation(path)
+        if queue_operation:
+            queue_name, operation = queue_operation
+            raw = content.decode("utf-8") if isinstance(content, bytes) else str(content)
+            with self._queue_guard:
+                if operation == "enqueue":
+                    message_id = str(uuid.uuid4())
+                    self._queues.setdefault(queue_name, []).append({"id": message_id, "data": raw})
+                    return message_id
+                if operation == "ack":
+                    self._queue_processing.setdefault(queue_name, {}).pop(raw, None)
+                    return ""
+                if operation == "clear":
+                    self._queues[queue_name] = []
+                    self._queue_processing[queue_name] = {}
+                    return ""
+
         p = self._resolve(path)
         p.parent.mkdir(parents=True, exist_ok=True)
         if isinstance(content, str):
@@ -102,6 +130,25 @@ class MockLocalAGFS:
         return self.writeto(path, content, ctx, **kwargs)
 
     def read_file(self, path, ctx=None, **kwargs):
+        queue_operation = self._queue_operation(path)
+        if queue_operation:
+            queue_name, operation = queue_operation
+            with self._queue_guard:
+                queue = self._queues.setdefault(queue_name, [])
+                processing = self._queue_processing.setdefault(queue_name, {})
+                if operation == "dequeue":
+                    if not queue:
+                        return b"{}"
+                    message = queue.pop(0)
+                    processing[message["id"]] = message
+                    return json.dumps(message).encode("utf-8")
+                if operation == "peek":
+                    return json.dumps(queue[0] if queue else {}).encode("utf-8")
+                if operation == "size":
+                    return str(len(queue)).encode("utf-8")
+                if operation == "messages":
+                    return json.dumps(queue + list(processing.values())).encode("utf-8")
+
         p = self._resolve(path)
         if not p.exists():
             raise FileNotFoundError(path)
@@ -176,9 +223,47 @@ class MockLocalAGFS:
 
     pathlock_acquire_exact = pathlock_acquire_tree
 
+    def pathlock_acquire_exact_batch(
+        self,
+        ctx,
+        paths,
+        timeout_secs=0.0,
+        owner_lease_ref=None,
+    ):
+        del ctx, owner_lease_ref
+        with self._pathlocks_guard:
+            locks = [
+                self._pathlocks.setdefault(path, threading.Lock()) for path in sorted(set(paths))
+            ]
+
+        acquired = []
+        try:
+            for lock in locks:
+                if not lock.acquire(timeout=timeout_secs):
+                    raise TimeoutError("timed out acquiring test path lock batch")
+                acquired.append(lock)
+        except BaseException:
+            for lock in reversed(acquired):
+                lock.release()
+            raise
+
+        lease_ref = str(uuid.uuid4())
+        lease = {
+            "lease_ref": lease_ref,
+            "ownership_ref": str(uuid.uuid4()),
+            "owner_id": "mock-local-agfs",
+            "owned": True,
+        }
+        with self._pathlocks_guard:
+            self._pathlock_leases[lease_ref] = locks
+        return lease
+
     def pathlock_release(self, ctx, owned_lease_ref):
         del ctx
         lease_ref = owned_lease_ref["lease_ref"]
         with self._pathlocks_guard:
-            lock = self._pathlock_leases.pop(lease_ref)
-        lock.release()
+            locks = self._pathlock_leases.pop(lease_ref)
+        if not isinstance(locks, list):
+            locks = [locks]
+        for lock in reversed(locks):
+            lock.release()
