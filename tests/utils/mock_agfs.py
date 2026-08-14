@@ -40,8 +40,8 @@ class MockLocalAGFS:
     @staticmethod
     def _queue_operation(path):
         parts = str(path).strip("/").split("/")
-        if len(parts) >= 3 and parts[-3] == "queue":
-            return parts[-2], parts[-1]
+        if len(parts) >= 3 and parts[0] == "queue":
+            return "/".join(parts[1:-1]), parts[-1]
         return None
 
     def _resolve(self, path):
@@ -167,19 +167,20 @@ class MockLocalAGFS:
         if queue_operation:
             queue_name, operation = queue_operation
             raw = content.decode("utf-8") if isinstance(content, bytes) else str(content)
+            written = f"Written {len(raw.encode('utf-8'))} bytes"
             with self._queue_guard:
                 if operation == "enqueue":
                     message_id = str(uuid.uuid4())
                     message = {"id": message_id, "data": raw}
                     self._queues.setdefault(queue_name, []).append(message)
-                    return message_id
+                    return written
                 if operation == "ack":
                     self._queue_processing.setdefault(queue_name, {}).pop(raw, None)
-                    return ""
+                    return written
                 if operation == "clear":
                     self._queues[queue_name] = []
                     self._queue_processing[queue_name] = {}
-                    return ""
+                    return written
 
         p = self._resolve(path)
         p.parent.mkdir(parents=True, exist_ok=True)

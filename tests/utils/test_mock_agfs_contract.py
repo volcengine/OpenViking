@@ -339,27 +339,42 @@ class TestMockAgfsQueueContract:
         mock = _make_mock(tmp_path)
         queue_path = "/queue/TestQueue"
         payload = '{"task_id":"abc"}'
-        msg_id = mock.writeto(f"{queue_path}/enqueue", payload.encode())
-        assert msg_id
+        write_result = mock.writeto(f"{queue_path}/enqueue", payload.encode())
+        assert write_result == f"Written {len(payload.encode())} bytes"
         raw = mock.read_file(f"{queue_path}/dequeue")
         import json as json_mod
 
         message = json_mod.loads(raw)
-        assert message["id"] == msg_id
+        assert message["id"] != write_result
         assert message["data"] == payload
         assert message["id"] != "abc"
+
+    def test_worker_queue_path_uses_nested_queue_name(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        queue_path = "/queue/worker-2/TestQueue"
+        payload = '{"task_id":"nested"}'
+        mock.writeto(f"{queue_path}/enqueue", payload.encode())
+
+        import json as json_mod
+
+        peeked = json_mod.loads(mock.read_file(f"{queue_path}/peek"))
+        assert peeked["data"] == payload
+        assert int(mock.read_file(f"{queue_path}/size")) == 1
+        dequeued = json_mod.loads(mock.read_file(f"{queue_path}/dequeue"))
+        assert dequeued == peeked
 
     def test_queue_size_and_messages(self, tmp_path):
         mock = _make_mock(tmp_path)
         queue_path = "/queue/TestQueue"
-        first_id = mock.writeto(f"{queue_path}/enqueue", b'{"id": "business-1"}')
-        second_id = mock.writeto(f"{queue_path}/enqueue", b'{"id": "business-2"}')
+        mock.writeto(f"{queue_path}/enqueue", b'{"id": "business-1"}')
+        mock.writeto(f"{queue_path}/enqueue", b'{"id": "business-2"}')
         assert int(mock.read_file(f"{queue_path}/size")) == 2
         snapshot = mock.read_file(f"{queue_path}/messages")
         import json as json_mod
 
         messages = json_mod.loads(snapshot)
-        assert {m["id"] for m in messages} == {first_id, second_id}
+        assert len({m["id"] for m in messages}) == 2
+        assert not {"business-1", "business-2"} & {m["id"] for m in messages}
         assert {m["data"] for m in messages} == {
             '{"id": "business-1"}',
             '{"id": "business-2"}',
@@ -368,11 +383,12 @@ class TestMockAgfsQueueContract:
     def test_ack_removes_processing_message(self, tmp_path):
         mock = _make_mock(tmp_path)
         queue_path = "/queue/TestQueue"
-        msg_id = mock.writeto(f"{queue_path}/enqueue", b'{"id": "business-id"}')
-        mock.read_file(f"{queue_path}/dequeue")
-        mock.writeto(f"{queue_path}/ack", msg_id.encode())
-        snapshot = mock.read_file(f"{queue_path}/messages")
+        mock.writeto(f"{queue_path}/enqueue", b'{"id": "business-id"}')
         import json as json_mod
+
+        message = json_mod.loads(mock.read_file(f"{queue_path}/dequeue"))
+        mock.writeto(f"{queue_path}/ack", message["id"].encode())
+        snapshot = mock.read_file(f"{queue_path}/messages")
 
         messages = json_mod.loads(snapshot)
         assert messages == []
