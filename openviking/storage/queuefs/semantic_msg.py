@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from openviking.utils.ingest_options import IngestOptions
 
+
 def build_semantic_coalesce_key(
     *,
     context_type: str,
@@ -56,7 +57,6 @@ class SemanticMsg:
     target_preexisting: Optional[bool] = None
     ingest_options: IngestOptions = field(default_factory=IngestOptions)
     coalesce_key: str = ""
-    coalesce_version: int = 0
     changes: Optional[Dict[str, List[str]]] = (
         None  # {"added": [...], "modified": [...], "deleted": [...]}
     )
@@ -78,7 +78,6 @@ class SemanticMsg:
         target_preexisting: Optional[bool] = None,
         ingest_options: IngestOptions | Dict[str, Any] | None = None,
         coalesce_key: str = "",
-        coalesce_version: int = 0,
         changes: Optional[Dict[str, List[str]]] = None,
     ):
         self.id = str(uuid4())
@@ -97,7 +96,6 @@ class SemanticMsg:
         self.target_preexisting = target_preexisting
         self.ingest_options = IngestOptions.from_value(ingest_options)
         self.coalesce_key = coalesce_key
-        self.coalesce_version = coalesce_version
         self.changes = changes
 
     def to_dict(self) -> Dict[str, Any]:
@@ -149,7 +147,6 @@ class SemanticMsg:
                 }
             ),
             coalesce_key=data.get("coalesce_key", ""),
-            coalesce_version=data.get("coalesce_version", 0),
             changes=data.get("changes"),
         )
         if "id" in data and data["id"]:

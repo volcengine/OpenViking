@@ -156,8 +156,6 @@ class SemanticDagExecutor:
         changes: Optional[Dict[str, List[str]]] = None,
         skip_vectorization: bool = False,
         ingest_options: IngestOptions | None = None,
-        coalesce_key: str = "",
-        coalesce_version: int = 0,
     ):
         self._processor = processor
         self._context_type = context_type
@@ -170,11 +168,8 @@ class SemanticDagExecutor:
         self._changes = changes or {}
         self._skip_vectorization = skip_vectorization
         self._ingest_options = IngestOptions.from_value(ingest_options)
-        self._coalesce_key = coalesce_key
-        self._coalesce_version = coalesce_version
         self._task_context = get_task_context()
         self._telemetry = get_current_telemetry()
-        self._stale = False
         self._changed_paths = {
             path for key in ("added", "modified", "deleted") for path in self._changes.get(key, [])
         }
@@ -707,10 +702,6 @@ class SemanticDagExecutor:
             return None
         return summary
 
-    @property
-    def stale(self) -> bool:
-        return self._stale
-
     async def _finalize_children_abstracts(self, node: DirNode) -> List[Dict[str, str]]:
         results: List[Dict[str, str]] = []
         for idx, child_uri in enumerate(node.children_dirs):
@@ -725,11 +716,6 @@ class SemanticDagExecutor:
                 results.append(item)
         return results
 
-    def _is_stale(self) -> bool:
-        from openviking.storage.queuefs.semantic_queue import is_semantic_coalesce_stale
-
-        return is_semantic_coalesce_stale(self._coalesce_key, self._coalesce_version)
-
     async def _write_directory_semantics(
         self,
         dir_uri: str,
@@ -742,12 +728,8 @@ class SemanticDagExecutor:
             overview=overview,
             abstract=abstract,
             ctx=self._ctx,
-            is_stale=self._is_stale,
             lock=self._lock,
-            log_prefix="[SemanticDag]",
         )
-        if not wrote:
-            self._stale = True
         return wrote
 
     async def _overview_task(self, dir_uri: str) -> None:

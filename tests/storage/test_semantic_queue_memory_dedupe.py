@@ -10,7 +10,7 @@ import pytest
 from openviking.storage.queuefs.named_queue import NamedQueue
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
-from openviking.storage.queuefs.semantic_queue import SemanticQueue, is_semantic_msg_stale
+from openviking.storage.queuefs.semantic_queue import SemanticQueue
 
 
 @pytest.mark.asyncio
@@ -75,7 +75,7 @@ async def test_non_memory_context_not_deduped():
 
 
 @pytest.mark.asyncio
-async def test_coalesced_semantic_messages_mark_old_version_stale():
+async def test_coalesced_semantic_messages_share_one_queue_trigger():
     mock_agfs = MagicMock()
     with patch.object(NamedQueue, "enqueue", new_callable=AsyncMock) as named_enqueue:
         named_enqueue.return_value = "queued-id"
@@ -85,20 +85,47 @@ async def test_coalesced_semantic_messages_mark_old_version_stale():
             uri="viking://resources/docs",
             context_type="resource",
             coalesce_key=coalesce_key,
+            changes={"modified": ["a.md"]},
         )
         second = SemanticMsg(
             uri="viking://resources/docs",
             context_type="resource",
             coalesce_key=first.coalesce_key,
+            changes={"modified": ["b.md"], "deleted": ["a.md"]},
         )
 
-        await q.enqueue(first)
-        await q.enqueue(second)
+        assert await q.enqueue(first) == "queued-id"
+        assert await q.enqueue(second) == "queued-id"
+        assert named_enqueue.call_count == 1
 
-        assert first.coalesce_version == 1
-        assert second.coalesce_version == 2
-        assert is_semantic_msg_stale(first)
-        assert not is_semantic_msg_stale(second)
+        third = SemanticMsg(
+            uri="viking://resources/docs",
+            context_type="resource",
+            coalesce_key=first.coalesce_key,
+            changes={"modified": ["c.md"]},
+        )
+        processed = []
+
+        async def process(msg, lock):
+            del lock
+            processed.append(msg)
+            if len(processed) == 1:
+                assert await q.enqueue(third) == "queued-id"
+
+        processor = SemanticProcessor()
+        with patch.object(processor, "_process_semantic_message", new=process):
+            await processor.on_dequeue({"data": first.to_json()})
+
+        assert named_enqueue.call_count == 1
+        assert processed[0].changes == {
+            "modified": ["b.md"],
+            "deleted": ["a.md"],
+        }
+        assert {event["id"] for event in processed[0]._coalesced_events} == {
+            first.id,
+            second.id,
+        }
+        assert processed[1].changes == {"modified": ["c.md"]}
 
 
 class _FakePathLock:
@@ -140,46 +167,25 @@ class _FakeMemoryDirFS:
 
 
 @pytest.mark.asyncio
-async def test_stale_memory_semantic_write_is_skipped(monkeypatch):
+async def test_memory_semantic_write_uses_sidecar_lock(monkeypatch):
     pathlock = _FakePathLock()
     viking_fs = _FakeVikingFS(pathlock)
     processor = SemanticProcessor()
-    coalesce_key = f"memory|acc|u|p|viking://user/default/memories/preferences/{uuid4().hex}"
-
-    with patch.object(NamedQueue, "enqueue", new_callable=AsyncMock):
-        q = SemanticQueue(MagicMock(), "/queue", "semantic")
-        first = SemanticMsg(
-            uri="viking://user/default/memories/preferences",
-            context_type="memory",
-            coalesce_key=coalesce_key,
-        )
-        latest = SemanticMsg(
-            uri="viking://user/default/memories/preferences",
-            context_type="memory",
-            coalesce_key=coalesce_key,
-        )
-        await q.enqueue(first)
-        await q.enqueue(latest)
-
-    wrote_first = await processor._write_memory_directory_semantics(
-        msg=first,
-        viking_fs=viking_fs,
-        dir_uri=first.uri,
-        overview="old overview",
-        abstract="old abstract",
-        ctx=None,
+    msg = SemanticMsg(
+        uri="viking://user/default/memories/preferences",
+        context_type="memory",
     )
-    wrote_latest = await processor._write_memory_directory_semantics(
-        msg=latest,
+
+    wrote = await processor._write_memory_directory_semantics(
+        msg=msg,
         viking_fs=viking_fs,
-        dir_uri=latest.uri,
-        overview="latest overview",
-        abstract="latest abstract",
+        dir_uri=msg.uri,
+        overview="overview",
+        abstract="abstract",
         ctx=None,
     )
 
-    assert not wrote_first
-    assert wrote_latest
+    assert wrote
     assert pathlock.acquired_batches == [
         [
             "/fake/viking/user/default/memories/preferences/.overview.md",
@@ -187,8 +193,8 @@ async def test_stale_memory_semantic_write_is_skipped(monkeypatch):
         ]
     ]
     assert viking_fs.writes == [
-        ("viking://user/default/memories/preferences/.overview.md", "latest overview"),
-        ("viking://user/default/memories/preferences/.abstract.md", "latest abstract"),
+        ("viking://user/default/memories/preferences/.overview.md", "overview"),
+        ("viking://user/default/memories/preferences/.abstract.md", "abstract"),
     ]
 
 
