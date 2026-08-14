@@ -512,6 +512,49 @@ class TaskTracker:
                 updated.updated_at = self._next_updated_at(task)
                 await self._persist_and_publish("update", updated)
 
+    async def checkpoint(
+        self,
+        task_id: str,
+        *,
+        stage: str,
+        result: Dict[str, Any],
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        resource_id: Optional[str] = None,
+    ) -> None:
+        """Persist resumable task progress without finalizing the task."""
+        await self._dispatcher.run(
+            lambda: self._checkpoint_on_owner(
+                task_id,
+                stage=stage,
+                result=result,
+                account_id=account_id,
+                user_id=user_id,
+                resource_id=resource_id,
+            )
+        )
+
+    async def _checkpoint_on_owner(
+        self,
+        task_id: str,
+        *,
+        stage: str,
+        result: Dict[str, Any],
+        account_id: Optional[str],
+        user_id: Optional[str],
+        resource_id: Optional[str],
+    ) -> None:
+        async with self._task_locks.acquire(task_id):
+            task = await self._load_for_update(task_id, account_id, user_id)
+            if task and task.status in (TaskStatus.PENDING, TaskStatus.RUNNING):
+                updated = deepcopy(task)
+                updated.stage = stage
+                updated.result = deepcopy(result)
+                if resource_id is not None:
+                    updated.resource_id = resource_id
+                updated.updated_at = self._next_updated_at(task)
+                await self._persist_and_publish("update", updated)
+
     async def complete(
         self,
         task_id: str,
@@ -792,9 +835,9 @@ class TaskTracker:
         while self._work_index.has_work(task_id, exclude_work_id=current_work_id):
             await asyncio.sleep(0.05)
 
-    def has_work(self, task_id: str) -> bool:
+    def has_work(self, task_id: str, exclude_work_id: Optional[str] = None) -> bool:
         """Return whether a task still owns durable or active queue work."""
-        return self._work_index.has_work(task_id)
+        return self._work_index.has_work(task_id, exclude_work_id=exclude_work_id)
 
     def register_running_task(self, task_id: str) -> None:
         """Register the current asyncio task so cancellation can interrupt it."""

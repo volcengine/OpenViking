@@ -547,14 +547,8 @@ class ResourceService:
                 create_parent=msg.create_parent,
                 **internal_kwargs,
             )
-            stage_result = stage_callback("processing_queue")
-            if inspect.isawaitable(stage_result):
-                await stage_result
             return result
 
-        stage_result = stage_callback("processing_queue")
-        if inspect.isawaitable(stage_result):
-            await stage_result
         return await self._resource_processor.finish_prepared_resource(
             msg.prepared,
             ctx=ctx,

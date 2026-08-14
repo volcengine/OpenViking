@@ -787,15 +787,21 @@ async def test_prepared_add_resource_job_forwards_processing_mode():
 async def test_add_resource_processor_persists_final_resource_uri(monkeypatch):
     final_uri = "viking://resources/真实文档标题"
     service = SimpleNamespace(
-        execute_add_resource_job=AsyncMock(
-            return_value={"status": "success", "root_uri": final_uri}
-        ),
+        execute_add_resource_job=AsyncMock(),
         _link_resource_reason_memory=AsyncMock(),
     )
     task_tracker = SimpleNamespace(
-        create=AsyncMock(return_value=SimpleNamespace(status=TaskStatus.PENDING)),
+        create=AsyncMock(
+            return_value=SimpleNamespace(
+                status=TaskStatus.RUNNING,
+                stage="processing_queue",
+                result={"status": "success", "root_uri": final_uri},
+                resource_id=final_uri,
+            )
+        ),
         start=AsyncMock(),
         update_stage=AsyncMock(),
+        checkpoint=AsyncMock(),
         complete=AsyncMock(),
         fail=AsyncMock(),
         wait_for_descendants=AsyncMock(),
@@ -803,11 +809,6 @@ async def test_add_resource_processor_persists_final_resource_uri(monkeypatch):
     monkeypatch.setattr(
         "openviking.storage.queuefs.add_resource_processor.get_task_tracker",
         Mock(return_value=task_tracker),
-    )
-    queue_manager = SimpleNamespace(enqueue=AsyncMock())
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.get_queue_manager",
-        Mock(return_value=queue_manager),
     )
     processor = AddResourceProcessor(
         service,
@@ -828,16 +829,12 @@ async def test_add_resource_processor_persists_final_resource_uri(monkeypatch):
 
     data = msg.to_dict()
     data[TASK_WORK_ID_FIELD] = "work-1"
+    load_lock = AsyncMock(return_value=None)
+    monkeypatch.setattr(processor, "_load_lock", load_lock)
     await processor._process(msg, data)
 
-    task_tracker.create.assert_awaited_once_with(
-        "add_resource",
-        resource_id=None,
-        account_id="account-1",
-        user_id="user-1",
-        task_id="task-1",
-        meta={"source_path": ""},
-    )
+    service.execute_add_resource_job.assert_not_awaited()
+    load_lock.assert_not_awaited()
     task_tracker.complete.assert_awaited_once_with(
         "task-1",
         {
@@ -862,8 +859,6 @@ async def test_add_resource_processor_persists_final_resource_uri(monkeypatch):
         user_id="user-1",
         resource_id=final_uri,
     )
-    assert await processor._requeue_lock_handoff(msg, RuntimeError("stale lock"))
-    assert queue_manager.enqueue.await_args.args[0] == QueueManager.ADD_RESOURCE
 
 
 def test_feishu_direct_submission_requires_configured_auth(monkeypatch):

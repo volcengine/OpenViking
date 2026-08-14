@@ -22,6 +22,8 @@ from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+_PROCESSING_QUEUE_STAGE = "processing_queue"
+
 
 class AddResourceProcessor(DequeueHandlerBase):
     """Own an add-resource task until it reaches a terminal state and can be ACKed."""
@@ -82,6 +84,7 @@ class AddResourceProcessor(DequeueHandlerBase):
 
     async def _process(self, msg: AddResourceMsg, data: Dict[str, Any]) -> None:
         telemetry_id = msg.telemetry_id or ""
+        metadata = extract_task_metadata(data)
         ctx = RequestContext(
             user=UserIdentifier(msg.account_id, msg.user_id),
             role=Role(msg.role),
@@ -108,21 +111,41 @@ class AddResourceProcessor(DequeueHandlerBase):
             self.report_success()
             return None
 
-        resource_lock = None
-        try:
-            resource_lock = await self._load_lock(msg, ctx)
-        except Exception as exc:
-            if await self._requeue_lock_handoff(msg, exc):
-                return None
-            await tracker.fail(
+        resumed_result = dict(task.result) if isinstance(task.result, dict) else None
+        resume_processing_queue = (
+            task.stage == _PROCESSING_QUEUE_STAGE and resumed_result is not None
+        )
+        if (
+            not resume_processing_queue
+            and metadata is not None
+            and tracker.has_work(msg.task_id, exclude_work_id=metadata.work_id)
+        ):
+            resume_processing_queue = True
+            resumed_result = {
+                "status": "success",
+                "root_uri": task.resource_id or msg.root_uri,
+            }
+            logger.info(
+                "[AddResource] Resuming task %s from durable downstream work",
                 msg.task_id,
-                f"Invalid lock_handoff: {exc}",
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
             )
-            self.report_error(f"Invalid lock_handoff: {exc}", data)
-            unregister_telemetry(telemetry_id)
-            return None
+
+        resource_lock = None
+        if not resume_processing_queue:
+            try:
+                resource_lock = await self._load_lock(msg, ctx)
+            except Exception as exc:
+                if await self._requeue_lock_handoff(msg, exc):
+                    return None
+                await tracker.fail(
+                    msg.task_id,
+                    f"Invalid lock_handoff: {exc}",
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+                self.report_error(f"Invalid lock_handoff: {exc}", data)
+                unregister_telemetry(telemetry_id)
+                return None
 
         telemetry = resolve_telemetry(telemetry_id) if telemetry_id else None
         if telemetry is None:
@@ -148,29 +171,45 @@ class AddResourceProcessor(DequeueHandlerBase):
             bind_task_context(msg.task_id, ctx.account_id, ctx.user.user_id),
         ):
             try:
-                metadata = extract_task_metadata(data)
-                await tracker.start(
-                    msg.task_id,
-                    account_id=ctx.account_id,
-                    user_id=ctx.user.user_id,
-                    stage="queued",
-                )
-                result = await self._resource_service.execute_add_resource_job(
-                    msg,
-                    ctx=ctx,
-                    resource_lock=resource_lock,
-                    stage_callback=_set_stage,
-                )
-                if result.get("status") == "error":
-                    errors = result.get("errors") or ["resource processing failed"]
-                    await tracker.fail(
+                result = resumed_result
+                if not resume_processing_queue:
+                    await tracker.start(
                         msg.task_id,
-                        "; ".join(str(error) for error in errors),
                         account_id=ctx.account_id,
                         user_id=ctx.user.user_id,
+                        stage="queued",
                     )
-                    self.report_error("resource processing failed", data)
-                    return None
+                    result = await self._resource_service.execute_add_resource_job(
+                        msg,
+                        ctx=ctx,
+                        resource_lock=resource_lock,
+                        stage_callback=_set_stage,
+                    )
+                    if result.get("status") == "error":
+                        errors = result.get("errors") or ["resource processing failed"]
+                        await tracker.fail(
+                            msg.task_id,
+                            "; ".join(str(error) for error in errors),
+                            account_id=ctx.account_id,
+                            user_id=ctx.user.user_id,
+                        )
+                        self.report_error("resource processing failed", data)
+                        return None
+
+                if result is None:
+                    raise RuntimeError("AddResource recovery result is missing")
+                if task.stage != _PROCESSING_QUEUE_STAGE or task.result is None:
+                    await tracker.checkpoint(
+                        msg.task_id,
+                        stage=_PROCESSING_QUEUE_STAGE,
+                        result=result,
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                        resource_id=result.get("root_uri"),
+                    )
+
+                if metadata is None:
+                    raise RuntimeError("AddResource queue message is missing task work metadata")
                 await tracker.wait_for_descendants(msg.task_id, metadata.work_id)
                 result["queue_status"] = request_wait_tracker.build_queue_status(telemetry_id)
                 record_resource_queue_metrics(
