@@ -1,14 +1,14 @@
 """Configuration schema using Pydantic."""
 
+import base64
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Literal, Optional
+from typing import Any, ClassVar, Dict, Literal, Optional
 
+from openviking_cli.utils.config.vlm_config import VLMCredential
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 from pydantic.json_schema import SkipJsonSchema
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-from openviking_cli.utils.config.vlm_config import VLMCredential
 
 
 class ChannelType(str, Enum):
@@ -1047,15 +1047,45 @@ class SessionKey(BaseModel):
     def __hash__(self):
         return hash((self.type, self.channel_id, self.chat_id))
 
+    _ENCODED_COMPONENT_PREFIX: ClassVar[str] = "~b32~"
+    _WINDOWS_INVALID_FILENAME_CHARS: ClassVar[frozenset[str]] = frozenset('<>:"/\\|?*')
+
+    @classmethod
+    def _encode_component(cls, value: str) -> str:
+        needs_encoding = (
+            value.startswith(cls._ENCODED_COMPONENT_PREFIX)
+            or any(ord(char) < 32 or char in cls._WINDOWS_INVALID_FILENAME_CHARS for char in value)
+            or value.endswith((" ", "."))
+        )
+        if not needs_encoding:
+            return value
+
+        encoded = base64.b32encode(value.encode("utf-8")).decode("ascii").rstrip("=")
+        return f"{cls._ENCODED_COMPONENT_PREFIX}{encoded}"
+
+    @classmethod
+    def _decode_component(cls, value: str) -> str:
+        if not value.startswith(cls._ENCODED_COMPONENT_PREFIX):
+            return value
+
+        encoded = value.removeprefix(cls._ENCODED_COMPONENT_PREFIX)
+        padding = "=" * (-len(encoded) % 8)
+        return base64.b32decode(encoded + padding).decode("utf-8")
+
     def safe_name(self):
-        return f"{self.type}__{self.channel_id}__{self.chat_id}"
+        return "__".join(
+            self._encode_component(component)
+            for component in (self.type, self.channel_id, self.chat_id)
+        )
 
     def channel_key(self):
         return f"{self.type}__{self.channel_id}"
 
     @staticmethod
     def from_safe_name(safe_name: str):
-        file_name_split = safe_name.split("__")
+        file_name_split = safe_name.split("__", 2)
         return SessionKey(
-            type=file_name_split[0], channel_id=file_name_split[1], chat_id=file_name_split[2]
+            type=SessionKey._decode_component(file_name_split[0]),
+            channel_id=SessionKey._decode_component(file_name_split[1]),
+            chat_id=SessionKey._decode_component(file_name_split[2]),
         )
