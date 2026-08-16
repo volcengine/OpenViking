@@ -9,18 +9,22 @@ use serde_json::Value;
 /// Confirm `(account_id, user_id)` exists on the server. Errors with a
 /// human-readable message when either is missing.
 ///
-/// Cheap on the happy path: a single filtered GET against
-/// `/api/v1/admin/accounts/{account_id}/users` asks the server for the target
-/// user before applying the endpoint's limit. Server-side the endpoint already
-/// enforces per-account auth; we report 404 as a clear "account not found"
-/// rather than the bare HTTP code.
+/// Fetches the user list from `/api/v1/admin/accounts/{account_id}/users`
+/// and checks locally for the target user. The endpoint requires ROOT or ADMIN
+/// role; when the caller lacks permission, validation is skipped and the
+/// command proceeds—the server will reject invalid user/account at the actual
+/// operation if needed.
+///
+/// We intentionally avoid server-side `name` filtering because the server uses
+/// fnmatch (glob patterns), which mishandles user IDs containing special
+/// characters like `[`, `]`, `*`, or `?`.
 pub async fn validate_user_account(
     client: &HttpClient,
     account_id: &str,
     user_id: &str,
 ) -> Result<()> {
     let body = match client
-        .admin_list_users(account_id, 1, Some(user_id.to_string()), None)
+        .admin_list_users(account_id, 200, None, None)
         .await
     {
         Ok(b) => b,
@@ -30,6 +34,9 @@ pub async fn validate_user_account(
                     "Account `{account_id}` not found. Run `ov admin list-accounts` to see valid accounts."
                 )));
             }
+            // Regular user keys lack admin permission for list-users.
+            // Skip validation; the server enforces user/account at the actual
+            // mkdir/rm operation.
             if is_permission_denied_error(&err) {
                 return Ok(());
             }
@@ -136,5 +143,16 @@ mod tests {
         let err = Error::Api("[NOT_FOUND] Account not found: acme".to_string());
         assert!(is_not_found_error(&err));
         assert!(!is_permission_denied_error(&err));
+    }
+
+    #[test]
+    fn finds_user_with_special_characters_in_id() {
+        // User IDs with glob-special chars must match exactly (not as patterns)
+        let body = json!([{"user_id": "user[1]"}, {"user_id": "test*user"}]);
+        assert!(user_exists(&body, "user[1]"));
+        assert!(user_exists(&body, "test*user"));
+        // These should NOT match due to exact string comparison
+        assert!(!user_exists(&body, "user1"));
+        assert!(!user_exists(&body, "testXuser"));
     }
 }
