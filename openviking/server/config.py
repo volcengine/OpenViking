@@ -246,6 +246,7 @@ class TempUploadConfig(BaseModel):
 
     default_mode: Literal["local", "shared"] = "local"
     shared_max_size_bytes: int = 512 * 1024 * 1024
+    shared_ttl_seconds: int = Field(24 * 60 * 60, gt=0)
 
     model_config = {"extra": "forbid"}
 

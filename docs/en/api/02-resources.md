@@ -614,7 +614,7 @@ Notes:
 - The default is `local`, so existing clients keep the original behavior unless they explicitly opt into `shared`.
 - Use `upload_mode=shared` only when you explicitly want distributed shared temporary uploads.
 - `shared` mode returns a `temp_file_id` in the `shared_<upload_id>` form. The same account can consume it repeatedly while it remains available.
-- Shared upload objects live under the internal `viking://upload/<upload_id>/` namespace and are not part of the normal filesystem browsing surface. They remain for 24 hours; every new shared upload enumerates the current account's upload directory and removes expired upload directories based on their modification time.
+- Shared upload objects live under the internal `viking://upload/<upload_id>/` namespace and are not part of the normal filesystem browsing surface. They remain for `server.temp_upload.shared_ttl_seconds` (24 hours by default); every new shared upload enumerates the current account's upload directory and removes expired upload directories based on their modification time.
 
 #### 3. Usage Examples
 

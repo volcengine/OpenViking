@@ -23,7 +23,6 @@ from openviking_cli.utils.config.open_viking_config import get_openviking_config
 
 _CHUNK_SIZE = 1024 * 1024
 _SHARED_UPLOAD_ROOT = "viking://upload"
-_SHARED_UPLOAD_MAX_AGE_SECONDS = 24 * 60 * 60
 
 
 @dataclass
@@ -321,7 +320,7 @@ class TempUploadStore:
         except Exception:
             return
 
-        cutoff = time.time() - _SHARED_UPLOAD_MAX_AGE_SECONDS
+        cutoff = time.time() - self.temp_cfg.shared_ttl_seconds
         for upload in uploads:
             if not upload.get("isDir"):
                 continue

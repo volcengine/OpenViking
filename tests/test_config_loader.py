@@ -168,6 +168,13 @@ def test_temp_upload_config_rejects_removed_shared_prefix():
     assert exc_info.value.errors()[0]["type"] == "extra_forbidden"
 
 
+def test_temp_upload_config_requires_positive_shared_ttl():
+    with pytest.raises(ValueError) as exc_info:
+        TempUploadConfig(shared_ttl_seconds=0)
+
+    assert exc_info.value.errors()[0]["type"] == "greater_than"
+
+
 def test_generic_code_hosting_domains_include_supported_platforms():
     config = CodeHostingConfig()
 

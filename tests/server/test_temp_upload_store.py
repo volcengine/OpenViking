@@ -22,10 +22,10 @@ async def test_shared_upload_cleanup_removes_only_expired_directories(monkeypatc
             assert uri == "viking://upload"
             assert kwargs["ctx"].role == Role.ROOT
             return [
-                {"uri": old_upload, "isDir": True, "modTime": now - 86_401},
-                {"uri": current_upload, "isDir": True, "modTime": now - 86_400},
+                {"uri": old_upload, "isDir": True, "modTime": now - 61},
+                {"uri": current_upload, "isDir": True, "modTime": now - 60},
                 {"uri": "viking://upload/unknown", "isDir": True},
-                {"uri": "viking://upload/file", "isDir": False, "modTime": now - 86_401},
+                {"uri": "viking://upload/file", "isDir": False, "modTime": now - 61},
             ]
 
         @staticmethod
@@ -38,8 +38,9 @@ async def test_shared_upload_cleanup_removes_only_expired_directories(monkeypatc
     monkeypatch.setattr("openviking.server.temp_upload_store.get_viking_fs", lambda: fake_vfs)
     monkeypatch.setattr("openviking.server.temp_upload_store.time.time", lambda: now)
     ctx = RequestContext(user=UserIdentifier("account", "user"), role=Role.USER)
+    server_config = ServerConfig(temp_upload={"shared_ttl_seconds": 60})
 
-    await TempUploadStore(ServerConfig())._cleanup_shared_uploads(ctx)
+    await TempUploadStore(server_config)._cleanup_shared_uploads(ctx)
 
     fake_vfs.rm.assert_awaited_once_with(
         old_upload,
