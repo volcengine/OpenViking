@@ -1,6 +1,6 @@
-# tkstack HTTP Integration
+# HTTP Integration for Multiple Local Agents
 
-Use this integration when several local coding agents need to share one OpenViking server through HTTP. It is intended for a fork-maintained tkstack deployment and does not require an MCP client.
+Use this integration when several local coding agents need to share one OpenViking server through HTTP. The setup pattern is generic, while the fork-local validation record at the end documents one tkstack deployment. It does not require an MCP client.
 
 ## Deployment boundary
 
@@ -59,13 +59,15 @@ OpenViking supports LiteLLM as an embedding and VLM provider. The following is a
 }
 ```
 
+The example binds to `127.0.0.1` because it assumes that the agents, OpenViking, and LiteLLM run on the same host. If agents run on separate hosts, bind OpenViking to a private interface/address, restrict TCP port `1933` with the network firewall, and keep `api_key` authentication enabled. Never expose an unauthenticated or trusted-mode listener on a public interface.
+
 Before indexing data, verify the exact LiteLLM routes with a minimal `/v1/models`, chat, and embeddings request. `openviking-server doctor` validates configuration readiness, but it does not prove that every proxy route can complete an end-to-end request. Model names that contain provider keywords can be auto-detected by LiteLLM; use the route format required by the proxy and test it directly before importing a large corpus.
 
 Self-hosted OpenAI-compatible and LiteLLM embedding endpoints are dense-only. OpenViking does not automatically add a BM25 or other sparse fallback when the configured endpoint returns dense vectors. If Japanese exact matching is required, keep `grep` or a separate lexical index in the retrieval path. See [Embedding Configuration](../guides/01-configuration.md#embedding) for the provider and hybrid-search constraints.
 
 ## Client pattern
 
-Use a user-scoped API key for each agent in production. The server resolves the account and user from the key, so agents can share an account while retaining an auditable identity.
+Use a user-scoped API key for each agent in production. The server resolves the account and user from the key, so agents can share an account while retaining an auditable identity. `actor_peer_id` is optional request-scoped actor metadata; it is not a substitute for the user API key.
 
 ```python
 import os
@@ -76,7 +78,7 @@ import openviking as ov
 client = ov.SyncHTTPClient(
     url=os.environ["OPENVIKING_URL"],
     api_key=os.environ["OPENVIKING_API_KEY"],
-    agent_id=os.environ.get("OPENVIKING_AGENT_ID", "local-agent"),
+    actor_peer_id=os.environ.get("OPENVIKING_ACTOR_PEER_ID", "local-agent"),
     timeout=60,
 )
 
@@ -107,11 +109,11 @@ Use the following validation order:
 4. `find` and `search` to confirm semantic retrieval.
 5. A second client identity and a small concurrent request set to confirm sharing and latency.
 
-Do not treat a successful upload or completed embedding queue as proof that semantic retrieval works. If `grep` succeeds while `find` returns no results, inspect the server queue and VLM/embedding logs before importing more data. OpenViking issue [#677](https://github.com/volcengine/OpenViking/issues/677) documents the same symptom pattern for uploaded resources; a local reproduction should be treated as a release blocker until the root cause is isolated or a lexical fallback is in place.
+Do not treat a successful upload or completed embedding queue as proof that semantic retrieval works. If `grep` succeeds while `find` returns no results, inspect the server queue and VLM/embedding logs before importing more data. OpenViking issue [#677](https://github.com/volcengine/OpenViking/issues/677) documents the same symptom pattern for uploaded resources; a local reproduction means the deployment is not ready for semantic production until the root cause is isolated or a lexical fallback is in place.
 
-## Fork validation record
+## Fork-local validation record
 
-The following smoke test was run against OpenViking `0.4.13` on 2026-08-16 with Python 3.13 and a local HTTP server:
+The following fork-local smoke test was run against OpenViking `0.4.13` on 2026-08-16 with Python 3.13 and a local HTTP server. It is an environment-specific record, not a compatibility guarantee for every provider or deployment.
 
 | Check | Result |
 | --- | --- |
@@ -123,7 +125,7 @@ The following smoke test was run against OpenViking `0.4.13` on 2026-08-16 with 
 | Existing LiteLLM VLM route | Blocked; the configured model alias was routed as DashScope and returned 429 |
 | Existing LiteLLM embedding route | Blocked upstream by an LM Studio `node ENOENT` failure; a temporary local GGUF embedder was used for the storage smoke test |
 
-The result supports OpenViking as an HTTP-accessible shared resource store for the pilot. It does not yet approve it as the production semantic context layer. Re-run the semantic checks after the LiteLLM routes are healthy, and record the exact OpenViking version, model IDs, vector dimension, and backend in the deployment change.
+The result validates the HTTP/read/grep path for the pilot but does not validate production semantic retrieval. Re-run the semantic checks after the LiteLLM routes are healthy, and record the exact OpenViking version, model IDs, vector dimension, and backend in the deployment change.
 
 ## Related documentation
 
