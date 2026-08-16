@@ -32,6 +32,7 @@ from openviking.parse.parsers.media.utils import (
 )
 from openviking.prompts import render_prompt
 from openviking.server.identity import RequestContext, Role
+from openviking.service.task_work_index import detach_task_context
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecutor
@@ -270,7 +271,8 @@ class SemanticProcessor(DequeueHandlerBase):
                 peer_id=msg.peer_id,
             ),
         )
-        await semantic_queue.enqueue(parent_msg)
+        with detach_task_context():
+            await semantic_queue.enqueue(parent_msg)
         logger.info("Enqueued parent semantic refresh: %s", parent_uri)
 
     async def on_dequeue(
