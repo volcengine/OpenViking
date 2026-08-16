@@ -22,7 +22,7 @@ def test_local_upload_cleanup_uses_configured_ttl(tmp_path, monkeypatch):
     os.utime(current_file, (now - 60, now - 60))
     monkeypatch.setattr("openviking.server.temp_upload_store.time.time", lambda: now)
 
-    store = TempUploadStore(ServerConfig(temp_upload={"shared_ttl_seconds": 60}))
+    store = TempUploadStore(ServerConfig(temp_upload={"ttl_seconds": 60}))
     store._cleanup_local_temp_files(tmp_path)
 
     assert not expired_file.exists()
@@ -56,7 +56,7 @@ async def test_shared_upload_cleanup_removes_only_expired_directories(monkeypatc
     monkeypatch.setattr("openviking.server.temp_upload_store.get_viking_fs", lambda: fake_vfs)
     monkeypatch.setattr("openviking.server.temp_upload_store.time.time", lambda: now)
     ctx = RequestContext(user=UserIdentifier("account", "user"), role=Role.USER)
-    server_config = ServerConfig(temp_upload={"shared_ttl_seconds": 60})
+    server_config = ServerConfig(temp_upload={"ttl_seconds": 60})
 
     await TempUploadStore(server_config)._cleanup_shared_uploads(ctx)
 

@@ -320,7 +320,7 @@ class TempUploadStore:
         except Exception:
             return
 
-        cutoff = time.time() - self.temp_cfg.shared_ttl_seconds
+        cutoff = time.time() - self.temp_cfg.ttl_seconds
         for upload in uploads:
             if not upload.get("isDir"):
                 continue
@@ -341,7 +341,7 @@ class TempUploadStore:
             if not file_path.is_file():
                 continue
             file_age = now - file_path.stat().st_mtime
-            if file_age > self.temp_cfg.shared_ttl_seconds:
+            if file_age > self.temp_cfg.ttl_seconds:
                 file_path.unlink(missing_ok=True)
                 if not file_path.name.endswith(".ov_upload.meta"):
                     meta_path = temp_dir / f"{file_path.name}.ov_upload.meta"
