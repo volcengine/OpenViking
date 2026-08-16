@@ -375,6 +375,7 @@ JSON 输出 - 错误：
 | POST | `/api/v1/content/batch-write` | 执行带前置条件的多文件写入 |
 | POST | `/api/v1/content/set_tags` | 设置检索标签 |
 | POST | `/api/v1/content/reindex` | 重建语义或向量索引 |
+| POST | `/api/v1/content/reindex/repair` | 校验并执行索引修复计划 |
 
 ### [技能](04-skills.md)
 

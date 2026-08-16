@@ -29,7 +29,7 @@ from openviking.service.session_service import SessionService
 from openviking.service.task_tracker import get_task_tracker, set_task_tracker
 from openviking.session import create_session_compressor
 from openviking.storage.collection_schemas import init_context_collection
-from openviking.storage.index_consistency import check_index_consistency
+from openviking.storage.index_audit import audit_index
 from openviking.storage.queuefs.add_resource_processor import AddResourceProcessor
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
 from openviking.storage.queuefs.session_commit_processor import SessionCommitProcessor
@@ -579,10 +579,36 @@ class OpenVikingService:
             execute_kwargs["tag_mode"] = tag_mode
         return await get_reindex_executor().execute(**execute_kwargs)
 
+    async def apply_index_repair_plan(
+        self,
+        *,
+        plan: dict[str, Any],
+        wait: bool = True,
+        dry_run: bool = False,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, Any]:
+        """Apply a preconditioned index repair plan through ReindexExecutor."""
+        if not self._initialized:
+            await self.initialize()
+        effective_ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)
+        from openviking.service.reindex_executor import get_reindex_executor
+
+        return await get_reindex_executor().apply_repair_plan(
+            plan=plan,
+            wait=wait,
+            dry_run=dry_run,
+            ctx=effective_ctx,
+        )
+
     async def check_consistency(
         self,
         *,
         uri: str,
+        issue_types: list[str] | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+        max_scan_records: int = 10000,
+        generate_repair_plan: bool = False,
         ctx: RequestContext | None = None,
     ) -> dict[str, Any]:
         """Check filesystem/vector-index consistency for a URI subtree."""
@@ -592,24 +618,41 @@ class OpenVikingService:
             raise NotInitializedError("VikingFS")
 
         effective_ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)
-        stat = await self._viking_fs.stat(uri, ctx=effective_ctx, skip_count=True)
+        canonical_uri = canonicalize_uri(uri, effective_ctx)
+        if not (
+            canonical_uri == "viking://resources" or canonical_uri.startswith("viking://resources/")
+        ):
+            raise InvalidArgumentError(
+                "Index audit currently supports only viking://resources subtrees."
+            )
+        stat = await self._viking_fs.stat(canonical_uri, ctx=effective_ctx, skip_count=True)
         if not stat.get("isDir", False):
             raise InvalidArgumentError("Consistency check only supports directory URIs.")
         entries = await self._viking_fs.tree(
-            uri,
+            canonical_uri,
             show_all_hidden=True,
             node_limit=None,
             level_limit=None,
             ctx=effective_ctx,
         )
-        report = await check_index_consistency(
+        result = await audit_index(
             self._viking_fs,
             self._vikingdb_manager,
-            uri,
+            canonical_uri,
             entries,
             effective_ctx,
+            issue_types=issue_types,
+            limit=limit,
+            cursor=cursor,
+            max_scan_records=max_scan_records,
+            generate_repair_plan=generate_repair_plan,
         )
-        return report.to_dict()
+        logger.info(
+            "Index audit completed: "
+            f"scanned={result.get('scanned_count', 0)} "
+            f"truncated={result.get('truncated', False)} counts={result.get('counts', {})}"
+        )
+        return result
 
     def _ensure_initialized(self) -> None:
         """Ensure service is initialized."""

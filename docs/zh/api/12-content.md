@@ -817,6 +817,28 @@ GET /api/v1/tasks?task_type=admin_reindex&resource_id=viking://resources
 - Reindex 会使用当前系统中“尽可能可恢复”的输入进行重建，不保证所有场景都能逐字节回放历史当时的 embedding 输入。
 - Memory 的 semantic reindex 基于当前已持久化的 memory 树，不会重建最初按时间顺序执行的记忆抽取流水线。
 
+### apply_index_repair_plan()
+
+执行服务端生成的带前置条件修复计划。第一次写入前，服务端会整体校验计划摘要、
+账号、资源根、active collection/schema、事实源拓扑及每个 source/index 指纹；
+计划被修改或已过期时整份拒绝。`dry_run=true` 会完成全部校验，但不删除记录、
+不投递 embedding；重复执行已收敛计划是安全 no-op。
+
+```python
+result = client.apply_index_repair_plan(plan, wait=True, dry_run=False)
+```
+
+```text
+POST /api/v1/content/reindex/repair
+```
+
+异步执行的 `task_type` 为 `index_repair`。CLI 示例：
+
+```bash
+ov reindex --apply-plan repair-plan.json --dry-run
+ov reindex --apply-plan repair-plan.json --wait true
+```
+
 ---
 
 ## 相关文档

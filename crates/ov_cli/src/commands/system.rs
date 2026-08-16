@@ -1,10 +1,11 @@
 use crate::client::HttpClient;
 use crate::config::Config;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::health_ui;
 use crate::output::{OutputFormat, output_success};
 use crate::status_ui;
 use serde_json::json;
+use std::io::Write;
 
 pub async fn wait(
     client: &HttpClient,
@@ -69,15 +70,54 @@ pub async fn diagnostic_status(
 pub async fn consistency(
     client: &HttpClient,
     uri: &str,
+    issue_types: Vec<String>,
+    limit: Option<usize>,
+    cursor: Option<String>,
+    max_scan_records: Option<usize>,
+    repair_plan: Option<String>,
+    force: bool,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let response: serde_json::Value = client.consistency(uri).await?;
+    let response: serde_json::Value = client
+        .consistency(
+            uri,
+            &issue_types,
+            limit,
+            cursor.as_deref(),
+            max_scan_records,
+            repair_plan.is_some(),
+        )
+        .await?;
+    if let Some(path) = repair_plan {
+        write_repair_plan(&path, response.get("repair_plan"), force)?;
+    }
     if matches!(output_format, OutputFormat::Table) {
         output_consistency_table(&response, compact);
     } else {
         output_success(&response, output_format, compact);
     }
+    Ok(())
+}
+
+fn write_repair_plan(path: &str, plan: Option<&serde_json::Value>, force: bool) -> Result<()> {
+    let plan = plan.ok_or_else(|| {
+        Error::Client("Server did not return an executable repair plan".to_string())
+    })?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true);
+    if force {
+        options.create(true).truncate(true);
+    } else {
+        options.create_new(true);
+    }
+    let mut file = options
+        .open(path)
+        .map_err(|error| Error::Client(format!("Failed to create repair plan {path}: {error}")))?;
+    let bytes = serde_json::to_vec_pretty(plan)
+        .map_err(|error| Error::Client(format!("Failed to serialize repair plan: {error}")))?;
+    file.write_all(&bytes)?;
+    file.write_all(b"\n")?;
     Ok(())
 }
 
@@ -115,6 +155,9 @@ fn output_consistency_table(response: &serde_json::Value, compact: bool) {
             .get("missing_records_truncated")
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
+        "complete": response.get("complete").cloned().unwrap_or(serde_json::Value::Null),
+        "scanned_count": response.get("scanned_count").cloned().unwrap_or(serde_json::Value::Null),
+        "truncated": response.get("truncated").cloned().unwrap_or(serde_json::Value::Null),
     });
     let mut sections = vec![
         crate::output::render_table_with_optional_profile(&summary, compact)
@@ -123,31 +166,34 @@ fn output_consistency_table(response: &serde_json::Value, compact: bool) {
             .to_string(),
     ];
 
-    let Some(missing_records) = response.get("missing_records").and_then(|v| v.as_array()) else {
-        println!(
-            "{}",
-            crate::output::append_profile_to_rendered(sections.join("\n"), response)
+    if let Some(missing_records) = response.get("missing_records").and_then(|v| v.as_array())
+        && !missing_records.is_empty()
+    {
+        sections.push("missing_records".to_string());
+        sections.push(
+            crate::output::render_table_with_optional_profile(
+                &serde_json::Value::Array(missing_records.clone()),
+                compact,
+            )
+            .unwrap_or_default()
+            .trim_end()
+            .to_string(),
         );
-        return;
-    };
-    if missing_records.is_empty() {
-        println!(
-            "{}",
-            crate::output::append_profile_to_rendered(sections.join("\n"), response)
-        );
-        return;
     }
-
-    sections.push("missing_records".to_string());
-    sections.push(
-        crate::output::render_table_with_optional_profile(
-            &serde_json::Value::Array(missing_records.clone()),
-            compact,
-        )
-        .unwrap_or_default()
-        .trim_end()
-        .to_string(),
-    );
+    if let Some(findings) = response.get("findings").and_then(|v| v.as_array())
+        && !findings.is_empty()
+    {
+        sections.push("findings".to_string());
+        sections.push(
+            crate::output::render_table_with_optional_profile(
+                &serde_json::Value::Array(findings.clone()),
+                compact,
+            )
+            .unwrap_or_default()
+            .trim_end()
+            .to_string(),
+        );
+    }
     println!(
         "{}",
         crate::output::append_profile_to_rendered(sections.join("\n\n"), response)
@@ -179,6 +225,7 @@ pub async fn health(
 
 #[cfg(test)]
 mod tests {
+    use super::write_repair_plan;
     use serde_json::json;
 
     #[test]
@@ -202,5 +249,23 @@ mod tests {
         );
 
         assert!(full.contains("profile\nconsistency took 2ms\n"));
+    }
+
+    #[test]
+    fn repair_plan_file_requires_force_to_overwrite() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("repair-plan.json");
+        let path = path.to_string_lossy();
+        let first = json!({"plan_version": "index-repair/v1", "plan_digest": "one"});
+        let second = json!({"plan_version": "index-repair/v1", "plan_digest": "two"});
+
+        write_repair_plan(&path, Some(&first), false).expect("initial write");
+        assert!(write_repair_plan(&path, Some(&second), false).is_err());
+        write_repair_plan(&path, Some(&second), true).expect("forced overwrite");
+
+        let written: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path.as_ref()).expect("read plan"))
+                .expect("valid json");
+        assert_eq!(written, second);
     }
 }

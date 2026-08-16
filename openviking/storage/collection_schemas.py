@@ -116,6 +116,7 @@ class CollectionSchemas:
                 {"FieldName": "search_tags", "FieldType": "list<string>"},
                 {"FieldName": "abstract", "FieldType": "string"},
                 {"FieldName": "content", "FieldType": "text"},
+                {"FieldName": "source_digest", "FieldType": "string"},
                 {"FieldName": "account_id", "FieldType": "string"},
                 {"FieldName": "owner_user_id", "FieldType": "string"},
             ]
@@ -212,8 +213,7 @@ def _embedding_metadata_compatible(
     if existing_meta is None:
         return False
     return all(
-        existing_meta.get(key) == current_meta.get(key)
-        for key in _EMBEDDING_COMPATIBILITY_KEYS
+        existing_meta.get(key) == current_meta.get(key) for key in _EMBEDDING_COMPATIBILITY_KEYS
     )
 
 

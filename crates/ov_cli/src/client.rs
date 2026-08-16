@@ -478,10 +478,48 @@ impl HttpClient {
         self.post("/api/v1/content/reindex", &body).await
     }
 
-    pub async fn consistency(&self, uri: &str) -> Result<serde_json::Value> {
+    pub async fn apply_index_repair_plan(
+        &self,
+        plan: &serde_json::Value,
+        wait: bool,
+        dry_run: bool,
+    ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
-            "uri": uri,
+            "plan": plan,
+            "wait": wait,
+            "dry_run": dry_run,
         });
+        self.post("/api/v1/content/reindex/repair", &body).await
+    }
+
+    pub async fn consistency(
+        &self,
+        uri: &str,
+        issue_types: &[String],
+        limit: Option<usize>,
+        cursor: Option<&str>,
+        max_scan_records: Option<usize>,
+        generate_repair_plan: bool,
+    ) -> Result<serde_json::Value> {
+        let mut body = serde_json::json!({"uri": uri});
+        let object = body
+            .as_object_mut()
+            .expect("consistency body must be an object");
+        if !issue_types.is_empty() {
+            object.insert("issue_types".to_string(), serde_json::json!(issue_types));
+        }
+        if let Some(value) = limit {
+            object.insert("limit".to_string(), serde_json::json!(value));
+        }
+        if let Some(value) = cursor {
+            object.insert("cursor".to_string(), serde_json::json!(value));
+        }
+        if let Some(value) = max_scan_records {
+            object.insert("max_scan_records".to_string(), serde_json::json!(value));
+        }
+        if generate_repair_plan {
+            object.insert("generate_repair_plan".to_string(), serde_json::json!(true));
+        }
         self.post("/api/v1/system/consistency", &body).await
     }
 

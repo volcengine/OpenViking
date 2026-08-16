@@ -500,3 +500,12 @@ ov add-resource --help
 - `--mode prune_orphans` —— 清理源文件已不存在的向量记录，加 `--dry-run` 可预览而不实际执行。
 
 没有 `semantic` 或 `full` 这样的模式别名。
+
+如需更安全的定点修复，可先执行只读审计，再应用服务端生成的计划。计划文件已存在
+时默认拒绝覆盖，只有显式传入 `--force` 才会覆盖。
+
+```bash
+ov system consistency viking://resources/project --repair-plan repair-plan.json
+ov reindex --apply-plan repair-plan.json --dry-run
+ov reindex --apply-plan repair-plan.json --wait true
+```

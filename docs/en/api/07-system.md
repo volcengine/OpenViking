@@ -239,15 +239,17 @@ ov system status
 
 #### 1. API Implementation Overview
 
-Check filesystem/vector-index consistency for a URI subtree. This is a general
-data consistency API for debugging missing index records, failed vector snapshot
-exports, and related issues. It is not an OVPack-private API;
+Audit filesystem/vector-index consistency for a `viking://resources` subtree in
+the active collection. The read-only audit reports `missing`, `stale`, `orphan`,
+`metadata_mismatch`, `duplicate_keys`, and `unverifiable` records. It is not an
+OVPack-private API;
 `ov export --include-vectors` and `ov backup --include-vectors` reuse the same
 check.
 
-The response returns only a summary and missing records. It does not return the
-full expected-record list. `missing_records` includes at most the first 20
-records; `missing_records_truncated` is `true` when more missing records exist.
+The response retains the legacy summary fields and adds stable findings, counts,
+scan completion, and an opaque continuation cursor. It never returns source text
+or vectors. A repair plan is returned only after a complete, verifiable first
+page; truncated, unreadable, or unfinished pages cannot produce a plan.
 
 **Code Entry Points**:
 - `openviking/server/routers/system.py:check_consistency` - HTTP route
@@ -259,6 +261,11 @@ records; `missing_records_truncated` is `true` when more missing records exist.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | uri | string | Yes | - | Viking URI subtree to check |
+| issue_types | string[] | No | all | Finding types to return |
+| limit | integer | No | 100 | Findings returned on this page, from 1 to 1000 |
+| cursor | string | No | - | Opaque continuation from the same request scope |
+| max_scan_records | integer | No | 10000 | Bounded fact/vector scan limit, up to 100000 |
+| generate_repair_plan | boolean | No | false | Return a preconditioned plan when the scan is complete |
 
 #### 3. Usage Examples
 
@@ -282,6 +289,12 @@ curl -X POST http://localhost:1933/api/v1/system/consistency \
 report = client.check_consistency("viking://resources/my-project")
 print(report["ok"])
 print(report["missing_records"])
+
+planned = client.check_consistency(
+    "viking://resources/my-project",
+    issue_types=["stale", "duplicate_keys"],
+    generate_repair_plan=True,
+)
 ```
 
 **TypeScript SDK**
@@ -304,6 +317,8 @@ fmt.Println(report["ok"])
 
 ```bash
 ov system consistency viking://resources/my-project
+ov system consistency viking://resources/my-project \
+  --issue-type stale --repair-plan repair-plan.json
 ```
 
 **Response Example**
@@ -323,10 +338,39 @@ ov system consistency viking://resources/my-project
         "level": 2,
         "key": "README.md#level=2"
       }
+    ],
+    "complete": true,
+    "next_cursor": null,
+    "counts": {
+      "missing": 1,
+      "stale": 0,
+      "orphan": 0,
+      "metadata_mismatch": 0,
+      "duplicate_keys": 0,
+      "unverifiable": 0
+    },
+    "findings": [
+      {
+        "issue_type": "missing",
+        "uri": "viking://resources/my-project/README.md",
+        "level": 2,
+        "reason_code": "record_absent",
+        "record_count": 0,
+        "auto_fixable": true
+      }
     ]
   }
 }
 ```
+
+#### Existing collection upgrade
+
+New collections include the string field `source_digest`. If an externally
+managed active collection predates this field, the audit safely reports digest
+checks as `unverifiable`; it does not rebuild or drop the collection. Add the
+field through the vector backend's normal schema-migration procedure, then run
+`ov reindex viking://resources --mode vectors_only` to backfill current records.
+Do not treat an empty historical value as a stale digest.
 
 ---
 

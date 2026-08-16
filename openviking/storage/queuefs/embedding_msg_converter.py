@@ -9,6 +9,7 @@ to EmbeddingMsg objects for asynchronous vector processing.
 
 from openviking.core.context import Context, ContextLevel
 from openviking.core.namespace import owner_fields_for_uri
+from openviking.storage.index_digest import embedding_input_digest
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.telemetry import get_current_telemetry
 from openviking_cli.utils import get_logger
@@ -80,6 +81,8 @@ class EmbeddingMsgConverter:
             message = parts
         else:
             message = vectorization_text
+
+        context_data["source_digest"] = embedding_input_digest(message)
 
         embedding_msg = EmbeddingMsg(
             message=message,
