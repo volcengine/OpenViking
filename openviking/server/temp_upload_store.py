@@ -333,17 +333,15 @@ class TempUploadStore:
             with suppress(Exception):
                 await vfs.rm(uri, recursive=True, ctx=internal_ctx)
 
-    @staticmethod
-    def _cleanup_local_temp_files(temp_dir: Path, max_age_hours: int = 1) -> None:
+    def _cleanup_local_temp_files(self, temp_dir: Path) -> None:
         if not temp_dir.exists():
             return
         now = time.time()
-        max_age_seconds = max_age_hours * 3600
         for file_path in temp_dir.iterdir():
             if not file_path.is_file():
                 continue
             file_age = now - file_path.stat().st_mtime
-            if file_age > max_age_seconds:
+            if file_age > self.temp_cfg.shared_ttl_seconds:
                 file_path.unlink(missing_ok=True)
                 if not file_path.name.endswith(".ov_upload.meta"):
                     meta_path = temp_dir / f"{file_path.name}.ov_upload.meta"

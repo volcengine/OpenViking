@@ -1611,7 +1611,7 @@ openviking add-resource ./docs --exclude "*.tmp"
     "temp_upload": {
       "default_mode": "local",
       "shared_max_size_bytes": 536870912,
-      "shared_ttl_seconds": 86400
+      "shared_ttl_seconds": 43200
     },
     "user_config_defaults": {
       "add_targets": {
@@ -1638,7 +1638,7 @@ openviking add-resource ./docs --exclude "*.tmp"
 | `upload_signed_ttl_seconds` | int | MCP `add_resource` 为本地文件上传 mint 的一次性 token 的过期时间（秒），走 `POST /api/v1/resources/temp_upload?token=...`。 | `600`（10 分钟） |
 | `temp_upload.default_mode` | str | `POST /api/v1/resources/temp_upload` 的服务端默认模式（客户端未显式传 `upload_mode` 时使用）：`"local"`（仅当前实例本地磁盘，单机默认行为）或 `"shared"`（分布式共享存储，多副本部署可跨实例消费）。shared 对象固定存入当前 account 的内部 `viking://upload/<upload_id>/` 目录，在 `shared_ttl_seconds` 指定的时间内可重复消费；每次 shared 上传都会清理该 account 下过期目录。 | `"local"` |
 | `temp_upload.shared_max_size_bytes` | int | `shared` 模式下接受的最大文件大小（字节）。超过此阈值的请求会在写入对象存储之前被拒绝。 | `536870912`（512 MiB） |
-| `temp_upload.shared_ttl_seconds` | int | shared 临时上传目录的保留时间（秒）。每次 shared 上传会清理当前 account 下超过此时间的目录；必须大于 `0`。 | `86400`（24 小时） |
+| `temp_upload.shared_ttl_seconds` | int | local 和 shared 临时上传文件共用的保留时间（秒）。每次对应模式的上传会清理超过此时间的文件；shared 仅清理当前 account 下的目录；必须大于 `0`。 | `43200`（12 小时） |
 | `user_config_defaults.add_targets.resource_uri` | str | `add_resource` 未传 `to` 和 `parent` 时使用的部署级默认资源添加目录。`viking://user/...` 会按请求用户解析。 | `null` |
 | `user_config_defaults.add_targets.skill_uri` | str | `add_skill` 未传 `target_uri` 时使用的部署级默认技能添加根目录。仅允许 `viking://user/skills` 和 `viking://agent/skills`。 | `null` |
 | `agent_evolution.enabled` | bool | 实例级 Agent 进化开关。开启时，session commit 可按 session `memory_policy` 生成或更新 cases、trajectories 和 experiences；关闭时，所有账号和用户均停止生产这三类记忆。已有记忆仍可读取和检索。 | `false` |

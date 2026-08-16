@@ -168,7 +168,9 @@ def test_temp_upload_config_rejects_removed_shared_prefix():
     assert exc_info.value.errors()[0]["type"] == "extra_forbidden"
 
 
-def test_temp_upload_config_requires_positive_shared_ttl():
+def test_temp_upload_config_requires_positive_ttl():
+    assert TempUploadConfig().shared_ttl_seconds == 12 * 60 * 60
+
     with pytest.raises(ValueError) as exc_info:
         TempUploadConfig(shared_ttl_seconds=0)
 

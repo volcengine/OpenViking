@@ -1,4 +1,5 @@
 import json
+import os
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -9,6 +10,23 @@ from openviking.server.identity import RequestContext, Role
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.service.user_deletion import UserDeletionService
 from openviking_cli.session.user_id import UserIdentifier
+
+
+def test_local_upload_cleanup_uses_configured_ttl(tmp_path, monkeypatch):
+    now = 1_800_000_000
+    expired_file = tmp_path / "expired.txt"
+    current_file = tmp_path / "current.txt"
+    expired_file.touch()
+    current_file.touch()
+    os.utime(expired_file, (now - 61, now - 61))
+    os.utime(current_file, (now - 60, now - 60))
+    monkeypatch.setattr("openviking.server.temp_upload_store.time.time", lambda: now)
+
+    store = TempUploadStore(ServerConfig(temp_upload={"shared_ttl_seconds": 60}))
+    store._cleanup_local_temp_files(tmp_path)
+
+    assert not expired_file.exists()
+    assert current_file.exists()
 
 
 @pytest.mark.asyncio
