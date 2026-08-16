@@ -851,11 +851,12 @@ async def test_shared_temp_upload_remains_available_after_add_resource(
     assert temp_file_id.startswith("shared_")
 
     upload_id = temp_file_id[len("shared_") :]
-    upload_root = f"viking://upload/{upload_id}"
+    content_uri = f"viking://upload/{upload_id}.content"
+    meta_uri = f"viking://upload/{upload_id}.meta.json"
     vfs = get_viking_fs()
-    assert await vfs.exists(f"{upload_root}/meta.json")
-    assert await vfs.exists(f"{upload_root}/content")
-    meta = json.loads(await vfs.read_file(f"{upload_root}/meta.json"))
+    assert await vfs.exists(meta_uri)
+    assert await vfs.exists(content_uri)
+    meta = json.loads(await vfs.read_file(meta_uri))
     assert set(meta) == {
         "version",
         "temp_file_id",
@@ -866,7 +867,6 @@ async def test_shared_temp_upload_remains_available_after_add_resource(
         "file_ext",
         "size",
         "storage_uri",
-        "created_at",
     }
 
     resp = await client.post(
@@ -877,8 +877,8 @@ async def test_shared_temp_upload_remains_available_after_add_resource(
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["root_uri"].startswith("viking://")
-    assert await vfs.exists(f"{upload_root}/meta.json")
-    assert await vfs.exists(f"{upload_root}/content")
+    assert await vfs.exists(meta_uri)
+    assert await vfs.exists(content_uri)
 
 
 @pytest.mark.parametrize("upload_mode", ["local", "shared"])
@@ -949,7 +949,7 @@ async def test_shared_temp_upload_failed_consume_is_retryable(
     assert resp.status_code == 500
 
     upload_id = temp_file_id[len("shared_") :]
-    meta_uri = f"viking://upload/{upload_id}/meta.json"
+    meta_uri = f"viking://upload/{upload_id}.meta.json"
     meta = json.loads(await get_viking_fs().read_file(meta_uri))
     assert "state" not in meta
 
@@ -968,7 +968,7 @@ async def test_shared_upload_content_read_rejects_internal_scope(
 
     resp = await client.get(
         "/api/v1/content/read",
-        params={"uri": f"viking://upload/{upload_id}/meta.json"},
+        params={"uri": f"viking://upload/{upload_id}.meta.json"},
     )
     assert resp.status_code == 400
     body = resp.json()

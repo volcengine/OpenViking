@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 import time
@@ -23,6 +24,8 @@ from openviking_cli.utils.config.open_viking_config import get_openviking_config
 
 _CHUNK_SIZE = 1024 * 1024
 _SHARED_UPLOAD_ROOT = "viking://upload"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -47,10 +50,18 @@ def _shared_upload_uri(upload_id: str) -> str:
 
 
 def _shared_content_uri(upload_id: str) -> str:
-    return f"{_shared_upload_uri(upload_id)}/content"
+    return f"{_SHARED_UPLOAD_ROOT}/{upload_id}.content"
 
 
 def _shared_meta_uri(upload_id: str) -> str:
+    return f"{_SHARED_UPLOAD_ROOT}/{upload_id}.meta.json"
+
+
+def _legacy_shared_content_uri(upload_id: str) -> str:
+    return f"{_shared_upload_uri(upload_id)}/content"
+
+
+def _legacy_shared_meta_uri(upload_id: str) -> str:
     return f"{_shared_upload_uri(upload_id)}/meta.json"
 
 
@@ -172,9 +183,8 @@ class TempUploadStore:
         internal_ctx = self._internal_ctx(ctx)
         content_uri = _shared_content_uri(upload_id)
         meta_uri = _shared_meta_uri(upload_id)
-        now = int(time.time())
         meta = {
-            "version": 1,
+            "version": 2,
             "temp_file_id": temp_file_id,
             "account": ctx.account_id,
             "user": ctx.user.user_id,
@@ -183,7 +193,6 @@ class TempUploadStore:
             "file_ext": Path(upload_file.filename or "").suffix,
             "size": total_size,
             "storage_uri": content_uri,
-            "created_at": now,
         }
 
         try:
@@ -194,11 +203,9 @@ class TempUploadStore:
             return temp_file_id
         except Exception:
             with suppress(Exception):
-                await vfs.rm(
-                    _shared_upload_uri(upload_id),
-                    recursive=True,
-                    ctx=internal_ctx,
-                )
+                await vfs.rm(content_uri, ctx=internal_ctx)
+            with suppress(Exception):
+                await vfs.rm(meta_uri, ctx=internal_ctx)
             raise
         finally:
             with suppress(FileNotFoundError):
@@ -286,15 +293,16 @@ class TempUploadStore:
         )
 
     async def _read_shared_meta(self, upload_id: str, ctx: RequestContext) -> dict[str, Any]:
-        meta_uri = _shared_meta_uri(upload_id)
-        try:
-            raw = await get_viking_fs().read_file(meta_uri, ctx=self._internal_ctx(ctx))
-            data = json.loads(raw)
-        except Exception as exc:
-            raise PermissionDeniedError("Temporary upload metadata is invalid or missing.") from exc
-        if not isinstance(data, dict):
-            raise PermissionDeniedError("Temporary upload metadata is invalid or missing.")
-        return data
+        vfs = get_viking_fs()
+        internal_ctx = self._internal_ctx(ctx)
+        for meta_uri in (_shared_meta_uri(upload_id), _legacy_shared_meta_uri(upload_id)):
+            try:
+                data = json.loads(await vfs.read_file(meta_uri, ctx=internal_ctx))
+            except Exception:
+                continue
+            if isinstance(data, dict):
+                return data
+        raise PermissionDeniedError("Temporary upload metadata is invalid or missing.")
 
     def _validate_shared_meta(
         self,
@@ -318,20 +326,82 @@ class TempUploadStore:
                 ctx=internal_ctx,
             )
         except Exception:
+            logger.warning(
+                "Shared temp upload cleanup list failed account=%s",
+                ctx.account_id,
+                exc_info=True,
+            )
             return
 
-        cutoff = time.time() - self.temp_cfg.ttl_seconds
+        now = time.time()
+        cutoff = now - self.temp_cfg.ttl_seconds
+        logger.debug(
+            "Shared temp upload cleanup account=%s ttl_seconds=%s upload_count=%s "
+            "now=%s cutoff=%s",
+            ctx.account_id,
+            self.temp_cfg.ttl_seconds,
+            len(uploads),
+            now,
+            cutoff,
+        )
+        upload_files: dict[str, dict[str, tuple[str, Optional[float]]]] = {}
         for upload in uploads:
-            if not upload.get("isDir"):
-                continue
-            mod_time = vfs._ls_entry_mtime(upload)
-            if mod_time is None or mod_time >= cutoff:
+            if upload.get("isDir"):
                 continue
             uri = str(upload.get("uri") or "").rstrip("/")
-            if not uri or uri == _SHARED_UPLOAD_ROOT:
+            if uri.startswith(f"{_SHARED_UPLOAD_ROOT}/") and uri.endswith(".meta.json"):
+                upload_id = uri.removeprefix(f"{_SHARED_UPLOAD_ROOT}/").removesuffix(".meta.json")
+                file_kind = "meta"
+            elif uri.startswith(f"{_SHARED_UPLOAD_ROOT}/") and uri.endswith(".content"):
+                upload_id = uri.removeprefix(f"{_SHARED_UPLOAD_ROOT}/").removesuffix(".content")
+                file_kind = "content"
+            else:
                 continue
-            with suppress(Exception):
-                await vfs.rm(uri, recursive=True, ctx=internal_ctx)
+            if not upload_id or "/" in upload_id:
+                continue
+            upload_files.setdefault(upload_id, {})[file_kind] = (
+                uri,
+                vfs._ls_entry_mtime(upload),
+            )
+
+        for files in upload_files.values():
+            meta = files.get("meta")
+            content = files.get("content")
+            cleanup_files = (content, meta) if meta is not None else (content,)
+            timestamp_source = meta or content
+            if timestamp_source is None:
+                continue
+            _, mod_time = timestamp_source
+            age_seconds = None if mod_time is None else float(now - mod_time)
+            expired = mod_time is not None and mod_time < cutoff
+            for file in cleanup_files:
+                if file is None:
+                    continue
+                uri, _ = file
+                logger.debug(
+                    "Shared temp upload cleanup candidate uri=%s mod_time=%s "
+                    "age_seconds=%s expired=%s",
+                    uri,
+                    mod_time,
+                    age_seconds,
+                    expired,
+                )
+            if not expired:
+                continue
+            for file in cleanup_files:
+                if file is None:
+                    continue
+                uri, _ = file
+                try:
+                    await vfs.rm(uri, recursive=False, ctx=internal_ctx)
+                except Exception:
+                    logger.warning(
+                        "Shared temp upload cleanup remove failed uri=%s",
+                        uri,
+                        exc_info=True,
+                    )
+                else:
+                    logger.debug("Shared temp upload cleanup removed uri=%s", uri)
 
     def _cleanup_local_temp_files(self, temp_dir: Path) -> None:
         if not temp_dir.exists():
