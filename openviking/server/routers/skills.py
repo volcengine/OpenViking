@@ -556,8 +556,9 @@ async def update_skill(
         "operation": "update",
     }
     if request.temp_file_id:
-        store = TempUploadStore.build(http_request.app.state.config)
-        resolved = await store.resolve_for_consume(request.temp_file_id, _ctx)
+        resolved = await TempUploadStore.build(http_request.app.state.config).resolve_for_consume(
+            request.temp_file_id, _ctx
+        )
         data = Path(resolved.local_path)
         allow_local_path_resolution = True
         if request.source_metadata is None:
@@ -571,8 +572,6 @@ async def update_skill(
             source_metadata["original_filename"] = resolved.original_filename
 
     source_path_hint = resolved.original_filename if resolved else None
-    store = TempUploadStore.build(http_request.app.state.config) if resolved else None
-
     async def _update() -> Dict[str, Any]:
         # Derive backup root from the actual skill root URI to keep backup in the same scope.
         skill_root_parent = root_uri.rsplit("/", 1)[0]
@@ -637,14 +636,10 @@ async def update_skill(
                     await _restore_skill_privacy(service, _ctx, skill_name, previous_privacy)
                 except Exception:
                     pass
-            if resolved and store:
-                await store.mark_failed(resolved, _ctx)
             raise
         else:
             if backup_created:
                 await service.fs.rm(backup_uri, ctx=_ctx, recursive=True)
-            if resolved and store:
-                await store.mark_consumed(resolved, _ctx)
             result["action"] = "update"
             return result
         finally:

@@ -281,15 +281,12 @@ class ResourceService:
                         "Pass 'to' explicitly, or add a resource type that returns root_uri."
                     )
                 if processor_kwargs.get("temp_file_id"):
-                    # An uploaded source is a one-time snapshot: the staged upload is
-                    # consumed at ingest, so a watch task recorded against it would
-                    # re-process the frozen snapshot every interval — silently ignoring
-                    # all edits to the client-side source — instead of watching anything
-                    # live. Reject at creation instead of pretending to watch.
+                    # An uploaded source is a static snapshot, so a watch task recorded
+                    # against it would re-process the frozen snapshot every interval.
                     raise InvalidArgumentError(
                         "watch_interval > 0 is not supported for uploaded content: an "
-                        "upload is consumed as a one-time snapshot at ingest, so the "
-                        "watch would re-process stale content forever. Watch a URL / "
+                        "upload is a static snapshot, so the watch would re-process "
+                        "stale content forever. Watch a URL / "
                         "sitemap / RSS source instead, or re-add the resource when the "
                         "source changes."
                     )
@@ -983,14 +980,12 @@ class ResourceService:
         kwargs.update(normalized_args.processor_kwargs)
         git_repo_source = is_git_repo_url(path)
         if watch_interval > 0 and kwargs.get("temp_file_id"):
-            # Fail fast, before any ingestion: an uploaded source is a one-time
-            # snapshot, so a watch on it can never observe the live source (see the
-            # matching guard in _manage_watch_if_needed, the watch-creation choke
-            # point that protects all other call paths).
+            # Fail fast: a watch on a static upload snapshot can never observe the
+            # live source.
             raise InvalidArgumentError(
                 "watch_interval > 0 is not supported for uploaded content: an "
-                "upload is consumed as a one-time snapshot at ingest, so the "
-                "watch would re-process stale content forever. Watch a URL / "
+                "upload is a static snapshot, so the watch would re-process "
+                "stale content forever. Watch a URL / "
                 "sitemap / RSS source instead, or re-add the resource when the "
                 "source changes."
             )

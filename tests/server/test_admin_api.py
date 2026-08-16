@@ -180,7 +180,6 @@ async def admin_app(admin_service):
     app.state.user_deletion_service = await setup_user_deletion(
         service=admin_service,
         manager=manager,
-        shared_upload_prefix=config.temp_upload.shared_prefix,
     )
 
     # Set auth plugin (lifespan not triggered in ASGI tests)

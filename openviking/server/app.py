@@ -144,7 +144,6 @@ async def _initialize_runtime_state(
     app.state.user_deletion_service = await setup_user_deletion(
         service=service,
         manager=app.state.api_key_manager,
-        shared_upload_prefix=config.temp_upload.shared_prefix,
         oauth_store=getattr(app.state, "oauth_store", None),
         usage_audit_runtime=getattr(app.state, "usage_audit_runtime", None),
     )

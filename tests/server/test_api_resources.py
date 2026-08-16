@@ -4,6 +4,7 @@
 """Tests for resource management endpoints."""
 
 import asyncio
+import json
 import zipfile
 from types import SimpleNamespace
 
@@ -836,7 +837,7 @@ async def test_add_resource_accepts_temp_uploaded_file(
     assert body["result"]["root_uri"].startswith("viking://")
 
 
-async def test_shared_temp_upload_and_add_resource_deletes_upload_dir(
+async def test_shared_temp_upload_remains_available_after_add_resource(
     client: httpx.AsyncClient,
     service,
 ):
@@ -854,6 +855,19 @@ async def test_shared_temp_upload_and_add_resource_deletes_upload_dir(
     vfs = get_viking_fs()
     assert await vfs.exists(f"{upload_root}/meta.json")
     assert await vfs.exists(f"{upload_root}/content")
+    meta = json.loads(await vfs.read_file(f"{upload_root}/meta.json"))
+    assert set(meta) == {
+        "version",
+        "temp_file_id",
+        "account",
+        "user",
+        "original_filename",
+        "content_type",
+        "file_ext",
+        "size",
+        "storage_uri",
+        "created_at",
+    }
 
     resp = await client.post(
         "/api/v1/resources",
@@ -863,7 +877,8 @@ async def test_shared_temp_upload_and_add_resource_deletes_upload_dir(
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["root_uri"].startswith("viking://")
-    assert not await vfs.exists(upload_root)
+    assert await vfs.exists(f"{upload_root}/meta.json")
+    assert await vfs.exists(f"{upload_root}/content")
 
 
 @pytest.mark.parametrize("upload_mode", ["local", "shared"])
@@ -935,8 +950,8 @@ async def test_shared_temp_upload_failed_consume_is_retryable(
 
     upload_id = temp_file_id[len("shared_") :]
     meta_uri = f"viking://upload/{upload_id}/meta.json"
-    meta_raw = await get_viking_fs().read_file(meta_uri)
-    assert '"state": "uploaded"' in meta_raw
+    meta = json.loads(await get_viking_fs().read_file(meta_uri))
+    assert "state" not in meta
 
 
 async def test_shared_upload_content_read_rejects_internal_scope(

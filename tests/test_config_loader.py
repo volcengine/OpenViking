@@ -21,6 +21,7 @@ from openviking_cli.utils.config.config_loader import (
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfig, ParserApiConfig
 from openviking_cli.utils.config.parser_config import CodeHostingConfig
 from openviking_cli.utils.config.queue_worker_config import QueueWorkersConfig
+from openviking.server.config import TempUploadConfig
 
 
 class TestResolveConfigPath:
@@ -156,6 +157,13 @@ def test_queue_worker_concurrency_rejects_non_positive_value(value):
 def test_parser_api_rejects_worker_max_concurrent():
     with pytest.raises(ValueError) as exc_info:
         ParserApiConfig(max_concurrent=9)
+
+    assert exc_info.value.errors()[0]["type"] == "extra_forbidden"
+
+
+def test_temp_upload_config_rejects_removed_shared_prefix():
+    with pytest.raises(ValueError) as exc_info:
+        TempUploadConfig(shared_prefix="viking://custom-upload")
 
     assert exc_info.value.errors()[0]["type"] == "extra_forbidden"
 

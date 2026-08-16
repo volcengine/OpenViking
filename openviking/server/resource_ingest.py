@@ -4,8 +4,8 @@
 
 Used by both the MCP ``add_resource`` tool (``temp_file_id`` branch) and the signed
 ``temp_upload`` route (automatic post-upload ingestion). Resolves the temp file, calls
-``ResourceService.add_resource`` (async, ``wait=False``), and drives the ``TempUploadStore``
-lifecycle: mark_consumed on success / mark_failed on error, always cleaning up.
+``ResourceService.add_resource`` (async, ``wait=False``), then cleans up the local
+working copy.
 """
 
 from __future__ import annotations
@@ -38,10 +38,9 @@ async def ingest_temp_upload(
     ``root_uri``) or a business-error dict (``{"status": "error", ...}``) that ``add_resource``
     returns WITHOUT raising. Callers MUST inspect ``status``: HTTP callers pass it through
     ``response_from_result`` (which maps errors to the right status code); the MCP tool formats
-    it — so an ingestion failure is never reported as success. The upload is marked consumed
-    only on success (mark_failed on business error or exception), and its temp file is always
-    cleaned up. ``resolve_for_consume`` may raise (PermissionDenied / InvalidArgument) before
-    anything is resolved — the caller surfaces that.
+    it — so an ingestion failure is never reported as success. ``resolve_for_consume`` may
+    raise (PermissionDenied / InvalidArgument) before anything is resolved — the caller
+    surfaces that.
     """
     resolved = await store.resolve_for_consume(temp_file_id, ctx)
     try:
@@ -64,12 +63,7 @@ async def ingest_temp_upload(
                 tag_mode=tag_mode,
             )
         except Exception:
-            await store.mark_failed(resolved, ctx)
             raise
-        if isinstance(result, dict) and result.get("status") == "error":
-            await store.mark_failed(resolved, ctx)
-        else:
-            await store.mark_consumed(resolved, ctx)
     finally:
         await resolved.cleanup()
 

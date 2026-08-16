@@ -219,18 +219,18 @@ async def add_resource(
     allow_local_path_resolution = False
     original_filename = None
     resolved = None
-    store = None
     if request.temp_file_id:
         if request.watch_interval > 0:
             raise InvalidArgumentError(
                 "watch_interval > 0 is not supported for uploaded content: an "
-                "upload is consumed as a one-time snapshot at ingest, so the "
-                "watch would re-process stale content forever. Watch a URL / "
+                "upload is a static snapshot, so the watch would re-process "
+                "stale content forever. Watch a URL / "
                 "sitemap / RSS source instead, or re-add the resource when the "
                 "source changes."
             )
-        store = TempUploadStore.build(http_request.app.state.config)
-        resolved = await store.resolve_for_consume(request.temp_file_id, _ctx)
+        resolved = await TempUploadStore.build(http_request.app.state.config).resolve_for_consume(
+            request.temp_file_id, _ctx
+        )
         path = resolved.local_path
         original_filename = resolved.original_filename
         allow_local_path_resolution = True
@@ -284,12 +284,8 @@ async def add_resource(
                 **kwargs,
             )
         except Exception:
-            if resolved and store:
-                await store.mark_failed(resolved, _ctx)
             raise
         else:
-            if resolved and store:
-                await store.mark_consumed(resolved, _ctx)
             return result
         finally:
             if resolved:
@@ -335,8 +331,6 @@ async def add_skill(
             source_metadata["original_filename"] = resolved.original_filename
 
     source_path_hint = resolved.original_filename if resolved else None
-    store = TempUploadStore.build(http_request.app.state.config) if resolved else None
-
     async def _add() -> dict[str, Any]:
         try:
             result = await service.resources.add_skill(
@@ -350,12 +344,8 @@ async def add_skill(
             )
             await persist_skill_source_metadata(service, _ctx, result, source_metadata)
         except Exception:
-            if resolved and store:
-                await store.mark_failed(resolved, _ctx)
             raise
         else:
-            if resolved and store:
-                await store.mark_consumed(resolved, _ctx)
             return result
         finally:
             if resolved:

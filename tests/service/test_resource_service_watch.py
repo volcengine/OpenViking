@@ -175,7 +175,7 @@ class TestWatchTaskCreation:
     async def test_watch_interval_rejected_for_uploaded_snapshot_source(
         self, resource_service: ResourceService, request_context: RequestContext
     ):
-        """A temp-upload source is a one-time snapshot: watching it would silently
+        """A temp-upload source is a static snapshot: watching it would silently
         re-process stale content forever, so creation must fail loudly."""
         to_uri = "viking://resources/uploaded_resource"
 
