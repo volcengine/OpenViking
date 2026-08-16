@@ -45,24 +45,12 @@ def get_temp_upload_config(server_config: ServerConfig) -> TempUploadConfig:
     return server_config.temp_upload
 
 
-def _shared_upload_uri(upload_id: str) -> str:
-    return f"{_SHARED_UPLOAD_ROOT}/{upload_id}"
-
-
 def _shared_content_uri(upload_id: str) -> str:
     return f"{_SHARED_UPLOAD_ROOT}/{upload_id}.content"
 
 
 def _shared_meta_uri(upload_id: str) -> str:
     return f"{_SHARED_UPLOAD_ROOT}/{upload_id}.meta"
-
-
-def _legacy_flat_shared_meta_uri(upload_id: str) -> str:
-    return f"{_SHARED_UPLOAD_ROOT}/{upload_id}.meta.json"
-
-
-def _legacy_shared_meta_uri(upload_id: str) -> str:
-    return f"{_shared_upload_uri(upload_id)}/meta.json"
 
 
 def _parse_shared_temp_file_id(temp_file_id: str) -> Optional[str]:
@@ -295,18 +283,13 @@ class TempUploadStore:
     async def _read_shared_meta(self, upload_id: str, ctx: RequestContext) -> dict[str, Any]:
         vfs = get_viking_fs()
         internal_ctx = self._internal_ctx(ctx)
-        for meta_uri in (
-            _shared_meta_uri(upload_id),
-            _legacy_flat_shared_meta_uri(upload_id),
-            _legacy_shared_meta_uri(upload_id),
-        ):
-            try:
-                data = json.loads(await vfs.read_file(meta_uri, ctx=internal_ctx))
-            except Exception:
-                continue
-            if isinstance(data, dict):
-                return data
-        raise PermissionDeniedError("Temporary upload metadata is invalid or missing.")
+        try:
+            data = json.loads(await vfs.read_file(_shared_meta_uri(upload_id), ctx=internal_ctx))
+        except Exception as exc:
+            raise PermissionDeniedError("Temporary upload metadata is invalid or missing.") from exc
+        if not isinstance(data, dict):
+            raise PermissionDeniedError("Temporary upload metadata is invalid or missing.")
+        return data
 
     def _validate_shared_meta(
         self,
@@ -355,9 +338,6 @@ class TempUploadStore:
             uri = str(upload.get("uri") or "").rstrip("/")
             if uri.startswith(f"{_SHARED_UPLOAD_ROOT}/") and uri.endswith(".meta"):
                 upload_id = uri.removeprefix(f"{_SHARED_UPLOAD_ROOT}/").removesuffix(".meta")
-                file_kind = "meta"
-            elif uri.startswith(f"{_SHARED_UPLOAD_ROOT}/") and uri.endswith(".meta.json"):
-                upload_id = uri.removeprefix(f"{_SHARED_UPLOAD_ROOT}/").removesuffix(".meta.json")
                 file_kind = "meta"
             elif uri.startswith(f"{_SHARED_UPLOAD_ROOT}/") and uri.endswith(".content"):
                 upload_id = uri.removeprefix(f"{_SHARED_UPLOAD_ROOT}/").removesuffix(".content")

@@ -451,24 +451,15 @@ class UserDeletionService:
                 if not upload_id or "/" in upload_id:
                     continue
                 content_uri = f"{_SHARED_UPLOAD_ROOT}/{upload_id}.content"
-            elif not upload.get("isDir") and uri.endswith(".meta.json"):
-                upload_id = uri.removeprefix(f"{_SHARED_UPLOAD_ROOT}/").removesuffix(".meta.json")
-                if not upload_id or "/" in upload_id:
-                    continue
-                content_uri = f"{_SHARED_UPLOAD_ROOT}/{upload_id}.content"
-            elif upload.get("isDir"):
-                content_uri = uri
             else:
                 continue
             try:
-                meta_uri = uri if not upload.get("isDir") else f"{uri}/meta.json"
-                meta = json.loads(await viking_fs.read_file(meta_uri, ctx=ctx))
+                meta = json.loads(await viking_fs.read_file(uri, ctx=ctx))
             except Exception:
                 logger.warning("Skipping shared upload with unreadable metadata: %s", uri)
                 continue
             if meta.get("account") == ctx.account_id and meta.get("user") == ctx.user.user_id:
-                if not upload.get("isDir"):
-                    await viking_fs.rm(content_uri, ctx=ctx)
+                await viking_fs.rm(content_uri, ctx=ctx)
                 await viking_fs.rm(uri, recursive=True, ctx=ctx)
 
 
