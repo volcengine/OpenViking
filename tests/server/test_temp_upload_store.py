@@ -36,9 +36,9 @@ async def test_shared_upload_cleanup_uses_flat_file_mtimes_in_one_listing(
 ):
     now = 1_800_000_000
     old_content = "viking://upload/old.content"
-    old_meta = "viking://upload/old.meta.json"
+    old_meta = "viking://upload/old.meta"
     current_content = "viking://upload/current.content"
-    current_meta = "viking://upload/current.meta.json"
+    current_meta = "viking://upload/current.meta"
     orphan_content = "viking://upload/orphan.content"
 
     class FakeVikingFS:
@@ -140,11 +140,49 @@ async def test_shared_upload_resolves_legacy_directory_layout(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_shared_upload_resolves_legacy_flat_meta_suffix(monkeypatch):
+    upload_id = "legacy-flat"
+    temp_file_id = f"shared_{upload_id}"
+    content_uri = f"viking://upload/{upload_id}.content"
+    legacy_meta = f"viking://upload/{upload_id}.meta.json"
+
+    class FakeVikingFS:
+        async def read_file(self, uri, **kwargs):
+            assert uri == legacy_meta
+            return json.dumps(
+                {
+                    "temp_file_id": temp_file_id,
+                    "account": "account",
+                    "storage_uri": content_uri,
+                    "file_ext": ".txt",
+                }
+            )
+
+        async def exists(self, uri, **kwargs):
+            return uri == content_uri
+
+        async def read_file_bytes(self, uri, **kwargs):
+            assert uri == content_uri
+            return b"legacy flat upload"
+
+    fake_vfs = FakeVikingFS()
+    monkeypatch.setattr("openviking.server.temp_upload_store.get_viking_fs", lambda: fake_vfs)
+    ctx = RequestContext(user=UserIdentifier("account", "user"), role=Role.USER)
+
+    resolved = await TempUploadStore(ServerConfig()).resolve_for_consume(temp_file_id, ctx)
+
+    try:
+        assert Path(resolved.local_path).read_bytes() == b"legacy flat upload"
+    finally:
+        await resolved.cleanup()
+
+
+@pytest.mark.asyncio
 async def test_user_deletion_removes_only_current_users_shared_uploads():
-    target_meta = "viking://upload/target.meta.json"
+    target_meta = "viking://upload/target.meta"
     target_content = "viking://upload/target.content"
-    other_user_meta = "viking://upload/other-user.meta.json"
-    other_account_meta = "viking://upload/other-account.meta.json"
+    other_user_meta = "viking://upload/other-user.meta"
+    other_account_meta = "viking://upload/other-account.meta"
 
     class FakeVikingFS:
         async def ls(self, uri, **kwargs):

@@ -54,11 +54,11 @@ def _shared_content_uri(upload_id: str) -> str:
 
 
 def _shared_meta_uri(upload_id: str) -> str:
+    return f"{_SHARED_UPLOAD_ROOT}/{upload_id}.meta"
+
+
+def _legacy_flat_shared_meta_uri(upload_id: str) -> str:
     return f"{_SHARED_UPLOAD_ROOT}/{upload_id}.meta.json"
-
-
-def _legacy_shared_content_uri(upload_id: str) -> str:
-    return f"{_shared_upload_uri(upload_id)}/content"
 
 
 def _legacy_shared_meta_uri(upload_id: str) -> str:
@@ -295,7 +295,11 @@ class TempUploadStore:
     async def _read_shared_meta(self, upload_id: str, ctx: RequestContext) -> dict[str, Any]:
         vfs = get_viking_fs()
         internal_ctx = self._internal_ctx(ctx)
-        for meta_uri in (_shared_meta_uri(upload_id), _legacy_shared_meta_uri(upload_id)):
+        for meta_uri in (
+            _shared_meta_uri(upload_id),
+            _legacy_flat_shared_meta_uri(upload_id),
+            _legacy_shared_meta_uri(upload_id),
+        ):
             try:
                 data = json.loads(await vfs.read_file(meta_uri, ctx=internal_ctx))
             except Exception:
@@ -349,7 +353,10 @@ class TempUploadStore:
             if upload.get("isDir"):
                 continue
             uri = str(upload.get("uri") or "").rstrip("/")
-            if uri.startswith(f"{_SHARED_UPLOAD_ROOT}/") and uri.endswith(".meta.json"):
+            if uri.startswith(f"{_SHARED_UPLOAD_ROOT}/") and uri.endswith(".meta"):
+                upload_id = uri.removeprefix(f"{_SHARED_UPLOAD_ROOT}/").removesuffix(".meta")
+                file_kind = "meta"
+            elif uri.startswith(f"{_SHARED_UPLOAD_ROOT}/") and uri.endswith(".meta.json"):
                 upload_id = uri.removeprefix(f"{_SHARED_UPLOAD_ROOT}/").removesuffix(".meta.json")
                 file_kind = "meta"
             elif uri.startswith(f"{_SHARED_UPLOAD_ROOT}/") and uri.endswith(".content"):

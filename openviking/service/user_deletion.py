@@ -446,7 +446,12 @@ class UserDeletionService:
             uri = str(upload.get("uri") or "").rstrip("/")
             if not uri or uri == _SHARED_UPLOAD_ROOT:
                 continue
-            if not upload.get("isDir") and uri.endswith(".meta.json"):
+            if not upload.get("isDir") and uri.endswith(".meta"):
+                upload_id = uri.removeprefix(f"{_SHARED_UPLOAD_ROOT}/").removesuffix(".meta")
+                if not upload_id or "/" in upload_id:
+                    continue
+                content_uri = f"{_SHARED_UPLOAD_ROOT}/{upload_id}.content"
+            elif not upload.get("isDir") and uri.endswith(".meta.json"):
                 upload_id = uri.removeprefix(f"{_SHARED_UPLOAD_ROOT}/").removesuffix(".meta.json")
                 if not upload_id or "/" in upload_id:
                     continue

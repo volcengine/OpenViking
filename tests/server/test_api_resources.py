@@ -852,7 +852,7 @@ async def test_shared_temp_upload_remains_available_after_add_resource(
 
     upload_id = temp_file_id[len("shared_") :]
     content_uri = f"viking://upload/{upload_id}.content"
-    meta_uri = f"viking://upload/{upload_id}.meta.json"
+    meta_uri = f"viking://upload/{upload_id}.meta"
     vfs = get_viking_fs()
     assert await vfs.exists(meta_uri)
     assert await vfs.exists(content_uri)
@@ -949,7 +949,7 @@ async def test_shared_temp_upload_failed_consume_is_retryable(
     assert resp.status_code == 500
 
     upload_id = temp_file_id[len("shared_") :]
-    meta_uri = f"viking://upload/{upload_id}.meta.json"
+    meta_uri = f"viking://upload/{upload_id}.meta"
     meta = json.loads(await get_viking_fs().read_file(meta_uri))
     assert "state" not in meta
 
@@ -968,7 +968,7 @@ async def test_shared_upload_content_read_rejects_internal_scope(
 
     resp = await client.get(
         "/api/v1/content/read",
-        params={"uri": f"viking://upload/{upload_id}.meta.json"},
+        params={"uri": f"viking://upload/{upload_id}.meta"},
     )
     assert resp.status_code == 400
     body = resp.json()
