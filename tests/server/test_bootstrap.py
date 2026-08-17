@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import socket
 from types import SimpleNamespace
 
 import openviking.server.app as app_module
@@ -12,6 +13,44 @@ from openviking.server.config import ServerConfig
 from openviking.utils.agfs_utils import resolve_queuefs_mount_point
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 from openviking_cli.utils.config.storage_config import StorageConfig
+
+
+class _RecordingUvicornConfig:
+    """Test double for uvicorn.Config that records constructor kwargs."""
+
+    def __init__(self, app, **kwargs):
+        self.captured = {"app": app, **kwargs}
+
+    def load_app(self):
+        return None
+
+
+def _stub_bind_retry(monkeypatch, captured):
+    """Stub port acquisition (returns unbound dummies) and record host/port."""
+
+    def fake_acquire(host, port, **kwargs):
+        captured.update({"acquire_host": host, "acquire_port": port})
+        return [socket.socket()]
+
+    monkeypatch.setattr(bootstrap, "_acquire_listen_sockets", fake_acquire)
+
+
+def _stub_single_process_serving(monkeypatch, captured):
+    """Stub uvicorn Config/Server.run for the single-worker serving path."""
+    config_holder = {}
+
+    def fake_config(app, **kwargs):
+        config_holder["config"] = _RecordingUvicornConfig(app, **kwargs)
+        return config_holder["config"]
+
+    monkeypatch.setattr(bootstrap.uvicorn, "Config", fake_config)
+    monkeypatch.setattr(
+        bootstrap.uvicorn.Server,
+        "run",
+        lambda self, sockets=None: captured.update(
+            {"config_kwargs": config_holder["config"].captured, "sockets": sockets}
+        ),
+    )
 
 
 def test_main_keeps_config_host_when_cli_host_is_omitted(monkeypatch):
@@ -61,11 +100,15 @@ def test_main_keeps_config_host_when_cli_host_is_omitted(monkeypatch):
             {"app": app, "host": host, "port": port, "log_config": log_config, **kwargs}
         ),
     )
+    _stub_bind_retry(monkeypatch, captured)
+    _stub_single_process_serving(monkeypatch, captured)
 
     bootstrap.main()
 
-    assert captured["host"] == "127.0.0.1"
-    assert captured["port"] == 1933
+    assert captured["acquire_host"] == "127.0.0.1"
+    assert captured["acquire_port"] == 1933
+    assert captured["config_kwargs"]["host"] == "127.0.0.1"
+    assert captured["config_kwargs"]["port"] == 1933
 
 
 def test_main_coerces_cli_host_all_to_none(monkeypatch):
@@ -115,11 +158,16 @@ def test_main_coerces_cli_host_all_to_none(monkeypatch):
             {"app": app, "host": host, "port": port, "log_config": log_config, **kwargs}
         ),
     )
+    _stub_bind_retry(monkeypatch, captured)
+    _stub_single_process_serving(monkeypatch, captured)
 
     bootstrap.main()
 
-    assert captured["host"] is None
-    assert captured["port"] == 1933
+    # CLI --host all coerces to None (bind all interfaces).
+    assert captured["acquire_host"] is None
+    assert captured["config_kwargs"]["host"] is None
+    assert captured["acquire_port"] == 1933
+    assert captured["config_kwargs"]["port"] == 1933
 
 
 def test_main_enables_bot_logging_when_with_bot_comes_from_config(monkeypatch):
@@ -165,6 +213,10 @@ def test_main_enables_bot_logging_when_with_bot_comes_from_config(monkeypatch):
     monkeypatch.setattr(bootstrap, "_start_vikingbot_gateway", _fake_start)
     monkeypatch.setattr(bootstrap, "_stop_vikingbot_gateway", lambda process: None)
     monkeypatch.setattr(bootstrap.uvicorn, "run", lambda *args, **kwargs: None)
+    # Port acquisition and serving are stubbed into a throwaway dict so the
+    # exact-match assertion below only sees the bot-related captures.
+    _stub_bind_retry(monkeypatch, {})
+    _stub_single_process_serving(monkeypatch, {})
 
     bootstrap.main()
 
@@ -206,6 +258,9 @@ def test_bot_alias_propagates_resolved_config_to_workers(monkeypatch):
         "run",
         lambda app, **kwargs: captured.update({"app": app, **kwargs}),
     )
+    # Multi-worker path closes the acquired socket and hands the bind to
+    # uvicorn; stub acquisition so no real port is touched.
+    _stub_bind_retry(monkeypatch, {})
 
     with monkeypatch.context() as worker_env:
         worker_env.delenv(app_module.WORKER_WITH_BOT_ENV, raising=False)
