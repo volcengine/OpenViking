@@ -17,6 +17,7 @@
 import { isPluginEnabled, loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { deriveOvSessionId, isBypassed, makeFetchJSON } from "./lib/ov-session.mjs";
+import { topScoreFromContextBlock } from "./lib/recall-state.mjs";
 import { writeJsonState } from "./lib/state.mjs";
 import { createHostCompressor } from "./lib/host-compressor.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
@@ -399,7 +400,7 @@ async function main() {
       hint_items: 0,
       tokens_used: estimateTokens(endpointBlock),
       tokens_budget: cfg.recallTokenBudget,
-      top_score: 0,
+      top_score: topScoreFromContextBlock(endpointBlock),
       cc_session_id: sessionId,
       reason: "ok",
     });
