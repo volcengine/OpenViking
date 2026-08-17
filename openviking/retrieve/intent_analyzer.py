@@ -88,6 +88,17 @@ class IntentAnalyzer:
 
         # Parse result
         parsed = parse_json_from_response(response)
+        if parsed is None:
+            raise ValueError("Failed to parse intent analysis response")
+
+        if isinstance(parsed, list):
+            parsed = {"reasoning": "", "queries": parsed}
+        elif not isinstance(parsed, dict):
+            raise ValueError(
+                "Intent analysis response must be a JSON object or array, got "
+                f"{type(parsed).__name__}"
+            )
+
         if not parsed:
             raise ValueError("Failed to parse intent analysis response")
 
@@ -96,8 +107,21 @@ class IntentAnalyzer:
             reasoning = str(reasoning)
 
         # Build QueryPlan
+        raw_queries = parsed.get("queries", [])
+        if not isinstance(raw_queries, list):
+            raise ValueError(
+                "Intent analysis response field 'queries' must be a JSON array, got "
+                f"{type(raw_queries).__name__}"
+            )
+
         queries = []
-        for q in parsed.get("queries", []):
+        for q in raw_queries:
+            if not isinstance(q, dict):
+                logger.warning(
+                    f"[IntentAnalyzer] Skipping non-object query item of type {type(q).__name__}"
+                )
+                continue
+
             try:
                 context_type = ContextType(q.get("context_type", "resource"))
             except ValueError:

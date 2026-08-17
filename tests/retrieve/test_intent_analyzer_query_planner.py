@@ -136,6 +136,89 @@ async def test_intent_analyzer_normalizes_non_string_reasoning(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_intent_analyzer_accepts_bare_query_array(monkeypatch):
+    planner = RecordingModel(
+        """[
+          {
+            "query": "planned query",
+            "context_type": "memory",
+            "intent": "test intent",
+            "priority": 1
+          }
+        ]"""
+    )
+    config = SimpleNamespace(get_query_planner=lambda: planner)
+
+    monkeypatch.setattr(intent_module, "get_openviking_config", lambda: config)
+    monkeypatch.setattr(intent_module, "render_prompt", lambda prompt_id, variables: "prompt")
+
+    result = await IntentAnalyzer().analyze(
+        compression_summary="",
+        messages=[],
+        current_message="where is my preference?",
+    )
+
+    assert result.reasoning == ""
+    assert [query.query for query in result.queries] == ["planned query"]
+
+
+@pytest.mark.asyncio
+async def test_intent_analyzer_skips_non_object_items_in_bare_array(monkeypatch):
+    planner = RecordingModel(
+        """[
+          "invalid item",
+          {
+            "query": "planned query",
+            "context_type": "memory",
+            "intent": "test intent",
+            "priority": 1
+          }
+        ]"""
+    )
+    config = SimpleNamespace(get_query_planner=lambda: planner)
+
+    monkeypatch.setattr(intent_module, "get_openviking_config", lambda: config)
+    monkeypatch.setattr(intent_module, "render_prompt", lambda prompt_id, variables: "prompt")
+
+    result = await IntentAnalyzer().analyze(
+        compression_summary="",
+        messages=[],
+        current_message="where is my preference?",
+    )
+
+    assert [query.query for query in result.queries] == ["planned query"]
+
+
+@pytest.mark.parametrize(
+    ("response", "error_match"),
+    [
+        (
+            '"invalid response"',
+            "Intent analysis response must be a JSON object or array, got str",
+        ),
+        (
+            '{"queries": {"query": "nested query"}}',
+            "Intent analysis response field 'queries' must be a JSON array, got dict",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_intent_analyzer_rejects_invalid_response_shape(monkeypatch, response, error_match):
+    planner = RecordingModel(response)
+    config = SimpleNamespace(get_query_planner=lambda: planner)
+
+    monkeypatch.setattr(intent_module, "get_openviking_config", lambda: config)
+    monkeypatch.setattr(intent_module, "render_prompt", lambda prompt_id, variables: "prompt")
+
+    with pytest.raises(ValueError, match=error_match):
+        await IntentAnalyzer().analyze(
+            compression_summary="",
+            messages=[],
+            current_message="where is my preference?",
+        )
+
+
+@pytest.mark.asyncio
 async def test_intent_analyzer_uses_model_specific_prompt(monkeypatch):
     planner = RecordingModel(
         _query_plan_response("planned query"),
