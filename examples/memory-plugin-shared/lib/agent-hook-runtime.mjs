@@ -88,7 +88,9 @@ export async function readHookInput() {
 export function resolveAgentCwd(input = {}) {
   const workspaceRoots = Array.isArray(input.workspace_roots)
     ? input.workspace_roots
-    : Array.isArray(input.workspaceRoots) ? input.workspaceRoots : [];
+    : Array.isArray(input.workspaceRoots)
+      ? input.workspaceRoots
+      : Array.isArray(input.workspacePaths) ? input.workspacePaths : [];
   return String(
     input.cwd
       || workspaceRoots.find((value) => typeof value === "string" && value.trim())
@@ -98,7 +100,8 @@ export function resolveAgentCwd(input = {}) {
 }
 
 export function resolveNativeSessionId(input = {}) {
-  const direct = input.conversation_id || input.session_id || input.sessionId || input.generation_id;
+  const direct = input.conversation_id || input.conversationId
+    || input.session_id || input.sessionId || input.generation_id;
   if (direct) return safePart(direct);
   const transcript = input.transcript_path || input.transcriptPath;
   if (transcript) {
