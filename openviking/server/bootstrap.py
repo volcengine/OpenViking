@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Bootstrap script for OpenViking HTTP Server."""
 
-import asyncio
 import argparse
+import asyncio
+import errno
 import json
 import os
 import shutil
@@ -13,7 +14,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import NoReturn, Optional
 
 import uvicorn
 
@@ -85,6 +86,158 @@ def _normalize_host_arg(host: Optional[str]) -> Optional[str]:
     if host.strip().lower() == "all":
         return None
     return host
+
+
+# Bind errors a retry can plausibly clear: the port is held by a process
+# that may exit, or — on Windows — by a socket in another login session
+# (WSAEACCES maps to EACCES). Anything else, e.g. EADDRNOTAVAIL for a host
+# not configured on this machine, is a configuration error that no retry
+# budget can fix, so it propagates immediately.
+_RETRYABLE_BIND_ERRNOS = frozenset({errno.EADDRINUSE, errno.EACCES})
+
+# Errors meaning "this machine has no usable IPv6 stack": the wildcard
+# bind then degrades to IPv4-only instead of failing startup.
+_IPV6_UNAVAILABLE_ERRNOS = frozenset({errno.EAFNOSUPPORT, errno.EADDRNOTAVAIL})
+
+
+def _new_listen_socket(family: int) -> socket.socket:
+    """Create a listen socket with the platform-appropriate options."""
+    sock = socket.socket(family=family, type=socket.SOCK_STREAM)
+    if sys.platform != "win32":
+        # POSIX: survive TIME_WAIT leftovers from prior runs; a live
+        # listener still fails the bind, which drives the retry loop.
+        # Windows: deliberately off — SO_REUSEADDR there allows binding
+        # over a live listener (silent port hijack) instead of detecting it.
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    return sock
+
+
+def _bind_explicit_listen_socket(host: str, port: int) -> socket.socket:
+    """Bind one explicitly configured address (uvicorn ``bind_socket`` parity)."""
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    sock = _new_listen_socket(family)
+    try:
+        sock.bind((host, port))
+    except OSError:
+        sock.close()
+        raise
+    return sock
+
+
+def _bind_wildcard_listen_sockets(port: int) -> list[socket.socket]:
+    """Bind both ``::`` and ``0.0.0.0`` — asyncio ``AI_PASSIVE`` parity.
+
+    The pre-retry code path (``loop.create_server(host=None)``) resolved the
+    wildcard with ``AI_PASSIVE`` and bound every returned family, so
+    ``--host all`` accepted IPv6 connections; uvicorn's ``bind_socket``
+    binds IPv4 only. Machines without an IPv6 stack degrade to IPv4-only
+    rather than failing startup. A partial failure closes the sockets
+    bound so far so the retry loop always starts from a clean slate.
+    """
+    socks: list[socket.socket] = []
+    try:
+        sock6 = _new_listen_socket(socket.AF_INET6)
+    except OSError as exc:
+        if exc.errno not in _IPV6_UNAVAILABLE_ERRNOS:
+            raise
+        sock6 = None
+    if sock6 is not None:
+        try:
+            sock6.bind(("::", port))
+        except OSError as exc:
+            sock6.close()
+            if exc.errno not in _IPV6_UNAVAILABLE_ERRNOS:
+                raise
+        else:
+            socks.append(sock6)
+    sock4 = _new_listen_socket(socket.AF_INET)
+    try:
+        sock4.bind(("0.0.0.0", port))
+    except OSError:
+        sock4.close()
+        for sock in socks:
+            sock.close()
+        raise
+    socks.append(sock4)
+    return socks
+
+
+def _acquire_listen_sockets(
+    host: Optional[str],
+    port: int,
+    max_attempts: int,
+    initial_delay: float,
+    backoff_factor: float,
+    label: str,
+) -> Optional[list[socket.socket]]:
+    """Bind ``(host, port)`` for listening, retrying while it is occupied.
+
+    Returns the bound socket(s) on success, or ``None`` after
+    ``max_attempts + 1`` failed tries. They are meant to be handed straight
+    to ``uvicorn.Server.run(sockets=[...])`` so the bind is never released
+    between acquisition and serving (no check-then-bind race window).
+    An explicit host binds a single socket with uvicorn ``bind_socket``
+    semantics (IPv6 family when the host contains ``:``); a wildcard host
+    (``None``) binds both families as ``loop.create_server(host=None)``
+    did. Only occupancy-class errors are retried; other bind errors (e.g.
+    ``EADDRNOTAVAIL`` when the configured host does not exist on this
+    machine) propagate to the caller immediately.
+    """
+    for attempt in range(max(0, max_attempts) + 1):
+        try:
+            if host:
+                socks = [_bind_explicit_listen_socket(host, port)]
+            else:
+                socks = _bind_wildcard_listen_sockets(port)
+        except OSError as exc:
+            if exc.errno not in _RETRYABLE_BIND_ERRNOS:
+                raise
+            if attempt >= max_attempts:
+                return None
+            delay = initial_delay * (backoff_factor**attempt)
+            print(
+                f"{label}: port {port} still in use "
+                f"(attempt {attempt + 1}/{max_attempts + 1}), "
+                f"retrying in {delay:.1f}s...",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
+        else:
+            if attempt > 0:
+                print(f"{label}: port {port} acquired after {attempt + 1} attempt(s)")
+            return socks
+    return None  # pragma: no cover - loop always returns or exhausts
+
+
+def _abort_port_acquisition_failed(port: int, max_attempts: int) -> NoReturn:
+    """Exit with a clear message when the listen port cannot be acquired."""
+    print(
+        f"Error: OpenViking server port {port} is still in use after "
+        f"{max_attempts + 1} bind attempt(s).\n"
+        f"  A stale or duplicate process is likely holding it.\n"
+        f"  Identify it:  lsof -nP -iTCP:{port} -sTCP:LISTEN   (Linux/macOS)\n"
+        f"                netstat -ano | findstr :{port}        (Windows)\n"
+        f"  On Windows, an empty result can mean the port sits in an OS\n"
+        f"  excluded range (bind denied, nothing listening):\n"
+        f"                netsh interface ipv4 show excludedportrange protocol=tcp\n"
+        f"  Kill the holder or move the port, or raise\n"
+        f"  server.bind_retry_max_attempts in ov.conf.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+
+def _serve_single_process(app, config, listen_socks: list[socket.socket]) -> None:
+    """Serve ``app`` on the pre-bound ``listen_socks`` (no re-bind race)."""
+    server_config = uvicorn.Config(
+        app,
+        host=config.host,
+        port=config.port,
+        timeout_keep_alive=config.timeout_keep_alive,
+        log_config=None,
+    )
+    # uvicorn's Server.run() -> Config.load() loads the app itself.
+    uvicorn.Server(server_config).run(sockets=listen_socks)
 
 
 def _resolve_default_bot_log_dir(config_path: Optional[str]) -> str:
@@ -301,15 +454,42 @@ def main():
         ),
     )
     workers_info = f" (workers: {config.workers})" if config.workers > 1 else ""
-    print(f"OpenViking HTTP Server is running on {config.host}:{config.port}{workers_info}")
 
+    listen_socks: Optional[list[socket.socket]] = None
     try:
+        # Port-binding recovery: acquire the listen socket(s) up-front with
+        # retry + exponential backoff, then serve on them. Without this, a
+        # stale or concurrently-restarting process holding the port makes
+        # uvicorn exit(1) with EADDRINUSE on the first try (e.g. watchdog
+        # restart races). Both failure modes here — the abort exit below and
+        # a raised non-retryable bind error — pass through the finally
+        # below, which owns stopping the gateway child.
+        listen_socks = _acquire_listen_sockets(
+            config.host,
+            config.port,
+            max_attempts=config.bind_retry_max_attempts,
+            initial_delay=config.bind_retry_initial_delay_seconds,
+            backoff_factor=config.bind_retry_backoff_factor,
+            label="OpenViking HTTP server",
+        )
+        if listen_socks is None:
+            _abort_port_acquisition_failed(config.port, config.bind_retry_max_attempts)
+
+        print(
+            f"OpenViking HTTP Server is running on {config.host}:{config.port}{workers_info}"
+        )
+
         workers = config.workers
         if workers > 1:
             # Multi-worker mode requires an import string so each worker
             # can independently import the application.  We stash the
             # resolved config path in an env-var so that the factory can
             # pick it up (ServerConfig already reads OPENVIKING_CONFIG_FILE).
+            # The multiprocess supervisor binds its own sockets; the acquire
+            # loop above has already waited out any stale holder, so close
+            # the probe sockets and hand the bind to uvicorn.
+            for sock in listen_socks:
+                sock.close()
             os.environ[WORKER_WITH_BOT_ENV] = "1" if config.with_bot else "0"
             os.environ[WORKER_BOT_API_URL_ENV] = config.bot_api_url
             uvicorn.run(
@@ -322,14 +502,14 @@ def main():
                 log_config=None,
             )
         else:
-            uvicorn.run(
-                app,
-                host=config.host,
-                port=config.port,
-                timeout_keep_alive=config.timeout_keep_alive,
-                log_config=None,
-            )
+            _serve_single_process(app, config, listen_socks)
     finally:
+        # uvicorn closes sockets it was given, but be defensive against
+        # early exits. Double-close is a no-op for closed Python sockets.
+        if listen_socks is not None:
+            for sock in listen_socks:
+                if sock.fileno() != -1:
+                    sock.close()
         # Cleanup vikingbot process on shutdown
         if bot_process is not None:
             _stop_vikingbot_gateway(bot_process)
