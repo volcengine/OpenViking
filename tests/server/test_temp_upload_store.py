@@ -43,32 +43,30 @@ def test_local_upload_cleanup_is_disabled_when_ttl_is_zero(tmp_path, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_shared_upload_cleanup_uses_flat_file_mtimes_in_one_listing(
+async def test_shared_upload_cleanup_uses_timestamp_directories_in_one_listing(
     monkeypatch,
 ):
     now = 1_800_000_000
-    old_content = "viking://upload/old.content"
-    old_meta = "viking://upload/old.meta"
-    current_content = "viking://upload/current.content"
-    current_meta = "viking://upload/current.meta"
-    orphan_content = "viking://upload/orphan.content"
+    old_upload = "1799999939000-11111111111111111111111111111111"
+    current_upload = "1799999940000-22222222222222222222222222222222"
+    malformed_upload = "not-a-timestamp"
+    malformed_nonce_upload = "1799999939000-not-a-uuid"
+    old_uri = f"viking://upload/{old_upload}"
+    current_uri = f"viking://upload/{current_upload}"
+    malformed_uri = f"viking://upload/{malformed_upload}"
+    malformed_nonce_uri = f"viking://upload/{malformed_nonce_upload}"
 
     class FakeVikingFS:
         async def ls(self, uri, **kwargs):
             assert uri == "viking://upload"
             assert kwargs["ctx"].role == Role.ROOT
             return [
-                {"uri": old_content, "isDir": False, "modTime": now - 120},
-                {"uri": old_meta, "isDir": False, "modTime": now - 61},
-                {"uri": current_content, "isDir": False, "modTime": now - 120},
-                {"uri": current_meta, "isDir": False, "modTime": now - 60},
-                {"uri": orphan_content, "isDir": False, "modTime": now - 61},
-                {"uri": "viking://upload/ignore.txt", "isDir": False, "modTime": now - 61},
+                {"uri": old_uri, "isDir": True},
+                {"uri": current_uri, "isDir": True},
+                {"uri": malformed_uri, "isDir": True},
+                {"uri": malformed_nonce_uri, "isDir": True},
+                {"uri": "viking://upload/ignore.txt", "isDir": False},
             ]
-
-        @staticmethod
-        def _ls_entry_mtime(entry):
-            return entry.get("modTime")
 
         rm = AsyncMock()
 
@@ -83,34 +81,26 @@ async def test_shared_upload_cleanup_uses_flat_file_mtimes_in_one_listing(
 
     assert fake_vfs.rm.await_args_list == [
         (
-            (old_content,),
-            {"recursive": False, "ctx": RequestContext(user=ctx.user, role=Role.ROOT)},
-        ),
-        (
-            (old_meta,),
-            {"recursive": False, "ctx": RequestContext(user=ctx.user, role=Role.ROOT)},
-        ),
-        (
-            (orphan_content,),
-            {"recursive": False, "ctx": RequestContext(user=ctx.user, role=Role.ROOT)},
+            (old_uri,),
+            {"recursive": True, "ctx": RequestContext(user=ctx.user, role=Role.ROOT)},
         ),
     ]
     mock_logger.debug.assert_any_call(
         "Shared temp upload cleanup account=%s ttl_seconds=%s upload_count=%s now=%s cutoff=%s",
         "account",
         60,
-        6,
+        5,
         now,
         now - 60,
     )
     mock_logger.debug.assert_any_call(
-        "Shared temp upload cleanup candidate uri=%s mod_time=%s age_seconds=%s expired=%s",
-        old_meta,
-        now - 61,
+        "Shared temp upload cleanup candidate uri=%s created_at=%s age_seconds=%s expired=%s",
+        old_uri,
+        1_799_999_939.0,
         61.0,
         True,
     )
-    mock_logger.debug.assert_any_call("Shared temp upload cleanup removed uri=%s", old_meta)
+    mock_logger.debug.assert_any_call("Shared temp upload cleanup removed uri=%s", old_uri)
 
 
 @pytest.mark.asyncio
@@ -132,19 +122,21 @@ async def test_shared_upload_cleanup_is_disabled_when_ttl_is_zero(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_user_deletion_removes_only_current_users_shared_uploads():
-    target_meta = "viking://upload/target.meta"
-    target_content = "viking://upload/target.content"
-    other_user_meta = "viking://upload/other-user.meta"
-    other_account_meta = "viking://upload/other-account.meta"
+    target_upload = "1800000000000-target"
+    other_user_upload = "1800000000000-other-user"
+    other_account_upload = "1800000000000-other-account"
+    target_uri = f"viking://upload/{target_upload}"
+    target_meta = f"{target_uri}/meta"
+    other_user_meta = f"viking://upload/{other_user_upload}/meta"
+    other_account_meta = f"viking://upload/{other_account_upload}/meta"
 
     class FakeVikingFS:
         async def ls(self, uri, **kwargs):
             assert uri == "viking://upload"
             return [
-                {"uri": target_meta, "isDir": False},
-                {"uri": target_content, "isDir": False},
-                {"uri": other_user_meta, "isDir": False},
-                {"uri": other_account_meta, "isDir": False},
+                {"uri": target_uri, "isDir": True},
+                {"uri": f"viking://upload/{other_user_upload}", "isDir": True},
+                {"uri": f"viking://upload/{other_account_upload}", "isDir": True},
             ]
 
         async def read_file(self, uri, **kwargs):
@@ -169,6 +161,5 @@ async def test_user_deletion_removes_only_current_users_shared_uploads():
     await deletion_service._delete_uploads(ctx)
 
     assert fake_vfs.rm.await_args_list == [
-        ((target_content,), {"ctx": ctx}),
-        ((target_meta,), {"recursive": True, "ctx": ctx}),
+        ((target_uri,), {"recursive": True, "ctx": ctx}),
     ]

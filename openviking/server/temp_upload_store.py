@@ -46,11 +46,11 @@ def get_temp_upload_config(server_config: ServerConfig) -> TempUploadConfig:
 
 
 def _shared_content_uri(upload_id: str) -> str:
-    return f"{_SHARED_UPLOAD_ROOT}/{upload_id}.content"
+    return f"{_SHARED_UPLOAD_ROOT}/{upload_id}/content"
 
 
 def _shared_meta_uri(upload_id: str) -> str:
-    return f"{_SHARED_UPLOAD_ROOT}/{upload_id}.meta"
+    return f"{_SHARED_UPLOAD_ROOT}/{upload_id}/meta"
 
 
 def _parse_shared_temp_file_id(temp_file_id: str) -> Optional[str]:
@@ -60,6 +60,23 @@ def _parse_shared_temp_file_id(temp_file_id: str) -> Optional[str]:
     if not upload_id or "/" in upload_id or "\\" in upload_id:
         return None
     return upload_id
+
+
+def _new_shared_upload_id() -> str:
+    return f"{time.time_ns() // 1_000_000:013d}-{uuid.uuid4().hex}"
+
+
+def _shared_upload_created_at(upload_id: str) -> Optional[float]:
+    timestamp_ms, separator, nonce = upload_id.partition("-")
+    if (
+        not separator
+        or len(timestamp_ms) != 13
+        or not timestamp_ms.isdigit()
+        or len(nonce) != 32
+        or any(char not in "0123456789abcdef" for char in nonce)
+    ):
+        return None
+    return int(timestamp_ms) / 1_000
 
 
 async def _stream_upload_to_local_temp(upload_file: Any, max_size_bytes: int) -> tuple[str, int]:
@@ -165,7 +182,7 @@ class TempUploadStore:
         temp_path, total_size = await _stream_upload_to_local_temp(
             upload_file, self.temp_cfg.shared_max_size_bytes
         )
-        upload_id = uuid.uuid4().hex
+        upload_id = _new_shared_upload_id()
         temp_file_id = f"shared_{upload_id}"
         vfs = get_viking_fs()
         internal_ctx = self._internal_ctx(ctx)
@@ -191,9 +208,11 @@ class TempUploadStore:
             return temp_file_id
         except Exception:
             with suppress(Exception):
-                await vfs.rm(content_uri, ctx=internal_ctx)
-            with suppress(Exception):
-                await vfs.rm(meta_uri, ctx=internal_ctx)
+                await vfs.rm(
+                    f"{_SHARED_UPLOAD_ROOT}/{upload_id}",
+                    recursive=True,
+                    ctx=internal_ctx,
+                )
             raise
         finally:
             with suppress(FileNotFoundError):
@@ -333,64 +352,39 @@ class TempUploadStore:
             now,
             cutoff,
         )
-        upload_files: dict[str, dict[str, tuple[str, Optional[float]]]] = {}
         for upload in uploads:
-            if upload.get("isDir"):
+            if not upload.get("isDir"):
                 continue
             uri = str(upload.get("uri") or "").rstrip("/")
-            if uri.startswith(f"{_SHARED_UPLOAD_ROOT}/") and uri.endswith(".meta"):
-                upload_id = uri.removeprefix(f"{_SHARED_UPLOAD_ROOT}/").removesuffix(".meta")
-                file_kind = "meta"
-            elif uri.startswith(f"{_SHARED_UPLOAD_ROOT}/") and uri.endswith(".content"):
-                upload_id = uri.removeprefix(f"{_SHARED_UPLOAD_ROOT}/").removesuffix(".content")
-                file_kind = "content"
-            else:
+            upload_id = uri.removeprefix(f"{_SHARED_UPLOAD_ROOT}/")
+            if not uri.startswith(f"{_SHARED_UPLOAD_ROOT}/") or "/" in upload_id:
                 continue
-            if not upload_id or "/" in upload_id:
+            created_at = _shared_upload_created_at(upload_id)
+            if created_at is None:
+                logger.debug("Shared temp upload cleanup skipped malformed uri=%s", uri)
                 continue
-            upload_files.setdefault(upload_id, {})[file_kind] = (
+            age_seconds = now - created_at
+            expired = created_at < cutoff
+            logger.debug(
+                "Shared temp upload cleanup candidate uri=%s created_at=%s "
+                "age_seconds=%s expired=%s",
                 uri,
-                vfs._ls_entry_mtime(upload),
+                created_at,
+                age_seconds,
+                expired,
             )
-
-        for files in upload_files.values():
-            meta = files.get("meta")
-            content = files.get("content")
-            cleanup_files = (content, meta) if meta is not None else (content,)
-            timestamp_source = meta or content
-            if timestamp_source is None:
-                continue
-            _, mod_time = timestamp_source
-            age_seconds = None if mod_time is None else float(now - mod_time)
-            expired = mod_time is not None and mod_time < cutoff
-            for file in cleanup_files:
-                if file is None:
-                    continue
-                uri, _ = file
-                logger.debug(
-                    "Shared temp upload cleanup candidate uri=%s mod_time=%s "
-                    "age_seconds=%s expired=%s",
-                    uri,
-                    mod_time,
-                    age_seconds,
-                    expired,
-                )
             if not expired:
                 continue
-            for file in cleanup_files:
-                if file is None:
-                    continue
-                uri, _ = file
-                try:
-                    await vfs.rm(uri, recursive=False, ctx=internal_ctx)
-                except Exception:
-                    logger.warning(
-                        "Shared temp upload cleanup remove failed uri=%s",
-                        uri,
-                        exc_info=True,
-                    )
-                else:
-                    logger.debug("Shared temp upload cleanup removed uri=%s", uri)
+            try:
+                await vfs.rm(uri, recursive=True, ctx=internal_ctx)
+            except Exception:
+                logger.warning(
+                    "Shared temp upload cleanup remove failed uri=%s",
+                    uri,
+                    exc_info=True,
+                )
+            else:
+                logger.debug("Shared temp upload cleanup removed uri=%s", uri)
 
     def _cleanup_local_temp_files(self, temp_dir: Path) -> None:
         if self.temp_cfg.ttl_seconds == 0:
