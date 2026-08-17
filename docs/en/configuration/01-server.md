@@ -246,6 +246,9 @@ This setting controls queue-job concurrency. It is separate from `vlm.media.max_
 | `port` | integer | `1933` | Listen port |
 | `workers` | integer | `1` | Worker process count |
 | `timeout_keep_alive` | integer (seconds) | `5` | Idle HTTP keep-alive timeout; raise it above the upstream's idle-connection lifetime |
+| `bind_retry_max_attempts` | integer, `>= 0` | `5` | Retries when the listen port is occupied at startup (stale process, restart race); `0` fails fast |
+| `bind_retry_initial_delay_seconds` | number, `> 0` | `1.0` | Delay before the first bind retry |
+| `bind_retry_backoff_factor` | number, `>= 1` | `2.0` | Multiplier applied to the retry delay after each failed bind attempt |
 | `auth_mode` | `dev`, `api_key`, `trusted` / `null` | `null` | Auth mode; null is inferred from `root_api_key` |
 | `root_api_key` | string / `null` | `null` | Root key; setting it defaults auth to `api_key` |
 | `cors_origins` | string[] | `["*"]` | Allowed origins |

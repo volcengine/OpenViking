@@ -246,6 +246,9 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 | `port` | integer | `1933` | HTTP 监听端口 |
 | `workers` | integer | `1` | 服务进程数量 |
 | `timeout_keep_alive` | integer（秒） | `5` | 空闲 HTTP keep-alive 超时；应调大到超过上游空闲连接寿命 |
+| `bind_retry_max_attempts` | integer，`>= 0` | `5` | 启动时监听端口被占用（残留进程、重启竞争）的重试次数；`0` 表示立即失败 |
+| `bind_retry_initial_delay_seconds` | number，`> 0` | `1.0` | 首次绑定重试前的等待秒数 |
+| `bind_retry_backoff_factor` | number，`>= 1` | `2.0` | 每次绑定失败后重试间隔的倍增系数 |
 | `auth_mode` | `dev`、`api_key`、`trusted` / `null` | `null` | 鉴权模式；空值根据 `root_api_key` 自动判断 |
 | `root_api_key` | string / `null` | `null` | Root API Key；配置后默认启用 `api_key` 模式 |
 | `cors_origins` | string[] | `["*"]` | 允许的跨域来源 |
