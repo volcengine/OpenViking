@@ -19,6 +19,7 @@ logger = get_logger(__name__)
 
 DEFAULT_INTENT_ANALYSIS_PROMPT = "retrieval.intent_analysis"
 MAX_INTENT_ANALYSIS_QUERIES = 5
+MAX_SFT_V4_INTENT_ANALYSIS_QUERIES = 15
 DEFAULT_QUERY_PRIORITY = 3
 
 # Model-specific query-planner prompts. Models not listed here keep using the
@@ -35,6 +36,14 @@ def resolve_intent_analysis_prompt_id(query_planner: Any) -> str:
     if not isinstance(model, str):
         return DEFAULT_INTENT_ANALYSIS_PROMPT
     return QUERY_PLANNER_PROMPT_BY_MODEL.get(model.strip(), DEFAULT_INTENT_ANALYSIS_PROMPT)
+
+
+def _max_queries_for_prompt(prompt_id: str) -> int:
+    """Return the largest query plan allowed by the selected prompt contract."""
+    if prompt_id == "retrieval.ov_intent_analysis_sft_v4":
+        # v4 permits up to five queries for each of the three context types.
+        return MAX_SFT_V4_INTENT_ANALYSIS_QUERIES
+    return MAX_INTENT_ANALYSIS_QUERIES
 
 
 def _normalize_query_plan_response(parsed: Any) -> tuple[str, list[Any]]:
@@ -98,17 +107,20 @@ def _normalize_query_priority(value: Any) -> int:
     return DEFAULT_QUERY_PRIORITY
 
 
-def _build_typed_queries(raw_queries: list[Any]) -> list[TypedQuery]:
+def _build_typed_queries(
+    raw_queries: list[Any],
+    max_queries: int = MAX_INTENT_ANALYSIS_QUERIES,
+) -> list[TypedQuery]:
     """Build a bounded query list while preserving valid items from mixed output."""
     queries: list[TypedQuery] = []
     skipped_items = 0
 
     for index, raw_query in enumerate(raw_queries):
-        if len(queries) >= MAX_INTENT_ANALYSIS_QUERIES:
+        if len(queries) >= max_queries:
             logger.warning(
                 "[IntentAnalyzer] Ignoring "
                 f"{len(raw_queries) - index} query item(s) beyond the "
-                f"{MAX_INTENT_ANALYSIS_QUERIES}-query limit"
+                f"{max_queries}-query limit"
             )
             break
 
@@ -193,13 +205,14 @@ class IntentAnalyzer:
 
         # Build context prompt. Some fine-tuned planner models expect a compact
         # prompt/output contract, selected by exact model mapping above.
+        prompt_id = resolve_intent_analysis_prompt_id(query_planner)
         prompt = self._build_context_prompt(
             compression_summary,
             messages,
             current_message,
             context_type,
             target_abstract,
-            prompt_id=resolve_intent_analysis_prompt_id(query_planner),
+            prompt_id=prompt_id,
         )
 
         response = await query_planner.get_completion_async(prompt)
@@ -207,7 +220,10 @@ class IntentAnalyzer:
         # Parse result
         parsed = parse_json_from_response(response)
         reasoning, raw_queries = _normalize_query_plan_response(parsed)
-        queries = _build_typed_queries(raw_queries)
+        queries = _build_typed_queries(
+            raw_queries,
+            max_queries=_max_queries_for_prompt(prompt_id),
+        )
 
         # Log analysis result
         for i, q in enumerate(queries):

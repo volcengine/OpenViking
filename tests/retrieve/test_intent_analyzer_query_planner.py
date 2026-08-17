@@ -88,6 +88,21 @@ def test_query_planner_prompt_mapping_targets_are_bundled():
 
 
 @pytest.mark.parametrize(
+    ("prompt_id", "expected"),
+    [
+        (
+            "retrieval.ov_intent_analysis_sft_v4",
+            intent_module.MAX_SFT_V4_INTENT_ANALYSIS_QUERIES,
+        ),
+        ("retrieval.ov_intent_analysis_sft_v7", intent_module.MAX_INTENT_ANALYSIS_QUERIES),
+        (intent_module.DEFAULT_INTENT_ANALYSIS_PROMPT, intent_module.MAX_INTENT_ANALYSIS_QUERIES),
+    ],
+)
+def test_query_limit_matches_prompt_contract(prompt_id, expected):
+    assert intent_module._max_queries_for_prompt(prompt_id) == expected
+
+
+@pytest.mark.parametrize(
     ("value", "expected"),
     [
         (1, 1),
@@ -335,6 +350,36 @@ async def test_intent_analyzer_caps_valid_queries(monkeypatch):
     assert [query.query for query in result.queries] == [
         f"query {index}" for index in range(intent_module.MAX_INTENT_ANALYSIS_QUERIES)
     ]
+
+
+@pytest.mark.asyncio
+async def test_intent_analyzer_preserves_v4_per_context_query_limit(monkeypatch):
+    response = json.dumps(
+        [
+            {
+                "query": f"query {index}",
+                "context_type": "resource",
+                "priority": 1,
+            }
+            for index in range(intent_module.MAX_INTENT_ANALYSIS_QUERIES + 1)
+        ]
+    )
+    planner = RecordingModel(
+        response,
+        model="ollama/guoxuter/ov_intent_analysis_sft:v4_q8",
+    )
+    config = SimpleNamespace(get_query_planner=lambda: planner)
+
+    monkeypatch.setattr(intent_module, "get_openviking_config", lambda: config)
+    monkeypatch.setattr(intent_module, "render_prompt", lambda prompt_id, variables: "prompt")
+
+    result = await IntentAnalyzer().analyze(
+        compression_summary="",
+        messages=[],
+        current_message="where is my preference?",
+    )
+
+    assert len(result.queries) == intent_module.MAX_INTENT_ANALYSIS_QUERIES + 1
 
 
 @pytest.mark.asyncio
