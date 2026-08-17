@@ -1,5 +1,5 @@
 """
-Web search tool with multiple backends (brave, ddgs, exa, tavily).
+Web search tool with multiple backends (brave, ddgs, exa, serply, tavily).
 
 To add a new backend:
     1. Create new file: websearch/mybackend.py
@@ -18,7 +18,7 @@ from .base import WebSearchBackend
 from .registry import registry
 
 # Import backends to register them
-from . import brave, ddgs, exa, tavily
+from . import brave, ddgs, exa, serply, tavily
 
 
 class WebSearchTool(Tool):
@@ -73,7 +73,7 @@ class WebSearchTool(Tool):
         Initialize WebSearchTool.
 
         Args:
-            backend: Backend name ("auto", "brave", "ddgs", "exa", "tavily") or WebSearchBackend instance
+            backend: Backend name ("auto", "brave", "ddgs", "exa", "serply", "tavily") or WebSearchBackend instance
             brave_api_key: Brave Search API key
             exa_api_key: Exa AI API key
             tavily_api_key: Tavily Search API key
