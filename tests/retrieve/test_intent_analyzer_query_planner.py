@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -86,6 +87,26 @@ def test_query_planner_prompt_mapping_targets_are_bundled():
         assert manager.load_template(prompt_id).metadata.id == prompt_id
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (1, 1),
+        (5, 5),
+        (" 2 ", 2),
+        (4.0, 4),
+        (None, intent_module.DEFAULT_QUERY_PRIORITY),
+        (True, intent_module.DEFAULT_QUERY_PRIORITY),
+        (0, intent_module.DEFAULT_QUERY_PRIORITY),
+        (6, intent_module.DEFAULT_QUERY_PRIORITY),
+        (2.5, intent_module.DEFAULT_QUERY_PRIORITY),
+        ("2.5", intent_module.DEFAULT_QUERY_PRIORITY),
+        ("invalid", intent_module.DEFAULT_QUERY_PRIORITY),
+    ],
+)
+def test_query_priority_normalization(value, expected):
+    assert intent_module._normalize_query_priority(value) == expected
+
+
 @pytest.mark.asyncio
 async def test_intent_analyzer_uses_query_planner_when_configured(monkeypatch):
     planner = RecordingModel(_query_plan_response("planned query"))
@@ -162,6 +183,58 @@ async def test_intent_analyzer_accepts_bare_query_array(monkeypatch):
     assert [query.query for query in result.queries] == ["planned query"]
 
 
+@pytest.mark.parametrize(
+    "response",
+    [
+        "[]",
+        '{"reasoning": null, "queries": null}',
+        '{"reasoning": "nothing missing"}',
+    ],
+)
+@pytest.mark.asyncio
+async def test_intent_analyzer_accepts_recoverable_empty_query_plans(monkeypatch, response):
+    planner = RecordingModel(response)
+    config = SimpleNamespace(get_query_planner=lambda: planner)
+
+    monkeypatch.setattr(intent_module, "get_openviking_config", lambda: config)
+    monkeypatch.setattr(intent_module, "render_prompt", lambda prompt_id, variables: "prompt")
+
+    result = await IntentAnalyzer().analyze(
+        compression_summary="",
+        messages=[],
+        current_message="hello",
+    )
+
+    assert result.queries == []
+    assert isinstance(result.reasoning, str)
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        '{"query": "top-level query", "context_type": "memory"}',
+        '{"queries": {"query": "top-level query", "context_type": "memory"}}',
+    ],
+)
+@pytest.mark.asyncio
+async def test_intent_analyzer_accepts_single_query_objects(monkeypatch, response):
+    planner = RecordingModel(response)
+    config = SimpleNamespace(get_query_planner=lambda: planner)
+
+    monkeypatch.setattr(intent_module, "get_openviking_config", lambda: config)
+    monkeypatch.setattr(intent_module, "render_prompt", lambda prompt_id, variables: "prompt")
+
+    result = await IntentAnalyzer().analyze(
+        compression_summary="",
+        messages=[],
+        current_message="where is my preference?",
+    )
+
+    assert [(query.query, query.context_type) for query in result.queries] == [
+        ("top-level query", intent_module.ContextType.MEMORY)
+    ]
+
+
 @pytest.mark.asyncio
 async def test_intent_analyzer_skips_non_object_items_in_bare_array(monkeypatch):
     planner = RecordingModel(
@@ -189,6 +262,100 @@ async def test_intent_analyzer_skips_non_object_items_in_bare_array(monkeypatch)
     assert [query.query for query in result.queries] == ["planned query"]
 
 
+@pytest.mark.asyncio
+async def test_intent_analyzer_normalizes_recoverable_query_fields(monkeypatch):
+    planner = RecordingModel(
+        """{
+          "queries": [
+            null,
+            {"query": "   "},
+            {"query": 42},
+            {
+              "query": "  planned query  ",
+              "context_type": ["invalid"],
+              "intent": {"goal": "test"},
+              "priority": "2"
+            },
+            {
+              "query": "default priority",
+              "context_type": " Skill ",
+              "intent": null,
+              "priority": 9
+            }
+          ]
+        }"""
+    )
+    config = SimpleNamespace(get_query_planner=lambda: planner)
+
+    monkeypatch.setattr(intent_module, "get_openviking_config", lambda: config)
+    monkeypatch.setattr(intent_module, "render_prompt", lambda prompt_id, variables: "prompt")
+
+    result = await IntentAnalyzer().analyze(
+        compression_summary="",
+        messages=[],
+        current_message="where is my preference?",
+    )
+
+    assert [query.query for query in result.queries] == ["planned query", "default priority"]
+    assert result.queries[0].context_type == intent_module.ContextType.RESOURCE
+    assert result.queries[0].intent == "{'goal': 'test'}"
+    assert result.queries[0].priority == 2
+    assert result.queries[1].context_type == intent_module.ContextType.SKILL
+    assert result.queries[1].intent == ""
+    assert result.queries[1].priority == intent_module.DEFAULT_QUERY_PRIORITY
+
+
+@pytest.mark.asyncio
+async def test_intent_analyzer_caps_valid_queries(monkeypatch):
+    response = json.dumps(
+        [
+            None,
+            *[
+                {
+                    "query": f"query {index}",
+                    "context_type": "resource",
+                    "priority": 1,
+                }
+                for index in range(intent_module.MAX_INTENT_ANALYSIS_QUERIES + 1)
+            ],
+        ]
+    )
+    planner = RecordingModel(response)
+    config = SimpleNamespace(get_query_planner=lambda: planner)
+
+    monkeypatch.setattr(intent_module, "get_openviking_config", lambda: config)
+    monkeypatch.setattr(intent_module, "render_prompt", lambda prompt_id, variables: "prompt")
+
+    result = await IntentAnalyzer().analyze(
+        compression_summary="",
+        messages=[],
+        current_message="where is my preference?",
+    )
+
+    assert [query.query for query in result.queries] == [
+        f"query {index}" for index in range(intent_module.MAX_INTENT_ANALYSIS_QUERIES)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_intent_analyzer_rejects_nonempty_plan_without_valid_queries(monkeypatch):
+    planner = RecordingModel('[null, "invalid", {"query": ""}, {"query": 42}]')
+    config = SimpleNamespace(get_query_planner=lambda: planner)
+
+    monkeypatch.setattr(intent_module, "get_openviking_config", lambda: config)
+    monkeypatch.setattr(intent_module, "render_prompt", lambda prompt_id, variables: "prompt")
+
+    with pytest.raises(
+        ValueError,
+        match="Intent analysis response does not contain any valid query objects",
+    ):
+        await IntentAnalyzer().analyze(
+            compression_summary="",
+            messages=[],
+            current_message="where is my preference?",
+        )
+
+
 @pytest.mark.parametrize(
     ("response", "error_match"),
     [
@@ -197,8 +364,24 @@ async def test_intent_analyzer_skips_non_object_items_in_bare_array(monkeypatch)
             "Intent analysis response must be a JSON object or array, got str",
         ),
         (
-            '{"queries": {"query": "nested query"}}',
-            "Intent analysis response field 'queries' must be a JSON array, got dict",
+            "42",
+            "Intent analysis response must be a JSON object or array, got int",
+        ),
+        (
+            "true",
+            "Intent analysis response must be a JSON object or array, got bool",
+        ),
+        (
+            "{}",
+            "Failed to parse intent analysis response",
+        ),
+        (
+            '{"unexpected": []}',
+            "Intent analysis response must contain 'queries' or 'query'",
+        ),
+        (
+            '{"queries": "nested query"}',
+            "Intent analysis response field 'queries' must be a JSON array or object, got str",
         ),
     ],
 )

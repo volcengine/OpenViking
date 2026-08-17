@@ -18,6 +18,8 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 DEFAULT_INTENT_ANALYSIS_PROMPT = "retrieval.intent_analysis"
+MAX_INTENT_ANALYSIS_QUERIES = 5
+DEFAULT_QUERY_PRIORITY = 3
 
 # Model-specific query-planner prompts. Models not listed here keep using the
 # default intent-analysis prompt for backward compatibility.
@@ -33,6 +35,122 @@ def resolve_intent_analysis_prompt_id(query_planner: Any) -> str:
     if not isinstance(model, str):
         return DEFAULT_INTENT_ANALYSIS_PROMPT
     return QUERY_PLANNER_PROMPT_BY_MODEL.get(model.strip(), DEFAULT_INTENT_ANALYSIS_PROMPT)
+
+
+def _normalize_query_plan_response(parsed: Any) -> tuple[str, list[Any]]:
+    """Normalize recoverable planner response shapes and reject ambiguous ones."""
+    if parsed is None:
+        raise ValueError("Failed to parse intent analysis response")
+
+    if isinstance(parsed, list):
+        parsed = {"reasoning": "", "queries": parsed}
+    elif not isinstance(parsed, dict):
+        raise ValueError(
+            f"Intent analysis response must be a JSON object or array, got {type(parsed).__name__}"
+        )
+
+    if not parsed:
+        raise ValueError("Failed to parse intent analysis response")
+
+    # Some planners omit the wrapper even when they emit only one query.
+    if "queries" not in parsed and "query" in parsed:
+        parsed = {"reasoning": "", "queries": [parsed]}
+    elif "queries" not in parsed and "reasoning" not in parsed:
+        raise ValueError("Intent analysis response must contain 'queries' or 'query'")
+
+    reasoning = parsed.get("reasoning", "")
+    if reasoning is None:
+        reasoning = ""
+    elif not isinstance(reasoning, str):
+        reasoning = str(reasoning)
+
+    raw_queries = parsed.get("queries", [])
+    if raw_queries is None:
+        raw_queries = []
+    elif isinstance(raw_queries, dict):
+        raw_queries = [raw_queries]
+    elif not isinstance(raw_queries, list):
+        raise ValueError(
+            "Intent analysis response field 'queries' must be a JSON array or object, got "
+            f"{type(raw_queries).__name__}"
+        )
+
+    return reasoning, raw_queries
+
+
+def _normalize_query_priority(value: Any) -> int:
+    """Return a planner priority in the documented 1-5 range."""
+    if isinstance(value, bool):
+        return DEFAULT_QUERY_PRIORITY
+
+    if isinstance(value, float):
+        if not value.is_integer():
+            return DEFAULT_QUERY_PRIORITY
+        value = int(value)
+    elif isinstance(value, str):
+        try:
+            value = int(value.strip())
+        except ValueError:
+            return DEFAULT_QUERY_PRIORITY
+
+    if isinstance(value, int) and 1 <= value <= 5:
+        return value
+    return DEFAULT_QUERY_PRIORITY
+
+
+def _build_typed_queries(raw_queries: list[Any]) -> list[TypedQuery]:
+    """Build a bounded query list while preserving valid items from mixed output."""
+    queries: list[TypedQuery] = []
+    skipped_items = 0
+
+    for index, raw_query in enumerate(raw_queries):
+        if len(queries) >= MAX_INTENT_ANALYSIS_QUERIES:
+            logger.warning(
+                "[IntentAnalyzer] Ignoring "
+                f"{len(raw_queries) - index} query item(s) beyond the "
+                f"{MAX_INTENT_ANALYSIS_QUERIES}-query limit"
+            )
+            break
+
+        if not isinstance(raw_query, dict):
+            skipped_items += 1
+            continue
+
+        query_text = raw_query.get("query")
+        if not isinstance(query_text, str) or not query_text.strip():
+            skipped_items += 1
+            continue
+        query_text = query_text.strip()
+
+        raw_context_type = raw_query.get("context_type", "resource")
+        if isinstance(raw_context_type, str):
+            raw_context_type = raw_context_type.strip().lower()
+        try:
+            query_context_type = ContextType(raw_context_type)
+        except (TypeError, ValueError):
+            query_context_type = ContextType.RESOURCE
+
+        intent = raw_query.get("intent", "")
+        if intent is None:
+            intent = ""
+        elif not isinstance(intent, str):
+            intent = str(intent)
+
+        queries.append(
+            TypedQuery(
+                query=query_text,
+                context_type=query_context_type,
+                intent=intent,
+                priority=_normalize_query_priority(raw_query.get("priority", 3)),
+            )
+        )
+
+    if skipped_items:
+        logger.warning(f"[IntentAnalyzer] Skipped {skipped_items} malformed query item(s)")
+    if raw_queries and not queries:
+        raise ValueError("Intent analysis response does not contain any valid query objects")
+
+    return queries
 
 
 class IntentAnalyzer:
@@ -88,53 +206,8 @@ class IntentAnalyzer:
 
         # Parse result
         parsed = parse_json_from_response(response)
-        if parsed is None:
-            raise ValueError("Failed to parse intent analysis response")
-
-        if isinstance(parsed, list):
-            parsed = {"reasoning": "", "queries": parsed}
-        elif not isinstance(parsed, dict):
-            raise ValueError(
-                "Intent analysis response must be a JSON object or array, got "
-                f"{type(parsed).__name__}"
-            )
-
-        if not parsed:
-            raise ValueError("Failed to parse intent analysis response")
-
-        reasoning = parsed.get("reasoning", "")
-        if not isinstance(reasoning, str):
-            reasoning = str(reasoning)
-
-        # Build QueryPlan
-        raw_queries = parsed.get("queries", [])
-        if not isinstance(raw_queries, list):
-            raise ValueError(
-                "Intent analysis response field 'queries' must be a JSON array, got "
-                f"{type(raw_queries).__name__}"
-            )
-
-        queries = []
-        for q in raw_queries:
-            if not isinstance(q, dict):
-                logger.warning(
-                    f"[IntentAnalyzer] Skipping non-object query item of type {type(q).__name__}"
-                )
-                continue
-
-            try:
-                context_type = ContextType(q.get("context_type", "resource"))
-            except ValueError:
-                context_type = ContextType.RESOURCE
-
-            queries.append(
-                TypedQuery(
-                    query=q.get("query", ""),
-                    context_type=context_type,
-                    intent=q.get("intent", ""),
-                    priority=q.get("priority", 3),
-                )
-            )
+        reasoning, raw_queries = _normalize_query_plan_response(parsed)
+        queries = _build_typed_queries(raw_queries)
 
         # Log analysis result
         for i, q in enumerate(queries):
