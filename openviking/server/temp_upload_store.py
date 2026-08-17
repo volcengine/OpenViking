@@ -303,6 +303,8 @@ class TempUploadStore:
             raise PermissionDeniedError("Temporary upload does not belong to current account.")
 
     async def _cleanup_shared_uploads(self, ctx: RequestContext) -> None:
+        if self.temp_cfg.ttl_seconds == 0:
+            return
         vfs = get_viking_fs()
         internal_ctx = self._internal_ctx(ctx)
         try:
@@ -391,6 +393,8 @@ class TempUploadStore:
                     logger.debug("Shared temp upload cleanup removed uri=%s", uri)
 
     def _cleanup_local_temp_files(self, temp_dir: Path) -> None:
+        if self.temp_cfg.ttl_seconds == 0:
+            return
         if not temp_dir.exists():
             return
         now = time.time()

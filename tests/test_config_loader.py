@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from openviking.server.config import TempUploadConfig
 from openviking_cli.utils.config import (
     OPENVIKING_CONFIG_ENV,
 )
@@ -21,7 +22,6 @@ from openviking_cli.utils.config.config_loader import (
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfig, ParserApiConfig
 from openviking_cli.utils.config.parser_config import CodeHostingConfig
 from openviking_cli.utils.config.queue_worker_config import QueueWorkersConfig
-from openviking.server.config import TempUploadConfig
 
 
 class TestResolveConfigPath:
@@ -168,13 +168,14 @@ def test_temp_upload_config_rejects_removed_shared_prefix():
     assert exc_info.value.errors()[0]["type"] == "extra_forbidden"
 
 
-def test_temp_upload_config_requires_positive_ttl():
+def test_temp_upload_config_allows_zero_ttl_to_disable_cleanup():
     assert TempUploadConfig().ttl_seconds == 12 * 60 * 60
+    assert TempUploadConfig(ttl_seconds=0).ttl_seconds == 0
 
     with pytest.raises(ValueError) as exc_info:
-        TempUploadConfig(ttl_seconds=0)
+        TempUploadConfig(ttl_seconds=-1)
 
-    assert exc_info.value.errors()[0]["type"] == "greater_than"
+    assert exc_info.value.errors()[0]["type"] == "greater_than_equal"
 
 
 def test_temp_upload_config_rejects_renamed_shared_ttl():

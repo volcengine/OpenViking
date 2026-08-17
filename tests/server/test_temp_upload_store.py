@@ -29,6 +29,19 @@ def test_local_upload_cleanup_uses_configured_ttl(tmp_path, monkeypatch):
     assert current_file.exists()
 
 
+def test_local_upload_cleanup_is_disabled_when_ttl_is_zero(tmp_path, monkeypatch):
+    now = 1_800_000_000
+    expired_file = tmp_path / "expired.txt"
+    expired_file.touch()
+    os.utime(expired_file, (now - 61, now - 61))
+    monkeypatch.setattr("openviking.server.temp_upload_store.time.time", lambda: now)
+
+    store = TempUploadStore(ServerConfig(temp_upload={"ttl_seconds": 0}))
+    store._cleanup_local_temp_files(tmp_path)
+
+    assert expired_file.exists()
+
+
 @pytest.mark.asyncio
 async def test_shared_upload_cleanup_uses_flat_file_mtimes_in_one_listing(
     monkeypatch,
@@ -98,6 +111,23 @@ async def test_shared_upload_cleanup_uses_flat_file_mtimes_in_one_listing(
         True,
     )
     mock_logger.debug.assert_any_call("Shared temp upload cleanup removed uri=%s", old_meta)
+
+
+@pytest.mark.asyncio
+async def test_shared_upload_cleanup_is_disabled_when_ttl_is_zero(monkeypatch):
+    class FakeVikingFS:
+        ls = AsyncMock()
+        rm = AsyncMock()
+
+    fake_vfs = FakeVikingFS()
+    monkeypatch.setattr("openviking.server.temp_upload_store.get_viking_fs", lambda: fake_vfs)
+    ctx = RequestContext(user=UserIdentifier("account", "user"), role=Role.USER)
+    store = TempUploadStore(ServerConfig(temp_upload={"ttl_seconds": 0}))
+
+    await store._cleanup_shared_uploads(ctx)
+
+    fake_vfs.ls.assert_not_awaited()
+    fake_vfs.rm.assert_not_awaited()
 
 
 @pytest.mark.asyncio
