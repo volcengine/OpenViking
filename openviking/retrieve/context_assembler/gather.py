@@ -14,6 +14,10 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from openviking.core.namespace import AGENT_SHARED_ROOTS, canonical_user_root
 from openviking.core.retrieval_targets import default_target_directories
+from openviking.retrieve.context_assembler.admission import (
+    RecallAdmissionTracker,
+    decide_recall_admission,
+)
 from openviking.retrieve.context_assembler.params import (
     MEMORY_CATEGORIES,
     ORIGIN_ORDER,
@@ -211,6 +215,7 @@ async def gather_candidates(
     peer_scope: str = "all",
     penalties: Optional[Mapping[str, float]] = None,
     excluded: Optional[Set[str]] = None,
+    admission_tracker: Optional[RecallAdmissionTracker] = None,
 ) -> Tuple[List[Candidate], Dict[str, Any]]:
     """Retrieve and rank candidates, returning ``(candidates, stats)``."""
     peer_scope = "actor" if peer_scope == "actor" else "all"
@@ -266,6 +271,30 @@ async def gather_candidates(
         """
         return want + min(len(excluded), want * 2)
 
+    def _search_score_threshold(category: str, origin: str) -> Optional[float]:
+        if admission_tracker is None or admission_tracker.config.mode != "enforce":
+            return score_threshold
+        return decide_recall_admission(
+            score=1.0,
+            category=category,
+            origin=origin,
+            score_threshold=score_threshold,
+            config=admission_tracker.config,
+        ).required_score
+
+    def _apply_admission(candidates: List[Candidate]) -> List[Candidate]:
+        if admission_tracker is None:
+            return candidates
+        return [
+            candidate
+            for candidate in candidates
+            if admission_tracker.evaluate(
+                score=candidate.score,
+                category=candidate.category,
+                origin=candidate.origin,
+            )
+        ]
+
     def _find(
         *,
         query: str,
@@ -273,6 +302,7 @@ async def gather_candidates(
         target_uri: str,
         find_limit: int,
         find_filter: Optional[Dict[str, Any]] = None,
+        find_score_threshold: Optional[float] = None,
     ) -> Any:
         return _safe_find(
             service,
@@ -281,7 +311,9 @@ async def gather_candidates(
             ctx=find_ctx,
             target_uri=target_uri,
             limit=find_limit,
-            score_threshold=score_threshold,
+            score_threshold=(
+                score_threshold if find_score_threshold is None else find_score_threshold
+            ),
             filter=find_filter if find_filter is not None else filter,
             image_url=image_url,
             level=None,
@@ -301,6 +333,7 @@ async def gather_candidates(
                 target_uri=target,
                 find_limit=_overfetch(quota),
                 find_filter=bucket_filter,
+                find_score_threshold=_search_score_threshold(bucket, "self"),
             )
             for query in planned
             for target in targets
@@ -314,6 +347,7 @@ async def gather_candidates(
                     target_uri=f"{user_root}/peers",
                     find_limit=_overfetch(max(quota * OTHER_PEER_OVERFETCH, quota)),
                     find_filter=bucket_filter,
+                    find_score_threshold=_search_score_threshold(bucket, "other_peer"),
                 )
                 for query in planned
             )
@@ -333,6 +367,7 @@ async def gather_candidates(
         searched[bucket] = len(found)
         candidates = _build([(item, bucket) for item in found])
         candidates.sort(key=_rank_key, reverse=True)
+        candidates = _apply_admission(candidates)
         return candidates[: max(0, quota)]
 
     async def gather_flat() -> List[Candidate]:
@@ -377,6 +412,7 @@ async def gather_candidates(
         searched["all"] = len(found)
         candidates = _build([(item, buckets.get(_uri(item))) for item in found])
         candidates.sort(key=_rank_key, reverse=True)
+        candidates = _apply_admission(candidates)
         return candidates[: max(0, limit)]
 
     if quotas is None:

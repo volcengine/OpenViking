@@ -349,6 +349,32 @@ async def test_recall_tool_returns_assembled_context(service, monkeypatch):
     assert "MCP recall event." in result
 
 
+async def test_recall_tool_forwards_enforced_admission(service, monkeypatch):
+    memory_uri = "viking://user/test_user/memories/events/weak.md"
+
+    async def fake_find(**kwargs):
+        if kwargs["target_uri"].endswith("/events"):
+            return SimpleNamespace(
+                memories=[SimpleNamespace(uri=memory_uri, score=0.4, abstract="weak")]
+            )
+        return SimpleNamespace(memories=[])
+
+    async def fail_read(*args, **kwargs):
+        del args, kwargs
+        raise AssertionError("rejected candidate must not be read")
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+    monkeypatch.setattr(service.fs, "read", fail_read)
+
+    result = await recall(
+        query="unrelated",
+        quotas={"events": 1, "entities": 0, "preferences": 0, "experiences": 0},
+        admission={"mode": "enforce", "type_min_scores": {"events": 0.5}},
+    )
+
+    assert result == "No relevant memories found."
+
+
 async def test_mcp_middleware_sets_actor_peer_context():
     async def downstream(scope, receive, send):
         ctx = _get_ctx()

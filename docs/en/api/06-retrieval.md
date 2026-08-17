@@ -604,8 +604,9 @@ Injecting context every turn used to mean searching per type, reading each hit b
 **Pipeline**:
 1. **L1 query understanding**: optional bounded intent expansion from the session's recent messages (at most 3 queries, timeout fuse, falls back to the original query)
 2. **L0 retrieval**: bucketed per `quotas`, or a single whole-scope search when quotas are off
-3. **L2 assembly**: tier filling inside the token budget (everyone at their category's default tier first, then leftover budget deepens in score order); an oversized tier falls back instead of being truncated
-4. **L3 rewrite**: optional digest with URI citations (timeout fuse; on failure the unrewritten `rendered` is still returned; an exact `NO_RELEVANT_MEMORY` result is reported as `stats.rewrite="no_relevant"` so Coding Agent clients inject nothing instead of falling back to `rendered`)
+3. **Admission**: optional model-free score policy in `shadow` or `enforce` mode, evaluated before any candidate body is read
+4. **L2 assembly**: tier filling inside the token budget (everyone at their category's default tier first, then leftover budget deepens in score order); an oversized tier falls back instead of being truncated
+5. **L3 rewrite**: optional digest with URI citations (timeout fuse; on failure the unrewritten `rendered` is still returned; an exact `NO_RELEVANT_MEMORY` result is reported as `stats.rewrite="no_relevant"` so Coding Agent clients inject nothing instead of falling back to `rendered`)
 
 **Code entry points**:
 - `openviking/server/routers/search.py:_search_context()` - HTTP route branch
@@ -637,6 +638,14 @@ Injecting context every turn used to mean searching per type, reading each hit b
 | `exclude_uris` | string[] | [] | Stateless dedup fallback, up to 200 entries, unioned with `dedup_turns` |
 | `peer_scope` | `actor` \| `all` | `all` | `actor` excludes other peers while keeping global, self-owned and current-actor content |
 | `other_peer_penalty` | number \| object | per-category defaults | Score penalty applied to other-peer hits |
+| `admission` | object | `{"mode":"off"}` | Optional pre-read guard. `shadow` reports decisions without changing results; `enforce` drops candidates below `type_min_scores`, with an optional extra `other_peer_score_delta` requirement |
+
+Admission thresholds accept every reported category: `events`, `entities`,
+`preferences`, `experiences`, `resources`, `skills`, and the quota-free
+`memories` catch-all. Retrieval scores are ranking signals rather than
+calibrated probabilities. Tune in `shadow` mode against both negative queries
+and known-positive memories before enabling `enforce`. Admission adds no model,
+embedding, rerank, or rewrite call.
 
 **L3 rewrite**
 
@@ -693,6 +702,20 @@ curl -X POST http://localhost:1933/api/v1/search/search \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $OPENVIKING_API_KEY" \
   -d '{"query":"tier design","mode":"context","max_tokens":3000,"rewrite":true}'
+
+# Observe an admission policy without changing returned entries
+curl -X POST http://localhost:1933/api/v1/search/search \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $OPENVIKING_API_KEY" \
+  -d '{
+    "query":"deployment rule",
+    "mode":"context",
+    "admission":{
+      "mode":"shadow",
+      "type_min_scores":{"events":0.50,"entities":0.50,"resources":0.45},
+      "other_peer_score_delta":0.08
+    }
+  }'
 ```
 
 **Response**
@@ -735,6 +758,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
       "query_expansion": "used",
       "rewrite": "off",
       "rewrite_usage": null,
+      "admission": {"mode": "off", "evaluated": 0, "accepted": 0, "rejected": 0, "reason_counts": {}, "type_min_scores": {}, "other_peer_score_delta": 0.0, "would_abstain": false, "abstained": false},
       "excluded": 0,
       "dedup": {"turns": 5, "status": "ok", "cooled": 2, "turn": 34}
     }
@@ -751,6 +775,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 | `rendered` | string | Flat XML context block, ready to inject; empty when rewrite reports `no_relevant` |
 | `digest` | string | Digest when the rewrite succeeded, empty string on failure or when the compressor reports no relevant memory |
 | `stats` | object | Budget usage, tier distribution, expansion and rewrite status (`off`, `ok`, `no_relevant`, `failed` or `timeout`), dedup ledger state; carries `retrieval_errors` when a retrieval scope failed, so a broken index is distinguishable from having no relevant memories |
+| `stats.admission` | object | Aggregate admission counts and stable reason codes; never includes query text, content, or URIs |
 
 When `stats.rewrite` is `no_relevant`, the response keeps `entries` for
 inspection but returns both `digest` and `rendered` as empty strings. This makes
@@ -763,6 +788,7 @@ ledger and remain available to the later turn they are relevant to.
 - Any context-only parameter sent explicitly under `mode="list"` → 400
 - `target_uri` under `mode="context"` → 400
 - Unknown `quotas` key → 400
+- Unknown admission category, mode, field, or out-of-range score → 400
 - Fields ignored in context mode (`level`, and `limit` when `purpose` or explicit quotas are active) are reported in `stats.ignored`
 
 ---

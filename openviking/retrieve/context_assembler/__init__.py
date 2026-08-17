@@ -2,6 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Server-side context assembly kernel shared by /search and /recall."""
 
+from openviking.retrieve.context_assembler.admission import (
+    RecallAdmissionConfig,
+    RecallAdmissionDecision,
+    RecallAdmissionTracker,
+    decide_recall_admission,
+)
 from openviking.retrieve.context_assembler.models import AssembledEntry, AssembleResult
 from openviking.retrieve.context_assembler.params import (
     CATEGORY_KEYS,
@@ -29,6 +35,9 @@ __all__ = [
     "AssembleParams",
     "AssembleResult",
     "AssembledEntry",
+    "RecallAdmissionConfig",
+    "RecallAdmissionDecision",
+    "RecallAdmissionTracker",
     "CATEGORY_KEYS",
     "DEFAULT_LIMIT",
     "DEFAULT_MAX_TOKENS",
@@ -42,6 +51,7 @@ __all__ = [
     "PURPOSE_PRESETS",
     "REPORTED_CATEGORY_KEYS",
     "assemble_context",
+    "decide_recall_admission",
     "normalize_detail",
     "normalize_digest",
     "normalize_penalties",

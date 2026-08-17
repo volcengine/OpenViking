@@ -138,6 +138,124 @@ async def test_assembly_returns_readable_entries_within_budget():
     assert result.rendered.count("<memory ") == 3
 
 
+async def test_shadow_admission_reports_rejection_but_keeps_context():
+    uri = f"{USER_ROOT}/memories/events/weak.md"
+    result = await assemble_context(
+        service=_service(
+            hits=[{"uri": uri, "score": 0.4, "abstract": "weak"}],
+            bodies={uri: "# Summary\nweak memory"},
+        ),
+        ctx=_ctx(),
+        params=AssembleParams(
+            query="unrelated",
+            admission={"mode": "shadow", "type_min_scores": {"events": 0.5}},
+        ),
+    )
+
+    assert [entry.uri for entry in result.entries] == [uri]
+    assert result.stats["admission"]["rejected"] == 1
+    assert result.stats["admission"]["would_abstain"] is True
+    assert result.stats["admission"]["abstained"] is False
+
+
+async def test_enforce_admission_rejects_before_content_read():
+    uri = f"{USER_ROOT}/memories/events/weak.md"
+    reads = []
+
+    async def fake_find(**kwargs):
+        del kwargs
+        return _FakeFindResult([{"uri": uri, "score": 0.4, "abstract": "weak"}])
+
+    async def fake_read(uri, **kwargs):
+        del kwargs
+        reads.append(uri)
+        return "must not be read"
+
+    service = SimpleNamespace(
+        search=SimpleNamespace(find=fake_find),
+        fs=SimpleNamespace(read=fake_read),
+        sessions=SimpleNamespace(),
+        viking_fs=None,
+    )
+    result = await assemble_context(
+        service=service,
+        ctx=_ctx(),
+        params=AssembleParams(
+            query="negative",
+            admission={"mode": "enforce", "type_min_scores": {"events": 0.5}},
+        ),
+    )
+
+    assert result.entries == []
+    assert result.rendered == ""
+    assert reads == []
+    assert result.stats["admission"]["rejected"] == 1
+    assert result.stats["admission"]["abstained"] is True
+
+
+async def test_enforce_admission_backfills_quota_after_other_peer_rejection():
+    self_uri = f"{USER_ROOT}/memories/events/self.md"
+    peer_uri = f"{USER_ROOT}/peers/other/memories/events/peer.md"
+    requests = []
+
+    async def fake_find(**kwargs):
+        requests.append(kwargs)
+        target = kwargs["target_uri"]
+        if target == f"{USER_ROOT}/memories/events":
+            return _FakeFindResult(
+                [{"uri": self_uri, "score": 0.52, "abstract": "eligible self memory"}]
+            )
+        if target == f"{USER_ROOT}/peers":
+            return _FakeFindResult(
+                [{"uri": peer_uri, "score": 0.55, "abstract": "weak peer memory"}]
+            )
+        return _FakeFindResult()
+
+    async def fake_read(uri, **kwargs):
+        del kwargs
+        assert uri == self_uri
+        return "# Summary\neligible self memory"
+
+    service = SimpleNamespace(
+        search=SimpleNamespace(find=fake_find),
+        fs=SimpleNamespace(read=fake_read),
+        sessions=SimpleNamespace(),
+        viking_fs=None,
+    )
+    result = await assemble_context(
+        service=service,
+        ctx=_ctx(),
+        params=AssembleParams(
+            query="known self memory",
+            quotas={"events": 1},
+            other_peer_penalty=0,
+            admission={
+                "mode": "enforce",
+                "type_min_scores": {"events": 0.5},
+                "other_peer_score_delta": 0.1,
+            },
+        ),
+    )
+
+    assert [entry.uri for entry in result.entries] == [self_uri]
+    assert result.stats["admission"]["accepted"] == 1
+    assert result.stats["admission"]["rejected"] == 1
+    assert min(request["limit"] for request in requests) == 1
+    assert {
+        request["score_threshold"]
+        for request in requests
+        if request["target_uri"] != f"{USER_ROOT}/peers"
+    } == {0.5}
+    assert (
+        next(
+            request["score_threshold"]
+            for request in requests
+            if request["target_uri"] == f"{USER_ROOT}/peers"
+        )
+        == 0.6
+    )
+
+
 async def test_query_expansion_fans_out_planned_queries(monkeypatch):
     queries_seen = []
 

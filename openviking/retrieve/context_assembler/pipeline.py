@@ -11,6 +11,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
+from openviking.retrieve.context_assembler.admission import (
+    RecallAdmissionConfig,
+    RecallAdmissionTracker,
+)
 from openviking.retrieve.context_assembler.budget import (
     oversized_abstract_needs_body,
     per_entry_cap,
@@ -80,6 +84,10 @@ async def assemble_context(
     cooled = ledger.cooled_uris() if ledger else set()
     excluded = normalize_exclude_uris(params.exclude_uris) | cooled
 
+    admission_tracker = RecallAdmissionTracker(
+        config=RecallAdmissionConfig.from_value(params.admission),
+        score_threshold=params.score_threshold,
+    )
     candidates, gather_stats = await gather_candidates(
         service=service,
         ctx=ctx,
@@ -92,6 +100,7 @@ async def assemble_context(
         peer_scope=params.peer_scope,
         penalties=penalties,
         excluded=excluded,
+        admission_tracker=admission_tracker,
     )
 
     # Read only the candidates whose planned tier actually needs a body: with
@@ -148,6 +157,7 @@ async def assemble_context(
         "planned_queries": queries,
         "score_threshold": params.score_threshold,
         "other_peer_penalties": penalties,
+        "admission": admission_tracker.to_stats(),
         "rewrite": rewrite_status,
         "rewrite_usage": rewrite_usage,
         "dedup": {

@@ -33,6 +33,9 @@
  *   OPENVIKING_RECALL_TIMEOUT_MS, OPENVIKING_RECALL_COMPRESS_TIMEOUT_MS
  *   OPENVIKING_RECALL_COMPRESS_MODEL, OPENVIKING_RECALL_COMPRESS_THINKING
  *   OPENVIKING_RECALL_LIMIT, OPENVIKING_SCORE_THRESHOLD
+ *   OPENVIKING_RECALL_ADMISSION_MODE
+ *   OPENVIKING_RECALL_ADMISSION_TYPE_MIN_SCORES
+ *   OPENVIKING_RECALL_ADMISSION_OTHER_PEER_SCORE_DELTA
  *   OPENVIKING_WORKSPACE_PEER, OPENVIKING_RECALL_PEER_SCOPE
  *   OPENVIKING_NO_AUTO_INJECT, OPENVIKING_PROFILE_TOKEN_BUDGET
  *   OPENVIKING_DEBUG=1, OPENVIKING_DEBUG_LOG
@@ -86,6 +89,24 @@ function hasOwn(obj, key) {
   return Object.prototype.hasOwnProperty.call(obj || {}, key);
 }
 
+function scoreMap(value) {
+  let parsed = value;
+  if (typeof parsed === "string" && parsed.trim()) {
+    try { parsed = JSON.parse(parsed); } catch { return {}; }
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  const allowed = new Set([
+    "events", "entities", "preferences", "experiences", "resources", "skills", "memories",
+  ]);
+  const entries = [];
+  for (const [key, rawScore] of Object.entries(parsed)) {
+    if (!allowed.has(key)) continue;
+    const score = num(rawScore, Number.NaN);
+    if (Number.isFinite(score)) entries.push([key, Math.min(1, Math.max(0, score))]);
+  }
+  return Object.fromEntries(entries);
+}
+
 function normalizeAuthMode(val) {
   const mode = str(val, "").toLowerCase();
   return ["trusted", "api_key"].includes(mode) ? mode : "";
@@ -115,6 +136,21 @@ export function loadConfig() {
     str(cx.recallPeerScope, "all"),
   );
   const recallPeerScope = recallPeerScopeRaw === "actor" ? "actor" : "all";
+  const recallAdmissionModeRaw = str(
+    process.env.OPENVIKING_RECALL_ADMISSION_MODE,
+    str(cx.recallAdmissionMode, "off"),
+  ).toLowerCase();
+  const recallAdmissionMode = ["shadow", "enforce"].includes(recallAdmissionModeRaw)
+    ? recallAdmissionModeRaw
+    : "off";
+  const recallAdmissionTypeMinScores = scoreMap(
+    process.env.OPENVIKING_RECALL_ADMISSION_TYPE_MIN_SCORES
+      ?? cx.recallAdmissionTypeMinScores,
+  );
+  const recallAdmissionOtherPeerScoreDelta = Math.min(1, Math.max(0, num(
+    process.env.OPENVIKING_RECALL_ADMISSION_OTHER_PEER_SCORE_DELTA,
+    num(cx.recallAdmissionOtherPeerScoreDelta, 0),
+  )));
 
   const timeoutMs = Math.max(1000, Math.floor(num(
     process.env.OPENVIKING_TIMEOUT_MS,
@@ -182,6 +218,9 @@ export function loadConfig() {
     ))),
     logRankingDetails: envBool("OPENVIKING_LOG_RANKING_DETAILS") ?? (cx.logRankingDetails === true),
     recallPeerScope,
+    recallAdmissionMode,
+    recallAdmissionTypeMinScores,
+    recallAdmissionOtherPeerScoreDelta,
     recallCompress: envBool("OPENVIKING_RECALL_COMPRESS") ?? configBool(cx.recallCompress, true),
     recallCompressModel,
     recallCompressThinking,
