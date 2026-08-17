@@ -398,14 +398,8 @@ async def read(uris: str | list[str]) -> str:
 
     async def _read_one(uri: str) -> str:
         async with semaphore:
-            try:
-                resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
-                body = await service.fs.read_visible(resolved_uri, ctx=ctx)
-                if isinstance(body, str) and body.strip():
-                    return body
-            except Exception:
-                pass
-            return f"(nothing found at {uri})"
+            resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
+            return await service.fs.read_for_tool(resolved_uri, ctx=ctx, display_uri=uri)
 
     if len(uri_list) == 1:
         return await _read_one(uri_list[0])

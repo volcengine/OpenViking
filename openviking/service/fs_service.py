@@ -29,7 +29,7 @@ from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import build_queue_status_payload
 from openviking.utils.embedding_utils import vectorize_directory_meta
-from openviking_cli.exceptions import DeadlineExceededError, NotInitializedError
+from openviking_cli.exceptions import DeadlineExceededError, NotFoundError, NotInitializedError
 from openviking_cli.utils import VikingURI, get_logger
 
 logger = get_logger(__name__)
@@ -586,6 +586,29 @@ class FSService:
             return await self.read(uri, ctx=ctx, offset=offset, limit=limit)
         content = await self.read(uri, ctx=ctx)
         return visible_content(content, uri=uri, offset=offset, limit=limit)
+
+    async def read_for_tool(
+        self,
+        uri: str,
+        ctx: RequestContext,
+        *,
+        display_uri: str | None = None,
+    ) -> str:
+        """Read content for agent tools, returning recoverable text for common read misses."""
+        display_uri = display_uri or uri
+        try:
+            stat = await self.stat(uri, ctx=ctx)
+        except NotFoundError:
+            return f"(not found at {display_uri})"
+        if stat.get("isDir", stat.get("is_dir", False)):
+            return (
+                f"Directory URI is not readable as a file: {display_uri}. "
+                "Use the list tool on this URI to inspect children, then use read on a file URI."
+            )
+        content = await self.read_visible(uri, ctx=ctx)
+        if isinstance(content, str) and content.strip():
+            return content
+        return f"(empty file at {display_uri})"
 
     async def abstract(self, uri: str, ctx: RequestContext) -> str:
         """Read L0 abstract (.abstract.md)."""

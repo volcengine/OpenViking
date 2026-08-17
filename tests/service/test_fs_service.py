@@ -9,6 +9,7 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.service.fs_service import FSService
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -181,6 +182,46 @@ async def test_read_visible_preserves_non_memory_content(request_context):
         )
         == '<!-- MEMORY_FIELDS {"example":true} -->'
     )
+
+
+@pytest.mark.asyncio
+async def test_read_for_tool_returns_not_found_message(request_context):
+    uri = "viking://resources/missing.md"
+    viking_fs = SimpleNamespace(stat=AsyncMock(side_effect=NotFoundError(uri)))
+    service = FSService(viking_fs=viking_fs)
+
+    result = await service.read_for_tool(uri, ctx=request_context, display_uri="viking://alias.md")
+
+    assert result == "(not found at viking://alias.md)"
+
+
+@pytest.mark.asyncio
+async def test_read_for_tool_returns_directory_hint(request_context):
+    viking_fs = SimpleNamespace(
+        stat=AsyncMock(return_value={"isDir": True}),
+        read_file=AsyncMock(),
+    )
+    service = FSService(viking_fs=viking_fs)
+
+    result = await service.read_for_tool("viking://resources/docs", ctx=request_context)
+
+    assert "Directory URI is not readable as a file" in result
+    assert "Use the list tool" in result
+    viking_fs.read_file.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_read_for_tool_returns_empty_file_message(request_context):
+    uri = "viking://resources/empty.md"
+    viking_fs = SimpleNamespace(
+        stat=AsyncMock(return_value={"isDir": False}),
+        read_file=AsyncMock(return_value=""),
+    )
+    service = FSService(viking_fs=viking_fs)
+
+    result = await service.read_for_tool(uri, ctx=request_context)
+
+    assert result == f"(empty file at {uri})"
 
 
 @pytest.mark.asyncio
