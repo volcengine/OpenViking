@@ -53,7 +53,7 @@ _RESOURCE_REASON_LANGUAGE_RE = re.compile(
 class SessionExtractContextProvider(ExtractContextProvider):
     """会话提取 Provider - 从会话消息中提取记忆"""
 
-    include_tool_parts_in_conversation: bool = False
+    include_tool_parts_in_conversation: bool = True
     split_long_text_messages_for_extraction: bool = True
 
     def __init__(
@@ -311,9 +311,11 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                     if part.tool_status:
                         fields.append(f"status={part.tool_status}")
                     if part.tool_input:
-                        fields.append(f"input={part.tool_input}")
+                        input_text = str(part.tool_input)[:300]
+                        fields.append(f"input={input_text}")
                     if part.tool_output:
-                        fields.append(f"output={part.tool_output[:500]}")
+                        output_text = str(part.tool_output)[:300]
+                        fields.append(f"output={output_text}")
                     if part.duration_ms is not None:
                         fields.append(f"duration_ms={part.duration_ms}")
                     if part.skill_uri:
