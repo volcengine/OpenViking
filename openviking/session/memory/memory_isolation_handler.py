@@ -81,7 +81,25 @@ class MemoryIsolationHandler:
 
     @staticmethod
     def _is_peer_owner_message(msg: Any) -> bool:
-        return getattr(msg, "role", None) == "user"
+        """Return True if a message may carry peer attribution for extraction.
+
+        The previous strict ``role == "user"`` check blocked the VLM extract
+        orchestrator (ExtractLoop) from attributing assistant- or tool-role
+        messages to a peer, even when the surrounding session explicitly
+        tagged the message with a ``peer_id``. Keeping the restriction so
+        tight made VLM-assisted extracts written through tools drop all peer
+        assignments silently: each memory ended up either self-scoped or
+        skipped entirely, which is the failure reported in issue #3171.
+
+        Any concrete end-user / assistant / tool / peer role is allowed to
+        carry peer attribution; intentionally excluded roles are ``system``,
+        ``developer``, ``None`` / empty, and unknown lowercase sentinels
+        (``"none"`` / ``""``) because these never identify a real speaker.
+        """
+        role = str(getattr(msg, "role", None) or "").lower()
+        if role in {"", "none", "system", "developer"}:
+            return False
+        return True
 
     def get_read_scope(self) -> RoleScope:
         user_ids = set()
