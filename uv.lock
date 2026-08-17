@@ -1366,6 +1366,21 @@ wheels = [
 ]
 
 [[package]]
+name = "firecrawl-anydoc"
+version = "0.1.8"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e9/58/94bdc78509da5d2bec4761cfc6e79061d35562d4397b504aec59e29b548b/firecrawl_anydoc-0.1.8.tar.gz", hash = "sha256:342289a9e7fcc46a312919547b475827f202f6824c2acf05e334fc1ed386e77e", size = 197922, upload-time = "2026-08-10T23:39:54.336Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/97/61/abd70c4215e2804c8dad88c2abe8685fa84f4d2496ce7fc17d7f7a1cc21d/firecrawl_anydoc-0.1.8-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:8a7218553f691f112a2d71f2c08c3ef87de3ce4d15fa82ffa782f493a307a284", size = 3447457, upload-time = "2026-08-10T23:39:39.832Z" },
+    { url = "https://files.pythonhosted.org/packages/cd/c1/ab54eb4ca0a131017941964219fbf80873059b4261b046f8dda1bdeb858c/firecrawl_anydoc-0.1.8-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:8920b0d303ae5ad34bc5e580b25043eaf107df73e4f8f2f02282bfad7f19845a", size = 3273654, upload-time = "2026-08-10T23:39:42.596Z" },
+    { url = "https://files.pythonhosted.org/packages/af/10/9216bb6e65d027aac7c4c856ad921684337c105f69db77703059afd1ec1e/firecrawl_anydoc-0.1.8-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:cfe87061151cb42dd52960eb84f4ec6249a220131e61b498bba1248b86ef51cc", size = 3313860, upload-time = "2026-08-10T23:39:44.664Z" },
+    { url = "https://files.pythonhosted.org/packages/b8/23/0d4fb73798b6554a63f38468e62ce13f1d411ef3dd879efc4c89f535ee44/firecrawl_anydoc-0.1.8-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:d3ba80a81f1831b5cdfcc14678e3ed13078587710fb3f5556f193dbcaa901070", size = 3540091, upload-time = "2026-08-10T23:39:46.642Z" },
+    { url = "https://files.pythonhosted.org/packages/17/f6/438c158410c0f696dbb29e4f0b83cbb6cd89511792fd97917aaa4f2cc76e/firecrawl_anydoc-0.1.8-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:07e4b9444cc979f2eb35289c8d28d738474209824a29d07081af25cd6a65bf9b", size = 3492643, upload-time = "2026-08-10T23:39:48.579Z" },
+    { url = "https://files.pythonhosted.org/packages/85/ba/bd6b8502093ddcc8fe170fdc20a37009dc5e7a6ae55551ede69a9639ecf8/firecrawl_anydoc-0.1.8-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:4b7d79b8f7c158a67232982dc1883c07114d95f69d7aedc902d0b113a5546b16", size = 3780576, upload-time = "2026-08-10T23:39:50.458Z" },
+    { url = "https://files.pythonhosted.org/packages/df/91/743986265ae347f0380a21d60378155575f4d724465c77c7e4781923df57/firecrawl_anydoc-0.1.8-cp310-abi3-win_amd64.whl", hash = "sha256:bf755eb80439f0a1540b298648919f19751c16f942a7376ee68dea5318e3f2a3", size = 3632712, upload-time = "2026-08-10T23:39:52.561Z" },
+]
+
+[[package]]
 name = "frozenlist"
 version = "1.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3410,15 +3425,6 @@ wheels = [
 ]
 
 [[package]]
-name = "olefile"
-version = "0.47"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/69/1b/077b508e3e500e1629d366249c3ccb32f95e50258b231705c09e3c7a4366/olefile-0.47.zip", hash = "sha256:599383381a0bf3dfbd932ca0ca6515acd174ed48870cbf7fee123d698c192c1c", size = 112240, upload-time = "2023-12-01T16:22:53.025Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/17/d3/b64c356a907242d719fc668b71befd73324e47ab46c8ebbbede252c154b2/olefile-0.47-py2.py3-none-any.whl", hash = "sha256:543c7da2a7adadf21214938bb79c83ea12b473a4b6ee4ad4bf854e7715e13d1f", size = 114565, upload-time = "2023-12-01T16:22:51.518Z" },
-]
-
-[[package]]
 name = "openai"
 version = "2.24.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3640,9 +3646,9 @@ dependencies = [
     { name = "charset-normalizer" },
     { name = "cryptography" },
     { name = "defusedxml" },
-    { name = "ebooklib" },
     { name = "fastapi" },
     { name = "feedparser" },
+    { name = "firecrawl-anydoc" },
     { name = "grep-ast" },
     { name = "httpx" },
     { name = "jinja2" },
@@ -3651,9 +3657,7 @@ dependencies = [
     { name = "litellm" },
     { name = "loguru" },
     { name = "mcp" },
-    { name = "olefile" },
     { name = "openai" },
-    { name = "openpyxl" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp-proto-grpc" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
@@ -3661,13 +3665,11 @@ dependencies = [
     { name = "opentelemetry-sdk" },
     { name = "openviking-sdk" },
     { name = "pathspec" },
-    { name = "pdfminer-six" },
+    { name = "pdf-inspector" },
     { name = "pdfplumber" },
     { name = "protobuf" },
     { name = "pydantic" },
-    { name = "python-docx" },
     { name = "python-multipart" },
-    { name = "python-pptx" },
     { name = "pyyaml" },
     { name = "requests" },
     { name = "scrapy" },
@@ -3691,7 +3693,6 @@ dependencies = [
     { name = "uvicorn" },
     { name = "volcengine" },
     { name = "volcengine-python-sdk", extra = ["ark"] },
-    { name = "xlrd" },
     { name = "xxhash" },
 ]
 
@@ -3788,13 +3789,17 @@ test = [
     { name = "boto3" },
     { name = "datasets" },
     { name = "diff-match-patch" },
+    { name = "ebooklib" },
     { name = "hvac" },
+    { name = "openpyxl" },
     { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "pandas", version = "3.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "pytest-xdist" },
+    { name = "python-docx" },
+    { name = "python-pptx" },
     { name = "ragas" },
 ]
 
@@ -3823,9 +3828,10 @@ requires-dist = [
     { name = "defusedxml", specifier = ">=0.7.1" },
     { name = "diff-match-patch", marker = "extra == 'test'", specifier = ">=20200713" },
     { name = "dingtalk-stream", marker = "extra == 'bot'", specifier = ">=0.4.0" },
-    { name = "ebooklib", specifier = ">=0.18.0" },
+    { name = "ebooklib", marker = "extra == 'test'", specifier = ">=0.18.0" },
     { name = "fastapi", specifier = ">=0.128.0" },
     { name = "feedparser", specifier = ">=6.0.0" },
+    { name = "firecrawl-anydoc", specifier = ">=0.1.8,<0.2" },
     { name = "fusepy", marker = "extra == 'bot'", specifier = ">=3.0.1" },
     { name = "google-genai", marker = "extra == 'gemini'", specifier = ">=1.0.0" },
     { name = "google-genai", marker = "extra == 'gemini-async'", specifier = ">=1.0.0" },
@@ -3852,10 +3858,9 @@ requires-dist = [
     { name = "msgpack", marker = "extra == 'bot'", specifier = ">=1.0.8" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
     { name = "myst-parser", marker = "extra == 'doc'", specifier = ">=2.0.0" },
-    { name = "olefile", specifier = ">=0.47" },
     { name = "openai", specifier = ">=1.0.0" },
     { name = "opencode-ai", marker = "extra == 'bot'", specifier = ">=0.1.0a0" },
-    { name = "openpyxl", specifier = ">=3.0.0" },
+    { name = "openpyxl", marker = "extra == 'test'", specifier = ">=3.0.0" },
     { name = "opensandbox", marker = "extra == 'bot'", specifier = ">=0.1.0" },
     { name = "opensandbox-server", marker = "extra == 'bot'", specifier = ">=0.1.0" },
     { name = "opentelemetry-api", specifier = ">=1.14" },
@@ -3868,7 +3873,7 @@ requires-dist = [
     { name = "pandas", marker = "extra == 'eval'", specifier = ">=2.0.0" },
     { name = "pandas", marker = "extra == 'test'", specifier = ">=2.0.0" },
     { name = "pathspec", specifier = ">=1.1.1" },
-    { name = "pdfminer-six", specifier = ">=20251230" },
+    { name = "pdf-inspector", specifier = ">=1.14.1,<2" },
     { name = "pdfplumber", specifier = ">=0.10.0" },
     { name = "prompt-toolkit", marker = "extra == 'bot'", specifier = ">=3.0.0" },
     { name = "protobuf", specifier = ">=6.33.5" },
@@ -3881,13 +3886,13 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.21.0" },
     { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=4.0.0" },
     { name = "pytest-xdist", marker = "extra == 'test'", specifier = ">=3.5.0" },
-    { name = "python-docx", specifier = ">=1.0.0" },
+    { name = "python-docx", marker = "extra == 'test'", specifier = ">=1.0.0" },
     { name = "python-engineio", marker = "extra == 'bot'", specifier = ">=4.13.2" },
     { name = "python-jose", extras = ["cryptography"], marker = "extra == 'auth'", specifier = ">=3.3.0" },
     { name = "python-jose", extras = ["cryptography"], marker = "extra == 'bot'", specifier = ">=3.3.0" },
     { name = "python-ldap", marker = "extra == 'auth'", specifier = ">=3.4.0" },
     { name = "python-multipart", specifier = ">=0.0.31" },
-    { name = "python-pptx", specifier = ">=1.0.0" },
+    { name = "python-pptx", marker = "extra == 'test'", specifier = ">=1.0.0" },
     { name = "python-socketio", marker = "extra == 'bot'", specifier = ">=5.16.2" },
     { name = "python-socks", extras = ["asyncio"], marker = "extra == 'bot'", specifier = ">=2.4.0" },
     { name = "python-telegram-bot", extras = ["socks"], marker = "extra == 'bot'", specifier = ">=21.0" },
@@ -3932,7 +3937,6 @@ requires-dist = [
     { name = "websocket-client", marker = "extra == 'bot'", specifier = ">=1.6.0" },
     { name = "websockets", marker = "extra == 'bot'", specifier = ">=12.0" },
     { name = "wheel", marker = "extra == 'build'" },
-    { name = "xlrd", specifier = ">=2.0.1" },
     { name = "xxhash", specifier = ">=3.0.0" },
 ]
 provides-extras = ["test", "auth", "dev", "doc", "eval", "gemini", "gemini-async", "ocr", "build", "bot", "benchmark", "local-embed"]
@@ -4259,6 +4263,19 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/5a/82/42f767fc1c1143d6fd36efb827202a2d997a375e160a71eb2888a925aac1/pathspec-1.1.1.tar.gz", hash = "sha256:17db5ecd524104a120e173814c90367a96a98d07c45b2e10c2f3919fff91bf5a", size = 135180, upload-time = "2026-04-27T01:46:08.907Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f1/d9/7fb5aa316bc299258e68c73ba3bddbc499654a07f151cba08f6153988714/pathspec-1.1.1-py3-none-any.whl", hash = "sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189", size = 57328, upload-time = "2026-04-27T01:46:07.06Z" },
+]
+
+[[package]]
+name = "pdf-inspector"
+version = "1.14.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/cc/7d/29ac7865f4c7332d28638d08b73aa6b7bf2f1325c383094bb6717a1a816d/pdf_inspector-1.14.1.tar.gz", hash = "sha256:e9d0fc1669ca77950d28488c8450d1aa28018e839ea260308d87253dfb8bec03", size = 1559937, upload-time = "2026-08-11T21:22:53.948Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/96/47/7ddacbcac7a04ec60014e2a03b943c4643a8bd794ed67588f5ebadfbeb15/pdf_inspector-1.14.1-cp38-abi3-macosx_10_12_x86_64.whl", hash = "sha256:b2159efa28f132df0442129a9b3eaf70c3f9915eb8202efcaaf759d85a01993f", size = 2855526, upload-time = "2026-08-11T21:22:44.66Z" },
+    { url = "https://files.pythonhosted.org/packages/98/24/00594b8ae250c0b8a87631a86067896416920879c43c8cdcdfeb50586d49/pdf_inspector-1.14.1-cp38-abi3-macosx_11_0_arm64.whl", hash = "sha256:54cb32691640e5684832d21fbb58d2b30c068cbc055e0157da37774c1e8b9218", size = 2767918, upload-time = "2026-08-11T21:22:46.768Z" },
+    { url = "https://files.pythonhosted.org/packages/cd/36/5b332c80858407fb19b34e6f18f6c99022d04324caf98b8aaf4547044871/pdf_inspector-1.14.1-cp38-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:501b8a6ffcd2c16ea74d71b9d7d70503c945c7d38c81151121790fd278021f0b", size = 2942959, upload-time = "2026-08-11T21:22:48.771Z" },
+    { url = "https://files.pythonhosted.org/packages/37/cc/589c355fed7b50098ddb9d09116c81d966c7b4ff78741183e600c1b4de6f/pdf_inspector-1.14.1-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:62e761a32ffd9c2b0c803dbefa2b0ad6f98bc26a75847571d99c3f7a65a7cea3", size = 3044612, upload-time = "2026-08-11T21:22:50.571Z" },
+    { url = "https://files.pythonhosted.org/packages/24/7c/4c84916a97cfd85d2e72dc3aaf6988cd19aff6e050d6a1b79d20f97e4566/pdf_inspector-1.14.1-cp38-abi3-win_amd64.whl", hash = "sha256:d4a2455c316e15eac745c3836f72b641e1c33207afb84c250abff2843209e527", size = 2690743, upload-time = "2026-08-11T21:22:52.407Z" },
 ]
 
 [[package]]
@@ -7045,15 +7062,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c7/79/12135bdf8b9c9367b8701c2c19a14c913c120b882d50b014ca0d38083c2c/wsproto-1.3.2.tar.gz", hash = "sha256:b86885dcf294e15204919950f666e06ffc6c7c114ca900b060d6e16293528294", size = 50116, upload-time = "2025-11-20T18:18:01.871Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a4/f5/10b68b7b1544245097b2a1b8238f66f2fc6dcaeb24ba5d917f52bd2eed4f/wsproto-1.3.2-py3-none-any.whl", hash = "sha256:61eea322cdf56e8cc904bd3ad7573359a242ba65688716b0710a5eb12beab584", size = 24405, upload-time = "2025-11-20T18:18:00.454Z" },
-]
-
-[[package]]
-name = "xlrd"
-version = "2.0.2"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/07/5a/377161c2d3538d1990d7af382c79f3b2372e880b65de21b01b1a2b78691e/xlrd-2.0.2.tar.gz", hash = "sha256:08b5e25de58f21ce71dc7db3b3b8106c1fa776f3024c54e45b45b374e89234c9", size = 100167, upload-time = "2025-06-14T08:46:39.039Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/1a/62/c8d562e7766786ba6587d09c5a8ba9f718ed3fa8af7f4553e8f91c36f302/xlrd-2.0.2-py2.py3-none-any.whl", hash = "sha256:ea762c3d29f4cca48d82df517b6d89fbce4db3107f9d78713e48cd321d5c9aa9", size = 96555, upload-time = "2025-06-14T08:46:37.766Z" },
 ]
 
 [[package]]

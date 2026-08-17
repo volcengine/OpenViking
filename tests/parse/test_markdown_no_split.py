@@ -103,14 +103,14 @@ async def test_pdf_no_split_converts_to_one_complete_markdown(
     content = _long_markdown(with_headings=True)
     fake_fs = _FakeVikingFS()
     parser = PDFParser(
-        PDFConfig(strategy="local", max_section_size=32, max_section_chars=128)
+        PDFConfig(max_section_size=32, max_section_chars=128)
     )
     markdown_parser = parser._get_markdown_parser()
     monkeypatch.setattr(markdown_parser, "_get_viking_fs", lambda: fake_fs)
     monkeypatch.setattr(
         parser,
         "_convert_to_markdown",
-        AsyncMock(return_value=(content, {})),
+        AsyncMock(return_value=(content, {}, [])),
     )
     monkeypatch.setattr(
         "openviking_cli.utils.storage.get_storage",

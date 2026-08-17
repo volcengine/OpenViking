@@ -223,14 +223,10 @@
     },
     "parsers": {
         "pdf": {
-            "strategy": "auto",
             "max_content_length": 100000,
             "max_section_size": 4000,
             "section_size_flexibility": 0.3,
             "max_section_chars": 6000,
-            "mineru_endpoint": "https://mineru.example.com/api/v1",
-            "mineru_api_key": "{your-mineru-api-key}",
-            "mineru_timeout": 300.0,
         },
         "code": {
             "github_raw_domain": "raw.githubusercontent.com",

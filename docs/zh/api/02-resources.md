@@ -11,18 +11,18 @@ OpenViking 支持多种资源类型，按照功能分类如下：
 文档类
 | 类型 | 扩展名 | 说明 |
 |------|--------|------|
-| PDF | `.pdf` | 支持本地解析和 MinerU API 转换 |
+| PDF | `.pdf` | 由 pdf-inspector 提取分页文本、标题、表格和阅读顺序，pdfplumber 在每页正文后提取图片；需要 OCR 的页面会保留并给出明确警告 |
 | Markdown | `.md`, `.markdown`, `.mdown`, `.mkd` | 原生支持，会提取结构并分段存储 |
 | HTML | `.html`, `.htm` | 清理导航/广告后提取内容，转换为 Markdown |
-| Word | `.docx` | 提取文本、标题、表格并转换为 Markdown |
+| Word | `.doc`, `.docx` | 通过 AnyDoc 将文本、标题、表格和嵌入图片的原始位置转换为 Markdown |
 | 纯文本 | `.txt`, `.text` | 直接导入处理 |
-| EPUB | `.epub` | 电子书格式，支持 ebooklib 或手动提取 |
+| EPUB | `.epub` | 通过 AnyDoc 将电子书结构和嵌入图片转换为 Markdown |
 
 表格类
 | 类型 | 扩展名 | 说明 |
 |------|--------|------|
-| Excel | `.xlsx`, `.xls`, `.xlsm` | 支持新版和老版 Excel，按工作表转换为 Markdown 表格 |
-| PowerPoint | `.pptx` | 按幻灯片提取内容，支持提取备注 |
+| Excel | `.xlsx`, `.xls`, `.xlsm` | 通过 AnyDoc 将工作表转换为 Markdown |
+| PowerPoint | `.pptx` | 通过 AnyDoc 保留幻灯片内容和嵌入图片位置；演讲者备注保留在同一资源的 `Speaker Notes` 分节中 |
 
 代码类
 | 类型 | 资源名 | 说明 |

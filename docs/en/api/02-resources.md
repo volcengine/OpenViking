@@ -12,19 +12,19 @@ OpenViking supports various resource types, categorized by functionality:
 
 | Type | Extensions | Description |
 |------|------------|-------------|
-| PDF | `.pdf` | Supports local parsing and MinerU API conversion |
+| PDF | `.pdf` | Uses pdf-inspector for page text, headings, tables, and reading order; pdfplumber extracts images after each page's text. Pages that require OCR are kept with explicit warnings |
 | Markdown | `.md`, `.markdown`, `.mdown`, `.mkd` | Native support, extracts structure and stores in segments |
 | HTML | `.html`, `.htm` | Cleans navigation/ads and extracts content, converts to Markdown |
-| Word | `.docx` | Extracts text, headings, tables and converts to Markdown |
+| Word | `.doc`, `.docx` | Uses AnyDoc to preserve text, headings, tables, and embedded image positions in Markdown |
 | Plain Text | `.txt`, `.text` | Direct import and processing |
-| EPUB | `.epub` | E-book format, supports ebooklib or manual extraction |
+| EPUB | `.epub` | Uses AnyDoc to convert the e-book structure and embedded images to Markdown |
 
 **Spreadsheets & Presentations**
 
 | Type | Extensions | Description |
 |------|------------|-------------|
-| Excel | `.xlsx`, `.xls`, `.xlsm` | Supports new and legacy Excel formats, converts to Markdown tables by worksheet |
-| PowerPoint | `.pptx` | Extracts content by slide, supports extracting notes |
+| Excel | `.xlsx`, `.xls`, `.xlsm` | Uses AnyDoc to convert worksheets to Markdown |
+| PowerPoint | `.pptx` | Uses AnyDoc to preserve slide content and embedded image positions; speaker notes stay in the same resource under `Speaker Notes` sections |
 
 **Code**
 

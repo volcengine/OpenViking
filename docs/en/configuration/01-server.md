@@ -336,7 +336,6 @@ Parsers live under `parsers`:
     "audio": {},
     "video": {},
     "markdown": {},
-    "excel": {},
     "html": {},
     "text": {},
     "directory": {},
@@ -357,8 +356,7 @@ Parsers live under `parsers`:
 | `code` | Repository file types, ignore rules, and network safety |
 | `image` | Image understanding and OCR |
 | `audio`, `video` | Audio/video parsing |
-| `markdown`, `html`, `text` | Text document chunking |
-| `excel` | Workbook parsing and chunking |
+| `markdown`, `html`, `text` | Text document chunking; AnyDoc-backed Office and EPUB files reuse the `markdown` sectioning settings |
 | `directory` | Directory scanning and ignore rules |
 | `feishu` | Feishu/Lark access and parsing |
 | `webfeed` | Sitemap, RSS, and Atom ingestion |

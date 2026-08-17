@@ -19,7 +19,6 @@ The parser handles scenarios:
 
 import asyncio
 import hashlib
-import io
 import os
 import re
 import time
@@ -29,6 +28,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from openviking.parse.accessors.mime_types import IANA_MEDIA_TYPE_TO_EXTENSION
 from openviking.parse.base import NodeType, ParseResult, ResourceNode, create_parse_result
+from openviking.parse.image_validation import is_valid_image
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.code.ast.providers import supports_code_skeleton
 from openviking.parse.parsers.constants import (
@@ -159,14 +159,6 @@ class MarkdownParser(BaseParser):
     # Used to bound force-split chunk size so it also respects the token budget.
     MAX_TOKENS_PER_CHAR = 0.7
     MAX_MERGED_FILENAME_LENGTH = 32  # Maximum length for merged section filenames
-
-    # Image validation constants
-    IMAGE_MIN_SIDE = 14  # Minimum width/height in pixels (exclusive)
-    IMAGE_MIN_PIXELS = 196  # Minimum width * height
-    IMAGE_MAX_PIXELS = 36000000  # Maximum width * height
-    IMAGE_MIN_ASPECT_RATIO = 1 / 150  # Minimum width/height ratio
-    IMAGE_MAX_ASPECT_RATIO = 150  # Maximum width/height ratio
-    IMAGE_MAX_FILE_BYTES = 10 * 1024 * 1024  # Local file path limit: 10 MB
 
     def __init__(
         self,
@@ -540,7 +532,7 @@ class MarkdownParser(BaseParser):
             seen.add(resolved)
             try:
                 image_bytes = await asyncio.to_thread(resolved.read_bytes)
-                if await asyncio.to_thread(self._is_valid_image, image_bytes, resolved):
+                if await asyncio.to_thread(is_valid_image, image_bytes, resolved):
                     return True
             except Exception:
                 continue
@@ -779,7 +771,7 @@ class MarkdownParser(BaseParser):
 
                     # Validate pixel size and file size; skip non-compliant images
                     if not await asyncio.to_thread(
-                        self._is_valid_image, image_bytes, resolved_path
+                        is_valid_image, image_bytes, resolved_path
                     ):
                         continue
 
@@ -890,63 +882,6 @@ class MarkdownParser(BaseParser):
         except Exception:
             logger.warning(f"[MarkdownParser] Cannot resolve image path: {path_str}")
             return None
-
-    def _is_valid_image(self, image_bytes: bytes, source_path: Path) -> bool:
-        """
-        Validate an image's pixel dimensions and file size.
-
-        Requirements:
-        - Width > 14px and height > 14px
-        - Width * height within [196, 36000000]
-        - Aspect ratio (width/height) within [1/150, 150]
-        - File size (local path) <= 10 MB
-
-        Args:
-            image_bytes: Raw image bytes
-            source_path: Original image path (for logging)
-
-        Returns:
-            True if the image satisfies all requirements, otherwise False
-        """
-        # File size check (local file path limit: 10 MB)
-        if len(image_bytes) > self.IMAGE_MAX_FILE_BYTES:
-            logger.warning(f"[MarkdownParser] Image exceeds 10MB, skipping: {source_path}")
-            return False
-
-        # Pixel size check
-        try:
-            from PIL import Image
-
-            with Image.open(io.BytesIO(image_bytes)) as img:
-                width, height = img.size
-        except Exception as e:
-            logger.warning(
-                f"[MarkdownParser] Cannot read image dimensions, skipping {source_path}: {e}"
-            )
-            return False
-
-        if width <= self.IMAGE_MIN_SIDE or height <= self.IMAGE_MIN_SIDE:
-            logger.warning(
-                f"[MarkdownParser] Image side too small ({width}x{height}), skipping: {source_path}"
-            )
-            return False
-
-        pixels = width * height
-        if pixels < self.IMAGE_MIN_PIXELS or pixels > self.IMAGE_MAX_PIXELS:
-            logger.warning(
-                f"[MarkdownParser] Image pixel count out of range ({pixels}), skipping: {source_path}"
-            )
-            return False
-
-        aspect_ratio = width / height
-        if aspect_ratio < self.IMAGE_MIN_ASPECT_RATIO or aspect_ratio > self.IMAGE_MAX_ASPECT_RATIO:
-            logger.warning(
-                f"[MarkdownParser] Image aspect ratio out of range ({aspect_ratio:.4f}), "
-                f"skipping: {source_path}"
-            )
-            return False
-
-        return True
 
     @staticmethod
     def _is_remote_uri(path: str) -> bool:
@@ -1114,7 +1049,7 @@ class MarkdownParser(BaseParser):
             if resolved is not None:
                 try:
                     image_bytes = await asyncio.to_thread(resolved.read_bytes)
-                    handled = await asyncio.to_thread(self._is_valid_image, image_bytes, resolved)
+                    handled = await asyncio.to_thread(is_valid_image, image_bytes, resolved)
                 except Exception:
                     handled = False
             cache[link] = handled

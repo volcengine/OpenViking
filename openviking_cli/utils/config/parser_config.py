@@ -8,9 +8,9 @@ scattered across different modules. All configurations inherit from ParserConfig
 and can be loaded from ov.conf files.
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 from openviking_cli.utils.logger import get_logger
 
@@ -137,34 +137,7 @@ class ParserConfig:
 
 @dataclass
 class PDFConfig(ParserConfig):
-    """
-    Configuration for PDF parsing.
-
-    Supports three strategies:
-    - "local": Use pdfplumber for local PDF→Markdown conversion
-    - "mineru": Use MinerU API for remote PDF→Markdown conversion
-    - "auto": Try local first, fallback to MinerU if available
-
-    Attributes:
-        strategy: Parsing strategy ("local" | "mineru" | "auto")
-        mineru_endpoint: MinerU API endpoint URL
-        mineru_api_key: MinerU API authentication key
-        mineru_timeout: MinerU request timeout in seconds
-        mineru_params: Additional MinerU API parameters
-    """
-
-    strategy: str = "auto"  # "local" | "mineru" | "auto"
-
-    # MinerU API configuration
-    mineru_endpoint: Optional[str] = None  # API endpoint URL
-    mineru_api_key: Optional[str] = None  # API authentication key
-    mineru_timeout: float = 300.0  # Request timeout in seconds (5 minutes)
-    mineru_params: Optional[dict] = None  # Additional API parameters
-
-    # Heading detection configuration
-    heading_detection: str = "auto"  # "bookmarks" | "font" | "auto" | "none"
-    font_heading_min_delta: float = 1.5  # Minimum font size delta from body text (pt)
-    max_heading_levels: int = 4  # Maximum heading levels for font analysis
+    """Configuration for local PDF parsing."""
 
     # Image extraction configuration
     image_resolution: int = 300  # Rendering DPI for extracted image regions
@@ -179,24 +152,8 @@ class PDFConfig(ParserConfig):
         # Validate base class fields
         super().validate()
 
-        # Validate PDF-specific fields
-        if self.strategy not in ("local", "mineru", "auto"):
-            raise ValueError(
-                f"Invalid strategy '{self.strategy}'. Must be 'local', 'mineru', or 'auto'"
-            )
-
-        if self.strategy == "mineru":
-            if not self.mineru_endpoint:
-                raise ValueError("mineru_endpoint is required when strategy='mineru'")
-
-        if self.mineru_timeout <= 0:
-            raise ValueError("mineru_timeout must be positive")
-
-        if self.heading_detection not in ("bookmarks", "font", "auto", "none"):
-            raise ValueError(f"Invalid heading_detection: {self.heading_detection}")
-
-        if self.font_heading_min_delta <= 0:
-            raise ValueError("font_heading_min_delta must be positive")
+        if self.image_resolution <= 0:
+            raise ValueError("image_resolution must be positive")
 
 
 @dataclass
@@ -468,95 +425,6 @@ class MarkdownConfig(ParserConfig):
 
 
 @dataclass
-class ExcelConfig(ParserConfig):
-    """
-    Configuration for Excel parsing.
-
-    Attributes:
-        enable_process_pool: Offload Excel→Markdown conversion and layout
-            planning to a ProcessPoolExecutor (default off).
-        process_pool_workers: Max worker processes when the pool is enabled.
-    """
-
-    enable_process_pool: bool = False
-    process_pool_workers: int = 2
-
-    # Excel is converted to Markdown and then sectioned by MarkdownParser, so
-    # these fields decide the resulting node structure and stable URIs.
-    _SECTIONING_FIELDS = (
-        "max_content_length",
-        "encoding",
-        "max_section_size",
-        "section_size_flexibility",
-        "max_section_chars",
-    )
-
-    # Names of keys a config source actually provided. Tracked as a plain
-    # instance attribute rather than a dataclass field so it never appears in
-    # asdict/model_dump output, cannot be injected from a config file, and does
-    # not affect equality. Absent means "provenance unknown".
-    _EXPLICIT_ATTR = "_openviking_explicit_keys"
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ExcelConfig":
-        """Build the config while remembering which keys were actually present.
-
-        ``with_sectioning_defaults_from`` needs to tell "the user wrote this
-        value" from "the key was absent". Comparing against class defaults
-        cannot do that, so record the provided keys here instead.
-        """
-        config = super().from_dict(data)
-        return config.with_explicit_keys(data)
-
-    def with_explicit_keys(self, names: Iterable[str]) -> "ExcelConfig":
-        """Return this config marked as having ``names`` explicitly configured."""
-        object.__setattr__(self, self._EXPLICIT_ATTR, frozenset(names))
-        return self
-
-    @property
-    def explicit_keys(self) -> Optional[frozenset]:
-        """Keys a config source provided, or ``None`` when unknown."""
-        return getattr(self, self._EXPLICIT_ATTR, None)
-
-    def with_sectioning_defaults_from(self, markdown: "ParserConfig") -> "ExcelConfig":
-        """Inherit sectioning fields that ``parsers.excel`` did not set.
-
-        Excel used to be registered with ``config.markdown`` directly, so a
-        deployment that tuned ``parsers.markdown`` also tuned Excel imports.
-        Introducing a dedicated ``parsers.excel`` section must not silently
-        change that node structure, so a sectioning field absent from
-        ``parsers.excel`` keeps following Markdown. Explicit ``parsers.excel``
-        values always win, including one that happens to equal the class
-        default.
-
-        Configs built without ``from_dict`` carry no key information; those are
-        treated as fully explicit so a hand-constructed ``ExcelConfig`` is never
-        silently rewritten.
-        """
-        if markdown is None:
-            return self
-
-        explicit = self.explicit_keys
-        if explicit is None:
-            return self
-
-        overrides = {
-            name: getattr(markdown, name)
-            for name in self._SECTIONING_FIELDS
-            if hasattr(markdown, name) and name not in explicit
-        }
-        if not overrides:
-            return self
-        return replace(self, **overrides).with_explicit_keys(explicit)
-
-    def validate(self) -> None:
-        """Validate Excel-specific configuration."""
-        super().validate()
-        if self.process_pool_workers < 1:
-            raise ValueError("process_pool_workers must be at least 1")
-
-
-@dataclass
 class HTMLConfig(ParserConfig):
     """
     Configuration for HTML parsing.
@@ -782,7 +650,6 @@ PARSER_CONFIG_REGISTRY = {
     "audio": AudioConfig,
     "video": VideoConfig,
     "markdown": MarkdownConfig,
-    "excel": ExcelConfig,
     "html": HTMLConfig,
     "text": TextConfig,
     "directory": DirectoryConfig,
@@ -840,7 +707,7 @@ def load_parser_configs_from_dict(config_dict: Dict[str, Any]) -> Dict[str, Pars
 
     Examples:
         >>> configs = load_parser_configs_from_dict({
-        ...     "pdf": {"strategy": "auto"},
+        ...     "pdf": {"image_resolution": 300},
         ...     "code": {"github_raw_domain": "raw.githubusercontent.com"}
         ... })
         >>> pdf_config = configs["pdf"]

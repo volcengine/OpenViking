@@ -198,7 +198,7 @@ def test_generic_code_hosting_domains_load_from_config():
     assert config.code_hosting_domains == ["git.generic.example.com"]
 
 
-def test_openviking_config_rejects_unknown_nested_parser_section(monkeypatch):
+def test_openviking_config_rejects_removed_excel_parser_section(monkeypatch):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 
     from openviking_cli.utils.config.open_viking_config import (
@@ -206,7 +206,7 @@ def test_openviking_config_rejects_unknown_nested_parser_section(monkeypatch):
         OpenVikingConfigSingleton,
     )
 
-    with pytest.raises(ValueError, match="markdown"):
+    with pytest.raises(ValueError, match="excel"):
         OpenVikingConfig.from_dict(
             {
                 "embedding": {
@@ -216,7 +216,7 @@ def test_openviking_config_rejects_unknown_nested_parser_section(monkeypatch):
                         "model": "text-embedding-3-small",
                     }
                 },
-                "parsers": {"markdwon": {}},
+                "parsers": {"excel": {}},
             }
         )
 

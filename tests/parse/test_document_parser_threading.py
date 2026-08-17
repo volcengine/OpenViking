@@ -1,9 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Regression tests for offloading synchronous document conversions."""
+"""Contract tests for the unified AnyDoc document parser."""
 
-import sys
-import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable
@@ -11,10 +9,43 @@ from typing import Any, Callable
 import pytest
 
 from openviking.parse.base import NodeType, ResourceNode, create_parse_result
-from openviking.parse.parsers import epub, excel, legacy_doc, powerpoint, word
+from openviking.parse.parsers import anydoc
 
 
-def _stub_markdown_parse(parser) -> dict[str, Any]:
+class _FakeStorage:
+    def __init__(self, media_dir: Path) -> None:
+        self.media_dir = media_dir
+        self.saved: list[tuple[str, bytes, str, str]] = []
+
+    def save_image(
+        self,
+        resource_name: str,
+        data: bytes,
+        *,
+        filename: str,
+        extension: str,
+    ) -> Path:
+        self.saved.append((resource_name, data, filename, extension))
+        return self.media_dir / resource_name / "images" / f"{filename}{extension}"
+
+
+def _model(**values: Any) -> SimpleNamespace:
+    return SimpleNamespace(**values)
+
+
+def _text(value: str) -> SimpleNamespace:
+    return _model(kind="text", text=value, style=None)
+
+
+def _paragraph(*content: SimpleNamespace) -> SimpleNamespace:
+    return _model(kind="paragraph", content=list(content))
+
+
+def _document(*blocks: SimpleNamespace, assets=None, notes=None) -> SimpleNamespace:
+    return _model(blocks=list(blocks), assets=assets or [], notes=notes or [])
+
+
+def _stub_markdown_parse(parser: anydoc.AnyDocParser) -> dict[str, Any]:
     seen: dict[str, Any] = {}
 
     async def parse_content(
@@ -23,10 +54,12 @@ def _stub_markdown_parse(parser) -> dict[str, Any]:
         instruction: str = "",
         **kwargs,
     ):
-        seen["content"] = content
-        seen["source_path"] = source_path
-        seen["instruction"] = instruction
-        seen["kwargs"] = kwargs
+        seen.update(
+            content=content,
+            source_path=source_path,
+            instruction=instruction,
+            kwargs=kwargs,
+        )
         return create_parse_result(
             root=ResourceNode(type=NodeType.ROOT),
             source_path=source_path,
@@ -34,244 +67,164 @@ def _stub_markdown_parse(parser) -> dict[str, Any]:
             parser_name="MarkdownParser",
         )
 
-    parser._md_parser.parse_content = parse_content
+    parser._markdown_parser.parse_content = parse_content
     return seen
 
 
-def _patch_to_thread(monkeypatch, module) -> list[tuple[Callable[..., Any], tuple, dict]]:
-    calls: list[tuple[Callable[..., Any], tuple, dict]] = []
+@pytest.mark.asyncio
+async def test_anydoc_parser_offloads_conversion_and_forwards_markdown_options(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    parser = anydoc.AnyDocParser()
+    seen = _stub_markdown_parse(parser)
+    calls: list[tuple[Callable[..., Any], tuple[Any, ...], dict[str, Any]]] = []
 
     async def fake_to_thread(func, /, *args, **kwargs):
         calls.append((func, args, kwargs))
         return func(*args, **kwargs)
 
-    monkeypatch.setattr(module.asyncio, "to_thread", fake_to_thread)
-    return calls
+    converted = anydoc._RenderedDocument(
+        markdown="# Converted\n",
+        detected_format="docx",
+        warnings=["conversion warning"],
+        assets_referenced=2,
+        images_extracted=1,
+    )
+    monkeypatch.setattr(anydoc.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(parser, "_convert", lambda *args, **kwargs: converted)
+    monkeypatch.setattr(anydoc, "version", lambda _package: "0.1.8")
+    storage = _FakeStorage(tmp_path / "media")
+    monkeypatch.setattr("openviking_cli.utils.storage.get_storage", lambda: storage)
 
-
-@pytest.mark.asyncio
-async def test_word_parser_offloads_docx_conversion(monkeypatch, tmp_path: Path):
-    parser = word.WordParser()
-    seen = _stub_markdown_parse(parser)
-    calls = _patch_to_thread(monkeypatch, word)
-    fake_docx = SimpleNamespace()
-    monkeypatch.setitem(sys.modules, "docx", fake_docx)
-
-    def convert(path: Path, docx_module, resource_name=None, storage=None) -> str:
-        assert docx_module is fake_docx
-        return "# converted docx"
-
-    monkeypatch.setattr(parser, "_convert_to_markdown", convert)
-    source = tmp_path / "sample.docx"
+    source = tmp_path / "upload.docx"
     source.write_bytes(b"placeholder")
-
-    result = await parser.parse(source)
-
-    # #2429 added resource_name/storage to the offloaded conversion call; assert
-    # the conversion was offloaded with the doc + docx module, without pinning the
-    # identity of the storage singleton.
-    assert len(calls) == 1
-    func, args, _ = calls[0]
-    assert func is convert
-    assert args[0] == source
-    assert args[1] is fake_docx
-    assert seen["content"] == "# converted docx"
-    assert result.source_format == "docx"
-    assert result.parser_name == "WordParser"
-
-
-@pytest.mark.asyncio
-async def test_word_parser_forwards_original_name_to_markdown(monkeypatch, tmp_path: Path):
-    # On single-file upload the on-disk path is a temp name (upload_<uuid>.docx)
-    # and the user's original filename arrives via source_name. WordParser must
-    # forward that name to MarkdownParser explicitly; otherwise parse_content can
-    # only fall back to the temp path and the resource ends up named upload_<uuid>.
-    parser = word.WordParser()
-    seen = _stub_markdown_parse(parser)
-    _patch_to_thread(monkeypatch, word)
-    monkeypatch.setitem(sys.modules, "docx", SimpleNamespace())
-    monkeypatch.setattr(parser, "_convert_to_markdown", lambda *args, **kwargs: "# converted docx")
-
-    upload = tmp_path / "upload_abc123.docx"
-    upload.write_bytes(b"placeholder")
-
-    await parser.parse(upload, source_name="季度报告.docx")
-
-    forwarded = seen["kwargs"].get("source_name") or seen["kwargs"].get("resource_name")
-    assert forwarded == "季度报告.docx", seen["kwargs"]
-
-
-@pytest.mark.asyncio
-async def test_word_parser_forwards_no_split_to_markdown(monkeypatch, tmp_path: Path):
-    parser = word.WordParser()
-    seen = _stub_markdown_parse(parser)
-    _patch_to_thread(monkeypatch, word)
-    monkeypatch.setitem(sys.modules, "docx", SimpleNamespace())
-    monkeypatch.setattr(parser, "_convert_to_markdown", lambda *args, **kwargs: "# converted docx")
-
-    upload = tmp_path / "screenplay.docx"
-    upload.write_bytes(b"placeholder")
-
-    await parser.parse(upload, split_content=False)
-
-    assert seen["kwargs"]["split_content"] is False
-
-
-@pytest.mark.asyncio
-async def test_excel_parser_offloads_xlsx_conversion(monkeypatch, tmp_path: Path):
-    parser = excel.ExcelParser()
-    seen = _stub_markdown_parse(parser)
-    calls = _patch_to_thread(monkeypatch, excel)
-    fake_openpyxl = SimpleNamespace()
-    monkeypatch.setitem(sys.modules, "openpyxl", fake_openpyxl)
-
-    def convert(path: Path, openpyxl_module) -> str:
-        assert openpyxl_module is fake_openpyxl
-        return "# converted xlsx"
-
-    monkeypatch.setattr(parser, "_convert_to_markdown", convert)
-    source = tmp_path / "sample.xlsx"
-    source.write_bytes(b"placeholder")
-
-    result = await parser.parse(source)
-
-    assert calls == [(convert, (source, fake_openpyxl), {})]
-    assert seen["content"] == "# converted xlsx"
-    assert result.source_format == "xlsx"
-    assert result.parser_name == "ExcelParser"
-
-
-@pytest.mark.asyncio
-async def test_excel_parser_offloads_xls_conversion(monkeypatch, tmp_path: Path):
-    parser = excel.ExcelParser()
-    seen = _stub_markdown_parse(parser)
-    calls = _patch_to_thread(monkeypatch, excel)
-
-    def convert(path: Path) -> str:
-        return "# converted xls"
-
-    monkeypatch.setattr(parser, "_convert_xls_to_markdown", convert)
-    source = tmp_path / "sample.xls"
-    source.write_bytes(b"placeholder")
-
-    result = await parser.parse(source)
-
-    assert calls == [(convert, (source,), {})]
-    assert seen["content"] == "# converted xls"
-    assert result.source_format == "xls"
-    assert result.parser_name == "ExcelParser"
-
-
-@pytest.mark.asyncio
-async def test_powerpoint_parser_offloads_pptx_conversion(monkeypatch, tmp_path: Path):
-    parser = powerpoint.PowerPointParser()
-    seen = _stub_markdown_parse(parser)
-    calls = _patch_to_thread(monkeypatch, powerpoint)
-    fake_pptx = SimpleNamespace()
-    monkeypatch.setitem(sys.modules, "pptx", fake_pptx)
-
-    def convert(path: Path, pptx_module) -> str:
-        assert pptx_module is fake_pptx
-        return "# converted pptx"
-
-    monkeypatch.setattr(parser, "_convert_to_markdown", convert)
-    source = tmp_path / "sample.pptx"
-    source.write_bytes(b"placeholder")
-
-    result = await parser.parse(source)
-
-    assert calls == [(convert, (source, fake_pptx), {})]
-    assert seen["content"] == "# converted pptx"
-    assert result.source_format == "pptx"
-    assert result.parser_name == "PowerPointParser"
-
-
-@pytest.mark.asyncio
-async def test_epub_parser_offloads_epub_conversion(monkeypatch, tmp_path: Path):
-    parser = epub.EPubParser()
-    seen = _stub_markdown_parse(parser)
-    calls = _patch_to_thread(monkeypatch, epub)
-
-    def convert(path: Path) -> str:
-        return "# converted epub"
-
-    monkeypatch.setattr(parser, "_convert_to_markdown", convert)
-    source = tmp_path / "sample.epub"
-    source.write_bytes(b"placeholder")
-
-    result = await parser.parse(source)
-
-    assert calls == [(convert, (source,), {})]
-    assert seen["content"] == "# converted epub"
-    assert result.source_format == "epub"
-    assert result.parser_name == "EPubParser"
-
-
-@pytest.mark.asyncio
-async def test_legacy_doc_parser_offloads_doc_extraction(monkeypatch, tmp_path: Path):
-    parser = legacy_doc.LegacyDocParser()
-    seen = _stub_markdown_parse(parser)
-    calls = _patch_to_thread(monkeypatch, legacy_doc)
-
-    def extract(path: Path) -> str:
-        return "# converted doc"
-
-    monkeypatch.setattr(parser, "_extract_text", extract)
-    source = tmp_path / "sample.doc"
-    source.write_bytes(b"placeholder")
-
-    result = await parser.parse(source)
-
-    assert calls == [(extract, (source,), {})]
-    assert seen["content"] == "# converted doc"
-    assert result.source_format == "doc"
-    assert result.parser_name == "LegacyDocParser"
-
-
-@pytest.mark.asyncio
-async def test_legacy_doc_parser_routes_ooxml_payload_to_word_parser(monkeypatch, tmp_path: Path):
-    parser = legacy_doc.LegacyDocParser()
-    _stub_markdown_parse(parser)
-    source = tmp_path / "mislabeled.doc"
-    with zipfile.ZipFile(source, "w") as archive:
-        archive.writestr("[Content_Types].xml", "<Types />")
-        archive.writestr("word/document.xml", "<w:document />")
-
-    seen: dict[str, Any] = {}
-
-    async def parse_word(self, source_path, instruction="", **kwargs):
-        seen["source"] = source_path
-        seen["instruction"] = instruction
-        seen["kwargs"] = kwargs
-        return create_parse_result(
-            root=ResourceNode(type=NodeType.ROOT),
-            source_path=str(source_path),
-            source_format="docx",
-            parser_name="WordParser",
-        )
-
-    monkeypatch.setattr(word.WordParser, "parse", parse_word)
-
+    caller_media = tmp_path / "caller-media"
     result = await parser.parse(
         source,
         instruction="preserve tables",
-        source_name="mislabeled.doc",
+        source_name="季度报告.docx",
+        allowed_media_dirs=[caller_media],
+        split_content=False,
     )
 
+    assert len(calls) == 1
+    assert calls[0][0] is parser._convert
+    assert calls[0][1] == (source,)
+    assert calls[0][2] == {
+        "resource_name": "季度报告.docx",
+        "storage": storage,
+    }
     assert seen == {
-        "source": source,
+        "content": "# Converted\n",
+        "source_path": str(source),
         "instruction": "preserve tables",
-        "kwargs": {"source_name": "mislabeled.doc"},
+        "kwargs": {
+            "base_dir": tmp_path,
+            "allowed_media_dirs": [caller_media, storage.media_dir],
+            "source_name": "季度报告.docx",
+            "split_content": False,
+        },
     }
     assert result.source_format == "docx"
-    assert result.parser_name == "WordParser"
+    assert result.parser_name == "AnyDocParser"
+    assert result.warnings == ["conversion warning"]
+    assert result.meta["images_extracted"] == 1
 
 
-@pytest.mark.asyncio
-async def test_legacy_doc_parser_rejects_non_word_zip_payload(tmp_path: Path):
-    source = tmp_path / "not-a-word-document.doc"
-    with zipfile.ZipFile(source, "w") as archive:
-        archive.writestr("payload.bin", b"binary")
+def test_anydoc_renderer_preserves_image_position_and_saves_repeated_asset_once(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    storage = _FakeStorage(tmp_path / "media")
+    asset = _model(
+        id=7,
+        media_type="image/png",
+        origin_part="word/media/image.png",
+        data=b"valid-image",
+    )
+    embedded = _model(
+        kind="image",
+        alt="diagram",
+        source=_model(kind="asset", asset_id=7),
+    )
+    external = _model(
+        kind="image",
+        alt="remote",
+        source=_model(kind="external", url="https://example.com/image.png"),
+    )
+    document = _document(
+        _paragraph(_text("before "), embedded, _text(" middle "), embedded, external),
+        assets=[asset],
+    )
+    monkeypatch.setattr(anydoc, "is_valid_image", lambda *_args: True)
 
-    with pytest.raises(ValueError, match="ZIP package"):
-        await legacy_doc.LegacyDocParser().parse(source)
+    renderer = anydoc._AnyDocMarkdownRenderer(
+        document,
+        source_format="docx",
+        resource_name="report",
+        storage=storage,
+    )
+    markdown = renderer.render()
+
+    image_ref = "report/images/anydoc_asset_7.png"
+    assert markdown == (
+        f"before ![diagram]({image_ref}) middle ![diagram]({image_ref})"
+        "![remote](https://example.com/image.png)\n"
+    )
+    assert storage.saved == [("report", b"valid-image", "anydoc_asset_7", ".png")]
+    assert renderer.images_extracted == 1
+    assert renderer.assets_referenced == {7}
+
+
+def test_anydoc_renderer_keeps_ppt_speaker_notes_in_document_order(tmp_path: Path) -> None:
+    heading = _model(kind="heading", level=1, content=[_text("Slide One")], anchor=None)
+    notes = _model(kind="block_quote", blocks=[_paragraph(_text("Presenter detail"))])
+    document = _document(heading, _paragraph(_text("Slide body")), notes)
+
+    markdown = anydoc._AnyDocMarkdownRenderer(
+        document,
+        source_format="pptx",
+        resource_name="slides",
+        storage=_FakeStorage(tmp_path / "media"),
+    ).render()
+
+    assert markdown == ("# Slide One\n\nSlide body\n\n### Speaker Notes\n\nPresenter detail\n")
+
+
+def test_anydoc_renderer_warns_and_keeps_alt_for_unusable_assets(tmp_path: Path) -> None:
+    document = _document(
+        _paragraph(
+            _model(
+                kind="image",
+                alt="attachment",
+                source=_model(kind="asset", asset_id=3),
+            ),
+            _text(" "),
+            _model(
+                kind="image",
+                alt="missing preview",
+                source=_model(kind="unavailable"),
+            ),
+        ),
+        assets=[
+            _model(
+                id=3,
+                media_type="application/octet-stream",
+                origin_part="embedding.bin",
+                data=b"not-an-image",
+            )
+        ],
+    )
+    renderer = anydoc._AnyDocMarkdownRenderer(
+        document,
+        source_format="xlsx",
+        resource_name="book",
+        storage=_FakeStorage(tmp_path / "media"),
+    )
+
+    assert renderer.render() == "attachment missing preview\n"
+    assert renderer.warnings == [
+        "AnyDoc asset 3 is not an image (application/octet-stream); kept as alt text",
+        "Embedded image is unavailable: missing preview",
+    ]

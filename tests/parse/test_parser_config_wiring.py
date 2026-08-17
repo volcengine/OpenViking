@@ -9,7 +9,7 @@ from openviking_cli.utils.config.parser_config import (
 
 
 def test_pdf_parser_passes_its_config_to_nested_markdown_parser():
-    parser = PDFParser(PDFConfig(strategy="local", max_section_size=2222, max_section_chars=5555))
+    parser = PDFParser(PDFConfig(max_section_size=2222, max_section_chars=5555))
 
     markdown_parser = parser._get_markdown_parser()
 
