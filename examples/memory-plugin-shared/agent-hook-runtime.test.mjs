@@ -4,6 +4,8 @@ import test from "node:test";
 import {
   commitAgentSession,
   makeAgentFetchJSON,
+  resolveAgentCwd,
+  resolveNativeSessionId,
 } from "./lib/agent-hook-runtime.mjs";
 
 function jsonResponse(status, value) {
@@ -77,4 +79,19 @@ test("agent fetch and commit logging preserve response trace_id", async (t) => {
       error: "commit failed",
     },
   });
+});
+
+test("hook payload aliases cover camelCase session id and workspace paths", () => {
+  assert.equal(resolveNativeSessionId({ conversationId: "conv-1" }), "conv-1");
+  assert.equal(
+    resolveNativeSessionId({ conversation_id: "snake", conversationId: "camel" }),
+    "snake",
+    "the snake_case field keeps precedence",
+  );
+  assert.equal(resolveAgentCwd({ workspacePaths: ["/repo"] }), "/repo");
+  assert.equal(
+    resolveAgentCwd({ workspaceRoots: ["/roots"], workspacePaths: ["/paths"] }),
+    "/roots",
+    "workspaceRoots keeps precedence over workspacePaths",
+  );
 });

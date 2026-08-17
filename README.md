@@ -146,6 +146,7 @@ Integrations inject OpenViking recall into your agent's context and auto-commit 
 - [TRAE / TRAE CN / TRAE CLI](https://docs.openviking.ai/en/agent-integrations/13-trae)
 - [OpenCode](https://docs.openviking.ai/en/agent-integrations/10-opencode)
 - [pi](https://docs.openviking.ai/en/agent-integrations/11-pi)
+- [Antigravity CLI (agy)](https://docs.openviking.ai/en/agent-integrations/16-agy)
 - [Agent Plugins 1.0](https://docs.openviking.ai/en/agent-integrations/15-agent-plugins)
 - [MCP clients](https://docs.openviking.ai/en/agent-integrations/06-mcp-clients)
 - [LangChain / LangGraph](https://docs.openviking.ai/en/agent-integrations/07-langchain-langgraph)

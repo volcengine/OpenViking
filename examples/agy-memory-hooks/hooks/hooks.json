@@ -1,0 +1,18 @@
+{
+  "openviking": {
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "node __OPENVIKING_AGY_ROOT__/scripts/auto-recall.mjs",
+        "timeout": 20
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "node __OPENVIKING_AGY_ROOT__/scripts/auto-capture.mjs",
+        "timeout": 30
+      }
+    ]
+  }
+}
