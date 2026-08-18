@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 from openviking.message import Message
 from openviking.message.part import TextPart
+from openviking.privacy.secret_scrub import scrub_secrets
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import (
     MemoryFile,
@@ -144,7 +145,7 @@ async def write_stored_links(
             bump_memory_version(mf)
             await viking_fs.write_file(
                 uri,
-                MemoryFileUtils.write(mf),
+                scrub_secrets(MemoryFileUtils.write(mf))[0],
                 ctx=ctx,
                 lease_ref=lease_ref,
             )
@@ -1038,7 +1039,7 @@ class MemoryUpdater:
                 if changed:
                     await viking_fs.write_file(
                         uri,
-                        MemoryFileUtils.write(mf),
+                        scrub_secrets(MemoryFileUtils.write(mf))[0],
                         ctx=ctx,
                         lease_ref=lease_ref,
                     )
@@ -1164,7 +1165,7 @@ class MemoryUpdater:
             )
             await viking_fs.write_file(
                 uri,
-                new_full_content,
+                scrub_secrets(new_full_content)[0],
                 ctx=ctx,
                 lease_ref=lease_ref,
             )
@@ -1322,7 +1323,7 @@ class MemoryUpdater:
                 bump_memory_version(mf)
                 await viking_fs.write_file(
                     uri,
-                    MemoryFileUtils.write(mf),
+                    scrub_secrets(MemoryFileUtils.write(mf))[0],
                     ctx=ctx,
                     lease_ref=lease_ref,
                 )
@@ -1618,7 +1619,7 @@ class MemoryUpdater:
         try:
             await viking_fs.write_file(
                 overview_path,
-                rendered,
+                scrub_secrets(rendered)[0],
                 ctx=ctx,
                 lease_ref=lease_ref,
             )
