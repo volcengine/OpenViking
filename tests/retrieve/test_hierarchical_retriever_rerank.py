@@ -665,23 +665,7 @@ async def test_convert_to_matched_contexts_propagates_search_tags():
 
 
 @pytest.mark.asyncio
-async def test_convert_to_matched_contexts_defaults_empty_search_tags():
-    retriever = HierarchicalRetriever(
-        storage=DummyStorage(),
-        embedder=None,
-        rerank_config=None,
-    )
-
-    result = await retriever._convert_to_matched_contexts(
-        [_result("viking://resources/file-a", 1.0, abstract="child A")],
-        ctx=_ctx(),
-    )
-
-    assert result[0].search_tags == []
-
-
-@pytest.mark.asyncio
-async def test_convert_to_matched_contexts_hides_okf_metadata_in_l0_l1_previews():
+async def test_convert_to_matched_contexts_defaults_tags_and_body_previews():
     retriever = HierarchicalRetriever(
         storage=DummyStorage(),
         embedder=None,
@@ -692,6 +676,7 @@ async def test_convert_to_matched_contexts_hides_okf_metadata_in_l0_l1_previews(
         "source": {"kind": "http", "uri": "https://example.com/private.pdf"},
         "generated_by": {"component": "SemanticProcessor", "trigger": "ingest"},
     }
+    markdown = "---\ntitle: User document\n---\n\nVisible body."
 
     result = await retriever._convert_to_matched_contexts(
         [
@@ -711,28 +696,14 @@ async def test_convert_to_matched_contexts_hides_okf_metadata_in_l0_l1_previews(
                     ContextLevel.OVERVIEW, uri, "# Visible overview", metadata
                 ),
             ),
+            _result("viking://resources/demo.md", 0.8, level=2, abstract=markdown),
         ],
         ctx=_ctx(),
     )
 
+    assert [item.search_tags for item in result] == [[], [], []]
     assert [item.abstract for item in result] == [
         "Visible abstract.",
         "# Visible overview",
+        markdown,
     ]
-
-
-@pytest.mark.asyncio
-async def test_convert_to_matched_contexts_preserves_l2_markdown_frontmatter():
-    retriever = HierarchicalRetriever(
-        storage=DummyStorage(),
-        embedder=None,
-        rerank_config=None,
-    )
-    markdown = "---\ntitle: User document\n---\n\nVisible body."
-
-    result = await retriever._convert_to_matched_contexts(
-        [_result("viking://resources/demo.md", 1.0, level=2, abstract=markdown)],
-        ctx=_ctx(),
-    )
-
-    assert result[0].abstract == markdown

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -144,6 +145,13 @@ class _ScheduledExecutor:
         self.failure = exc
 
 
+def _patch_semantic_config(monkeypatch, *, sidecar_sample_size=32):
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(sidecar_sample_size=sidecar_sample_size)),
+    )
+
+
 @pytest.mark.asyncio
 async def test_semantic_dag_stats_collects_nodes(monkeypatch):
     root_uri = "viking://resources/root"
@@ -159,6 +167,7 @@ async def test_semantic_dag_stats_collects_nodes(monkeypatch):
     }
     fake_fs = _FakeVikingFS(tree)
     monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    _patch_semantic_config(monkeypatch)
 
     processor = _FakeProcessor(verify_streaming=True)
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
@@ -195,6 +204,7 @@ async def test_semantic_dag_bounds_active_node_work(monkeypatch):
     }
     fake_fs = _FakeVikingFS(tree)
     monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    _patch_semantic_config(monkeypatch)
 
     processor = _TrackingProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
@@ -232,6 +242,7 @@ async def test_semantic_dag_shares_node_scheduler_across_roots(monkeypatch):
     }
     fake_fs = _FakeVikingFS(tree)
     monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    _patch_semantic_config(monkeypatch)
 
     processor = _TrackingProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
@@ -333,6 +344,7 @@ async def test_semantic_dag_skip_vectorization_does_not_schedule_tasks(monkeypat
     }
     fake_fs = _FakeVikingFS(tree)
     monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    _patch_semantic_config(monkeypatch)
 
     processor = _FakeProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)

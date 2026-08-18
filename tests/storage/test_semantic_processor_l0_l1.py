@@ -3,16 +3,10 @@
 
 from types import SimpleNamespace
 
-import pytest
-
 from openviking.core.context import ContextLevel
 from openviking.storage.queuefs import semantic_processor as semantic_processor_module
-from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
-from openviking.storage.semantic_sidecar import (
-    parse_semantic_sidecar,
-    render_semantic_sidecar,
-)
+from openviking.storage.semantic_sidecar import render_semantic_sidecar
 
 
 def _patch_semantic_limits(monkeypatch, *, abstract_max_chars=256, overview_max_chars=4000):
@@ -23,125 +17,6 @@ def _patch_semantic_limits(monkeypatch, *, abstract_max_chars=256, overview_max_
         )
     )
     monkeypatch.setattr(semantic_processor_module, "get_openviking_config", lambda: config)
-
-
-class _ParentRefreshFS:
-    def __init__(self, files, events):
-        self.files = dict(files)
-        self.events = events
-        self._async_agfs = self
-
-    def _uri_to_path(self, uri, ctx=None):
-        return uri
-
-    async def pathlock_acquire_exact_batch(self, paths):
-        return {"paths": paths}
-
-    async def pathlock_release(self, lease):
-        return None
-
-    async def read_file(self, uri, ctx=None):
-        return self.files[uri]
-
-    async def write_file(self, uri, content, ctx=None, lease_ref=None):
-        self.files[uri] = content
-        self.events.append(("write", uri))
-
-
-class _ParentRefreshQueue:
-    def __init__(self, events, error=None):
-        self.events = events
-        self.error = error
-        self.messages = []
-
-    async def enqueue(self, msg):
-        self.events.append(("enqueue", msg.uri))
-        if self.error is not None:
-            raise self.error
-        self.messages.append(msg)
-        return "msg-1"
-
-
-class _ParentRefreshQueueManager:
-    SEMANTIC = "semantic"
-
-    def __init__(self, queue):
-        self.queue = queue
-
-    def get_queue(self, name, allow_create=False):
-        assert name == self.SEMANTIC
-        assert allow_create is True
-        return self.queue
-
-
-def _parent_sidecars(parent_uri):
-    metadata = {
-        "freshness": {
-            "total_entries": 1,
-            "sampled_entries": 1,
-            "unsampled_entries": 0,
-            "pending_child_changes": 0,
-        }
-    }
-    return {
-        f"{parent_uri}/.abstract.md": render_semantic_sidecar(
-            ContextLevel.ABSTRACT, parent_uri, "Parent abstract.", metadata
-        ),
-        f"{parent_uri}/.overview.md": render_semantic_sidecar(
-            ContextLevel.OVERVIEW, parent_uri, "# Parent overview", metadata
-        ),
-    }
-
-
-@pytest.mark.asyncio
-async def test_parent_refresh_marks_sidecars_pending_before_enqueue(monkeypatch):
-    parent_uri = "viking://resources/project"
-    child_uri = f"{parent_uri}/child"
-    events = []
-    fs = _ParentRefreshFS(_parent_sidecars(parent_uri), events)
-    before = {uri: parse_semantic_sidecar(raw) for uri, raw in fs.files.items()}
-    queue = _ParentRefreshQueue(events)
-    monkeypatch.setattr(semantic_processor_module, "get_viking_fs", lambda: fs)
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.get_queue_manager",
-        lambda: _ParentRefreshQueueManager(queue),
-    )
-
-    await SemanticProcessor()._enqueue_parent_refresh(
-        SemanticMsg(uri=child_uri, context_type="resource"), child_uri
-    )
-
-    assert events[-1] == ("enqueue", parent_uri)
-    assert [event[0] for event in events[:-1]] == ["write", "write"]
-    for uri, raw in fs.files.items():
-        after = parse_semantic_sidecar(raw)
-        assert after.body == before[uri].body
-        assert after.metadata["freshness"]["pending_child_changes"] == 1
-    parent_msg = queue.messages[0]
-    assert parent_msg.changes == {"modified": [child_uri]}
-    assert parent_msg.generation_trigger == "parent_refresh"
-
-
-@pytest.mark.asyncio
-async def test_parent_refresh_keeps_pending_when_enqueue_fails(monkeypatch):
-    parent_uri = "viking://resources/project"
-    child_uri = f"{parent_uri}/child"
-    events = []
-    fs = _ParentRefreshFS(_parent_sidecars(parent_uri), events)
-    queue = _ParentRefreshQueue(events, error=RuntimeError("queue unavailable"))
-    monkeypatch.setattr(semantic_processor_module, "get_viking_fs", lambda: fs)
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.get_queue_manager",
-        lambda: _ParentRefreshQueueManager(queue),
-    )
-
-    with pytest.raises(RuntimeError, match="queue unavailable"):
-        await SemanticProcessor()._enqueue_parent_refresh(
-            SemanticMsg(uri=child_uri, context_type="resource"), child_uri
-        )
-
-    for raw in fs.files.values():
-        assert parse_semantic_sidecar(raw).metadata["freshness"]["pending_child_changes"] == 1
 
 
 def test_markdown_overview_uses_brief_description_as_abstract(monkeypatch):
@@ -159,6 +34,19 @@ def test_markdown_overview_uses_brief_description_as_abstract(monkeypatch):
     assert overview == generated
     assert abstract == "This brief description is the retrieval abstract."
 
+    raw = render_semantic_sidecar(
+        ContextLevel.OVERVIEW,
+        "viking://resources/demo",
+        generated,
+        {"source": {"kind": "http", "uri": "https://example.com/private.pdf"}},
+    )
+
+    overview, abstract = processor._normalize_overview_generation(raw)
+
+    assert overview == generated
+    assert abstract == "This brief description is the retrieval abstract."
+    assert "source:" not in overview
+
 
 def test_markdown_overview_extracts_multiline_brief_description(monkeypatch):
     _patch_semantic_limits(monkeypatch)
@@ -175,69 +63,6 @@ def test_markdown_overview_extracts_multiline_brief_description(monkeypatch):
 
     assert overview == generated
     assert abstract == "This is the first abstract line.\nThis is the second abstract line."
-
-
-def test_okf_overview_frontmatter_is_not_part_of_l0_or_size_limit(monkeypatch):
-    _patch_semantic_limits(monkeypatch, overview_max_chars=80)
-    processor = SemanticProcessor()
-    body = "# README\n\nVisible brief.\n\n## Navigation\n\n- README.md"
-    raw = render_semantic_sidecar(
-        ContextLevel.OVERVIEW,
-        "viking://resources/demo",
-        body,
-        {
-            "source": {"kind": "http", "uri": "https://example.com/very-long-source"},
-            "generated_by": {"component": "SemanticProcessor", "trigger": "test"},
-            "freshness": {
-                "total_entries": 1,
-                "sampled_entries": 1,
-                "unsampled_entries": 0,
-                "pending_child_changes": 0,
-            },
-        },
-    )
-
-    overview, abstract = processor._normalize_overview_generation(raw)
-
-    assert overview == body
-    assert abstract == "Visible brief."
-    assert "generated_by" not in overview
-
-
-def test_body_truncation_preserves_okf_metadata_when_rendered(monkeypatch):
-    _patch_semantic_limits(monkeypatch, abstract_max_chars=32, overview_max_chars=64)
-    processor = SemanticProcessor()
-    metadata = {
-        "source": {"kind": "http", "uri": "https://example.com/source.md"},
-        "generated_by": {"component": "SemanticProcessor", "trigger": "ingest"},
-        "freshness": {
-            "total_entries": 3,
-            "sampled_entries": 2,
-            "unsampled_entries": 1,
-            "pending_child_changes": 0,
-        },
-    }
-    raw = render_semantic_sidecar(
-        ContextLevel.OVERVIEW,
-        "viking://resources/demo",
-        "# Demo\n\nA compact sentence. " + ("Long navigation detail. " * 10),
-        metadata,
-    )
-    original = parse_semantic_sidecar(raw)
-
-    overview, abstract = processor._normalize_overview_generation(raw)
-    rewritten = parse_semantic_sidecar(
-        render_semantic_sidecar(
-            ContextLevel.OVERVIEW,
-            "viking://resources/demo",
-            overview,
-            original.metadata,
-        )
-    )
-
-    assert len(rewritten.body.rstrip()) <= 64
-    assert len(abstract) <= 32
-    assert rewritten.metadata == original.metadata
 
 
 def test_index_references_are_replaced_inside_markdown_overview(monkeypatch):

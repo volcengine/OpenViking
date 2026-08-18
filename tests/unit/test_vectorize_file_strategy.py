@@ -531,35 +531,6 @@ async def test_vectorize_directory_meta_writes_search_tags_into_embedding_contex
         assert msg.context_data["search_tags"] == ["team=search", "env=test"]
 
 
-@pytest.mark.parametrize(
-    ("include_abstract", "include_overview", "expected_level", "expected_body"),
-    [
-        (True, False, 0, "demo abstract"),
-        (False, True, 1, "demo overview"),
-    ],
-)
-@pytest.mark.asyncio
-async def test_vectorize_directory_meta_only_enqueues_included_level(
-    monkeypatch, include_abstract, include_overview, expected_level, expected_body
-):
-    queue = DummyQueue()
-    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
-    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("ignored"))
-
-    await embedding_utils.vectorize_directory_meta(
-        uri="viking://user/default/resources/demo",
-        abstract="demo abstract",
-        overview="demo overview",
-        ctx=DummyReq(),
-        include_abstract=include_abstract,
-        include_overview=include_overview,
-    )
-
-    assert len(queue.items) == 1
-    assert queue.items[0].context_data["level"] == expected_level
-    assert queue.items[0].context_data["abstract"] == expected_body
-
-
 @pytest.mark.asyncio
 async def test_vectorize_directory_meta_appends_search_tags_by_level(monkeypatch):
     queue = DummyQueue()
@@ -590,38 +561,15 @@ async def test_vectorize_directory_meta_appends_search_tags_by_level(monkeypatch
 async def test_vectorize_directory_meta_l1_abstract_is_overview(monkeypatch):
     """L1 records must carry the overview in the abstract scalar so Rerank
     sees L1 text instead of the L0 abstract."""
-    queue = DummyQueue()
-    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
-    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("ignored"))
-
-    overview = "# Overview\n\n" + ("section detail. " * 50)
-    await embedding_utils.vectorize_directory_meta(
-        uri="viking://user/default/resources/demo",
-        abstract="demo abstract",
-        overview=overview,
-        ctx=DummyReq(),
-    )
-
-    assert len(queue.items) == 2
-    l0, l1 = queue.items
-    assert l0.context_data["level"] == 0
-    assert l0.context_data["abstract"] == "demo abstract"
-    assert l1.context_data["level"] == 1
-    assert l1.context_data["abstract"] == overview
-    assert l1.message == (
-        f"---\ndirectory: viking://user/default/resources/demo/\n---\n\n{overview.rstrip()}"
-    )
-
-
-@pytest.mark.asyncio
-async def test_vectorize_directory_meta_strips_operational_okf_metadata(monkeypatch):
     from openviking.core.context import ContextLevel
     from openviking.storage.semantic_sidecar import render_semantic_sidecar
 
     queue = DummyQueue()
     monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
     monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("ignored"))
+
     uri = "viking://user/default/resources/demo"
+    overview = "# Overview\n\n" + ("section detail. " * 50)
     metadata = {
         "source": {"kind": "http", "uri": "https://example.com/private.pdf"},
         "generated_by": {"component": "SemanticProcessor", "trigger": "ingest"},
@@ -632,19 +580,20 @@ async def test_vectorize_directory_meta_strips_operational_okf_metadata(monkeypa
             "pending_child_changes": 0,
         },
     }
-
     await embedding_utils.vectorize_directory_meta(
         uri=uri,
         abstract=render_semantic_sidecar(ContextLevel.ABSTRACT, uri, "Visible abstract.", metadata),
-        overview=render_semantic_sidecar(
-            ContextLevel.OVERVIEW, uri, "# Visible overview", metadata
-        ),
+        overview=render_semantic_sidecar(ContextLevel.OVERVIEW, uri, overview, metadata),
         ctx=DummyReq(),
     )
 
+    assert len(queue.items) == 2
     l0, l1 = queue.items
+    assert l0.context_data["level"] == 0
     assert l0.context_data["abstract"] == "Visible abstract."
-    assert l1.context_data["abstract"] == "# Visible overview"
+    assert l1.context_data["level"] == 1
+    assert l1.context_data["abstract"] == overview.rstrip()
+    assert l1.message == (f"---\ndirectory: {uri}/\n---\n\n{overview.rstrip()}")
     for item in (l0, l1):
         assert f"directory: {uri}/" in item.message
         assert "source:" not in item.message

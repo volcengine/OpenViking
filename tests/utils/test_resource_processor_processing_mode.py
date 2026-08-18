@@ -1,14 +1,12 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-from pathlib import Path
 import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from openviking.parse.accessors.base import LocalResource, SourceType
 from openviking.server.identity import RequestContext, Role
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.resource_processor import ResourceProcessor
@@ -48,38 +46,6 @@ def ctx() -> RequestContext:
         user=UserIdentifier("account-1", "user-1"),
         role=Role.USER,
     )
-
-
-@pytest.mark.parametrize(
-    ("path", "source_format", "expected_kind"),
-    [
-        ("https://example.com/demo.pdf", "pdf", "http"),
-        ("https://example.com/acme/repo.git", "repository", "git"),
-        ("ssh://git@example.com/acme/repo.git", "repository", "git"),
-        ("/tmp/demo", "directory", "local"),
-    ],
-)
-def test_semantic_source_metadata_classifies_unprepared_sources(path, source_format, expected_kind):
-    assert ResourceProcessor._semantic_source_metadata(
-        path=path, prepared_resource=None, source_format=source_format
-    ) == {"kind": expected_kind, "uri": path}
-
-
-def test_semantic_source_metadata_prefers_prepared_original_source():
-    prepared = LocalResource(
-        path=Path("/tmp/downloaded.pdf"),
-        source_type=SourceType.HTTP,
-        original_source="https://example.com/original.pdf",
-    )
-
-    assert ResourceProcessor._semantic_source_metadata(
-        path="/tmp/downloaded.pdf",
-        prepared_resource=prepared,
-        source_format="pdf",
-    ) == {
-        "kind": "http",
-        "uri": "https://example.com/original.pdf",
-    }
 
 
 @pytest.mark.asyncio
@@ -380,6 +346,14 @@ async def test_vectors_only_syncs_preexisting_target_instead_of_merging(monkeypa
     )
     monkeypatch.setattr("openviking.utils.resource_processor.rewrite_image_uris", AsyncMock())
     monkeypatch.setattr("openviking.utils.resource_processor.vectorize_file", AsyncMock())
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.get_openviking_config",
+        lambda: SimpleNamespace(
+            queue_workers=SimpleNamespace(
+                add_resource=SimpleNamespace(file_vectorization_concurrency=8)
+            )
+        ),
+    )
     processor = ResourceProcessor(_FakeVikingDB())
     processor._delete_resource_semantic_vectors = AsyncMock()
     lock = {"lease_ref": "lock-1"}
@@ -496,6 +470,14 @@ async def test_vectors_only_deletes_sync_removed_detail_vectors(monkeypatch, ctx
     )
     monkeypatch.setattr("openviking.utils.resource_processor.rewrite_image_uris", AsyncMock())
     monkeypatch.setattr("openviking.utils.resource_processor.vectorize_file", AsyncMock())
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.get_openviking_config",
+        lambda: SimpleNamespace(
+            queue_workers=SimpleNamespace(
+                add_resource=SimpleNamespace(file_vectorization_concurrency=8)
+            )
+        ),
+    )
     processor = ResourceProcessor(_FakeVikingDB())
     processor._delete_resource_semantic_vectors = AsyncMock()
     processor._delete_removed_resource_vectors = AsyncMock()

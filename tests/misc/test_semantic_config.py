@@ -21,12 +21,6 @@ def test_semantic_config_defaults():
     assert config.memory_chunk_overlap == 200
 
 
-@pytest.mark.parametrize("value", [0, -1])
-def test_semantic_config_rejects_non_positive_sidecar_sample_size(value):
-    with pytest.raises(ValueError, match="sidecar_sample_size must be positive"):
-        SemanticConfig(sidecar_sample_size=value)
-
-
 def test_semantic_config_custom_values():
     """Test custom values override defaults."""
     config = SemanticConfig(

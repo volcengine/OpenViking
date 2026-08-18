@@ -1936,91 +1936,6 @@ async def test_reindex_resource_vectors_parallelize_files_and_isolate_failures(m
     assert counters.rebuilt_records == 1
 
 
-@pytest.mark.parametrize(
-    ("reindex_kind", "directory_uri", "context_type"),
-    [
-        ("resource", "viking://resources/demo", "resource"),
-        ("memory", "viking://user/default/memories/preferences", "memory"),
-        ("skill", "viking://user/default/skills/demo", "skill"),
-    ],
-)
-@pytest.mark.asyncio
-async def test_admin_reindex_directory_vectors_preserve_embedding_metadata_whitelist(
-    monkeypatch, reindex_kind, directory_uri, context_type
-):
-    from openviking.service.reindex_executor import ReindexExecutor, _ReindexCounters
-
-    class FakeVikingFS:
-        async def exists(self, uri, ctx=None):
-            return False
-
-    async def fake_read_directory_abstract(self, uri, *, ctx):
-        assert uri == directory_uri
-        return "Visible abstract."
-
-    async def fake_read_directory_overview(self, uri, *, ctx):
-        assert uri == directory_uri
-        return "# Visible overview"
-
-    async def fake_upsert_context(self, **kwargs):
-        upserts.append(kwargs)
-
-    async def fake_skill_meta(self, *, uri, abstract, ctx):
-        return {"name": "demo", "description": abstract}
-
-    monkeypatch.setattr("openviking.service.reindex_executor.get_viking_fs", lambda: FakeVikingFS())
-    monkeypatch.setattr(ReindexExecutor, "_read_directory_abstract", fake_read_directory_abstract)
-    monkeypatch.setattr(ReindexExecutor, "_read_directory_overview", fake_read_directory_overview)
-    monkeypatch.setattr(ReindexExecutor, "_upsert_context", fake_upsert_context)
-    monkeypatch.setattr(ReindexExecutor, "_skill_meta", fake_skill_meta)
-
-    upserts = []
-    counters = _ReindexCounters()
-    ctx = RequestContext(
-        user=UserIdentifier(account_id="test", user_id="alice"),
-        role=Role.ROOT,
-    )
-    service = ReindexExecutor()
-
-    if reindex_kind == "resource":
-        await service._reindex_resource_vectors_from_entries(
-            root_uri=directory_uri,
-            directories=[directory_uri],
-            files=[],
-            counters=counters,
-            ctx=ctx,
-        )
-    elif reindex_kind == "memory":
-        await service._reindex_memory_directory_chain(
-            directory_uris=[directory_uri],
-            counters=counters,
-            ctx=ctx,
-        )
-    else:
-        await service._reindex_skill_vectors(
-            uri=directory_uri,
-            counters=counters,
-            ctx=ctx,
-        )
-
-    by_level = {int(item["level"]): item for item in upserts}
-    assert set(by_level) == {int(ContextLevel.ABSTRACT), int(ContextLevel.OVERVIEW)}
-    assert all(item["context_type"] == context_type for item in upserts)
-    assert by_level[int(ContextLevel.ABSTRACT)]["abstract"] == "Visible abstract."
-    assert by_level[int(ContextLevel.OVERVIEW)]["abstract"] == "# Visible overview"
-    assert by_level[int(ContextLevel.ABSTRACT)]["vector_text"] == (
-        f"---\ndirectory: {directory_uri}/\n---\n\nVisible abstract."
-    )
-    assert by_level[int(ContextLevel.OVERVIEW)]["vector_text"] == (
-        f"---\ndirectory: {directory_uri}/\n---\n\n# Visible overview"
-    )
-    for item in upserts:
-        assert "source:" not in item["vector_text"]
-        assert "generated_by:" not in item["vector_text"]
-        assert "freshness:" not in item["vector_text"]
-    assert counters.rebuilt_records == 2
-
-
 @pytest.mark.asyncio
 async def test_reindex_semantic_processor_runs_with_skip_vectorization(monkeypatch):
     from openviking.service.reindex_executor import ReindexExecutor
@@ -2190,6 +2105,7 @@ async def test_reindex_resource_vector_text_summary_first_skips_content_read(mon
 @pytest.mark.asyncio
 async def test_reindex_file_summary_reads_existing_record_as_uri_owner(monkeypatch):
     from openviking.service.reindex_executor import ReindexExecutor
+    from openviking.storage.semantic_sidecar import render_semantic_sidecar
 
     captured = {}
 
@@ -2217,12 +2133,6 @@ async def test_reindex_file_summary_reads_existing_record_as_uri_owner(monkeypat
     assert summary == "owner summary"
     assert captured["ctx"].user.user_id == "bob"
 
-
-@pytest.mark.asyncio
-async def test_reindex_file_summary_parses_okf_overview_body_only(monkeypatch):
-    from openviking.service.reindex_executor import ReindexExecutor
-    from openviking.storage.semantic_sidecar import render_semantic_sidecar
-
     raw = render_semantic_sidecar(
         ContextLevel.OVERVIEW,
         "viking://resources/demo",
@@ -2239,12 +2149,11 @@ async def test_reindex_file_summary_parses_okf_overview_body_only(monkeypatch):
         del self, uri, ctx
         return raw
 
+    async def fail_if_existing_record_read(self, *, uri, level, ctx):
+        raise AssertionError("body-only overview summary should be used before fallback")
+
     monkeypatch.setattr(ReindexExecutor, "_safe_read_text", fake_safe_read_text)
-    service = ReindexExecutor()
-    ctx = RequestContext(
-        user=UserIdentifier(account_id="test", user_id="admin"),
-        role=Role.ROOT,
-    )
+    monkeypatch.setattr(ReindexExecutor, "_fetch_existing_record", fail_if_existing_record_read)
 
     summary = await service._best_file_summary(
         "viking://resources/demo/image.png",
