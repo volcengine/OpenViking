@@ -205,6 +205,42 @@ func TestListSendsOrderingOptions(t *testing.T) {
 	}
 }
 
+func TestTreeSendsLevelLimitAndPreservesDefault(t *testing.T) {
+	tests := []struct {
+		name    string
+		options *TreeOptions
+		want    string
+	}{
+		{name: "nil options", options: nil, want: "3"},
+		{name: "zero-value options", options: &TreeOptions{}, want: "3"},
+		{name: "custom depth", options: &TreeOptions{LevelLimit: Int(2)}, want: "2"},
+		{name: "explicit zero", options: &TreeOptions{LevelLimit: Int(0)}, want: "0"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/api/v1/fs/tree" {
+					t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+				}
+				if got := r.URL.Query().Get("level_limit"); got != test.want {
+					t.Fatalf("level_limit = %q, want %q", got, test.want)
+				}
+				writeOK(t, w, []any{})
+			}))
+			defer closeServer()
+
+			if _, err := client.Tree(
+				context.Background(),
+				"viking://resources/docs",
+				test.options,
+			); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestFindSendsImageQuery(t *testing.T) {
 	imagePath := filepath.Join(t.TempDir(), "query.png")
 	if err := os.WriteFile(imagePath, []byte("\x89PNG\r\n\x1a\n"), 0o600); err != nil {

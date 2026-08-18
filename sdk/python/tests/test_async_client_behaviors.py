@@ -297,6 +297,27 @@ def test_sync_http_client_reindex_forwards_to_async_client():
     )
 
 
+def test_sync_http_client_tree_forwards_level_limit():
+    client = SyncHTTPClient(url="http://localhost:1933")
+    with patch.object(
+        client._async_client,
+        "tree",
+        new_callable=Mock,
+        return_value=[],
+    ) as mock_tree:
+        with patch(
+            "openviking_sdk.client.run_async",
+            return_value=[],
+        ) as mock_run:
+            explicit_result = client.tree("viking://resources/demo", level_limit=2)
+            zero_result = client.tree("viking://resources/demo", level_limit=0)
+            default_result = client.tree("viking://resources/demo")
+
+    assert explicit_result == zero_result == default_result == []
+    assert mock_run.call_count == 3
+    assert [call.kwargs["level_limit"] for call in mock_tree.call_args_list] == [2, 0, 3]
+
+
 def test_sync_http_client_batch_add_messages_forwards_to_async_client():
     client = SyncHTTPClient(url="http://localhost:1933")
     messages = [
@@ -955,6 +976,24 @@ async def test_ls_passes_full_query_params():
             "sort_order": "desc",
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_tree_passes_level_limit_and_preserves_default():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(get=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response = lambda _response: []
+
+    await client.tree("viking://resources/", level_limit=2)
+    await client.tree("viking://resources/", level_limit=0)
+    await client.tree("viking://resources/")
+
+    assert [call.kwargs["params"]["level_limit"] for call in fake_http.get.await_args_list] == [
+        2,
+        0,
+        3,
+    ]
 
 
 @pytest.mark.asyncio

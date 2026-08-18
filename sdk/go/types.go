@@ -160,6 +160,7 @@ type TreeOptions struct {
 	AbsLimit      int
 	ShowAllHidden bool
 	NodeLimit     int
+	LevelLimit    *int
 }
 
 // RemoveOptions controls Remove.

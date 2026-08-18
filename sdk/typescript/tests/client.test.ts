@@ -220,6 +220,27 @@ describe("OpenVikingClient", () => {
     expect(url.searchParams.get("sort_order")).toBe("desc");
   });
 
+  it("passes directory tree depth and preserves the server default", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => ok([]));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await client.tree("viking://resources/docs", { levelLimit: 2 });
+    await client.tree("viking://resources/docs", { levelLimit: 0 });
+    await client.tree("viking://resources/docs");
+
+    const explicitUrl = new URL(String(fetcher.mock.calls[0]![0]));
+    const zeroUrl = new URL(String(fetcher.mock.calls[1]![0]));
+    const defaultUrl = new URL(String(fetcher.mock.calls[2]![0]));
+    expect(explicitUrl.searchParams.get("level_limit")).toBe("2");
+    expect(zeroUrl.searchParams.get("level_limit")).toBe("0");
+    expect(defaultUrl.searchParams.get("level_limit")).toBe("3");
+  });
+
   it("sends addResource tags and tagMode to the server", async () => {
     const fetcher = vi
       .fn<typeof fetch>()

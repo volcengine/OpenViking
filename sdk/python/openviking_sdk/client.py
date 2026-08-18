@@ -1063,6 +1063,7 @@ class AsyncHTTPClient:
         abs_limit: int = 128,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
+        level_limit: int = 3,
     ) -> List[Dict[str, Any]]:
         response = await self._request(
             "GET",
@@ -1073,6 +1074,7 @@ class AsyncHTTPClient:
                 "abs_limit": abs_limit,
                 "show_all_hidden": show_all_hidden,
                 "node_limit": node_limit,
+                "level_limit": level_limit,
             },
         )
         return self._handle_response(response)
@@ -2198,6 +2200,7 @@ class SyncHTTPClient:
         abs_limit: int = 128,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
+        level_limit: int = 3,
     ) -> List[Dict[str, Any]]:
         return run_async(
             self._async_client.tree(
@@ -2206,6 +2209,7 @@ class SyncHTTPClient:
                 abs_limit=abs_limit,
                 show_all_hidden=show_all_hidden,
                 node_limit=node_limit,
+                level_limit=level_limit,
             )
         )
 
