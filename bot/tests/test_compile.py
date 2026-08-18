@@ -2945,6 +2945,91 @@ async def test_request_normalization_uses_default_reason_and_canonical_skill(mon
 
 
 @pytest.mark.asyncio
+async def test_request_normalization_resolves_installed_skill_name(monkeypatch):
+    class Client:
+        async def attrs(self, uri):
+            assert uri != "memory_consolidation"
+            return {"uri": uri.rstrip("/")}
+
+        async def stat(self, uri):
+            return {"uri": uri, "isDir": True}
+
+        async def get_skill(self, name, *, target_uri=None):
+            assert name == "memory_consolidation"
+            assert target_uri is None
+            return {
+                "root_uri": "viking://user/alice/skills/memory_consolidation",
+                "content": (
+                    "---\nname: memory_consolidation\n"
+                    "description: Consolidate memories\n---\nMerge them"
+                ),
+            }
+
+        async def close(self):
+            return None
+
+    async def create_client(**kwargs):
+        del kwargs
+        return Client()
+
+    monkeypatch.setattr("vikingbot.compile.service.VikingClient.create", create_client)
+    service = object.__new__(BotCompileService)
+    service.config = None
+    service.limits = CompileLimits()
+
+    normalized = await service._normalize_request(
+        CompileRequest.model_validate(
+            {
+                "from": ["viking://user/alice/memories/preferences/zhangsan"],
+                "to": "viking://user/alice/memories/preferences/张三",
+                "skill": "memory_consolidation",
+                "reason": "Merge the alias into the canonical owner",
+            }
+        ),
+        connection={},
+    )
+
+    assert normalized.skill == "viking://user/alice/skills/memory_consolidation"
+
+
+@pytest.mark.asyncio
+async def test_request_normalization_rejects_invalid_skill_shorthand(monkeypatch):
+    class Client:
+        async def attrs(self, uri):
+            return {"uri": uri.rstrip("/")}
+
+        async def stat(self, uri):
+            return {"uri": uri, "isDir": True}
+
+        async def close(self):
+            return None
+
+    async def create_client(**kwargs):
+        del kwargs
+        return Client()
+
+    monkeypatch.setattr("vikingbot.compile.service.VikingClient.create", create_client)
+    service = object.__new__(BotCompileService)
+    service.config = None
+    service.limits = CompileLimits()
+
+    with pytest.raises(CompileFailure) as raised:
+        await service._normalize_request(
+            CompileRequest.model_validate(
+                {
+                    "from": ["viking://resources/source"],
+                    "to": "viking://resources/wiki",
+                    "skill": "../memory_consolidation",
+                }
+            ),
+            connection={},
+        )
+
+    assert raised.value.code == "SKILL_INVALID"
+    assert "installed Skill name" in str(raised.value)
+
+
+@pytest.mark.asyncio
 async def test_request_normalization_rejects_runtime_above_server_limit_before_io(monkeypatch):
     async def create_client(**kwargs):
         raise AssertionError(f"client must not be created: {kwargs}")

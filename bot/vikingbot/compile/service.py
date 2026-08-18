@@ -102,6 +102,9 @@ _LANGUAGE_CONTEXT_CHARS = 16_000
 _COMPILE_BUDGET_REMINDER_THRESHOLDS = (15, 8, 3)  # heads_up / warn / critical iterations left
 
 _REQUIREMENT_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
+_SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
 def _workspace_submission_rule(*, exec_enabled: bool) -> str:
     """How to hand over content too large to inline into submit_wiki_bundle."""
     writer = "write_file or exec" if exec_enabled else "write_file"
@@ -597,20 +600,37 @@ class BotCompileService:
                     "RESOURCE_EXHAUSTED", "Compile source root limit exceeded.", stage="queued"
                 )
 
-            skill_uri = request.skill.strip().rstrip("/")
-            if skill_uri.endswith("/SKILL.md"):
-                skill_uri = skill_uri[: -len("/SKILL.md")]
-            skill_attrs = await client.attrs(skill_uri)
-            canonical_skill = str(skill_attrs.get("uri") or "").rstrip("/")
-            skill_stat = await client.stat(canonical_skill)
-            if not skill_stat.get("isDir"):
-                raise CompileFailure(
-                    "SKILL_INVALID",
-                    "--skill must resolve to a Skill directory or SKILL.md",
-                    stage="queued",
-                )
-            skill_name, skill_target = self._skill_name_and_target(canonical_skill)
-            skill = await client.get_skill(skill_name, target_uri=skill_target)
+            skill_ref = request.skill.strip().rstrip("/")
+            if skill_ref.startswith("viking://"):
+                if skill_ref.endswith("/SKILL.md"):
+                    skill_ref = skill_ref[: -len("/SKILL.md")]
+                skill_attrs = await client.attrs(skill_ref)
+                canonical_skill = str(skill_attrs.get("uri") or "").rstrip("/")
+                skill_stat = await client.stat(canonical_skill)
+                if not skill_stat.get("isDir"):
+                    raise CompileFailure(
+                        "SKILL_INVALID",
+                        "--skill must resolve to a Skill directory or SKILL.md",
+                        stage="queued",
+                    )
+                skill_name, skill_target = self._skill_name_and_target(canonical_skill)
+                skill = await client.get_skill(skill_name, target_uri=skill_target)
+            else:
+                if not _SKILL_NAME_RE.fullmatch(skill_ref):
+                    raise CompileFailure(
+                        "SKILL_INVALID",
+                        "--skill must be an installed Skill name, directory URI, or SKILL.md URI",
+                        stage="queued",
+                    )
+                skill = await client.get_skill(skill_ref, target_uri=None)
+                canonical_skill = str(skill.get("root_uri") or "").rstrip("/")
+                skill_name, _skill_target = self._skill_name_and_target(canonical_skill)
+                if skill_name != skill_ref:
+                    raise CompileFailure(
+                        "SKILL_INVALID",
+                        "Resolved Skill name does not match --skill",
+                        stage="queued",
+                    )
             canonical_skill = str(skill.get("root_uri") or canonical_skill).rstrip("/")
             try:
                 SkillLoader.parse(
