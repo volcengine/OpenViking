@@ -361,11 +361,9 @@ impl MountableFS {
                                       config.name
                                   )));
                             }
-                            let pl_mgr = self
-                                .pathlock_manager
-                                .get()
-                                .cloned()
-                                .expect("pathlock manager must be initialized before mount");
+                            let pl_mgr = self.pathlock_manager.get().cloned().ok_or_else(|| {
+                                Error::config("pathlock manager must be initialized before mount")
+                            })?;
                             Arc::new(EncryptionWrappedFS::new(
                                 storage_fs,
                                 rk,
@@ -445,11 +443,9 @@ impl MountableFS {
         bc: &BackendsConfig,
     ) -> Result<MultiWriteWrappedFS> {
         let (enc_root_key, enc_provider_type) = self.get_encryption_config().await;
-        let pathlock_manager = self
-            .pathlock_manager
-            .get()
-            .cloned()
-            .expect("pathlock manager must be initialized before multi-write mount");
+        let pathlock_manager = self.pathlock_manager.get().cloned().ok_or_else(|| {
+            Error::config("pathlock manager must be initialized before multi-write mount")
+        })?;
         build_multi_write_fs(
             &self.registry,
             config,
@@ -601,11 +597,10 @@ impl MountableFS {
             return Ok(false);
         }
 
-        let manager = self
-            .pathlock_manager
-            .get()
-            .cloned()
-            .expect("pathlock manager must be initialized before raw copy");
+        let manager =
+            self.pathlock_manager.get().cloned().ok_or_else(|| {
+                Error::config("pathlock manager must be initialized before raw copy")
+            })?;
         let request = PathLockRequest {
             path: dst_path.to_string(),
             kind: PathLockKind::Exact,
@@ -1659,6 +1654,26 @@ mod tests {
         manager.release(&outer).await.unwrap();
     }
 
+    #[tokio::test]
+    async fn copy_within_mount_without_pathlock_manager_returns_config_error() {
+        use crate::plugins::MemFSPlugin;
+
+        let mfs = Arc::new(MountableFS::new());
+        mfs.register_plugin(MemFSPlugin).await;
+        mfs.mount(test_config("memfs", "/local")).await.unwrap();
+        mfs.mkdir("/local/src", 0o755).await.unwrap();
+        mfs.mkdir("/local/dst", 0o755).await.unwrap();
+        mfs.write("/local/src/a.md", b"content", 0, WriteFlag::Create)
+            .await
+            .unwrap();
+
+        let result = mfs
+            .copy_within_mount("/local/src/a.md", "/local/dst/a.md")
+            .await;
+
+        assert!(matches!(result.err(), Some(Error::Config(_))));
+    }
+
     #[cfg(feature = "cache")]
     #[tokio::test]
     async fn copy_within_mount_overwrite_invalidates_cached_destination() {
@@ -2318,6 +2333,57 @@ mod tests {
 
         let result = mfs.build_multi_write_fs(&config, &backups).await;
         assert!(result.is_err());
+        assert!(matches!(result.err(), Some(Error::Config(_))));
+    }
+
+    #[tokio::test]
+    async fn build_multi_write_fs_without_pathlock_manager_returns_config_error() {
+        let mfs = Arc::new(MountableFS::new());
+        mfs.register_plugin(MockPlugin::new("primary")).await;
+        mfs.register_plugin(MockPlugin::new("backupfs")).await;
+
+        let backups = BackendsConfig {
+            sync_type: "async".to_string(),
+            write_ack_count: None,
+            write_ack_timeout_ms: None,
+            write_concurrency: None,
+            retry_interval_ms: None,
+            retry_backoff_base_ms: None,
+            retry_max_retries_per_round: None,
+            retry_quarantine_after_failures: None,
+            read_probe_cache_ttl_ms: None,
+            items: vec![BackendItemConfig {
+                name: "backup1".to_string(),
+                backend: "backupfs".to_string(),
+                params: serde_json::Value::Null,
+                timeout: None,
+                encryption: None,
+                operations: None,
+                excludes: None,
+            }],
+        };
+        let config = PluginConfig {
+            name: "primary".to_string(),
+            mount_path: "/local".to_string(),
+            params: HashMap::new(),
+            backups: Some(backups.clone()),
+            ..PluginConfig::default()
+        };
+
+        let result = mfs.build_multi_write_fs(&config, &backups).await;
+        assert!(matches!(result.err(), Some(Error::Config(_))));
+    }
+
+    #[tokio::test]
+    async fn mount_encrypted_single_backend_without_pathlock_manager_returns_config_error() {
+        use crate::plugins::MemFSPlugin;
+
+        let mfs = Arc::new(MountableFS::new());
+        mfs.register_plugin(MemFSPlugin).await;
+        mfs.set_encryption_config(Some([9u8; 32]), Some(1)).await;
+
+        let result = mfs.mount(test_config("memfs", "/mock")).await;
+
         assert!(matches!(result.err(), Some(Error::Config(_))));
     }
 
