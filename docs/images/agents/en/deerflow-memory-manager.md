@@ -2,7 +2,7 @@ DeerFlow can use OpenViking as a long-term memory backend through MemoryManager.
 
 ## Step 1: Configure OpenViking credentials
 
-Edit the `.env` file in the DeerFlow project root and add the OpenViking USER API Key:
+Edit the `.env` file in the DeerFlow project root and add the API key from this page:
 
 ```bash
 OPENVIKING_API_KEY=[TODO]your-api-key
@@ -20,7 +20,7 @@ memory:
   manager_class: openviking
   mode: middleware
   backend_config:
-    base_url: [TODO]openviking-base-url
+    base_url: https://api.vikingdb.cn-beijing.volces.com/openviking
     owner_user_id: default
     api_key_env: OPENVIKING_API_KEY
     startup_policy: fail_fast
@@ -57,7 +57,7 @@ Successful log examples:
 
 ```text
 Memory manager resolved: OpenVikingMemoryManager (manager_class='openviking')
-HTTP Request: GET [TODO]openviking-base-url/health "HTTP/1.1 200 OK"
+HTTP Request: GET https://api.vikingdb.cn-beijing.volces.com/openviking/health "HTTP/1.1 200 OK"
 ```
 
 ## Step 5: Verify memory write and recall

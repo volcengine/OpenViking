@@ -148,18 +148,16 @@ class PDFConfig(ParserConfig):
     Attributes:
         strategy: Parsing strategy ("local" | "mineru" | "auto")
         mineru_endpoint: MinerU API endpoint URL
-        mineru_api_key: MinerU API authentication key
         mineru_timeout: MinerU request timeout in seconds
-        mineru_params: Additional MinerU API parameters
+        mineru_bodys: Additional MinerU API multipart form fields
     """
 
     strategy: str = "auto"  # "local" | "mineru" | "auto"
 
     # MinerU API configuration
     mineru_endpoint: Optional[str] = None  # API endpoint URL
-    mineru_api_key: Optional[str] = None  # API authentication key
     mineru_timeout: float = 300.0  # Request timeout in seconds (5 minutes)
-    mineru_params: Optional[dict] = None  # Additional API parameters
+    mineru_bodys: Optional[dict] = None  # Additional API multipart form fields
 
     # Heading detection configuration
     heading_detection: str = "auto"  # "bookmarks" | "font" | "auto" | "none"

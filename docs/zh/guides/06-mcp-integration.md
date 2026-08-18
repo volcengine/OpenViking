@@ -121,13 +121,12 @@ claude mcp add --transport http openviking \
 
 ## 可用的 MCP 工具
 
-连接后，OpenViking MCP 端点暴露 16 个工具：
+连接后，OpenViking MCP 端点暴露 15 个工具：
 
 | 工具 | 说明 | 主要参数 |
 |------|------|----------|
 | `find` | 无 session 上下文的快速语义检索 | `query`, `target_uri`(可选), `limit`, `min_score`, `level`(可选), `context_type`(可选) |
-| `search` | 支持可选 session 上下文和意图分析的深度语义检索 | `query`, `target_uri`(可选), `session_id`(可选), `limit`, `min_score`, `level`(可选), `context_type`(可选) |
-| `recall` | 按记忆类别配额召回，服务端组装为带 URI 的扁平 `<memory>` 块 | `query`, `quotas`(可选), `max_chars`, `min_score`, `peer_scope`, `other_peer_penalty`(可选), `session_id`(可选), `detail`(可选), `max_tokens`(可选), `rewrite`(可选) |
+| `search` | 深度语义检索；`mode="context"` 组装可直接注入的上下文，并替代原 `recall` 工具 | `query`, `mode`（`list` 或 `context`）, `target_uri`（仅 list 模式）, `session_id`(可选), `limit`, `min_score`, `level`（list 模式）, `context_type`(可选)，以及 context 模式的 `quotas`, `purpose`, `max_tokens`, `detail` 或 `detail_by_category`, `dedup_turns`, `exclude_uris`, `peer_scope`, 标量 `other_peer_penalty` 或按类别设置的 `other_peer_penalties`, `rewrite`（`off` 或 `auto`） |
 | `read` | 读取一个或多个 `viking://` URI 的内容 | `uris`（单个字符串或数组） |
 | `list` | 列出 `viking://` 目录下的条目 | `uri`, `recursive`(可选) |
 | `tree` | 以缩进形式展示 `viking://` URI 下的递归目录树——当需要全面了解文件树结构时使用（单层列表用 `list`，按文件名查找用 `glob`） | `uri`(可选), `level_limit`(默认 3), `node_limit`(默认 1000), `include_abstract`(可选——同时展示每个文件的摘要) |

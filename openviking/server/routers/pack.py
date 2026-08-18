@@ -189,10 +189,7 @@ async def import_ovpack(
             vector_mode=body.vector_mode,
         )
     except Exception:
-        await store.mark_failed(resolved, ctx)
         raise
-    else:
-        await store.mark_consumed(resolved, ctx)
     finally:
         await resolved.cleanup()
 
@@ -219,10 +216,7 @@ async def restore_ovpack(
             vector_mode=body.vector_mode,
         )
     except Exception:
-        await store.mark_failed(resolved, ctx)
         raise
-    else:
-        await store.mark_consumed(resolved, ctx)
     finally:
         await resolved.cleanup()
 

@@ -3,8 +3,9 @@
 """Regression tests for bounded local and remote sandbox file access."""
 
 import json
+import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 from vikingbot.sandbox.backends.aiosandbox import AioSandboxBackend
@@ -34,6 +35,15 @@ async def test_local_workspace_listing_and_reads_are_bounded(tmp_path: Path):
         await backend.read_file_bytes("nested/artifact.bin", max_bytes=7)
     with pytest.raises(ValueError, match="inventory exceeds 2 entries"):
         await backend.list_files(max_entries=2)
+
+    assert backend.local_file_path("nested/artifact.bin") == tmp_path / "nested/artifact.bin"
+    exported = tmp_path / "exported.bin"
+    assert await backend.export_file("nested/artifact.bin", exported) == 8
+    assert exported.read_bytes() == b"artifact"
+    oversized = tmp_path / "oversized.bin"
+    with pytest.raises(ValueError, match="7-byte export limit"):
+        await backend.export_file("nested/artifact.bin", oversized, max_bytes=7)
+    assert not oversized.exists()
 
 
 class _AioFileClient:
@@ -125,7 +135,16 @@ async def test_aiosandbox_lists_and_streams_from_remote_workspace(tmp_path: Path
     assert await backend.read_file_bytes("artifact.bin", max_bytes=6) == b"abcdef"
     with pytest.raises(ValueError, match="5-byte read limit"):
         await backend.read_file_bytes("artifact.bin", max_bytes=5)
-    assert files.download_calls == ["/home/gem/artifact.bin", "/home/gem/artifact.bin"]
+
+    destination = tmp_path / "download" / "artifact.bin"
+    assert backend.local_file_path("artifact.bin") is None
+    assert await backend.export_file("artifact.bin", destination) == 6
+    assert destination.read_bytes() == b"abcdef"
+    assert files.download_calls == [
+        "/home/gem/artifact.bin",
+        "/home/gem/artifact.bin",
+        "/home/gem/artifact.bin",
+    ]
 
 
 @pytest.mark.asyncio
@@ -170,11 +189,27 @@ class _OpenSandboxCommands:
         )
 
 
+class _RunCommandOpts(SimpleNamespace):
+    pass
+
+
 def _opensandbox_vke_backend(
     tmp_path: Path,
     file_client: _OpenSandboxFiles,
     commands: _OpenSandboxCommands,
 ) -> OpenSandboxBackend:
+    if "opensandbox.models.execd" not in sys.modules:
+        opensandbox_module = sys.modules.setdefault("opensandbox", ModuleType("opensandbox"))
+        models_module = sys.modules.setdefault(
+            "opensandbox.models",
+            ModuleType("opensandbox.models"),
+        )
+        execd_module = ModuleType("opensandbox.models.execd")
+        execd_module.RunCommandOpts = _RunCommandOpts
+        opensandbox_module.models = models_module
+        models_module.execd = execd_module
+        sys.modules["opensandbox.models.execd"] = execd_module
+
     backend = object.__new__(OpenSandboxBackend)
     backend._workspace = tmp_path
     backend._is_vke = True
@@ -200,6 +235,16 @@ async def test_opensandbox_vke_uses_bounded_remote_inventory_and_range_reads(tmp
     assert files.read_calls == [
         ("/workspace/artifact.bin", "bytes=0-6"),
         ("/workspace/artifact.bin", "bytes=0-5"),
+    ]
+
+    destination = tmp_path / "download" / "artifact.bin"
+    assert backend.local_file_path("artifact.bin") is None
+    assert await backend.export_file("artifact.bin", destination) == 6
+    assert destination.read_bytes() == b"abcdef"
+    assert files.read_calls == [
+        ("/workspace/artifact.bin", "bytes=0-6"),
+        ("/workspace/artifact.bin", "bytes=0-5"),
+        ("/workspace/artifact.bin", None),
     ]
 
 

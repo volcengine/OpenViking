@@ -84,8 +84,14 @@
     },
     "queue_workers": {
         "external_parse": {"max_concurrent": 4},
-        "add_resource": {"max_concurrent": 4},
+        "add_resource": {
+            "max_concurrent": 4,
+            "file_vectorization_concurrency": 8
+        },
         "session_commit": {"max_concurrent": 8},
+    },
+    "reindex": {
+        "file_vectorization_concurrency": 8
     },
     "embedding": {
         "dense": {
@@ -228,9 +234,13 @@
             "max_section_size": 4000,
             "section_size_flexibility": 0.3,
             "max_section_chars": 6000,
-            "mineru_endpoint": "https://mineru.example.com/api/v1",
-            "mineru_api_key": "{your-mineru-api-key}",
+            "mineru_endpoint": "http://127.0.0.1:8000",
             "mineru_timeout": 300.0,
+            "mineru_bodys": {
+                "backend": "hybrid-auto-engine",
+                "lang_list": ["ch"],
+                "parse_method": "auto"
+            },
         },
         "code": {
             "github_raw_domain": "raw.githubusercontent.com",

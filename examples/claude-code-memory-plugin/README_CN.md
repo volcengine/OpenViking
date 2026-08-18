@@ -264,7 +264,7 @@ bypass 命中时所有 hook 直接放行，不联系 OpenViking。
 示例：
 
 ```text
-OV ✓ │ Fable 5 · ctx 42% │ ↩ 6 mem (0.92) · 50ms   注入 6 条记忆；模型 + 上下文占比
+OV ✓ │ Fable 5 · ctx 42% │ ↩ 6 mem · 50ms          注入 6 条记忆；模型 + 上下文占比
 OV ⚠ slow                                  探针超过 1s 预算（服务器可能在抽风）
 OV ✗ offline                               服务器不可达
 OV ⚡ bypass │ Fable 5 · ctx 42%            命中 OPENVIKING_BYPASS_SESSION*
@@ -351,7 +351,7 @@ Claude Code 自带 `MEMORY.md` 文件系统，本插件**与之互补**：
 
 没有 TypeScript 编译步骤，也没有运行时 npm 引导。Hook 都是直接走 HTTP 调 OpenViking 的 `.mjs` 文件；MCP 使用 `servers/mcp-proxy.mjs` 作为零依赖 stdio 桥接，转发到 OpenViking 服务器自身的 `/mcp` endpoint。
 
-首次接触时创建一个持久化的 OpenViking session，整个 Claude Code 会话期间复用。OV session ID 是 `cc-<sha256(cc_session_id)>`，所以 resume / compact / 多 hook 事件都打到同一个 session，OV 的 `auto_commit_threshold` 自然驱动归档与记忆抽取。
+首次接触时创建一个持久化的 OpenViking session，整个 Claude Code 会话期间复用。OV session ID 是 `cc-<cc_session_id>`（CC session_id 原样保留，不做哈希），所以 resume / compact / 多 hook 事件都打到同一个 session。归档与记忆抽取由客户端触发：`Stop` hook 在服务端报告的 pending tokens 超过 `commitTokenThreshold`（默认 20000）时 commit，`PreCompact` / `SessionEnd` / `SubagentStop` 则无条件 commit。
 
 ### 各 hook 职责
 
@@ -364,6 +364,8 @@ Claude Code 自带 `MEMORY.md` 文件系统，本插件**与之互补**：
 | `SessionEnd`          | Claude Code 会话关闭                  | 最后一次 commit                                                                                  |
 | `SubagentStart`       | 父 session 通过 Task 工具孵化子 agent | 为子 agent 派生隔离的 OV session ID，写 start state                                              |
 | `SubagentStop`        | 子 agent 结束                         | 读子 agent transcript → 推到带子 agent peer 身份的隔离 session → commit                          |
+| `PreToolUse`          | 原生 `Read` / `Glob` / `Grep` 指向 `viking://` URI | 拒绝该调用，提示 Claude 改用对应的 OpenViking MCP 工具                              |
+| `PostToolUse`         | `Read` 读到 `SKILL.md` 文件           | 可选（默认关闭）：OV 有相关 skill 经验记忆时注入经验块                                           |
 
 ### 异步写路径
 
@@ -388,7 +390,7 @@ claude-code-memory-plugin/
 ├── .claude-plugin/
 │   └── plugin.json          # plugin manifest
 ├── hooks/
-│   └── hooks.json           # 7 个 hook 注册
+│   └── hooks.json           # 9 个 hook 注册
 ├── servers/
 │   └── mcp-proxy.mjs        # stdio -> OpenViking /mcp 桥接
 ├── scripts/

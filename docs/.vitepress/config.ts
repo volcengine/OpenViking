@@ -122,6 +122,7 @@ const gettingStartedSidebar = {
 const agentIntegrationSidebar = {
   en: {
     overview: 'Integration Overview',
+    topItems: [['16-capability-reference.md', 'Capability Reference']],
     groups: [
       {
         text: 'Developer Tools',
@@ -156,6 +157,7 @@ const agentIntegrationSidebar = {
   },
   zh: {
     overview: '集成概览',
+    topItems: [['16-capability-reference.md', '集成能力参考']],
     groups: [
       {
         text: '开发工具',
@@ -482,6 +484,7 @@ const guidesSidebar = {
 
 type StructuredSidebarCopy = {
   readonly overview: string
+  readonly topItems?: ReadonlyArray<readonly [string, string]>
   readonly groups: ReadonlyArray<{
     readonly text: string
     readonly items: ReadonlyArray<readonly [string, string]>
@@ -540,6 +543,7 @@ function structuredSidebarSection(
     collapsed,
     items: [
       configuredSidebarItem(locale, section, [overviewFile, copy.overview]),
+      ...(copy.topItems ?? []).map((item) => configuredSidebarItem(locale, section, item)),
       ...configuredSidebarGroups(locale, section, copy.groups)
     ]
   }

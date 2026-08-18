@@ -2,6 +2,7 @@
 
 import asyncio
 import atexit
+import base64
 import json
 import os
 import posixpath
@@ -302,6 +303,11 @@ class OpenSandboxBackend(SandboxBackend):
         relative = self._normalize_workspace_path(path)
         return self.sandbox_cwd if not relative else f"{self.sandbox_cwd}/{relative}"
 
+    def local_file_path(self, path: str) -> Path | None:
+        if self._is_vke:
+            return None
+        return super().local_file_path(path)
+
     async def read_file(self, path: str) -> str:
         """Read file from OpenSandbox."""
         if not self._sandbox:
@@ -331,6 +337,38 @@ class OpenSandboxBackend(SandboxBackend):
                 raise
         else:
             await super().write_file(path, content)
+
+    async def write_file_bytes(self, path: str, content: bytes) -> None:
+        """Write binary content to OpenSandbox, including remote VKE sandboxes."""
+        if not self._sandbox:
+            raise SandboxNotStartedError()
+        if not self._is_vke:
+            await super().write_file_bytes(path, content)
+            return
+        sandbox_path = path if path.startswith("/") else f"/workspace/{path}"
+        try:
+            await self._sandbox.files.write_file(sandbox_path, content, mode=0o644)
+        except TypeError:
+            encoded_path = f"{sandbox_path}.vikingbot-b64"
+            encoded = base64.b64encode(content).decode("ascii")
+            await self._sandbox.files.write_file(encoded_path, encoded, mode=0o600)
+            output = await self.execute(
+                f"base64 -d {shlex.quote(encoded_path)} > {shlex.quote(sandbox_path)} "
+                f"&& rm -f {shlex.quote(encoded_path)}"
+            )
+            self._ensure_command_succeeded(output, "binary file decode")
+
+    async def remove_tree(self, path: str) -> None:
+        if not self._sandbox:
+            raise SandboxNotStartedError()
+        if not path or path.startswith("/") or ".." in Path(path).parts:
+            raise PermissionError("remove_tree requires a safe sandbox-relative path")
+        if not self._is_vke:
+            await super().remove_tree(path)
+            return
+        sandbox_path = f"/workspace/{path}"
+        output = await self.execute(f"rm -rf -- {shlex.quote(sandbox_path)}")
+        self._ensure_command_succeeded(output, "sandbox tree removal")
 
     async def list_dir(self, path: str) -> list[tuple[str, bool]]:
         """List directory in OpenSandbox."""
@@ -470,3 +508,22 @@ class OpenSandboxBackend(SandboxBackend):
             range_header=range_header,
         )
         return await self._collect_stream_bytes(stream, path, max_bytes)
+
+    async def export_file(
+        self,
+        path: str,
+        destination: Path,
+        *,
+        max_bytes: int | None = None,
+    ) -> int:
+        if not self._is_vke:
+            return await super().export_file(path, destination, max_bytes=max_bytes)
+        if not self._sandbox:
+            raise SandboxNotStartedError()
+        self._validate_max_bytes(max_bytes)
+        range_header = None if max_bytes is None else f"bytes=0-{max_bytes}"
+        stream = await self._sandbox.files.read_bytes_stream(
+            self._sandbox_path(path),
+            range_header=range_header,
+        )
+        return await self._export_stream_to_local(stream, destination, path, max_bytes)

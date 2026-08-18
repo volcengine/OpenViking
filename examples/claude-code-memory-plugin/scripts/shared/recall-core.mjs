@@ -421,7 +421,7 @@ function looksLikeUnknownField(res) {
 function wrapContext(body) {
   return [
     "<openviking-context>",
-    "Relevant memory from OpenViking. Use the recall/read MCP tools to expand URIs.",
+    "Relevant memory from OpenViking. Use the search/read MCP tools to expand URIs.",
     body,
     "</openviking-context>",
   ].join("\n");

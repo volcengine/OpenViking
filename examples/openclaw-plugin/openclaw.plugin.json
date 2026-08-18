@@ -261,6 +261,12 @@
       "placeholder": "memory",
       "help": "Agent-visible tool blocklist applied after enabledTools. Accepts the same tool names or groups.",
       "advanced": true
+    },
+    "runtimeQueryConfigPath": {
+      "label": "Runtime Query Config Path",
+      "placeholder": "~/.openclaw/openviking/runtime-query-config.json",
+      "help": "Optional JSON file for /ov-query-config runtime overrides. Empty keeps overrides in memory only.",
+      "advanced": true
     }
   },
   "configSchema": {
@@ -514,6 +520,10 @@
             "type": "string"
           }
         ]
+      },
+      "runtimeQueryConfigPath": {
+        "type": "string",
+        "description": "Optional JSON file path for runtime query config overrides. Empty means in-memory only."
       },
       "agentExperience": {
         "type": "object",

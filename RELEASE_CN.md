@@ -146,7 +146,7 @@ VikingBot 当前不再作为推荐的独立 PyPI 包发版路径维护。现行�
 - 源码开发入口：`uv pip install -e ".[bot]"`。
 - 官方 Docker 镜像默认已包含 VikingBot，可通过 `--without-bot` 或 `OPENVIKING_WITH_BOT=0` 关闭。
 
-根仓库中仍保留 `First Release to PyPI` workflow，但它会在 `bot` 目录执行独立 Python 包构建；当前 `bot/` 目录没有独立的 `pyproject.toml`、`setup.py` 或 `setup.cfg`，因此该 workflow 应视为历史遗留配置，不建议用于新的 VikingBot 发版。
+根仓库原有的 `First Release to PyPI` workflow 已删除。当前 `bot/` 目录没有独立的 `pyproject.toml`、`setup.py` 或 `setup.cfg`，因此不能从这个仓库作为独立 Python 包发布。
 
 同时，`bot/.github/workflows/release.yml` 位于 `bot` 子目录，它应视为历史上的 bot 子项目或拆分仓库发布参考，不应当作根仓库当前可直接触发的 GitHub Actions workflow。如需恢复独立 `vikingbot` 包，需要先补齐 `bot/` 下独立 Python 包配置、版本策略和发布凭证策略。
 

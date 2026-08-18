@@ -194,6 +194,15 @@ class AddResourceProcessor(DequeueHandlerBase):
                     telemetry_id=telemetry_id,
                     root_uri=result.get("root_uri"),
                 )
+
+                # Extract token usage summary from telemetry and inject into result
+                _snapshot = telemetry.finish()
+                if _snapshot is not None:
+                    _tokens = _snapshot.summary.get("tokens", {})
+                    if _tokens:
+                        result.setdefault("usage", {})
+                        result["usage"]["tokens"] = _tokens
+
                 await self._resource_service._link_resource_reason_memory(
                     result=result,
                     ctx=ctx,

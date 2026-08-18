@@ -15,10 +15,18 @@ class SandboxManager:
     COPY_BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md", "IDENTITY.md"]
 
     def __init__(self, config: Config, sandbox_parent_path: Path, source_workspace_path: Path):
+        from vikingbot.agent.remote_skill_cache import RemoteSkillSnapshotCache
+
         self.config = config
         self.workspace = sandbox_parent_path
         self.source_workspace = source_workspace_path
         self._sandboxes: dict[str, SandboxBackend] = {}
+        self.remote_skill_cache = (
+            RemoteSkillSnapshotCache(config)
+            if getattr(config, "remote_skills", None) is not None
+            and getattr(config, "bot_data_path", None) is not None
+            else None
+        )
         backend_cls = get_backend(config.sandbox.backend)
         if not backend_cls:
             raise UnsupportedBackendError(f"Unknown sandbox backend: {config.backend}")

@@ -270,7 +270,7 @@ The plugin renders a one-line status of OpenViking under your Claude Code input 
 Examples:
 
 ```text
-OV ✓ │ Fable 5 · ctx 42% │ ↩ 6 mem (0.92) · 50ms   6 memories injected; model + context usage
+OV ✓ │ Fable 5 · ctx 42% │ ↩ 6 mem · 50ms          6 memories injected; model + context usage
 OV ⚠ slow                                  probe missed the 1 s budget (server may be lagging)
 OV ✗ offline                               server unreachable
 OV ⚡ bypass │ Fable 5 · ctx 42%            OPENVIKING_BYPASS_SESSION* matched
@@ -357,7 +357,7 @@ Claude Code has a built-in `MEMORY.md` file system. This plugin **complements** 
 
 There is no TypeScript build step and no runtime npm bootstrap. Hooks are plain `.mjs` files that talk to OpenViking over HTTP; MCP uses `servers/mcp-proxy.mjs` as a zero-dependency stdio bridge to the OpenViking server's `/mcp` endpoint.
 
-A persistent OpenViking session is created on first contact and reused for the entire Claude Code session. The OV session ID is `cc-<sha256(cc_session_id)>`, so resume / compact / multi-hook events all target the same session, and OV's `auto_commit_threshold` drives archival + memory extraction naturally.
+A persistent OpenViking session is created on first contact and reused for the entire Claude Code session. The OV session ID is `cc-<cc_session_id>` (the CC session_id verbatim, no hashing), so resume / compact / multi-hook events all target the same session. Archival + memory extraction is triggered client-side: the `Stop` hook commits when server-reported pending tokens cross `commitTokenThreshold` (default 20000), and `PreCompact` / `SessionEnd` / `SubagentStop` commit unconditionally.
 
 ### Hook responsibilities
 
@@ -370,6 +370,8 @@ A persistent OpenViking session is created on first contact and reused for the e
 | `SessionEnd`          | Claude Code session closes               | Final commit so the last window is archived                                                       |
 | `SubagentStart`       | Parent spawns a subagent via Task tool   | Derive an isolated OV session ID for the subagent, persist start state                            |
 | `SubagentStop`        | Subagent finishes                        | Read subagent transcript → push to an isolated session with subagent peer identity → commit       |
+| `PreToolUse`          | Native `Read` / `Glob` / `Grep` on a `viking://` URI | Deny the call and point Claude to the equivalent OpenViking MCP tool                  |
+| `PostToolUse`         | `Read` of a `SKILL.md` file              | Optional (default off): inject an experience block when OV has relevant skill-experience memories |
 
 ### Async write path
 
@@ -394,7 +396,7 @@ claude-code-memory-plugin/
 ├── .claude-plugin/
 │   └── plugin.json          # plugin manifest
 ├── hooks/
-│   └── hooks.json           # 7 hook registrations
+│   └── hooks.json           # 9 hook registrations
 ├── servers/
 │   └── mcp-proxy.mjs        # stdio -> OpenViking /mcp bridge
 ├── scripts/

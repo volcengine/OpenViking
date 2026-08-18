@@ -621,8 +621,9 @@ task_id      uuid-xxx
 
 - 默认值是 `local`，所以现有客户端在不改动的情况下仍保持原有行为。
 - 只有在你明确需要分布式共享临时上传时，才应显式使用 `upload_mode=shared`。
-- `shared` 模式下返回的一次性 `temp_file_id` 形如 `shared_<upload_id>`。
-- shared 上传对象存放在内部 `viking://upload/...` 命名空间下，不属于普通文件系统浏览空间。
+- `shared` 模式下返回的 `temp_file_id` 形如 `shared_<upload_id>`；同一 account 在文件保留期间可以重复消费。
+- 新的 shared 上传会创建内部目录 `viking://upload/<created_at_ms>-<uuid>/`，目录内包含 `content` 和 `meta`。目录名中的 13 位 Unix 毫秒时间戳即上传创建时间；`meta` 最后写入，代表上传已完整完成。这些对象不属于普通文件系统浏览空间。
+- shared 上传会保留 `server.temp_upload.ttl_seconds` 指定的时长（默认 12 小时）。每次新的 shared 上传会对内部上传根目录执行一次列举，从每个一级上传目录名解析创建时间戳，并递归删除过期目录，不依赖文件系统修改时间。
 
 #### 3. 使用示例
 

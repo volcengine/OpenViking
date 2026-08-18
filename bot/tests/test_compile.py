@@ -1480,9 +1480,10 @@ async def test_request_normalization_uses_default_reason_and_canonical_skill(mon
         async def mkdir(self, uri):
             self.created.add(uri)
 
-        async def get_skill(self, name, *, target_uri):
+        async def get_skill(self, name, *, target_uri, include_integrity=False):
             assert name == "wiki"
             assert target_uri == "viking://agent/skills"
+            assert include_integrity is False
             return {
                 "root_uri": "viking://agent/skills/wiki",
                 "content": self.skill_content,

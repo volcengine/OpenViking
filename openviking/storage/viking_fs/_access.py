@@ -170,6 +170,16 @@ class _AccessMixin:
         if is_hidden_by_actor_peer_view(uri, real_ctx) or may_include_hidden_actor_peers(uri, real_ctx):
             raise PermissionDeniedError(f"Access denied for {uri}", resource=uri)
         self._ensure_supported_delete_namespace(uri)
+        canonical_parts = self._safe_uri_parts(uri)
+        if real_ctx.role != Role.ROOT and (
+            canonical_parts == ["resources"]
+            or (canonical_parts[:1] == ["user"] and len(canonical_parts) == 2)
+        ):
+            raise PermissionDeniedError(
+                "Deleting a namespace root requires root access; use a concrete content "
+                "path instead.",
+                resource=uri,
+            )
         if real_ctx.role != Role.ROOT and uri.rstrip("/") == "viking://temp":
             raise PermissionDeniedError(
                 "Temp root is read-only for non-root users",

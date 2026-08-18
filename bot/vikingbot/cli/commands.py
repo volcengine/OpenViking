@@ -21,6 +21,7 @@ from prompt_toolkit.styles import Style as PromptStyle
 from rich.console import Console
 from rich.table import Table
 
+from openviking.utils.time_utils import parse_iso_datetime
 from vikingbot import __logo__, __version__
 from vikingbot.agent.loop import AgentLoop
 from vikingbot.bus.queue import MessageBus
@@ -1134,9 +1135,11 @@ def cron_add(
     elif cron_expr:
         schedule = CronSchedule(kind="cron", expr=cron_expr)
     elif at:
-        import datetime
-
-        dt = datetime.datetime.fromisoformat(at)
+        try:
+            dt = parse_iso_datetime(at)
+        except ValueError as e:
+            console.print(f"[red]Error: invalid --at datetime: {e}[/red]")
+            raise typer.Exit(1) from e
         schedule = CronSchedule(kind="at", at_ms=int(dt.timestamp() * 1000))
     else:
         console.print("[red]Error: Must specify --every, --cron, or --at[/red]")

@@ -147,6 +147,7 @@ RAGbenchmark/*.log
 CLAUDE.md
 *.so
 AGENTS.md
+AGENTS.md.local
 
 # Git worktrees
 .worktrees/

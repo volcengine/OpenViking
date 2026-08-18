@@ -2,10 +2,12 @@
  * Shared configuration loader for the Codex OpenViking memory plugin.
  *
  * Credential source:
- *   - Default: active ovcli.conf wins when present, so `ov config switch`
+ *   - Default (auto): env-var credentials win when any credential env var is
+ *     set; otherwise the active ovcli.conf is used, so `ov config switch`
  *     changes hooks, MCP, and in-process `ov` commands together on next launch.
- *   - Set OPENVIKING_CREDENTIAL_SOURCE=env to force env-var credentials.
- *   - Without ovcli.conf, env vars and then ov.conf/defaults are used.
+ *   - Set OPENVIKING_CREDENTIAL_SOURCE=cli to force ovcli.conf, or =env to
+ *     force env-var credentials.
+ *   - Without env vars or ovcli.conf, ov.conf/defaults are used.
  *
  * Tuning resolution remains env vars > ov.conf codex.* > built-in defaults.
  *
