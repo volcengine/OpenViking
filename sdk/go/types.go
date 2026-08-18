@@ -25,6 +25,7 @@ type AddResourceOptions struct {
 	To                  string
 	Parent              string
 	CreateParent        *bool
+	AddType             string
 	Reason              string
 	Instruction         string
 	Wait                bool
@@ -36,6 +37,7 @@ type AddResourceOptions struct {
 	DirectlyUploadMedia *bool
 	PreserveStructure   *bool
 	WatchInterval       float64
+	ProcessingMode      string
 	Args                map[string]any
 	Tags                []string
 	TagMode             string

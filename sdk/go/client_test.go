@@ -658,6 +658,24 @@ func TestAddResourceExtra(t *testing.T) {
 	}
 }
 
+func TestAddResourceSendsAddTypeAndProcessingMode(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		if body["add_type"] != "git" || body["processing_mode"] != "vectors_only" {
+			t.Fatalf("body = %#v", body)
+		}
+		writeOK(t, w, map[string]any{"root_uri": "viking://resources/a"})
+	}))
+	defer closeServer()
+
+	if _, err := client.AddResource(context.Background(), "https://example.com/a.md", &AddResourceOptions{
+		AddType:        "git",
+		ProcessingMode: "vectors_only",
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSessionSendsLatestMessageAndRetentionFields(t *testing.T) {
 	var bodies []map[string]any
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
