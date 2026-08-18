@@ -1,0 +1,21 @@
+openviking/prompts/templates/memory/entities.yaml
+  s_b3210499670685::t_e0f928a89141aa 59-62
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "af579294590cb5d02f7954dde4358e2ffe3b1f1f",
+  "prompts": {},
+  "sessions": {
+    "s_b3210499670685": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a01394-3d63-7ba0-9127-f4935897c443",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
