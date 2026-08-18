@@ -270,7 +270,7 @@ The plugin renders a one-line status of OpenViking under your Claude Code input 
 Examples:
 
 ```text
-OV ✓ │ Fable 5 · ctx 42% │ ↩ 6 mem (0.92) · 50ms   6 memories injected; model + context usage
+OV ✓ │ Fable 5 · ctx 42% │ ↩ 6 mem · 50ms          6 memories injected; model + context usage
 OV ⚠ slow                                  probe missed the 1 s budget (server may be lagging)
 OV ✗ offline                               server unreachable
 OV ⚡ bypass │ Fable 5 · ctx 42%            OPENVIKING_BYPASS_SESSION* matched

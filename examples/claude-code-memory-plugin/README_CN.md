@@ -264,7 +264,7 @@ bypass 命中时所有 hook 直接放行，不联系 OpenViking。
 示例：
 
 ```text
-OV ✓ │ Fable 5 · ctx 42% │ ↩ 6 mem (0.92) · 50ms   注入 6 条记忆；模型 + 上下文占比
+OV ✓ │ Fable 5 · ctx 42% │ ↩ 6 mem · 50ms          注入 6 条记忆；模型 + 上下文占比
 OV ⚠ slow                                  探针超过 1s 预算（服务器可能在抽风）
 OV ✗ offline                               服务器不可达
 OV ⚡ bypass │ Fable 5 · ctx 42%            命中 OPENVIKING_BYPASS_SESSION*

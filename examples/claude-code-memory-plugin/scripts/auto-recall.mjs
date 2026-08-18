@@ -17,7 +17,6 @@
 import { isPluginEnabled, loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { deriveOvSessionId, isBypassed, makeFetchJSON } from "./lib/ov-session.mjs";
-import { topScoreFromContextBlock } from "./lib/recall-state.mjs";
 import { writeJsonState } from "./lib/state.mjs";
 import { createHostCompressor } from "./lib/host-compressor.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
@@ -400,7 +399,6 @@ async function main() {
       hint_items: 0,
       tokens_used: estimateTokens(endpointBlock),
       tokens_budget: cfg.recallTokenBudget,
-      top_score: topScoreFromContextBlock(endpointBlock),
       cc_session_id: sessionId,
       reason: "ok",
     });
@@ -437,14 +435,12 @@ async function main() {
   }
 
   const built = await buildInjectionBlock(picked, effectivePeer.peerId);
-  const topScore = picked.reduce((m, it) => Math.max(m, clampScore(it.score)), 0);
   writeRecallState({
     count: picked.length,
     content_items: built?.contentCount ?? 0,
     hint_items: built?.hintCount ?? 0,
     tokens_used: built?.budgetUsed ?? 0,
     tokens_budget: cfg.recallTokenBudget,
-    top_score: topScore,
     cc_session_id: sessionId,
     reason: "ok",
   });
