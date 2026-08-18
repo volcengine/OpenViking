@@ -290,9 +290,7 @@ class ResourceProcessor:
                         source_format=parse_result.source_format,
                         create_parent=kwargs.get("create_parent", False),
                         flatten_single_file=(
-                            normalize_parse_mode(
-                                kwargs.get("parse_mode", ParseMode.DEFAULT)
-                            )
+                            normalize_parse_mode(kwargs.get("parse_mode", ParseMode.DEFAULT))
                             is ParseMode.NO_SPLIT
                             and parse_result.source_format not in {"directory", "repository"}
                             and not to_is_directory
@@ -301,9 +299,7 @@ class ResourceProcessor:
                     if context_tree and context_tree.root:
                         result["root_uri"] = context_tree.root.uri
                         result["temp_uri"] = context_tree.root.temp_uri
-                    root_is_file = bool(
-                        getattr(context_tree, "_root_is_file", False)
-                    )
+                    root_is_file = bool(getattr(context_tree, "_root_is_file", False))
                 telemetry.set(
                     "resource.finalize.duration_ms",
                     round((time.perf_counter() - finalize_start) * 1000, 3),
@@ -656,11 +652,13 @@ class ResourceProcessor:
                 await self.vikingdb.delete(ids, ctx=ctx)
         for uri in dict.fromkeys(dirs):
             records = await self.vikingdb.filter(
-                filter=And([
-                    PathScope("uri", uri, depth=-1),
-                    Eq("level", int(ContextLevel.DETAIL)),
-                    Eq("account_id", ctx.account_id),
-                ]),
+                filter=And(
+                    [
+                        PathScope("uri", uri, depth=-1),
+                        Eq("level", int(ContextLevel.DETAIL)),
+                        Eq("account_id", ctx.account_id),
+                    ]
+                ),
                 limit=VECTORDB_MAX_QUERY_LIMIT,
                 output_fields=["id"],
                 ctx=ctx,
@@ -782,9 +780,7 @@ class ResourceProcessor:
         try:
             pathlock = get_viking_fs()._async_agfs
             acquire = (
-                pathlock.pathlock_acquire_exact
-                if root_is_file
-                else pathlock.pathlock_acquire_tree
+                pathlock.pathlock_acquire_exact if root_is_file else pathlock.pathlock_acquire_tree
             )
             return await acquire(path, timeout_secs=timeout)
         except LockAcquisitionError as exc:

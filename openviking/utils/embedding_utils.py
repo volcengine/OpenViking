@@ -407,9 +407,7 @@ async def vectorize_directory_meta(
             owner_space=owner_space,
         )
         context_abstract.set_vectorize(
-            Vectorize(
-                text=embedding_text_for_body(ContextLevel.ABSTRACT, uri, abstract)
-            )
+            Vectorize(text=embedding_text_for_body(ContextLevel.ABSTRACT, uri, abstract))
         )
         msg_abstract = EmbeddingMsgConverter.from_context(context_abstract)
         _apply_scalar_overrides(
@@ -454,9 +452,7 @@ async def vectorize_directory_meta(
                 owner_space=owner_space,
             )
             context_overview.set_vectorize(
-                Vectorize(
-                    text=embedding_text_for_body(ContextLevel.OVERVIEW, uri, overview)
-                )
+                Vectorize(text=embedding_text_for_body(ContextLevel.OVERVIEW, uri, overview))
             )
             msg_overview = EmbeddingMsgConverter.from_context(context_overview)
             _apply_scalar_overrides(

@@ -263,12 +263,12 @@ async def test_semantic_dag_shares_node_scheduler_across_roots(monkeypatch):
     assert processor.max_active_summaries == 1
     assert executor_a.get_stats().done_nodes == 21
     assert executor_b.get_stats().done_nodes == 21
-    assert {
-        processor.vectorized_contexts[f"{root_a}/a-{idx}.txt"] for idx in range(20)
-    } == {("task-a", telemetry_a.telemetry_id)}
-    assert {
-        processor.vectorized_contexts[f"{root_b}/b-{idx}.txt"] for idx in range(20)
-    } == {("task-b", telemetry_b.telemetry_id)}
+    assert {processor.vectorized_contexts[f"{root_a}/a-{idx}.txt"] for idx in range(20)} == {
+        ("task-a", telemetry_a.telemetry_id)
+    }
+    assert {processor.vectorized_contexts[f"{root_b}/b-{idx}.txt"] for idx in range(20)} == {
+        ("task-b", telemetry_b.telemetry_id)
+    }
 
 
 @pytest.mark.asyncio
@@ -359,11 +359,12 @@ async def test_semantic_dag_skip_vectorization_does_not_schedule_tasks(monkeypat
         "abstract",
     ]
     assert all(
-        parse_semantic_sidecar(raw).metadata["generated_by"]["component"]
-        == "SemanticProcessor"
+        parse_semantic_sidecar(raw).metadata["generated_by"]["component"] == "SemanticProcessor"
         for _, raw in fake_fs.writes
     )
     assert processor.vectorized_dirs == []
     assert processor.vectorized_files == []
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

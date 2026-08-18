@@ -178,10 +178,7 @@ async def test_semantic_accessors_and_agent_tree_hide_sidecar_metadata(monkeypat
 
     assert await fs.abstract(directory, ctx=_default_ctx()) == "Visible abstract."
     assert await fs.overview(directory, ctx=_default_ctx()) == "# Visible overview"
-    assert (
-        await fs.read_file(f"{directory}/.abstract.md", ctx=_default_ctx())
-        == abstract_raw
-    )
+    assert await fs.read_file(f"{directory}/.abstract.md", ctx=_default_ctx()) == abstract_raw
     entries = [{"uri": directory, "isDir": True}]
     await fs._batch_fetch_abstracts(entries, 256, ctx=_default_ctx())
     assert entries[0]["abstract"] == "Visible abstract."
@@ -189,9 +186,7 @@ async def test_semantic_accessors_and_agent_tree_hide_sidecar_metadata(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_ls_hides_semantic_sidecars_unless_hidden_entries_are_requested(
-    monkeypatch, fs
-):
+async def test_ls_hides_semantic_sidecars_unless_hidden_entries_are_requested(monkeypatch, fs):
     directory = "viking://resources/demo"
     items = [
         ({"name": "note.md", "isDir": False}, f"{directory}/note.md"),

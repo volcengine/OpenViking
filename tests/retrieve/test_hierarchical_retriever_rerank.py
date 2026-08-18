@@ -9,8 +9,10 @@ import time
 
 import pytest
 
+from openviking.core.context import ContextLevel
 from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever, RetrieverMode
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.semantic_sidecar import render_semantic_sidecar
 from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.retrieve.types import ContextType, TypedQuery
 from openviking_cli.session.user_id import UserIdentifier
@@ -676,3 +678,61 @@ async def test_convert_to_matched_contexts_defaults_empty_search_tags():
     )
 
     assert result[0].search_tags == []
+
+
+@pytest.mark.asyncio
+async def test_convert_to_matched_contexts_hides_okf_metadata_in_l0_l1_previews():
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=None,
+        rerank_config=None,
+    )
+    uri = "viking://resources/demo"
+    metadata = {
+        "source": {"kind": "http", "uri": "https://example.com/private.pdf"},
+        "generated_by": {"component": "SemanticProcessor", "trigger": "ingest"},
+    }
+
+    result = await retriever._convert_to_matched_contexts(
+        [
+            _result(
+                uri,
+                1.0,
+                level=int(ContextLevel.ABSTRACT),
+                abstract=render_semantic_sidecar(
+                    ContextLevel.ABSTRACT, uri, "Visible abstract.", metadata
+                ),
+            ),
+            _result(
+                uri,
+                0.9,
+                level=int(ContextLevel.OVERVIEW),
+                abstract=render_semantic_sidecar(
+                    ContextLevel.OVERVIEW, uri, "# Visible overview", metadata
+                ),
+            ),
+        ],
+        ctx=_ctx(),
+    )
+
+    assert [item.abstract for item in result] == [
+        "Visible abstract.",
+        "# Visible overview",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_convert_to_matched_contexts_preserves_l2_markdown_frontmatter():
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=None,
+        rerank_config=None,
+    )
+    markdown = "---\ntitle: User document\n---\n\nVisible body."
+
+    result = await retriever._convert_to_matched_contexts(
+        [_result("viking://resources/demo.md", 1.0, level=2, abstract=markdown)],
+        ctx=_ctx(),
+    )
+
+    assert result[0].abstract == markdown

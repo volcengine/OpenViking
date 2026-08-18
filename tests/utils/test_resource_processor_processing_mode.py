@@ -58,9 +58,7 @@ def ctx() -> RequestContext:
         ("/tmp/demo", "directory", "local"),
     ],
 )
-def test_semantic_source_metadata_classifies_unprepared_sources(
-    path, source_format, expected_kind
-):
+def test_semantic_source_metadata_classifies_unprepared_sources(path, source_format, expected_kind):
     assert ResourceProcessor._semantic_source_metadata(
         path=path, prepared_resource=None, source_format=source_format
     ) == {"kind": expected_kind, "uri": path}
@@ -97,9 +95,7 @@ async def test_flat_file_refreshes_parent_semantics_and_vectorizes_via_summary(
         lambda: viking_fs,
     )
     processor = ResourceProcessor(_FakeVikingDB())
-    summarizer = SimpleNamespace(
-        refresh_file_parent=AsyncMock(return_value={"status": "success"})
-    )
+    summarizer = SimpleNamespace(refresh_file_parent=AsyncMock(return_value={"status": "success"}))
     processor._get_summarizer = Mock(return_value=summarizer)
 
     result = await processor.finish_prepared_resource(
@@ -161,9 +157,7 @@ async def test_vectors_only_replaces_preexisting_flat_file_without_directory_syn
     viking_fs = SimpleNamespace(
         _async_agfs=SimpleNamespace(pathlock_release=AsyncMock()),
         exists=AsyncMock(return_value=True),
-        ls=AsyncMock(
-            side_effect=NotADirectoryError("flat resource roots cannot be listed")
-        ),
+        ls=AsyncMock(side_effect=NotADirectoryError("flat resource roots cannot be listed")),
         persist_temp_tree=AsyncMock(),
         delete_temp=AsyncMock(),
     )
@@ -247,7 +241,9 @@ async def test_vectors_only_persists_tree_and_vectorizes_files_only(monkeypatch,
     vectorize_file = AsyncMock()
     rewrite_image_uris = AsyncMock()
     monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: viking_fs)
-    monkeypatch.setattr("openviking.utils.resource_processor.rewrite_image_uris", rewrite_image_uris)
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.rewrite_image_uris", rewrite_image_uris
+    )
     monkeypatch.setattr("openviking.utils.resource_processor.vectorize_file", vectorize_file)
     processor = ResourceProcessor(_FakeVikingDB())
     processor._get_summarizer = Mock(side_effect=AssertionError("summarizer should not run"))

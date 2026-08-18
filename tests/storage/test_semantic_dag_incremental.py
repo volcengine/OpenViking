@@ -79,9 +79,7 @@ class _FakeProcessor:
         return {"name": file_path.split("/")[-1], "summary": "summary"}
 
     async def _generate_overview(self, dir_uri, file_summaries, children_abstracts):
-        self.overview_inputs.append(
-            (dir_uri, list(file_summaries), list(children_abstracts))
-        )
+        self.overview_inputs.append((dir_uri, list(file_summaries), list(children_abstracts)))
         lines = ["FILES:"]
         for item in file_summaries:
             name = item.get("name", "")
@@ -191,17 +189,12 @@ async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypa
 @pytest.mark.asyncio
 async def test_large_directory_sampling_is_deterministic_and_stable(monkeypatch):
     root_uri = "viking://resources/root"
-    entries = [
-        {"name": f"file-{index}.txt", "isDir": False}
-        for index in reversed(range(5))
-    ]
+    entries = [{"name": f"file-{index}.txt", "isDir": False} for index in reversed(range(5))]
     fake_fs = _FakeVikingFS(
         tree={root_uri: entries},
         file_contents={f"{root_uri}/file-{index}.txt": str(index) for index in range(5)},
     )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs
-    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_dag.get_openviking_config",
         lambda: SimpleNamespace(semantic=SimpleNamespace(sidecar_sample_size=2)),
@@ -256,9 +249,7 @@ async def test_source_metadata_is_only_written_on_import_root(monkeypatch):
         },
         file_contents={f"{child_uri}/note.txt": "note"},
     )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs
-    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
     processor = _FakeProcessor(fake_fs)
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
 
@@ -277,9 +268,7 @@ async def test_source_metadata_is_only_written_on_import_root(monkeypatch):
     assert root.metadata["source"]["kind"] == "git"
     assert "source" not in child.metadata
     root_inputs = next(
-        children
-        for dir_uri, _files, children in processor.overview_inputs
-        if dir_uri == root_uri
+        children for dir_uri, _files, children in processor.overview_inputs if dir_uri == root_uri
     )
     assert root_inputs == [{"name": "child", "abstract": "abstract"}]
     assert "directory:" not in root_inputs[0]["abstract"]
@@ -297,9 +286,7 @@ async def test_malformed_incremental_sidecar_fails_loudly(monkeypatch):
             f"{root_uri}/.abstract.md": "legacy",
         },
     )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs
-    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
     processor = _FakeProcessor(fake_fs)
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
 

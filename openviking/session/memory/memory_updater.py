@@ -965,9 +965,7 @@ class MemoryUpdater:
                 uri_memory_type_map[uri] = op.memory_type
         # Merge caller-supplied transient tags with per-operation search_tags
         # (e.g. event-memory custom scalars) so both reach vectorization.
-        effective_search_tags_by_uri = _collect_search_tags_by_uri(
-            operations, search_tags_by_uri
-        )
+        effective_search_tags_by_uri = _collect_search_tags_by_uri(operations, search_tags_by_uri)
         await self._vectorize_memories(
             result,
             ctx,

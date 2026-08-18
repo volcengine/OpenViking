@@ -822,12 +822,8 @@ class SemanticDagExecutor:
                     key=lambda tagged: str(tagged[1].get("name") or ""),
                 )
                 sampled_inputs = deterministic_sample(tagged_inputs, sample_limit)
-                file_summaries = [
-                    item for kind, item in sampled_inputs if kind == "file"
-                ]
-                children_abstracts = [
-                    item for kind, item in sampled_inputs if kind == "directory"
-                ]
+                file_summaries = [item for kind, item in sampled_inputs if kind == "file"]
+                children_abstracts = [item for kind, item in sampled_inputs if kind == "directory"]
                 overview = self._select_direct_media_overview(node, file_summaries)
                 if overview is None:
                     async with self._llm_sem:

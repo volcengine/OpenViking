@@ -2063,7 +2063,9 @@ async def test_reindex_resource_vector_text_summary_first_skips_content_read(mon
     monkeypatch.setattr(ReindexExecutor, "_fetch_existing_record", fake_fetch_existing_record)
     monkeypatch.setattr(
         "openviking.service.reindex_executor.get_openviking_config",
-        lambda: type("Config", (), {"embedding": type("Embedding", (), {"text_source": "summary_first"})()})(),
+        lambda: type(
+            "Config", (), {"embedding": type("Embedding", (), {"text_source": "summary_first"})()}
+        )(),
     )
 
     service = ReindexExecutor()

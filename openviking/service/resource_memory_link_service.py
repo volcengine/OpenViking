@@ -343,9 +343,7 @@ class ResourceMemoryLinkService:
             task_id,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
-            timeout=(
-                _RESOURCE_REASON_COMMIT_TIMEOUT_SECONDS if timeout is None else timeout
-            ),
+            timeout=(_RESOURCE_REASON_COMMIT_TIMEOUT_SECONDS if timeout is None else timeout),
             poll_interval=0.1,
         )
         if task.status == TaskStatus.COMPLETED:

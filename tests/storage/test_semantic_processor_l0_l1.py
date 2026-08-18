@@ -6,7 +6,10 @@ from types import SimpleNamespace
 from openviking.core.context import ContextLevel
 from openviking.storage.queuefs import semantic_processor as semantic_processor_module
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
-from openviking.storage.semantic_sidecar import render_semantic_sidecar
+from openviking.storage.semantic_sidecar import (
+    parse_semantic_sidecar,
+    render_semantic_sidecar,
+)
 
 
 def _patch_semantic_limits(monkeypatch, *, abstract_max_chars=256, overview_max_chars=4000):
@@ -79,6 +82,42 @@ def test_okf_overview_frontmatter_is_not_part_of_l0_or_size_limit(monkeypatch):
     assert "generated_by" not in overview
 
 
+def test_body_truncation_preserves_okf_metadata_when_rendered(monkeypatch):
+    _patch_semantic_limits(monkeypatch, abstract_max_chars=32, overview_max_chars=64)
+    processor = SemanticProcessor()
+    metadata = {
+        "source": {"kind": "http", "uri": "https://example.com/source.md"},
+        "generated_by": {"component": "SemanticProcessor", "trigger": "ingest"},
+        "freshness": {
+            "total_entries": 3,
+            "sampled_entries": 2,
+            "unsampled_entries": 1,
+            "pending_child_changes": 0,
+        },
+    }
+    raw = render_semantic_sidecar(
+        ContextLevel.OVERVIEW,
+        "viking://resources/demo",
+        "# Demo\n\nA compact sentence. " + ("Long navigation detail. " * 10),
+        metadata,
+    )
+    original = parse_semantic_sidecar(raw)
+
+    overview, abstract = processor._normalize_overview_generation(raw)
+    rewritten = parse_semantic_sidecar(
+        render_semantic_sidecar(
+            ContextLevel.OVERVIEW,
+            "viking://resources/demo",
+            overview,
+            original.metadata,
+        )
+    )
+
+    assert len(rewritten.body.rstrip()) <= 64
+    assert len(abstract) <= 32
+    assert rewritten.metadata == original.metadata
+
+
 def test_index_references_are_replaced_inside_markdown_overview(monkeypatch):
     _patch_semantic_limits(monkeypatch)
     processor = SemanticProcessor()
@@ -121,9 +160,7 @@ def test_overview_truncation_prefers_complete_sentence(monkeypatch):
     _patch_semantic_limits(monkeypatch, overview_max_chars=45)
     processor = SemanticProcessor()
     overview = (
-        "# README\n\n"
-        "This is a complete sentence. "
-        "This second sentence would be cut in the middle."
+        "# README\n\nThis is a complete sentence. This second sentence would be cut in the middle."
     )
 
     overview, abstract = processor._enforce_size_limits(overview, "abstract")
@@ -135,12 +172,7 @@ def test_overview_truncation_prefers_complete_sentence(monkeypatch):
 def test_overview_truncation_keeps_last_complete_sentence_within_limit(monkeypatch):
     _patch_semantic_limits(monkeypatch, overview_max_chars=57)
     processor = SemanticProcessor()
-    overview = (
-        "# README\n\n"
-        "First sentence. "
-        "Second sentence. "
-        "Third sentence should be omitted."
-    )
+    overview = "# README\n\nFirst sentence. Second sentence. Third sentence should be omitted."
 
     overview, abstract = processor._enforce_size_limits(overview, "abstract")
 

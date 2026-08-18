@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for memory-context semantic enqueue deduplication (#769)."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -140,6 +141,26 @@ class _FakeMemoryDirFS:
         ]
 
 
+class _FakeSampledMemoryDirFS(_FakeVikingFS):
+    """Memory directory double with deliberately unstable listing order."""
+
+    def __init__(self):
+        super().__init__()
+        self.files = {}
+
+    async def ls(self, uri, node_limit=None, ctx=None):
+        del uri, node_limit, ctx
+        return [{"name": f"{index}.md", "isDir": False} for index in range(5, 0, -1)]
+
+    async def read_file(self, uri, ctx=None):
+        del ctx
+        return self.files[uri]
+
+    async def write_file(self, uri, content, ctx=None, lease_ref=None):
+        await super().write_file(uri, content, ctx=ctx, lease_ref=lease_ref)
+        self.files[uri] = content
+
+
 @pytest.mark.asyncio
 async def test_stale_memory_semantic_write_is_skipped(monkeypatch):
     pathlock = _FakePathLock()
@@ -238,6 +259,57 @@ async def test_memory_directory_summarizes_all_uncached_files(monkeypatch):
     )
 
     assert [item["name"] for item in summaries] == ["first.md", "second.md"]
+
+
+@pytest.mark.asyncio
+async def test_memory_directory_sampling_is_stable_and_records_freshness(monkeypatch):
+    processor = SemanticProcessor(max_concurrent_llm=4)
+    viking_fs = _FakeSampledMemoryDirFS()
+    overview_inputs = []
+
+    async def generate_file_summary(file_path, llm_sem=None, ctx=None):
+        del llm_sem, ctx
+        name = file_path.rsplit("/", 1)[-1]
+        return {"name": name, "summary": f"summary:{name}"}
+
+    async def generate_overview(dir_uri, file_summaries, children_abstracts, llm_sem=None):
+        del dir_uri, children_abstracts, llm_sem
+        overview_inputs.append([item["name"] for item in file_summaries])
+        return "stable overview"
+
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: viking_fs,
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(sidecar_sample_size=2)),
+    )
+    monkeypatch.setattr(processor, "_generate_single_file_summary", generate_file_summary)
+    monkeypatch.setattr(processor, "_generate_overview", generate_overview)
+    monkeypatch.setattr(
+        processor,
+        "_normalize_overview_generation",
+        lambda overview: (overview, "stable abstract"),
+    )
+
+    msg = SemanticMsg(
+        uri="viking://user/default/memories/preferences",
+        context_type="memory",
+        skip_vectorization=True,
+    )
+    await processor._process_memory_directory(msg)
+    await processor._process_memory_directory(msg)
+
+    assert overview_inputs == [["1.md", "5.md"], ["1.md", "5.md"]]
+    assert len(viking_fs.writes) == 2
+    for raw in viking_fs.files.values():
+        assert parse_semantic_sidecar(raw).metadata["freshness"] == {
+            "total_entries": 5,
+            "sampled_entries": 2,
+            "unsampled_entries": 3,
+            "pending_child_changes": 0,
+        }
 
 
 @pytest.mark.asyncio

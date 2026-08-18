@@ -354,9 +354,7 @@ class _SemanticMixin:
                 target_abstract = ""
 
         intent_enabled = (
-            bool(self.retrieval_config.enable_intent)
-            if self.retrieval_config is not None
-            else True
+            bool(self.retrieval_config.enable_intent) if self.retrieval_config is not None else True
         )
 
         # With session context: optional intent analysis

@@ -32,6 +32,10 @@ class SemanticSidecarFormatError(ValueError):
     """A generated semantic sidecar has invalid OKF frontmatter."""
 
 
+class SemanticSidecarMetadataError(SemanticSidecarFormatError):
+    """A public write attempted to change protected sidecar metadata."""
+
+
 @dataclass(frozen=True)
 class SemanticSidecarDocument:
     """Parsed machine metadata and visible Markdown body."""
@@ -52,9 +56,7 @@ def _normalize_directory_uri(dir_uri: str) -> str:
     if not value:
         raise SemanticSidecarFormatError("semantic sidecar directory must not be empty")
     if not value.startswith("viking://"):
-        raise SemanticSidecarFormatError(
-            "semantic sidecar directory must be a viking:// URI"
-        )
+        raise SemanticSidecarFormatError("semantic sidecar directory must be a viking:// URI")
     return value.rstrip("/") + "/"
 
 
@@ -90,9 +92,7 @@ def _normalize_metadata(metadata: Mapping[str, Any]) -> Dict[str, Any]:
             )
         normalized["source"] = {
             "kind": _bounded_string(source["kind"], field="source.kind", limit=_MAX_LABEL_CHARS),
-            "uri": _bounded_string(
-                source["uri"], field="source.uri", limit=_MAX_SOURCE_URI_CHARS
-            ),
+            "uri": _bounded_string(source["uri"], field="source.uri", limit=_MAX_SOURCE_URI_CHARS),
         }
 
     generated_by = metadata.get("generated_by")
@@ -126,9 +126,7 @@ def _normalize_metadata(metadata: Mapping[str, Any]) -> Dict[str, Any]:
             "pending_child_changes",
         }
         if not isinstance(freshness, Mapping) or set(freshness) != required:
-            raise SemanticSidecarFormatError(
-                "semantic sidecar freshness has an invalid field set"
-            )
+            raise SemanticSidecarFormatError("semantic sidecar freshness has an invalid field set")
         counters: Dict[str, int] = {}
         for field in (
             "total_entries",
@@ -142,9 +140,7 @@ def _normalize_metadata(metadata: Mapping[str, Any]) -> Dict[str, Any]:
                     f"semantic sidecar freshness.{field} must be a non-negative integer"
                 )
             counters[field] = value
-        if counters["sampled_entries"] + counters["unsampled_entries"] != counters[
-            "total_entries"
-        ]:
+        if counters["sampled_entries"] + counters["unsampled_entries"] != counters["total_entries"]:
             raise SemanticSidecarFormatError(
                 "semantic sidecar freshness sampled + unsampled must equal total"
             )
@@ -191,18 +187,14 @@ def parse_semantic_sidecar(raw: str | bytes) -> SemanticSidecarDocument:
     if not isinstance(loaded, Mapping):
         raise SemanticSidecarFormatError("semantic sidecar frontmatter must be a YAML object")
     if "directory" not in loaded:
-        raise SemanticSidecarFormatError(
-            "semantic sidecar frontmatter must contain directory"
-        )
+        raise SemanticSidecarFormatError("semantic sidecar frontmatter must contain directory")
 
     body = "".join(lines[closing_index + 1 :])
     if body.startswith("\r\n"):
         body = body[2:]
     elif body.startswith("\n"):
         body = body[1:]
-    return SemanticSidecarDocument(
-        metadata=_normalize_metadata(loaded), body=body, legacy=False
-    )
+    return SemanticSidecarDocument(metadata=_normalize_metadata(loaded), body=body, legacy=False)
 
 
 def render_semantic_sidecar(
@@ -233,6 +225,47 @@ def render_semantic_sidecar(
     return f"---\n{frontmatter}\n---\n\n{body.strip()}\n"
 
 
+def prepare_semantic_sidecar_write(
+    uri: str,
+    current_raw: str | bytes,
+    requested_raw: str | bytes,
+    *,
+    mode: str = "replace",
+) -> str:
+    """Protect metadata while applying a public body write.
+
+    Callers may round-trip the full raw document, but any supplied metadata
+    must equal the stored metadata after schema normalization.  A body-only
+    request inherits the stored metadata.  The result is always rendered in
+    canonical OKF form so metadata cannot be removed by omission.
+
+    This helper assumes the target already exists.  Creating a generated
+    sidecar through the public write API is intentionally rejected by the
+    coordinator because there is no trusted metadata baseline to preserve.
+    """
+
+    if mode not in {"replace", "append"}:
+        raise ValueError(f"unsupported semantic sidecar write mode: {mode}")
+    if not is_semantic_sidecar_uri(uri):
+        raise ValueError(f"not a semantic sidecar URI: {uri}")
+
+    current = parse_semantic_sidecar(current_raw)
+    requested = parse_semantic_sidecar(requested_raw)
+    if not requested.legacy and requested.metadata != current.metadata:
+        raise SemanticSidecarMetadataError("cannot modify protected semantic sidecar metadata")
+
+    requested_body = requested.body
+    body = current.body + requested_body if mode == "append" else requested_body
+    filename = uri.rstrip("/").rsplit("/", 1)[-1]
+    level = ContextLevel.ABSTRACT if filename == ".abstract.md" else ContextLevel.OVERVIEW
+    # Preserve even a historically inconsistent stored directory value.  A
+    # public body edit must never repair or otherwise mutate protected
+    # metadata as a side effect.  Legacy sidecars have no metadata baseline,
+    # so their first body edit naturally migrates them using the target URI.
+    dir_uri = current.metadata.get("directory") or uri.rstrip("/").rsplit("/", 1)[0]
+    return render_semantic_sidecar(level, dir_uri, body, current.metadata)
+
+
 def body_for_preview(raw: str | bytes) -> str:
     """Return only user-visible Markdown from a semantic sidecar."""
 
@@ -252,9 +285,7 @@ def body_for_embedding(
 
     document = parse_semantic_sidecar(raw)
     selected = {
-        field: document.metadata[field]
-        for field in whitelist
-        if field in document.metadata
+        field: document.metadata[field] for field in whitelist if field in document.metadata
     }
     if not selected:
         return document.body
@@ -378,9 +409,7 @@ async def write_semantic_sidecars(
             await viking_fs._async_agfs.pathlock_release(sidecar_lease)
 
 
-async def _raw_if_exists(
-    viking_fs: Any, uri: str, ctx: Optional[RequestContext]
-) -> Optional[str]:
+async def _raw_if_exists(viking_fs: Any, uri: str, ctx: Optional[RequestContext]) -> Optional[str]:
     read_file = getattr(viking_fs, "read_file", None)
     if read_file is None:
         return None
@@ -429,9 +458,7 @@ async def mark_semantic_sidecars_pending(
     lock_paths = [viking_fs._uri_to_path(uri, ctx=ctx) for uri in uris]
     lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(lock_paths)
     try:
-        for level, uri in zip(
-            (ContextLevel.OVERVIEW, ContextLevel.ABSTRACT), uris, strict=True
-        ):
+        for level, uri in zip((ContextLevel.OVERVIEW, ContextLevel.ABSTRACT), uris, strict=True):
             raw = await _raw_if_exists(viking_fs, uri, ctx)
             if raw is None:
                 continue

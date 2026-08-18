@@ -580,10 +580,7 @@ async def test_vectorize_directory_meta_l1_abstract_is_overview(monkeypatch):
     assert l1.context_data["level"] == 1
     assert l1.context_data["abstract"] == overview
     assert l1.message == (
-        "---\n"
-        "directory: viking://user/default/resources/demo/\n"
-        "---\n\n"
-        f"{overview.rstrip()}"
+        f"---\ndirectory: viking://user/default/resources/demo/\n---\n\n{overview.rstrip()}"
     )
 
 
@@ -609,9 +606,7 @@ async def test_vectorize_directory_meta_strips_operational_okf_metadata(monkeypa
 
     await embedding_utils.vectorize_directory_meta(
         uri=uri,
-        abstract=render_semantic_sidecar(
-            ContextLevel.ABSTRACT, uri, "Visible abstract.", metadata
-        ),
+        abstract=render_semantic_sidecar(ContextLevel.ABSTRACT, uri, "Visible abstract.", metadata),
         overview=render_semantic_sidecar(
             ContextLevel.OVERVIEW, uri, "# Visible overview", metadata
         ),

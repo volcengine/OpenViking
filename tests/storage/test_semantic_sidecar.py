@@ -12,6 +12,7 @@ from openviking.storage.semantic_sidecar import (
     freshness_metadata,
     mark_semantic_sidecars_pending,
     parse_semantic_sidecar,
+    prepare_semantic_sidecar_write,
     render_semantic_sidecar,
     write_semantic_sidecars,
 )
@@ -44,12 +45,15 @@ def test_render_and_parse_semantic_sidecar_are_deterministic():
         "directory": "viking://resources/images_2/",
         **_metadata(),
     }
-    assert render_semantic_sidecar(
-        ContextLevel.ABSTRACT,
-        "viking://resources/images_2",
-        document.body,
-        document.metadata,
-    ) == raw
+    assert (
+        render_semantic_sidecar(
+            ContextLevel.ABSTRACT,
+            "viking://resources/images_2",
+            document.body,
+            document.metadata,
+        )
+        == raw
+    )
 
 
 def test_legacy_sidecar_is_body_only():
@@ -103,6 +107,94 @@ def test_deterministic_sample_preserves_order_and_spans_first_and_last():
     first = deterministic_sample(items, 5)
     second = deterministic_sample(items, 5)
     assert first == second == [0, 24, 49, 74, 99]
+
+
+def test_public_sidecar_write_accepts_unchanged_metadata_and_replaces_body():
+    uri = "viking://resources/demo/.overview.md"
+    current = render_semantic_sidecar(
+        ContextLevel.OVERVIEW, "viking://resources/demo", "Old body.", _metadata()
+    )
+    requested = render_semantic_sidecar(
+        ContextLevel.OVERVIEW,
+        "viking://resources/demo",
+        "New body.",
+        parse_semantic_sidecar(current).metadata,
+    )
+
+    result = parse_semantic_sidecar(prepare_semantic_sidecar_write(uri, current, requested))
+
+    assert result.body == "New body.\n"
+    assert result.metadata == parse_semantic_sidecar(current).metadata
+
+
+def test_public_sidecar_write_inherits_metadata_for_body_only_request():
+    uri = "viking://resources/demo/.abstract.md"
+    current = render_semantic_sidecar(
+        ContextLevel.ABSTRACT, "viking://resources/demo", "Old body.", _metadata()
+    )
+
+    result = parse_semantic_sidecar(
+        prepare_semantic_sidecar_write(uri, current, "Body only replacement.")
+    )
+
+    assert result.body == "Body only replacement.\n"
+    assert result.metadata == parse_semantic_sidecar(current).metadata
+
+
+def test_public_sidecar_write_does_not_repair_stored_directory_metadata():
+    current = render_semantic_sidecar(
+        ContextLevel.ABSTRACT,
+        "viking://resources/historical-location",
+        "Old body.",
+        _metadata(),
+    )
+
+    result = parse_semantic_sidecar(
+        prepare_semantic_sidecar_write(
+            "viking://resources/current-location/.abstract.md",
+            current,
+            "New body.",
+        )
+    )
+
+    assert result.metadata == parse_semantic_sidecar(current).metadata
+
+
+def test_public_sidecar_append_preserves_metadata_and_appends_only_body():
+    uri = "viking://resources/demo/.overview.md"
+    current = render_semantic_sidecar(
+        ContextLevel.OVERVIEW, "viking://resources/demo", "First.", _metadata()
+    )
+    requested = render_semantic_sidecar(
+        ContextLevel.OVERVIEW,
+        "viking://resources/demo",
+        " Second.",
+        parse_semantic_sidecar(current).metadata,
+    )
+
+    result = parse_semantic_sidecar(
+        prepare_semantic_sidecar_write(uri, current, requested, mode="append")
+    )
+
+    assert result.body == "First.\nSecond.\n"
+    assert result.metadata == parse_semantic_sidecar(current).metadata
+
+
+def test_public_sidecar_write_rejects_metadata_changes():
+    uri = "viking://resources/demo/.abstract.md"
+    current = render_semantic_sidecar(
+        ContextLevel.ABSTRACT, "viking://resources/demo", "Old body.", _metadata()
+    )
+    changed = {
+        **parse_semantic_sidecar(current).metadata,
+        "source": {"kind": "http", "uri": "https://attacker.invalid"},
+    }
+    requested = render_semantic_sidecar(
+        ContextLevel.ABSTRACT, "viking://resources/demo", "New body.", changed
+    )
+
+    with pytest.raises(SemanticSidecarFormatError, match="cannot modify protected.*metadata"):
+        prepare_semantic_sidecar_write(uri, current, requested)
 
 
 class _FakeFS:
@@ -177,10 +269,7 @@ async def test_pending_changes_update_metadata_without_changing_body():
         is_stale=lambda: False,
         metadata=_metadata(),
     )
-    before = {
-        uri: parse_semantic_sidecar(content)
-        for uri, content in fs.files.items()
-    }
+    before = {uri: parse_semantic_sidecar(content) for uri, content in fs.files.items()}
     fs.writes.clear()
 
     await mark_semantic_sidecars_pending(

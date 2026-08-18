@@ -253,4 +253,3 @@ Semantic reuse and embedding:
 - Do not add a dedicated `read_metadata()` API in the first version. Direct `read()` / `get()` of the sidecar file is enough for callers that intentionally need metadata.
 - Use the metadata embedding policy described above: `directory` is included initially; `source`, `generated_by`, and `freshness` are excluded.
 - Include OKF metadata in Git diffs as-is. Body-only diff rendering can be a future viewer feature, not part of the storage format.
-
