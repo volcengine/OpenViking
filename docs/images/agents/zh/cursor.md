@@ -1,7 +1,21 @@
+## 安装
+
 ```bash
 bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness cursor --dist tos
 ```
 
 选 **火山引擎 OpenViking 云服务**，把本页 API Key 贴进去。
 
-重启 Cursor。在 **Tools & MCPs** 里确认 `openviking` 已连接。
+## 验证
+
+1. 重启 Cursor，新建 Agent 会话。
+2. **Cursor Settings → Hooks**：生命周期 Hook 执行 `cursor-hook.mjs`。
+3. **Cursor Settings → Tools & MCPs**：`openviking` 已连接。
+
+## 故障排查
+
+| 问题 | 处理 |
+|---|---|
+| Hook 没跑 | 完全退出 Cursor，重启，再建会话 |
+| 连接 / 鉴权失败 | 检查 `~/.openviking/ovcli.conf`，重启 Cursor |
+| 需要日志 | `OPENVIKING_DEBUG=1`，看 `~/.openviking/logs/cursor-hooks.log` |

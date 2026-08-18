@@ -1,4 +1,4 @@
-[Hermes Agent](https://hermes-agent.nousresearch.com/) 内置 OpenViking，不用装插件。
+## 安装
 
 ```bash
 hermes memory setup openviking
@@ -6,6 +6,17 @@ hermes memory setup openviking
 
 保持 **OpenViking Service (VolcEngine Cloud)**，把本页 API Key 贴进去。
 
+## 验证
+
 ```bash
 hermes memory status
 ```
+
+应看到 `Provider: openviking` 且 `Status: available`。然后开一轮新会话。
+
+## 故障排查
+
+| 问题 | 处理 |
+|---|---|
+| Provider 不是 openviking | 重跑 `hermes memory setup openviking` |
+| Status 不是 available | 检查本页 API Key |

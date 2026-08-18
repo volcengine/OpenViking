@@ -1,3 +1,5 @@
+## Install
+
 ```bash
 # TRAE
 bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness trae --dist tos
@@ -8,4 +10,14 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 
 Select **Volcengine OpenViking Cloud**. Paste the API key from this page.
 
-Restart TRAE and confirm `openviking` is connected.
+## Verify
+
+Restart TRAE. Confirm `openviking` is connected in settings.
+
+## Troubleshoot
+
+| Problem | Fix |
+|---|---|
+| No auto recall | Quit TRAE completely, restart, new Agent session |
+| Connection / auth fails | Check `~/.openviking/ovcli.conf` and restart TRAE |
+| Need logs | `~/.openviking/logs/trae-hooks.log` or `trae-cn-hooks.log` |
