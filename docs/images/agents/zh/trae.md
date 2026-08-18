@@ -21,3 +21,8 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 | 没有自动召回 | 完全退出 TRAE，重启，再建会话 |
 | 连接 / 鉴权失败 | 检查 `~/.openviking/ovcli.conf`，重启 TRAE |
 | 需要日志 | `~/.openviking/logs/trae-hooks.log` 或 `trae-cn-hooks.log` |
+
+## 参考
+
+- 文档：[TRAE](https://docs.openviking.net/zh/agent-integrations/13-trae)
+- 源码：[examples/trae-memory-hooks](https://github.com/volcengine/OpenViking/tree/main/examples/trae-memory-hooks)

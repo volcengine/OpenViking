@@ -18,3 +18,8 @@ openclaw openviking status
 |---|---|
 | Plugin not active | Re-run Install, then `openclaw gateway restart` |
 | 401 / 403 | Paste the API key from this page again |
+
+## Reference
+
+- Docs: [OpenClaw](https://docs.openviking.net/en/agent-integrations/03-openclaw)
+- Code: [examples/openclaw-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/openclaw-plugin)

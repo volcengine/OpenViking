@@ -20,3 +20,8 @@ hermes memory status
 |---|---|
 | Provider 不是 openviking | 重跑 `hermes memory setup openviking` |
 | Status 不是 available | 检查本页 API Key |
+
+## 参考
+
+- 文档：[Hermes](https://docs.openviking.net/zh/agent-integrations/05-hermes)
+- Hermes provider：[OpenViking memory](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers#openviking)

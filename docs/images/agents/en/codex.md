@@ -18,3 +18,9 @@ Launch `codex`. Approve hooks once with `/hooks`. The first prompt should load y
 | Connection error | `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
 | `4 hooks need review` | `/hooks` and approve |
 | Need logs | `OPENVIKING_DEBUG=1` and `~/.openviking/logs/codex-hooks.log` |
+
+## Reference
+
+- Docs: [Codex](https://docs.openviking.net/en/agent-integrations/04-codex)
+- Blog: [OpenViking for coding agents](https://blog.openviking.ai/post/openviking-coding-agent/)
+- Code: [examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin)

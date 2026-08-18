@@ -19,3 +19,8 @@ Select **Volcengine OpenViking Cloud**. Paste the API key from this page.
 | Hooks do not run | Quit Cursor completely, restart, new Agent session |
 | Connection / auth fails | Check `~/.openviking/ovcli.conf` and restart Cursor |
 | Need logs | `OPENVIKING_DEBUG=1` and `~/.openviking/logs/cursor-hooks.log` |
+
+## Reference
+
+- Docs: [Cursor](https://docs.openviking.net/en/agent-integrations/12-cursor)
+- Code: [examples/cursor-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/cursor-memory-plugin)

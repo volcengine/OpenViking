@@ -22,3 +22,9 @@ Restart Claude Code, then:
 | Recall is empty | `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
 | 401 / 403 | Paste the API key from this page again |
 | Need logs | `OPENVIKING_DEBUG=1` and `~/.openviking/logs/cc-hooks.log` |
+
+## Reference
+
+- Docs: [Claude Code](https://docs.openviking.net/en/agent-integrations/02-claude-code)
+- Blog: [OpenViking for coding agents](https://blog.openviking.ai/post/openviking-coding-agent/)
+- Code: [examples/claude-code-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/claude-code-memory-plugin)

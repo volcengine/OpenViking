@@ -17,3 +17,8 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 | 插件没加载 | 检查 `~/.config/opencode/opencode.json` 是否包含 `@openviking/opencode-plugin` |
 | 连错服务 / 401 | 检查 `~/.openviking/ovcli.conf` 和本页 API Key |
 | 召回为空 | 确认云端实例里已有记忆 |
+
+## 参考
+
+- 文档：[OpenCode](https://docs.openviking.net/zh/agent-integrations/10-opencode)
+- 源码：[examples/opencode-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-plugin)

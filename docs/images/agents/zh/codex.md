@@ -18,3 +18,9 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 | 连接失败 | `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
 | `4 hooks need review` | `/hooks` 里批准 |
 | 需要日志 | `OPENVIKING_DEBUG=1`，看 `~/.openviking/logs/codex-hooks.log` |
+
+## 参考
+
+- 文档：[Codex](https://docs.openviking.net/zh/agent-integrations/04-codex)
+- 博客：[为 Coding Agent 加长期记忆](https://blog.openviking.ai/post/openviking-coding-agent/)
+- 源码：[examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin)

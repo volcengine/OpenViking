@@ -22,3 +22,9 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 | 召回为空 | `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
 | 401 / 403 | 重新粘贴本页 API Key |
 | 需要日志 | `OPENVIKING_DEBUG=1`，看 `~/.openviking/logs/cc-hooks.log` |
+
+## 参考
+
+- 文档：[Claude Code](https://docs.openviking.net/zh/agent-integrations/02-claude-code)
+- 博客：[为 Coding Agent 加长期记忆](https://blog.openviking.ai/post/openviking-coding-agent/)
+- 源码：[examples/claude-code-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/claude-code-memory-plugin)

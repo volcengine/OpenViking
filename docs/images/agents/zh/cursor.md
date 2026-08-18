@@ -19,3 +19,8 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 | Hook 没跑 | 完全退出 Cursor，重启，再建会话 |
 | 连接 / 鉴权失败 | 检查 `~/.openviking/ovcli.conf`，重启 Cursor |
 | 需要日志 | `OPENVIKING_DEBUG=1`，看 `~/.openviking/logs/cursor-hooks.log` |
+
+## 参考
+
+- 文档：[Cursor](https://docs.openviking.net/zh/agent-integrations/12-cursor)
+- 源码：[examples/cursor-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/cursor-memory-plugin)

@@ -17,3 +17,8 @@ Restart OpenCode. Ask it to search OpenViking memory. Tools look like `openvikin
 | Plugin is not loaded | Check `~/.config/opencode/opencode.json` includes `@openviking/opencode-plugin` |
 | Wrong server / 401 | Check `~/.openviking/ovcli.conf` and the API key from this page |
 | Recall is empty | Confirm the cloud instance has memories |
+
+## Reference
+
+- Docs: [OpenCode](https://docs.openviking.net/en/agent-integrations/10-opencode)
+- Code: [examples/opencode-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-plugin)

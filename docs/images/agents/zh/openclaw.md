@@ -18,3 +18,8 @@ openclaw openviking status
 |---|---|
 | 插件未生效 | 重跑安装，再执行 `openclaw gateway restart` |
 | 401 / 403 | 重新粘贴本页 API Key |
+
+## 参考
+
+- 文档：[OpenClaw](https://docs.openviking.net/zh/agent-integrations/03-openclaw)
+- 源码：[examples/openclaw-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/openclaw-plugin)
