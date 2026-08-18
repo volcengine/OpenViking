@@ -496,6 +496,7 @@ class SkillRuntimeContext:
                     target_uri=target_uri,
                     include_content=True,
                     include_files=True,
+                    include_integrity=True,
                 )
             except Exception as exc:
                 raise SkillRuntimeError("SKILL_NOT_FOUND", str(exc)) from exc
@@ -1305,6 +1306,7 @@ class SkillRuntimeContext:
             target_uri=_skill_identity_from_uri(skill.root_uri)[1],
             include_content=True,
             include_files=True,
+            include_integrity=True,
         )
         if _manifest_signature(latest) != skill.manifest_signature:
             raise SkillRuntimeError(
@@ -1388,8 +1390,7 @@ class SkillRuntimeContext:
     def _materialized_root(self, skill: ActiveRemoteSkill) -> str:
         digest = hashlib.sha256(skill.root_uri.encode("utf-8")).hexdigest()
         return (
-            f"{_MATERIALIZED_SKILL_ROOT}/{self.request_id}/{digest}/"
-            f"{_safe_skill_name(skill.name)}"
+            f"{_MATERIALIZED_SKILL_ROOT}/{self.request_id}/{digest}/{_safe_skill_name(skill.name)}"
         )
 
     async def close(self) -> None:

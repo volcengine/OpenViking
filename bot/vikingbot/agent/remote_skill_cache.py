@@ -53,6 +53,14 @@ class CachedSkillSnapshot:
     file_count: int
 
 
+@dataclass
+class _KeyLockState:
+    """One keyed lock plus the holders and waiters that still reference it."""
+
+    lock: asyncio.Lock
+    users: int = 0
+
+
 SnapshotBuilder = Callable[[Path], Awaitable[SnapshotBuildResult]]
 
 
@@ -69,7 +77,7 @@ class RemoteSkillSnapshotCache:
         self.idle_ttl_seconds = float(settings.cache_idle_ttl_seconds)
         self.max_entries = int(settings.cache_max_entries)
         self.max_bytes = int(settings.cache_max_bytes)
-        self._key_locks: dict[RemoteSkillCacheKey, asyncio.Lock] = {}
+        self._key_locks: dict[RemoteSkillCacheKey, _KeyLockState] = {}
         self._state_lock = asyncio.Lock()
         self._prune_lock = asyncio.Lock()
         self._active_entries: dict[Path, int] = {}
@@ -88,8 +96,7 @@ class RemoteSkillSnapshotCache:
         builder: SnapshotBuilder,
     ) -> AsyncIterator[CachedSkillSnapshot]:
         """Lease a validated cached snapshot, building it once on a cache miss."""
-        lock = self._key_locks.setdefault(key, asyncio.Lock())
-        async with lock:
+        async with self._key_lock(key):
             entry = self.entry_path(key)
             await self._lease(entry)
             used_successfully = False
@@ -130,14 +137,31 @@ class RemoteSkillSnapshotCache:
 
     async def invalidate(self, key: RemoteSkillCacheKey) -> None:
         """Remove a corrupt or otherwise unusable cache entry."""
-        lock = self._key_locks.setdefault(key, asyncio.Lock())
-        async with lock:
+        async with self._key_lock(key):
             entry = self.entry_path(key)
             async with self._state_lock:
                 active = self._active_entries.get(entry, 0)
             if active:
                 return
             await asyncio.to_thread(shutil.rmtree, entry, True)
+
+    @asynccontextmanager
+    async def _key_lock(self, key: RemoteSkillCacheKey) -> AsyncIterator[None]:
+        """Serialize one cache key and discard the lock after its last user exits."""
+        async with self._state_lock:
+            state = self._key_locks.get(key)
+            if state is None:
+                state = _KeyLockState(lock=asyncio.Lock())
+                self._key_locks[key] = state
+            state.users += 1
+        try:
+            async with state.lock:
+                yield
+        finally:
+            async with self._state_lock:
+                state.users -= 1
+                if state.users == 0 and self._key_locks.get(key) is state:
+                    self._key_locks.pop(key, None)
 
     async def prune(self) -> None:
         """Apply idle-TTL, entry-count, and byte-size eviction to inactive entries."""

@@ -643,7 +643,7 @@ class VikingClient:
         target_uri: str,
         include_content: bool = True,
         include_files: bool = True,
-        include_integrity: bool = True,
+        include_integrity: bool = False,
     ) -> Dict[str, Any]:
         return await self.client.get_skill(
             skill_name,

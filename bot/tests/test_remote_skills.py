@@ -8,7 +8,11 @@ from types import SimpleNamespace
 
 import pytest
 from vikingbot.agent.loop import AgentLoop
-from vikingbot.agent.remote_skill_cache import RemoteSkillSnapshotCache
+from vikingbot.agent.remote_skill_cache import (
+    RemoteSkillCacheKey,
+    RemoteSkillSnapshotCache,
+    SnapshotBuildResult,
+)
 from vikingbot.agent.remote_skills import SkillRuntimeContext, SkillRuntimeError
 from vikingbot.agent.tools.base import ToolContext
 from vikingbot.agent.tools.filesystem import ReadFileTool
@@ -46,7 +50,28 @@ class _FakeSandbox:
     def __init__(self):
         self.files: dict[str, bytes] = {}
         self.removed: list[str] = []
+        self.exported: list[str] = []
         self.requirements_ok = True
+
+    def local_file_path(self, path: str) -> Path | None:
+        del path
+        return None
+
+    async def export_file(
+        self,
+        path: str,
+        destination: Path,
+        *,
+        max_bytes: int | None = None,
+    ) -> int:
+        if path not in self.files:
+            raise FileNotFoundError(path)
+        content = self.files[path]
+        if max_bytes is not None and len(content) > max_bytes:
+            raise ValueError("file exceeds export limit")
+        destination.write_bytes(content)
+        self.exported.append(path)
+        return len(content)
 
     async def write_file_bytes(self, path: str, content: bytes) -> None:
         self.files[path] = bytes(content)
@@ -275,9 +300,7 @@ async def test_registry_multi_read_activates_skill_and_renders_resource_bindings
     assert "Do not recreate, copy, or write them into the workspace" in outcome.result
     assert "VikingBot materializes and rewrites it automatically" in outcome.result
 
-    prepared = await runtime.prepare_tool_call(
-        ExecTool(), {"command": "python scripts/audit.py"}
-    )
+    prepared = await runtime.prepare_tool_call(ExecTool(), {"command": "python scripts/audit.py"})
     assert prepared.params["command"].endswith("/release-audit/scripts/audit.py")
 
 
@@ -463,8 +486,7 @@ async def test_cache_hit_rechecks_manifest_before_creating_execution_copy(tmp_pa
     assert client2.download_calls == []
     assert runtime2.materializations == {}
     assert any(
-        path.startswith(".remote-skill/request-2/")
-        for path in sandbox_manager.sandbox.removed
+        path.startswith(".remote-skill/request-2/") for path in sandbox_manager.sandbox.removed
     )
 
 
@@ -706,6 +728,38 @@ async def test_versioned_cache_evicts_least_recently_used_entry_at_capacity(tmp_
     client3, runtime3 = await materialize_revision("request-3", "revision-1", b"print('one')\n")
     assert len(client3.download_calls) == 2
     assert runtime3.usage[-1]["cache"] == "miss"
+
+
+@pytest.mark.asyncio
+async def test_versioned_cache_reclaims_key_locks_after_eviction(tmp_path):
+    config = Config(
+        ov_server={"server_url": "http://openviking.test"},
+        storage_workspace=str(tmp_path),
+        remote_skills={"cache_max_entries": 1},
+    )
+    cache = RemoteSkillSnapshotCache(config)
+
+    async def build(snapshot: Path) -> SnapshotBuildResult:
+        (snapshot / "SKILL.md").write_bytes(b"x")
+        return SnapshotBuildResult(total_bytes=1, file_count=1)
+
+    for index in range(100):
+        key = RemoteSkillCacheKey(
+            scope_digest=f"scope-{index}",
+            root_digest="root",
+            revision_digest="revision",
+        )
+        async with cache.acquire(
+            key=key,
+            root_uri=SKILL_URI,
+            revision=f"revision-{index}",
+            manifest_signature=f"manifest-{index}",
+            builder=build,
+        ):
+            pass
+
+    assert len(list(cache.root.rglob("metadata.json"))) == 1
+    assert cache._key_locks == {}
 
 
 @pytest.mark.asyncio
@@ -1082,9 +1136,7 @@ def test_runtime_enablement_follows_visible_multi_read_tool(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_agent_loop_defers_same_batch_consumers_until_refreshed_schema(
-    tmp_path, monkeypatch
-):
+async def test_agent_loop_defers_same_batch_consumers_until_refreshed_schema(tmp_path, monkeypatch):
     event_order = []
 
     class _Provider(LLMProvider):
@@ -1358,10 +1410,11 @@ async def test_add_resource_uploads_materialized_sandbox_file(monkeypatch):
         "description": "template",
         "to": None,
     }
+    assert sandbox_manager.sandbox.exported == ["assets/template.bin"]
 
 
 @pytest.mark.asyncio
-async def test_viking_client_requests_integrity_manifest_by_default():
+async def test_viking_client_preserves_lightweight_get_skill_default():
     captured = {}
 
     class _Client:
@@ -1374,6 +1427,28 @@ async def test_viking_client_requests_integrity_manifest_by_default():
     wrapper.client = _Client()
 
     await wrapper.get_skill("release-audit", target_uri="viking://user/u1/skills")
+
+    assert captured["include_integrity"] is False
+
+
+@pytest.mark.asyncio
+async def test_viking_client_forwards_explicit_integrity_request():
+    captured = {}
+
+    class _Client:
+        async def get_skill(self, skill_name, **kwargs):
+            captured["skill_name"] = skill_name
+            captured.update(kwargs)
+            return {"name": skill_name}
+
+    wrapper = VikingClient.__new__(VikingClient)
+    wrapper.client = _Client()
+
+    await wrapper.get_skill(
+        "release-audit",
+        target_uri="viking://user/u1/skills",
+        include_integrity=True,
+    )
 
     assert captured["include_integrity"] is True
 

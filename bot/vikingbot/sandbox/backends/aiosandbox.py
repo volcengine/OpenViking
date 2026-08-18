@@ -110,6 +110,10 @@ class AioSandboxBackend(SandboxBackend):
         relative = self._normalize_workspace_path(path)
         return self.sandbox_cwd if not relative else f"{self.sandbox_cwd}/{relative}"
 
+    def local_file_path(self, path: str) -> Path | None:
+        del path
+        return None
+
     async def _list_path(self, path: str) -> list[Any]:
         if not self._client:
             raise SandboxNotStartedError()
@@ -263,3 +267,16 @@ class AioSandboxBackend(SandboxBackend):
         self._validate_max_bytes(max_bytes)
         stream = self._client.file.download_file(path=self._sandbox_path(path))
         return await self._collect_stream_bytes(stream, path, max_bytes)
+
+    async def export_file(
+        self,
+        path: str,
+        destination: Path,
+        *,
+        max_bytes: int | None = None,
+    ) -> int:
+        if not self._client:
+            raise SandboxNotStartedError()
+        self._validate_max_bytes(max_bytes)
+        stream = self._client.file.download_file(path=self._sandbox_path(path))
+        return await self._export_stream_to_local(stream, destination, path, max_bytes)

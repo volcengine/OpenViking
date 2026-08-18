@@ -35,6 +35,15 @@ async def test_local_workspace_listing_and_reads_are_bounded(tmp_path: Path):
     with pytest.raises(ValueError, match="inventory exceeds 2 entries"):
         await backend.list_files(max_entries=2)
 
+    assert backend.local_file_path("nested/artifact.bin") == tmp_path / "nested/artifact.bin"
+    exported = tmp_path / "exported.bin"
+    assert await backend.export_file("nested/artifact.bin", exported) == 8
+    assert exported.read_bytes() == b"artifact"
+    oversized = tmp_path / "oversized.bin"
+    with pytest.raises(ValueError, match="7-byte export limit"):
+        await backend.export_file("nested/artifact.bin", oversized, max_bytes=7)
+    assert not oversized.exists()
+
 
 class _AioFileClient:
     def __init__(self, *, truncated=False):
@@ -138,6 +147,22 @@ async def test_aiosandbox_inventory_uses_the_remote_result_limit(tmp_path: Path)
     assert files.glob_calls[0]["max_results"] == 4
 
 
+@pytest.mark.asyncio
+async def test_aiosandbox_exports_remote_file_as_stream(tmp_path: Path):
+    files = _AioFileClient()
+    backend = _aio_backend(tmp_path, files)
+    destination = tmp_path / "download" / "artifact.bin"
+
+    assert backend.local_file_path("artifact.bin") is None
+    assert await backend.export_file("artifact.bin", destination) == 6
+    assert destination.read_bytes() == b"abcdef"
+    oversized = tmp_path / "download" / "oversized.bin"
+    with pytest.raises(ValueError, match="5-byte export limit"):
+        await backend.export_file("artifact.bin", oversized, max_bytes=5)
+    assert not oversized.exists()
+    assert files.download_calls == ["/home/gem/artifact.bin", "/home/gem/artifact.bin"]
+
+
 class _OpenSandboxFiles:
     def __init__(self):
         self.read_calls = []
@@ -211,3 +236,15 @@ async def test_opensandbox_vke_inventory_stops_at_the_remote_limit(tmp_path: Pat
     with pytest.raises(ValueError, match="inventory exceeds 1 entries"):
         await backend.list_files(max_entries=1)
     assert "limit = 1" in commands.calls[0][0]
+
+
+@pytest.mark.asyncio
+async def test_opensandbox_vke_exports_remote_file_as_stream(tmp_path: Path):
+    files = _OpenSandboxFiles()
+    backend = _opensandbox_vke_backend(tmp_path, files, _OpenSandboxCommands())
+    destination = tmp_path / "download" / "artifact.bin"
+
+    assert backend.local_file_path("artifact.bin") is None
+    assert await backend.export_file("artifact.bin", destination) == 6
+    assert destination.read_bytes() == b"abcdef"
+    assert files.read_calls == [("/workspace/artifact.bin", None)]

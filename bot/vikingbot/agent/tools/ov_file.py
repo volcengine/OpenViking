@@ -544,11 +544,14 @@ class VikingAddResourceTool(OVFileTool):
                     sandbox = await tool_context.sandbox_manager.get_sandbox(
                         tool_context.session_key
                     )
-                    data = await sandbox.read_file_bytes(path)
-                    temp_dir = tempfile.TemporaryDirectory(prefix="vikingbot-add-resource-")
-                    local_path = Path(temp_dir.name) / (Path(path).name or "resource")
-                    await asyncio.to_thread(local_path.write_bytes, data)
-                    upload_path = str(local_path)
+                    local_path = sandbox.local_file_path(path)
+                    if local_path is not None:
+                        upload_path = str(local_path)
+                    else:
+                        temp_dir = tempfile.TemporaryDirectory(prefix="vikingbot-add-resource-")
+                        local_path = Path(temp_dir.name) / (Path(path).name or "resource")
+                        await sandbox.export_file(path, local_path)
+                        upload_path = str(local_path)
                 else:
                     local_path = Path(path).expanduser().resolve()
                     if not local_path.exists():

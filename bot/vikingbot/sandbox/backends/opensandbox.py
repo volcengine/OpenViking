@@ -303,6 +303,11 @@ class OpenSandboxBackend(SandboxBackend):
         relative = self._normalize_workspace_path(path)
         return self.sandbox_cwd if not relative else f"{self.sandbox_cwd}/{relative}"
 
+    def local_file_path(self, path: str) -> Path | None:
+        if self._is_vke:
+            return None
+        return super().local_file_path(path)
+
     async def read_file(self, path: str) -> str:
         """Read file from OpenSandbox."""
         if not self._sandbox:
@@ -503,3 +508,22 @@ class OpenSandboxBackend(SandboxBackend):
             range_header=range_header,
         )
         return await self._collect_stream_bytes(stream, path, max_bytes)
+
+    async def export_file(
+        self,
+        path: str,
+        destination: Path,
+        *,
+        max_bytes: int | None = None,
+    ) -> int:
+        if not self._is_vke:
+            return await super().export_file(path, destination, max_bytes=max_bytes)
+        if not self._sandbox:
+            raise SandboxNotStartedError()
+        self._validate_max_bytes(max_bytes)
+        range_header = None if max_bytes is None else f"bytes=0-{max_bytes}"
+        stream = await self._sandbox.files.read_bytes_stream(
+            self._sandbox_path(path),
+            range_header=range_header,
+        )
+        return await self._export_stream_to_local(stream, destination, path, max_bytes)

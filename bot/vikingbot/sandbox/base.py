@@ -129,6 +129,39 @@ class SandboxBackend(ABC):
         return data
 
     @staticmethod
+    def _copy_local_file(
+        source: Path,
+        destination: Path,
+        original_path: str,
+        max_bytes: int | None,
+    ) -> int:
+        """Copy one host file with bounded memory and remove partial output on failure."""
+        if not source.exists():
+            raise FileNotFoundError(f"File not found: {original_path}")
+        if not source.is_file():
+            raise IOError(f"Not a file: {original_path}")
+        size = source.stat().st_size
+        if max_bytes is not None and size > max_bytes:
+            raise ValueError(f"File exceeds the {max_bytes}-byte export limit: {original_path}")
+        if source.resolve() == destination.resolve():
+            return size
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        total = 0
+        try:
+            with source.open("rb") as input_stream, destination.open("wb") as output_stream:
+                while chunk := input_stream.read(1024 * 1024):
+                    total += len(chunk)
+                    if max_bytes is not None and total > max_bytes:
+                        raise ValueError(
+                            f"File exceeds the {max_bytes}-byte export limit: {original_path}"
+                        )
+                    output_stream.write(chunk)
+        except Exception:
+            destination.unlink(missing_ok=True)
+            raise
+        return total
+
+    @staticmethod
     async def _collect_stream_bytes(
         stream: AsyncIterator[bytes],
         original_path: str,
@@ -156,6 +189,72 @@ class SandboxBackend(ABC):
             raise ValueError(f"File exceeds the {max_bytes}-byte read limit: {original_path}")
         return bytes(data)
 
+    @staticmethod
+    async def _export_stream_to_local(
+        stream: AsyncIterator[bytes],
+        destination: Path,
+        original_path: str,
+        max_bytes: int | None,
+    ) -> int:
+        """Write a remote byte stream locally while retaining only one chunk in memory."""
+        await asyncio.to_thread(destination.parent.mkdir, parents=True, exist_ok=True)
+        total = 0
+        output_stream = None
+        try:
+            output_stream = await asyncio.to_thread(destination.open, "wb")
+            async for chunk in stream:
+                if not isinstance(chunk, (bytes, bytearray, memoryview)):
+                    raise IOError(f"Sandbox returned invalid file bytes: {original_path}")
+                total += len(chunk)
+                if max_bytes is not None and total > max_bytes:
+                    raise ValueError(
+                        f"File exceeds the {max_bytes}-byte export limit: {original_path}"
+                    )
+                await asyncio.to_thread(output_stream.write, chunk)
+        except BaseException:
+            if output_stream is not None:
+                await asyncio.to_thread(output_stream.close)
+                output_stream = None
+            await asyncio.to_thread(destination.unlink, missing_ok=True)
+            raise
+        finally:
+            if output_stream is not None:
+                await asyncio.to_thread(output_stream.close)
+            close = getattr(stream, "aclose", None)
+            if close is not None:
+                await close()
+        return total
+
+    def local_file_path(self, path: str) -> Path | None:
+        """Return a safe host path when this sandbox workspace is host-accessible."""
+        sandbox_path = self._resolve_path(path)
+        self._check_path_restriction(sandbox_path)
+        if not sandbox_path.exists():
+            raise FileNotFoundError(f"File not found: {path}")
+        if not sandbox_path.is_file():
+            raise IOError(f"Not a file: {path}")
+        return sandbox_path
+
+    async def export_file(
+        self,
+        path: str,
+        destination: Path,
+        *,
+        max_bytes: int | None = None,
+    ) -> int:
+        """Export a sandbox file to the host without materializing it in Bot memory."""
+        self._validate_max_bytes(max_bytes)
+        source = self.local_file_path(path)
+        if source is None:
+            raise IOError("Sandbox does not expose a host file path or streaming exporter")
+        return await asyncio.to_thread(
+            self._copy_local_file,
+            source,
+            destination,
+            path,
+            max_bytes,
+        )
+
     async def read_file_bytes(self, path: str, *, max_bytes: int | None = None) -> bytes:
         """Read file bytes from sandbox (default implementation: host filesystem).
 
@@ -173,8 +272,9 @@ class SandboxBackend(ABC):
             PermissionError: If path outside workspace and restriction is enabled
         """
         self._validate_max_bytes(max_bytes)
-        sandbox_path = self._resolve_path(path)
-        self._check_path_restriction(sandbox_path)
+        sandbox_path = self.local_file_path(path)
+        if sandbox_path is None:
+            raise IOError("Sandbox file is not accessible from the host")
         return await asyncio.to_thread(self._read_local_bytes, sandbox_path, path, max_bytes)
 
     async def list_files(
