@@ -3889,7 +3889,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pydantic-settings", marker = "extra == 'bot'", specifier = ">=2.0.0" },
     { name = "pygments", marker = "extra == 'bot'", specifier = ">=2.16.0" },
-    { name = "pymilvus", extras = ["milvus-lite"], marker = "extra == 'milvus'", specifier = ">=2.6.0" },
+    { name = "pymilvus", extras = ["milvus-lite"], marker = "extra == 'milvus'", specifier = ">=3.0.0" },
     { name = "pytesseract", marker = "extra == 'ocr'", specifier = ">=0.3.10" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=7.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.21.0" },

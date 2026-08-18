@@ -194,11 +194,38 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 |---|---|---|---|
 | `workspace` | path | `"./data"` | OpenViking 工作目录 |
 | `agfs.backend` | `local`、`memory`、`s3` | `local` | 文件与元数据存储后端 |
-| `vectordb.backend` | `local`、`cuvs`、`http`、`volcengine`、`vikingdb` | `local` | 向量数据库后端 |
+| `vectordb.backend` | `local`、`cuvs`、`http`、`milvus`、`volcengine`、`vikingdb` | `local` | 向量数据库后端 |
 | `vectordb.dimension` | integer | 跟随 Embedding | 向量集合维度 |
 | `skip_process_lock` | boolean | `false` | 是否跳过 workspace 进程锁；仅在明确接受并发写风险时启用 |
 
 远程存储后端还需要配置 endpoint、bucket/collection、鉴权和超时等字段。完整后端示例见[配置指南](../guides/01-configuration.md#storage)。
+
+Milvus 后端需要显式启用：先执行 `uv sync --extra milvus`，再把
+`vectordb.backend` 设置为 `milvus`。默认后端仍为 `local`，默认配置下导入或启动
+OpenViking 不依赖 PyMilvus。`./milvus.db` 这类文件 URI 会启动 Milvus Lite；HTTP
+endpoint 和 token 则显式选择 Milvus Server 或 Zilliz Cloud。
+
+endpoint 的优先级依次为显式 `milvus.uri`、旧版 `vectordb.url`、
+`vectordb.custom_params.uri`，最后才是 `./milvus.db`。显式配置的 `milvus.uri` 不会被本地
+默认值覆盖。
+
+Milvus Lite 会为支持的 `VARCHAR`、`INT64` 和 `BOOL` 字段创建真实 `INVERTED`
+标量索引。Lite 不支持 `ARRAY` 标量索引，因此授权数组仍可过滤，但 metadata 会将其
+报告为不可用，不会误报为成功创建。由于当前 adapter 无法保证完整的 sparse 候选召回，
+sparse/hybrid 检索会明确拒绝。标量排序和分组聚合若匹配超过 10,000 条、可能发生截断，
+也会明确报错。
+
+旧 OpenViking 动态 schema collection 可通过动态字段补充 ACL 字段；读取时会把旧记录的
+NULL ACL 值归一化为公开默认值。若静态 collection 缺少必需字段，或已有字段类型不兼容，
+以及 vector 字段/维度、主键、`auto_id`、动态 schema 设置、ARRAY element/capacity 任一
+不兼容，都必须先迁移或重建。完成全部校验前，OpenViking 不会修改 collection property
+或 sidecar metadata。
+
+新 metadata 会同时保存精确的 logical project、logical collection、physical naming
+version 和 physical collection name。若旧 physical collection 或旧 sidecar 缺少可验证的
+ownership identity，adapter 不会自动绑定，也不会通过该绑定读取、更新或删除；应先迁移或
+重建，或在独立确认 owner 后建立显式绑定。任何会解析为当前或旧 metadata namespace 的
+业务名称都会被拒绝。
 
 ## 队列 Worker 配置
 

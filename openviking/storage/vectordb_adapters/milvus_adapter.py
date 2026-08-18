@@ -5,9 +5,11 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import math
 import re
+from copy import deepcopy
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from openviking.storage.expr import (
@@ -40,6 +42,7 @@ logger = get_logger(__name__)
 _DEFAULT_URI = "./milvus.db"
 _DEFAULT_TIMEOUT_SECONDS = 30
 _DEFAULT_QUERY_LIMIT = 10_000
+_TRUNCATION_PROBE_LIMIT = _DEFAULT_QUERY_LIMIT + 1
 _MILVUS_MAX_COLLECTION_NAME_LENGTH = 255
 _MILVUS_VARCHAR_MAX_LENGTH = 65_535
 _ID_MAX_LENGTH = 512
@@ -54,13 +57,20 @@ _FLOAT_FIELD_TYPES = {"float", "double"}
 _BOOL_FIELD_TYPES = {"bool", "boolean"}
 _META_PROPERTY_KEY = "openviking_meta"
 _INDEX_META_PROPERTY_PREFIX = "openviking_index_"
-_META_COLLECTION_NAME = "ov_openviking_milvus_meta"
+_DATA_COLLECTION_PREFIX = "ov_data"
+_META_COLLECTION_NAME = "ov_internal_metadata_v1"
+_LEGACY_META_COLLECTION_NAME = "ov_openviking_milvus_meta"
+_META_IDENTITY_KEY = "_openviking_identity"
+_PHYSICAL_NAMING_VERSION = 2
 _META_VECTOR_FIELD = "meta_vector"
+_META_VECTOR_INDEX = "meta_vector_index"
+_META_VECTOR_DIM = 2
+_META_VECTOR_VALUE = [0.0] * _META_VECTOR_DIM
 
 
 def _import_pymilvus():
     try:
-        import pymilvus  # type: ignore  # noqa: PLC0415
+        import pymilvus  # noqa: PLC0415
 
         return pymilvus
     except ImportError as exc:  # pragma: no cover - exercised only without optional driver
@@ -71,7 +81,8 @@ def _import_pymilvus():
 
 
 def _safe_collection_name(*parts: Any, prefix: str = "ov") -> str:
-    raw = "_".join(str(part or "") for part in parts)
+    raw_parts = [str(part or "") for part in parts]
+    raw = "_".join(raw_parts)
     normalized = _COLLECTION_NAME_RE.sub("_", raw).strip("_")
     if not normalized:
         normalized = "default"
@@ -79,14 +90,40 @@ def _safe_collection_name(*parts: Any, prefix: str = "ov") -> str:
         normalized = f"{prefix}_{normalized}"
     elif prefix and not normalized.startswith(f"{prefix}_"):
         normalized = f"{prefix}_{normalized}"
+    digest = hashlib.sha256("\0".join(raw_parts).encode("utf-8")).hexdigest()[:12]
+    keep = _MILVUS_MAX_COLLECTION_NAME_LENGTH - len(digest) - 1
+    return f"{normalized[:keep]}_{digest}"
+
+
+def _legacy_collection_name(*parts: Any) -> str:
+    """Return the pre-hash physical name for restart compatibility."""
+    raw = "_".join(str(part or "") for part in parts)
+    normalized = _COLLECTION_NAME_RE.sub("_", raw).strip("_") or "default"
+    if normalized[0].isdigit():
+        normalized = f"ov_{normalized}"
+    elif not normalized.startswith("ov_"):
+        normalized = f"ov_{normalized}"
     if len(normalized) <= _MILVUS_MAX_COLLECTION_NAME_LENGTH:
         return normalized
-
-    import hashlib
-
     digest = hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:10]
     keep = _MILVUS_MAX_COLLECTION_NAME_LENGTH - len(digest) - 1
     return f"{normalized[:keep]}_{digest}"
+
+
+def _validate_business_namespace(project_name: str, collection_name: str) -> None:
+    reserved = {_META_COLLECTION_NAME, _LEGACY_META_COLLECTION_NAME}
+    candidates = {
+        str(project_name),
+        str(collection_name),
+        _legacy_collection_name(project_name),
+        _legacy_collection_name(collection_name),
+        _legacy_collection_name(project_name, collection_name),
+    }
+    if candidates & reserved:
+        raise ValueError(
+            "Milvus project/collection name resolves to a reserved OpenViking metadata "
+            "namespace; choose a different business name"
+        )
 
 
 def _normalize_distance(distance: str) -> str:
@@ -135,18 +172,6 @@ def _encode_scope_roots(value: Any) -> str:
     roots = value if isinstance(value, list) else [value]
     normalized = [str(root) for root in roots if root is not None]
     return "\n" + "\n".join(normalized) + "\n" if normalized else "\n"
-
-
-def _sparse_dot(left: Optional[Dict[str, float]], right: Optional[Dict[str, float]]) -> float:
-    if not left or not right:
-        return 0.0
-    total = 0.0
-    for key, raw_value in left.items():
-        try:
-            total += float(raw_value) * float(right.get(key, 0.0))
-        except (TypeError, ValueError):
-            continue
-    return total
 
 
 def _coerce_datetime_value(value: Any) -> Any:
@@ -199,14 +224,14 @@ def _score_from_hit(hit: Dict[str, Any], distance_metric: str) -> float:
         if hit.get("score") is not None
         else hit.get("distance", hit.get("_distance", 0.0))
     )
+    if raw_score is None:
+        return 0.0
     try:
         score = float(raw_score)
     except (TypeError, ValueError):
         return 0.0
     if not math.isfinite(score):
         return 0.0
-    if distance_metric == "cosine":
-        return 1.0 - score
     if distance_metric == "l2":
         return 1.0 / (1.0 + max(score, 0.0))
     return score
@@ -280,6 +305,7 @@ class MilvusCollection(ICollection):
         sparse_vector_name: str,
         distance_metric: str,
         timeout_seconds: int,
+        allow_legacy_sidecar: bool = False,
         meta: Optional[Dict[str, Any]] = None,
     ) -> None:
         super().__init__()
@@ -291,10 +317,14 @@ class MilvusCollection(ICollection):
         self._sparse_vector_name = sparse_vector_name
         self._distance_metric = _normalize_distance(distance_metric)
         self._timeout_seconds = int(timeout_seconds)
-        self._meta = dict(meta or {})
-        self._field_types = self._build_field_type_map(self._meta)
-        self._varchar_lengths = self._build_varchar_length_map()
-        self._vector_dim = self._extract_vector_dim(self._meta)
+        self._allow_legacy_sidecar = bool(allow_legacy_sidecar)
+        _validate_business_namespace(project_name, logical_collection_name)
+        self._meta: Dict[str, Any] = {}
+        self._field_types: Dict[str, str] = {}
+        self._field_defaults: Dict[str, Any] = {}
+        self._varchar_lengths: Dict[str, int] = {}
+        self._vector_dim = 0
+        self._set_meta(dict(meta or {}))
 
     @property
     def collection_name(self) -> str:
@@ -324,6 +354,21 @@ class MilvusCollection(ICollection):
         mapping.update(cls.INTERNAL_PATH_FIELDS)
         return mapping
 
+    @staticmethod
+    def _build_field_default_map(meta: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            str(field["FieldName"]): deepcopy(field["DefaultValue"])
+            for field in meta.get("Fields", []) or []
+            if field.get("FieldName") and "DefaultValue" in field
+        }
+
+    def _set_meta(self, meta: Dict[str, Any]) -> None:
+        self._meta = dict(meta)
+        self._field_types = self._build_field_type_map(self._meta)
+        self._field_defaults = self._build_field_default_map(self._meta)
+        self._varchar_lengths = self._build_varchar_length_map()
+        self._vector_dim = self._extract_vector_dim(self._meta)
+
     def _build_varchar_length_map(self) -> Dict[str, int]:
         lengths: Dict[str, int] = {
             "id": _ID_MAX_LENGTH,
@@ -345,23 +390,78 @@ class MilvusCollection(ICollection):
         )
 
     def _collection_properties(self) -> Dict[str, Any]:
-        try:
-            desc = self._client.describe_collection(
-                collection_name=self._physical_collection_name,
-                timeout=self._timeout_seconds,
-            )
-        except Exception:
-            return {}
+        desc = self._client.describe_collection(
+            collection_name=self._physical_collection_name,
+            timeout=self._timeout_seconds,
+        )
         props = desc.get("properties") if isinstance(desc, dict) else None
         return dict(props or {})
 
-    def _ensure_meta_collection(self) -> None:
+    def _identity(self) -> Dict[str, Any]:
+        naming_version = (
+            _PHYSICAL_NAMING_VERSION
+            if self._physical_collection_name
+            == _safe_collection_name(
+                self._project_name,
+                self._logical_collection_name,
+                prefix=_DATA_COLLECTION_PREFIX,
+            )
+            else 1
+        )
+        return {
+            "logical_project": self._project_name,
+            "logical_collection": self._logical_collection_name,
+            "naming_version": naming_version,
+            "physical_collection": self._physical_collection_name,
+        }
+
+    def _encode_owned_meta(self, meta: Dict[str, Any]) -> str:
+        persisted = deepcopy(meta)
+        persisted[_META_IDENTITY_KEY] = self._identity()
+        return _json_dumps(persisted)
+
+    def _decode_owned_meta(self, raw_meta: Any, *, source: str) -> Dict[str, Any]:
         try:
-            if self._client.has_collection(
-                collection_name=_META_COLLECTION_NAME,
-                timeout=self._timeout_seconds,
-            ):
-                return
+            persisted = json.loads(raw_meta) if isinstance(raw_meta, str) else raw_meta
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                f"Milvus {source} metadata is invalid; migration/rebuild is required"
+            ) from exc
+        if not isinstance(persisted, dict):
+            raise RuntimeError(
+                f"Milvus {source} metadata is invalid; migration/rebuild is required"
+            )
+        identity = persisted.get(_META_IDENTITY_KEY)
+        if not isinstance(identity, dict):
+            raise RuntimeError(
+                f"Milvus {source} metadata has no verifiable ownership identity; refusing "
+                "automatic binding. Migrate/rebuild the collection or add an explicit, "
+                "verified binding."
+            )
+        expected = self._identity()
+        if identity != expected:
+            raise RuntimeError(
+                f"Milvus {source} ownership identity does not match the requested logical "
+                "project/collection and physical name; refusing read, update, or delete. "
+                "Migrate/rebuild the collection or use an explicit, verified binding."
+            )
+        schema_meta = deepcopy(persisted)
+        schema_meta.pop(_META_IDENTITY_KEY, None)
+        return schema_meta
+
+    def _validate_meta_record_identity(
+        self, record: Dict[str, Any], *, source: str
+    ) -> Dict[str, Any]:
+        if record:
+            self._decode_owned_meta(record.get("meta_json"), source=source)
+        return record
+
+    def _ensure_meta_collection(self) -> None:
+        collection_exists = self._client.has_collection(
+            collection_name=_META_COLLECTION_NAME,
+            timeout=self._timeout_seconds,
+        )
+        if not collection_exists:
             pymilvus = _import_pymilvus()
             DataType = pymilvus.DataType
             schema = self._client.create_schema(auto_id=False, enable_dynamic_field=False)
@@ -377,77 +477,117 @@ class MilvusCollection(ICollection):
                 max_length=_MILVUS_VARCHAR_MAX_LENGTH,
             )
             schema.add_field(field_name="indexes_json", datatype=DataType.JSON, nullable=True)
-            schema.add_field(field_name=_META_VECTOR_FIELD, datatype=DataType.FLOAT_VECTOR, dim=1)
+            schema.add_field(
+                field_name=_META_VECTOR_FIELD,
+                datatype=DataType.FLOAT_VECTOR,
+                dim=_META_VECTOR_DIM,
+            )
             self._client.create_collection(
                 collection_name=_META_COLLECTION_NAME,
                 schema=schema,
                 timeout=self._timeout_seconds,
             )
-        except Exception as exc:
-            logger.warning("Failed to ensure Milvus metadata collection: %s", exc)
+
+        indexes = list(
+            self._client.list_indexes(
+                collection_name=_META_COLLECTION_NAME,
+                timeout=self._timeout_seconds,
+            )
+            or []
+        )
+        if _META_VECTOR_FIELD not in indexes and _META_VECTOR_INDEX not in indexes:
+            index_params = self._client.prepare_index_params()
+            index_params.add_index(
+                field_name=_META_VECTOR_FIELD,
+                index_name=_META_VECTOR_INDEX,
+                index_type="AUTOINDEX",
+                metric_type="COSINE",
+            )
+            self._client.create_index(
+                collection_name=_META_COLLECTION_NAME,
+                index_params=index_params,
+                timeout=self._timeout_seconds,
+            )
+        self._client.load_collection(
+            collection_name=_META_COLLECTION_NAME,
+            timeout=self._timeout_seconds,
+        )
 
     def _load_meta_record(self) -> Dict[str, Any]:
         self._ensure_meta_collection()
-        try:
-            rows = self._client.get(
-                collection_name=_META_COLLECTION_NAME,
-                ids=[self._physical_collection_name],
-                output_fields=["meta_json", "indexes_json"],
-                timeout=self._timeout_seconds,
+        rows = self._client.get(
+            collection_name=_META_COLLECTION_NAME,
+            ids=[self._physical_collection_name],
+            output_fields=["meta_json", "indexes_json"],
+            timeout=self._timeout_seconds,
+        )
+        if rows:
+            return self._validate_meta_record_identity(
+                dict(rows[0]), source=f"sidecar {_META_COLLECTION_NAME!r}"
             )
-        except Exception:
+        if not self._allow_legacy_sidecar or self._identity()["naming_version"] != 1:
             return {}
-        return dict(rows[0]) if rows else {}
+        if not self._client.has_collection(
+            collection_name=_LEGACY_META_COLLECTION_NAME,
+            timeout=self._timeout_seconds,
+        ):
+            return {}
+        self._client.load_collection(
+            collection_name=_LEGACY_META_COLLECTION_NAME,
+            timeout=self._timeout_seconds,
+        )
+        legacy_rows = self._client.get(
+            collection_name=_LEGACY_META_COLLECTION_NAME,
+            ids=[self._physical_collection_name],
+            output_fields=["meta_json", "indexes_json"],
+            timeout=self._timeout_seconds,
+        )
+        if not legacy_rows:
+            return {}
+        return self._validate_meta_record_identity(
+            dict(legacy_rows[0]), source=f"legacy sidecar {_LEGACY_META_COLLECTION_NAME!r}"
+        )
 
     def _save_meta_record(self, *, meta: Optional[Dict[str, Any]] = None) -> None:
         self._ensure_meta_collection()
         existing = self._load_meta_record()
-        meta_json = _json_dumps(meta if meta is not None else self._meta)
-        indexes_json = existing.get("indexes_json") if existing else {}
-        try:
-            self._client.upsert(
-                collection_name=_META_COLLECTION_NAME,
-                data=[
-                    {
-                        "id": self._physical_collection_name,
-                        "meta_json": meta_json,
-                        "indexes_json": indexes_json if isinstance(indexes_json, dict) else {},
-                        _META_VECTOR_FIELD: [0.0],
-                    }
-                ],
-                timeout=self._timeout_seconds,
-            )
-        except Exception as exc:
-            logger.warning("Failed to persist Milvus metadata record: %s", exc)
+        meta_json = self._encode_owned_meta(meta if meta is not None else self._meta)
+        indexes_json = deepcopy(existing.get("indexes_json")) if existing else {}
+        self._client.upsert(
+            collection_name=_META_COLLECTION_NAME,
+            data=[
+                {
+                    "id": self._physical_collection_name,
+                    "meta_json": meta_json,
+                    "indexes_json": indexes_json if isinstance(indexes_json, dict) else {},
+                    _META_VECTOR_FIELD: _META_VECTOR_VALUE,
+                }
+            ],
+            timeout=self._timeout_seconds,
+        )
 
     def load_remote_meta(self) -> Optional[Dict[str, Any]]:
         record = self._load_meta_record()
         raw_meta = record.get("meta_json")
-        if isinstance(raw_meta, str):
-            try:
-                meta = json.loads(raw_meta)
-            except (TypeError, ValueError):
-                meta = None
-            if isinstance(meta, dict):
-                self._meta = meta
-                self._field_types = self._build_field_type_map(meta)
-                self._varchar_lengths = self._build_varchar_length_map()
-                self._vector_dim = self._extract_vector_dim(meta)
-                return meta
+        if raw_meta is not None:
+            meta = self._decode_owned_meta(raw_meta, source="sidecar")
+            property_raw = self._collection_properties().get(_META_PROPERTY_KEY)
+            if property_raw is not None:
+                property_meta = self._decode_owned_meta(property_raw, source="collection property")
+                if property_meta != meta:
+                    raise RuntimeError(
+                        "Milvus collection metadata is inconsistent between sidecar and "
+                        "collection property; repair or rebuild before binding"
+                    )
+            self._set_meta(meta)
+            return meta
 
         props = self._collection_properties()
         raw_meta = props.get(_META_PROPERTY_KEY)
-        if isinstance(raw_meta, str):
-            try:
-                meta = json.loads(raw_meta)
-            except (TypeError, ValueError):
-                meta = None
-            if isinstance(meta, dict):
-                self._meta = meta
-                self._field_types = self._build_field_type_map(meta)
-                self._varchar_lengths = self._build_varchar_length_map()
-                self._vector_dim = self._extract_vector_dim(meta)
-                return meta
+        if raw_meta is not None:
+            meta = self._decode_owned_meta(raw_meta, source="collection property")
+            self._set_meta(meta)
+            return meta
 
         return None
 
@@ -457,10 +597,7 @@ class MilvusCollection(ICollection):
         *,
         consistency_level: Optional[str] = None,
     ) -> None:
-        self._meta = dict(meta_data)
-        self._field_types = self._build_field_type_map(self._meta)
-        self._varchar_lengths = self._build_varchar_length_map()
-        self._vector_dim = self._extract_vector_dim(self._meta)
+        self._set_meta(dict(meta_data))
         if self._vector_dim <= 0:
             raise ValueError("Milvus collection requires a positive dense vector dimension")
 
@@ -475,7 +612,24 @@ class MilvusCollection(ICollection):
             timeout=self._timeout_seconds,
             **create_kwargs,
         )
-        self._save_collection_meta()
+        try:
+            self._save_collection_meta()
+        except Exception as exc:
+            try:
+                self._client.drop_collection(
+                    collection_name=self._physical_collection_name,
+                    timeout=self._timeout_seconds,
+                )
+                self._delete_meta_record(ignore_missing=True)
+            except Exception as rollback_exc:
+                raise RuntimeError(
+                    "Milvus collection metadata persistence failed and rollback left an "
+                    f"inconsistent collection {self._physical_collection_name!r}: {rollback_exc}"
+                ) from exc
+            raise RuntimeError(
+                f"Milvus collection metadata persistence failed; rolled back "
+                f"{self._physical_collection_name!r}"
+            ) from exc
 
     def _build_schema(self, pymilvus: Any):
         DataType = pymilvus.DataType
@@ -527,6 +681,8 @@ class MilvusCollection(ICollection):
                     max_length=self._varchar_lengths.get(field_name, _MILVUS_VARCHAR_MAX_LENGTH),
                     nullable=True,
                 )
+            if "DefaultValue" in field and field_type not in _LIST_STRING_FIELD_TYPES:
+                kwargs["default_value"] = deepcopy(field["DefaultValue"])
             schema.add_field(field_name=field_name, datatype=datatype, **kwargs)
         return schema
 
@@ -538,16 +694,173 @@ class MilvusCollection(ICollection):
                 fields.append({"FieldName": field_name, "FieldType": field_type})
         return fields
 
+    @staticmethod
+    def _expected_physical_type(field: Dict[str, Any], sparse_vector_name: str) -> str:
+        field_name = str(field.get("FieldName") or "")
+        field_type = str(field.get("FieldType") or "").lower()
+        if field_type in _VECTOR_FIELD_TYPES:
+            return "FLOAT_VECTOR"
+        if field_name == sparse_vector_name or field_type in {"json", "sparse_vector"}:
+            return "JSON"
+        if field_type in _LIST_STRING_FIELD_TYPES:
+            return "ARRAY"
+        if field_type in _INT_FIELD_TYPES:
+            return "INT64"
+        if field_type in _FLOAT_FIELD_TYPES:
+            return "DOUBLE"
+        if field_type in _BOOL_FIELD_TYPES:
+            return "BOOL"
+        return "VARCHAR"
+
+    def ensure_schema_compatible(self, desired_meta: Dict[str, Any]) -> None:
+        """Upgrade dynamic metadata or fail before using an incompatible static schema."""
+        desc = self._client.describe_collection(
+            collection_name=self._physical_collection_name,
+            timeout=self._timeout_seconds,
+        )
+        described_fields = {
+            str(field.get("name")): field
+            for field in (desc.get("fields", []) if isinstance(desc, dict) else [])
+            if field.get("name")
+        }
+        desired_fields = [dict(field) for field in desired_meta.get("Fields", []) or []]
+        desired_names = {str(field.get("FieldName")) for field in desired_fields}
+        for field_name, field_type in self.INTERNAL_PATH_FIELDS.items():
+            if field_name not in desired_names:
+                desired_fields.append({"FieldName": field_name, "FieldType": field_type})
+
+        mismatches: List[str] = []
+        missing: List[str] = []
+        if bool(desc.get("auto_id")):
+            mismatches.append("collection auto_id (True != False)")
+        if not bool(desc.get("enable_dynamic_field")):
+            mismatches.append("collection enable_dynamic_field (False != True)")
+
+        vector_fields = [
+            str(field.get("FieldName") or "")
+            for field in desired_fields
+            if str(field.get("FieldType") or "").lower() in _VECTOR_FIELD_TYPES
+        ]
+        if vector_fields != [self._dense_vector_name]:
+            mismatches.append(
+                f"dense vector field ({vector_fields!r} != {[self._dense_vector_name]!r})"
+            )
+        desired_primary = [
+            str(field.get("FieldName") or "")
+            for field in desired_fields
+            if field.get("IsPrimaryKey")
+        ]
+        if desired_primary != ["id"]:
+            mismatches.append(f"logical primary key ({desired_primary!r} != ['id'])")
+        physical_primary = [
+            name for name, field in described_fields.items() if bool(field.get("is_primary"))
+        ]
+        if physical_primary != ["id"]:
+            mismatches.append(f"physical primary key ({physical_primary!r} != ['id'])")
+
+        for field in desired_fields:
+            field_name = str(field.get("FieldName") or "")
+            if not field_name:
+                continue
+            physical_field = described_fields.get(field_name)
+            if physical_field is None:
+                missing.append(field_name)
+                continue
+            actual_type = self._physical_type_name(physical_field)
+            expected_type = self._expected_physical_type(field, self._sparse_vector_name)
+            if actual_type != expected_type:
+                mismatches.append(f"{field_name} ({actual_type} != {expected_type})")
+                continue
+            params = physical_field.get("params") or {}
+            if expected_type == "FLOAT_VECTOR":
+                expected_dim = int(field.get("Dim") or 0)
+                actual_dim = int(params.get("dim") or 0)
+                if actual_dim != expected_dim:
+                    mismatches.append(f"{field_name}.dim ({actual_dim} != {expected_dim})")
+            elif expected_type == "ARRAY":
+                element_type = self._physical_type_name(
+                    {"type": physical_field.get("element_type")}
+                )
+                if element_type != "VARCHAR":
+                    mismatches.append(f"{field_name}.element_type ({element_type} != VARCHAR)")
+                actual_capacity = int(params.get("max_capacity") or 0)
+                if actual_capacity != 1024:
+                    mismatches.append(f"{field_name}.max_capacity ({actual_capacity} != 1024)")
+            elif expected_type == "VARCHAR":
+                expected_length = self._varchar_lengths.get(field_name, _MILVUS_VARCHAR_MAX_LENGTH)
+                actual_length = int(params.get("max_length") or 0)
+                if actual_length != expected_length:
+                    mismatches.append(
+                        f"{field_name}.max_length ({actual_length} != {expected_length})"
+                    )
+            if field_name == "id" and not bool(physical_field.get("is_primary")):
+                mismatches.append("id.is_primary (False != True)")
+            if field_name not in {"id", self._dense_vector_name} and not bool(
+                physical_field.get("nullable")
+            ):
+                mismatches.append(f"{field_name}.nullable (False != True)")
+        if mismatches:
+            raise RuntimeError(
+                "Existing Milvus schema is incompatible and requires migration/rebuild: "
+                + ", ".join(mismatches)
+            )
+        if missing and not bool(desc.get("enable_dynamic_field")):
+            raise RuntimeError(
+                "Existing static Milvus schema is missing fields and requires migration/rebuild: "
+                + ", ".join(sorted(missing))
+            )
+
+        upgraded = dict(desired_meta)
+        existing_fields = [dict(field) for field in self._meta.get("Fields", []) or []]
+        desired_field_names = {field.get("FieldName") for field in desired_fields}
+        upgraded["Fields"] = desired_fields + [
+            field for field in existing_fields if field.get("FieldName") not in desired_field_names
+        ]
+        self._set_meta(upgraded)
+        self._save_collection_meta()
+
     def _save_collection_meta(self) -> None:
         self._save_meta_record(meta=self._meta)
-        try:
-            self._client.alter_collection_properties(
-                collection_name=self._physical_collection_name,
-                properties={_META_PROPERTY_KEY: _json_dumps(self._meta)},
+        self._client.alter_collection_properties(
+            collection_name=self._physical_collection_name,
+            properties={_META_PROPERTY_KEY: self._encode_owned_meta(self._meta)},
+            timeout=self._timeout_seconds,
+        )
+
+    def _delete_meta_record(self, *, ignore_missing: bool = False) -> None:
+        owned_records = []
+        collection_names = [_META_COLLECTION_NAME]
+        if self._allow_legacy_sidecar and self._identity()["naming_version"] == 1:
+            collection_names.append(_LEGACY_META_COLLECTION_NAME)
+        for collection_name in collection_names:
+            exists = self._client.has_collection(
+                collection_name=collection_name,
                 timeout=self._timeout_seconds,
             )
-        except Exception as exc:
-            logger.debug("Milvus collection properties are not available: %s", exc)
+            if not exists:
+                if ignore_missing:
+                    continue
+                if collection_name == _META_COLLECTION_NAME:
+                    raise RuntimeError("Milvus metadata collection is missing")
+                continue
+            rows = self._client.get(
+                collection_name=collection_name,
+                ids=[self._physical_collection_name],
+                output_fields=["meta_json"],
+                timeout=self._timeout_seconds,
+            )
+            if not rows:
+                continue
+            self._validate_meta_record_identity(
+                dict(rows[0]), source=f"sidecar {collection_name!r}"
+            )
+            owned_records.append(collection_name)
+        for collection_name in owned_records:
+            self._client.delete(
+                collection_name=collection_name,
+                ids=[self._physical_collection_name],
+                timeout=self._timeout_seconds,
+            )
 
     def update(self, fields: Optional[Dict[str, Any]] = None, description: Optional[str] = None):
         if fields:
@@ -567,94 +880,330 @@ class MilvusCollection(ICollection):
 
     def drop(self):
         if self.collection_exists():
+            if not self.load_remote_meta():
+                raise RuntimeError(
+                    "Milvus collection has no verifiable ownership metadata; refusing delete. "
+                    "Migrate/rebuild the collection or use an explicit, verified binding."
+                )
+            self._validate_all_sidecar_ownership()
             self._client.drop_collection(
                 collection_name=self._physical_collection_name,
                 timeout=self._timeout_seconds,
             )
-        try:
-            self._client.delete(
-                collection_name=_META_COLLECTION_NAME,
+        self._delete_meta_record(ignore_missing=True)
+
+    def _validate_all_sidecar_ownership(self) -> None:
+        collection_names = [_META_COLLECTION_NAME]
+        if self._allow_legacy_sidecar and self._identity()["naming_version"] == 1:
+            collection_names.append(_LEGACY_META_COLLECTION_NAME)
+        for collection_name in collection_names:
+            if not self._client.has_collection(
+                collection_name=collection_name,
+                timeout=self._timeout_seconds,
+            ):
+                continue
+            rows = self._client.get(
+                collection_name=collection_name,
                 ids=[self._physical_collection_name],
+                output_fields=["meta_json"],
                 timeout=self._timeout_seconds,
             )
-        except Exception:
-            pass
+            if rows:
+                self._validate_meta_record_identity(
+                    dict(rows[0]), source=f"sidecar {collection_name!r}"
+                )
 
     def create_index(self, index_name: str, meta_data: Dict[str, Any]) -> IIndex:
         meta = dict(meta_data or {})
         vector_meta = dict(meta.get("VectorIndex") or {})
         metric_type = _milvus_metric(vector_meta.get("Distance") or self._distance_metric)
-        existing_indexes = set(self.list_indexes() or [])
-        if index_name in existing_indexes or self._dense_vector_name in existing_indexes:
+        actual_scalar_fields: List[str] = []
+        degraded_scalar_fields: List[str] = []
+        initial_index_definitions = self._physical_index_definitions()
+        initial_physical_indexes = {
+            field_name: str(definition["index_name"])
+            for field_name, definition in initial_index_definitions.items()
+        }
+        was_loaded = self._is_collection_loaded()
+        load_attempted = False
+        try:
+            physical_fields = self._physical_field_types()
+            physical_indexes = dict(initial_physical_indexes)
+            if self._dense_vector_name not in physical_indexes:
+                index_params = self._client.prepare_index_params()
+                index_params.add_index(
+                    field_name=self._dense_vector_name,
+                    index_name=index_name,
+                    index_type="AUTOINDEX",
+                    metric_type=metric_type,
+                )
+                self._client.create_index(
+                    collection_name=self._physical_collection_name,
+                    index_params=index_params,
+                    timeout=self._timeout_seconds,
+                )
+                physical_indexes = self._physical_indexes()
+
+            requested_scalar_fields = list(dict.fromkeys(meta.get("ScalarIndex") or []))
+            for field_name in requested_scalar_fields:
+                field_type = physical_fields.get(field_name)
+                if field_type not in {"VARCHAR", "INT64", "BOOL"}:
+                    degraded_scalar_fields.append(field_name)
+                    continue
+                if field_name not in physical_indexes:
+                    scalar_params = self._client.prepare_index_params()
+                    scalar_params.add_index(
+                        field_name=field_name,
+                        index_name=f"{index_name}_{field_name}",
+                        index_type="INVERTED",
+                    )
+                    self._client.create_index(
+                        collection_name=self._physical_collection_name,
+                        index_params=scalar_params,
+                        timeout=self._timeout_seconds,
+                    )
+                    physical_indexes = self._physical_indexes()
+                if field_name in physical_indexes:
+                    actual_scalar_fields.append(field_name)
+
+            if degraded_scalar_fields:
+                logger.warning(
+                    "Milvus scalar indexes are unavailable for fields %s; Lite does not support "
+                    "ARRAY indexes and dynamic-only fields cannot be indexed",
+                    ", ".join(sorted(degraded_scalar_fields)),
+                )
             meta["VectorIndex"] = {
                 **vector_meta,
                 "IndexType": "AUTOINDEX",
                 "Distance": self._distance_metric,
             }
-            self._save_index_meta(index_name, meta)
-            return MilvusIndex(self, index_name, meta)
-
-        index_params = self._client.prepare_index_params()
-        index_params.add_index(
-            field_name=self._dense_vector_name,
-            index_name=index_name,
-            index_type="AUTOINDEX",
-            metric_type=metric_type,
-        )
-        try:
-            self._client.create_index(
-                collection_name=self._physical_collection_name,
-                index_params=index_params,
-                timeout=self._timeout_seconds,
-            )
-        except Exception as exc:
-            if "index already" not in str(exc).lower():
-                raise
-        try:
+            meta["ScalarIndex"] = actual_scalar_fields
+            if degraded_scalar_fields:
+                meta["ScalarIndexUnavailable"] = degraded_scalar_fields
+            else:
+                meta.pop("ScalarIndexUnavailable", None)
+            load_attempted = True
             self._client.load_collection(
                 collection_name=self._physical_collection_name,
                 timeout=self._timeout_seconds,
             )
+            self._save_index_meta(index_name, meta)
         except Exception as exc:
-            logger.debug("Milvus collection load skipped or failed: %s", exc)
-        meta["VectorIndex"] = {
-            **vector_meta,
-            "IndexType": "AUTOINDEX",
-            "Distance": self._distance_metric,
-        }
-        self._save_index_meta(index_name, meta)
+            rollback_errors: List[str] = []
+            current_indexes = self._physical_indexes()
+            created_index_names = [
+                remote_name
+                for field_name, remote_name in current_indexes.items()
+                if field_name not in initial_physical_indexes
+            ]
+            released_for_rollback = False
+            if created_index_names or (load_attempted and not was_loaded):
+                try:
+                    self._client.release_collection(
+                        collection_name=self._physical_collection_name,
+                        timeout=self._timeout_seconds,
+                    )
+                    released_for_rollback = True
+                except Exception as rollback_exc:
+                    rollback_errors.append(f"release: {rollback_exc}")
+            for remote_name in reversed(created_index_names):
+                try:
+                    if remote_name not in (
+                        self._client.list_indexes(
+                            collection_name=self._physical_collection_name,
+                            timeout=self._timeout_seconds,
+                        )
+                        or []
+                    ):
+                        continue
+                    self._client.drop_index(
+                        collection_name=self._physical_collection_name,
+                        index_name=remote_name,
+                        timeout=self._timeout_seconds,
+                    )
+                except Exception as rollback_exc:
+                    rollback_errors.append(f"drop {remote_name}: {rollback_exc}")
+            try:
+                remaining_fields = set(self._physical_indexes())
+                for field_name, definition in initial_index_definitions.items():
+                    if field_name in remaining_fields:
+                        continue
+                    restore_params = self._client.prepare_index_params()
+                    restore_kwargs = {
+                        "field_name": field_name,
+                        "index_name": definition["index_name"],
+                        "index_type": definition["index_type"],
+                    }
+                    restore_metric: Optional[str] = definition.get("metric_type")
+                    if restore_metric and restore_metric != "NONE":
+                        restore_kwargs["metric_type"] = restore_metric
+                    restore_params.add_index(**restore_kwargs)
+                    self._client.create_index(
+                        collection_name=self._physical_collection_name,
+                        index_params=restore_params,
+                        timeout=self._timeout_seconds,
+                    )
+                    remaining_fields.add(field_name)
+            except Exception as rollback_exc:
+                rollback_errors.append(f"restore existing indexes: {rollback_exc}")
+            if was_loaded and released_for_rollback:
+                try:
+                    self._client.load_collection(
+                        collection_name=self._physical_collection_name,
+                        timeout=self._timeout_seconds,
+                    )
+                except Exception as rollback_exc:
+                    rollback_errors.append(f"restore load state: {rollback_exc}")
+            if rollback_errors:
+                raise RuntimeError(
+                    "Milvus index creation failed and rollback left physical indexes or load "
+                    f"state inconsistent: {'; '.join(rollback_errors)}"
+                ) from exc
+            raise RuntimeError(
+                "Milvus index creation failed; new physical indexes rolled back"
+            ) from exc
         return MilvusIndex(self, index_name, meta)
+
+    def _is_collection_loaded(self) -> bool:
+        try:
+            load_state = self._client.get_load_state(
+                collection_name=self._physical_collection_name,
+                timeout=self._timeout_seconds,
+            )
+        except (AttributeError, NotImplementedError):
+            return True
+        state = load_state.get("state") if isinstance(load_state, dict) else load_state
+        state_name = getattr(state, "name", str(state))
+        return str(state_name).lower() == "loaded"
+
+    @staticmethod
+    def _physical_type_name(field: Dict[str, Any]) -> str:
+        value = field.get("type")
+        name = getattr(value, "name", None)
+        if name:
+            return str(name).upper()
+        text = str(value or "").upper()
+        return text.rsplit(".", 1)[-1]
+
+    def _physical_field_types(self) -> Dict[str, str]:
+        desc = self._client.describe_collection(
+            collection_name=self._physical_collection_name,
+            timeout=self._timeout_seconds,
+        )
+        return {
+            str(field.get("name")): self._physical_type_name(field)
+            for field in (desc.get("fields", []) if isinstance(desc, dict) else [])
+            if field.get("name")
+        }
+
+    def _physical_indexes(self) -> Dict[str, str]:
+        return {
+            field_name: str(definition["index_name"])
+            for field_name, definition in self._physical_index_definitions().items()
+        }
+
+    def _physical_index_definitions(self) -> Dict[str, Dict[str, str]]:
+        result: Dict[str, Dict[str, str]] = {}
+        remote_names = (
+            self._client.list_indexes(
+                collection_name=self._physical_collection_name,
+                timeout=self._timeout_seconds,
+            )
+            or []
+        )
+        for remote_name in remote_names:
+            desc = self._client.describe_index(
+                collection_name=self._physical_collection_name,
+                index_name=remote_name,
+                timeout=self._timeout_seconds,
+            )
+            field_name = desc.get("field_name") if isinstance(desc, dict) else None
+            actual_name = desc.get("index_name") if isinstance(desc, dict) else None
+            if field_name:
+                result[str(field_name)] = {
+                    "field_name": str(field_name),
+                    "index_name": str(actual_name or remote_name),
+                    "index_type": str(desc.get("index_type") or "AUTOINDEX"),
+                    "metric_type": str(desc.get("metric_type") or "NONE"),
+                }
+        return result
 
     def _save_index_meta(self, index_name: str, meta: Dict[str, Any]) -> None:
         self._ensure_meta_collection()
-        record = self._load_meta_record()
-        indexes = record.get("indexes_json") if record else {}
-        if not isinstance(indexes, dict):
-            indexes = {}
-        indexes[index_name] = meta
-        try:
-            self._client.upsert(
-                collection_name=_META_COLLECTION_NAME,
-                data=[
-                    {
-                        "id": self._physical_collection_name,
-                        "meta_json": record.get("meta_json") or _json_dumps(self._meta),
-                        "indexes_json": indexes,
-                        _META_VECTOR_FIELD: [0.0],
-                    }
-                ],
-                timeout=self._timeout_seconds,
+        record = deepcopy(self._load_meta_record())
+        if not record:
+            raise RuntimeError(
+                "Milvus collection metadata is missing; refusing index update until the "
+                "collection is migrated/rebuilt"
             )
-        except Exception as exc:
-            logger.warning("Failed to persist Milvus index metadata: %s", exc)
+        old_indexes = deepcopy(record.get("indexes_json"))
+        if not isinstance(old_indexes, dict):
+            old_indexes = {}
+        property_key = f"{_INDEX_META_PROPERTY_PREFIX}{index_name}"
+        old_property = self._collection_properties().get(property_key)
+        old_sidecar_meta = old_indexes.get(index_name)
+        if old_sidecar_meta is not None and old_property is not None:
+            parsed_property = _json_loads(old_property)
+            if parsed_property != old_sidecar_meta:
+                raise RuntimeError(
+                    "Milvus index metadata is inconsistent between sidecar and collection "
+                    "properties; repair or rebuild before retrying"
+                )
+
+        indexes = deepcopy(old_indexes)
+        indexes[index_name] = deepcopy(meta)
+        persisted_record = {
+            "id": self._physical_collection_name,
+            "meta_json": record["meta_json"],
+            "indexes_json": deepcopy(old_indexes),
+            _META_VECTOR_FIELD: _META_VECTOR_VALUE,
+        }
+        new_record = deepcopy(persisted_record)
+        new_record["indexes_json"] = indexes
         try:
             self._client.alter_collection_properties(
                 collection_name=self._physical_collection_name,
-                properties={f"{_INDEX_META_PROPERTY_PREFIX}{index_name}": _json_dumps(meta)},
+                properties={property_key: _json_dumps(meta)},
+                timeout=self._timeout_seconds,
+            )
+            self._client.upsert(
+                collection_name=_META_COLLECTION_NAME,
+                data=[new_record],
                 timeout=self._timeout_seconds,
             )
         except Exception as exc:
-            logger.debug("Milvus index properties are not available: %s", exc)
+            rollback_errors: List[str] = []
+            try:
+                self._client.upsert(
+                    collection_name=_META_COLLECTION_NAME,
+                    data=[persisted_record],
+                    timeout=self._timeout_seconds,
+                )
+            except Exception as rollback_exc:
+                rollback_errors.append(f"sidecar: {rollback_exc}")
+            try:
+                if old_property is not None:
+                    self._client.alter_collection_properties(
+                        collection_name=self._physical_collection_name,
+                        properties={property_key: old_property},
+                        timeout=self._timeout_seconds,
+                    )
+                else:
+                    self._client.drop_collection_properties(
+                        collection_name=self._physical_collection_name,
+                        property_keys=[property_key],
+                        timeout=self._timeout_seconds,
+                    )
+            except Exception as rollback_exc:
+                rollback_errors.append(f"property: {rollback_exc}")
+            if rollback_errors:
+                raise RuntimeError(
+                    "Milvus index metadata persistence failed and rollback left an "
+                    f"inconsistent state: {'; '.join(rollback_errors)}"
+                ) from exc
+            raise RuntimeError(
+                "Milvus index metadata persistence failed; sidecar and property rolled back"
+            ) from exc
 
     def has_index(self, index_name: str) -> bool:
         return self.get_index_meta_data(index_name) is not None or index_name in (
@@ -678,36 +1227,38 @@ class MilvusCollection(ICollection):
             )
         if description is not None:
             meta["Description"] = description
+        if scalar_index is not None:
+            updated = self.create_index(index_name, meta)
+            return updated.get_meta_data()
         self._save_index_meta(index_name, meta)
         return meta
 
     def get_index_meta_data(self, index_name: str):
         record = self._load_meta_record()
         indexes = record.get("indexes_json") if record else {}
-        if isinstance(indexes, dict) and isinstance(indexes.get(index_name), dict):
-            return indexes[index_name]
-
+        sidecar_meta = indexes.get(index_name) if isinstance(indexes, dict) else None
         props = self._collection_properties()
         raw_meta = props.get(f"{_INDEX_META_PROPERTY_PREFIX}{index_name}")
-        if not isinstance(raw_meta, str):
-            return None
-        try:
-            meta = json.loads(raw_meta)
-        except (TypeError, ValueError):
-            return None
-        return meta if isinstance(meta, dict) else None
+        property_meta = _json_loads(raw_meta) if raw_meta is not None else None
+        if property_meta is not None and not isinstance(property_meta, dict):
+            raise RuntimeError("Milvus index collection property contains invalid metadata")
+        if sidecar_meta is not None and property_meta is not None and sidecar_meta != property_meta:
+            raise RuntimeError(
+                "Milvus index metadata is inconsistent between sidecar and collection "
+                "properties; repair or rebuild before retrying"
+            )
+        if isinstance(sidecar_meta, dict):
+            return deepcopy(sidecar_meta)
+        return deepcopy(property_meta) if isinstance(property_meta, dict) else None
 
     def list_indexes(self):
-        try:
-            return list(
-                self._client.list_indexes(
-                    collection_name=self._physical_collection_name,
-                    timeout=self._timeout_seconds,
-                )
-                or []
+        return list(
+            self._client.list_indexes(
+                collection_name=self._physical_collection_name,
+                timeout=self._timeout_seconds,
             )
-        except Exception:
-            return []
+            or []
+        )
 
     def drop_index(self, index_name: str):
         try:
@@ -715,49 +1266,57 @@ class MilvusCollection(ICollection):
                 collection_name=self._physical_collection_name,
                 timeout=self._timeout_seconds,
             )
-        except Exception:
-            pass
-        for remote_name in list(self.list_indexes() or []):
-            if remote_name == index_name or str(remote_name).startswith(f"{index_name}_"):
-                try:
-                    self._client.drop_index(
-                        collection_name=self._physical_collection_name,
-                        index_name=remote_name,
-                        timeout=self._timeout_seconds,
-                    )
-                except Exception as exc:
-                    logger.warning("Failed to drop Milvus index %s: %s", remote_name, exc)
-        try:
+        except Exception as exc:
+            logger.debug("Milvus collection release before index drop failed: %s", exc)
+
+        meta = self.get_index_meta_data(index_name) or {}
+        physical_indexes = self._physical_indexes()
+        if meta:
+            target_fields = [self._dense_vector_name, *(meta.get("ScalarIndex") or [])]
+        else:
+            target_fields = [
+                field_name
+                for field_name, remote_name in physical_indexes.items()
+                if field_name == index_name or remote_name == index_name
+            ]
+        for field_name in target_fields:
+            remote_name = physical_indexes.get(field_name)
+            if remote_name:
+                self._client.drop_index(
+                    collection_name=self._physical_collection_name,
+                    index_name=remote_name,
+                    timeout=self._timeout_seconds,
+                )
+        if meta:
             self._client.drop_collection_properties(
                 collection_name=self._physical_collection_name,
                 property_keys=[f"{_INDEX_META_PROPERTY_PREFIX}{index_name}"],
                 timeout=self._timeout_seconds,
             )
-        except Exception:
-            pass
-        try:
-            record = self._load_meta_record()
-            indexes = record.get("indexes_json") if record else {}
-            if isinstance(indexes, dict) and index_name in indexes:
-                indexes.pop(index_name, None)
-                self._client.upsert(
-                    collection_name=_META_COLLECTION_NAME,
-                    data=[
-                        {
-                            "id": self._physical_collection_name,
-                            "meta_json": record.get("meta_json") or _json_dumps(self._meta),
-                            "indexes_json": indexes,
-                            _META_VECTOR_FIELD: [0.0],
-                        }
-                    ],
-                    timeout=self._timeout_seconds,
-                )
-        except Exception:
-            pass
+        record = self._load_meta_record()
+        indexes = record.get("indexes_json") if record else {}
+        if isinstance(indexes, dict) and index_name in indexes:
+            indexes.pop(index_name, None)
+            self._client.upsert(
+                collection_name=_META_COLLECTION_NAME,
+                data=[
+                    {
+                        "id": self._physical_collection_name,
+                        "meta_json": record.get("meta_json") or _json_dumps(self._meta),
+                        "indexes_json": indexes,
+                        _META_VECTOR_FIELD: _META_VECTOR_VALUE,
+                    }
+                ],
+                timeout=self._timeout_seconds,
+            )
 
     def _prepare_record_for_write(self, record: Dict[str, Any]) -> Dict[str, Any]:
         prepared: Dict[str, Any] = {}
-        for field_name, value in record.items():
+        materialized = dict(record)
+        for field_name, default_value in self._field_defaults.items():
+            if materialized.get(field_name) is None:
+                materialized[field_name] = deepcopy(default_value)
+        for field_name, value in materialized.items():
             if value is None:
                 continue
             field_type = self._field_types.get(field_name, "")
@@ -832,6 +1391,9 @@ class MilvusCollection(ICollection):
 
     def _decode_record(self, record: Dict[str, Any]) -> Dict[str, Any]:
         decoded = dict(record)
+        for field_name, default_value in self._field_defaults.items():
+            if decoded.get(field_name) is None:
+                decoded[field_name] = deepcopy(default_value)
         sparse = decoded.get(self._sparse_vector_name)
         if isinstance(sparse, str):
             parsed = _json_loads(sparse)
@@ -868,6 +1430,11 @@ class MilvusCollection(ICollection):
         del index_name
         if limit <= 0:
             return SearchResult()
+        if sparse_vector:
+            raise NotImplementedError(
+                "Milvus sparse and hybrid search is not supported because candidate recall "
+                "cannot be made complete"
+            )
         if dense_vector is None:
             return self._search_by_sparse(sparse_vector, limit, offset, filters, output_fields)
 
@@ -875,7 +1442,7 @@ class MilvusCollection(ICollection):
         fields = self._select_output_fields(
             output_fields,
             include_vector=False,
-            include_sparse=bool(sparse_vector),
+            include_sparse=False,
         )
         raw_results = self._client.search(
             collection_name=self._physical_collection_name,
@@ -896,14 +1463,7 @@ class MilvusCollection(ICollection):
                 entity["id"] = hit.get("id")
             record_id, payload = self._record_from_entity(entity)
             score = _score_from_hit(hit, self._distance_metric) if isinstance(hit, dict) else 0.0
-            if sparse_vector:
-                sparse_payload = payload.pop(self._sparse_vector_name, None)
-                score += _sparse_dot(
-                    sparse_vector, sparse_payload if isinstance(sparse_payload, dict) else None
-                )
             items.append(SearchItemResult(id=record_id, fields=payload, score=score))
-        if sparse_vector:
-            items.sort(key=lambda item: item.score or 0.0, reverse=True)
         return SearchResult(data=items[offset : offset + limit])
 
     def _search_by_sparse(
@@ -916,25 +1476,11 @@ class MilvusCollection(ICollection):
     ) -> SearchResult:
         if not sparse_vector:
             return SearchResult()
-        fields = self._select_output_fields(output_fields, include_sparse=True)
-        rows = self._client.query(
-            collection_name=self._physical_collection_name,
-            filter=filters or "",
-            output_fields=fields,
-            limit=max(limit + offset, _DEFAULT_QUERY_LIMIT),
-            timeout=self._timeout_seconds,
+        del limit, offset, filters, output_fields
+        raise NotImplementedError(
+            "Milvus sparse search is not supported because a complete sparse candidate set "
+            "cannot be guaranteed"
         )
-        items = []
-        for row in rows:
-            record_id, payload = self._record_from_entity(row)
-            sparse_payload = payload.pop(self._sparse_vector_name, None)
-            score = _sparse_dot(
-                sparse_vector, sparse_payload if isinstance(sparse_payload, dict) else None
-            )
-            if score > 0:
-                items.append(SearchItemResult(id=record_id, fields=payload, score=score))
-        items.sort(key=lambda item: item.score or 0.0, reverse=True)
-        return SearchResult(data=items[offset : offset + limit])
 
     def search_by_keywords(
         self,
@@ -990,11 +1536,10 @@ class MilvusCollection(ICollection):
         if not rows:
             return SearchResult()
         dense_vector = rows[0].get(self._dense_vector_name)
-        sparse_vector = rows[0].get(self._sparse_vector_name)
         result = self.search_by_vector(
             index_name=index_name,
             dense_vector=dense_vector,
-            sparse_vector=sparse_vector if isinstance(sparse_vector, dict) else None,
+            sparse_vector=None,
             limit=limit + offset + 1,
             offset=0,
             filters=filters,
@@ -1025,6 +1570,11 @@ class MilvusCollection(ICollection):
         output_fields: Optional[List[str]] = None,
     ) -> SearchResult:
         del index_name
+        if limit + offset > _DEFAULT_QUERY_LIMIT:
+            raise ValueError(
+                "Milvus scalar ordering supports at most 10000 rows; the requested window "
+                "would be incomplete"
+            )
         rows = self._client.query(
             collection_name=self._physical_collection_name,
             filter=filters or "",
@@ -1057,9 +1607,13 @@ class MilvusCollection(ICollection):
             collection_name=self._physical_collection_name,
             filter=filters or "",
             output_fields=fields,
-            limit=max(limit + offset, _DEFAULT_QUERY_LIMIT),
+            limit=_TRUNCATION_PROBE_LIMIT,
             timeout=self._timeout_seconds,
         )
+        if len(rows) >= _TRUNCATION_PROBE_LIMIT:
+            raise ValueError(
+                "Milvus scalar ordering cannot safely process more than 10000 matching rows"
+            )
         reverse = (order or "desc").lower() == "desc"
         rows.sort(key=lambda row: (row.get(field) is None, row.get(field)), reverse=reverse)
         items = []
@@ -1181,9 +1735,13 @@ class MilvusCollection(ICollection):
                     collection_name=self._physical_collection_name,
                     filter=filters or "",
                     output_fields=["id"],
-                    limit=_DEFAULT_QUERY_LIMIT,
+                    limit=_TRUNCATION_PROBE_LIMIT,
                     timeout=self._timeout_seconds,
                 )
+                if len(rows) >= _TRUNCATION_PROBE_LIMIT:
+                    raise ValueError(
+                        "Milvus count fallback cannot safely process more than 10000 rows"
+                    )
                 total = len(rows)
             return AggregateResult(agg={"_total": total}, op=op, field=None)
 
@@ -1191,9 +1749,13 @@ class MilvusCollection(ICollection):
             collection_name=self._physical_collection_name,
             filter=filters or "",
             output_fields=[field],
-            limit=_DEFAULT_QUERY_LIMIT,
+            limit=_TRUNCATION_PROBE_LIMIT,
             timeout=self._timeout_seconds,
         )
+        if len(rows) >= _TRUNCATION_PROBE_LIMIT:
+            raise ValueError(
+                "Milvus grouped aggregation cannot safely process more than 10000 matching rows"
+            )
         grouped: Dict[Any, int] = {}
         for row in rows:
             value = row.get(field)
@@ -1308,7 +1870,10 @@ class MilvusFilterCompiler:
                 if len(values) > 1
                 else self._eq(field, values[0])
             )
-            return f"not ({expr})" if expr else ""
+            if not expr:
+                return ""
+            field_name = self._validate_field(field)
+            return self._join("or", [f"not ({expr})", f"{field_name} is null"])
         if op in {"range", "time_range"}:
             return self._range(
                 str(payload.get("field")),
@@ -1422,22 +1987,34 @@ class MilvusCollectionAdapter(CollectionAdapter):
         sparse_vector_name: str,
     ) -> None:
         super().__init__(collection_name=collection_name, index_name=index_name)
+        self._collection: Optional[Collection]
         self._uri = uri
         self._token = token
         self._db_name = db_name
         self._consistency_level = consistency_level
         self._timeout_seconds = int(timeout_seconds)
         self._project_name = project_name
+        _validate_business_namespace(project_name, collection_name)
         self._distance_metric = _normalize_distance(distance_metric)
         self._dense_vector_name = dense_vector_name
         self._sparse_vector_name = sparse_vector_name
         self._client = None
+        self._resolved_physical_collection_name: Optional[str] = None
 
     @classmethod
     def from_config(cls, config: Any):
         cfg = getattr(config, "milvus", None)
         params = dict(getattr(config, "custom_params", {}) or {})
-        uri = getattr(cfg, "uri", None) or getattr(config, "url", None) or params.get("uri")
+        cfg_fields_set: set[str] = (
+            getattr(cfg, "model_fields_set", set()) if cfg is not None else set()
+        )
+        explicit_uri = getattr(cfg, "uri", None) if "uri" in cfg_fields_set else None
+        uri = (
+            explicit_uri
+            or getattr(config, "url", None)
+            or params.get("uri")
+            or getattr(cfg, "uri", None)
+        )
         token = getattr(cfg, "token", None) or params.get("token")
         db_name = getattr(cfg, "db_name", None) or params.get("db_name")
         consistency_level = getattr(cfg, "consistency_level", None) or params.get(
@@ -1471,7 +2048,15 @@ class MilvusCollectionAdapter(CollectionAdapter):
 
     @property
     def physical_collection_name(self) -> str:
-        return _safe_collection_name(self._project_name, self._collection_name)
+        return self._resolved_physical_collection_name or _safe_collection_name(
+            self._project_name,
+            self._collection_name,
+            prefix=_DATA_COLLECTION_PREFIX,
+        )
+
+    @property
+    def legacy_physical_collection_name(self) -> str:
+        return _legacy_collection_name(self._project_name, self._collection_name)
 
     def _connect(self):
         if self._client is not None:
@@ -1488,16 +2073,27 @@ class MilvusCollectionAdapter(CollectionAdapter):
         self._client = pymilvus.MilvusClient(**kwargs)
         return self._client
 
-    def _new_collection(self, meta: Optional[Dict[str, Any]] = None) -> MilvusCollection:
+    def _new_collection(
+        self,
+        meta: Optional[Dict[str, Any]] = None,
+        *,
+        physical_collection_name: Optional[str] = None,
+    ) -> MilvusCollection:
+        resolved_physical_name = physical_collection_name or self.physical_collection_name
+        allow_legacy_sidecar = (
+            self._resolved_physical_collection_name == resolved_physical_name
+            and resolved_physical_name == self.legacy_physical_collection_name
+        )
         return MilvusCollection(
             client=self._connect(),
             logical_collection_name=self._collection_name,
-            physical_collection_name=self.physical_collection_name,
+            physical_collection_name=resolved_physical_name,
             project_name=self._project_name,
             dense_vector_name=self._dense_vector_name,
             sparse_vector_name=self._sparse_vector_name,
             distance_metric=self._distance_metric,
             timeout_seconds=self._timeout_seconds,
+            allow_legacy_sidecar=allow_legacy_sidecar,
             meta=meta,
         )
 
@@ -1506,7 +2102,14 @@ class MilvusCollectionAdapter(CollectionAdapter):
             return
         raw_collection = self._new_collection()
         if not raw_collection.collection_exists():
-            return
+            legacy_name = self.legacy_physical_collection_name
+            if legacy_name == self.physical_collection_name:
+                return
+            raw_collection = self._new_collection(physical_collection_name=legacy_name)
+            if not raw_collection.collection_exists():
+                return
+            self._resolved_physical_collection_name = legacy_name
+            raw_collection = self._new_collection(physical_collection_name=legacy_name)
         meta = raw_collection.load_remote_meta()
         if not meta:
             raise RuntimeError(
@@ -1516,10 +2119,75 @@ class MilvusCollectionAdapter(CollectionAdapter):
             )
         self._collection = Collection(raw_collection)
 
+    def create_collection(
+        self,
+        name: str,
+        schema: Dict[str, Any],
+        *,
+        distance: str,
+        sparse_weight: float,
+        index_name: str,
+    ) -> bool:
+        if sparse_weight > 0.0:
+            raise NotImplementedError(
+                "Milvus sparse and hybrid indexes are not supported because complete recall "
+                "cannot be guaranteed"
+            )
+        _validate_business_namespace(self._project_name, name)
+        self._collection_name = name
+        self._index_name = index_name
+        self._load_existing_collection_if_needed()
+        if self._collection is None:
+            return super().create_collection(
+                name,
+                schema,
+                distance=distance,
+                sparse_weight=sparse_weight,
+                index_name=index_name,
+            )
+
+        raw_collection = self._new_collection()
+        remote_meta = raw_collection.load_remote_meta()
+        if not remote_meta:
+            raise RuntimeError(
+                f"Existing Milvus collection {self.physical_collection_name!r} has no metadata"
+            )
+        raw_collection.ensure_schema_compatible(schema)
+        scalar_fields = self._sanitize_scalar_index_fields(
+            scalar_index_fields=schema.get("ScalarIndex", []),
+            fields_meta=schema.get("Fields", []),
+        )
+        raw_collection.create_index(
+            index_name,
+            self._build_default_index_meta(
+                index_name=index_name,
+                distance=distance,
+                use_sparse=False,
+                sparse_weight=0.0,
+                scalar_index_fields=scalar_fields,
+            ),
+        )
+        self._collection = Collection(raw_collection)
+        return False
+
     def _create_backend_collection(self, meta: Dict[str, Any]) -> Collection:
         raw_collection = self._new_collection(meta)
         raw_collection.create_remote_collection(meta, consistency_level=self._consistency_level)
         return Collection(raw_collection)
+
+    def drop_collection(self) -> bool:
+        """Drop an owned business collection before removing its exact sidecar row."""
+        self._load_existing_collection_if_needed()
+        raw_collection = self._new_collection()
+        if not raw_collection.collection_exists():
+            raw_collection._validate_all_sidecar_ownership()
+            raw_collection._delete_meta_record(ignore_missing=True)
+            self._collection = None
+            return False
+
+        raw_collection.drop()
+        self._collection = None
+        return True
 
     def close(self) -> None:
         super().close()
@@ -1528,6 +2196,7 @@ class MilvusCollectionAdapter(CollectionAdapter):
             if callable(close):
                 close()
             self._client = None
+        self._resolved_physical_collection_name = None
 
     def _sanitize_scalar_index_fields(
         self,
@@ -1547,9 +2216,9 @@ class MilvusCollectionAdapter(CollectionAdapter):
         scalar_index_fields: list[str],
     ) -> Dict[str, Any]:
         if use_sparse:
-            logger.warning(
-                "Milvus adapter stores sparse vectors but currently searches dense vectors first; "
-                "sparse scores are only applied to returned dense candidates."
+            raise NotImplementedError(
+                "Milvus sparse and hybrid indexes are not supported because complete recall "
+                "cannot be guaranteed"
             )
         return {
             "IndexName": index_name,
@@ -1617,24 +2286,9 @@ class MilvusCollectionAdapter(CollectionAdapter):
         return normalized
 
     def _field_types_for_filter(self) -> Dict[str, str]:
-        try:
-            collection = self.get_collection()
-            meta = collection.get_meta_data() or {}
-            field_types = MilvusCollection._build_field_type_map(meta)
-        except Exception:
-            field_types = {
-                "id": "string",
-                self._dense_vector_name: "vector",
-                self._sparse_vector_name: "sparse_vector",
-                "uri": "path",
-                "parent_uri": "path",
-                "scope_roots": "string",
-                "uri_depth": "int64",
-                "level": "int64",
-                "active_count": "int64",
-                "search_tags": "list<string>",
-            }
-        return field_types
+        collection = self.get_collection()
+        meta = collection.get_meta_data() or {}
+        return MilvusCollection._build_field_type_map(meta)
 
     def _compile_filter(self, expr: FilterExpr | Dict[str, Any] | str | None) -> str:
         return MilvusFilterCompiler(self._field_types_for_filter()).compile(expr)

@@ -106,7 +106,7 @@ auth = [
   "python-ldap>=3.4.0",
 ]
 milvus = [
-    "pymilvus[milvus_lite]>=2.6.0",
+    "pymilvus[milvus-lite]>=3.0.0",
 ]
 dev = [
     "mypy>=1.0.0",

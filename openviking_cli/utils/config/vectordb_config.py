@@ -220,11 +220,12 @@ class MilvusConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_milvus(self):
-        self.uri = (self.uri or "./milvus.db").strip()
-        if not self.uri:
+        normalized_uri = (self.uri or "./milvus.db").strip()
+        if not normalized_uri:
             raise ValueError("Milvus uri must not be empty")
-        if self.uri.startswith(("http://", "https://")):
-            self.uri = self.uri.rstrip("/")
+        if normalized_uri.startswith(("http://", "https://")):
+            normalized_uri = normalized_uri.rstrip("/")
+        object.__setattr__(self, "uri", normalized_uri)
         if self.consistency_level:
             allowed = {"Strong", "Session", "Bounded", "Eventually"}
             normalized = self.consistency_level.strip()
@@ -234,12 +235,15 @@ class MilvusConfig(BaseModel):
                     "Milvus consistency_level must be one of: "
                     f"{sorted(allowed)}; got {self.consistency_level!r}"
                 )
-            self.consistency_level = title_value
-        self.dense_vector_name = (self.dense_vector_name or "vector").strip()
-        self.sparse_vector_name = (self.sparse_vector_name or "sparse_vector").strip()
+            object.__setattr__(self, "consistency_level", title_value)
+        object.__setattr__(self, "dense_vector_name", (self.dense_vector_name or "vector").strip())
+        object.__setattr__(
+            self, "sparse_vector_name", (self.sparse_vector_name or "sparse_vector").strip()
+        )
         if self.timeout_seconds <= 0:
             raise ValueError("Milvus timeout_seconds must be positive")
         return self
+
 
 class VectorDBBackendConfig(BaseModel):
     """
@@ -385,11 +389,13 @@ class VectorDBBackendConfig(BaseModel):
                 raise ValueError("VectorDB vikingdb backend requires 'host' to be set")
 
         elif self.backend == "milvus":
+            explicit_milvus_uri = (
+                self.milvus.uri
+                if self.milvus is not None and "uri" in self.milvus.model_fields_set
+                else None
+            )
             milvus_uri = (
-                (self.milvus.uri if self.milvus else None)
-                or self.url
-                or self.custom_params.get("uri")
-                or "./milvus.db"
+                explicit_milvus_uri or self.url or self.custom_params.get("uri") or "./milvus.db"
             )
             if self.milvus is None:
                 self.milvus = MilvusConfig()
