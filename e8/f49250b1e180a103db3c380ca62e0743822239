@@ -1,0 +1,21 @@
+openviking/session/memory/utils/json_parser.py
+  s_4308f83fbf826b::t_9e0935970380f4 351
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "e8f49250b1e180a103db3c380ca62e0743822239",
+  "prompts": {},
+  "sessions": {
+    "s_4308f83fbf826b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0154d-c03b-7312-9c0b-0116f1f115bf",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
