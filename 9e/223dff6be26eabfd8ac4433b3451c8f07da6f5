@@ -1,0 +1,27 @@
+openviking/session/memory/patch_merge_context_provider.py
+  s_b3210499670685::t_6a0ec62fa44abd 149-150,186-188
+openviking/session/memory/streaming_memory_updater.py
+  s_b3210499670685::t_48338809d76865 16,499-507,509-595,597,695,758,817-823,850,868,894,900-903,1928-1965
+tests/session/memory/test_patch_merge_context_provider.py
+  s_b3210499670685::t_6740be7d61162f 136-164
+tests/session/memory/test_streaming_memory_updater.py
+  s_b3210499670685::t_fd723128c4600b 34,215-249,663-787,1350-1418
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "9e223dff6be26eabfd8ac4433b3451c8f07da6f5",
+  "prompts": {},
+  "sessions": {
+    "s_b3210499670685": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a01394-3d63-7ba0-9127-f4935897c443",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
