@@ -463,6 +463,15 @@ class TestAddResourceArgs:
         to_uri = "viking://resources/feishu_user_watch"
         resource_service._plan_source_job_target = AsyncMock(return_value=(to_uri, None, False))
 
+        async def preflight(_self, _source, *, feishu_access_token=None):
+            assert feishu_access_token == "u-test"
+            return SimpleNamespace(source_name=None, source_format="file")
+
+        monkeypatch.setattr(
+            "openviking.parse.accessors.feishu_accessor.FeishuAccessor.preflight_source",
+            preflight,
+        )
+
         await resource_service.add_resource(
             path="https://example.feishu.cn/docx/doc_token",
             ctx=request_context,

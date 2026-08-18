@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 from openviking.core.content_targets import ContentTargetSpec
+from openviking.core.namespace import is_content_root_uri
 from openviking.core.uri_validation import validate_optional_content_target_uri
 from openviking.parse.backend import ParserBackend, normalize_parser_backend
 from openviking.parse.mode import ParseMode, normalize_parse_mode
@@ -748,11 +749,15 @@ class ResourceService:
                         "access_token": token.strip(),
                     }
                 )
-            doc_type, _ = FeishuAccessor._parse_feishu_url(path)
+            preflight = await FeishuAccessor().preflight_source(
+                path,
+                feishu_access_token=token.strip() if isinstance(token, str) else None,
+            )
+            source_name = source_name or preflight.source_name
             source_info = _ResourceSourceInfo(
                 source_name=source_name,
                 source_path=path,
-                source_format="directory" if doc_type == "folder" else "file",
+                source_format=preflight.source_format,
             )
             defer_unnamed_target = True
             direct_understanding = bool(
@@ -887,8 +892,16 @@ class ResourceService:
         planned_to_is_directory = (
             to_is_directory if to_is_directory is not None else bool(target.to)
         )
+        target_to_is_exact = bool(
+            target.to and not is_content_root_uri(target.to, ctx, kind="resource")
+        )
         defer_candidate_resolution = bool(
-            plan.defer_unnamed_target and plan.source_identity.source_name is None and not target.to
+            (
+                plan.defer_unnamed_target
+                and plan.source_identity.source_name is None
+                and not target.to
+            )
+            or (mode is ParseMode.NO_SPLIT and not target_to_is_exact)
         )
         root_uri = ""
         resource_lock = None

@@ -126,14 +126,23 @@ async def test_no_split_watch_replay_preserves_auto_bound_file_target(
     scheduler = WatchScheduler(resource_service=service, check_interval=1)
     scheduler._watch_manager = watch_manager
     service._watch_scheduler = scheduler
+    service._plan_source_job_target = AsyncMock(
+        side_effect=lambda **kwargs: (
+            "viking://resources/test",
+            None,
+            kwargs["defer_candidate_resolution"],
+        )
+    )
 
-    await service.add_resource(
+    result = await service.add_resource(
         path="https://example.com/guide.md",
         ctx=ctx,
         watch_interval=30.0,
         args={"parse_mode": "no_split"},
     )
+    assert "root_uri" not in result
     message = service._enqueue_add_resource_job.await_args.args[0]
+    assert message.defer_target_resolution is True
     await service.execute_add_resource_job(
         message,
         ctx=ctx,
@@ -158,6 +167,32 @@ async def test_no_split_watch_replay_preserves_auto_bound_file_target(
     replay_message = service._enqueue_add_resource_job.await_args.args[0]
     assert replay_message.root_uri == "viking://resources/test"
     assert replay_message.to_is_directory is False
+
+
+@pytest.mark.asyncio
+async def test_no_split_defers_initial_root_when_parent_targeted(
+    service: ResourceService,
+    ctx: RequestContext,
+):
+    service._plan_source_job_target = AsyncMock(
+        side_effect=lambda **kwargs: (
+            "viking://resources/test",
+            None,
+            kwargs["defer_candidate_resolution"],
+        )
+    )
+
+    result = await service.add_resource(
+        path="https://example.com/guide.md",
+        ctx=ctx,
+        parent="viking://resources/docs",
+        args={"parse_mode": "no_split"},
+    )
+
+    assert "root_uri" not in result
+    assert service._plan_source_job_target.await_args.kwargs["defer_candidate_resolution"] is True
+    message = service._enqueue_add_resource_job.await_args.args[0]
+    assert message.defer_target_resolution is True
 
 
 @pytest.mark.asyncio
@@ -293,7 +328,7 @@ async def test_no_split_bypasses_understanding_shortcut(
         raising=False,
     )
 
-    await service.add_resource(
+    result = await service.add_resource(
         path="https://example.com/manual.pdf",
         ctx=ctx,
         to="viking://resources/manual",
@@ -301,6 +336,7 @@ async def test_no_split_bypasses_understanding_shortcut(
         allow_local_path_resolution=False,
     )
 
+    assert result["root_uri"] == "viking://resources/test"
     direct_probe.assert_not_called()
     api_probe.assert_not_called()
 

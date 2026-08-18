@@ -621,6 +621,46 @@ def test_fetch_document_dispatches_all_supported_types(monkeypatch):
     )
     assert handlers["_parse_bitable"].call_args_list[-1].args == ("wiki_app_token", None)
 
+    monkeypatch.setattr(accessor, "_probe_docx_document", MagicMock())
+    monkeypatch.setattr(
+        accessor,
+        "_fetch_spreadsheet_metadata",
+        MagicMock(return_value={"properties": {"title": "Sheet/Title"}, "sheets": []}),
+    )
+    monkeypatch.setattr(
+        accessor,
+        "_list_bitable_tables",
+        MagicMock(
+            return_value=[
+                SimpleNamespace(table_id="tbl_one", name="One"),
+                SimpleNamespace(table_id="tbl_two", name="Two"),
+            ]
+        ),
+    )
+    monkeypatch.setattr(accessor, "_probe_bitable_table", MagicMock())
+    monkeypatch.setattr(accessor, "_get_drive_folder_name", MagicMock(return_value="Docs/Root"))
+    monkeypatch.setattr(accessor, "_probe_drive_folder_children", MagicMock())
+
+    docx_identity = asyncio.run(accessor.preflight_source("https://example.feishu.cn/docx/doc"))
+    sheets_identity = asyncio.run(
+        accessor.preflight_source("https://example.feishu.cn/sheets/sht")
+    )
+    base_identity = asyncio.run(accessor.preflight_source("https://example.feishu.cn/base/app"))
+    table_identity = asyncio.run(
+        accessor.preflight_source("https://example.feishu.cn/base/app?table=tbl_one")
+    )
+    folder_identity = asyncio.run(
+        accessor.preflight_source("https://example.feishu.cn/drive/folder/fld")
+    )
+    wiki_identity = asyncio.run(accessor.preflight_source("https://example.feishu.cn/wiki/wiki"))
+
+    assert docx_identity.source_name is None
+    assert sheets_identity.source_name == "Sheet_Title"
+    assert base_identity.source_name == "Bitable (2 tables)"
+    assert table_identity.source_name == "tbl_one"
+    assert folder_identity.source_name == "Docs_Root"
+    assert wiki_identity.source_name == "Wiki Base"
+
 
 def test_fetch_document_honors_bitable_table_and_view(monkeypatch):
     _install_fake_lark_modules(monkeypatch)
@@ -667,6 +707,21 @@ def test_fetch_document_honors_bitable_table_and_view(monkeypatch):
     assert document.title == "tblSales (vewPublic)"
     assert document.meta["feishu_table_id"] == "tblSales"
     assert document.meta["feishu_view_id"] == "vewPublic"
+
+    list_fields.reset_mock()
+    list_records.reset_mock()
+    identity = asyncio.run(
+        accessor.preflight_source(
+            "https://example.feishu.cn/base/app_token?table=tblSales&view=vewPublic"
+        )
+    )
+
+    assert identity.source_name == "tblSales (vewPublic)"
+    assert list_tables.call_count == 0
+    assert list_fields.call_count == 1
+    assert list_records.call_count == 1
+    request = list_records.call_args.args[0]
+    assert (request.table_id, request.view_id) == ("tblSales", "vewPublic")
 
 
 def test_fetch_document_rejects_bitable_view_without_table():

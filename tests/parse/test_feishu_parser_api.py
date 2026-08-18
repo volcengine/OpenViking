@@ -409,16 +409,24 @@ def test_add_resource_message_round_trips_processing_mode():
 
 
 @pytest.mark.asyncio
-async def test_uat_producer_payload_reaches_worker_without_persisting_token(monkeypatch):
-    source = "https://example.larkoffice.com/docx/doxcnToken"
+@pytest.mark.parametrize(
+    ("source", "preflight_name"),
+    [
+        ("https://example.larkoffice.com/docx/doxcnToken", None),
+        ("https://example.larkoffice.com/sheets/shtcnToken", "Sheet Title"),
+        ("https://example.larkoffice.com/base/appToken?table=tblSales", "tblSales"),
+    ],
+)
+async def test_uat_producer_payload_reaches_worker_without_persisting_token(
+    monkeypatch,
+    source,
+    preflight_name,
+):
     root_uri = "viking://resources/lark/doxcnToken"
     submit_understanding = AsyncMock(return_value="response-1")
     resource_processor = SimpleNamespace(
         should_use_understanding_directly=lambda _source, **_kwargs: True,
         submit_understanding=submit_understanding,
-        tree_builder=SimpleNamespace(
-            resolve_target_uri=AsyncMock(return_value=(root_uri, root_uri))
-        ),
         process_resource=AsyncMock(
             return_value={
                 "status": "success",
@@ -458,6 +466,19 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(monk
         Mock(return_value=False),
     )
     monkeypatch.setattr("openviking.service.resource_service.uuid4", Mock(return_value="task-1"))
+
+    async def preflight(_self, _source, *, feishu_access_token=None):
+        assert feishu_access_token == "u-secret"
+        return SimpleNamespace(source_name=preflight_name, source_format="file")
+
+    async def plan_source_job_target(*, source_info, **_kwargs):
+        return root_uri, None, source_info.source_name is None
+
+    monkeypatch.setattr(
+        "openviking.parse.accessors.feishu_accessor.FeishuAccessor.preflight_source",
+        preflight,
+    )
+    service._plan_source_job_target = AsyncMock(side_effect=plan_source_job_target)
     ctx = RequestContext(
         user=UserIdentifier("account-1", "user-1"),
         role=Role.USER,
@@ -472,8 +493,13 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(monk
         args={"feishu_access_token": "u-secret", "custom_option": "forwarded"},
     )
 
-    assert initial_result == {"status": "success", "task_id": "task-1"}
-    assert task_tracker.create.await_args.kwargs["resource_id"] is None
+    expected_initial = {"status": "success", "task_id": "task-1"}
+    if preflight_name:
+        expected_initial["root_uri"] = root_uri
+    assert initial_result == expected_initial
+    assert task_tracker.create.await_args.kwargs["resource_id"] == (
+        None if preflight_name is None else root_uri
+    )
     submit_understanding.assert_awaited_once_with(
         source,
         feishu_access_token="u-secret",
@@ -665,6 +691,15 @@ async def test_uat_producer_cancellation_respects_queue_ownership(
     monkeypatch.setattr(
         "openviking.service.resource_service.is_git_repo_url",
         Mock(return_value=False),
+    )
+
+    async def preflight(_self, _source, *, feishu_access_token=None):
+        assert feishu_access_token == "u-secret"
+        return SimpleNamespace(source_name=None, source_format="file")
+
+    monkeypatch.setattr(
+        "openviking.parse.accessors.feishu_accessor.FeishuAccessor.preflight_source",
+        preflight,
     )
     ctx = RequestContext(
         user=UserIdentifier("account-1", "user-1"),
