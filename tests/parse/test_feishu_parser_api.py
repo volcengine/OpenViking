@@ -786,12 +786,6 @@ async def test_prepared_add_resource_job_forwards_processing_mode():
 @pytest.mark.asyncio
 async def test_add_resource_processor_persists_final_resource_uri(monkeypatch):
     final_uri = "viking://resources/真实文档标题"
-    service = SimpleNamespace(
-        execute_add_resource_job=AsyncMock(
-            return_value={"status": "success", "root_uri": final_uri}
-        ),
-        _link_resource_reason_memory=AsyncMock(),
-    )
     task_tracker = SimpleNamespace(
         create=AsyncMock(return_value=SimpleNamespace(status=TaskStatus.PENDING)),
         start=AsyncMock(),
@@ -799,6 +793,21 @@ async def test_add_resource_processor_persists_final_resource_uri(monkeypatch):
         complete=AsyncMock(),
         fail=AsyncMock(),
         wait_for_descendants=AsyncMock(),
+    )
+
+    async def count_resource_vectors(root_uri, *, ctx):
+        assert task_tracker.wait_for_descendants.await_count == 1
+        assert root_uri == final_uri
+        assert ctx.account_id == "account-1"
+        assert ctx.user.user_id == "user-1"
+        return 9
+
+    service = SimpleNamespace(
+        execute_add_resource_job=AsyncMock(
+            return_value={"status": "success", "root_uri": final_uri}
+        ),
+        _count_resource_vectors=AsyncMock(side_effect=count_resource_vectors),
+        _link_resource_reason_memory=AsyncMock(),
     )
     monkeypatch.setattr(
         "openviking.storage.queuefs.add_resource_processor.get_task_tracker",
@@ -855,6 +864,7 @@ async def test_add_resource_processor_persists_final_resource_uri(monkeypatch):
         {
             "status": "success",
             "root_uri": final_uri,
+            "vector_count": 9,
             "queue_status": {
                 "Semantic": {
                     "processed": 0,
@@ -887,6 +897,7 @@ async def test_add_resource_processor_replay_skips_lock_adopt_when_result_exists
         execute_add_resource_job=AsyncMock(
             return_value={"status": "success", "root_uri": "viking://resources/duplicated"}
         ),
+        _count_resource_vectors=AsyncMock(return_value=4),
         _link_resource_reason_memory=AsyncMock(),
     )
     task_tracker = SimpleNamespace(
@@ -937,6 +948,55 @@ async def test_add_resource_processor_replay_skips_lock_adopt_when_result_exists
     task_tracker.complete.assert_awaited_once()
     completed_result = task_tracker.complete.await_args.args[1]
     assert completed_result["root_uri"] == final_uri
+    assert completed_result["vector_count"] == 4
+    service._count_resource_vectors.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_add_resource_processor_count_failure_does_not_fail_upload(monkeypatch):
+    final_uri = "viking://resources/count-unavailable"
+    service = SimpleNamespace(
+        execute_add_resource_job=AsyncMock(
+            return_value={"status": "success", "root_uri": final_uri}
+        ),
+        _count_resource_vectors=AsyncMock(side_effect=RuntimeError("count unavailable")),
+        _link_resource_reason_memory=AsyncMock(),
+    )
+    task_tracker = SimpleNamespace(
+        create=AsyncMock(return_value=SimpleNamespace(status=TaskStatus.PENDING)),
+        start=AsyncMock(),
+        update_stage=AsyncMock(),
+        complete=AsyncMock(),
+        fail=AsyncMock(),
+        wait_for_descendants=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.add_resource_processor.get_task_tracker",
+        Mock(return_value=task_tracker),
+    )
+    processor = AddResourceProcessor(
+        service,
+        asyncio.get_running_loop(),
+        QueueManager.ADD_RESOURCE,
+        SimpleNamespace(_async_agfs=SimpleNamespace(pathlock_release=AsyncMock())),
+    )
+    msg = AddResourceMsg(
+        task_id="task-1",
+        path="/tmp/demo.md",
+        root_uri=final_uri,
+        account_id="account-1",
+        user_id="user-1",
+        role="user",
+    )
+    data = msg.to_dict()
+    data[TASK_WORK_ID_FIELD] = "work-1"
+
+    await processor._process(msg, data)
+
+    task_tracker.fail.assert_not_awaited()
+    final_result = task_tracker.complete.await_args.args[1]
+    assert final_result["root_uri"] == final_uri
+    assert "vector_count" not in final_result
 
 
 def test_feishu_direct_submission_requires_configured_auth(monkeypatch):
