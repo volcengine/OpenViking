@@ -13,7 +13,6 @@ downloads/
 eggs/
 .eggs/
 lib/
-doc-fetch-resources/
 # Shared memory-plugin JS source — not a Python build artifact.
 !examples/memory-plugin-shared/lib/
 !examples/opencode-plugin/lib/
