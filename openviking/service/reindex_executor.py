@@ -55,6 +55,7 @@ logger = get_logger(__name__)
 REINDEX_TASK_TYPE = "admin_reindex"
 PRUNE_ORPHAN_CANDIDATE_LIMIT = 100000
 PRUNE_OUTPUT_FIELDS = ["id", "uri", "level", "context_type", "account_id", "owner_user_id"]
+_MAX_FILE_VECTORIZATION_CONCURRENCY = 64
 
 
 # Trailing markers VikingFS appends when a directory has no generated .abstract.md/.overview.md
@@ -139,13 +140,13 @@ class ReindexExecutor:
     }
 
     @staticmethod
-    def _effective_vector_enqueue_concurrency() -> int:
+    def _effective_file_vectorization_concurrency() -> int:
         config = get_openviking_config().reindex
         return max(
             1,
             min(
-                int(config.vector_enqueue_concurrency),
-                int(config.max_vector_enqueue_concurrency),
+                int(config.file_vectorization_concurrency),
+                _MAX_FILE_VECTORIZATION_CONCURRENCY,
             ),
         )
 
@@ -1183,10 +1184,10 @@ class ReindexExecutor:
                 file_counters.warnings.append(f"Failed to reindex {file_uri} vector: {exc}")
             return file_counters
 
-        concurrency = self._effective_vector_enqueue_concurrency()
+        concurrency = self._effective_file_vectorization_concurrency()
         if deduped_files:
             logger.info(
-                "Reindex resource vector enqueue: root=%s files=%d concurrency=%d",
+                "Reindex resource file vectorization: root=%s files=%d concurrency=%d",
                 root_uri,
                 len(deduped_files),
                 concurrency,
@@ -1635,10 +1636,10 @@ class ReindexExecutor:
                 file_counters.warnings.append(f"Failed to reindex {file_uri} vector: {exc}")
             return file_counters
 
-        concurrency = self._effective_vector_enqueue_concurrency()
+        concurrency = self._effective_file_vectorization_concurrency()
         if file_uris:
             logger.info(
-                "Reindex memory vector enqueue: root=%s files=%d concurrency=%d",
+                "Reindex memory file vectorization: root=%s files=%d concurrency=%d",
                 uri,
                 len(file_uris),
                 concurrency,

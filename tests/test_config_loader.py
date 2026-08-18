@@ -127,8 +127,7 @@ def test_queue_worker_concurrency_uses_queue_specific_defaults():
 
     assert config.queue_workers.external_parse.max_concurrent == 4
     assert config.queue_workers.add_resource.max_concurrent == 4
-    assert config.queue_workers.add_resource.vector_enqueue_concurrency == 8
-    assert config.queue_workers.add_resource.max_vector_enqueue_concurrency == 64
+    assert config.queue_workers.add_resource.file_vectorization_concurrency == 8
     assert config.queue_workers.session_commit.max_concurrent == 8
 
 
@@ -139,8 +138,7 @@ def test_queue_worker_concurrency_accepts_separate_values():
                 "external_parse": {"max_concurrent": 9},
                 "add_resource": {
                     "max_concurrent": 7,
-                    "vector_enqueue_concurrency": 12,
-                    "max_vector_enqueue_concurrency": 32,
+                    "file_vectorization_concurrency": 12,
                 },
                 "session_commit": {"max_concurrent": 50},
             }
@@ -149,38 +147,47 @@ def test_queue_worker_concurrency_accepts_separate_values():
 
     assert config.queue_workers.external_parse.max_concurrent == 9
     assert config.queue_workers.add_resource.max_concurrent == 7
-    assert config.queue_workers.add_resource.vector_enqueue_concurrency == 12
-    assert config.queue_workers.add_resource.max_vector_enqueue_concurrency == 32
+    assert config.queue_workers.add_resource.file_vectorization_concurrency == 12
     assert config.queue_workers.session_commit.max_concurrent == 50
 
 
-def test_reindex_config_defaults_to_conservative_vector_enqueue_concurrency():
+def test_reindex_config_defaults_to_conservative_file_vectorization_concurrency():
     config = OpenVikingConfig.from_dict({})
 
-    assert config.reindex.vector_enqueue_concurrency == 8
-    assert config.reindex.max_vector_enqueue_concurrency == 64
+    assert config.reindex.file_vectorization_concurrency == 8
 
 
-def test_reindex_config_accepts_vector_enqueue_concurrency():
+def test_reindex_config_accepts_file_vectorization_concurrency():
     config = OpenVikingConfig.from_dict(
         {
             "reindex": {
-                "vector_enqueue_concurrency": 12,
-                "max_vector_enqueue_concurrency": 32,
+                "file_vectorization_concurrency": 12,
             }
         }
     )
 
-    assert config.reindex.vector_enqueue_concurrency == 12
-    assert config.reindex.max_vector_enqueue_concurrency == 32
+    assert config.reindex.file_vectorization_concurrency == 12
 
 
-@pytest.mark.parametrize("field_name", ["vector_enqueue_concurrency", "max_vector_enqueue_concurrency"])
-def test_reindex_config_rejects_non_positive_concurrency(field_name):
+def test_reindex_config_rejects_non_positive_concurrency():
     with pytest.raises(ValueError) as exc_info:
-        ReindexConfig(**{field_name: 0})
+        ReindexConfig(file_vectorization_concurrency=0)
 
     assert exc_info.value.errors()[0]["type"] == "greater_than"
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    ["vector_enqueue_concurrency", "max_vector_enqueue_concurrency"],
+)
+def test_removed_vector_enqueue_fields_are_rejected(field_name):
+    with pytest.raises(ValueError) as exc_info:
+        OpenVikingConfig.from_dict({"queue_workers": {"add_resource": {field_name: 64}}})
+    assert field_name in str(exc_info.value)
+
+    with pytest.raises(ValueError) as exc_info:
+        OpenVikingConfig.from_dict({"reindex": {field_name: 64}})
+    assert field_name in str(exc_info.value)
 
 
 @pytest.mark.parametrize("value", [0, -1])

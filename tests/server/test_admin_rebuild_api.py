@@ -31,16 +31,23 @@ def _make_reindex_run(ctx, counters):
     return _ReindexRunContext(ctx=ctx, counters=counters)
 
 
-def _patch_reindex_config(monkeypatch, *, concurrency: int = 8, max_concurrency: int = 64):
+def _patch_reindex_config(monkeypatch, *, concurrency: int = 8):
     monkeypatch.setattr(
         "openviking.service.reindex_executor.get_openviking_config",
         lambda: SimpleNamespace(
             reindex=SimpleNamespace(
-                vector_enqueue_concurrency=concurrency,
-                max_vector_enqueue_concurrency=max_concurrency,
+                file_vectorization_concurrency=concurrency,
             )
         ),
     )
+
+
+def test_reindex_file_vectorization_concurrency_respects_hard_cap(monkeypatch):
+    from openviking.service.reindex_executor import ReindexExecutor
+
+    _patch_reindex_config(monkeypatch, concurrency=1000)
+
+    assert ReindexExecutor._effective_file_vectorization_concurrency() == 64
 
 
 async def test_reindex_requires_admin_role(admin_client: httpx.AsyncClient):

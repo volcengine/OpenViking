@@ -8,15 +8,10 @@ from pydantic import BaseModel, Field
 class ReindexConfig(BaseModel):
     """Runtime limits for admin reindex execution."""
 
-    vector_enqueue_concurrency: int = Field(
+    file_vectorization_concurrency: int = Field(
         default=8,
         gt=0,
-        description="Maximum number of vector records prepared and enqueued concurrently",
-    )
-    max_vector_enqueue_concurrency: int = Field(
-        default=64,
-        gt=0,
-        description="Hard cap for vector enqueue concurrency",
+        description="Maximum number of files read, prepared, and enqueued concurrently",
     )
 
     model_config = {"extra": "forbid"}

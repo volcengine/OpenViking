@@ -303,8 +303,7 @@ async def test_vectors_only_vectorizes_directory_files_concurrently(monkeypatch,
         lambda: SimpleNamespace(
             queue_workers=SimpleNamespace(
                 add_resource=SimpleNamespace(
-                    vector_enqueue_concurrency=8,
-                    max_vector_enqueue_concurrency=64,
+                    file_vectorization_concurrency=8,
                 )
             )
         ),
@@ -324,7 +323,10 @@ async def test_vectors_only_vectorizes_directory_files_concurrently(monkeypatch,
 
 
 @pytest.mark.asyncio
-async def test_vectors_only_vector_enqueue_concurrency_respects_hard_cap(monkeypatch, ctx):
+async def test_vectors_only_file_vectorization_concurrency_respects_hard_cap(
+    monkeypatch,
+    ctx,
+):
     viking_fs = SimpleNamespace(
         tree=AsyncMock(
             return_value=[
@@ -333,7 +335,7 @@ async def test_vectors_only_vector_enqueue_concurrency_respects_hard_cap(monkeyp
                     "isDir": False,
                     "name": f"{index}.md",
                 }
-                for index in range(4)
+                for index in range(65)
             ]
         ),
     )
@@ -355,8 +357,7 @@ async def test_vectors_only_vector_enqueue_concurrency_respects_hard_cap(monkeyp
         lambda: SimpleNamespace(
             queue_workers=SimpleNamespace(
                 add_resource=SimpleNamespace(
-                    vector_enqueue_concurrency=8,
-                    max_vector_enqueue_concurrency=2,
+                    file_vectorization_concurrency=1000,
                 )
             )
         ),
@@ -367,7 +368,7 @@ async def test_vectors_only_vector_enqueue_concurrency_respects_hard_cap(monkeyp
         ctx=ctx,
     )
 
-    assert peak_active == 2
+    assert peak_active == 64
 
 
 @pytest.mark.asyncio
@@ -401,8 +402,7 @@ async def test_vectors_only_parallel_vectorization_propagates_file_failure(monke
         lambda: SimpleNamespace(
             queue_workers=SimpleNamespace(
                 add_resource=SimpleNamespace(
-                    vector_enqueue_concurrency=8,
-                    max_vector_enqueue_concurrency=64,
+                    file_vectorization_concurrency=8,
                 )
             )
         ),
@@ -464,8 +464,7 @@ async def test_vectors_only_waits_for_sibling_cancellation_before_releasing_lock
         lambda: SimpleNamespace(
             queue_workers=SimpleNamespace(
                 add_resource=SimpleNamespace(
-                    vector_enqueue_concurrency=8,
-                    max_vector_enqueue_concurrency=64,
+                    file_vectorization_concurrency=8,
                 )
             )
         ),

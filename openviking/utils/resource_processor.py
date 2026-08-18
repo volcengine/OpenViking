@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from openviking.parse.vlm import VLMProcessor
 
 logger = get_logger(__name__)
+_MAX_FILE_VECTORIZATION_CONCURRENCY = 64
 VECTORDB_MAX_QUERY_LIMIT = 100_000
 
 
@@ -671,8 +672,8 @@ class ResourceProcessor:
         concurrency = max(
             1,
             min(
-                int(config.vector_enqueue_concurrency),
-                int(config.max_vector_enqueue_concurrency),
+                int(config.file_vectorization_concurrency),
+                _MAX_FILE_VECTORIZATION_CONCURRENCY,
             ),
         )
 

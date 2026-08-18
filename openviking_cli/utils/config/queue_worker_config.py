@@ -20,15 +20,10 @@ class QueueWorkerConfig(BaseModel):
 class AddResourceQueueWorkerConfig(QueueWorkerConfig):
     """Runtime limits for add-resource queue workers."""
 
-    vector_enqueue_concurrency: int = Field(
+    file_vectorization_concurrency: int = Field(
         default=8,
         gt=0,
-        description="Maximum number of files enqueued concurrently within one vectors-only job",
-    )
-    max_vector_enqueue_concurrency: int = Field(
-        default=64,
-        gt=0,
-        description="Hard cap for vectors-only file enqueue concurrency",
+        description="Maximum number of files read, prepared, and enqueued concurrently within one vectors-only job",
     )
 
 
