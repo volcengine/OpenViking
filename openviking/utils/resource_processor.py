@@ -7,6 +7,7 @@ Handles coordinated writes and self-iteration processes
 as described in the OpenViking design document.
 """
 
+import asyncio
 import inspect
 import time
 from collections.abc import Callable
@@ -36,6 +37,7 @@ from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.summarizer import Summarizer
 from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.utils import VikingURI, get_logger
+from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.storage import StoragePath
 
 if TYPE_CHECKING:
@@ -652,6 +654,7 @@ class ResourceProcessor:
             level_limit=None,
             ctx=ctx,
         )
+        files: list[tuple[str, str, str]] = []
         for entry in entries:
             entry_uri = entry.get("uri") if isinstance(entry, dict) else None
             if not entry_uri or entry.get("isDir"):
@@ -662,13 +665,33 @@ class ResourceProcessor:
             parent = VikingURI(entry_uri).parent
             if parent is None:
                 continue
+            files.append((entry_uri, str(name), parent.uri))
+
+        config = get_openviking_config().queue_workers.add_resource
+        concurrency = max(
+            1,
+            min(
+                int(config.vector_enqueue_concurrency),
+                int(config.max_vector_enqueue_concurrency),
+            ),
+        )
+
+        async def vectorize(entry_uri: str, name: str, parent_uri: str) -> None:
             await vectorize_file(
                 file_path=entry_uri,
                 summary_dict={"name": name, "summary": ""},
-                parent_uri=parent.uri,
+                parent_uri=parent_uri,
                 context_type=context_type_for_uri(entry_uri),
                 ctx=ctx,
                 ingest_options=ingest_options,
+            )
+
+        for start in range(0, len(files), concurrency):
+            await asyncio.gather(
+                *(
+                    vectorize(entry_uri, name, parent_uri)
+                    for entry_uri, name, parent_uri in files[start : start + concurrency]
+                )
             )
 
     async def _vectorize_resource_file(

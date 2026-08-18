@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -263,6 +264,155 @@ async def test_vectors_only_persists_tree_and_vectorizes_files_only(monkeypatch,
     processor._delete_resource_semantic_markers.assert_not_awaited()
     processor._delete_resource_semantic_vectors.assert_not_awaited()
     viking_fs._async_agfs.pathlock_release.assert_awaited_once_with(lock)
+
+
+@pytest.mark.asyncio
+async def test_vectors_only_vectorizes_directory_files_concurrently(monkeypatch, ctx):
+    viking_fs = SimpleNamespace(
+        tree=AsyncMock(
+            return_value=[
+                {
+                    "uri": "viking://resources/demo/first.md",
+                    "isDir": False,
+                    "name": "first.md",
+                },
+                {
+                    "uri": "viking://resources/demo/second.md",
+                    "isDir": False,
+                    "name": "second.md",
+                },
+            ]
+        ),
+    )
+    entered = 0
+    both_entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def vectorize_file(**kwargs):
+        nonlocal entered
+        entered += 1
+        if entered == 2:
+            both_entered.set()
+        await release.wait()
+        return True
+
+    monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: viking_fs)
+    monkeypatch.setattr("openviking.utils.resource_processor.vectorize_file", vectorize_file)
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.get_openviking_config",
+        lambda: SimpleNamespace(
+            queue_workers=SimpleNamespace(
+                add_resource=SimpleNamespace(
+                    vector_enqueue_concurrency=8,
+                    max_vector_enqueue_concurrency=64,
+                )
+            )
+        ),
+    )
+    processor = ResourceProcessor(_FakeVikingDB())
+
+    task = asyncio.create_task(
+        processor._vectorize_resource_files("viking://resources/demo", ctx=ctx)
+    )
+    try:
+        await asyncio.wait_for(both_entered.wait(), timeout=0.2)
+    finally:
+        release.set()
+    await task
+
+    assert entered == 2
+
+
+@pytest.mark.asyncio
+async def test_vectors_only_vector_enqueue_concurrency_respects_hard_cap(monkeypatch, ctx):
+    viking_fs = SimpleNamespace(
+        tree=AsyncMock(
+            return_value=[
+                {
+                    "uri": f"viking://resources/demo/{index}.md",
+                    "isDir": False,
+                    "name": f"{index}.md",
+                }
+                for index in range(4)
+            ]
+        ),
+    )
+    active = 0
+    peak_active = 0
+
+    async def vectorize_file(**kwargs):
+        nonlocal active, peak_active
+        active += 1
+        peak_active = max(peak_active, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return True
+
+    monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: viking_fs)
+    monkeypatch.setattr("openviking.utils.resource_processor.vectorize_file", vectorize_file)
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.get_openviking_config",
+        lambda: SimpleNamespace(
+            queue_workers=SimpleNamespace(
+                add_resource=SimpleNamespace(
+                    vector_enqueue_concurrency=8,
+                    max_vector_enqueue_concurrency=2,
+                )
+            )
+        ),
+    )
+
+    await ResourceProcessor(_FakeVikingDB())._vectorize_resource_files(
+        "viking://resources/demo",
+        ctx=ctx,
+    )
+
+    assert peak_active == 2
+
+
+@pytest.mark.asyncio
+async def test_vectors_only_parallel_vectorization_propagates_file_failure(monkeypatch, ctx):
+    viking_fs = SimpleNamespace(
+        tree=AsyncMock(
+            return_value=[
+                {
+                    "uri": "viking://resources/demo/failing.md",
+                    "isDir": False,
+                    "name": "failing.md",
+                },
+                {
+                    "uri": "viking://resources/demo/healthy.md",
+                    "isDir": False,
+                    "name": "healthy.md",
+                },
+            ]
+        ),
+    )
+
+    async def vectorize_file(*, file_path, **kwargs):
+        if file_path.endswith("failing.md"):
+            raise RuntimeError("vector enqueue failed")
+        return True
+
+    monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: viking_fs)
+    monkeypatch.setattr("openviking.utils.resource_processor.vectorize_file", vectorize_file)
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.get_openviking_config",
+        lambda: SimpleNamespace(
+            queue_workers=SimpleNamespace(
+                add_resource=SimpleNamespace(
+                    vector_enqueue_concurrency=8,
+                    max_vector_enqueue_concurrency=64,
+                )
+            )
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="vector enqueue failed"):
+        await ResourceProcessor(_FakeVikingDB())._vectorize_resource_files(
+            "viking://resources/demo",
+            ctx=ctx,
+        )
 
 
 @pytest.mark.asyncio

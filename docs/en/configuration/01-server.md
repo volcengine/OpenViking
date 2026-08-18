@@ -213,6 +213,10 @@ This setting controls queue-job concurrency. It is separate from `vlm.media.max_
 | Field | Type | Default | Description |
 |---|---|---:|---|
 | `max_concurrent` | integer | `4` | Number of complete AddResource jobs consumed concurrently; must be greater than `0`; requires a server restart after changes |
+| `vector_enqueue_concurrency` | integer | `8` | Number of files concurrently read and enqueued within one directory AddResource job when `processing_mode="vectors_only"`; must be greater than `0`; requires a server restart after changes |
+| `max_vector_enqueue_concurrency` | integer | `64` | Hard cap applied to `vector_enqueue_concurrency`; must be greater than `0`; requires a server restart after changes |
+
+`max_concurrent` controls independent AddResource jobs, while `vector_enqueue_concurrency` controls files within one vectors-only directory job. The effective per-job file concurrency is the smaller of `vector_enqueue_concurrency` and `max_vector_enqueue_concurrency`. It does not affect single-file resources or `semantic_and_vectors` processing.
 
 ### `queue_workers.session_commit`
 

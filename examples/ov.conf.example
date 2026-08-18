@@ -84,7 +84,11 @@
     },
     "queue_workers": {
         "external_parse": {"max_concurrent": 4},
-        "add_resource": {"max_concurrent": 4},
+        "add_resource": {
+            "max_concurrent": 4,
+            "vector_enqueue_concurrency": 8,
+            "max_vector_enqueue_concurrency": 64
+        },
         "session_commit": {"max_concurrent": 8},
     },
     "embedding": {

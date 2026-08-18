@@ -127,6 +127,8 @@ def test_queue_worker_concurrency_uses_queue_specific_defaults():
 
     assert config.queue_workers.external_parse.max_concurrent == 4
     assert config.queue_workers.add_resource.max_concurrent == 4
+    assert config.queue_workers.add_resource.vector_enqueue_concurrency == 8
+    assert config.queue_workers.add_resource.max_vector_enqueue_concurrency == 64
     assert config.queue_workers.session_commit.max_concurrent == 8
 
 
@@ -135,7 +137,11 @@ def test_queue_worker_concurrency_accepts_separate_values():
         {
             "queue_workers": {
                 "external_parse": {"max_concurrent": 9},
-                "add_resource": {"max_concurrent": 7},
+                "add_resource": {
+                    "max_concurrent": 7,
+                    "vector_enqueue_concurrency": 12,
+                    "max_vector_enqueue_concurrency": 32,
+                },
                 "session_commit": {"max_concurrent": 50},
             }
         }
@@ -143,6 +149,8 @@ def test_queue_worker_concurrency_accepts_separate_values():
 
     assert config.queue_workers.external_parse.max_concurrent == 9
     assert config.queue_workers.add_resource.max_concurrent == 7
+    assert config.queue_workers.add_resource.vector_enqueue_concurrency == 12
+    assert config.queue_workers.add_resource.max_vector_enqueue_concurrency == 32
     assert config.queue_workers.session_commit.max_concurrent == 50
 
 

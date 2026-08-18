@@ -17,11 +17,28 @@ class QueueWorkerConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class AddResourceQueueWorkerConfig(QueueWorkerConfig):
+    """Runtime limits for add-resource queue workers."""
+
+    vector_enqueue_concurrency: int = Field(
+        default=8,
+        gt=0,
+        description="Maximum number of files enqueued concurrently within one vectors-only job",
+    )
+    max_vector_enqueue_concurrency: int = Field(
+        default=64,
+        gt=0,
+        description="Hard cap for vectors-only file enqueue concurrency",
+    )
+
+
 class QueueWorkersConfig(BaseModel):
     """Runtime limits for QueueFS consumers."""
 
     external_parse: QueueWorkerConfig = Field(default_factory=QueueWorkerConfig)
-    add_resource: QueueWorkerConfig = Field(default_factory=QueueWorkerConfig)
+    add_resource: AddResourceQueueWorkerConfig = Field(
+        default_factory=AddResourceQueueWorkerConfig
+    )
     session_commit: QueueWorkerConfig = Field(
         default_factory=lambda: QueueWorkerConfig(max_concurrent=8)
     )
