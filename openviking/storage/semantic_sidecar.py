@@ -72,13 +72,12 @@ def _bounded_string(value: Any, *, field: str, limit: int) -> str:
 
 
 def _normalize_metadata(metadata: Mapping[str, Any]) -> Dict[str, Any]:
-    """Validate and order the deliberately small generated metadata schema."""
+    """Validate known fields and silently discard fields outside the schema.
 
-    unknown = set(metadata) - set(_METADATA_ORDER)
-    if unknown:
-        raise SemanticSidecarFormatError(
-            f"unsupported semantic sidecar metadata fields: {sorted(unknown)}"
-        )
+    Ignoring unknown fields keeps readers forward-compatible with metadata
+    written by newer OpenViking versions.  Known fields remain strict so a
+    malformed value cannot leak into previews, embeddings, or writeback.
+    """
 
     normalized: Dict[str, Any] = {}
     if "directory" in metadata:
@@ -86,10 +85,8 @@ def _normalize_metadata(metadata: Mapping[str, Any]) -> Dict[str, Any]:
 
     source = metadata.get("source")
     if source is not None:
-        if not isinstance(source, Mapping) or set(source) != {"kind", "uri"}:
-            raise SemanticSidecarFormatError(
-                "semantic sidecar source must contain exactly kind and uri"
-            )
+        if not isinstance(source, Mapping) or not {"kind", "uri"}.issubset(source):
+            raise SemanticSidecarFormatError("semantic sidecar source must contain kind and uri")
         normalized["source"] = {
             "kind": _bounded_string(source["kind"], field="source.kind", limit=_MAX_LABEL_CHARS),
             "uri": _bounded_string(source["uri"], field="source.uri", limit=_MAX_SOURCE_URI_CHARS),
@@ -97,12 +94,12 @@ def _normalize_metadata(metadata: Mapping[str, Any]) -> Dict[str, Any]:
 
     generated_by = metadata.get("generated_by")
     if generated_by is not None:
-        if not isinstance(generated_by, Mapping) or set(generated_by) != {
+        if not isinstance(generated_by, Mapping) or not {
             "component",
             "trigger",
-        }:
+        }.issubset(generated_by):
             raise SemanticSidecarFormatError(
-                "semantic sidecar generated_by must contain exactly component and trigger"
+                "semantic sidecar generated_by must contain component and trigger"
             )
         normalized["generated_by"] = {
             "component": _bounded_string(
@@ -125,7 +122,7 @@ def _normalize_metadata(metadata: Mapping[str, Any]) -> Dict[str, Any]:
             "unsampled_entries",
             "pending_child_changes",
         }
-        if not isinstance(freshness, Mapping) or set(freshness) != required:
+        if not isinstance(freshness, Mapping) or not required.issubset(freshness):
             raise SemanticSidecarFormatError("semantic sidecar freshness has an invalid field set")
         counters: Dict[str, int] = {}
         for field in (

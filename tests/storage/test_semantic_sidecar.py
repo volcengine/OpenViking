@@ -95,6 +95,104 @@ def test_embedding_uses_only_directory_metadata():
     assert "freshness:" not in embedded
 
 
+def test_unknown_metadata_fields_are_silently_discarded():
+    raw = """---
+directory: viking://resources/demo/
+secret: must-not-survive
+future_feature:
+  enabled: true
+---
+
+Visible body.
+"""
+
+    document = parse_semantic_sidecar(raw)
+    embedded = body_for_embedding(raw)
+
+    assert document.metadata == {"directory": "viking://resources/demo/"}
+    assert document.body == "Visible body.\n"
+    assert "directory: viking://resources/demo/" in embedded
+    assert "secret" not in embedded
+    assert "future_feature" not in embedded
+
+
+def test_render_silently_discards_unknown_metadata_fields():
+    raw = render_semantic_sidecar(
+        ContextLevel.ABSTRACT,
+        "viking://resources/demo",
+        "Visible body.",
+        {"secret": "must-not-survive", "future_feature": {"enabled": True}},
+    )
+
+    assert parse_semantic_sidecar(raw).metadata == {"directory": "viking://resources/demo/"}
+    assert "secret" not in raw
+    assert "future_feature" not in raw
+
+
+def test_unknown_nested_metadata_fields_are_silently_discarded():
+    raw = """---
+directory: viking://resources/demo/
+source:
+  kind: http
+  uri: https://example.com/demo.pdf
+  checksum: ignored
+generated_by:
+  component: SemanticProcessor
+  trigger: ingest
+  version: ignored
+freshness:
+  total_entries: 1
+  sampled_entries: 1
+  unsampled_entries: 0
+  pending_child_changes: 0
+  generation: ignored
+---
+
+Visible body.
+"""
+
+    document = parse_semantic_sidecar(raw)
+
+    assert document.metadata["source"] == {
+        "kind": "http",
+        "uri": "https://example.com/demo.pdf",
+    }
+    assert document.metadata["generated_by"] == {
+        "component": "SemanticProcessor",
+        "trigger": "ingest",
+    }
+    assert document.metadata["freshness"] == {
+        "total_entries": 1,
+        "sampled_entries": 1,
+        "unsampled_entries": 0,
+        "pending_child_changes": 0,
+    }
+
+
+def test_unknown_metadata_does_not_affect_write_protection_comparison():
+    current = """---
+directory: viking://resources/demo/
+secret: old-version-only
+---
+
+Old body.
+"""
+    requested = """---
+directory: viking://resources/demo/
+secret: different-but-ignored
+---
+
+New body.
+"""
+
+    result = prepare_semantic_sidecar_write(
+        "viking://resources/demo/.abstract.md", current, requested
+    )
+
+    assert parse_semantic_sidecar(result).body == "New body.\n"
+    assert "secret" not in result
+
+
 def test_ordinary_markdown_frontmatter_is_untouched_without_explicit_parsing():
     raw = "---\ntitle: User document\n---\n\nBody"
     assert raw == "---\ntitle: User document\n---\n\nBody"
