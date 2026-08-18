@@ -202,7 +202,7 @@ Use it in these paths:
 | `abstract()` / `overview()` | Strip OKF frontmatter before returning semantic accessor content |
 | Incremental summary reuse | Parse `.overview.md` body before extracting file summaries |
 | L0 derivation | Extract abstract from L1 body |
-| Vectorization | Enqueue body-only text for L0/L1 embeddings |
+| Vectorization | Enqueue the body plus explicitly whitelisted metadata for L0/L1 embeddings |
 | Preview formatting | Keep using semantic accessor/body-only content |
 
 The parser should be tolerant: valid YAML object frontmatter is metadata; missing frontmatter means legacy body; malformed frontmatter should not silently enter embeddings. For generated sidecars, malformed frontmatter should be treated as a processing error.
@@ -253,3 +253,9 @@ Semantic reuse and embedding:
 - Do not add a dedicated `read_metadata()` API in the first version. Direct `read()` / `get()` of the sidecar file is enough for callers that intentionally need metadata.
 - Use the metadata embedding policy described above: `directory` is included initially; `source`, `generated_by`, and `freshness` are excluded.
 - Include OKF metadata in Git diffs as-is. Body-only diff rendering can be a future viewer feature, not part of the storage format.
+
+## Future Work: Freshness-Aware Parent Bubbling
+
+The current implementation schedules a parent refresh after every successful resource/skill semantic task, even when the newly generated child summary is unchanged. It marks the parent `pending_child_changes` before enqueue so freshness remains accurate, but unconditional bubbling is not the intended final scheduling policy.
+
+Future work should use freshness state to control bubbling frequency. Candidate inputs include `pending_child_changes`, sampling coverage, direct-child change volume, whether the child L0 body actually changed, and recent parent-refresh state. The scheduler may coalesce changes, apply thresholds, or use a time window to reduce repeated refreshes and upward write amplification in hot directory trees while preserving eventual consistency.

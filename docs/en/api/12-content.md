@@ -226,7 +226,7 @@ Update an existing file, or create a new one when `mode="create"`, and automatic
 
 - `replace` and `append` require the file to exist; `create` targets a new file and returns `409 Conflict` when the path already exists. Directories are always rejected.
 - `create` only accepts text-writable extensions: `.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.toml`, `.py`, `.js`, `.ts`. Parent directories are created automatically.
-- Derived semantic files cannot be written directly: `.abstract.md`, `.overview.md`, `.relations.json`.
+- `.relations.json` cannot be written directly. Existing `.abstract.md` and `.overview.md` bodies may be updated, but public APIs cannot create them. A body-only request preserves stored OKF metadata; a full-OKF request must match the stored metadata. Unknown metadata fields are silently dropped. A sidecar body write rebuilds only the directory's existing L0/L1 vectors and does not regenerate semantics.
 - File content is updated before the API returns. `wait` only controls whether the call waits for semantic/vector refresh to finish.
 - The public API no longer accepts `regenerate_semantics` or `revectorize`; write always refreshes related semantics and vectors.
 
@@ -358,6 +358,7 @@ Each operation contains:
 - Every non-idempotent precondition is checked under the target tree lock before the first new write. A mismatch returns `409 Conflict`.
 - If a target already contains the requested bytes, it is reported as `unchanged`; retrying the same request can therefore repeat a failed refresh without rewriting matching content.
 - The API prevents precondition conflicts from causing new writes, but an underlying I/O failure can still leave writes completed earlier in the batch visible.
+- Existing `.abstract.md` and `.overview.md` bodies may be updated with `replace_if_hash`. OpenViking preserves and validates protected OKF metadata, rejects `create_if_absent` for sidecars, and rebuilds only the directory's existing L0/L1 vectors for these operations.
 
 **Python SDK**
 
