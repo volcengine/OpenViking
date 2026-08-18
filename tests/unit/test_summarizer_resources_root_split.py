@@ -220,6 +220,7 @@ async def test_flat_file_refresh_enqueues_incremental_parent_summary():
     assert msg.recursive is False
     assert msg.changes == {"modified": ["viking://resources/神雕.md"]}
     assert msg.skip_vectorization is False
+    assert msg.tag_parent_directory is True
     assert msg.telemetry_id == "tid"
     assert wait_tracker.registered == [("tid", msg.id)]
 

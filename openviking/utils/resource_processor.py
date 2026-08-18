@@ -444,6 +444,7 @@ class ResourceProcessor:
                 "target_preexisting": target_preexisting,
                 "is_code_repo": parse_result.source_format == "repository",
                 "root_is_file": root_is_file,
+                "tag_parent_directory": not bool(parent),
             }
             if defer_post_processing:
                 result["_post_process"] = prepared
@@ -488,6 +489,8 @@ class ResourceProcessor:
         processing_mode = normalize_processing_mode(processing_mode)
         vectors_only = processing_mode == VECTORS_ONLY
         root_is_file = bool(prepared.get("root_is_file"))
+        # Prepared payloads already persisted before this field existed keep the old behavior.
+        tag_parent_directory = bool(prepared.get("tag_parent_directory", True))
         ingest_options = IngestOptions.from_value(kwargs.pop("ingest_options", None))
         should_summarize = not root_is_file and not vectors_only and (summarize or build_index)
         should_refresh_file_parent = (
@@ -576,6 +579,7 @@ class ResourceProcessor:
                         ctx=ctx,
                         skip_vectorization=not build_index,
                         ingest_options=ingest_options,
+                        tag_parent_directory=tag_parent_directory,
                     )
                 elif build_index:
                     if root_is_file:
@@ -594,6 +598,7 @@ class ResourceProcessor:
                 ctx=ctx,
                 skip_vectorization=not build_index,
                 ingest_options=ingest_options,
+                tag_parent_directory=tag_parent_directory,
             )
         elif vectors_only or root_is_file:
             if not build_index:

@@ -480,6 +480,8 @@ async def test_resource_rm_wait_registers_request_before_semantic_root(
     assert tracker.registered_roots
     assert tracker.registered_roots[0]["request_was_registered"] is True
     assert queue_manager.messages[0].recursive is False
+    assert queue_manager.messages[0].directory_refresh_only is True
+    assert queue_manager.messages[0].changes is None
     assert tracker.wait_calls == [("tm-fs-rm", 3)]
     assert tracker.cleaned == ["tm-fs-rm"]
     assert result["semantic_status"] == "complete"

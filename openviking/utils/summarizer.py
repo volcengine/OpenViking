@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from openviking.core.namespace import context_type_for_uri
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
-from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -39,6 +38,7 @@ class Summarizer:
         ctx: "RequestContext",
         skip_vectorization: bool = False,
         ingest_options: IngestOptions | None = None,
+        tag_parent_directory: bool = True,
     ) -> Dict[str, Any]:
         """Summarize one flat file and refresh its parent directory semantics."""
         parent = VikingURI(file_uri).parent
@@ -60,13 +60,7 @@ class Summarizer:
             skip_vectorization=skip_vectorization,
             telemetry_id=telemetry_id,
             changes={"modified": [file_uri]},
-            coalesce_key=build_semantic_coalesce_key(
-                context_type=context_type_for_uri(file_uri),
-                uri=parent_uri,
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
-                peer_id=ctx.user.user_id,
-            ),
+            tag_parent_directory=tag_parent_directory,
             ingest_options=ingest_options,
         )
         if telemetry_id:

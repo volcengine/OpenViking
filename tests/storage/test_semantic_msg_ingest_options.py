@@ -1,8 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-from openviking.utils.ingest_options import IngestOptions
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
+from openviking.utils.ingest_options import IngestOptions
 
 
 def test_semantic_msg_serializes_ingest_options():
@@ -10,6 +10,7 @@ def test_semantic_msg_serializes_ingest_options():
         uri="viking://resources/demo",
         context_type="resource",
         ingest_options=IngestOptions(search_tags=["team=search"], search_tag_mode="append"),
+        tag_parent_directory=False,
     )
 
     data = msg.to_dict()
@@ -23,6 +24,7 @@ def test_semantic_msg_serializes_ingest_options():
         search_tags=["team=search"],
         search_tag_mode="append",
     )
+    assert restored.tag_parent_directory is False
 
 
 def test_semantic_msg_reads_legacy_search_tag_fields():

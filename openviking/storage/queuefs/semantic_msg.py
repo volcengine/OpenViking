@@ -9,16 +9,16 @@ from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from openviking.utils.ingest_options import IngestOptions
+from openviking_cli.utils.uri import VikingURI
 
-def build_semantic_coalesce_key(
+
+def semantic_directory_key(
     *,
     context_type: str,
     uri: str,
     account_id: str = "default",
-    user_id: str = "default",
-    peer_id: str = "default",
-) -> str:
-    return "|".join([context_type, account_id, user_id, peer_id, uri.rstrip("/")])
+) -> tuple[str, str, str]:
+    return account_id, context_type, VikingURI.normalize(uri).rstrip("/")
 
 
 @dataclass
@@ -55,8 +55,8 @@ class SemanticMsg:
     is_code_repo: bool = False
     target_preexisting: Optional[bool] = None
     ingest_options: IngestOptions = field(default_factory=IngestOptions)
-    coalesce_key: str = ""
-    coalesce_version: int = 0
+    tag_parent_directory: bool = True
+    directory_refresh_only: bool = False
     changes: Optional[Dict[str, List[str]]] = (
         None  # {"added": [...], "modified": [...], "deleted": [...]}
     )
@@ -77,8 +77,8 @@ class SemanticMsg:
         is_code_repo: bool = False,
         target_preexisting: Optional[bool] = None,
         ingest_options: IngestOptions | Dict[str, Any] | None = None,
-        coalesce_key: str = "",
-        coalesce_version: int = 0,
+        tag_parent_directory: bool = True,
+        directory_refresh_only: bool = False,
         changes: Optional[Dict[str, List[str]]] = None,
     ):
         self.id = str(uuid4())
@@ -96,8 +96,8 @@ class SemanticMsg:
         self.is_code_repo = is_code_repo
         self.target_preexisting = target_preexisting
         self.ingest_options = IngestOptions.from_value(ingest_options)
-        self.coalesce_key = coalesce_key
-        self.coalesce_version = coalesce_version
+        self.tag_parent_directory = tag_parent_directory
+        self.directory_refresh_only = directory_refresh_only
         self.changes = changes
 
     def to_dict(self) -> Dict[str, Any]:
@@ -148,8 +148,8 @@ class SemanticMsg:
                     "search_tag_mode": data.get("search_tag_mode", "replace"),
                 }
             ),
-            coalesce_key=data.get("coalesce_key", ""),
-            coalesce_version=data.get("coalesce_version", 0),
+            tag_parent_directory=data.get("tag_parent_directory", True),
+            directory_refresh_only=data.get("directory_refresh_only", False),
             changes=data.get("changes"),
         )
         if "id" in data and data["id"]:

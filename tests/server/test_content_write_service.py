@@ -410,7 +410,7 @@ class _FakeQueueManager:
 
 
 @pytest.mark.asyncio
-async def test_resource_write_semantic_refresh_uses_coalesce_key(monkeypatch):
+async def test_resource_write_semantic_refresh_keeps_file_change(monkeypatch):
     file_uri = "viking://resources/demo/doc.md"
     root_uri = "viking://resources/demo"
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
@@ -432,9 +432,8 @@ async def test_resource_write_semantic_refresh_uses_coalesce_key(monkeypatch):
     )
 
     assert len(queue.messages) == 1
-    assert queue.messages[0].coalesce_key == (
-        "resource|default|default|default|viking://resources/demo"
-    )
+    assert queue.messages[0].changes == {"modified": [file_uri]}
+    assert queue.messages[0].directory_refresh_only is False
     assert queue.messages[0].lock_handoff is None
 
 

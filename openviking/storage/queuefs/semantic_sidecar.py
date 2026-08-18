@@ -2,12 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Shared writeback for semantic sidecar files."""
 
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Dict, Optional
 
 from openviking.server.identity import RequestContext
-from openviking_cli.utils.logger import get_logger
-
-logger = get_logger(__name__)
 
 
 async def write_semantic_sidecars(
@@ -17,15 +14,9 @@ async def write_semantic_sidecars(
     overview: str,
     abstract: str,
     ctx: Optional[RequestContext],
-    is_stale: Callable[[], bool],
     lock: Optional[Dict[str, Any]] = None,
-    log_prefix: str = "[Semantic]",
-) -> bool:
+) -> None:
     """Write .overview.md and .abstract.md sidecar files under dir_uri with exact-path locking."""
-    if is_stale():
-        logger.info("%s Skipping stale semantic write for %s", log_prefix, dir_uri)
-        return False
-
     lock_paths = [
         viking_fs._uri_to_path(f"{dir_uri}/.overview.md", ctx=ctx),
         viking_fs._uri_to_path(f"{dir_uri}/.abstract.md", ctx=ctx),
@@ -35,11 +26,7 @@ async def write_semantic_sidecars(
     if sidecar_lease is None:
         sidecar_lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(lock_paths)
     try:
-        if is_stale():
-            logger.info("%s Skipping stale semantic write for %s", log_prefix, dir_uri)
-            return False
         await _write_sidecars(viking_fs, dir_uri, overview, abstract, ctx, sidecar_lease)
-        return True
     finally:
         if owns_lease:
             await viking_fs._async_agfs.pathlock_release(sidecar_lease)

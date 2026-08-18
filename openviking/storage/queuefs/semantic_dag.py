@@ -12,7 +12,11 @@ from weakref import WeakKeyDictionary
 
 from openviking.parse.parsers.media import get_media_type
 from openviking.server.identity import RequestContext
-from openviking.service.task_work_index import bind_task_context, get_task_context
+from openviking.service.task_work_index import (
+    TaskExecutionContext,
+    bind_task_context,
+    get_task_context,
+)
 from openviking.storage.queuefs.semantic_sidecar import write_semantic_sidecars
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry import bind_telemetry, get_current_telemetry
@@ -156,8 +160,11 @@ class SemanticDagExecutor:
         changes: Optional[Dict[str, List[str]]] = None,
         skip_vectorization: bool = False,
         ingest_options: IngestOptions | None = None,
-        coalesce_key: str = "",
-        coalesce_version: int = 0,
+        file_ingest_options: Optional[Dict[str, IngestOptions]] = None,
+        file_task_contexts: Optional[Dict[str, TaskExecutionContext]] = None,
+        file_telemetry: Optional[Dict[str, Any]] = None,
+        directory_ingest_options: IngestOptions | None = None,
+        directory_refresh_only: bool = False,
     ):
         self._processor = processor
         self._context_type = context_type
@@ -170,11 +177,20 @@ class SemanticDagExecutor:
         self._changes = changes or {}
         self._skip_vectorization = skip_vectorization
         self._ingest_options = IngestOptions.from_value(ingest_options)
-        self._coalesce_key = coalesce_key
-        self._coalesce_version = coalesce_version
+        self._file_ingest_options = {
+            path: IngestOptions.from_value(options)
+            for path, options in (file_ingest_options or {}).items()
+        }
+        self._file_task_contexts = file_task_contexts or {}
+        self._file_telemetry = file_telemetry or {}
+        self._directory_ingest_options = (
+            self._ingest_options
+            if directory_ingest_options is None
+            else IngestOptions.from_value(directory_ingest_options)
+        )
+        self._directory_refresh_only = directory_refresh_only
         self._task_context = get_task_context()
         self._telemetry = get_current_telemetry()
-        self._stale = False
         self._changed_paths = {
             path for key in ("added", "modified", "deleted") for path in self._changes.get(key, [])
         }
@@ -297,16 +313,26 @@ class SemanticDagExecutor:
         return stats
 
     async def _run_work(self, work: DagWork) -> None:
+        active_task_context = (
+            self._file_task_contexts.get(work.file_path)
+            if work.kind == "file" and work.file_path is not None
+            else None
+        ) or self._task_context
         task_context = (
             bind_task_context(
-                self._task_context.task_id,
-                self._task_context.account_id,
-                self._task_context.user_id,
+                active_task_context.task_id,
+                active_task_context.account_id,
+                active_task_context.user_id,
             )
-            if self._task_context is not None
+            if active_task_context is not None
             else nullcontext()
         )
-        with bind_telemetry(self._telemetry), task_context:
+        telemetry = (
+            self._file_telemetry.get(work.file_path)
+            if work.kind == "file" and work.file_path is not None
+            else None
+        ) or self._telemetry
+        with bind_telemetry(telemetry), task_context:
             await self._run_work_bound(work)
 
     async def _run_work_bound(self, work: DagWork) -> None:
@@ -430,7 +456,7 @@ class SemanticDagExecutor:
     def _is_direct_incremental_update(self) -> bool:
         return (
             self._incremental_update
-            and bool(self._changed_paths)
+            and (bool(self._changed_paths) or self._directory_refresh_only)
             and self._target_uri == self._root_uri
         )
 
@@ -441,6 +467,8 @@ class SemanticDagExecutor:
         return any(path.startswith(prefix) for path in self._changed_paths)
 
     async def _check_file_content_changed(self, file_path: str) -> bool:
+        if self._directory_refresh_only:
+            return False
         if self._is_direct_incremental_update():
             return file_path in self._changed_paths
         target_path = self._get_target_file_path(file_path)
@@ -518,6 +546,8 @@ class SemanticDagExecutor:
     async def _check_dir_children_changed(
         self, dir_uri: str, current_files: List[str], current_dirs: List[str]
     ) -> bool:
+        if self._directory_refresh_only:
+            return True
         if self._is_direct_incremental_update():
             if self._path_has_direct_change(dir_uri):
                 return True
@@ -582,6 +612,9 @@ class SemanticDagExecutor:
                     summary_dict = await self._read_existing_summary(file_path)
                     if summary_dict is not None:
                         need_vectorize = False
+                    elif self._directory_refresh_only:
+                        summary_dict = {"name": file_name, "summary": ""}
+                        need_vectorize = False
                     else:
                         self._file_change_status[file_path] = True
             else:
@@ -609,7 +642,9 @@ class SemanticDagExecutor:
                     summary_dict=summary_dict,
                     ctx=self._ctx,
                     use_summary=use_summary,
-                    ingest_options=self._ingest_options,
+                    ingest_options=self._file_ingest_options.get(
+                        file_path, self._ingest_options
+                    ),
                 )
             except Exception as e:
                 logger.error(
@@ -707,10 +742,6 @@ class SemanticDagExecutor:
             return None
         return summary
 
-    @property
-    def stale(self) -> bool:
-        return self._stale
-
     async def _finalize_children_abstracts(self, node: DirNode) -> List[Dict[str, str]]:
         results: List[Dict[str, str]] = []
         for idx, child_uri in enumerate(node.children_dirs):
@@ -725,30 +756,20 @@ class SemanticDagExecutor:
                 results.append(item)
         return results
 
-    def _is_stale(self) -> bool:
-        from openviking.storage.queuefs.semantic_queue import is_semantic_coalesce_stale
-
-        return is_semantic_coalesce_stale(self._coalesce_key, self._coalesce_version)
-
     async def _write_directory_semantics(
         self,
         dir_uri: str,
         overview: str,
         abstract: str,
-    ) -> bool:
-        wrote = await write_semantic_sidecars(
+    ) -> None:
+        await write_semantic_sidecars(
             viking_fs=self._viking_fs,
             dir_uri=dir_uri,
             overview=overview,
             abstract=abstract,
             ctx=self._ctx,
-            is_stale=self._is_stale,
             lock=self._lock,
-            log_prefix="[SemanticDag]",
         )
-        if not wrote:
-            self._stale = True
-        return wrote
 
     async def _overview_task(self, dir_uri: str) -> None:
         node = self._nodes.get(dir_uri)
@@ -785,9 +806,7 @@ class SemanticDagExecutor:
 
             # Write directly, protected by the outer semantic lock.
             try:
-                wrote = await self._write_directory_semantics(dir_uri, overview, abstract)
-                if not wrote:
-                    need_vectorize = False
+                await self._write_directory_semantics(dir_uri, overview, abstract)
             except Exception:
                 logger.info(f"[SemanticDag] {dir_uri} write failed, skipping")
 
@@ -802,7 +821,7 @@ class SemanticDagExecutor:
                         abstract=abstract,
                         overview=overview,
                         ctx=self._ctx,
-                        ingest_options=self._ingest_options,
+                        ingest_options=self._directory_ingest_options,
                     )
                 except Exception as e:
                     logger.error(

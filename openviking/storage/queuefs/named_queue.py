@@ -102,6 +102,9 @@ class DequeueHandlerBase(abc.ABC):
         self.report_success()
         return None
 
+    def prepare_dequeued_batch(self, messages: List[Dict[str, Any]]) -> None:
+        """Observe one bounded worker batch before processing starts."""
+
     @abc.abstractmethod
     async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """Called after message dequeue. Returns None to discard message."""
@@ -214,6 +217,10 @@ class NamedQueue:
     def has_dequeue_handler(self) -> bool:
         """Check if dequeue handler exists."""
         return self._dequeue_handler is not None
+
+    def prepare_dequeued_batch(self, messages: List[Dict[str, Any]]) -> None:
+        if self._dequeue_handler is not None:
+            self._dequeue_handler.prepare_dequeued_batch(messages)
 
     async def _ensure_initialized(self):
         """Ensure queue directory is created in AGFS."""

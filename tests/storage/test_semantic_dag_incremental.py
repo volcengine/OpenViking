@@ -7,7 +7,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from openviking.server.identity import RequestContext, Role
+from openviking.service.task_work_index import TaskExecutionContext, get_task_context
 from openviking.storage.queuefs.semantic_dag import SemanticDagExecutor
+from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -56,6 +58,9 @@ class _FakeProcessor:
         self.summarized_files = []
         self.sync_calls = []
         self.vectorized_files = []
+        self.file_task_ids = {}
+        self.directory_options = []
+        self.overview_calls = 0
 
     def _parse_overview_md(self, overview_content):
         results = {}
@@ -71,6 +76,7 @@ class _FakeProcessor:
         return {"name": file_path.split("/")[-1], "summary": "summary"}
 
     async def _generate_overview(self, dir_uri, file_summaries, children_abstracts):
+        self.overview_calls += 1
         lines = ["FILES:"]
         for item in file_summaries:
             name = item.get("name", "")
@@ -91,7 +97,8 @@ class _FakeProcessor:
         use_summary=False,
         ingest_options=None,
     ):
-        self.vectorized_files.append(file_path)
+        self.vectorized_files.append((file_path, ingest_options))
+        self.file_task_ids[file_path] = get_task_context().task_id
 
     async def _vectorize_directory(
         self,
@@ -102,7 +109,7 @@ class _FakeProcessor:
         ctx=None,
         ingest_options=None,
     ):
-        return None
+        self.directory_options.append(ingest_options)
 
     async def _sync_topdown_recursive(
         self, root_uri, target_uri, ctx=None, file_change_status=None, lock=None
@@ -154,17 +161,38 @@ async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypa
         ctx=ctx,
         incremental_update=True,
         target_uri=root_uri,
-        changes={"modified": [f"{root_uri}/a.txt"]},
+        changes={"modified": [f"{root_uri}/a.txt", f"{root_uri}/b.txt"]},
+        file_ingest_options={
+            f"{root_uri}/a.txt": IngestOptions(search_tags=["file=a"]),
+            f"{root_uri}/b.txt": IngestOptions(search_tags=["file=b"]),
+        },
+        file_task_contexts={
+            f"{root_uri}/a.txt": TaskExecutionContext("task-a", "acc1", "user1"),
+            f"{root_uri}/b.txt": TaskExecutionContext("task-b", "acc1", "user1"),
+        },
+        directory_ingest_options=IngestOptions(search_tags=["file=b"]),
     )
 
     await executor.run(root_uri)
 
-    assert processor.summarized_files == [f"{root_uri}/a.txt"]
-    assert processor.vectorized_files == [f"{root_uri}/a.txt"]
+    assert set(processor.summarized_files) == {
+        f"{root_uri}/a.txt",
+        f"{root_uri}/b.txt",
+    }
+    assert dict(processor.vectorized_files) == {
+        f"{root_uri}/a.txt": IngestOptions(search_tags=["file=a"]),
+        f"{root_uri}/b.txt": IngestOptions(search_tags=["file=b"]),
+    }
+    assert processor.file_task_ids == {
+        f"{root_uri}/a.txt": "task-a",
+        f"{root_uri}/b.txt": "task-b",
+    }
+    assert processor.overview_calls == 1
+    assert processor.directory_options == [IngestOptions(search_tags=["file=b"])]
     assert processor.sync_calls == []
     overview = fake_fs._file_contents[f"{root_uri}/.overview.md"]
     assert "- a.txt: summary" in overview
-    assert "- b.txt: old-b" in overview
+    assert "- b.txt: summary" in overview
 
 
 if __name__ == "__main__":

@@ -135,6 +135,9 @@ class QueueManager:
     async def prepare_task_tracking(self, tracker: Any) -> None:
         """Rebuild task work from QueueFS before any consumer starts."""
         snapshots = {name: await queue.snapshot() for name, queue in self._queues.items()}
+        semantic_queue = self._queues.get(self.SEMANTIC)
+        if isinstance(semantic_queue, SemanticQueue):
+            semantic_queue.restore_directory_refreshes(snapshots.get(self.SEMANTIC, []))
         owners = self._task_work_index.rebuild(snapshots)
         tracker.attach_work_index(self._task_work_index)
         await tracker.restore_work_tasks(owners)
@@ -278,8 +281,9 @@ class QueueManager:
             # Prune completed tasks
             active_tasks = {t for t in active_tasks if not t.done()}
 
-            # While capacity remains, keep draining the queue
-            while len(active_tasks) < max_concurrent:
+            batch: list[Dict[str, Any]] = []
+            available = max_concurrent - len(active_tasks)
+            while len(batch) < available:
                 try:
                     queue_size = await queue.size()
                 except Exception:
@@ -292,6 +296,12 @@ class QueueManager:
                 # Increment before task creation to close the race window where
                 # size=0 and in_progress=0 between dequeue_raw() and task execution.
                 queue._on_dequeue_start()
+                batch.append(data)
+
+            if batch:
+                queue.prepare_dequeued_batch(batch)
+
+            for data in batch:
                 task = asyncio.create_task(process_one(data))
                 active_tasks.add(task)
                 logger.debug(
