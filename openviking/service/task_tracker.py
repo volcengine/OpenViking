@@ -875,6 +875,7 @@ class TaskTracker:
         status: Optional[str] = None,
         resource_id: Optional[str] = None,
         limit: int = 50,
+        offset: int = 0,
         account_id: Optional[str] = None,
         user_id: Optional[str] = None,
     ) -> List[TaskRecord]:
@@ -885,6 +886,7 @@ class TaskTracker:
                 status,
                 resource_id,
                 limit,
+                offset,
                 account_id,
                 user_id,
             )
@@ -896,6 +898,7 @@ class TaskTracker:
         status: Optional[str],
         resource_id: Optional[str],
         limit: int,
+        offset: int,
         account_id: Optional[str],
         user_id: Optional[str],
     ) -> List[TaskRecord]:
@@ -910,7 +913,7 @@ class TaskTracker:
         if resource_id:
             tasks = [t for t in tasks if t.resource_id == resource_id]
         tasks.sort(key=lambda t: t.created_at, reverse=True)
-        return tasks[:limit]
+        return tasks[offset : offset + limit]
 
     async def has_running(
         self,

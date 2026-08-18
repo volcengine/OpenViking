@@ -291,6 +291,15 @@ async def test_list_limit(tracker: TaskTracker):
     assert len(tasks) == 3
 
 
+async def test_list_offset_applies_after_sorting(tracker: TaskTracker):
+    for i in range(5):
+        await tracker.create("session_commit", resource_id=f"s{i}", **_owner_kwargs())
+
+    tasks = await tracker.list_tasks(limit=2, offset=1)
+
+    assert [task.resource_id for task in tasks] == ["s3", "s2"]
+
+
 async def test_list_order_most_recent_first(tracker: TaskTracker):
     await tracker.create("session_commit", resource_id="first", **_owner_kwargs())
     await tracker.create("session_commit", resource_id="second", **_owner_kwargs())

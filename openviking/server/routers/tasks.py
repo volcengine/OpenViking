@@ -90,16 +90,18 @@ async def list_tasks(
     ),
     resource_id: Optional[str] = Query(None, description="Filter by resource ID (e.g. session_id)"),
     limit: int = Query(50, le=200, description="Max results"),
+    offset: int = Query(0, ge=0, description="Number of results to skip"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """List background tasks with optional filters."""
     tracker = get_task_tracker()
     if _ctx.role == Role.ROOT:
+        fetch_limit = offset + limit
         system_tasks = await tracker.list_tasks(
             task_type=task_type,
             status=status,
             resource_id=resource_id,
-            limit=limit,
+            limit=fetch_limit,
             account_id=SYSTEM_TASK_ACCOUNT_ID,
             user_id=SYSTEM_TASK_USER_ID,
         )
@@ -107,17 +109,20 @@ async def list_tasks(
             task_type=task_type,
             status=status,
             resource_id=resource_id,
-            limit=limit,
+            limit=fetch_limit,
         )
         tasks_by_id = {task.task_id: task for task in cached_tasks}
         tasks_by_id.update({task.task_id: task for task in system_tasks})
-        tasks = sorted(tasks_by_id.values(), key=lambda task: task.created_at, reverse=True)[:limit]
+        tasks = sorted(tasks_by_id.values(), key=lambda task: task.created_at, reverse=True)[
+            offset : offset + limit
+        ]
     else:
         tasks = await tracker.list_tasks(
             task_type=task_type,
             status=status,
             resource_id=resource_id,
             limit=limit,
+            offset=offset,
             account_id=_ctx.account_id,
             user_id=_ctx.user.user_id,
         )

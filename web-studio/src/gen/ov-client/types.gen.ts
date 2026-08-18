@@ -4347,6 +4347,12 @@ export type GetTasksData = {
          * Max results
          */
         limit?: number;
+        /**
+         * Offset
+         *
+         * Number of results to skip
+         */
+        offset?: number;
     };
     url: '/api/v1/tasks';
 };

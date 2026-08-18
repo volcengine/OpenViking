@@ -22,7 +22,11 @@ from openviking.server.dependencies import set_service
 from openviking.server.identity import ResolvedIdentity, Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.service.core import OpenVikingService
-from openviking.service.task_store import PersistentTaskStore
+from openviking.service.task_store import (
+    SYSTEM_TASK_ACCOUNT_ID,
+    SYSTEM_TASK_USER_ID,
+    PersistentTaskStore,
+)
 from openviking.service.task_tracker import (
     TaskTracker,
     get_task_tracker,
@@ -470,6 +474,67 @@ async def test_task_endpoints_are_user_scoped():
         assert bob_list.status_code == 200
         assert {task["task_id"] for task in bob_list.json()["result"]} == {bob_task.task_id}
 
+    set_task_tracker(None)
+
+
+async def test_root_task_list_applies_offset_after_merging_task_scopes():
+    set_task_tracker(None)
+    _set_fake_task_tracker()
+    tracker = get_task_tracker()
+    await tracker.create(
+        "session_commit",
+        resource_id="oldest",
+        account_id="acme",
+        user_id="alice",
+    )
+    middle = await tracker.create(
+        "session_commit",
+        resource_id="middle",
+        account_id=SYSTEM_TASK_ACCOUNT_ID,
+        user_id=SYSTEM_TASK_USER_ID,
+    )
+    await tracker.create(
+        "session_commit",
+        resource_id="latest",
+        account_id="acme",
+        user_id="alice",
+    )
+    app = _build_task_http_test_app(
+        ResolvedIdentity(role=Role.ROOT, account_id="root", user_id="root")
+    )
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get("/api/v1/tasks", params={"limit": 1, "offset": 1})
+
+    assert response.status_code == 200
+    assert [task["task_id"] for task in response.json()["result"]] == [middle.task_id]
+    set_task_tracker(None)
+
+
+async def test_user_task_list_applies_offset_after_sorting():
+    set_task_tracker(None)
+    _set_fake_task_tracker()
+    tracker = get_task_tracker()
+    task_ids = []
+    for resource_id in ("oldest", "middle", "latest"):
+        task = await tracker.create(
+            "session_commit",
+            resource_id=resource_id,
+            account_id="acme",
+            user_id="alice",
+        )
+        task_ids.append(task.task_id)
+    app = _build_task_http_test_app(
+        ResolvedIdentity(role=Role.USER, account_id="acme", user_id="alice")
+    )
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get("/api/v1/tasks", params={"limit": 1, "offset": 1})
+
+    assert response.status_code == 200
+    assert [task["task_id"] for task in response.json()["result"]] == [task_ids[1]]
     set_task_tracker(None)
 
 

@@ -75,7 +75,9 @@ type TaskTypeFilter =
   | 'all'
 
 const DEFAULT_PAGE_SIZE = 20
+const TASK_API_PAGE_SIZE = 200
 const MAX_TASKS = 300
+const MAX_ALL_TASKS = 10000
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const
 const TASK_TYPE_OPTIONS: Exclude<TaskTypeFilter, 'all'>[] = [
   'session_commit',
@@ -111,24 +113,42 @@ export function getEffectiveTaskStatus(taskItem: any, list: any[]): string {
 
 export type TaskDataScope = '24h' | 'all'
 
-async function fetchTasks(
+export async function fetchTasks(
   taskType: TaskTypeFilter,
   status: TaskStatusFilter,
   dataScope: TaskDataScope = '24h',
 ): Promise<TaskRecord[]> {
+  const maxTasks = dataScope === 'all' ? MAX_ALL_TASKS : MAX_TASKS
   const query = {
-    limit: dataScope === 'all' ? 10000 : MAX_TASKS,
     status: undefined,
     task_type: taskType === 'all' ? undefined : taskType,
-    include_archived: dataScope === 'all' ? true : undefined,
   }
   try {
-    const result = await getOvResult<unknown>(
-      getTasks({
-        query: query as any,
-      }),
-    )
-    let fetched = normalizeTasks(result).sort(
+    const tasksById = new Map<string, TaskRecord>()
+    let offset = 0
+    while (offset < maxTasks) {
+      const limit = Math.min(TASK_API_PAGE_SIZE, maxTasks - offset)
+      const result = await getOvResult<unknown>(
+        getTasks({
+          query: {
+            ...query,
+            limit,
+            offset,
+          },
+        }),
+      )
+      const page = normalizeTasks(result)
+      const previousSize = tasksById.size
+      for (const task of page) {
+        tasksById.set(task.task_id, task)
+      }
+      offset += page.length
+      if (page.length < limit) break
+      // Avoid repeating the same page forever when cached Studio assets talk
+      // to an older API that does not support the offset parameter yet.
+      if (tasksById.size === previousSize) break
+    }
+    let fetched = Array.from(tasksById.values()).sort(
       (a, b) => Number(b.created_at || 0) - Number(a.created_at || 0),
     )
     if (dataScope === '24h') {

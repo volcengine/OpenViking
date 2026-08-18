@@ -662,9 +662,10 @@ class OpenVikingAPIClient:
         status: Optional[str] = None,
         resource_id: Optional[str] = None,
         limit: int = 50,
+        offset: int = 0,
     ) -> requests.Response:
         endpoint = "/api/v1/tasks"
-        params = {"limit": limit}
+        params = {"limit": limit, "offset": offset}
         if task_type:
             params["task_type"] = task_type
         if status:
