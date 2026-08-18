@@ -203,7 +203,7 @@ On `resume`, the script skips commit/sweep. It still injects the profile block. 
 
 ### Auto-recall (every UserPromptSubmit)
 
-`auto-recall.mjs` reads `prompt` and `session_id` from stdin. It first asks `/api/v1/search/recall` for bounded, type-quota candidates and passes those entries through the same relevance compressor used by the fallback path. If that endpoint is unavailable, the hook derives the long-lived OpenViking session id (`cx-<safe-session-id>`) directly from the Codex session id (no plugin state read, so a corrupt state file can't crash recall), calls `/api/v1/search/search` with that `session_id`, ranks results, and reads full content for top-ranked leaves before compression.
+`auto-recall.mjs` reads `prompt` and `session_id` from stdin. It derives the long-lived OpenViking session id (`cx-<safe-session-id>`) directly from the Codex session id (no plugin state read, so a corrupt state file can't crash recall), then asks `/api/v1/search/search` with `mode="context"` for a bounded, type-quota context block. Older deployments fall back to `/api/v1/search/recall`, then to ranked search and full-content reads when neither server-assembly path is available. Whichever path answers is passed through the same relevance compressor before injection.
 
 ```json
 { "hookSpecificOutput": { "hookEventName": "UserPromptSubmit", "additionalContext": "<openviking-context source=\"auto-recall\" format=\"digest\">\nOpenViking memory digest:\n- ...\n</openviking-context>" } }

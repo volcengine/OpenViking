@@ -317,7 +317,7 @@ function assembledToRecallResult(rendered, entries) {
         "OpenViking memory digest:",
         rendered,
         "",
-        "More detail: use the OpenViking MCP recall/read/search tools with cited viking:// URIs if needed.",
+        "More detail: use the OpenViking MCP read/search tools with cited viking:// URIs if needed.",
       ].join("\n")
     : "";
   return { context, items };

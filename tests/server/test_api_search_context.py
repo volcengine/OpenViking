@@ -62,6 +62,15 @@ async def test_context_mode_returns_flat_entries_within_budget(
     assert result["stats"]["used_tokens"] <= 1200
 
 
+async def test_removed_recall_endpoint_returns_not_found(client: httpx.AsyncClient):
+    response = await client.post(
+        "/api/v1/search/recall",
+        json={"query": "legacy client"},
+    )
+
+    assert response.status_code == 404
+
+
 async def test_context_mode_quotas_use_category_ownership_roots(
     client: httpx.AsyncClient,
     service,

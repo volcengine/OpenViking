@@ -407,7 +407,6 @@ JSON 输出 - 错误：
 | POST | `/api/v1/sessions/{session_id}/messages` | 添加单条消息 |
 | POST | `/api/v1/sessions/{session_id}/messages/batch` | 批量添加消息 |
 | POST | `/api/v1/sessions/{session_id}/used` | 记录实际使用的上下文或技能 |
-| POST | `/api/v1/search/recall` | 已弃用：search 接口 `mode="context"` 之上的轻量预设 |
 | GET | `/api/v1/agent-evolution/experiences/trajectories` | 分页查询应用过指定 Experience 的 Trajectory |
 | GET | `/api/v1/agent-evolution/experiences/outcomes` | 聚合应用过指定 Experience 的 Trajectory 结果分布 |
 

@@ -54,12 +54,13 @@ async def test_default_scope_searches_other_peers_with_an_open_context(
     monkeypatch.setattr(service.search, "find", fake_find)
     monkeypatch.setattr(service.fs, "read", fake_read)
     response = await client.post(
-        "/api/v1/search/recall",
+        "/api/v1/search/search",
         headers={"X-OpenViking-Actor-Peer": "current"},
         json={
             "query": "peer memory",
+            "mode": "context",
             "quotas": {"events": 3, "entities": 0, "preferences": 0, "experiences": 0},
-            "max_chars": 5000,
+            "max_tokens": 1250,
         },
     )
 
@@ -98,13 +99,14 @@ async def test_actor_scope_skips_the_open_peer_scan(
     monkeypatch.setattr(service.search, "find", fake_find)
     monkeypatch.setattr(service.fs, "read", fake_read)
     response = await client.post(
-        "/api/v1/search/recall",
+        "/api/v1/search/search",
         headers={"X-OpenViking-Actor-Peer": "current"},
         json={
             "query": "peer memory",
+            "mode": "context",
             "peer_scope": "actor",
             "quotas": {"events": 1, "entities": 0, "preferences": 0, "experiences": 0},
-            "max_chars": 300,
+            "max_tokens": 75,
         },
     )
 

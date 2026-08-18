@@ -6,7 +6,6 @@ import math
 from typing import Any, Dict, List, Literal, Optional, Sequence, Union
 
 from fastapi import APIRouter, Depends
-from fastapi import Response as FastAPIResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
@@ -20,12 +19,6 @@ from openviking.retrieve.context_assembler import (
     AssembleParams,
     DetailRequest,
     assemble_context,
-)
-from openviking.retrieve.context_assembler.recall_preset import (
-    DEFAULT_MAX_CHARS,
-    DEFAULT_MIN_SCORE,
-    deprecation_stats,
-    fold_recall_request,
 )
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
@@ -212,42 +205,6 @@ class SearchRequest(BaseModel):
         return self
 
 
-class RecallRequest(BaseModel):
-    """Request model for the recall preset over context assembly.
-
-    Deprecated in favour of ``POST /search`` with ``mode="context"``. The v1
-    fields (``max_chars``, ``min_score``, ``render``) are accepted as aliases
-    here only, and are folded onto the context contract.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    query: str
-    quotas: Optional[Dict[str, int]] = None
-    max_chars: int = DEFAULT_MAX_CHARS
-    min_score: float = DEFAULT_MIN_SCORE
-    peer_scope: Literal["actor", "all"] = "all"
-    other_peer_penalty: Optional[Union[float, Dict[str, float]]] = None
-    render: Union[bool, Literal["full", "compact"]] = True
-    telemetry: TelemetryRequest = False
-
-    session_id: Optional[str] = None
-    query_expansion: Optional[Literal["off", "auto"]] = None
-    max_tokens: Optional[int] = Field(default=None, ge=64, le=32000)
-    purpose: Optional[Literal["chat", "coding"]] = None
-    detail: Optional[DetailRequest] = None
-    score_threshold: Optional[float] = None
-    dedup_turns: Optional[int] = Field(default=None, ge=0, le=100)
-    exclude_uris: List[str] = Field(default_factory=list, max_length=MAX_EXCLUDE_URIS)
-    rewrite: Union[bool, Literal["auto"]] = False
-    rewrite_max_bullets: int = Field(default=6, ge=1, le=20)
-
-    @model_validator(mode="after")
-    def _validate_quotas(self) -> "RecallRequest":
-        _reject_unknown_quota_and_detail(self.quotas, self.detail)
-        return self
-
-
 class GrepRequest(BaseModel):
     """Request model for grep."""
 
@@ -421,31 +378,6 @@ async def search(
     return Response(
         status="ok",
         result=result,
-        telemetry=execution.telemetry,
-    ).model_dump(exclude_none=True)
-
-
-@router.post("/recall", deprecated=True)
-async def recall(
-    request: RecallRequest,
-    response: FastAPIResponse,
-    _ctx: RequestContext = Depends(get_request_context),
-):
-    """Deprecated preset over context assembly; use /search with mode="context"."""
-    service = get_service()
-    params, aliases = fold_recall_request(request.model_dump(), request.model_fields_set)
-    execution = await run_operation(
-        operation="search.recall",
-        telemetry=request.telemetry,
-        fn=lambda: assemble_context(service=service, ctx=_ctx, params=params),
-    )
-    result = execution.result
-    result.stats["deprecated"] = deprecation_stats(aliases)
-    response.headers["Deprecation"] = "true"
-    response.headers["Link"] = '</api/v1/search/search>; rel="successor-version"'
-    return Response(
-        status="ok",
-        result=_sanitize_floats(result.to_dict()),
         telemetry=execution.telemetry,
     ).model_dump(exclude_none=True)
 
