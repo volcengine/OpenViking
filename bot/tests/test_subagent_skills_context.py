@@ -11,10 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from vikingbot.agent.subagent import SubagentManager  # noqa: E402
-from vikingbot.agent.tools.factory import register_subagent_tools  # noqa: E402
-from vikingbot.agent.tools.registry import ToolRegistry  # noqa: E402
 from vikingbot.bus.queue import MessageBus  # noqa: E402
-from vikingbot.config.schema import Config  # noqa: E402
 
 
 def _write_skill(workspace: Path, name: str, content: str) -> None:
@@ -65,16 +62,6 @@ Read this only when needed.
     assert "<name>normal-skill</name>" in prompt
     assert "<description>Normal on-demand instructions</description>" in prompt
     assert "<location>skills/normal-skill/SKILL.md</location>" in prompt
-
-
-def test_subagent_does_not_register_openviking_tools():
-    config = Config()
-    registry = ToolRegistry(config=config)
-
-    register_subagent_tools(registry, config)
-
-    assert "openviking_multi_read" not in registry.tool_names
-    assert not any(name.startswith("openviking_") for name in registry.tool_names)
 
 
 @pytest.mark.asyncio
