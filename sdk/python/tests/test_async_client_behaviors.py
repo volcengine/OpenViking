@@ -1,12 +1,44 @@
 import inspect
+import json
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
+import httpx
 import pytest
 from openviking_sdk import AsyncHTTPClient, SyncHTTPClient
 from openviking_sdk.client import Session, SyncSession
 from openviking_sdk.errors import NotFoundError
+
+
+@dataclass
+class _TextPart:
+    text: str
+    type: str = "text"
+
+
+@dataclass
+class _ContextPart:
+    uri: str
+    context_type: str
+    abstract: str
+    type: str = "context"
+
+
+@dataclass
+class _ImagePart:
+    url: str
+    detail: str | None = None
+    type: str = "image_url"
+
+
+@dataclass
+class _ToolPart:
+    tool_id: str
+    tool_name: str
+    tool_input: dict | None = None
+    type: str = "tool"
 
 
 def test_add_resource_signatures_keep_telemetry_position():
@@ -133,6 +165,150 @@ async def test_async_http_client_sends_message_semantics_and_turn_retention():
         "retained_message_token_budget": 12_000,
         "min_raw_tail_steps": 1,
     }
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_serializes_structured_message_parts():
+    captured_payload = None
+
+    async def handle_request(request: httpx.Request) -> httpx.Response:
+        nonlocal captured_payload
+        captured_payload = json.loads(request.content)
+        return httpx.Response(200, json={"status": "ok", "result": {"status": "ok"}})
+
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    async with httpx.AsyncClient(
+        base_url="http://localhost:1933",
+        transport=httpx.MockTransport(handle_request),
+    ) as http:
+        client._http = http
+        result = await client.add_message(
+            "structured-session",
+            "assistant",
+            parts=[
+                _TextPart(text="hello"),
+                _ContextPart(
+                    uri="viking://resources/docs/",
+                    context_type="resource",
+                    abstract="Docs",
+                ),
+                _ImagePart(url="https://example.com/image.png", detail="auto"),
+                _ToolPart(
+                    tool_id="call-1",
+                    tool_name="search",
+                    tool_input={"query": "OpenViking"},
+                ),
+                {
+                    "type": "text",
+                    "text": "already serialized",
+                    "metadata": {"source": "raw"},
+                },
+            ],
+        )
+
+    assert result == {"status": "ok"}
+    assert captured_payload == {
+        "role": "assistant",
+        "parts": [
+            {"type": "text", "text": "hello"},
+            {
+                "type": "context",
+                "uri": "viking://resources/docs/",
+                "context_type": "resource",
+                "abstract": "Docs",
+            },
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": "https://example.com/image.png",
+                    "detail": "auto",
+                },
+            },
+            {
+                "type": "tool",
+                "tool_id": "call-1",
+                "tool_name": "search",
+                "tool_input": {"query": "OpenViking"},
+            },
+            {
+                "type": "text",
+                "text": "already serialized",
+                "metadata": {"source": "raw"},
+            },
+        ],
+    }
+
+
+def test_sync_http_client_serializes_structured_message_parts():
+    captured_payload = None
+
+    async def handle_request(request: httpx.Request) -> httpx.Response:
+        nonlocal captured_payload
+        captured_payload = json.loads(request.content)
+        return httpx.Response(200, json={"status": "ok", "result": {"status": "ok"}})
+
+    client = SyncHTTPClient(url="http://localhost:1933")
+    client._async_client._http = httpx.AsyncClient(
+        base_url="http://localhost:1933",
+        transport=httpx.MockTransport(handle_request),
+    )
+    try:
+        result = client.add_message(
+            "structured-session",
+            "user",
+            parts=[_TextPart(text="hello")],
+        )
+    finally:
+        client.close()
+
+    assert result == {"status": "ok"}
+    assert captured_payload == {
+        "role": "user",
+        "parts": [{"type": "text", "text": "hello"}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_serializes_batch_parts_without_mutating_input():
+    captured_payload = None
+
+    async def handle_request(request: httpx.Request) -> httpx.Response:
+        nonlocal captured_payload
+        captured_payload = json.loads(request.content)
+        return httpx.Response(200, json={"status": "ok", "result": {"added": 2}})
+
+    text_part = _TextPart(text="hello")
+    image_part = _ImagePart(url="https://example.com/image.png")
+    messages = [
+        {"role": "user", "content": "plain text"},
+        {"role": "assistant", "parts": [text_part, image_part]},
+    ]
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    async with httpx.AsyncClient(
+        base_url="http://localhost:1933",
+        transport=httpx.MockTransport(handle_request),
+    ) as http:
+        client._http = http
+        result = await client.batch_add_messages("structured-session", messages)
+
+    assert result == {"added": 2}
+    assert captured_payload == {
+        "messages": [
+            {"role": "user", "content": "plain text"},
+            {
+                "role": "assistant",
+                "parts": [
+                    {"type": "text", "text": "hello"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.com/image.png"},
+                    },
+                ],
+            },
+        ]
+    }
+    assert messages[1]["parts"][0] is text_part
+    assert messages[1]["parts"][1] is image_part
 
 
 @pytest.mark.asyncio

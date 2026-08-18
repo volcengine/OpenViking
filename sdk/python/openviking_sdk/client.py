@@ -7,6 +7,7 @@ import os
 import tempfile
 import uuid
 import zipfile
+from dataclasses import asdict, is_dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union
@@ -66,6 +67,37 @@ ERROR_CODE_TO_EXCEPTION = {
 GATEWAY_MARKER_HEADER = "X-VikingBot-Gateway"
 GATEWAY_TOKEN_HEADER = "X-Gateway-Token"
 _SESSION_CONFIG_UNSET = object()
+_MESSAGE_PART_TYPES = frozenset({"text", "context", "image_url", "tool"})
+
+
+def _message_part_to_payload(part: Any) -> Any:
+    """Convert a structured message Part into its JSON wire representation."""
+    if isinstance(part, type) or not is_dataclass(part):
+        return part
+
+    serialized_part = asdict(part)
+    part_type = serialized_part.get("type")
+    if part_type not in _MESSAGE_PART_TYPES:
+        return part
+    if part_type != "image_url":
+        return serialized_part
+
+    image_url = {"url": serialized_part.get("url", "")}
+    if serialized_part.get("detail") is not None:
+        image_url["detail"] = serialized_part["detail"]
+    return {"type": "image_url", "image_url": image_url}
+
+
+def _message_parts_to_payload(parts: list[Any]) -> list[Any]:
+    return [_message_part_to_payload(part) for part in parts]
+
+
+def _message_to_payload(message: dict[str, Any]) -> dict[str, Any]:
+    """Copy one batch message and serialize its structured parts, if present."""
+    payload = dict(message)
+    if payload.get("parts") is not None:
+        payload["parts"] = _message_parts_to_payload(payload["parts"])
+    return payload
 
 
 def _image_mime_type(file_name: str = "") -> str:
@@ -137,7 +169,7 @@ class Session:
         self,
         role: str,
         content: str | None = None,
-        parts: list[dict] | None = None,
+        parts: list[Any] | None = None,
         created_at: str | None = None,
         peer_id: str | None = None,
         turn_id: str | None = None,
@@ -216,7 +248,7 @@ class SyncSession:
         self,
         role: str,
         content: str | None = None,
-        parts: list[dict] | None = None,
+        parts: list[Any] | None = None,
         created_at: str | None = None,
         peer_id: str | None = None,
         turn_id: str | None = None,
@@ -758,7 +790,9 @@ class AsyncHTTPClient:
         telemetry: Any = False,
     ) -> Dict[str, Any]:
         session_path = self._path_segment(session_id)
-        payload: Dict[str, Any] = {"messages": messages}
+        payload: Dict[str, Any] = {
+            "messages": [_message_to_payload(message) for message in messages]
+        }
         if telemetry is not False:
             payload["telemetry"] = telemetry
         response = await self._request(
@@ -1513,7 +1547,7 @@ class AsyncHTTPClient:
         session_id: str,
         role: str,
         content: str | None = None,
-        parts: list[dict] | None = None,
+        parts: list[Any] | None = None,
         created_at: str | None = None,
         peer_id: str | None = None,
         telemetry: Any = False,
@@ -1523,7 +1557,7 @@ class AsyncHTTPClient:
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {"role": role}
         if parts is not None:
-            payload["parts"] = parts
+            payload["parts"] = _message_parts_to_payload(parts)
         elif content is not None:
             payload["content"] = content
         else:
@@ -2518,7 +2552,7 @@ class SyncHTTPClient:
         session_id: str,
         role: str,
         content: str | None = None,
-        parts: list[dict] | None = None,
+        parts: list[Any] | None = None,
         created_at: str | None = None,
         peer_id: str | None = None,
         telemetry: Any = False,
