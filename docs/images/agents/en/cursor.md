@@ -22,5 +22,5 @@ Select **Volcengine OpenViking Cloud**. Paste the API key from this page.
 
 ## Reference
 
-- Docs: [Cursor](https://docs.openviking.net/en/agent-integrations/12-cursor)
+- Docs on Manual Settings: [Cursor](https://docs.openviking.net/en/agent-integrations/12-cursor)
 - Code: [examples/cursor-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/cursor-memory-plugin)

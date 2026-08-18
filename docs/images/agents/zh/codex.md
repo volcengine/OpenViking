@@ -21,6 +21,6 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 
 ## 参考
 
-- 文档：[Codex](https://docs.openviking.net/zh/agent-integrations/04-codex)
-- 博客：[为 Coding Agent 加长期记忆](https://blog.openviking.ai/post/openviking-coding-agent/)
+- 手动配置文档：[Codex](https://docs.openviking.net/zh/agent-integrations/04-codex)
+- 原理博客：[OpenViking for coding agents](https://blog.openviking.ai/post/openviking-coding-agent/)
 - 源码：[examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin)

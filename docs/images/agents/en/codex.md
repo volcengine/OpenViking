@@ -21,6 +21,6 @@ Launch `codex`. Approve hooks once with `/hooks`. The first prompt should load y
 
 ## Reference
 
-- Docs: [Codex](https://docs.openviking.net/en/agent-integrations/04-codex)
-- Blog: [OpenViking for coding agents](https://blog.openviking.ai/post/openviking-coding-agent/)
+- Docs on Manual Settings: [Codex](https://docs.openviking.net/en/agent-integrations/04-codex)
+- Blog about how it works: [OpenViking for coding agents](https://blog.openviking.ai/post/openviking-coding-agent/)
 - Code: [examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin)

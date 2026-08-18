@@ -20,5 +20,5 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 
 ## 参考
 
-- 文档：[OpenCode](https://docs.openviking.net/zh/agent-integrations/10-opencode)
+- 手动配置文档：[OpenCode](https://docs.openviking.net/zh/agent-integrations/10-opencode)
 - 源码：[examples/opencode-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-plugin)

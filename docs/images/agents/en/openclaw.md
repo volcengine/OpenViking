@@ -21,5 +21,5 @@ openclaw openviking status
 
 ## Reference
 
-- Docs: [OpenClaw](https://docs.openviking.net/en/agent-integrations/03-openclaw)
+- Docs on Manual Settings: [OpenClaw](https://docs.openviking.net/en/agent-integrations/03-openclaw)
 - Code: [examples/openclaw-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/openclaw-plugin)

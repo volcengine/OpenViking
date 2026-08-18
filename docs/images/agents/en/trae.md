@@ -24,5 +24,5 @@ Restart TRAE. Confirm `openviking` is connected in settings.
 
 ## Reference
 
-- Docs: [TRAE](https://docs.openviking.net/en/agent-integrations/13-trae)
+- Docs on Manual Settings: [TRAE](https://docs.openviking.net/en/agent-integrations/13-trae)
 - Code: [examples/trae-memory-hooks](https://github.com/volcengine/OpenViking/tree/main/examples/trae-memory-hooks)

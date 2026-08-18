@@ -23,5 +23,5 @@ hermes memory status
 
 ## 参考
 
-- 文档：[Hermes](https://docs.openviking.net/zh/agent-integrations/05-hermes)
-- Hermes provider：[OpenViking memory](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers#openviking)
+- 手动配置文档：[Hermes](https://docs.openviking.net/zh/agent-integrations/05-hermes)
+- 原理说明：[OpenViking memory provider](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers#openviking)

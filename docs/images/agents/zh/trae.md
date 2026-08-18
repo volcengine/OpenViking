@@ -24,5 +24,5 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 
 ## 参考
 
-- 文档：[TRAE](https://docs.openviking.net/zh/agent-integrations/13-trae)
+- 手动配置文档：[TRAE](https://docs.openviking.net/zh/agent-integrations/13-trae)
 - 源码：[examples/trae-memory-hooks](https://github.com/volcengine/OpenViking/tree/main/examples/trae-memory-hooks)

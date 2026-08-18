@@ -22,5 +22,5 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 
 ## 参考
 
-- 文档：[Cursor](https://docs.openviking.net/zh/agent-integrations/12-cursor)
+- 手动配置文档：[Cursor](https://docs.openviking.net/zh/agent-integrations/12-cursor)
 - 源码：[examples/cursor-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/cursor-memory-plugin)

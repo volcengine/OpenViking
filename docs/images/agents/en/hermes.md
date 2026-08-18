@@ -23,5 +23,5 @@ Expect `Provider: openviking` and `Status: available`. Start a new Hermes sessio
 
 ## Reference
 
-- Docs: [Hermes](https://docs.openviking.net/en/agent-integrations/05-hermes)
-- Hermes provider: [OpenViking memory](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers#openviking)
+- Docs on Manual Settings: [Hermes](https://docs.openviking.net/en/agent-integrations/05-hermes)
+- Blog about how it works: [OpenViking memory provider](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers#openviking)

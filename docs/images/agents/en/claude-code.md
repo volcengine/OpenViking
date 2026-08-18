@@ -25,6 +25,6 @@ Restart Claude Code, then:
 
 ## Reference
 
-- Docs: [Claude Code](https://docs.openviking.net/en/agent-integrations/02-claude-code)
-- Blog: [OpenViking for coding agents](https://blog.openviking.ai/post/openviking-coding-agent/)
+- Docs on Manual Settings: [Claude Code](https://docs.openviking.net/en/agent-integrations/02-claude-code)
+- Blog about how it works: [OpenViking for coding agents](https://blog.openviking.ai/post/openviking-coding-agent/)
 - Code: [examples/claude-code-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/claude-code-memory-plugin)

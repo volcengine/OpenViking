@@ -20,5 +20,5 @@ Restart OpenCode. Ask it to search OpenViking memory. Tools look like `openvikin
 
 ## Reference
 
-- Docs: [OpenCode](https://docs.openviking.net/en/agent-integrations/10-opencode)
+- Docs on Manual Settings: [OpenCode](https://docs.openviking.net/en/agent-integrations/10-opencode)
 - Code: [examples/opencode-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-plugin)

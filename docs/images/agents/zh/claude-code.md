@@ -25,6 +25,6 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 
 ## 参考
 
-- 文档：[Claude Code](https://docs.openviking.net/zh/agent-integrations/02-claude-code)
-- 博客：[为 Coding Agent 加长期记忆](https://blog.openviking.ai/post/openviking-coding-agent/)
+- 手动配置文档：[Claude Code](https://docs.openviking.net/zh/agent-integrations/02-claude-code)
+- 原理博客：[OpenViking for coding agents](https://blog.openviking.ai/post/openviking-coding-agent/)
 - 源码：[examples/claude-code-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/claude-code-memory-plugin)

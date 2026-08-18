@@ -21,5 +21,5 @@ openclaw openviking status
 
 ## 参考
 
-- 文档：[OpenClaw](https://docs.openviking.net/zh/agent-integrations/03-openclaw)
+- 手动配置文档：[OpenClaw](https://docs.openviking.net/zh/agent-integrations/03-openclaw)
 - 源码：[examples/openclaw-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/openclaw-plugin)
