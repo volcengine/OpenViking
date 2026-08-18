@@ -1,0 +1,27 @@
+openviking/session/memory/memory_updater.py
+  s_d29b79c25a0919::t_f7649817b84f5d 780,783,789,798,1502,1519,1542,1545,1573,1598,1615,1626,1629
+openviking/storage/content_write.py
+  s_d29b79c25a0919::t_44290399f66caf 1057,1091,1335-1340
+tests/server/test_content_write_service.py
+  s_d29b79c25a0919::t_424778c148f8b7 260,264-267,270-280
+tests/storage/test_content_write_processing_mode.py
+  s_d29b79c25a0919::t_985f304f6082d8 141-147,152,184
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "d9a7bc227f711d1bfc009c944643f556c72d225c",
+  "prompts": {},
+  "sessions": {
+    "s_d29b79c25a0919": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00fe8-8b50-7391-ad7e-0e7d22b75107",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
