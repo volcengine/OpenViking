@@ -1,0 +1,25 @@
+openviking/session/memory/extract_loop.py
+  s_4308f83fbf826b::t_9d19bbebb627ea 169-172,735-741
+openviking/session/memory/schema_model_generator.py
+  s_4308f83fbf826b::t_e8d239beaf26ca 40-68,81,90,278-290,393
+tests/session/memory/test_memory_react.py
+  s_4308f83fbf826b::t_6c439eb628aeaa 196,198-203,226-227,240-281,286,294-295
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "60ceddb01a6e67dd1cb60212bcb1db288ca2cb1c",
+  "prompts": {},
+  "sessions": {
+    "s_4308f83fbf826b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0154d-c03b-7312-9c0b-0116f1f115bf",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
