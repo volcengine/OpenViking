@@ -103,17 +103,24 @@ class ResourceProcessor:
             )
         return self._media_processor
 
-    async def prepare_resource(
+    async def prepare_durable_source(
         self,
         path: str,
         ctx: RequestContext,
         *,
+        snapshot_required: bool = False,
         allow_local_path_resolution: bool = True,
         **kwargs,
-    ) -> "LocalResource":
-        """Resolve a source once before selecting an async parser route."""
+    ) -> Optional["LocalResource"]:
+        """Freeze a source when durable routing cannot safely defer access."""
+        media_processor = self._get_media_processor()
+        if (
+            not snapshot_required
+            and not media_processor.durable_route_requires_preparation(path, **kwargs)
+        ):
+            return None
         with get_viking_fs().bind_request_context(ctx):
-            return await self._get_media_processor().prepare(
+            return await media_processor.prepare(
                 path,
                 allow_local_path_resolution=allow_local_path_resolution,
                 **kwargs,

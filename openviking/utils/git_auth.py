@@ -8,6 +8,7 @@ import base64
 import os
 from dataclasses import dataclass, field
 from typing import Mapping
+from urllib.parse import urlparse
 
 from openviking_cli.exceptions import InvalidArgumentError
 
@@ -18,6 +19,17 @@ class GitHttpAuthConfig:
 
     username: str
     token: str = field(repr=False)
+
+
+def reject_git_http_userinfo(repo_url: str) -> None:
+    """Require HTTP(S) Git credentials to travel through ``auth_config``."""
+    parsed = urlparse(repo_url)
+    if parsed.scheme.lower() in {"http", "https"} and (
+        parsed.username is not None or parsed.password is not None
+    ):
+        raise InvalidArgumentError(
+            "HTTP(S) Git URLs cannot contain userinfo; use args.auth_config instead."
+        )
 
 
 def _validate_git_https_auth_url(repo_url: str) -> str:

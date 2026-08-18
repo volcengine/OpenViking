@@ -4,9 +4,11 @@
 
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
+from urllib.parse import urlparse
 
 from openviking.parse.accessors.base import LocalResource, SourceType
 from openviking.parse.accessors.mime_types import IANA_MEDIA_TYPE_TO_EXTENSION
+from openviking.parse.backend import ParserBackend, normalize_parser_backend
 from openviking.parse.base import ParseResult
 from openviking.parse.mode import ParseMode, normalize_parse_mode
 from openviking.parse.parsers.constants import (
@@ -123,6 +125,36 @@ class UnifiedResourceProcessor:
     def should_use_understanding_directly(self, source: str, **kwargs) -> bool:
         return self._get_parser_router().should_use_understanding_directly(source, **kwargs)
 
+    def durable_route_requires_preparation(
+        self,
+        source: str,
+        *,
+        parse_mode: ParseMode | str = ParseMode.DEFAULT,
+        **kwargs,
+    ) -> bool:
+        """Return whether durable parser selection must inspect fetched content."""
+        if normalize_parse_mode(parse_mode) is ParseMode.NO_SPLIT:
+            return False
+        parser_backend = normalize_parser_backend(kwargs.get("parser_backend"))
+        if parser_backend is ParserBackend.INTERNAL:
+            return False
+
+        from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+        from openviking.parse.accessors.web_feed_accessor import WebFeedAccessor
+
+        accessor = self._get_accessor_registry().get_accessor(source, **kwargs)
+        if isinstance(accessor, (FeishuAccessor, WebFeedAccessor)):
+            return False
+
+        router = self._get_parser_router()
+        if not router.understanding_api_enabled():
+            return False
+        if parser_backend is ParserBackend.UNDERSTANDING:
+            return True
+        if not Path(urlparse(source).path).suffix:
+            return True
+        return router.should_use_understanding_api(source)
+
     async def submit_understanding(self, source: str | Path | LocalResource, **kwargs) -> str:
         return await self._get_parser_router().submit(source, **kwargs)
 
@@ -216,7 +248,7 @@ class UnifiedResourceProcessor:
                 "original_url": source,
             }
             parse_kwargs["original_source"] = source
-            parse_kwargs["parser_backend"] = "understanding"
+            parse_kwargs["parser_backend"] = ParserBackend.UNDERSTANDING
             parse_kwargs.pop("feishu_access_token", None)
 
             explicit_name = kwargs.get("resource_name") or kwargs.get("source_name")
