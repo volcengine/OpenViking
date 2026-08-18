@@ -117,10 +117,10 @@ def main():
                         raise
                 result = client.add_resource(
                     path=dir_path,
+                    parent=parent_uri,
+                    reason=f"benchmark perf: {rel_dir}",
+                    wait=True,
                     options={
-                        "parent": parent_uri,
-                        "reason": f"benchmark perf: {rel_dir}",
-                        "wait": True,
                         "processing_mode": "vectors_only",
                     },
                 )

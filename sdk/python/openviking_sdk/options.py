@@ -14,9 +14,7 @@ class _ExtraOptions(TypedDict, total=False):
 
 
 class FindOptions(_ExtraOptions, total=False):
-    target_uri: TargetURI
     image: Any
-    limit: int
     node_limit: int
     score_threshold: float
     filter: Dict[str, Any]
@@ -31,13 +29,11 @@ class FindOptions(_ExtraOptions, total=False):
 
 
 class SearchOptions(FindOptions, total=False):
-    session_id: str
+    pass
 
 
 class SearchContextOptions(_ExtraOptions, total=False):
     image: Any
-    session_id: str
-    limit: int
     node_limit: int
     score_threshold: float
     filter: Dict[str, Any]
@@ -62,13 +58,8 @@ class SearchContextOptions(_ExtraOptions, total=False):
 
 
 class AddResourceOptions(_ExtraOptions, total=False):
-    to: str
-    parent: str
     create_parent: bool
-    reason: str
     instruction: str
-    wait: bool
-    timeout: float
     strict: bool
     ignore_dirs: str
     include: str
@@ -85,8 +76,6 @@ class AddResourceOptions(_ExtraOptions, total=False):
 
 
 class AddSkillOptions(_ExtraOptions, total=False):
-    wait: bool
-    timeout: float
     telemetry: Any
     target_uri: str
 
@@ -96,35 +85,24 @@ class UpdateSkillOptions(AddSkillOptions, total=False):
 
 
 class WriteOptions(_ExtraOptions, total=False):
-    mode: str
-    wait: bool
-    timeout: float
     telemetry: Any
     processing_mode: ProcessingMode
 
 
 class BatchWriteOptions(_ExtraOptions, total=False):
-    wait: bool
-    timeout: float
     telemetry: Any
 
 
 class SetTagsOptions(_ExtraOptions, total=False):
-    mode: Literal["replace", "append"]
-    recursive: bool
     telemetry: Any
 
 
 class ReindexOptions(_ExtraOptions, total=False):
-    mode: str
-    wait: bool
-    dry_run: bool
     tags: List[str]
     tag_mode: Literal["replace", "append"]
 
 
 class CreateSessionOptions(_ExtraOptions, total=False):
-    session_id: str
     memory_policy: Dict[str, Any]
     auto_commit_policy: Optional[Dict[str, Any]]
     memory_extraction_config: Dict[str, Any]
@@ -152,12 +130,20 @@ class Message(_RequiredMessage, total=False):
     telemetry: Any
 
 
+class AddMessageOptions(_ExtraOptions, total=False):
+    created_at: str
+    peer_id: str
+    turn_id: str
+    message_kind: Literal["user_query", "assistant_step", "tool_transport", "checkpoint"]
+    source_message_ids: List[str]
+    telemetry: Any
+
+
 class BatchAddMessagesOptions(_ExtraOptions, total=False):
     telemetry: Any
 
 
 class CommitSessionOptions(_ExtraOptions, total=False):
-    keep_recent_count: int
     retention_mode: Literal["turn_budget"]
     keep_recent_turn_count: int
     retained_message_token_budget: int

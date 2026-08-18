@@ -96,9 +96,9 @@ async def test_async_http_client_sends_message_semantics_and_turn_retention():
 
     await client.add_message(
         "demo-session",
-        {
-            "role": "assistant",
-            "parts": [{"type": "text", "text": "checking"}],
+        role="assistant",
+        parts=[{"type": "text", "text": "checking"}],
+        options={
             "turn_id": "turn-1",
             "message_kind": "assistant_step",
             "source_message_ids": ["u1"],
@@ -106,7 +106,7 @@ async def test_async_http_client_sends_message_semantics_and_turn_retention():
     )
     await client.commit_session(
         "demo-session",
-        {
+        options={
             "retention_mode": "turn_budget",
             "keep_recent_turn_count": 3,
             "retained_message_token_budget": 12_000,
@@ -122,6 +122,7 @@ async def test_async_http_client_sends_message_semantics_and_turn_retention():
         "source_message_ids": ["u1"],
     }
     assert fake_http.post.await_args_list[1].kwargs["json"] == {
+        "keep_recent_count": 0,
         "retention_mode": "turn_budget",
         "keep_recent_turn_count": 3,
         "retained_message_token_budget": 12_000,
@@ -141,7 +142,7 @@ async def test_async_http_client_sends_event_memory_tag_configuration():
     config = {"events": {"tags": ["team=search", "channel=web"]}}
 
     await client.create_session(
-        {"session_id": "tagged-session", "memory_extraction_config": config}
+        "tagged-session", options={"memory_extraction_config": config}
     )
     await client.update_session_config(
         "tagged-session",
@@ -150,9 +151,9 @@ async def test_async_http_client_sends_event_memory_tag_configuration():
             "auto_commit_policy": {"message_count_threshold": 25},
         },
     )
-    await client.commit_session("tagged-session", {"event_tags": []})
+    await client.commit_session("tagged-session", options={"event_tags": []})
     await client.update_session_config("tagged-session", {"auto_commit_policy": None})
-    await client.create_session({"session_id": "disabled-session", "auto_commit_policy": None})
+    await client.create_session("disabled-session", options={"auto_commit_policy": None})
 
     assert fake_http.post.await_args_list[0].kwargs["json"] == {
         "session_id": "tagged-session",
@@ -164,6 +165,7 @@ async def test_async_http_client_sends_event_memory_tag_configuration():
         "auto_commit_policy": {"message_count_threshold": 25},
     }
     assert fake_http.post.await_args_list[1].kwargs["json"] == {
+        "keep_recent_count": 0,
         "extraction_metadata": {"event": {"tags": []}},
     }
     assert fake_http.patch.await_args_list[1].args == ("/api/v1/sessions/tagged-session/config",)
@@ -183,7 +185,10 @@ async def test_async_http_client_reindex_posts_content_reindex():
 
     result = await client.reindex(
         "viking://resources/demo",
-        {"mode": "prune_orphans", "wait": False, "dry_run": True},
+        mode="prune_orphans",
+        wait=False,
+        dry_run=True,
+        options=None,
     )
 
     assert result == {"status": "completed"}
@@ -207,7 +212,7 @@ async def test_async_http_client_reindex_sends_explicit_empty_tags():
 
     await client.reindex(
         "viking://resources/demo",
-        {"tags": [], "tag_mode": "replace"},
+        options={"tags": [], "tag_mode": "replace"},
     )
 
     assert fake_http.post.await_args.kwargs["json"]["tags"] == []
@@ -226,7 +231,7 @@ async def test_async_http_client_write_forwards_processing_mode():
     await client.write(
         "viking://resources/demo.md",
         "updated",
-        {"processing_mode": "vectors_only"},
+        options={"processing_mode": "vectors_only"},
     )
 
     payload = fake_http.post.await_args.kwargs["json"]
@@ -275,14 +280,19 @@ def test_sync_http_client_reindex_forwards_to_async_client():
         ) as mock_run:
             result = client.reindex(
                 "viking://resources/demo",
-                {"mode": "prune_orphans", "wait": False, "dry_run": True},
+                mode="prune_orphans",
+                wait=False,
+                dry_run=True,
             )
 
     assert result == {"status": "accepted"}
     assert mock_run.called
     mock_reindex.assert_called_once_with(
         "viking://resources/demo",
-        {"mode": "prune_orphans", "wait": False, "dry_run": True},
+        mode="prune_orphans",
+        wait=False,
+        dry_run=True,
+        options=None,
     )
 
 
@@ -336,13 +346,16 @@ def test_sync_session_add_message_wraps_async_client():
             "openviking_sdk.client.run_async",
             return_value={"message_id": "msg-1"},
         ) as mock_run:
-            result = session.add_message({"role": "user", "content": "hello"})
+            result = session.add_message(role="user", content="hello")
 
     assert result == {"message_id": "msg-1"}
     assert mock_run.called
     mock_add_message.assert_called_once_with(
         "demo-session",
-        {"role": "user", "content": "hello"},
+        role="user",
+        content="hello",
+        parts=None,
+        options=None,
     )
 
 
@@ -364,13 +377,17 @@ def test_sync_session_commit_and_context_are_sync():
                 "openviking_sdk.client.run_async",
                 side_effect=[{"status": "completed"}, {"messages": []}],
             ) as mock_run:
-                commit_result = session.commit({"keep_recent_count": 1})
+                commit_result = session.commit(keep_recent_count=1)
                 context_result = session.get_session_context(2048)
 
     assert commit_result == {"status": "completed"}
     assert context_result == {"messages": []}
     assert mock_run.call_count == 2
-    mock_commit.assert_called_once_with("demo-session", {"keep_recent_count": 1})
+    mock_commit.assert_called_once_with(
+        "demo-session",
+        keep_recent_count=1,
+        options=None,
+    )
     mock_context.assert_called_once_with("demo-session", 2048)
 
 
@@ -444,10 +461,10 @@ def test_sync_session_commit_async_and_repr_match_sync_usage():
     session = client.session("demo-session")
 
     with patch.object(session, "commit", return_value={"status": "completed"}) as mock_commit:
-        result = session.commit_async({"keep_recent_count": 3})
+        result = session.commit_async(keep_recent_count=3)
 
     assert result == {"status": "completed"}
-    mock_commit.assert_called_once_with({"keep_recent_count": 3})
+    mock_commit.assert_called_once_with(keep_recent_count=3, options=None)
     assert "demo-session" in repr(session)
 
 
@@ -476,13 +493,14 @@ async def test_write_omits_removed_semantic_flags_from_http_payload():
         "result": {"uri": "viking://resources/demo.md"}
     }
 
-    await client.write("viking://resources/demo.md", "updated", {"wait": True})
+    await client.write("viking://resources/demo.md", "updated", wait=True)
 
     fake_http.post.assert_awaited_once_with(
         "/api/v1/content/write",
         json={
             "uri": "viking://resources/demo.md",
             "content": "updated",
+            "mode": "replace",
             "wait": True,
         },
     )
@@ -496,7 +514,7 @@ async def test_find_forwards_level_and_time_filters_when_provided():
 
     await client.find(
         "hello",
-        {
+        options={
             "level": [0, 1],
             "since": "2026-01-01",
             "until": "2026-02-01",
@@ -531,7 +549,7 @@ async def test_search_forwards_level_zero_and_omits_unset_time_filters():
     client._handle_response_data = lambda _response: {"result": {}}
 
     # level=0 is a valid level and must survive compaction (is-None check, not falsy).
-    await client.search("hello", {"session_id": "s1", "level": 0})
+    await client.search("hello", session_id="s1", options={"level": 0})
 
     payload = client._request.await_args.kwargs["json"]
     assert payload["level"] == 0
@@ -548,7 +566,7 @@ async def test_find_extra_forwards_unknown_fields_to_payload():
 
     # The escape hatch lets callers reach server fields the SDK does not yet
     # model, without waiting for an SDK release.
-    await client.find("hello", {"include_provenance": True})
+    await client.find("hello", options={"include_provenance": True})
 
     payload = client._request.await_args.kwargs["json"]
     assert payload["include_provenance"] is True
@@ -564,7 +582,7 @@ async def test_write_extra_forwards_unknown_fields_to_payload():
     await client.write(
         "viking://resources/demo.md",
         "body",
-        {"extra": {"future_flag": 1}},
+        options={"extra": {"future_flag": 1}},
     )
 
     payload = fake_http.post.await_args.kwargs["json"]
@@ -611,7 +629,8 @@ async def test_add_resource_uploads_local_file_even_when_url_is_localhost(tmp_pa
 
     await client.add_resource(
         str(resource_file),
-        {"reason": "test", "watch_interval": 60},
+        reason="test",
+        options={"watch_interval": 60},
     )
 
     fake_http.post.assert_awaited_once()
@@ -632,7 +651,7 @@ async def test_add_resource_forwards_processing_mode():
 
     await client.add_resource(
         "https://example.com/demo.md",
-        {"processing_mode": "vectors_only"},
+        options={"processing_mode": "vectors_only"},
     )
 
     fake_http.post.assert_awaited_once()
@@ -651,7 +670,8 @@ async def test_add_resource_forwards_declared_add_type_with_exact_target():
 
     await client.add_resource(
         "space:home",
-        {"add_type": " feishu ", "to": "viking://resources/feishu"},
+        to="viking://resources/feishu",
+        options={"add_type": " feishu "},
     )
 
     payload = fake_http.post.await_args.kwargs["json"]
@@ -665,7 +685,7 @@ async def test_add_resource_declared_add_type_requires_exact_target():
     client = AsyncHTTPClient(url="http://127.0.0.1:1933")
 
     with pytest.raises(ValueError, match="exact 'to'"):
-        await client.add_resource("space:home", {"add_type": "feishu"})
+        await client.add_resource("space:home", options={"add_type": "feishu"})
 
 
 @pytest.mark.asyncio
@@ -675,10 +695,10 @@ async def test_add_resource_declared_add_type_rejects_parent():
     with pytest.raises(ValueError, match="'parent'"):
         await client.add_resource(
             "space:home",
-            {
+            to="viking://resources/feishu",
+            parent="viking://resources/imports",
+            options={
                 "add_type": "feishu",
-                "to": "viking://resources/feishu",
-                "parent": "viking://resources/imports",
             },
         )
 
@@ -698,7 +718,8 @@ async def test_add_resource_declared_add_type_skips_local_file_upload(tmp_path):
 
     await client.add_resource(
         str(source),
-        {"add_type": "feishu", "to": "viking://resources/feishu"},
+        to="viking://resources/feishu",
+        options={"add_type": "feishu"},
     )
 
     client._upload_temp_file.assert_not_awaited()
@@ -718,13 +739,18 @@ def test_sync_add_resource_accepts_and_forwards_declared_add_type():
     ) as mock_add_resource:
         result = client.add_resource(
             "space:home",
-            {"add_type": "feishu", "to": "viking://resources/feishu"},
+            to="viking://resources/feishu",
+            options={"add_type": "feishu"},
         )
 
     assert result["root_uri"] == "viking://resources/feishu"
-    assert mock_add_resource.await_args.args[1] == {
-        "add_type": "feishu",
+    assert mock_add_resource.await_args.kwargs == {
         "to": "viking://resources/feishu",
+        "parent": None,
+        "reason": "",
+        "wait": False,
+        "timeout": None,
+        "options": {"add_type": "feishu"},
     }
 
 
@@ -833,12 +859,13 @@ async def test_add_resource_sends_tags_and_tag_mode():
 
     await client.add_resource(
         "https://example.com/demo.md",
-        {"tags": ["team=search"], "tag_mode": "append"},
+        options={"tags": ["team=search"], "tag_mode": "append"},
     )
 
     fake_http.post.assert_awaited_once_with(
         "/api/v1/resources",
         json={
+            "wait": False,
             "path": "https://example.com/demo.md",
             "tags": ["team=search"],
             "tag_mode": "append",
@@ -855,9 +882,9 @@ async def test_find_uses_node_limit_as_http_limit_and_normalizes_target_uri_list
 
     await client.find(
         "sample",
-        {
-            "target_uri": ["/resources/demo", "viking://resources/kept"],
-            "limit": 3,
+        target_uri=["/resources/demo", "viking://resources/kept"],
+        limit=3,
+        options={
             "node_limit": 9,
             "score_threshold": 0.4,
             "filter": {"type": "resource"},
@@ -892,11 +919,9 @@ async def test_search_uses_session_wrapper_session_id_in_payload():
 
     await client.search(
         "sample",
-        {
-            "target_uri": "/resources/demo",
-            "session_id": "thread-123",
-            "limit": 5,
-        },
+        session_id="thread-123",
+        target_uri="/resources/demo",
+        limit=5,
     )
 
     fake_http.post.assert_awaited_once_with(
@@ -1032,7 +1057,8 @@ async def test_batch_write_http_timeout_outlives_server_wait_timeout():
     await client.batch_write(
         "viking://resources/wiki",
         [],
-        {"wait": True, "timeout": 300.0},
+        wait=True,
+        timeout=300.0,
     )
 
     request_timeout = client._request.await_args.kwargs["timeout"]
@@ -1113,7 +1139,7 @@ async def test_session_wrapper_forwards_commit_context_and_archive_operations():
     client.get_session_archive = AsyncMock(return_value={"archive_id": "arc-1"})
     client.delete_session = AsyncMock(return_value=None)
 
-    commit_result = await session.commit({"keep_recent_count": 2})
+    commit_result = await session.commit(keep_recent_count=2)
     context_result = await session.get_session_context(2048)
     archive_result = await session.get_archive("arc-1")
     await session.delete()
@@ -1121,7 +1147,11 @@ async def test_session_wrapper_forwards_commit_context_and_archive_operations():
     assert commit_result == {"status": "completed"}
     assert context_result == {"messages": []}
     assert archive_result == {"archive_id": "arc-1"}
-    client.commit_session.assert_awaited_once_with("thread-1", {"keep_recent_count": 2})
+    client.commit_session.assert_awaited_once_with(
+        "thread-1",
+        keep_recent_count=2,
+        options=None,
+    )
     client.get_session_context.assert_awaited_once_with("thread-1", 2048)
     client.get_session_archive.assert_awaited_once_with("thread-1", "arc-1")
     client.delete_session.assert_awaited_once_with("thread-1")

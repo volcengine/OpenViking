@@ -70,7 +70,7 @@ def main():
         # Add a URL resource
         result = client.add_resource(
             path="https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md",
-            options={"wait": False},  # Non-blocking, process in background
+            wait=False,  # Non-blocking, process in background
         )
 
         root_uri = result.get("root_uri", "")
@@ -188,7 +188,8 @@ def main():
 
             results = client.find(
                 query=query,
-                options={"target_uri": root_uri, "limit": 5},
+                target_uri=root_uri,
+                limit=5,
             )
 
             resources = results.get("resources", [])
@@ -244,14 +245,13 @@ def main():
         # Add a conversation turn
         client.add_message(
             session_id=session_id,
-            message={"role": "user", "content": "I prefer Python for data science projects"},
+            role="user",
+            content="I prefer Python for data science projects",
         )
         client.add_message(
             session_id=session_id,
-            message={
-                "role": "assistant",
-                "content": "Understood! I'll use Python for your data science work.",
-            },
+            role="assistant",
+            content="Understood! I'll use Python for your data science work.",
         )
 
         print("   Added conversation turn")

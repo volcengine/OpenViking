@@ -121,11 +121,12 @@ client.initialize()
 healthy = client.health()
 print("health:", healthy)
 
-session = client.create_session(options={"session_id": "demo-session"})
+session = client.create_session(session_id="demo-session")
 print("session:", session)
 
 client.session(session_id="demo-session").add_message(
-    message={"role": "user", "content": "hello from sdk"}
+    role="user",
+    content="hello from sdk",
 )
 context = client.session(session_id="demo-session").get_session_context(token_budget=4096)
 print("context:", context)
@@ -151,12 +152,13 @@ async def main() -> None:
     healthy = await client.health()
     print("health:", healthy)
 
-    session = await client.create_session(options={"session_id": "demo-session-async"})
+    session = await client.create_session(session_id="demo-session-async")
     print("session:", session)
 
     session_client = client.session(session_id="demo-session-async")
     await session_client.add_message(
-        message={"role": "user", "content": "hello from async sdk"}
+        role="user",
+        content="hello from async sdk",
     )
     context = await session_client.get_session_context(token_budget=4096)
     print("context:", context)
@@ -182,14 +184,15 @@ event_config = {
     }
 }
 result = client.create_session(
+    session_id="demo-session",
     options={
-        "session_id": "demo-session",
         "memory_extraction_config": event_config,
     },
 )
 # 创建时显式传 None，可覆盖服务端默认并禁用自动提交。
 client.create_session(
-    options={"session_id": "manual-session", "auto_commit_policy": None}
+    session_id="manual-session",
+    options={"auto_commit_policy": None},
 )
 client.update_session_config(
     session_id="demo-session",
@@ -224,10 +227,10 @@ client.initialize()
 
 result = client.add_resource(
     path="/path/to/notes.md",
+    to="viking://resources/demo-notes",
+    reason="knowledge import",
+    wait=True,
     options={
-        "to": "viking://resources/demo-notes",
-        "reason": "knowledge import",
-        "wait": True,
     },
 )
 print(result)
@@ -239,10 +242,10 @@ print(result)
 ```python
 result = client.add_resource(
     path="/path/to/notes.md",
+    to="viking://resources/demo-notes",
+    wait=True,
     options={
-        "to": "viking://resources/demo-notes",
         "processing_mode": "vectors_only",
-        "wait": True,
     },
 )
 ```
@@ -268,14 +271,24 @@ from openviking_sdk import SyncHTTPClient
 client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
 client.initialize()
 
-result = client.find(query="hello", options={"limit": 5})
+result = client.find(query="hello", limit=5)
 print(result)
 ```
+
+### 高频参数与 Options
+
+高频字段使用显式关键字参数。例如，`add_resource` 使用 `to`、`reason`、
+`wait`；检索使用 `target_uri`、`limit`；`add_message` 使用 `role`、`content`、
+`parts`。
+
+进阶字段统一放入带类型提示的 `options` 字典，例如 `processing_mode`、检索
+过滤条件和 Session 提取配置。不要把进阶字段作为裸关键字参数传入。同一个字段
+只能通过一个入口传递；`options` 或 `extra` 中的 SDK 已定义字段不能覆盖显式参数。
 
 图片搜索也使用同一组方法。`image` 支持本地路径、bytes、data URI、HTTP URL 或 `viking://` URI；服务端需要使用 multimodal embedding 模型。
 
 ```python
-result = client.find(query="", options={"image": "/path/to/photo.png", "limit": 5})
+result = client.find(query="", limit=5, options={"image": "/path/to/photo.png"})
 result = client.search(
     query="similar poster",
     options={"image": "viking://resources/poster.png"},
@@ -288,7 +301,8 @@ result = client.search(
 ```python
 result = client.find(
     query="authentication",
-    options={"limit": 10, "extra": {"future_server_field": False}},
+    limit=10,
+    options={"extra": {"future_server_field": False}},
 )
 ```
 

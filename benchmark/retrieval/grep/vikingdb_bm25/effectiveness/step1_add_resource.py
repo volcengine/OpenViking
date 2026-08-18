@@ -54,10 +54,10 @@ def main():
                 raise
         result = client.add_resource(
             path=source,
+            parent=args.parent,
+            reason="benchmark effectiveness",
+            wait=True,
             options={
-                "parent": args.parent,
-                "reason": "benchmark effectiveness",
-                "wait": True,
                 "processing_mode": "semantic_and_vectors",
             },
         )

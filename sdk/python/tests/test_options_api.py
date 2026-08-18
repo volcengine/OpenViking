@@ -1,8 +1,10 @@
+import inspect
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 from openviking_sdk import (
+    AddResourceOptions,
     AsyncHTTPClient,
     FindOptions,
     SearchContextOptions,
@@ -23,13 +25,26 @@ def _client() -> tuple[AsyncHTTPClient, AsyncMock]:
 
 
 def test_options_are_public_typed_dicts():
-    find: FindOptions = {"limit": 0, "tags": []}
+    find: FindOptions = {"level": 0, "tags": []}
     context: SearchContextOptions = {"purpose": "coding", "max_tokens": 3000}
-    write: WriteOptions = {"processing_mode": "vectors_only", "wait": False}
+    write: WriteOptions = {"processing_mode": "vectors_only"}
 
-    assert find["limit"] == 0
+    assert find["level"] == 0
     assert context["purpose"] == "coding"
     assert write["processing_mode"] == "vectors_only"
+
+
+def test_core_options_are_explicit_keyword_parameters_without_legacy_kwargs():
+    assert inspect.Parameter.VAR_KEYWORD not in {
+        parameter.kind for parameter in inspect.signature(AsyncHTTPClient.add_resource).parameters.values()
+    }
+    assert inspect.Parameter.VAR_KEYWORD not in {
+        parameter.kind for parameter in inspect.signature(SyncHTTPClient.find).parameters.values()
+    }
+
+    assert "to" not in AddResourceOptions.__optional_keys__
+    assert "limit" not in FindOptions.__optional_keys__
+    assert "wait" not in WriteOptions.__optional_keys__
 
 
 @pytest.mark.asyncio
@@ -37,10 +52,10 @@ async def test_find_serializes_options_and_preserves_explicit_empty_values():
     client, post = _client()
 
     await client.find(
-        "authentication",
-        {
-            "target_uri": ["/resources/docs", "viking://user/memories"],
-            "limit": 0,
+        query="authentication",
+        target_uri=["/resources/docs", "viking://user/memories"],
+        limit=0,
+        options={
             "level": 0,
             "tags": [],
             "include_provenance": False,
@@ -70,9 +85,9 @@ async def test_search_context_sets_mode_and_context_fields():
     client, post = _client()
 
     await client.search_context(
-        "continue refactor",
-        {
-            "session_id": "session-1",
+        query="continue refactor",
+        session_id="session-1",
+        options={
             "purpose": "coding",
             "max_tokens": 3000,
             "dedup_turns": 5,
@@ -86,6 +101,8 @@ async def test_search_context_sets_mode_and_context_fields():
             "query": "continue refactor",
             "mode": "context",
             "session_id": "session-1",
+            "target_uri": "",
+            "limit": 10,
             "purpose": "coding",
             "max_tokens": 3000,
             "dedup_turns": 5,
@@ -99,27 +116,27 @@ async def test_extra_cannot_override_official_or_fixed_fields():
     client, _post = _client()
 
     with pytest.raises(ValueError, match="limit"):
-        await client.find("query", {"limit": 5, "extra": {"limit": 10}})
+        await client.find("query", limit=5, options={"extra": {"limit": 10}})
 
     with pytest.raises(ValueError, match="mode"):
         await client.reindex(
             "viking://resources",
-            {"extra": {"mode": "prune_orphans"}},
+            options={"extra": {"mode": "prune_orphans"}},
         )
 
     with pytest.raises(ValueError, match="tags"):
         await client.reindex(
             "viking://resources",
-            {"extra": {"tags": ["team=search"]}},
+            options={"extra": {"tags": ["team=search"]}},
         )
 
     with pytest.raises(ValueError, match="mode"):
-        await client.search_context("query", {"extra": {"mode": "list"}})
+        await client.search_context("query", options={"extra": {"mode": "list"}})
 
     with pytest.raises(ValueError, match="extraction_metadata"):
         await client.commit_session(
             "session-1",
-            {
+            options={
                 "event_tags": ["team=search"],
                 "extra": {"extraction_metadata": {}},
             },
@@ -132,11 +149,9 @@ async def test_add_message_prefers_parts_when_content_is_also_provided():
 
     await client.add_message(
         "session-1",
-        {
-            "role": "assistant",
-            "content": "fallback text",
-            "parts": [{"type": "text", "text": "structured text"}],
-        },
+        role="assistant",
+        content="fallback text",
+        parts=[{"type": "text", "text": "structured text"}],
     )
 
     post.assert_awaited_once_with(
@@ -154,11 +169,9 @@ async def test_add_message_keeps_content_when_parts_is_null():
 
     await client.add_message(
         "session-1",
-        {
-            "role": "assistant",
-            "content": "fallback text",
-            "parts": None,
-        },
+        role="assistant",
+        content="fallback text",
+        parts=None,
     )
 
     post.assert_awaited_once_with(
@@ -176,11 +189,9 @@ async def test_add_message_uses_content_when_parts_is_empty():
 
     await client.add_message(
         "session-1",
-        {
-            "role": "assistant",
-            "content": "fallback text",
-            "parts": [],
-        },
+        role="assistant",
+        content="fallback text",
+        parts=[],
     )
 
     post.assert_awaited_once_with(
@@ -199,10 +210,8 @@ async def test_add_message_rejects_empty_parts_without_content():
     with pytest.raises(ValueError, match="Either content or non-empty parts"):
         await client.add_message(
             "session-1",
-            {
-                "role": "assistant",
-                "parts": [],
-            },
+            role="assistant",
+            parts=[],
         )
 
     post.assert_not_awaited()
@@ -265,9 +274,9 @@ async def test_write_uses_options_and_extra():
     await client.write(
         "/resources/note.md",
         "",
-        {
-            "mode": "replace",
-            "wait": False,
+        mode="replace",
+        wait=False,
+        options={
             "processing_mode": "vectors_only",
             "extra": {"future_write_flag": 0},
         },
@@ -292,9 +301,9 @@ async def test_session_message_and_commit_options_use_latest_fields():
 
     await client.add_message(
         "session-1",
-        {
-            "role": "assistant",
-            "content": "done",
+        role="assistant",
+        content="done",
+        options={
             "turn_id": "turn-1",
             "message_kind": "assistant_step",
             "source_message_ids": ["user-1"],
@@ -302,7 +311,7 @@ async def test_session_message_and_commit_options_use_latest_fields():
     )
     await client.commit_session(
         "session-1",
-        {
+        options={
             "retention_mode": "turn_budget",
             "keep_recent_turn_count": 3,
             "retained_message_token_budget": 12_000,
@@ -318,6 +327,7 @@ async def test_session_message_and_commit_options_use_latest_fields():
         "source_message_ids": ["user-1"],
     }
     assert post.await_args_list[1].kwargs["json"] == {
+        "keep_recent_count": 0,
         "retention_mode": "turn_budget",
         "keep_recent_turn_count": 3,
         "retained_message_token_budget": 12_000,
@@ -332,7 +342,7 @@ async def test_turn_retention_fields_require_turn_budget_mode():
     with pytest.raises(ValueError, match="retention_mode"):
         await client.commit_session(
             "session-1",
-            {"keep_recent_turn_count": 3},
+            options={"keep_recent_turn_count": 3},
         )
 
 
@@ -342,10 +352,10 @@ async def test_add_resource_uses_options_and_normalizes_request_fields():
 
     await client.add_resource(
         "https://example.com/manual.pdf",
-        {
-            "to": "/resources/manual.pdf",
+        to="/resources/manual.pdf",
+        wait=False,
+        options={
             "create_parent": False,
-            "wait": False,
             "processing_mode": "vectors_only",
             "tags": [],
             "tag_mode": "replace",
@@ -377,12 +387,13 @@ async def test_skill_writes_use_options_and_extra(tmp_path):
 
     await client.add_skill(
         str(skill_file),
-        {"wait": False, "target_uri": "/user/skills", "extra": {"future": 0}},
+        wait=False,
+        options={"target_uri": "/user/skills", "extra": {"future": 0}},
     )
     await client.update_skill(
         "demo",
         {"name": "demo"},
-        {"source_metadata": {}, "target_uri": "/agent/skills"},
+        options={"source_metadata": {}, "target_uri": "/agent/skills"},
     )
 
     assert post.await_args_list[0].kwargs["json"] == {
@@ -393,6 +404,7 @@ async def test_skill_writes_use_options_and_extra(tmp_path):
     }
     assert post.await_args_list[1].kwargs["json"] == {
         "data": {"name": "demo"},
+        "wait": False,
         "source_metadata": {},
         "target_uri": "viking://agent/skills",
     }
@@ -431,18 +443,18 @@ async def test_unknown_official_option_suggests_extra():
     client, _post = _client()
 
     with pytest.raises(TypeError, match="use 'extra'"):
-        await client.find("query", {"future_field": True})  # type: ignore[typeddict-unknown-key]
+        await client.find("query", options={"future_field": True})  # type: ignore[typeddict-unknown-key]
 
 
 @pytest.mark.asyncio
-async def test_legacy_keyword_options_are_merged_into_find_payload():
+async def test_find_keeps_advanced_fields_in_options():
     client, post = _client()
 
     await client.find(
         "query",
-        {"target_uri": "/resources", "limit": 0},
-        level=2,
-        tags=[],
+        target_uri="/resources",
+        limit=0,
+        options={"level": 2, "tags": []},
     )
 
     post.assert_awaited_once_with(
@@ -458,29 +470,16 @@ async def test_legacy_keyword_options_are_merged_into_find_payload():
 
 
 @pytest.mark.asyncio
-async def test_legacy_keyword_options_reject_unknown_and_duplicate_fields():
+async def test_options_preserve_session_null_and_message_fields():
     client, post = _client()
 
-    with pytest.raises(TypeError, match=r"unsupported option 'limti'.*options\[\"extra\"\]"):
-        await client.find("query", limti=5)
-
-    with pytest.raises(ValueError, match=r"'limit'.*both options and kwargs"):
-        await client.find("query", {"limit": 5}, limit=10)
-
-    post.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_legacy_keyword_options_preserve_session_null_and_message_fields():
-    client, post = _client()
-
-    await client.create_session(auto_commit_policy=None, session_id="session-1")
+    await client.create_session("session-1", options={"auto_commit_policy": None})
     await client.add_message(
         "session-1",
         role="assistant",
         content="fallback text",
         parts=[],
-        turn_id="turn-1",
+        options={"turn_id": "turn-1"},
     )
 
     assert post.await_args_list[0].kwargs["json"] == {
@@ -494,17 +493,14 @@ async def test_legacy_keyword_options_preserve_session_null_and_message_fields()
     }
 
 
-def test_sync_client_forwards_legacy_keyword_options():
+def test_sync_client_forwards_explicit_and_options_parameters():
     client = SyncHTTPClient(url="http://localhost:1933")
     client._async_client.find = AsyncMock(return_value={"total": 1})
 
-    assert client.find("query", limit=0, level=2) == {"total": 1}
+    assert client.find("query", limit=0, options={"level": 2}) == {"total": 1}
 
     client._async_client.find.assert_awaited_once_with(
-        "query",
-        None,
-        limit=0,
-        level=2,
+        "query", target_uri="", limit=0, options={"level": 2}
     )
 
 
@@ -514,15 +510,21 @@ def test_sync_client_forwards_options_without_rebuilding_payload():
     client._async_client.search_context = AsyncMock(return_value={"rendered": "ctx"})
     client._async_client.write = AsyncMock(return_value={"uri": "viking://resources/a.md"})
 
-    assert client.find("query", {"limit": 0}) == {"total": 1}
-    assert client.search_context("query", {"max_tokens": 64}) == {"rendered": "ctx"}
-    assert client.write("/resources/a.md", "", {"wait": False}) == {
+    assert client.find("query", limit=0) == {"total": 1}
+    assert client.search_context("query", options={"max_tokens": 64}) == {"rendered": "ctx"}
+    assert client.write("/resources/a.md", "", wait=False) == {
         "uri": "viking://resources/a.md"
     }
 
-    client._async_client.find.assert_awaited_once_with("query", {"limit": 0})
-    client._async_client.search_context.assert_awaited_once_with("query", {"max_tokens": 64})
-    client._async_client.write.assert_awaited_once_with("/resources/a.md", "", {"wait": False})
+    client._async_client.find.assert_awaited_once_with(
+        "query", target_uri="", limit=0, options=None
+    )
+    client._async_client.search_context.assert_awaited_once_with(
+        "query", session_id=None, target_uri="", limit=10, options={"max_tokens": 64}
+    )
+    client._async_client.write.assert_awaited_once_with(
+        "/resources/a.md", "", mode="replace", wait=False, timeout=None, options=None
+    )
 
 
 @pytest.mark.asyncio

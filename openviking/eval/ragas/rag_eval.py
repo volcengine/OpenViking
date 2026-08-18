@@ -118,7 +118,8 @@ class RAGEvaluator:
             try:
                 result = client.add_resource(
                     str(path),
-                    {"wait": True, "timeout": 300},
+                    wait=True,
+                    timeout=300,
                 )
                 if result and "root_uri" in result:
                     logger.info(f"Added: {result['root_uri']}")
@@ -135,7 +136,8 @@ class RAGEvaluator:
             try:
                 result = client.add_resource(
                     str(path),
-                    {"wait": True, "timeout": 300},
+                    wait=True,
+                    timeout=300,
                 )
                 if result and "root_uri" in result:
                     logger.info(f"Added: {result['root_uri']}")
@@ -159,7 +161,7 @@ class RAGEvaluator:
         start_time = time.time()
 
         try:
-            result = client.search(query, {"limit": top_k})
+            result = client.search(query, limit=top_k)
             contexts = []
 
             if result:

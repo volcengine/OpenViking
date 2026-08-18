@@ -124,11 +124,12 @@ client.initialize()
 healthy = client.health()
 print("health:", healthy)
 
-session = client.create_session(options={"session_id": "demo-session"})
+session = client.create_session(session_id="demo-session")
 print("session:", session)
 
 client.session(session_id="demo-session").add_message(
-    message={"role": "user", "content": "hello from sdk"}
+    role="user",
+    content="hello from sdk",
 )
 context = client.session(session_id="demo-session").get_session_context(token_budget=4096)
 print("context:", context)
@@ -154,12 +155,13 @@ async def main() -> None:
     healthy = await client.health()
     print("health:", healthy)
 
-    session = await client.create_session(options={"session_id": "demo-session-async"})
+    session = await client.create_session(session_id="demo-session-async")
     print("session:", session)
 
     session_client = client.session(session_id="demo-session-async")
     await session_client.add_message(
-        message={"role": "user", "content": "hello from async sdk"}
+        role="user",
+        content="hello from async sdk",
     )
     context = await session_client.get_session_context(token_budget=4096)
     print("context:", context)
@@ -185,14 +187,15 @@ event_config = {
     }
 }
 result = client.create_session(
+    session_id="demo-session",
     options={
-        "session_id": "demo-session",
         "memory_extraction_config": event_config,
     },
 )
 # Explicit None disables a server-wide auto-commit default at creation time.
 client.create_session(
-    options={"session_id": "manual-session", "auto_commit_policy": None}
+    session_id="manual-session",
+    options={"auto_commit_policy": None},
 )
 client.update_session_config(
     session_id="demo-session",
@@ -227,10 +230,10 @@ client.initialize()
 
 result = client.add_resource(
     path="/path/to/notes.md",
+    to="viking://resources/demo-notes",
+    reason="knowledge import",
+    wait=True,
     options={
-        "to": "viking://resources/demo-notes",
-        "reason": "knowledge import",
-        "wait": True,
     },
 )
 print(result)
@@ -243,10 +246,10 @@ or refresh `.abstract.md` / `.overview.md`.
 ```python
 result = client.add_resource(
     path="/path/to/notes.md",
+    to="viking://resources/demo-notes",
+    wait=True,
     options={
-        "to": "viking://resources/demo-notes",
         "processing_mode": "vectors_only",
-        "wait": True,
     },
 )
 ```
@@ -272,14 +275,26 @@ from openviking_sdk import SyncHTTPClient
 client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
 client.initialize()
 
-result = client.find(query="hello", options={"limit": 5})
+result = client.find(query="hello", limit=5)
 print(result)
 ```
+
+### Core Parameters and Options
+
+Frequently used fields are explicit keyword parameters. For example, use
+`to`, `reason`, and `wait` with `add_resource`; `target_uri` and `limit` with
+retrieval; and `role`, `content`, and `parts` with `add_message`.
+
+Use the method's typed `options` dictionary for advanced fields, such as
+`processing_mode`, retrieval filters, or session extraction configuration.
+Do not pass advanced fields as bare keyword arguments. A field must be passed
+through exactly one entry point; SDK-defined fields in `options` and
+`extra` cannot override explicit parameters.
 
 Image search uses the same methods. Pass a local path, bytes, data URI, HTTP URL, or `viking://` URI with `image`. The server must use a multimodal embedding model.
 
 ```python
-result = client.find(query="", options={"image": "/path/to/photo.png", "limit": 5})
+result = client.find(query="", limit=5, options={"image": "/path/to/photo.png"})
 result = client.search(
     query="similar poster",
     options={"image": "viking://resources/poster.png"},
@@ -292,7 +307,8 @@ server fields that the installed SDK version does not yet expose:
 ```python
 result = client.find(
     query="authentication",
-    options={"limit": 10, "extra": {"future_server_field": False}},
+    limit=10,
+    options={"extra": {"future_server_field": False}},
 )
 ```
 

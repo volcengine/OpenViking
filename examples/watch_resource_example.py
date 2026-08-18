@@ -43,9 +43,9 @@ Version: 1.0
         print("\nAdding resource with watch_interval=60.0 minutes...")
         result = await client.add_resource(
             path=str(test_file),
+            to=to_uri,
+            reason="Example: monitoring a document",
             options={
-                "to": to_uri,
-                "reason": "Example: monitoring a document",
                 "instruction": "Check for updates and re-index",
                 "watch_interval": 60.0,
             },
@@ -68,13 +68,14 @@ async def example_update_watch_interval():
         print("\nUpdating watch interval by canceling then re-creating...")
         await client.add_resource(
             path=str(test_file),
-            options={"to": to_uri, "watch_interval": 0},
+            to=to_uri,
+            options={"watch_interval": 0},
         )
         await client.add_resource(
             path=str(test_file),
+            to=to_uri,
+            reason="Updated: more frequent monitoring",
             options={
-                "to": to_uri,
-                "reason": "Updated: more frequent monitoring",
                 "watch_interval": 120.0,
             },
         )
@@ -94,7 +95,8 @@ async def example_cancel_watch():
         print("\nCancelling watch by setting interval to 0...")
         await client.add_resource(
             path=str(test_file),
-            options={"to": to_uri, "watch_interval": 0},
+            to=to_uri,
+            options={"watch_interval": 0},
         )
         print("Watch task cancelled successfully!")
     finally:
@@ -112,7 +114,8 @@ async def example_handle_conflict():
         print("\nCreating first watch task...")
         await client.add_resource(
             path=str(test_file),
-            options={"to": to_uri, "watch_interval": 30.0},
+            to=to_uri,
+            options={"watch_interval": 30.0},
         )
         print("  First watch task created successfully")
 
@@ -120,7 +123,8 @@ async def example_handle_conflict():
         try:
             await client.add_resource(
                 path=str(test_file),
-                options={"to": to_uri, "watch_interval": 60.0},
+                to=to_uri,
+                options={"watch_interval": 60.0},
             )
             print("  ERROR: This should not happen!")
         except ConflictError as e:

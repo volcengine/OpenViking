@@ -73,8 +73,8 @@ class Recipe:
         # `find` has better performance, but not so smart
         results = self.client.search(
             query=query,
+            target_uri=target_uri or "",
             options={
-                "target_uri": target_uri,
                 "score_threshold": score_threshold,
             },
         )

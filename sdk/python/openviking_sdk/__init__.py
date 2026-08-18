@@ -8,6 +8,7 @@ from .errors import (
     UnimplementedError,
 )
 from .options import (
+    AddMessageOptions,
     AddResourceOptions,
     AddSkillOptions,
     BatchAddMessagesOptions,
@@ -32,6 +33,7 @@ from .options import (
 
 __all__ = [
     "AbortedError",
+    "AddMessageOptions",
     "AddResourceOptions",
     "AddSkillOptions",
     "AsyncHTTPClient",
