@@ -5,10 +5,12 @@
 ## 步骤 1：安装
 
 ```bash
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh)
+bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness opencode --dist tos
 ```
 
-OpenCode 与 Claude Code、Codex 共用这一个安装器。它会询问要安装的工具、下载源（GitHub 或 TOS 镜像）、语言（English/中文）和 OpenViking 凭据；每一步都是幂等的，重复运行完全安全。TOS 渠道以本地文件方式安装插件——更新时重跑安装器即可。
+安装器问连接到哪里时，选 **火山引擎 OpenViking 云服务**，再把本页的 API Key 贴进去。
+
+OpenCode 与 Claude Code、Codex 共用这一个安装器。每一步都是幂等的，重复运行安全。TOS 渠道以本地文件方式安装插件，更新时重跑安装器即可。
 
 <details>
 <summary><b>手动安装</b></summary>

@@ -13,7 +13,7 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness trae,trae-cn --dist tos
 ```
 
-安装器询问连接方式时，请选择 **火山引擎 OpenViking 云服务** 并填写 API Key。只有本机已运行 OpenViking 服务时才选择 **自建 / 本地**。
+安装器问连接到哪里时，选 **火山引擎 OpenViking 云服务**，再把本页的 API Key 贴进去。只有本机已经在跑 OpenViking 时才选 **自建 / 本地**。
 
 ## 验证
 

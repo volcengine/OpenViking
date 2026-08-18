@@ -6,7 +6,7 @@ Requires macOS/Linux and Node.js 18+. The command installs Hooks, MCP, Rule, and
 bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness cursor --dist tos
 ```
 
-When asked where to connect, select **Volcengine OpenViking Cloud** and enter your API key. Choose **Self-hosted / local** only for a locally running OpenViking server.
+When asked where to connect, select **Volcengine OpenViking Cloud** and paste the API key from this page. Choose **Self-hosted / local** only for a locally running OpenViking server.
 
 ## Verify
 

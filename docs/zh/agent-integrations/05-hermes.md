@@ -13,19 +13,22 @@ Python 环境中。请在独立的虚拟环境或容器中运行 OpenViking 服�
 
 ## 配置
 
-运行 Hermes 记忆配置向导：
-
 ```bash
-hermes memory setup
+hermes memory setup openviking
 ```
 
-向导会询问：
+带上 `openviking` 会跳过 provider 选择。只跑 `hermes memory setup` 也可以，然后选 **openviking**。
 
-- **OpenViking 服务 URL** — 自托管服务器（默认 `http://127.0.0.1:1933`）或 OpenViking Service（火山引擎云）
-- **API Key** — 本地开发模式留空
-- **租户 account / user / peer ID** — 多租户部署时使用。迁移期的旧 `agent_id` 配置会映射为请求的 actor peer。
+如果 Hermes 已经发现 `~/.openviking/ovcli.conf`，直接复用那个 profile。否则向导会问：
 
-配置保存在 Hermes 的 `config.yaml` 和 `.env` 文件中。
+- **OpenViking connection** — 默认 **OpenViking Service (VolcEngine Cloud)**，或 **Custom**（本地 / VPS / 自托管）
+- **云** — 端点已填好，粘贴 API Key
+- **Custom** — 服务 URL（默认 `http://127.0.0.1:1933`），然后选用户 API Key、root API Key，或本地免鉴权
+- **Hermes peer ID** — 默认 `hermes`
+
+只有 root API Key 才需要填 account / user。火山云用用户 API Key 即可。迁移期的旧 `agent_id` 会映射为请求的 actor peer。
+
+配置保存在 Hermes 的 `config.yaml` 和 `.env`。向导也可以镜像到 `~/.openviking/ovcli.conf.<name>`。
 
 ## 验证
 

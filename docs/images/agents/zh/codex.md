@@ -5,10 +5,12 @@
 ## 步骤 1：安装
 
 ```bash
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh)
+bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness codex --dist tos
 ```
 
-Claude Code 和 Codex 共用这一个安装脚本。它会依次询问要安装的工具、安装源（GitHub 或 TOS 镜像）、界面语言（English/中文）和 OpenViking 凭据；所有步骤幂等，可安全地重复执行。若为 Codex 选择 TOS 渠道，安装脚本会使用 TOS 托管的 git 仓库，之后仍可用 `codex plugin marketplace upgrade openviking` 远程更新。
+安装器问连接到哪里时，选 **火山引擎 OpenViking 云服务**，再把本页的 API Key 贴进去。
+
+Claude Code 和 Codex 共用这一个安装脚本。每一步都是幂等的，重复运行安全。TOS 渠道下 Codex 装的是 TOS 托管的 git 仓库，之后仍可用 `codex plugin marketplace upgrade openviking` 更新。
 
 不再需要任何 shell wrapper——插件自带的 stdio MCP 代理会在运行时读取 `~/.openviking/ovcli.conf`。安装完成后：
 

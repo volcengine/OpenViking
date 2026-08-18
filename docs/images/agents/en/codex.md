@@ -5,10 +5,12 @@ Source: [examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/
 ## Step 1: Install
 
 ```bash
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh)
+bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness codex --dist tos
 ```
 
-Claude Code and Codex share this one installer. It asks which tools to install, which source to use (GitHub or the TOS mirror), your language (English/中文), and OpenViking credentials; each step is idempotent, so it is safe to rerun. If you choose the TOS channel for Codex, it installs from a TOS-hosted git repo and can update later with `codex plugin marketplace upgrade openviking`.
+When asked where to connect, select **Volcengine OpenViking Cloud** and paste the API key from this page.
+
+Claude Code and Codex share this installer. Every step is idempotent, so it is safe to rerun. On TOS, Codex installs from a TOS-hosted git repo and can update later with `codex plugin marketplace upgrade openviking`.
 
 No shell wrapper is needed anymore — the plugin ships a stdio MCP proxy that reads `~/.openviking/ovcli.conf` at runtime. After installing:
 

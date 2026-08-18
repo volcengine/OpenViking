@@ -1,33 +1,38 @@
+[Hermes Agent](https://hermes-agent.nousresearch.com/) 内置 OpenViking 记忆提供方，不用再装插件。本页只讲怎么接到火山引擎 OpenViking 云服务。自托管请看文档站的 Hermes 指南。
 
-[Hermes Agent](https://hermes-agent.nousresearch.com/) (Nous Research) 内置 OpenViking 记忆提供方。无需安装插件——把 Hermes 指向你的 OpenViking 服务即可，记忆存储、召回和抽取均原生支持。
-
-## 步骤 1：运行 Hermes 记忆配置向导：
+## 步骤 1：打开记忆配置向导
 
 ```bash
-hermes memory setup
+hermes memory setup openviking
 ```
 
-## 步骤 2：复制 Base URL 和 鉴权管理
-执行 setup 命令后会依次提示输入 Base URL 和 鉴权管理，可复制后粘贴到你的 Hermes：
+## 步骤 2：选火山云，粘贴 API Key
 
-- Base URL: 复制以下 Base URL 到你的 Hermes：
+向导自己带了云端地址，你只要把本页的 API Key 贴进去。
+
+1. 如果出现 **OpenViking config source**，选 **Create new OpenViking profile**。本机已经跑过共享安装脚本（Claude Code / Codex / Cursor / TRAE）的话，选 **Use existing OpenViking profile** 即可。
+2. **OpenViking connection** 默认就是 **OpenViking Service (VolcEngine Cloud)**，直接回车。
+3. 终端会自己打印端点：
+
 ```text
 https://api.vikingdb.cn-beijing.volces.com/openviking
 ```
-- 鉴权管理: 复制页面中展示的 鉴权管理 到你的 Hermes 终端
-- 租户 account / user / agent ID：多租户部署时使用
 
-配置保存在 Hermes 的 `config.yaml` 和 `.env` 文件中。
+4. 出现 **OpenViking API key** 时，把本页的 API Key 粘贴进去。
+5. Hermes peer ID 默认是 `hermes`，一般不用改。
 
+不用手填 Base URL。用用户 API Key 时也不用填租户 account / user。
 
-## 步骤 3：验证 Hermes 记忆状态
+## 步骤 3：验证
 
 ```bash
 hermes memory status
 ```
 
-配置完成后，Hermes 会通过 OpenViking memory provider 自动注入上下文、预取相关记忆，并在会话后同步和抽取记忆。可用工具包括 `viking_search`、`viking_read`、`viking_browse`、`viking_remember`、`viking_forget` 和 `viking_add_resource`。
+看到 `Provider: openviking` 且 `Status: available` 就行。然后再开一轮新的 Hermes 会话。
+
+配置完成后，Hermes 会自动注入上下文、预取相关记忆，并在会话后同步和抽取。可用工具：`viking_search`、`viking_read`、`viking_browse`、`viking_remember`、`viking_forget`、`viking_add_resource`。
 
 ## 参考文档
 
-- [Hermes — OpenViking memory provider 文档](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers#openviking) — 完整配置指南
+- [Hermes — OpenViking memory provider](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers#openviking)
