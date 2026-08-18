@@ -25,11 +25,25 @@ test("context requests preserve the configured recall width and server budget", 
     recallCompressMaxInputChars: 18000,
   });
 
-  assert.equal(Object.values(body.quotas).reduce((sum, quota) => sum + quota, 0), 6);
+  assert.equal(Object.values(body.quotas).reduce((sum, quota) => sum + quota, 0), 1);
   assert.equal(body.quotas.resources, 1);
-  assert.equal(body.quotas.skills, 1);
+  assert.equal(body.quotas.skills, 0);
   assert.equal(body.max_tokens, 800);
   assert.equal(body.purpose, "coding");
+});
+
+test("context requests can delegate relevance entirely to the server", () => {
+  const body = buildContextSearchBody({
+    recallPurpose: null,
+    recallLimit: 1,
+    recallLimitConfigured: true,
+    recallMaxTokens: 800,
+    recallMaxTokensConfigured: true,
+  });
+
+  assert.equal(body.purpose, undefined);
+  assert.equal(body.quotas, undefined);
+  assert.equal(body.max_tokens, 800);
 });
 
 test("context requests omit defaults owned by the server", () => {

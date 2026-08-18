@@ -20,6 +20,7 @@ const DEFAULT_CONFIG = {
   // Server-side query expansion costs a model call before retrieval starts, so
   // it has to be switchable from the client that pays the latency.
   recallQueryExpansion: "auto",
+  recallPurpose: "coding",
   enabled: true,
   mcp: {
     enabled: true,
@@ -142,6 +143,8 @@ function applyBehaviorConfig(config, fileConfig = {}) {
   const autoRecall = fileConfig.autoRecall ?? {}
   config.recallLimitConfigured = autoRecall.limit !== undefined ||
     fileConfig.recallLimit !== undefined
+  config.recallMaxTokensConfigured = autoRecall.tokenBudget !== undefined ||
+    fileConfig.recallTokenBudget !== undefined
   config.autoRecall = {
     ...DEFAULT_CONFIG.autoRecall,
     ...autoRecall,
@@ -172,6 +175,7 @@ function applyBehaviorConfig(config, fileConfig = {}) {
     "workspacePeer",
     "recallPeerScope",
     "recallQueryExpansion",
+    "recallPurpose",
   ]) {
     if (fileConfig[key] !== undefined) config[key] = fileConfig[key]
   }
@@ -191,7 +195,10 @@ function applyEnv(config) {
   if (process.env.OPENVIKING_RECALL_MAX_CONTENT_CHARS) {
     config.autoRecall.maxContentChars = process.env.OPENVIKING_RECALL_MAX_CONTENT_CHARS
   }
-  if (process.env.OPENVIKING_RECALL_TOKEN_BUDGET) config.autoRecall.tokenBudget = process.env.OPENVIKING_RECALL_TOKEN_BUDGET
+  if (process.env.OPENVIKING_RECALL_TOKEN_BUDGET) {
+    config.autoRecall.tokenBudget = process.env.OPENVIKING_RECALL_TOKEN_BUDGET
+    config.recallMaxTokensConfigured = true
+  }
   if (process.env.OPENVIKING_RECALL_PREFER_ABSTRACT !== undefined) {
     config.autoRecall.preferAbstract = envBool("OPENVIKING_RECALL_PREFER_ABSTRACT") ?? config.autoRecall.preferAbstract
   }
@@ -260,6 +267,9 @@ function normalizeConfig(config) {
   config.captureMode = config.captureMode === "keyword" ? "keyword" : "semantic"
   config.recallPeerScope = config.recallPeerScope === "actor" ? "actor" : "all"
   config.recallQueryExpansion = config.recallQueryExpansion === "off" ? "off" : "auto"
+  config.recallPurpose = config.recallPurpose === null
+    ? null
+    : (config.recallPurpose === "chat" ? "chat" : "coding")
   config.captureMaxLength = Math.max(200, Math.min(100000, Math.round(Number(config.captureMaxLength) || 24000)))
   config.captureToolMaxChars = Math.max(200, Math.min(1000000, Math.round(Number(config.captureToolMaxChars) || 1000000)))
   config.commitTokenThreshold = Math.max(1000, Math.round(Number(config.commitTokenThreshold) || 20000))
@@ -280,6 +290,7 @@ function normalizeConfig(config) {
   config.recallMaxContentChars = config.autoRecall.maxContentChars
   config.recallPreferAbstract = config.autoRecall.preferAbstract !== false
   config.recallTokenBudget = config.autoRecall.tokenBudget
+  config.recallMaxTokens = config.autoRecall.tokenBudget
   config.minQueryLength = config.autoRecall.minQueryLength
   return config
 }
