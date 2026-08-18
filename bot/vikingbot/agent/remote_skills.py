@@ -39,6 +39,7 @@ _SKILL_EXCLUDED_FILES = frozenset(
 )
 _EXEC_PATH_PREFIX = r"(?<![A-Za-z0-9_./-])"
 _EXEC_PATH_SUFFIX = r"(?=$|[\s\"'`;|&()<>])"
+_MATERIALIZED_SKILL_ROOT = ".remote-skill"
 _TRANSPORT_TOOLS = frozenset({"openviking_multi_read"})
 _SHELL_CONTROL_TOKENS = frozenset({";", "&", "&&", "|", "||", "<", ">", "<<", ">>"})
 _EXEC_FILE_CONSUMERS = frozenset(
@@ -161,7 +162,6 @@ class ActiveRemoteSkill:
 class PreparedToolCall:
     params: dict[str, Any]
     skill_uris: tuple[str, ...] = ()
-    redact_persisted_result: bool = False
 
 
 def _resource_path_segments(expression: str) -> tuple[str, ...]:
@@ -640,8 +640,12 @@ class SkillRuntimeContext:
             "",
             "## OpenViking resource bindings",
             "",
-            "Use these canonical URIs for packaged resources. Use `workspace:<relative-path>` "
-            "or an absolute path for an ordinary workspace file.",
+            "Packaged resources are managed by VikingBot. Do not recreate, copy, or write "
+            "them into the workspace, and do not set `working_dir` to an OpenViking storage "
+            "or materialization path. Pass the exact relative path below (or its canonical "
+            "URI) directly to the consuming tool; VikingBot materializes and rewrites it "
+            "automatically. Use `workspace:<relative-path>` or an absolute path only for an "
+            "ordinary workspace file.",
         ]
         lines.extend(f"- `{item.path}` → `{item.uri}`" for item in resources)
         return "\n".join(lines) + "\n"
@@ -685,7 +689,6 @@ class SkillRuntimeContext:
     ) -> PreparedToolCall:
         effective = copy.deepcopy(dict(params))
         used: list[str] = []
-        redact_persisted_result = False
 
         # Text resources stay remote. Resolve relative references such as
         # ``references/checklist.md`` to their canonical OpenViking URI before
@@ -719,7 +722,6 @@ class SkillRuntimeContext:
                 skill, resource = match
                 resolved_uris.append(resource.uri)
                 used.append(skill.root_uri)
-                redact_persisted_result = True
             effective["uris"] = resolved_uris
 
         policy_skills = [] if tool.name in _TRANSPORT_TOOLS else list(self.active_skills.values())
@@ -751,18 +753,15 @@ class SkillRuntimeContext:
                     parent[key] = local_path
                     if skill_uri:
                         used.append(skill_uri)
-                        redact_persisted_result = True
 
         if tool.name == "exec" and isinstance(effective.get("command"), str):
             command, exec_skill_uris = await self._rewrite_exec_command(effective["command"])
             effective["command"] = command
             used.extend(exec_skill_uris)
-            redact_persisted_result = redact_persisted_result or bool(exec_skill_uris)
 
         return PreparedToolCall(
             params=effective,
             skill_uris=tuple(dict.fromkeys(used)),
-            redact_persisted_result=redact_persisted_result,
         )
 
     def _authorize_tool_arguments(
@@ -833,27 +832,6 @@ class SkillRuntimeContext:
                 sandbox = await self.sandbox_manager.get_sandbox(self.session_key)
                 await self._check_requirements(skill, sandbox)
             self._requirements_checked.add(skill.root_uri)
-
-    def persisted_result_for_tool(
-        self,
-        tool_name: str,
-        result: Any,
-        skill_uris: Iterable[str] = (),
-        *,
-        redact: bool = False,
-    ) -> Any:
-        """Return the session/trace-safe view without remote Skill contents."""
-        associated = list(dict.fromkeys(skill_uris))
-        if not associated or (tool_name != "openviking_multi_read" and not redact):
-            return result
-        failed = isinstance(result, Exception) or (
-            isinstance(result, str) and result.lstrip().startswith("Error:")
-        )
-        status = "failed" if failed else "completed"
-        return (
-            f"Remote Skill tool call {status}; content-bearing result was omitted from "
-            f"persisted session/trace data. skill_uris={associated}"
-        )
 
     def skill_uris_for_tool(
         self,
@@ -1409,7 +1387,10 @@ class SkillRuntimeContext:
 
     def _materialized_root(self, skill: ActiveRemoteSkill) -> str:
         digest = hashlib.sha256(skill.root_uri.encode("utf-8")).hexdigest()
-        return f".vikingbot/remote-skills/{self.request_id}/{digest}/{_safe_skill_name(skill.name)}"
+        return (
+            f"{_MATERIALIZED_SKILL_ROOT}/{self.request_id}/{digest}/"
+            f"{_safe_skill_name(skill.name)}"
+        )
 
     async def close(self) -> None:
         if self._closed:
@@ -1418,7 +1399,7 @@ class SkillRuntimeContext:
         if self.sandbox_manager is not None and self._materialization_started:
             try:
                 sandbox = await self.sandbox_manager.get_sandbox(self.session_key)
-                await sandbox.remove_tree(f".vikingbot/remote-skills/{self.request_id}")
+                await sandbox.remove_tree(f"{_MATERIALIZED_SKILL_ROOT}/{self.request_id}")
             except Exception as exc:
                 logger.warning("Failed to clean remote Skill snapshot: {}", exc)
         if self._client is not None:

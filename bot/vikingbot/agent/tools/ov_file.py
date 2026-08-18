@@ -941,6 +941,11 @@ class VikingMultiReadTool(OVFileTool):
                 async with semaphore:
                     try:
                         content = await client.read_content(uri, level=level)
+                        skill_runtime = getattr(tool_context, "skill_runtime", None)
+                        if skill_runtime is not None:
+                            active_skill = await skill_runtime.activate_from_read(uri, content)
+                            if active_skill is not None:
+                                content = skill_runtime.render_skill_content(active_skill)
                         return {
                             "uri": uri,
                             "content": content,

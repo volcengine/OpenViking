@@ -1,11 +1,13 @@
 """Tool registry for dynamic tool management."""
 
+import json
 import time
 from dataclasses import dataclass
 from typing import Any
 
 from loguru import logger
 
+from vikingbot.agent.remote_skills import SkillRuntimeError
 from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.config.schema import SessionKey
 from vikingbot.hooks import HookContext
@@ -22,7 +24,6 @@ class ToolExecutionResult:
     result: Any
     effective_params: dict[str, Any]
     skill_uris: tuple[str, ...] = ()
-    persisted_result: Any = None
 
 
 class ToolRegistry:
@@ -218,8 +219,6 @@ class ToolRegistry:
         result = None
         effective_params = dict(params)
         skill_uris: tuple[str, ...] = ()
-        persisted_result = None
-        redact_persisted_result = False
         response_id = get_current_response_id()
         try:
             if self.langfuse.enabled:
@@ -244,7 +243,13 @@ class ToolRegistry:
                     prepared = await skill_runtime.prepare_tool_call(tool, params)
                     effective_params = prepared.params
                     skill_uris = prepared.skill_uris
-                    redact_persisted_result = prepared.redact_persisted_result
+                    if effective_params != params:
+                        prepared_args = json.dumps(
+                            effective_params,
+                            ensure_ascii=False,
+                            default=str,
+                        )
+                        logger.info("[TOOL_PREPARED]: {}({})", name, prepared_args[:600])
                 result = await tool.execute(tool_context, **effective_params)
                 if skill_runtime is not None:
                     skill_uris = skill_runtime.skill_uris_for_tool(
@@ -252,15 +257,12 @@ class ToolRegistry:
                         effective_params,
                         skill_uris,
                     )
-                    persisted_result = skill_runtime.persisted_result_for_tool(
-                        name,
-                        result,
-                        skill_uris,
-                        redact=redact_persisted_result,
-                    )
+        except SkillRuntimeError as e:
+            result = e
+            logger.warning("Remote Skill tool call rejected: tool={} error={}", name, e)
         except Exception as e:
             result = e
-            logger.exception("Tool call fail: ", e)
+            logger.exception("Tool call failed: {}", e)
         finally:
             # End Langfuse tool call tracing
             duration_ms = (time.time() - start_time) * 1000
@@ -269,8 +271,7 @@ class ToolRegistry:
                     execute_success = not isinstance(result, Exception) and not (
                         isinstance(result, str) and result.lstrip().startswith("Error:")
                     )
-                    trace_result = persisted_result if persisted_result is not None else result
-                    output_str = str(trace_result) if trace_result is not None else None
+                    output_str = str(result) if result is not None else None
                     self.langfuse.end_tool_call(
                         span=tool_span,
                         output=output_str,
@@ -303,18 +304,10 @@ class ToolRegistry:
         result = hook_result.get("result")
         if isinstance(result, Exception):
             result = f"Error executing {name}: {str(result)}"
-        if skill_runtime is not None:
-            persisted_result = skill_runtime.persisted_result_for_tool(
-                name,
-                result,
-                skill_uris,
-                redact=redact_persisted_result,
-            )
         return ToolExecutionResult(
             result=result,
             effective_params=effective_params,
             skill_uris=skill_uris,
-            persisted_result=(result if persisted_result is None else persisted_result),
         )
 
     async def execute(

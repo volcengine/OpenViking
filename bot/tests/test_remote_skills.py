@@ -12,7 +12,7 @@ from vikingbot.agent.remote_skill_cache import RemoteSkillSnapshotCache
 from vikingbot.agent.remote_skills import SkillRuntimeContext, SkillRuntimeError
 from vikingbot.agent.tools.base import ToolContext
 from vikingbot.agent.tools.filesystem import ReadFileTool
-from vikingbot.agent.tools.ov_file import VikingAddResourceTool
+from vikingbot.agent.tools.ov_file import VikingAddResourceTool, VikingMultiReadTool
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.agent.tools.shell import ExecTool
 from vikingbot.bus.events import OutboundEventType
@@ -173,6 +173,12 @@ class _FakeClient:
         self.download_calls.append(uri)
         return self.downloads[uri]
 
+    async def read_content(self, uri: str, level: str = "read") -> str:
+        assert level == "read"
+        if uri == SKILL_MD_URI:
+            return SKILL_MD
+        return self.downloads[uri].decode("utf-8")
+
     async def close(self) -> None:
         self.closed = True
 
@@ -242,6 +248,40 @@ async def test_activation_validates_skill_and_keeps_text_resources_remote():
 
 
 @pytest.mark.asyncio
+async def test_registry_multi_read_activates_skill_and_renders_resource_bindings(monkeypatch):
+    runtime, client, sandbox_manager = _runtime()
+    tool = VikingMultiReadTool(config=runtime.config)
+
+    async def get_client(_tool_context):
+        return client
+
+    monkeypatch.setattr(tool, "_get_client", get_client)
+    registry = ToolRegistry(config=runtime.config)
+    registry.register(tool)
+
+    outcome = await registry.execute_detailed(
+        "openviking_multi_read",
+        {"uris": [SKILL_MD_URI]},
+        session_key=runtime.session_key,
+        sandbox_manager=sandbox_manager,
+        skill_runtime=runtime,
+    )
+
+    assert runtime.activation_succeeded({"uris": [SKILL_MD_URI]}) is True
+    assert SKILL_URI in runtime.active_skills
+    assert "## OpenViking resource bindings" in outcome.result
+    assert f"{SKILL_URI}/scripts/audit.py" in outcome.result
+    assert "Run `python scripts/audit.py`." in outcome.result
+    assert "Do not recreate, copy, or write them into the workspace" in outcome.result
+    assert "VikingBot materializes and rewrites it automatically" in outcome.result
+
+    prepared = await runtime.prepare_tool_call(
+        ExecTool(), {"command": "python scripts/audit.py"}
+    )
+    assert prepared.params["command"].endswith("/release-audit/scripts/audit.py")
+
+
+@pytest.mark.asyncio
 async def test_activation_rejects_manifest_uri_path_mismatch():
     runtime, client, _sandbox_manager = _runtime()
     client.skill_result["files"][2]["uri"] = f"{SKILL_URI}/scripts/other.py"
@@ -267,7 +307,7 @@ async def test_exec_materializes_bundle_and_rewrites_manifest_path():
     prepared = await runtime.prepare_tool_call(ExecTool(), {"command": "python scripts/audit.py"})
 
     digest = hashlib.sha256(SKILL_URI.encode()).hexdigest()
-    expected_root = f".vikingbot/remote-skills/request-1/{digest}/release-audit"
+    expected_root = f".remote-skill/request-1/{digest}/release-audit"
     assert prepared.params["command"] == f"python {expected_root}/scripts/audit.py"
     assert prepared.skill_uris == (SKILL_URI,)
     assert sandbox_manager.sandbox.files[f"{expected_root}/SKILL.md"] == SKILL_MD.encode()
@@ -279,11 +319,20 @@ async def test_exec_materializes_bundle_and_rewrites_manifest_path():
 
 
 @pytest.mark.asyncio
-async def test_registry_returns_real_skill_uri_and_resolved_args():
+async def test_registry_returns_real_skill_uri_and_resolved_args(monkeypatch):
     runtime, _client, sandbox_manager = _runtime()
     await runtime.activate_from_read(SKILL_MD_URI, SKILL_MD)
     registry = ToolRegistry(config=runtime.config)
     registry.register(ReadFileTool())
+    info_calls = []
+    monkeypatch.setattr(
+        "vikingbot.agent.tools.registry.logger",
+        SimpleNamespace(
+            info=lambda *args: info_calls.append(args),
+            warning=lambda *args: None,
+            exception=lambda *args: None,
+        ),
+    )
 
     outcome = await registry.execute_detailed(
         "read_file",
@@ -296,6 +345,9 @@ async def test_registry_returns_real_skill_uri_and_resolved_args():
     assert outcome.result == "# Checklist\n"
     assert outcome.skill_uris == (SKILL_URI,)
     assert outcome.effective_params["path"].endswith("/references/checklist.md")
+    assert info_calls[0][0] == "[TOOL_PREPARED]: {}({})"
+    assert info_calls[0][1] == "read_file"
+    assert ".remote-skill/request-1/" in info_calls[0][2]
 
 
 @pytest.mark.asyncio
@@ -311,11 +363,6 @@ async def test_multi_read_resolves_relative_resource_without_materializing():
     assert prepared.params["uris"] == [f"{SKILL_URI}/references/checklist.md"]
     assert prepared.skill_uris == (SKILL_URI,)
     assert sandbox_manager.sandbox.files == {}
-    persisted = runtime.persisted_result_for_tool(
-        "openviking_multi_read", "# sensitive checklist", prepared.skill_uris
-    )
-    assert "sensitive checklist" not in persisted
-    assert SKILL_URI in persisted
 
 
 @pytest.mark.asyncio
@@ -339,7 +386,7 @@ async def test_request_close_removes_materialized_snapshot():
 
     await runtime.close()
 
-    assert sandbox_manager.sandbox.removed == [".vikingbot/remote-skills/request-1"]
+    assert sandbox_manager.sandbox.removed == [".remote-skill/request-1"]
     assert client.closed is True
 
 
@@ -367,7 +414,7 @@ async def test_versioned_cache_reuses_downloaded_snapshot_across_agent_turns(tmp
     await runtime1.activate_from_read(SKILL_MD_URI, SKILL_MD)
     await runtime1.prepare_tool_call(ExecTool(), {"command": "python scripts/audit.py"})
     await runtime1.close()
-    assert sandbox_manager.sandbox.removed == [".vikingbot/remote-skills/request-1"]
+    assert sandbox_manager.sandbox.removed == [".remote-skill/request-1"]
 
     runtime2, client2, _ = _runtime(
         request_id="request-2",
@@ -416,7 +463,7 @@ async def test_cache_hit_rechecks_manifest_before_creating_execution_copy(tmp_pa
     assert client2.download_calls == []
     assert runtime2.materializations == {}
     assert any(
-        path.startswith(".vikingbot/remote-skills/request-2/")
+        path.startswith(".remote-skill/request-2/")
         for path in sandbox_manager.sandbox.removed
     )
 
@@ -883,6 +930,35 @@ async def test_constrained_bash_rejects_compound_shell_syntax(command):
         await runtime.prepare_tool_call(ExecTool(), {"command": command})
 
 
+@pytest.mark.asyncio
+async def test_registry_logs_skill_policy_rejection_without_exception_trace(monkeypatch):
+    runtime, _client, sandbox_manager = _runtime()
+    await runtime.activate_from_read(SKILL_MD_URI, SKILL_MD)
+    registry = ToolRegistry(config=runtime.config)
+    registry.register(ExecTool())
+    warning_calls = []
+    exception_calls = []
+    monkeypatch.setattr(
+        "vikingbot.agent.tools.registry.logger",
+        SimpleNamespace(
+            warning=lambda *args: warning_calls.append(args),
+            exception=lambda *args: exception_calls.append(args),
+        ),
+    )
+
+    outcome = await registry.execute_detailed(
+        "exec",
+        {"command": "mkdir -p scripts"},
+        session_key=runtime.session_key,
+        sandbox_manager=sandbox_manager,
+        skill_runtime=runtime,
+    )
+
+    assert "SKILL_TOOL_NOT_ALLOWED" in str(outcome.result)
+    assert warning_calls
+    assert exception_calls == []
+
+
 def test_multiple_skills_hide_tools_not_allowed_by_every_skill():
     runtime, _client, _sandbox_manager = _runtime()
     runtime.active_skills[SKILL_URI] = SimpleNamespace(
@@ -1006,7 +1082,11 @@ def test_runtime_enablement_follows_visible_multi_read_tool(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_agent_loop_defers_same_batch_consumers_until_refreshed_schema(tmp_path):
+async def test_agent_loop_defers_same_batch_consumers_until_refreshed_schema(
+    tmp_path, monkeypatch
+):
+    event_order = []
+
     class _Provider(LLMProvider):
         def __init__(self):
             self.calls = 0
@@ -1078,6 +1158,7 @@ async def test_agent_loop_defers_same_batch_consumers_until_refreshed_schema(tmp
 
         async def execute_detailed(self, name, params, **kwargs):
             del kwargs
+            event_order.append(f"execute:{name}")
             self.execution_order.append(name)
             if name == "openviking_multi_read":
                 self.runtime.active = True
@@ -1087,13 +1168,22 @@ async def test_agent_loop_defers_same_batch_consumers_until_refreshed_schema(tmp
                 result = "checklist"
             return SimpleNamespace(
                 result=result,
-                persisted_result=result,
                 effective_params=params,
                 skill_uris=(),
             )
 
     runtime = _Runtime()
     registry = _Registry(runtime)
+    monkeypatch.setattr(
+        "vikingbot.agent.loop.logger",
+        SimpleNamespace(
+            debug=lambda *args: None,
+            error=lambda *args: None,
+            exception=lambda *args: None,
+            info=lambda message, *args: event_order.append(str(message)),
+            warning=lambda *args: None,
+        ),
+    )
     loop = AgentLoop(
         bus=MessageBus(),
         provider=_Provider(),
@@ -1115,6 +1205,16 @@ async def test_agent_loop_defers_same_batch_consumers_until_refreshed_schema(tmp
     )
 
     assert registry.execution_order == ["openviking_multi_read", "read_file"]
+    first_tool_log = next(
+        index for index, event in enumerate(event_order) if event.startswith("[TOOL_CALL]:")
+    )
+    first_execution = next(
+        index for index, event in enumerate(event_order) if event.startswith("execute:")
+    )
+    first_result_log = next(
+        index for index, event in enumerate(event_order) if event.startswith("[RESULT]:")
+    )
+    assert first_tool_log < first_execution < first_result_log
     assert [item["tool_name"] for item in captured_turns[0]["tool_calls"]] == [
         "read_file",
         "openviking_multi_read",
@@ -1124,8 +1224,8 @@ async def test_agent_loop_defers_same_batch_consumers_until_refreshed_schema(tmp
 
 
 @pytest.mark.asyncio
-async def test_tool_result_event_publishes_persisted_view_not_remote_skill_content(tmp_path):
-    secret = "restored-secret-in-remote-skill"
+async def test_tool_result_event_publishes_full_remote_skill_content(tmp_path):
+    skill_content = "full-remote-skill-content"
 
     class _Provider(LLMProvider):
         async def chat(self, *args, **kwargs):
@@ -1171,8 +1271,7 @@ async def test_tool_result_event_publishes_persisted_view_not_remote_skill_conte
         async def execute_detailed(self, name, params, **kwargs):
             del name, kwargs
             return SimpleNamespace(
-                result=f"SKILL.md contains {secret}",
-                persisted_result="Remote Skill content omitted. skill_uri=" + SKILL_URI,
+                result=f"SKILL.md contains {skill_content}",
                 effective_params=params,
                 skill_uris=(SKILL_URI,),
             )
@@ -1199,12 +1298,11 @@ async def test_tool_result_event_publishes_persisted_view_not_remote_skill_conte
     events = [await bus.consume_outbound() for _ in range(bus.outbound.qsize())]
     result_events = [event for event in events if event.event_type == OutboundEventType.TOOL_RESULT]
     assert len(result_events) == 1
-    assert secret not in result_events[0].content
-    assert SKILL_URI in result_events[0].content
+    assert skill_content in result_events[0].content
 
 
 @pytest.mark.asyncio
-async def test_materialized_skill_read_has_separate_model_and_persisted_views():
+async def test_materialized_skill_read_returns_full_result():
     runtime, _client, _sandbox_manager = _runtime()
     await runtime.activate_from_read(SKILL_MD_URI, SKILL_MD)
     registry = ToolRegistry(config=runtime.config)
@@ -1219,8 +1317,6 @@ async def test_materialized_skill_read_has_separate_model_and_persisted_views():
     )
 
     assert "print('ok')" in outcome.result
-    assert "print('ok')" not in outcome.persisted_result
-    assert "content-bearing result was omitted" in outcome.persisted_result
     assert outcome.skill_uris == (SKILL_URI,)
 
 

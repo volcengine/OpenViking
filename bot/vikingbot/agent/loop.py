@@ -1116,7 +1116,6 @@ class AgentLoop:
                             tool_call,
                             ToolExecutionResult(
                                 result=result,
-                                persisted_result=result,
                                 effective_params=dict(tool_call.arguments),
                             ),
                             0.0,
@@ -1152,15 +1151,15 @@ class AgentLoop:
                         )
                         outcome = ToolExecutionResult(
                             result=result,
-                            persisted_result=result,
                             effective_params=dict(tool_call.arguments),
                         )
                     tool_execute_duration = (time.time() - tool_execute_start_time) * 1000
                     return idx, tool_call, outcome, tool_execute_duration
 
-                if publish_events:
-                    for tool_call in response.tool_calls:
-                        args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
+                for tool_call in response.tool_calls:
+                    args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
+                    logger.info(f"[TOOL_CALL]: {tool_call.name}({args_str[:200]})")
+                    if publish_events:
                         await self.bus.publish_outbound(
                             OutboundMessage(
                                 session_key=session_key,
@@ -1220,10 +1219,6 @@ class AgentLoop:
                                     "were activated; retry this tool call using the refreshed "
                                     "tool definitions"
                                 ),
-                                persisted_result=(
-                                    "Error: SKILL_CONTEXT_UPDATED: retry with refreshed remote "
-                                    "Skill tool definitions"
-                                ),
                                 effective_params=dict(call.arguments),
                             ),
                             0.0,
@@ -1240,20 +1235,14 @@ class AgentLoop:
                 turn_tools: list[dict[str, Any]] = []
                 for _idx, tool_call, outcome, tool_execute_duration in results:
                     result = outcome.result
-                    persisted_result = (
-                        outcome.result
-                        if outcome.persisted_result is None
-                        else outcome.persisted_result
-                    )
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
-                    logger.info(f"[TOOL_CALL]: {tool_call.name}({args_str[:200]})")
-                    logger.info(f"[RESULT]: {str(persisted_result)[:600]}")
+                    logger.info(f"[RESULT]: {str(result)[:600]}")
 
                     if publish_events:
                         await self.bus.publish_outbound(
                             OutboundMessage(
                                 session_key=session_key,
-                                content=str(persisted_result),
+                                content=str(result),
                                 event_type=OutboundEventType.TOOL_RESULT,
                             )
                         )
@@ -1266,7 +1255,7 @@ class AgentLoop:
                         "tool_name": tool_call.name,
                         "args": args_str,
                         "resolved_args": outcome.effective_params,
-                        "result": persisted_result,
+                        "result": result,
                         "duration": tool_execute_duration,
                         "execute_success": _is_tool_result_success(result),
                         "input_token": tool_call.tokens,
