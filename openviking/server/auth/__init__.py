@@ -16,6 +16,7 @@ from openviking.server.identity import (
 from openviking.server.upload_token_store import UploadTokenError, upload_token_store
 from openviking.telemetry.span_models import update_root_span_identity
 from openviking_cli.exceptions import (
+    FailedPreconditionError,
     InvalidArgumentError,
     PermissionDeniedError,
     UnauthenticatedError,
@@ -74,19 +75,6 @@ def normalize_actor_peer_header(value: Optional[str]) -> Optional[str]:
         raise InvalidArgumentError(str(exc)) from exc
 
 
-def resolve_actor_peer_headers(
-    actor_peer_header: Optional[str],
-    legacy_agent_header: Optional[str],
-) -> tuple[Optional[str], Optional[str]]:
-    actor_peer_id = normalize_actor_peer_header(actor_peer_header)
-    legacy_agent_id = normalize_actor_peer_header(legacy_agent_header)
-    if actor_peer_id and legacy_agent_id and actor_peer_id != legacy_agent_id:
-        raise InvalidArgumentError(
-            "X-OpenViking-Agent and X-OpenViking-Actor-Peer must match when both are set."
-        )
-    return actor_peer_id or legacy_agent_id, legacy_agent_id
-
-
 def _explicit_identity_from_request(request: Request) -> tuple[Optional[str], Optional[str]]:
     path_params = getattr(request, "path_params", {}) or {}
     query_params = request.query_params
@@ -108,6 +96,45 @@ def _get_plugin(request: Request):
     if plugin is None:
         raise UnauthenticatedError("Auth plugin not initialized")
     return plugin
+
+
+def _build_request_context(
+    request: Request,
+    identity: ResolvedIdentity,
+    *,
+    actor_peer_id: Optional[str] = None,
+    api_key: Optional[str] = None,
+) -> RequestContext:
+    plugin = _get_plugin(request)
+    plugin.get_request_context_checks(request.url.path, identity)
+    ctx = RequestContext(
+        user=UserIdentifier(
+            identity.account_id or "default",
+            identity.user_id or "default",
+        ),
+        role=identity.role,
+        actor_peer_id=actor_peer_id,
+        from_oauth=identity.from_oauth,
+        api_key=api_key,
+    )
+    manager = getattr(request.app.state, "api_key_manager", None)
+    is_user_deleting = getattr(manager, "is_user_deleting", None)
+    if (
+        ctx.role != Role.ROOT
+        and callable(is_user_deleting)
+        and is_user_deleting(ctx.account_id, ctx.user.user_id)
+    ):
+        deletion = manager.get_user_deletion(ctx.account_id, ctx.user.user_id) or {}
+        raise FailedPreconditionError(
+            "User deletion is in progress",
+            details={"task_id": deletion.get("task_id")},
+        )
+    update_root_span_identity(
+        request_state=request.state,
+        account_id=identity.account_id,
+        user_id=identity.user_id,
+    )
+    return ctx
 
 
 async def resolve_identity(
@@ -135,40 +162,30 @@ async def get_request_context(
     request: Request,
     identity: ResolvedIdentity = Depends(resolve_identity),
     x_openviking_actor_peer: Optional[str] = Header(None, alias="X-OpenViking-Actor-Peer"),
-    x_openviking_agent: Optional[str] = Header(None, alias="X-OpenViking-Agent"),
     x_api_key_ctx: Optional[str] = Header(None, alias="X-API-Key"),
     authorization_ctx: Optional[str] = Header(None, alias="Authorization"),
 ) -> RequestContext:
     """Convert ResolvedIdentity to RequestContext."""
-    path = request.url.path
-    plugin = _get_plugin(request)
-    plugin.get_request_context_checks(path, identity)
-    actor_peer_id, legacy_agent_id = resolve_actor_peer_headers(
-        x_openviking_actor_peer,
-        x_openviking_agent,
+    return _build_request_context(
+        request,
+        identity,
+        actor_peer_id=normalize_actor_peer_header(x_openviking_actor_peer),
+        api_key=_extract_api_key(x_api_key_ctx, authorization_ctx),
     )
 
-    raw_api_key = _extract_api_key(x_api_key_ctx, authorization_ctx)
 
-    ctx = RequestContext(
-        user=UserIdentifier(
-            identity.account_id or "default",
-            identity.user_id or "default",
-        ),
-        role=identity.role,
-        actor_peer_id=actor_peer_id,
-        legacy_agent_id=legacy_agent_id,
-        from_oauth=identity.from_oauth,
-        api_key=raw_api_key,
+async def get_session_request_context(
+    request: Request,
+    identity: ResolvedIdentity = Depends(resolve_identity),
+    x_api_key_ctx: Optional[str] = Header(None, alias="X-API-Key"),
+    authorization_ctx: Optional[str] = Header(None, alias="Authorization"),
+) -> RequestContext:
+    """Build a Session context without accepting an actor peer view."""
+    return _build_request_context(
+        request,
+        identity,
+        api_key=_extract_api_key(x_api_key_ctx, authorization_ctx),
     )
-    # Update the unified root observability context after authentication succeeds.
-    update_root_span_identity(
-        request_state=request.state,
-        account_id=identity.account_id,
-        user_id=identity.user_id,
-    )
-
-    return ctx
 
 
 async def get_upload_request_context(
@@ -179,7 +196,6 @@ async def get_upload_request_context(
     x_openviking_account: Optional[str] = Header(None, alias="X-OpenViking-Account"),
     x_openviking_user: Optional[str] = Header(None, alias="X-OpenViking-User"),
     x_openviking_actor_peer: Optional[str] = Header(None, alias="X-OpenViking-Actor-Peer"),
-    x_openviking_agent: Optional[str] = Header(None, alias="X-OpenViking-Agent"),
 ) -> RequestContext:
     """Two-layer auth for the ``temp_upload`` route: API key first, else a signed token.
 
@@ -220,7 +236,7 @@ async def get_upload_request_context(
     identity = await resolve_identity(
         request, x_api_key, authorization, x_openviking_account, x_openviking_user
     )
-    return await get_request_context(request, identity, x_openviking_actor_peer, x_openviking_agent)
+    return await get_request_context(request, identity, x_openviking_actor_peer)
 
 
 def require_role(*allowed_roles: Role):
@@ -287,9 +303,8 @@ def require_auth_role(*allowed_roles: Role):
                     "Admin API authentication failed: unable to resolve request context."
                 )
 
-            plugin = _get_plugin(request)
             manager = getattr(request.app.state, "api_key_manager", None)
-            if manager is None and plugin.requires_api_key_manager():
+            if manager is None:
                 raise PermissionDeniedError(_DEV_MODE_ADMIN_API_MESSAGE)
 
             if ctx.role not in allowed_roles:
@@ -329,11 +344,9 @@ def get_api_key_manager_or_raise(request: Request):
     """Get APIKeyManager from app state or raise appropriate error.
 
     Raises:
-        PermissionDeniedError: When the current auth plugin requires an
-            APIKeyManager but none is available.
+        PermissionDeniedError: When no APIKeyManager is available.
     """
     manager = getattr(request.app.state, "api_key_manager", None)
-    plugin = _get_plugin(request)
-    if manager is None and plugin.requires_api_key_manager():
+    if manager is None:
         raise PermissionDeniedError(_DEV_MODE_ADMIN_API_MESSAGE)
     return manager

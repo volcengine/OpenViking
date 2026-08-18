@@ -5,8 +5,8 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import { getStateDir } from "./session-state.mjs";
 
 const DEFAULT_PRIMARY = { model: "gpt-5.3-codex-spark", thinking: "default", source: "default_primary" };
-const DEFAULT_FALLBACK = { model: "gpt-5.5", thinking: "low", source: "default_fallback" };
-const PROFILE_SCHEMA_VERSION = 2;
+const DEFAULT_FALLBACK = { model: "gpt-5.6-luna", thinking: "low", source: "default_fallback" };
+const PROFILE_SCHEMA_VERSION = 3;
 const DEFAULT_CODEX_HOME = join(homedir(), ".codex");
 
 function isOff(value) {

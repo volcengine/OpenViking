@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 
-from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV, OPENVIKING_ENABLE_RECORDER_ENV
+from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 
 logging.basicConfig(
     level=logging.INFO,
@@ -65,8 +65,7 @@ class RAGEvaluator:
         docs_dirs: List[str],
         code_dirs: List[str],
         config_path: str = "./ov.conf",
-        data_path: str = "./data",
-        enable_recorder: bool = False,
+        server_url: str = "http://127.0.0.1:1933",
     ):
         """
         Initialize the RAG evaluator.
@@ -75,38 +74,28 @@ class RAGEvaluator:
             docs_dirs: List of document directories or files
             code_dirs: List of code repository paths
             config_path: Path to OpenViking config file
-            data_path: Path to OpenViking data directory
-            enable_recorder: Whether to enable IO recording
+            server_url: OpenViking HTTP server URL
         """
         self.docs_dirs = docs_dirs
         self.code_dirs = code_dirs
         self.config_path = config_path
-        self.data_path = data_path
-        self.enable_recorder = enable_recorder
+        self.server_url = server_url
         self._client = None
         self._initialized = False
-
-        if enable_recorder:
-            from openviking.eval.recorder import init_recorder
-
-            init_recorder(enabled=True)
-            logger.info("IO Recorder enabled")
 
     def _get_client(self):
         """Get or create OpenViking client."""
         if self._client is None:
             try:
-                from openviking import OpenViking
+                from openviking_sdk import SyncHTTPClient
 
                 config_path = Path(self.config_path).expanduser()
                 if config_path.exists():
                     os.environ[OPENVIKING_CONFIG_ENV] = str(config_path)
                     logger.info(f"Using config file: {config_path}")
 
-                if self.enable_recorder:
-                    os.environ[OPENVIKING_ENABLE_RECORDER_ENV] = "true"
-
-                self._client = OpenViking(path=self.data_path)
+                self._client = SyncHTTPClient(url=self.server_url)
+                self._client.initialize()
             except Exception as e:
                 logger.error(f"Failed to create OpenViking client: {e}")
                 raise
@@ -176,12 +165,17 @@ class RAGEvaluator:
             contexts = []
 
             if result:
-                for ctx in result:
+                items = (
+                    result.get("memories", [])
+                    + result.get("resources", [])
+                    + result.get("skills", [])
+                )
+                for ctx in items:
                     contexts.append(
                         {
-                            "uri": getattr(ctx, "uri", ""),
-                            "content": getattr(ctx, "abstract", "") or getattr(ctx, "overview", ""),
-                            "score": getattr(ctx, "score", 0.0),
+                            "uri": ctx.get("uri", ""),
+                            "content": ctx.get("abstract", "") or ctx.get("overview", ""),
+                            "score": ctx.get("score", 0.0),
                         }
                     )
 
@@ -363,8 +357,7 @@ async def main_async(args):
         docs_dirs=args.docs_dir,
         code_dirs=args.code_dir,
         config_path=args.config,
-        data_path=args.data_path,
-        enable_recorder=args.recorder,
+        server_url=args.url,
     )
 
     print("\nRunning RAG evaluation...")
@@ -380,32 +373,6 @@ async def main_async(args):
 
     if args.ragas:
         await run_ragas_evaluation(eval_results)
-
-    if args.recorder:
-        from openviking.eval.recorder import get_recorder
-        from openviking.storage.viking_fs import get_viking_fs
-
-        recorder = get_recorder()
-
-        viking_fs = get_viking_fs()
-        if hasattr(viking_fs.agfs, "stop_recording"):
-            viking_fs.agfs.stop_recording()
-
-        stats = recorder.get_stats()
-        print("\n" + "=" * 60)
-        print("IO Recorder Statistics")
-        print("=" * 60)
-        print(f"Total Records: {stats['total_count']}")
-        print(f"FS Operations: {stats['fs_count']}")
-        print(f"VikingDB Operations: {stats['vikingdb_count']}")
-        print(f"Total Latency: {stats['total_latency_ms']:.2f} ms")
-        print(f"Errors: {stats['errors']}")
-        if stats["operations"]:
-            print("\nOperations Breakdown:")
-            for op, data in stats["operations"].items():
-                avg_latency = data["total_latency_ms"] / data["count"] if data["count"] > 0 else 0
-                print(f"  {op}: {data['count']} calls, avg {avg_latency:.2f} ms")
-        print(f"\nRecord file: {recorder.record_file}")
 
 
 def main():
@@ -453,9 +420,9 @@ Examples:
     )
 
     parser.add_argument(
-        "--data_path",
-        default="./data",
-        help="Path to OpenViking data directory (default: ./data)",
+        "--url",
+        default="http://127.0.0.1:1933",
+        help="OpenViking server URL (default: http://127.0.0.1:1933)",
     )
 
     parser.add_argument(
@@ -474,12 +441,6 @@ Examples:
         "--ragas",
         action="store_true",
         help="Run RAGAS evaluation (requires ragas package)",
-    )
-
-    parser.add_argument(
-        "--recorder",
-        action="store_true",
-        help="Enable IO recording for storage layer evaluation",
     )
 
     args = parser.parse_args()

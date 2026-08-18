@@ -105,13 +105,14 @@ Edit `~/.openviking/ov.conf`:
     "agents": {
       "provider": "openai",
       "model": "gpt-4o-mini",
-      "api_key": "<your-model-api-key>"
+      "api_key": "<your-model-api-key>",
+      "max_tokens": 8192
     }
   }
 }
 ```
 
-Alternatively, configure only the root-level `vlm` section. VikingBot inherits its model, provider, API key, API base, and timeout settings.
+Alternatively, configure only the root-level `vlm` section. VikingBot inherits its model, provider, API key, API base, timeout, and output-token settings. `bot.agents.max_tokens` is optional; when omitted, VikingBot lets the model provider choose the output limit. A `max_tokens` value on an individual credential overrides the Agent-level value.
 
 #### 2. Start chatting
 
@@ -313,6 +314,7 @@ Restart `vikingbot gateway` after changing the configuration.
 | `bot.gateway.port` | `18790` | Gateway listen port |
 | `bot.sandbox.backend` | `direct` | Execution backend |
 | `bot.sandbox.mode` | `shared` | Workspace isolation mode |
+| `bot.sandbox.backends.direct.allow_compile_exec` | `false` | Unsafe opt-in that adds `exec` to Compile when using the `direct` backend; ordinary Compile tasks still run without it |
 | `bot.heartbeat.enabled` | `true` | Whether to check `HEARTBEAT.md` periodically |
 | `bot.heartbeat.interval_seconds` | `600` | Heartbeat interval |
 | `bot.mode` | `normal` | One of `normal`, `readonly`, or `debug` |

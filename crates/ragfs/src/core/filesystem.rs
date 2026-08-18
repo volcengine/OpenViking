@@ -197,6 +197,52 @@ pub trait FileSystem: Send + Sync + Any {
     /// * `Error::IsADirectory` - If the path points to a directory
     async fn write(&self, path: &str, data: &[u8], offset: u64, flags: WriteFlag) -> Result<u64>;
 
+    /// Replace a file only when its full current content equals `expected`.
+    ///
+    /// # Arguments
+    /// * `path` - The path of the file to replace
+    /// * `expected` - Exact current file content required for the replacement
+    /// * `new_data` - New full file content
+    ///
+    /// # Returns
+    /// `true` when replaced, `false` when the file is missing or no longer matches.
+    ///
+    /// # Errors
+    /// Returns `Error::InvalidOperation` when the backend cannot provide a native
+    /// compare-and-write operation.
+    async fn compare_and_write(
+        &self,
+        path: &str,
+        expected: &[u8],
+        new_data: &[u8],
+    ) -> Result<bool> {
+        let _ = (expected, new_data);
+        Err(Error::invalid_operation(format!(
+            "compare_and_write is not supported: {}",
+            path
+        )))
+    }
+
+    /// Remove a file only when its full current content equals `expected`.
+    ///
+    /// # Arguments
+    /// * `path` - The path of the file to remove
+    /// * `expected` - Exact current file content required for removal
+    ///
+    /// # Returns
+    /// `true` when removed, `false` when the file is missing or no longer matches.
+    ///
+    /// # Errors
+    /// Returns `Error::InvalidOperation` when the backend cannot provide a native
+    /// compare-and-remove operation.
+    async fn compare_and_remove(&self, path: &str, expected: &[u8]) -> Result<bool> {
+        let _ = expected;
+        Err(Error::invalid_operation(format!(
+            "compare_and_remove is not supported: {}",
+            path
+        )))
+    }
+
     /// List directory contents
     ///
     /// # Arguments
@@ -209,6 +255,17 @@ pub trait FileSystem: Send + Sync + Any {
     /// * `Error::NotFound` - If the directory doesn't exist
     /// * `Error::NotADirectory` - If the path is not a directory
     async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>>;
+
+    /// List directory contents without public internal-name filtering.
+    ///
+    /// # Arguments
+    /// * `path` - The directory path to list
+    ///
+    /// # Returns
+    /// Raw directory entries visible to filesystem internals.
+    async fn read_internal_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
+        self.read_dir(path).await
+    }
 
     /// Get file or directory metadata
     ///
@@ -1016,7 +1073,7 @@ mod tests {
         let entries = root_tree(&fs, false, None, Some(1)).await;
 
         assert_eq!(entries.len(), 2);
-        assert_tree_names(&entries, &["a.txt", "sub"]);
+        assert_tree_names(&entries, &["sub", "a.txt"]);
     }
 
     #[tokio::test]
@@ -1081,8 +1138,8 @@ mod tests {
         let entries = fs.tree_directory("/", false, None, None).await.unwrap();
 
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].path, "/a.txt");
-        assert_eq!(entries[0].rel_path, "a.txt");
+        assert_eq!(entries[0].path, "/sub");
+        assert_eq!(entries[0].rel_path, "sub");
     }
 
     #[tokio::test]

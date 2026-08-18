@@ -85,7 +85,7 @@ else:
                     "handlers": ["null"],
                     "propagate": False,
                 },
-                "openviking.async_client": {
+                "openviking_sdk.client": {
                     "level": "CRITICAL",
                     "handlers": ["null"],
                     "propagate": False,

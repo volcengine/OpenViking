@@ -49,11 +49,16 @@ def is_text_file(file_path: Union[str, Path]) -> bool:
     p = Path(file_path)
     extension = p.suffix.lower()
     if extension:
-        return (
+        if (
             extension in CODE_EXTENSIONS
             or extension in DOCUMENTATION_EXTENSIONS
             or extension in ADDITIONAL_TEXT_EXTENSIONS
-        )
+        ):
+            return True
+
+        from openviking.parse.parsers.code.ast.providers import supports_code_skeleton
+
+        return supports_code_skeleton(str(p))
     # Extensionless files: check against known text file names (case-insensitive).
     return p.name.upper() in _EXTENSIONLESS_TEXT_NAMES
 

@@ -26,6 +26,9 @@ def test_openviking_top_level_exports_http_clients():
 
     assert openviking.AsyncHTTPClient is LegacyAsyncHTTPClient
     assert openviking.SyncHTTPClient is LegacySyncHTTPClient
+    assert not hasattr(openviking, "AsyncOpenViking")
+    assert not hasattr(openviking, "SyncOpenViking")
+    assert not hasattr(openviking, "OpenViking")
 
 
 def test_openviking_client_module_exports_http_clients():
@@ -56,12 +59,11 @@ def test_openviking_client_module_can_fallback_to_repo_local_sdk():
         sys.path[:] = original_sys_path
 
 
-def test_openviking_client_module_import_is_lazy_for_local_client_stack():
+def test_openviking_client_module_does_not_import_service_stack():
     _purge_openviking_modules()
 
     import openviking.client as client_module
 
-    assert "openviking.client.local" not in sys.modules
     assert "openviking.service" not in sys.modules
     assert client_module.AsyncHTTPClient.__module__ == "openviking_cli.client._http_compat"
 

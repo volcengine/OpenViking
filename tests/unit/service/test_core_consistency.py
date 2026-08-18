@@ -1,7 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
-"""Focused tests for system consistency URI validation."""
+"""Focused tests for core service behavior."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -11,6 +12,51 @@ from openviking.service.core import OpenVikingService
 from openviking.storage.index_consistency import IndexConsistencyReport
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
+
+
+def test_service_passes_queue_worker_concurrency_to_storage(monkeypatch) -> None:
+    storage_calls = []
+    embedder = SimpleNamespace(is_sparse=False)
+    config = SimpleNamespace(
+        default_account="default",
+        default_user="default",
+        storage=object(),
+        embedding=SimpleNamespace(
+            max_concurrent=10,
+            dimension=1024,
+            get_embedder=lambda: embedder,
+        ),
+        vlm=SimpleNamespace(max_concurrent=32),
+        parser_api=SimpleNamespace(),
+        queue_workers=SimpleNamespace(
+            external_parse=SimpleNamespace(max_concurrent=9),
+            add_resource=SimpleNamespace(max_concurrent=7),
+            session_commit=SimpleNamespace(max_concurrent=5),
+        ),
+        git=object(),
+    )
+
+    monkeypatch.setattr(
+        "openviking.service.core.initialize_openviking_config",
+        lambda **_kwargs: config,
+    )
+    monkeypatch.setattr(OpenVikingService, "_ensure_data_dir_lock_acquired", lambda self: None)
+    monkeypatch.setattr(
+        OpenVikingService,
+        "_build_ragfs_binding_config",
+        lambda self: object(),
+    )
+
+    def _capture_storage_init(self, *args, **kwargs) -> None:
+        storage_calls.append((args, kwargs))
+
+    monkeypatch.setattr(OpenVikingService, "_init_storage", _capture_storage_init)
+
+    OpenVikingService()
+
+    assert storage_calls[0][1]["max_concurrent_external_parse"] == 9
+    assert storage_calls[0][1]["max_concurrent_add_resource"] == 7
+    assert storage_calls[0][1]["max_concurrent_session_commit"] == 5
 
 
 def _service_with_fs(stat_result: dict) -> tuple[OpenVikingService, AsyncMock]:

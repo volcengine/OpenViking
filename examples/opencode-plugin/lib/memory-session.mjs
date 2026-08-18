@@ -16,6 +16,9 @@ import {
   sendSessionMessages,
 } from "./shared/batch-send.mjs"
 import {
+  isRetryableFailure,
+} from "./shared/retryable.mjs"
+import {
   log,
   effectivePeerId,
   fetchJSON,
@@ -27,6 +30,20 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   const statePath = path.join(pluginRoot, "openviking-session-state.json")
   const oldSessionMapPath = path.join(pluginRoot, "openviking-session-map.json")
   let saveTimer = null
+  // Serialize saves: concurrent saveState() calls (a debounced save racing
+  // with flushAll / flushSession / session deletion) all share the same
+  // `${statePath}.tmp` temp file, so one rename can fail with ENOENT after
+  // another already moved it. Chaining through a promise queue keeps at most
+  // one write+rename in flight. Each queued save re-serializes the in-memory
+  // `sessions` map at execution time, so the last save always persists the
+  // latest state.
+  let saveChain = Promise.resolve()
+
+  function enqueueSave() {
+    const run = saveChain.then(() => saveState())
+    saveChain = run.catch(() => {})
+    return run
+  }
 
   async function init() {
     if (config.autoCapture) await migrateLegacySessionMap()
@@ -81,7 +98,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   function debouncedSaveState() {
     if (saveTimer) clearTimeout(saveTimer)
     saveTimer = setTimeout(() => {
-      saveState().catch((error) => {
+      enqueueSave().catch((error) => {
         log("ERROR", "persistence", "Debounced save failed", { error: error?.message })
       })
     }, 300)
@@ -173,7 +190,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     if (!sessionId) return
     await flushSession(sessionId, { commit: true, reason: event.type })
     sessions.delete(sessionId)
-    await saveState()
+    await enqueueSave()
   }
 
   async function handleSessionError(event) {
@@ -250,7 +267,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     for (const sessionId of sessions.keys()) {
       await flushSession(sessionId, { commit, reason: "flushAll" })
     }
-    await saveState()
+    await enqueueSave()
   }
 
   async function flushSession(opencodeSessionId, { commit = false, reason = "manual" } = {}) {
@@ -264,7 +281,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     } else if (added > 0) {
       await maybeCommitByThreshold(state)
     }
-    await saveState()
+    await enqueueSave()
     return true
   }
 
@@ -438,15 +455,35 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       for (const state of sessions.values()) {
         if (state.ovSessionId === ovSessionId) state.lastCommitTime = Date.now()
       }
-      log("INFO", "session", "Committed OpenViking session", { openviking_session: ovSessionId, reason })
-      return { status: "accepted", result: res.result }
+      const traceId = res.traceId || res.result?.trace_id
+      log("INFO", "session", "Committed OpenViking session", {
+        openviking_session: ovSessionId,
+        reason,
+        trace_id: traceId,
+      })
+      return { status: "accepted", result: res.result, traceId }
     }
     if (isRetryableFailure(res)) {
       await enqueue("commitSession", ovSessionId, body)
-      log("WARN", "session", "Queued OpenViking session commit", { openviking_session: ovSessionId, reason })
+      log("WARN", "session", "Queued OpenViking session commit", {
+        openviking_session: ovSessionId,
+        reason,
+        trace_id: res.traceId,
+        status: res.status,
+      })
       return { status: "queued" }
     }
-    throw new Error(`Failed to commit OpenViking session ${ovSessionId}: ${res.error?.message || res.status}`)
+    log("ERROR", "session", "Failed to commit OpenViking session", {
+      openviking_session: ovSessionId,
+      reason,
+      trace_id: res.traceId,
+      status: res.status,
+      error: res.error?.message || res.error?.code,
+    })
+    throw new Error(
+      `Failed to commit OpenViking session ${ovSessionId}: ${res.error?.message || res.status}` +
+      (res.traceId ? ` (trace_id=${res.traceId})` : ""),
+    )
   }
 
   async function migrateLegacySessionMap() {
@@ -475,9 +512,4 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     }
   }
 
-  function isRetryableFailure(res) {
-    if (!res || res.ok) return false
-    const status = Number(res.status || 0)
-    return !status || status >= 500 || status === 408 || status === 429
-  }
 }

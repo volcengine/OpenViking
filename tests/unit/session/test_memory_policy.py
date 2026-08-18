@@ -1,6 +1,10 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import json
+import warnings
+from pathlib import Path
+
 import pytest
 
 from openviking.session.memory.dataclass import MemoryField, MemoryTypeSchema
@@ -66,13 +70,43 @@ def test_memory_policy_rejects_invalid_working_memory_shape():
         MemoryPolicy.from_dict({"working_memory": {"enabled": True, "mode": "summary"}})
 
 
+def test_memory_policy_legacy_enabled_compatibility_fixture():
+    fixture_path = Path(__file__).parent / "fixtures" / "memory_policy_compat.json"
+    cases = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+    for case in cases:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            policy = MemoryPolicy.from_dict({"peer": {"enabled": case["value"]}})
+
+        assert policy.peer_enabled is case["expected"]
+        deprecations = [item for item in caught if item.category is FutureWarning]
+        assert bool(deprecations) is case["deprecated"]
+
+
+def test_memory_policy_legacy_enabled_warning_is_user_visible():
+    with pytest.warns(FutureWarning, match="legacy coercion is deprecated"):
+        MemoryPolicy.from_dict({"peer": {"enabled": "false"}})
+
+
 def test_memory_policy_rejects_invalid_memory_types():
     policy = MemoryPolicy.from_dict({"memory_types": ["profile", "missing"]})
 
     with pytest.raises(InvalidArgumentError, match="missing"):
         policy.validate_memory_types({"profile"})
 
-    assert MemoryPolicy.from_dict({"memory_types": ["experiences"]}).memory_types == {"experiences"}
+    evolution_policy = MemoryPolicy.from_dict({"memory_types": ["profile", "experiences"]})
+    assert evolution_policy.memory_types == {
+        "profile",
+        "cases",
+        "trajectories",
+        "experiences",
+    }
+
+    incomplete_policy = MemoryPolicy.from_dict(
+        {"memory_types": ["profile", "cases", "trajectories"]}
+    )
+    assert incomplete_policy.memory_types == {"profile"}
 
 
 async def test_initialize_memory_files_respects_memory_type_filter(monkeypatch):

@@ -200,7 +200,7 @@ class DirectoryInitializer:
         # still protect peer subtrees during normal filesystem mutations, but
         # it must not prevent a fresh user from creating the container that
         # owns those subtrees in the first place.
-        initialization_ctx = replace(ctx, actor_peer_id=None, legacy_agent_id=None)
+        initialization_ctx = replace(ctx, actor_peer_id=None)
         user_tree = PRESET_DIRECTORIES["user"]
         parent_uri = "viking://user"
         count = 0

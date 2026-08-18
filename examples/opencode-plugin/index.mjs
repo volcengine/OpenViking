@@ -24,7 +24,7 @@ export async function OpenVikingPlugin({ client, directory }) {
 
   const repoContext = createRepoContext({ config })
   const sessionManager = createMemorySessionManager({ config, pluginRoot: dataDir })
-  const recall = createMemoryRecall({ config })
+  const recall = createMemoryRecall({ config, sessionManager })
   const sessionInject = createSessionInject({ config, sessionManager })
   const vikingUriGuard = createVikingUriGuard()
 
@@ -44,8 +44,15 @@ export async function OpenVikingPlugin({ client, directory }) {
 
   return {
     config: async (opencodeConfig) => {
-      const injected = injectOpenVikingMcpConfig(opencodeConfig, pluginRoot)
-      log(injected ? "INFO" : "WARN", "mcp", injected ? "Registered OpenViking MCP server" : "OpenViking MCP server was not registered")
+      const injected = injectOpenVikingMcpConfig(opencodeConfig, pluginRoot, config.mcp.enabled)
+      const hookOnly = !config.mcp.enabled
+      log(
+        injected || hookOnly ? "INFO" : "WARN",
+        "mcp",
+        injected ? "Registered OpenViking MCP server" :
+          hookOnly ? "Skipped bundled MCP registration in hook-only mode" :
+            "OpenViking MCP server was not registered",
+      )
     },
 
     event: async ({ event }) => {

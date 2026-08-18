@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Bootstrap script for OpenViking HTTP Server."""
 
+import asyncio
 import argparse
 import json
 import os
@@ -16,7 +17,11 @@ from typing import Optional
 
 import uvicorn
 
-from openviking.server.app import create_app
+from openviking.server.app import (
+    WORKER_BOT_API_URL_ENV,
+    WORKER_WITH_BOT_ENV,
+    create_app,
+)
 from openviking.server.config import get_server_url_from_server_data, load_server_config
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.config_loader import resolve_config_path
@@ -160,10 +165,6 @@ def main():
     )
     parser.add_argument(
         "--bot",
-        action="store_true",
-        help="Also start vikingbot gateway after server starts",
-    )
-    parser.add_argument(
         "--with-bot",
         action="store_true",
         dest="with_bot",
@@ -207,11 +208,28 @@ def main():
 
     # Load server config from ov.conf
     try:
+        resolved_config_path = resolve_config_path(
+            args.config,
+            OPENVIKING_CONFIG_ENV,
+            DEFAULT_OV_CONF,
+        )
         config = load_server_config(args.config)
         OpenVikingConfigSingleton.initialize(config_path=args.config)
     except (FileNotFoundError, ValueError) as e:
         print(e, file=sys.stderr)
         sys.exit(1)
+
+    # Configure logging early so that all subsequent steps have proper logging
+    configure_uvicorn_logging()
+
+    # 🔍 Authentication health check - CRITICAL: will exit if check fails
+    try:
+        from openviking.server.auth.health_check import run_startup_health_check_or_exit
+        asyncio.run(run_startup_health_check_or_exit(config))
+    except Exception as e:
+        # Don't fail startup if health check itself has issues
+        print(f"Warning: Authentication health check failed to run: {e}", file=sys.stderr)
+        print("Continuing startup anyway...", file=sys.stderr)
 
     # Ensure Ollama is running if configured
     try:
@@ -243,9 +261,6 @@ def main():
         config.workers = args.workers
     if args.with_bot:
         config.with_bot = True
-
-    # Configure logging for Uvicorn
-    configure_uvicorn_logging()
 
     bot_process: Optional[BotProcess] = None
     if config.with_bot:
@@ -279,7 +294,12 @@ def main():
             sys.exit(1)
 
     # Create and run server app
-    app = create_app(config)
+    app = create_app(
+        config,
+        config_path=(
+            str(resolved_config_path) if resolved_config_path is not None else args.config
+        ),
+    )
     workers_info = f" (workers: {config.workers})" if config.workers > 1 else ""
     print(f"OpenViking HTTP Server is running on {config.host}:{config.port}{workers_info}")
 
@@ -290,16 +310,25 @@ def main():
             # can independently import the application.  We stash the
             # resolved config path in an env-var so that the factory can
             # pick it up (ServerConfig already reads OPENVIKING_CONFIG_FILE).
+            os.environ[WORKER_WITH_BOT_ENV] = "1" if config.with_bot else "0"
+            os.environ[WORKER_BOT_API_URL_ENV] = config.bot_api_url
             uvicorn.run(
-                "openviking.server.app:create_app",
+                "openviking.server.app:create_worker_app",
                 factory=True,
                 host=config.host,
                 port=config.port,
                 workers=workers,
+                timeout_keep_alive=config.timeout_keep_alive,
                 log_config=None,
             )
         else:
-            uvicorn.run(app, host=config.host, port=config.port, log_config=None)
+            uvicorn.run(
+                app,
+                host=config.host,
+                port=config.port,
+                timeout_keep_alive=config.timeout_keep_alive,
+                log_config=None,
+            )
     finally:
         # Cleanup vikingbot process on shutdown
         if bot_process is not None:

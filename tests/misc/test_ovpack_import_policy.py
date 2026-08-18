@@ -10,10 +10,12 @@ import os
 import tempfile
 import zipfile
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
 from openviking.server.identity import RequestContext, Role
+from openviking.service.pack_service import PackService
 from openviking.storage.index_consistency import IndexConsistencyReport, IndexExpectation
 from openviking.storage.ovpack.operations import (
     backup_ovpack,
@@ -171,6 +173,7 @@ class FakeBackupVikingFS:
             "viking://resources/README.md": b"hello",
             "viking://user/alice/sessions/sess_1/.meta.json": b'{"session_id":"sess_1"}',
         }
+        self.tree_contexts: list[tuple[str, RequestContext]] = []
 
     async def tree(
         self,
@@ -183,6 +186,7 @@ class FakeBackupVikingFS:
         assert show_all_hidden is True
         assert node_limit is None
         assert level_limit is None
+        self.tree_contexts.append((uri, ctx))
         if uri == "viking://resources":
             return [
                 {
@@ -588,12 +592,13 @@ async def test_export_ovpack_skips_missing_semantic_sidecars(
 
 
 @pytest.mark.asyncio
-async def test_backup_restore_contract(temp_ovpack_path: Path, request_ctx: RequestContext):
-    await backup_ovpack(
-        FakeBackupVikingFS(),
-        str(temp_ovpack_path),
-        ctx=request_ctx,
-    )
+async def test_backup_restore_contract(
+    temp_ovpack_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    admin_ctx = RequestContext(user=UserIdentifier("acct", "admin"), role=Role.ADMIN)
+    backup_fs = FakeBackupVikingFS()
+    await PackService(backup_fs).backup_ovpack(str(temp_ovpack_path), ctx=admin_ctx)
 
     with zipfile.ZipFile(temp_ovpack_path, "r") as zf:
         names = set(zf.namelist())
@@ -601,6 +606,7 @@ async def test_backup_restore_contract(temp_ovpack_path: Path, request_ctx: Requ
 
     assert "openviking-backup/files/resources/README.md" in names
     assert "openviking-backup/files/user/alice/sessions/sess_1/.meta.json" in names
+    assert all(ctx.role == Role.ROOT for _, ctx in backup_fs.tree_contexts)
     assert manifest["root"] == {
         "name": "openviking-backup",
         "uri": "viking://",
@@ -610,15 +616,33 @@ async def test_backup_restore_contract(temp_ovpack_path: Path, request_ctx: Requ
     assert manifest["scopes"] == ["resources", "user"]
 
     with pytest.raises(InvalidArgumentError, match=r"must be restored"):
-        await import_ovpack(FakeVikingFS(), str(temp_ovpack_path), "viking://", request_ctx)
+        await import_ovpack(FakeVikingFS(), str(temp_ovpack_path), "viking://", admin_ctx)
+
+    monkeypatch.setattr(
+        "openviking.storage.ovpack.operations._enqueue_direct_vectorization",
+        AsyncMock(),
+    )
 
     fake_fs = FakeVikingFS()
-    assert await restore_ovpack(fake_fs, str(temp_ovpack_path), request_ctx) == "viking://"
+    fake_fs.ls = AsyncMock(return_value=[])
+    fake_fs.stat = AsyncMock(side_effect=FileNotFoundError())
+    fake_fs.rm = AsyncMock()
+    restore_service = PackService(fake_fs)
+
+    assert (
+        await restore_service.restore_ovpack(
+            str(temp_ovpack_path),
+            admin_ctx,
+            on_conflict="overwrite",
+        )
+        == "viking://"
+    )
     assert fake_fs.written_files == [
         "viking://resources/README.md",
         "viking://user/alice/sessions/sess_1/.meta.json",
     ]
-    assert fake_fs.tree_calls == ["viking://resources", "viking://user"]
+    fake_fs.rm.assert_not_awaited()
+    assert "viking://user" not in fake_fs.created_dirs
 
 
 @pytest.mark.asyncio
@@ -887,9 +911,16 @@ async def test_import_ovpack_rejects_manifest_file_hash_mismatch(
         manifest=manifest,
     )
     fake_fs = FakeVikingFS()
+    fake_fs.ls = AsyncMock(return_value=[])
 
     with pytest.raises(InvalidArgumentError, match=r"sha256 does not match manifest"):
-        await import_ovpack(fake_fs, str(temp_ovpack_path), "viking://resources", request_ctx)
+        await import_ovpack(
+            fake_fs,
+            str(temp_ovpack_path),
+            "viking://resources",
+            request_ctx,
+            on_conflict="skip",
+        )
 
     assert fake_fs.written_files == []
 

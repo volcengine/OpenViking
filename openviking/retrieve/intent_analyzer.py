@@ -91,6 +91,10 @@ class IntentAnalyzer:
         if not parsed:
             raise ValueError("Failed to parse intent analysis response")
 
+        reasoning = parsed.get("reasoning", "")
+        if not isinstance(reasoning, str):
+            reasoning = str(reasoning)
+
         # Build QueryPlan
         queries = []
         for q in parsed.get("queries", []):
@@ -113,12 +117,12 @@ class IntentAnalyzer:
             logger.info(
                 f'  [{i + 1}] type={q.context_type.value}, priority={q.priority}, query="{q.query}"'
             )
-        logger.debug(f"[IntentAnalyzer] Reasoning: {parsed.get('reasoning', '')[:200]}...")
+        logger.debug(f"[IntentAnalyzer] Reasoning: {reasoning[:200]}...")
 
         return QueryPlan(
             queries=queries,
             session_context=self._summarize_context(compression_summary, current_message),
-            reasoning=parsed.get("reasoning", ""),
+            reasoning=reasoning,
         )
 
     def _build_context_prompt(

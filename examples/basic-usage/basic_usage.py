@@ -3,7 +3,7 @@
 OpenViking Basic Usage Example
 
 This script demonstrates the core features of OpenViking:
-1. Initialization (embedded mode and HTTP client mode)
+1. HTTP client initialization
 2. Adding resources (URLs, files, directories)
 3. Browsing the virtual filesystem
 4. Semantic search and retrieval
@@ -12,7 +12,7 @@ This script demonstrates the core features of OpenViking:
 
 Requirements:
 - pip install openviking --upgrade
-- Configuration file at ~/.openviking/ov.conf
+- A running OpenViking server at http://localhost:1933
 """
 
 import os
@@ -35,18 +35,13 @@ def main():
     print("-" * 40)
 
     try:
-        import openviking as ov
+        from openviking_sdk import SyncHTTPClient
     except ImportError as e:
-        print(f"   Error: Failed to import openviking: {e}")
-        print("   Please install: pip install openviking --upgrade")
+        print(f"   Error: Failed to import openviking_sdk: {e}")
+        print("   Please install: pip install openviking-sdk --upgrade")
         sys.exit(1)
 
-    # Embedded mode (local development)
-    # Option A: Embedded mode with local path
-    client = ov.OpenViking(path="./data")
-
-    # Option B: HTTP client mode (connect to remote server)
-    # client = ov.SyncHTTPClient(url="http://localhost:1933")
+    client = SyncHTTPClient(url="http://localhost:1933")
 
     try:
         client.initialize()
@@ -60,7 +55,7 @@ def main():
 
     except Exception as e:
         print(f"   Error during initialization: {e}")
-        print("   Make sure you have configured ~/.openviking/ov.conf")
+        print("   Make sure the OpenViking server is running")
         sys.exit(1)
 
     print()
@@ -193,10 +188,11 @@ def main():
 
             results = client.find(query=query, target_uri=root_uri, limit=5)
 
-            if hasattr(results, "resources") and results.resources:
-                for r in results.resources:
-                    print(f"   - {r.uri}")
-                    print(f"     Score: {r.score:.4f}")
+            resources = results.get("resources", [])
+            if resources:
+                for resource in resources:
+                    print(f"   - {resource['uri']}")
+                    print(f"     Score: {resource.get('score', 0.0):.4f}")
             else:
                 print("   No results found")
 

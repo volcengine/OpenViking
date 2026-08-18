@@ -2,6 +2,7 @@ import * as React from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createFileRoute } from '@tanstack/react-router'
 import {
+  CheckCircle2Icon,
   CheckIcon,
   CircleDashedIcon,
   CircleXIcon,
@@ -89,8 +90,10 @@ const TASK_TYPE_OPTIONS: Exclude<TaskTypeFilter, 'all'>[] = [
 const TASK_STATUS_OPTIONS: Exclude<TaskStatusFilter, 'all'>[] = [
   'pending',
   'running',
+  'cancelling',
   'completed',
   'failed',
+  'cancelled',
 ]
 
 // 根据 8 并发物理上限计算任务的物理有效状态 (前 8 个 running, 第 9 个及以后 pending)
@@ -351,6 +354,14 @@ function TasksRoute() {
     const status = normalizeTaskStatus(effStatus)
     const pct = getTaskProgressPct(task)
     const isRetrying = retryMutation.isPending && retryMutation.variables?.task_id === taskId
+    const Icon =
+      status === 'completed'
+        ? CheckCircle2Icon
+        : status === 'failed' || status === 'cancelled'
+          ? CircleXIcon
+          : status === 'running' || status === 'cancelling'
+            ? LoaderCircleIcon
+            : CircleDashedIcon
 
     return (
       <Badge
@@ -363,6 +374,13 @@ function TasksRoute() {
         }
         className="gap-1.5 font-normal select-none"
       >
+        <Icon
+          className={
+            status === 'running' || status === 'cancelling'
+              ? 'size-3.5 animate-spin'
+              : 'size-3.5'
+          }
+        />
         <span>
           {status === 'pending'
             ? (i18n.language.startsWith('zh') ? '队首等待中' : 'Queued')

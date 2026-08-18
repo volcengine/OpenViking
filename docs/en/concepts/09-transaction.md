@@ -1,6 +1,6 @@
 # Path Locks and Crash Recovery
 
-OpenViking uses two simple primitives — **path locks** and **redo log** — to protect the consistency of core write operations (`rm`, `mv`, `add_resource`, `session.commit`), ensuring that VikingFS, VectorDB, and QueueManager remain consistent even when failures occur.
+OpenViking uses two simple primitives — **path locks** and **persistent queue recovery** — to protect the consistency of core write operations (`rm`, `mv`, `add_resource`, `session.commit`), ensuring that VikingFS, VectorDB, and QueueManager remain consistent even when failures occur.
 
 ## Design Philosophy
 
@@ -13,7 +13,7 @@ OpenViking is a context database where FS is the source of truth and VectorDB is
 1. **Write-exclusive**: Path locks ensure only one write operation can operate on a path at a time
 2. **On by default**: All data operations automatically acquire locks; no extra configuration needed
 3. **Lock as protection**: LockContext acquires locks on entry, releases on exit — no undo/journal/commit semantics
-4. **Only session_memory needs crash recovery**: RedoLog re-executes memory extraction after a process crash
+4. **Only session_memory needs crash recovery**: a persistent `session_commit` queue resumes Phase 2 after a process crash
 5. **Queue operations run outside locks**: SemanticQueue/EmbeddingQueue enqueue operations are idempotent and retriable
 
 ## Architecture
@@ -57,26 +57,23 @@ class LockHandle:
 **LockManager** is a global singleton managing lock lifecycle:
 - Creates/releases LockHandles
 - Background cleanup of leaked locks (in-process safety net)
-- Executes RedoLog recovery on startup
+- Relies on QueueManager to resume persisted `session_commit` Phase 2 work after startup
 
 **LockContext** is an async context manager encapsulating the lock/unlock lifecycle:
 
 ```python
-from openviking.storage.transaction import LockContext, get_lock_manager
-
-async with LockContext(get_lock_manager(), [path], lock_mode="exact") as handle:
+# Conceptual example: production path locks are acquired inside the Rust ragfs layer.
+async with LockContext(lock_manager, [path], lock_mode="exact") as handle:
     # Perform operations under lock protection
     ...
 # Lock automatically released on exit (including exceptions)
 ```
 
-### Component 2: RedoLog (Crash Recovery)
+### Component 2: Persistent `session_commit` Queue (Crash Recovery)
 
-Used only for the memory extraction phase of `session.commit`. Writes a marker before the operation, deletes it after success, and scans for leftover markers on startup to redo.
-
-```
-/local/_system/redo/{task_id}/redo.json
-```
+`session.commit` Phase 2 no longer uses a standalone redo log. Phase 1 persists archive metadata first,
+then enqueues a durable `SessionCommitMsg`; after restart, QueueManager resumes any leftover
+`session_commit` jobs and continues Phase 2.
 
 Memory extraction is idempotent — re-extracting from the same archive produces the same result.
 
@@ -86,7 +83,7 @@ Memory extraction is idempotent — re-extracting from the same archive produces
 
 | Problem | Solution |
 |---------|----------|
-| Delete file first, then index -> file gone but index remains -> search returns non-existent file | **Reverse order**: delete index first, then file. Index deletion failure -> both file and index intact |
+| Delete file first, then index -> file gone but index remains -> search returns non-existent file | **Reverse order**: delete index first, then file. Index deletion failure -> the source file remains and retry completes any partial index cleanup |
 
 **Locking strategy** (depends on target type):
 - Deleting a **directory**: `lock_mode="tree"`, locks the directory and its subtree
@@ -102,7 +99,10 @@ Operation flow:
 5. Release lock
 ```
 
-VectorDB deletion fails -> exception thrown, lock auto-released, file and index both intact. FS deletion fails -> VectorDB already deleted but file remains, retry is safe.
+Index URI collection or VectorDB deletion fails -> exception thrown, lock auto-released, and the
+source file remains. A backend may already have deleted part of a multi-record index operation, but
+retry is safe and completes cleanup. FS deletion fails -> VectorDB already deleted but file remains,
+retry is also safe.
 
 ### mv(old_uri, new_uri)
 
@@ -204,7 +204,7 @@ hold separate ExactPathLocks for the two source files. Refreshing `preferences/.
 
 | Problem | Solution |
 |---------|----------|
-| Messages cleared but archive not written -> conversation data lost | Phase 1 without lock (incomplete archive has no side effects) + Phase 2 with RedoLog |
+| Messages cleared but archive not written -> conversation data lost | Phase 1 without lock (incomplete archive has no side effects) + Phase 2 with a persistent `session_commit` queue |
 
 LLM calls have unpredictable latency (5s~60s+) and cannot be inside a lock-holding operation. The design splits into two phases:
 
@@ -215,32 +215,29 @@ Phase 1 — Archive (no lock):
   3. Clear messages.jsonl
   4. Clear in-memory message list
 
-Phase 2 — Memory extraction + write (RedoLog):
-  1. Write redo marker (archive_uri, session_uri, user identity)
+Phase 2 — Memory extraction + write (persistent `session_commit` queue):
+  1. Persist archive metadata and enqueue `SessionCommitMsg`
   2. Extract memories from archived messages (LLM)
   3. Write current message state
   4. Write relations
   5. Directly enqueue SemanticQueue
-  6. Delete redo marker
 ```
 
 **Crash recovery analysis**:
 
 | Failure moment | State | Recovery action |
 |------------|-------|----------------|
-| During Phase 1 archive write | No marker | Incomplete archive; next commit scans history/ for index, unaffected |
-| Phase 1 archive complete but messages not cleared | No marker | Archive complete + messages still present = redundant but safe |
-| During Phase 2 memory extraction/write | Redo marker exists | On startup: redo extraction + write + enqueue from archive |
-| Phase 2 complete | Redo marker deleted | No recovery needed |
+| During Phase 1 archive write | Queue not published yet | Incomplete archive; next commit scans history/ for index, unaffected |
+| Phase 1 archive complete but messages not cleared | Queue not published yet | Archive complete + messages still present = redundant but safe |
+| During Phase 2 memory extraction/write | `session_commit` job still persisted | After restart: resume the job and recover Phase 2 from archive |
+| Phase 2 complete | Archive marked complete | No recovery needed |
 
 ## LockContext
 
 `LockContext` is an **async** context manager that encapsulates lock acquisition and release:
 
 ```python
-from openviking.storage.transaction import LockContext, get_lock_manager
-
-lock_manager = get_lock_manager()
+# Conceptual example: production path locks are acquired inside the Rust ragfs layer.
 
 # Exact lock (write operations, semantic processing)
 async with LockContext(lock_manager, [path], lock_mode="exact"):
@@ -361,7 +358,7 @@ for conflicts first:
 
 ### Lock Expiry Cleanup
 
-**Stale lock detection**: PathLockEngine checks the fencing token timestamp. Locks older than `lock_expire` (default 1800s / 30 minutes) are considered stale and are removed automatically during acquisition.
+**Stale lock detection**: PathLockEngine checks the fencing token timestamp. Locks older than `lock_expire` (default 30s) are considered stale and are removed automatically during acquisition.
 
 **In-process cleanup**: LockManager checks active LockHandles every 60 seconds. Handles that still own lock files but have been inactive for longer than `lock_expire` are force-released.
 
@@ -369,12 +366,12 @@ for conflicts first:
 
 ## Crash Recovery
 
-`LockManager.start()` automatically scans for leftover markers in `/local/_system/redo/` on startup:
+After startup, QueueManager resumes persisted `session_commit` jobs:
 
 | Scenario | Recovery action |
 |----------|----------------|
-| session_memory extraction crash | Redo memory extraction + write + enqueue from archive |
-| Crash while holding lock | Lock file remains in AGFS; stale detection auto-cleans on next acquisition (default 1800s / 30-minute expiry) |
+| session_memory extraction crash | Recover Phase 2 from archive and continue the `session_commit` job |
+| Crash while holding lock | Lock file remains in AGFS; stale detection auto-cleans on next acquisition (default 30s expiry) |
 | Crash after enqueue, before worker processes | QueueFS SQLite persistence; worker auto-pulls after restart |
 | Orphan index | Cleaned on L2 on-demand load |
 
@@ -384,20 +381,35 @@ for conflicts first:
 |-----------------|--------|-----------------|
 | Crash during operation | Lock auto-expires + stale detection | Next acquisition of same path lock |
 | Crash during add_resource semantic processing | Lifecycle lock expires + SemanticProcessor re-acquires on restart | Worker restart |
-| Crash during session.commit Phase 2 | RedoLog marker + redo | On restart |
+| Crash during session.commit Phase 2 | Persistent `session_commit` queue + resumed consumption | On restart |
 | Crash after enqueue, before worker | QueueFS SQLite persistence | Worker restart |
 | Orphan index | L2 on-demand load cleanup | When user accesses |
 
 ## Configuration
 
-Path locks are enabled by default with no extra configuration needed. **The default behavior is no-wait**: if the path is locked, `LockAcquisitionError` is raised immediately. To allow wait/retry, configure the `storage.transaction` section:
+Path locks are enabled by default with no extra configuration needed. Prefer `storage.agfs.pathlock` for expiry settings. The runtime wait timeout is fixed at `0.0` seconds and no longer accepts external configuration. `storage.transaction` remains only as a legacy compatibility layer: `lock_timeout` is deprecated and ignored, `lock_expire` is automatically mapped when the new field is unset, and `redo_recovery_enabled` is deprecated and ignored.
+
+Recommended configuration:
+
+```json
+{
+  "storage": {
+    "agfs": {
+      "pathlock": {
+        "lock_expire_secs": 30.0
+      }
+    }
+  }
+}
+```
+
+Legacy compatibility form:
 
 ```json
 {
   "storage": {
     "transaction": {
-      "lock_timeout": 5.0,
-      "lock_expire": 1800.0
+      "lock_expire": 30.0
     }
   }
 }
@@ -405,8 +417,8 @@ Path locks are enabled by default with no extra configuration needed. **The defa
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `lock_timeout` | float | Lock acquisition timeout (seconds). `0` = fail immediately if locked (default). `> 0` = wait/retry up to this many seconds. | `0.0` |
-| `lock_expire` | float | Lock inactivity threshold (seconds). Locks not refreshed within this window are treated as stale and reclaimed. | `1800.0` |
+| `lock_timeout` | float | Deprecated and ignored. Runtime wait timeout is fixed at `0.0`. | `0.0` |
+| `lock_expire` | float | Deprecated. Use `storage.agfs.pathlock.lock_expire_secs`. | `30.0` |
 
 ### QueueFS Persistence
 

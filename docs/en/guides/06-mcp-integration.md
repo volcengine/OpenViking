@@ -135,24 +135,32 @@ Once connected, OpenViking exposes 16 tools:
 |------|-------------|----------------|
 | `find` | Fast semantic retrieval without session context | `query`, `target_uri` (optional), `limit`, `min_score`, `level` (optional), `context_type` (optional) |
 | `search` | Deep semantic retrieval with optional session context and intent analysis | `query`, `target_uri` (optional), `session_id` (optional), `limit`, `min_score`, `level` (optional), `context_type` (optional) |
-| `recall` | Type-quota recall across memory categories | `query`, `quotas` (optional), `max_chars`, `min_score`, `peer_scope`, `other_peer_penalty` (optional) |
+| `recall` | Type-quota recall assembled server-side into flat `<memory>` blocks that always carry their URI | `query`, `quotas` (optional), `max_chars`, `min_score`, `peer_scope`, `other_peer_penalty` (optional), `session_id` (optional), `detail` (optional), `max_tokens` (optional), `rewrite` (optional) |
 | `read` | Read one or more `viking://` URIs | `uris` (single string or array) |
 | `list` | List entries under a `viking://` directory | `uri`, `recursive` (optional) |
+| `tree` | Show the recursive directory tree under a `viking://` URI, indented by depth — use when you need a full picture of the file tree (prefer `list` for a single level, `glob` for filename patterns) | `uri` (optional), `level_limit` (default 3), `node_limit` (default 1000), `include_abstract` (optional — also show each file's summary) |
 | `remember` | Store messages into long-term memory (triggers extraction) | `messages` (list of `{role, content}`) |
-| `add_resource` | Add a local file or URL as a resource (local files trigger a progressive upload flow) | `path`, `temp_file_id` (optional), `description` (optional), `watch_interval` (optional, minutes — auto-refresh cadence for remote URLs), `to` (optional, target `viking://resources/...` URI; if omitted when `watch_interval > 0`, the watch auto-binds to the resource's created URI), `args` (optional parser-specific options, such as `{"feishu_access_token":"u-..."}` for one-time Feishu user-token imports, or `{"feishu_access_token":"u-...","feishu_refresh_token":"r-..."}` for Feishu user-token watches) |
+| `write` | Write text to a `viking://` file (create/overwrite/append). Parent directories are created automatically; use `read` first to see current content before overwriting, and prefer `edit` for changing part of an existing file | `uri`, `content`, `mode` (optional: `replace` default — creates the file if missing, `append`, `create` — fail if it exists), `wait` (optional, block until re-indexed), `timeout` (optional) |
+| `edit` | Replace an exact string with new text in an existing `viking://` file — for targeted changes instead of a full rewrite. The file is left unchanged if `old_string` is not found, or matches multiple times while `replace_all` is false | `uri`, `old_string`, `new_string`, `replace_all` (optional), `wait` (optional, block until re-indexed), `timeout` (optional) |
+| `add_resource` | Add a local file or URL as a resource (local files trigger a progressive upload flow) | `path`, `temp_file_id` (optional), `description` (optional), `watch_interval` (optional, minutes — auto-refresh cadence for remote URLs), `processing_mode` (optional: `semantic_and_vectors` default, or `vectors_only` to skip VLM semantic understanding and only vectorize current files), `to` (optional, target `viking://resources/...` URI; if omitted when `watch_interval > 0`, the watch auto-binds to the resource's created URI), `args` (optional parser-specific options, including `{"parse_mode":"no_split"}` to parse each source document into one Markdown body, `{"feishu_access_token":"u-..."}` for one-time Feishu user-token imports, or `{"feishu_access_token":"u-...","feishu_refresh_token":"r-..."}` for Feishu user-token watches) |
 | `list_watches` | List watch tasks (auto-refresh subscriptions) visible to the current agent. Each entry shows target URI, refresh interval (minutes), active/paused status, and next scheduled execution time | none |
 | `cancel_watch` | Cancel (delete) a watch task by its target URI. To change the cadence or pause temporarily, cancel and re-add with a new `watch_interval` | `to_uri` (must match the watch task's `to` value, e.g. `viking://resources/...`) |
 | `grep` | Regex content search across `viking://` files | `uri`, `pattern` (string or array), `case_insensitive`, `node_limit` |
 | `glob` | Find files matching a glob pattern | `pattern`, `uri` (optional scope), `node_limit` |
 | `forget` | Delete any `viking://` URI (use `search` to find it first; pass `recursive=true` to delete a directory) | `uri`, `recursive` (optional) |
-| `code_outline` | Show a file's symbol structure (classes, functions, methods, line ranges) without reading bodies. Survey a file before deciding what to `read`. | `uri` (must be a `viking://` **file** URI) |
-| `code_search` | Search symbol names (class / function / method) by substring across a `viking://` directory. Returns symbol type, class context, file URI, line range. Scans up to 200 source files. | `query`, `uri` (must be a `viking://` directory; narrow to subdir for deeper coverage) |
-| `code_expand` | Return the full source of a single named symbol, avoiding reading the entire file. | `uri` (file), `symbol` (`bar` for top-level or `Foo.bar` for a method) |
 | `health` | Check OpenViking service health | none |
+
+For MCP tools, `viking://user` is the authenticated user's workspace. For example,
+`viking://user/notes/todo.md` resolves to
+`viking://user/<current-user>/notes/todo.md`, regardless of the file name or
+extension. Canonical URIs containing that exact current user id are also accepted;
+MCP does not use this shorthand for cross-user access.
 
 > **Note**: MCP exposes the minimum closure for watch management (`list_watches` + `cancel_watch`). Pause / resume / trigger and the unified `update` verb are intentionally not exposed here — use the REST `/api/v1/watches/*` endpoints or the `ov task watch` CLI for those operations.
 
 > Feishu/Lark imports without `args.feishu_access_token` keep the existing app/tenant-token behavior and can be watched. Feishu/Lark one-time user-token imports pass only `args.feishu_access_token`; Feishu/Lark user-token watches must also pass `args.feishu_refresh_token` and require the same Feishu app credentials configured on the OpenViking server.
+
+> `processing_mode=vectors_only` skips the VLM semantic-understanding stage. It does not generate or refresh `.abstract.md` / `.overview.md`; it only vectorizes current non-hidden resource files, preserving any older semantic artifacts that already exist.
 
 ### Adding local-file resources (single-step upload)
 

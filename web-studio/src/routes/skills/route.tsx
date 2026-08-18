@@ -3,12 +3,12 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, createFileRoute } from '@tanstack/react-router'
 import {
   ChevronRightIcon,
+  ExternalLinkIcon,
   FileCode2Icon,
   LoaderCircleIcon,
   RefreshCwIcon,
   SparklesIcon,
   UserRoundIcon,
-  UsersRoundIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
@@ -31,11 +31,16 @@ import {
 import { useAppConnection } from '#/hooks/use-app-connection'
 import { getOvResult, isOvClientError, ovClient } from '#/lib/ov-client'
 
+import {
+  SKILL_SCOPE_ICONS,
+  SkillScopeTabs,
+  getSkillsForScope,
+} from './-components/skill-scope-tabs'
+import type { SkillScope } from './-components/skill-scope-tabs'
+
 export const Route = createFileRoute('/skills')({
   component: SkillsRoute,
 })
-
-type SkillScope = 'agent' | 'user'
 
 type SkillItem = {
   description: string
@@ -104,7 +109,10 @@ function stringArray(value: unknown): string[] {
     : []
 }
 
-function normalizeSkillDetail(value: unknown, fallback: SkillItem): SkillDetail {
+function normalizeSkillDetail(
+  value: unknown,
+  fallback: SkillItem,
+): SkillDetail {
   const detail = asRecord(value)
   const files = Array.isArray(detail?.files) ? detail.files : []
 
@@ -185,6 +193,11 @@ function SkillsRoute() {
     staleTime: 30_000,
   })
   const skills = skillsQuery.data ?? []
+  const [activeScope, setActiveScope] = React.useState<SkillScope>('user')
+  const visibleSkills = React.useMemo(
+    () => getSkillsForScope(skills, activeScope),
+    [activeScope, skills],
+  )
   const connectionUnavailable =
     isOvClientError(skillsQuery.error) &&
     skillsQuery.error.code === 'NETWORK_ERROR'
@@ -262,57 +275,93 @@ function SkillsRoute() {
           </div>
         </Card>
       ) : (
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {skills.map((skill) => {
-            const ScopeIcon =
-              skill.scope === 'user' ? UserRoundIcon : UsersRoundIcon
+        <div className="grid gap-4">
+          <SkillScopeTabs
+            activeScope={activeScope}
+            skills={skills}
+            onScopeChange={setActiveScope}
+          />
 
-            return (
-              <button
-                key={`${skill.scope}:${skill.uri}`}
-                type="button"
-                className="min-w-0 rounded-xl text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-                aria-label={t('viewDetail', { name: skill.name })}
-                onClick={() => setSelectedSkill(skill)}
-              >
-                <Card
-                  size="sm"
-                  className="h-full transition-colors hover:bg-muted/35"
-                >
-                  <CardHeader>
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex min-w-0 items-center gap-2.5">
-                        <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                          <SparklesIcon className="size-4" />
-                        </div>
-                        <CardTitle className="truncate">{skill.name}</CardTitle>
-                      </div>
-                      <Badge variant="outline" className="gap-1 font-normal">
-                        <ScopeIcon />
-                        {t(`scopes.${skill.scope}`)}
-                      </Badge>
-                    </div>
-                    {skill.description ? (
-                      <CardDescription className="line-clamp-2 pt-1 leading-5">
-                        {skill.description}
-                      </CardDescription>
-                    ) : null}
-                  </CardHeader>
-                  <CardContent className="mt-auto">
-                    <div className="flex items-center justify-between gap-3">
-                      <code className="min-w-0 truncate text-xs text-muted-foreground">
-                        {skill.uri}
-                      </code>
-                      <span className="flex shrink-0 items-center gap-0.5 text-xs font-medium text-primary">
-                        {t('detail')}
-                        <ChevronRightIcon className="size-3.5" />
-                      </span>
-                    </div>
-                  </CardContent>
-                </Card>
-              </button>
-            )
-          })}
+          <div
+            id={`skills-${activeScope}-panel`}
+            aria-labelledby={`skills-${activeScope}-tab`}
+            role="tabpanel"
+          >
+            {visibleSkills.length === 0 ? (
+              <Card className="min-h-56 items-center justify-center px-6 text-center">
+                <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                  <SparklesIcon className="size-5" />
+                </div>
+                <div className="grid max-w-md gap-1">
+                  <p className="font-medium">
+                    {t('emptyScope', {
+                      scope: t(`scopes.${activeScope}`),
+                    })}
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    {t('emptyScopeDescription')}
+                  </p>
+                </div>
+              </Card>
+            ) : (
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {visibleSkills.map((skill) => {
+                  const ScopeIcon = SKILL_SCOPE_ICONS[skill.scope]
+
+                  return (
+                    <button
+                      key={`${skill.scope}:${skill.uri}`}
+                      type="button"
+                      className="min-w-0 rounded-xl text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                      aria-label={t('viewDetail', { name: skill.name })}
+                      onClick={() => setSelectedSkill(skill)}
+                    >
+                      <Card
+                        size="sm"
+                        className="h-full transition-colors hover:bg-muted/35"
+                      >
+                        <CardHeader>
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex min-w-0 items-center gap-2.5">
+                              <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                                <SparklesIcon className="size-4" />
+                              </div>
+                              <CardTitle className="truncate">
+                                {skill.name}
+                              </CardTitle>
+                            </div>
+                            <Badge
+                              variant="outline"
+                              className="gap-1 font-normal"
+                            >
+                              <ScopeIcon />
+                              {t(`scopes.${skill.scope}`)}
+                            </Badge>
+                          </div>
+                          {skill.description ? (
+                            <CardDescription className="line-clamp-2 pt-1 leading-5">
+                              {skill.description}
+                            </CardDescription>
+                          ) : null}
+                        </CardHeader>
+                        <CardContent className="mt-auto">
+                          <div className="flex items-center justify-between gap-3">
+                            <code className="min-w-0 truncate text-xs text-muted-foreground">
+                              {skill.uri}
+                            </code>
+                            <span className="flex shrink-0 items-center gap-0.5 text-xs font-medium text-primary">
+                              {t('detail')}
+                              <ChevronRightIcon className="size-3.5" />
+                            </span>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -322,7 +371,7 @@ function SkillsRoute() {
           if (!open) setSelectedSkill(null)
         }}
       >
-        <SheetContent className="gap-0 sm:max-w-2xl">
+        <SheetContent className="gap-0 data-[side=right]:sm:max-w-3xl">
           <SheetHeader className="border-b px-6 py-5">
             <div className="flex items-center gap-2 pr-10">
               <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -332,9 +381,29 @@ function SkillsRoute() {
                 {selectedSkill?.name}
               </SheetTitle>
             </div>
-            <SheetDescription className="truncate font-mono text-xs">
-              {selectedSkill?.uri}
-            </SheetDescription>
+            <div className="flex items-center gap-2 pr-10">
+              <SheetDescription className="min-w-0 flex-1 truncate font-mono text-xs">
+                {selectedSkill?.uri}
+              </SheetDescription>
+              {selectedSkill ? (
+                <Button
+                  render={
+                    <Link
+                      rel="noreferrer noopener"
+                      search={{ uri: selectedSkill.uri }}
+                      target="_blank"
+                      to="/playground"
+                    />
+                  }
+                  nativeButton={false}
+                  size="xs"
+                  variant="outline"
+                >
+                  {t('openPlayground')}
+                  <ExternalLinkIcon />
+                </Button>
+              ) : null}
+            </div>
           </SheetHeader>
 
           <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">

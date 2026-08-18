@@ -12,10 +12,14 @@ export class RecallManager {
   private config: OVConfig;
   private cache: RecallCache = { block: null, promptText: "" };
   private pendingPrompt = "";
+  // Read lazily: the session manager that owns this id is constructed after the
+  // recall manager, and the id only exists once a session has been opened.
+  private sessionId: () => string | null;
 
-  constructor(client: OVClient, config: OVConfig) {
+  constructor(client: OVClient, config: OVConfig, sessionId: () => string | null = () => null) {
     this.client = client;
     this.config = config;
+    this.sessionId = sessionId;
   }
 
   queueSearch(userQuery: string): void {
@@ -33,10 +37,19 @@ export class RecallManager {
     }
 
     const block = await buildRecallBlock(
-      (path: string, init?: any, options?: any) => this.client.fetchJSON(path, init, 10000),
+      // 10s is this extension's own budget for a bare retrieval; when the
+      // request also spends a server fuse the helper hands down a longer
+      // deadline, and ignoring it would abort a request still inside its fuse.
+      (path: string, init?: any, options?: any) =>
+        this.client.fetchJSON(path, init, options?.timeoutMs ?? 10000),
       this.config as any,
       userQuery,
-      { actorPeerId: this.config.peerId },
+      {
+        actorPeerId: this.config.peerId,
+        // Passing the OV session id is what turns on server-side query
+        // expansion and the cross-turn dedup ledger.
+        sessionId: this.sessionId() ?? "",
+      },
     );
     this.cache = { block, promptText: userQuery };
     return block;

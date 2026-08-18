@@ -7,7 +7,7 @@ import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Union
 
 from openviking.utils.exceptions import AllCredentialsFailedError
 from openviking.utils.model_retry import (
@@ -21,6 +21,10 @@ from .token_usage import TokenUsageTracker
 
 _THINK_TAG_RE = re.compile(r"<think>[\s\S]*?</think>")
 logger = get_logger(__name__)
+
+
+class UnsupportedMediaInputError(RuntimeError):
+    """Raised when a VLM backend cannot process an audio or video input."""
 
 
 @dataclass
@@ -172,6 +176,31 @@ class VLMBase(ABC):
             str if no tools provided, VLMResponse if tools provided
         """
         pass
+
+    def supports_media(
+        self,
+        *,
+        media_type: str,
+        filename: str,
+        size_bytes: int,
+    ) -> bool:
+        """Return whether this backend can process the specified media input."""
+        del media_type, filename, size_bytes
+        return False
+
+    async def get_media_completion_async(
+        self,
+        *,
+        prompt: str,
+        media_path: Path,
+        filename: str,
+        media_type: str,
+    ) -> str:
+        """Understand one audio or video file asynchronously."""
+        del prompt, media_path, filename, media_type
+        raise UnsupportedMediaInputError(
+            f"VLM provider {self.provider!r} does not support audio/video inputs"
+        )
 
     def _clean_response(self, content: str) -> str:
         """Strip reasoning tags (e.g. ``<think>...</think>``) from model output."""
@@ -479,6 +508,45 @@ class FailoverVLM(VLMBase):
             self._logger.error(f"Backup VLM also failed with error: {e}")
             raise last_error
 
+    async def stream_with_failover(
+        self,
+        stream_factory: Callable[[VLMBase], AsyncIterator[Any]],
+    ) -> AsyncIterator[Any]:
+        """Stream from the active backend and fail over before output starts.
+
+        Once an item has been yielded, replaying the request through another
+        backend would duplicate visible output.  Errors after that point are
+        therefore propagated to the caller instead of triggering failover.
+        """
+        last_error = None
+
+        if self._switcher.should_try_primary():
+            emitted = False
+            try:
+                async for item in stream_factory(self.primary):
+                    emitted = True
+                    yield item
+                self._switcher.record_primary_success()
+                return
+            except Exception as exc:
+                _annotate_vlm_error(exc, self.primary)
+                last_error = exc
+                if emitted or not self._switcher.record_primary_failure(exc):
+                    raise
+
+        emitted = False
+        try:
+            self._switcher.record_backup_request()
+            async for item in stream_factory(self.backup):
+                emitted = True
+                yield item
+            return
+        except Exception as exc:
+            _annotate_vlm_error(exc, self.backup)
+            last_error = exc
+            self._logger.error(f"Backup VLM also failed with error: {exc}")
+            raise last_error
+
     def get_completion(
         self,
         prompt: str = "",
@@ -553,6 +621,74 @@ class FailoverVLM(VLMBase):
             tools=tools,
             tool_choice=tool_choice,
             messages=messages,
+        )
+
+    def supports_media(
+        self,
+        *,
+        media_type: str,
+        filename: str,
+        size_bytes: int,
+    ) -> bool:
+        return any(
+            vlm.supports_media(
+                media_type=media_type,
+                filename=filename,
+                size_bytes=size_bytes,
+            )
+            for vlm in (self.primary, self.backup)
+        )
+
+    async def get_media_completion_async(
+        self,
+        *,
+        prompt: str,
+        media_path: Path,
+        filename: str,
+        media_type: str,
+    ) -> str:
+        size_bytes = media_path.stat().st_size if media_path.exists() else 0
+        kwargs = {
+            "prompt": prompt,
+            "media_path": media_path,
+            "filename": filename,
+            "media_type": media_type,
+        }
+        primary_supported = self.primary.supports_media(
+            media_type=media_type,
+            filename=filename,
+            size_bytes=size_bytes,
+        )
+        backup_supported = self.backup.supports_media(
+            media_type=media_type,
+            filename=filename,
+            size_bytes=size_bytes,
+        )
+        last_error = None
+
+        if primary_supported and (not backup_supported or self._switcher.should_try_primary()):
+            try:
+                result = await self.primary.get_media_completion_async(**kwargs)
+                self._switcher.record_primary_success()
+                return result
+            except Exception as error:
+                _annotate_vlm_error(error, self.primary)
+                last_error = error
+                if not backup_supported or not self._switcher.record_primary_failure(error):
+                    raise
+
+        if backup_supported:
+            try:
+                self._switcher.record_backup_request()
+                return await self.backup.get_media_completion_async(**kwargs)
+            except Exception as error:
+                _annotate_vlm_error(error, self.backup)
+                raise
+
+        if last_error is not None:
+            raise last_error
+        raise UnsupportedMediaInputError(
+            f"No configured VLM supports {media_type} input {filename!r}"
         )
 
     @property
@@ -743,6 +879,48 @@ class MultiCredentialVLM(VLMBase):
 
         raise AllCredentialsFailedError(aggregated_errors)
 
+    async def stream_with_failover(
+        self,
+        stream_factory: Callable[[VLMBase], AsyncIterator[Any]],
+    ) -> AsyncIterator[Any]:
+        """Stream with ordered credential failover before output starts.
+
+        A credential may be replaced while opening or awaiting the first
+        visible stream item.  After an item is emitted, switching would replay
+        already delivered output, so subsequent errors fail the request.
+        """
+        aggregated_errors = []
+        start = self._switcher.maybe_failback()
+        n = self._switcher.n
+
+        for offset in range(n):
+            idx = (start + offset) % n
+            credential_id = self._credential_ids[idx]
+            vlm_instance = self._vlm_instances[idx]
+            emitted = False
+
+            try:
+                async for item in stream_factory(vlm_instance):
+                    emitted = True
+                    yield item
+                self._switcher.commit_success(idx)
+                return
+            except Exception as exc:
+                _annotate_vlm_error(exc, vlm_instance)
+                if emitted:
+                    raise
+
+                error_class = classify_api_error(exc)
+                aggregated_errors.append((credential_id, error_class, exc, idx))
+                if self._switcher.is_fail_fast(error_class):
+                    raise
+
+                self._logger.warning(
+                    f"Credential {credential_id} failed with {error_class}, trying next credential"
+                )
+
+        raise AllCredentialsFailedError(aggregated_errors)
+
     def get_completion(
         self,
         prompt: str = "",
@@ -817,6 +995,80 @@ class MultiCredentialVLM(VLMBase):
             tools=tools,
             tool_choice=tool_choice,
             messages=messages,
+        )
+
+    def supports_media(
+        self,
+        *,
+        media_type: str,
+        filename: str,
+        size_bytes: int,
+    ) -> bool:
+        return any(
+            vlm.supports_media(
+                media_type=media_type,
+                filename=filename,
+                size_bytes=size_bytes,
+            )
+            for vlm in self._vlm_instances
+        )
+
+    async def get_media_completion_async(
+        self,
+        *,
+        prompt: str,
+        media_path: Path,
+        filename: str,
+        media_type: str,
+    ) -> str:
+        size_bytes = media_path.stat().st_size if media_path.exists() else 0
+        start = self._switcher.maybe_failback()
+        errors = []
+        attempted = False
+        active_credential_failed = False
+
+        for offset in range(self._switcher.n):
+            idx = (start + offset) % self._switcher.n
+            vlm = self._vlm_instances[idx]
+            if not vlm.supports_media(
+                media_type=media_type,
+                filename=filename,
+                size_bytes=size_bytes,
+            ):
+                continue
+
+            attempted = True
+            credential_id = self._credential_ids[idx]
+            try:
+                result = await vlm.get_media_completion_async(
+                    prompt=prompt,
+                    media_path=media_path,
+                    filename=filename,
+                    media_type=media_type,
+                )
+                # Capability routing alone must not change the credential used
+                # by text and vision calls.
+                if idx == start or active_credential_failed:
+                    self._switcher.commit_success(idx)
+                return result
+            except Exception as error:
+                _annotate_vlm_error(error, vlm)
+                error_class = classify_api_error(error)
+                errors.append((credential_id, error_class, error, idx))
+                if idx == start:
+                    active_credential_failed = True
+                if self._switcher.is_fail_fast(error_class):
+                    raise
+                self._logger.warning(
+                    "Credential %s failed media understanding with %s, trying next credential",
+                    credential_id,
+                    error_class,
+                )
+
+        if attempted:
+            raise AllCredentialsFailedError(errors)
+        raise UnsupportedMediaInputError(
+            f"No configured VLM supports {media_type} input {filename!r}"
         )
 
     @property

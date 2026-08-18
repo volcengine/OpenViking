@@ -7,6 +7,7 @@ import pytest
 
 pytest.importorskip("langchain_core")
 pytest.importorskip("langgraph")
+pytest.importorskip("langchain_openviking")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 

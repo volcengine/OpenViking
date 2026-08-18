@@ -21,7 +21,7 @@ from openviking.session.memory.dataclass import (
     StoredLink,
 )
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
-from openviking.session.memory.merge_op import MergeOp
+from openviking.session.memory.merge_op import FieldType, MergeOp, PatchOp
 from openviking.session.memory.schema_model_generator import SchemaModelGenerator
 from openviking.session.memory.tools import (
     MEMORY_TOOLS_REGISTRY,
@@ -177,19 +177,14 @@ class ExtractLoop:
             if tool.name in allowed_tools
         ]
 
-        # 预计算 expected_fields
+        # Resolve global link support before generating the operations model.
         config = get_openviking_config()
         self._link_enabled = config.memory.link_enabled if config.memory else False
-        self._expected_fields = []
-        if self._link_enabled:
-            self._expected_fields.append("links")
 
         # 获取 ExtractContext（整个流程复用）
         self._extract_context = self.context_provider.get_extract_context()
         if self._extract_context is None:
             raise ValueError("Failed to get ExtractContext from provider")
-        for schema in schemas:
-            self._expected_fields.append(f"{schema.memory_type}")
 
         # 预计算 operations_model
         role_scope = self._isolation_handler.get_read_scope() if self._isolation_handler else None
@@ -197,6 +192,9 @@ class ExtractLoop:
         self._operations_model = self.schema_model_generator.create_structured_operations_model(
             role_scope
         )
+        # Keep the stability parser's allowlist aligned with the generated
+        # contract, including conditional fields such as delete_ids and links.
+        self._expected_fields = list(self._operations_model.model_fields)
 
         json_schema = self._operations_model.model_json_schema()
 
@@ -295,7 +293,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
                         tracer.info(f"Extended max_iterations to {max_iterations} for refetch")
 
                     continue
-                patch_errors = self._validate_patch_operations(final_operations)
+                patch_errors = await self._validate_patch_operations(final_operations)
                 if patch_errors and patch_repair_count == 0:
                     patch_repair_count += 1
                     max_iterations += 1
@@ -523,38 +521,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
         operations.resolved_links = resolved_links
 
-    def _pair_link_uris(self, from_uris: List[str], to_uris: List[str]) -> List[tuple[str, str]]:
-        namespace_pairs = []
-        seen_pairs = set()
-
-        for from_uri in from_uris:
-            from_namespace = from_uri.split("/memories/", 1)[0]
-            for to_uri in to_uris:
-                if from_uri == to_uri:
-                    continue
-                if from_namespace != to_uri.split("/memories/", 1)[0]:
-                    continue
-                pair = (from_uri, to_uri)
-                if pair in seen_pairs:
-                    continue
-                seen_pairs.add(pair)
-                namespace_pairs.append(pair)
-
-        if namespace_pairs:
-            return namespace_pairs
-
-        all_pairs = []
-        for from_uri in from_uris:
-            for to_uri in to_uris:
-                if from_uri == to_uri:
-                    continue
-                pair = (from_uri, to_uri)
-                if pair in seen_pairs:
-                    continue
-                seen_pairs.add(pair)
-                all_pairs.append(pair)
-        return all_pairs
-
     def _resolve_links(self, raw_links: List, upsert_operations: List = None) -> List[StoredLink]:
         """Resolve WikiLinks with page_ids to StoredLinks with URIs.
 
@@ -562,8 +528,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
         Links go into from_uri's "links" field; backlinks go into to_uri's "backlinks" field.
         The routing is handled by memory_updater based on which file each link belongs to.
         """
-        from datetime import datetime, timezone
-
         if not raw_links:
             return []
 
@@ -581,67 +545,20 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
         if not page_id_map._id_to_uri and not op_page_map:
             return []
-
-        resolved_links = []
-        seen_links = set()
-        now = datetime.now(timezone.utc).isoformat()
-
+        page_uri_map = {page_id: list(uris) for page_id, uris in op_page_map.items()}
         for link in raw_links:
-            if link.f is None or link.t is None:
-                tracer.info(f"Skipping link with null page_ids: f={link.f}, t={link.t}")
-                continue
-
-            from_uris = []
-            to_uris = []
-
-            from_uri = page_id_map.resolve(link.f)
-            to_uri = page_id_map.resolve(link.t)
-            if from_uri:
-                from_uris.append(from_uri)
-            if to_uri:
-                to_uris.append(to_uri)
-
-            for uri in op_page_map.get(link.f, []):
-                if uri not in from_uris:
-                    from_uris.append(uri)
-            for uri in op_page_map.get(link.t, []):
-                if uri not in to_uris:
-                    to_uris.append(uri)
-
-            if not from_uris or not to_uris:
-                tracer.info(
-                    f"Skipping link with unresolved page_ids: f={link.f}, t={link.t}, "
-                    f"from_uri={from_uris[0] if from_uris else None}, "
-                    f"to_uri={to_uris[0] if to_uris else None}, "
-                    f"op_page_map_keys={list(op_page_map.keys())}"
-                )
-                continue
-
-            for from_uri, to_uri in self._pair_link_uris(from_uris, to_uris):
-                link_key = (
-                    from_uri,
-                    to_uri,
-                    link.link_type,
-                    link.weight,
-                    link.match_text,
-                    link.description,
-                )
-                if link_key in seen_links:
+            for page_id in (link.f, link.t):
+                if page_id is None:
                     continue
-                seen_links.add(link_key)
+                uri = page_id_map.resolve(page_id)
+                if uri:
+                    page_uri_map.setdefault(page_id, [])
+                    if uri not in page_uri_map[page_id]:
+                        page_uri_map[page_id].insert(0, uri)
 
-                stored_link = StoredLink(
-                    from_uri=from_uri,
-                    to_uri=to_uri,
-                    link_type=link.link_type,
-                    weight=link.weight,
-                    match_text=link.match_text,
-                    description=link.description,
-                    created_at=now,
-                )
-                resolved_links.append(stored_link)
+        from openviking.session.memory.utils.link_resolver import resolve_wiki_links
 
-        return resolved_links
+        return resolve_wiki_links(raw_links, page_uri_map)
 
     @tracer("extract_loop.execute_tool_calls")
     async def _execute_tool_calls(self, messages, tool_calls, tools_used) -> bool:
@@ -862,16 +779,20 @@ The final output of the model must strictly follow the JSON Schema format shown 
             f"{skeleton}"
         )
 
-    def _validate_patch_operations(self, operations: ResolvedOperations) -> List[Dict[str, Any]]:
+    async def _validate_patch_operations(
+        self,
+        operations: ResolvedOperations,
+    ) -> List[Dict[str, Any]]:
         from openviking.session.memory.merge_op.base import SearchReplaceBlock, StrPatch
-        from openviking.session.memory.merge_op.patch_handler import apply_str_patch
+        from openviking.session.memory.merge_op.patch_handler import unescape_markers
 
         errors = []
+        patch_op = PatchOp(FieldType.STRING)
         read_files = self.context_provider.read_file_contents or {}
         for operation in operations.upsert_operations:
             if operation.old_memory_file_content is None:
                 continue
-            current_content = operation.old_memory_file_content.content or ""
+            current_content = operation.old_memory_file_content.plain_content() or ""
             target_uri = (
                 operation.uris[0] if operation.uris else operation.old_memory_file_content.uri
             )
@@ -887,28 +808,47 @@ The final output of the model must strictly follow the JSON Schema format shown 
                             blocks.append(SearchReplaceBlock(**raw_block))
                 if not blocks:
                     continue
-                patch = StrPatch(blocks=blocks)
-                try:
-                    applied_content = apply_str_patch(current_content, patch)
-                except Exception:
-                    applied_content = current_content
-                if applied_content != current_content:
-                    continue
-                for block in blocks:
+                working_content = current_content
+                for block_index, block in enumerate(blocks, start=1):
                     search = block.search or ""
-                    if not search:
+                    if not search or search == block.replace:
                         continue
+                    effective_search = unescape_markers(search)
+                    match_count = working_content.count(effective_search)
+                    apply_failed = False
+                    try:
+                        applied_content = await patch_op.apply(
+                            working_content,
+                            StrPatch(blocks=[block]),
+                        )
+                    except Exception:
+                        apply_failed = True
+                        applied_content = working_content
+                    if applied_content != working_content:
+                        working_content = applied_content
+                        continue
+                    if match_count > 1:
+                        reason = "non_unique"
+                    elif match_count == 0:
+                        reason = "not_found"
+                    elif apply_failed:
+                        reason = "apply_error"
+                    else:
+                        reason = "not_applied"
                     found_in = [
                         uri
                         for uri, memory_file in read_files.items()
-                        if uri != target_uri and search in (memory_file.content or "")
+                        if uri != target_uri and search in (memory_file.plain_content() or "")
                     ]
                     errors.append(
                         {
                             "uri": target_uri,
                             "page_id": operation.page_id,
                             "field": field_name,
+                            "block_index": block_index,
                             "search": search,
+                            "reason": reason,
+                            "match_count": match_count,
                             "found_in_other_uris": found_in,
                         }
                     )

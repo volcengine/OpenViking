@@ -85,26 +85,30 @@ dependencies = [
     "cryptography>=48.0.1",
     "argon2-cffi>=23.0.0",
     "lark-oapi>=1.5.3",
-    "mcp>=1.27.0",
+    "mcp>=1.27,<2",
     "pathspec>=1.1.1",
+    "grep-ast>=0.9.0",
+    "tree-sitter-language-pack>=1.12,<2.0",
 ]
 
 
 [project.optional-dependencies]
 test = [
-    "pytest>=7.0.0",
-    "pytest-asyncio>=0.21.0",
-    "pytest-xdist>=3.5.0",
-    "boto3>=1.42.44",
-    "pytest-cov>=4.0.0",
-    "ragas>=0.1.0",
-    "datasets>=2.0.0",
-    "pandas>=2.0.0",
-    "diff-match-patch>=20200713",
-    "hvac>=2.0.0",
+  "pytest>=7.0.0",
+  "pytest-asyncio>=0.21.0",
+  "pytest-xdist>=3.5.0",
+  "boto3>=1.42.44",
+  "pytest-cov>=4.0.0",
+  "ragas>=0.1.0",
+  "datasets>=2.0.0",
+  "pandas>=2.0.0",
+  "diff-match-patch>=20200713",
+  "hvac>=2.0.0",
 ]
-opengauss = [
-    "psycopg2-binary>=2.9",
+auth = [
+  "python-jose[cryptography]>=3.3.0",
+  "httpx>=0.25.0",
+  "python-ldap>=3.4.0",
 ]
 dev = [
     "mypy>=1.0.0",
@@ -140,39 +144,41 @@ build = [
 ]
 # vikingbot - all features included
 bot = [
-    "pydantic-settings>=2.0.0",
-    "websockets>=12.0",
-    "websocket-client>=1.6.0",
-    "httpx[socks]>=0.25.0",
-    "readability-lxml>=0.8.0",
-    "rich>=13.0.0",
-    "croniter>=2.0.0",
-    "socksio>=1.0.0",
-    "python-socketio>=5.16.2",
-    "python-engineio>=4.13.2",
-    "msgpack>=1.0.8",
-    "python-socks[asyncio]>=2.4.0",
-    "prompt-toolkit>=3.0.0",
-    "pygments>=2.16.0",
-    "html2text>=2020.1.16",
-    "beautifulsoup4>=4.12.0",
-    "ddgs>=9.0.0",
-    "tavily-python>=0.5.0",
-    "gradio>=6.6.0",
-    "py-machineid>=1.0.0",
-    "mcp>=1.0.0",
-    # All optional features included by default
-    "langfuse>=3.0.0",
-    "python-telegram-bot[socks]>=21.0",
-    "lark-oapi>=1.0.0",
-    "dingtalk-stream>=0.4.0",
-    "slack-sdk>=3.26.0",
-    "qq-botpy>=1.0.0",
-    "opensandbox>=0.1.0",
-    "opensandbox-server>=0.1.0",
-    "agent-sandbox>=0.0.23",
-    "fusepy>=3.0.1",
-    "opencode-ai>=0.1.0a0",
+  "pydantic-settings>=2.0.0",
+  "websockets>=12.0",
+  "websocket-client>=1.6.0",
+  "httpx[socks]>=0.25.0",
+  "readability-lxml>=0.8.0",
+  "rich>=13.0.0",
+  "croniter>=2.0.0",
+  "socksio>=1.0.0",
+  "python-socketio>=5.16.2",
+  "python-engineio>=4.13.2",
+  "msgpack>=1.0.8",
+  "python-socks[asyncio]>=2.4.0",
+  "prompt-toolkit>=3.0.0",
+  "pygments>=2.16.0",
+  "html2text>=2020.1.16",
+  "beautifulsoup4>=4.12.0",
+  "ddgs>=9.0.0",
+  "tavily-python>=0.5.0",
+  "gradio>=6.6.0",
+  "py-machineid>=1.0.0",
+  "mcp>=1,<2",
+  # All optional features included by default
+  "langfuse>=3.0.0",
+  "python-telegram-bot[socks]>=21.0",
+  "lark-oapi>=1.0.0",
+  "dingtalk-stream>=0.4.0",
+  "slack-sdk>=3.26.0",
+  "qq-botpy>=1.0.0",
+  "opensandbox>=0.1.0",
+  "opensandbox-server>=0.1.0",
+  "agent-sandbox>=0.0.23",
+  "fusepy>=3.0.1",
+  "opencode-ai>=0.1.0a0",
+  # Auth dependencies
+  "python-jose[cryptography]>=3.3.0",
 ]
 benchmark = [
     "langchain>=1.0.0",
@@ -181,14 +187,6 @@ benchmark = [
     "tiktoken>=0.5.0",
     "datasets>=2.0.0",
     "pandas>=2.0.0",
-]
-langchain = [
-    "langchain-core>=1.0.0,<2.0.0",
-]
-langgraph = [
-    "langchain>=1.0.0,<2.0.0",
-    "langchain-core>=1.0.0,<2.0.0",
-    "langgraph>=1.0.0,<2.0.0",
 ]
 local-embed = [
     "llama-cpp-python>=0.3.0",
@@ -233,6 +231,7 @@ vikingbot = [
     "**/*.mjs",
     "skills/**/*.md",
     "skills/**/*.sh",
+    "workspace/**/*",
     "bridge/**/*",
 ]
 

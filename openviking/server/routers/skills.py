@@ -3,7 +3,6 @@
 """Agent-scope skill management endpoints for OpenViking HTTP Server."""
 
 import asyncio
-import re
 import shutil
 import uuid
 from pathlib import Path
@@ -16,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from openviking.core.namespace import canonical_user_root
 from openviking.core.path_variables import resolve_path_variables
-from openviking.core.skill_loader import SkillLoader
+from openviking.core.skill_loader import validate_skill_format
 from openviking.privacy.service import UserPrivacyConfigVersion
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
@@ -211,147 +210,6 @@ def _skill_summary_from_meta(name: str, root_uri: str, meta: Dict[str, Any]) -> 
         "description": meta.get("description", ""),
         "tags": meta.get("tags") or [],
         "allowed_tools": meta.get("allowed_tools") or meta.get("allowed-tools") or [],
-    }
-
-
-_SKILL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
-
-
-def _validation_issue(rule: str, message: str, field: str = "") -> Dict[str, str]:
-    issue = {"rule": rule, "message": message}
-    if field:
-        issue["field"] = field
-    return issue
-
-
-def _parse_skill_for_validation(data: Any) -> Dict[str, Any]:
-    if isinstance(data, dict):
-        parsed = dict(data)
-        parsed["content"] = parsed.get("content") or ""
-    elif isinstance(data, str):
-        frontmatter, body = SkillLoader._split_frontmatter(data)
-        if not frontmatter:
-            raise ValueError("SKILL.md must have YAML frontmatter")
-        try:
-            meta = yaml.safe_load(frontmatter)
-        except Exception as exc:
-            raise ValueError(f"Invalid YAML frontmatter: {exc}") from exc
-        if not isinstance(meta, dict):
-            raise ValueError("Invalid YAML frontmatter")
-        parsed = dict(meta)
-        parsed["content"] = body.strip()
-    else:
-        raise ValueError(f"Unsupported data type: {type(data)}")
-
-    allowed_tools = parsed.get("allowed_tools")
-    if not allowed_tools:
-        allowed_tools = parsed.get("allowed-tools")
-    if allowed_tools is not None:
-        parsed["allowed_tools"] = (
-            allowed_tools if isinstance(allowed_tools, list) else [allowed_tools]
-        )
-    parsed.pop("allowed-tools", None)
-
-    tags = parsed.get("tags")
-    if tags is not None and not isinstance(tags, list):
-        parsed["tags"] = [tags]
-
-    return parsed
-
-
-def _validate_skill_format(
-    service,
-    data: Any,
-    *,
-    strict: bool,
-    skill_dir_name: Optional[str],
-    source_path: Optional[str],
-) -> Dict[str, Any]:
-    errors: list[Dict[str, str]] = []
-    warnings: list[Dict[str, str]] = []
-
-    try:
-        parsed = _parse_skill_for_validation(data)
-    except Exception as exc:
-        return {
-            "valid": False,
-            "strict": strict,
-            "errors": [
-                _validation_issue(
-                    "yaml_format",
-                    str(exc),
-                    "data",
-                )
-            ],
-            "warnings": [],
-            "source_path": source_path or "",
-        }
-
-    name = parsed.get("name")
-    description = parsed.get("description")
-    content = parsed.get("content") or ""
-
-    if not isinstance(name, str) or not name.strip():
-        errors.append(_validation_issue("name_required", "name is required", "name"))
-    if not isinstance(description, str) or not description.strip():
-        errors.append(
-            _validation_issue("description_required", "description is required", "description")
-        )
-
-    def add_mode_issue(rule: str, message: str, field: str):
-        issue = _validation_issue(rule, message, field)
-        if strict:
-            errors.append(issue)
-        else:
-            warnings.append(issue)
-
-    if isinstance(name, str) and name.strip():
-        normalized_name = name.strip()
-        normalized_dir_name = (skill_dir_name or "").strip()
-        if normalized_dir_name and normalized_name != normalized_dir_name:
-            add_mode_issue(
-                "name_matches_directory",
-                f"name '{normalized_name}' does not match directory name '{normalized_dir_name}'",
-                "name",
-            )
-        if len(normalized_name) > 64:
-            add_mode_issue("name_max_length", "name must not exceed 64 characters", "name")
-        if not _SKILL_NAME_PATTERN.match(normalized_name):
-            add_mode_issue(
-                "name_allowed_characters",
-                "name may only contain letters, numbers, underscores, and hyphens",
-                "name",
-            )
-
-    if isinstance(description, str) and len(description) > 1024:
-        add_mode_issue(
-            "description_max_length",
-            "description must not exceed 1024 characters",
-            "description",
-        )
-
-    body_lines = len(content.splitlines())
-    if strict and body_lines > 500:
-        warnings.append(
-            _validation_issue(
-                "body_max_lines",
-                "SKILL.md body exceeds 500 lines",
-                "content",
-            )
-        )
-
-    return {
-        "valid": not errors,
-        "strict": strict,
-        "name": name or "",
-        "description": description or "",
-        "tags": parsed.get("tags") or [],
-        "allowed_tools": parsed.get("allowed_tools") or [],
-        "body_lines": body_lines,
-        "source_path": source_path or "",
-        "skill_dir_name": skill_dir_name or "",
-        "errors": errors,
-        "warnings": warnings,
     }
 
 
@@ -621,9 +479,7 @@ async def validate_skill(
 ):
     """Validate a SKILL.md payload using Agent Skills formatting rules."""
     del _ctx
-    service = get_service()
-    result = _validate_skill_format(
-        service,
+    result = validate_skill_format(
         request.data,
         strict=request.strict,
         skill_dir_name=request.skill_dir_name,
@@ -700,8 +556,9 @@ async def update_skill(
         "operation": "update",
     }
     if request.temp_file_id:
-        store = TempUploadStore.build(http_request.app.state.config)
-        resolved = await store.resolve_for_consume(request.temp_file_id, _ctx)
+        resolved = await TempUploadStore.build(http_request.app.state.config).resolve_for_consume(
+            request.temp_file_id, _ctx
+        )
         data = Path(resolved.local_path)
         allow_local_path_resolution = True
         if request.source_metadata is None:
@@ -715,8 +572,6 @@ async def update_skill(
             source_metadata["original_filename"] = resolved.original_filename
 
     source_path_hint = resolved.original_filename if resolved else None
-    store = TempUploadStore.build(http_request.app.state.config) if resolved else None
-
     async def _update() -> Dict[str, Any]:
         # Derive backup root from the actual skill root URI to keep backup in the same scope.
         skill_root_parent = root_uri.rsplit("/", 1)[0]
@@ -781,14 +636,10 @@ async def update_skill(
                     await _restore_skill_privacy(service, _ctx, skill_name, previous_privacy)
                 except Exception:
                     pass
-            if resolved and store:
-                await store.mark_failed(resolved, _ctx)
             raise
         else:
             if backup_created:
                 await service.fs.rm(backup_uri, ctx=_ctx, recursive=True)
-            if resolved and store:
-                await store.mark_consumed(resolved, _ctx)
             result["action"] = "update"
             return result
         finally:

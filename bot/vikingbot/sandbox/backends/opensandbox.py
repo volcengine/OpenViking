@@ -2,7 +2,10 @@
 
 import asyncio
 import atexit
+import json
 import os
+import posixpath
+import shlex
 import subprocess
 import time
 from datetime import timedelta
@@ -14,7 +17,7 @@ from loguru import logger
 
 from vikingbot.config.schema import SandboxConfig, SessionKey
 from vikingbot.sandbox.backends import register_backend
-from vikingbot.sandbox.base import SandboxBackend, SandboxNotStartedError
+from vikingbot.sandbox.base import SandboxBackend, SandboxFileInfo, SandboxNotStartedError
 
 # Global to track the opensandbox-server process
 _OSB_SERVER_PROCESS: "subprocess.Popen | None" = None
@@ -293,6 +296,12 @@ class OpenSandboxBackend(SandboxBackend):
     def sandbox_cwd(self) -> str:
         return "/workspace"
 
+    def _sandbox_path(self, path: str) -> str:
+        if path.startswith("/"):
+            return path
+        relative = self._normalize_workspace_path(path)
+        return self.sandbox_cwd if not relative else f"{self.sandbox_cwd}/{relative}"
+
     async def read_file(self, path: str) -> str:
         """Read file from OpenSandbox."""
         if not self._sandbox:
@@ -301,10 +310,7 @@ class OpenSandboxBackend(SandboxBackend):
         # In VKE environment, use SDK API; in local, use base implementation (host mount)
         if self._is_vke:
             try:
-                sandbox_path = path
-                if not path.startswith("/"):
-                    sandbox_path = f"/workspace/{path}"
-                return await self._sandbox.files.read_file(sandbox_path)
+                return await self._sandbox.files.read_file(self._sandbox_path(path))
             except Exception as e:
                 logger.error(f"[OpenSandbox] Failed to read file {path}: {e}")
                 raise
@@ -319,10 +325,7 @@ class OpenSandboxBackend(SandboxBackend):
         # In VKE environment, use SDK API; in local, use base implementation (host mount)
         if self._is_vke:
             try:
-                sandbox_path = path
-                if not path.startswith("/"):
-                    sandbox_path = f"/workspace/{path}"
-                await self._sandbox.files.write_file(sandbox_path, content, mode=0o644)
+                await self._sandbox.files.write_file(self._sandbox_path(path), content, mode=0o644)
             except Exception as e:
                 logger.error(f"[OpenSandbox] Failed to write file {path}: {e}")
                 raise
@@ -360,3 +363,110 @@ class OpenSandboxBackend(SandboxBackend):
                 raise
         else:
             return await super().list_dir(path)
+
+    async def list_files(
+        self,
+        path: str = ".",
+        *,
+        max_entries: int,
+    ) -> list[SandboxFileInfo]:
+        """List remote VKE files without materializing an unbounded search response."""
+        if not self._is_vke:
+            return await super().list_files(path, max_entries=max_entries)
+        if not self._sandbox:
+            raise SandboxNotStartedError()
+        self._validate_max_entries(max_entries)
+        root = self._normalize_workspace_path(path)
+        sandbox_root = self._sandbox_path(root or ".").rstrip("/")
+
+        # OpenSandbox's search API returns one fully materialized JSON array and
+        # has no server-side result limit. Traverse in the sandbox so both the
+        # walk and the response stop at the service-owned inventory bound.
+        script = "\n".join(
+            [
+                "import json, os",
+                f"root = {sandbox_root!r}",
+                f"limit = {max_entries}",
+                f"pending = [({root!r}, root)]",
+                "files = []",
+                "visited = 0",
+                "overflow = False",
+                "while pending and not overflow:",
+                "    relative_dir, directory = pending.pop()",
+                "    try:",
+                "        entries = os.scandir(directory)",
+                "    except FileNotFoundError:",
+                "        continue",
+                "    with entries:",
+                "        for entry in entries:",
+                "            visited += 1",
+                "            if visited > limit:",
+                "                overflow = True",
+                "                break",
+                "            relative = os.path.join(relative_dir, entry.name)",
+                "            try:",
+                "                if entry.is_dir(follow_symlinks=False):",
+                "                    pending.append((relative, entry.path))",
+                "                elif entry.is_file(follow_symlinks=False):",
+                "                    size = entry.stat(follow_symlinks=False).st_size",
+                "                    files.append((relative, size))",
+                "            except FileNotFoundError:",
+                "                pass",
+                'print(json.dumps({"overflow": overflow, "files": files}, separators=(",", ":")))',
+            ]
+        )
+
+        from opensandbox.models.execd import RunCommandOpts
+
+        execution = await self._sandbox.commands.run(
+            f"python3 -c {shlex.quote(script)}",
+            opts=RunCommandOpts(timeout=timedelta(seconds=30)),
+        )
+        if execution.error:
+            raise IOError(f"Sandbox workspace inventory failed: {execution.error.value}")
+        stdout = "".join(message.text for message in execution.logs.stdout)
+        try:
+            inventory = json.loads(stdout)
+            overflow = inventory["overflow"]
+            entries = inventory["files"]
+        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            raise IOError("Sandbox returned an invalid workspace inventory") from exc
+        if not isinstance(overflow, bool) or not isinstance(entries, list):
+            raise IOError("Sandbox returned an invalid workspace inventory")
+        if overflow:
+            raise ValueError(f"Sandbox workspace inventory exceeds {max_entries} entries")
+
+        workspace_prefix = self.sandbox_cwd.rstrip("/") + "/"
+        files: list[SandboxFileInfo] = []
+        seen: set[str] = set()
+        for entry in entries:
+            if not isinstance(entry, list) or len(entry) != 2:
+                raise IOError("Sandbox returned an invalid workspace inventory")
+            remote_path, size = entry
+            if not isinstance(remote_path, str):
+                raise IOError("Sandbox returned an invalid workspace inventory")
+            remote_path = posixpath.normpath(posixpath.join(self.sandbox_cwd, remote_path))
+            if not remote_path.startswith(workspace_prefix):
+                raise IOError("Sandbox returned a path outside the workspace")
+            relative = remote_path.removeprefix(workspace_prefix)
+            relative = self._normalize_workspace_path(relative)
+            if not relative or relative in seen:
+                continue
+            if not isinstance(size, int) or size < 0:
+                raise IOError(f"Sandbox did not report a valid file size: {relative}")
+            seen.add(relative)
+            files.append(SandboxFileInfo(path=relative, size=size))
+        return sorted(files, key=lambda item: item.path)
+
+    async def read_file_bytes(self, path: str, *, max_bytes: int | None = None) -> bytes:
+        if not self._is_vke:
+            return await super().read_file_bytes(path, max_bytes=max_bytes)
+        if not self._sandbox:
+            raise SandboxNotStartedError()
+        self._validate_max_bytes(max_bytes)
+        range_header = None if max_bytes is None else f"bytes=0-{max_bytes}"
+        stream = await self._sandbox.files.read_bytes_stream(
+            self._sandbox_path(path),
+            range_header=range_header,
+        )
+        return await self._collect_stream_bytes(stream, path, max_bytes)

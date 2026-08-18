@@ -17,7 +17,8 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import ErrorInfo, Response
-from openviking.storage import VikingDBManagerProxy
+from openviking.server.responses import error_response
+from openviking.storage.vikingdb_manager import VikingDBManagerProxy
 
 router = APIRouter(prefix="/api/v1/debug", tags=["debug"])
 
@@ -42,9 +43,8 @@ async def debug_vector_scroll(
     """Get paginated vector records with tenant isolation."""
     service = get_service()
     if not service.vikingdb_manager:
-        return Response(
-            status="error",
-            error=ErrorInfo(code="NO_VECTOR_DB", message="Vector DB not initialized"),
+        return error_response(
+            code="NO_VECTOR_DB", message="Vector DB not initialized"
         )
 
     proxy = VikingDBManagerProxy(service.vikingdb_manager, _ctx)
@@ -71,9 +71,8 @@ async def debug_vector_count(
 
     service = get_service()
     if not service.vikingdb_manager:
-        return Response(
-            status="error",
-            error=ErrorInfo(code="NO_VECTOR_DB", message="Vector DB not initialized"),
+        return error_response(
+            code="NO_VECTOR_DB", message="Vector DB not initialized"
         )
 
     proxy = VikingDBManagerProxy(service.vikingdb_manager, _ctx)
@@ -83,9 +82,8 @@ async def debug_vector_count(
         try:
             filter_expr = json.loads(filter)
         except json.JSONDecodeError:
-            return Response(
-                status="error",
-                error=ErrorInfo(code="INVALID_FILTER", message="Invalid filter JSON"),
+            return error_response(
+                code="INVALID_FILTER", message="Invalid filter JSON"
             )
 
     if uri:

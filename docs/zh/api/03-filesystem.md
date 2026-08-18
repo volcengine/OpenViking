@@ -42,7 +42,7 @@ OpenViking 提供类 Unix 的文件系统操作来管理上下文。
 ```
 
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK**
 
 ```python
 entries = client.ls(
@@ -139,7 +139,7 @@ openviking ls viking://resources/ [--simple] [--recursive]
 | level_limit | int | 否 | 3 | 最大目录遍历深度 |
 
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK**
 
 ```python
 entries = client.tree("viking://resources/")
@@ -223,7 +223,7 @@ openviking tree viking://resources/my-project/
 | uri | str | 是 | - | Viking URI |
 
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK**
 
 ```python
 info = client.stat("viking://resources/docs/api.md")
@@ -433,7 +433,7 @@ openviking attrs set-tags viking://resources/docs --tags team=search --mode appe
 | description | str | 否 | `null` | 目录初始说明。传入后会写入 `.abstract.md`，并进入目录 L0 向量化队列。 |
 
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK**
 
 ```python
 client.mkdir("viking://resources/new-project/")
@@ -507,7 +507,7 @@ URI 格式非法、scheme 不支持或使用非公开作用域时返回 `INVALID
 | recursive | bool | 否 | False | 递归删除目录 |
 
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK**
 
 ```python
 # 删除单个文件
@@ -600,7 +600,7 @@ openviking rm viking://resources/old.md [--recursive]
 | to_uri | str | 是 | - | 目标 Viking URI |
 
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK**
 
 ```python
 client.mv(

@@ -78,6 +78,35 @@ client = SyncHTTPClient(
 )
 ```
 
+## 请求级 Actor Peer
+
+应用可以复用一个已经绑定凭证并完成初始化的 client，同时为每个请求选择当前的
+actor peer：
+
+```python
+from openviking_sdk import (
+    SyncHTTPClient,
+    use_actor_peer,
+)
+
+client = SyncHTTPClient(
+    url="http://127.0.0.1:1933",
+    api_key="your-user-key",
+)
+client.initialize()
+
+with use_actor_peer("assistant-a"):
+    memories = client.find("部署偏好")
+```
+
+该作用域通过 Python `ContextVar` 隔离，因此并发 async task 以及由 SDK worker loop
+执行的同步调用不会互相覆盖。嵌套作用域会自动恢复之前的 actor peer。
+
+该作用域不会改变认证或租户归属。Account 和 user 身份仍然由 API Key 或 OAuth
+凭证决定。每个 OpenViking user 应使用各自绑定凭证的 client，actor peer 只能从应用
+已经认证的状态中解析。服务端只会在支持 actor-peer view 的接口上应用该值；Session
+接口仍然以 user 为作用域。
+
 ## 快速开始：同步客户端
 
 ```python
@@ -98,6 +127,8 @@ print("session:", session)
 client.session("demo-session").add_message("user", "hello from sdk")
 context = client.session("demo-session").get_session_context(token_budget=4096)
 print("context:", context)
+
+client.close()
 ```
 
 ## 快速开始：异步客户端
@@ -141,7 +172,28 @@ from openviking_sdk import SyncHTTPClient
 
 client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
 client.initialize()
-result = client.create_session("demo-session")
+event_config = {
+    "events": {
+        "tags": ["team=search", "channel=web"],
+    }
+}
+result = client.create_session(
+    "demo-session",
+    memory_extraction_config=event_config,
+)
+# 创建时显式传 None，可覆盖服务端默认并禁用自动提交。
+client.create_session("manual-session", auto_commit_policy=None)
+client.update_session_config(
+    "demo-session",
+    auto_commit_policy={"message_count_threshold": 25},
+    memory_extraction_config={
+        "events": {"tags": ["team=search", "channel=app"]}
+    },
+)
+# 显式传 None 会禁用自动 commit；省略参数则保持不变。
+client.update_session_config("demo-session", auto_commit_policy=None)
+client.session("demo-session").commit(event_tags=["team=search", "channel=web"])
+# 单次 commit 传 event_tags=[] 可显式跳过 session 默认 tags。
 print(result)
 ```
 
@@ -162,6 +214,18 @@ result = client.add_resource(
     wait=True,
 )
 print(result)
+```
+
+如果只希望入库并生成向量、不走 VLM 语义理解，可以传 `processing_mode="vectors_only"`。
+该模式会写入/同步资源树并向量化当前文件，但不会生成或刷新 `.abstract.md` / `.overview.md`。
+
+```python
+result = client.add_resource(
+    "/path/to/notes.md",
+    to="viking://resources/demo-notes",
+    processing_mode="vectors_only",
+    wait=True,
+)
 ```
 
 ### 文件系统操作

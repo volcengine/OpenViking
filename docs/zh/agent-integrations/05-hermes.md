@@ -33,7 +33,7 @@ hermes memory setup
 hermes memory status
 ```
 
-配置完成后，Hermes 自动使用 OpenViking 作为长期记忆——`viking_remember`、`viking_recall` 等记忆工具即刻可用。
+配置完成后，Hermes 会通过 OpenViking memory provider 自动注入上下文、预取相关记忆，并在会话后同步和抽取记忆。可用工具包括 `viking_search`、`viking_read`、`viking_browse`、`viking_remember`、`viking_forget` 和 `viking_add_resource`。
 
 ## 参见
 

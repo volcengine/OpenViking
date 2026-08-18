@@ -293,6 +293,7 @@ class MatchedContext:
     match_reason: str = ""
 
     relations: List[RelatedContext] = field(default_factory=list)
+    search_tags: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -373,17 +374,19 @@ class FindResult:
         return result
 
     def _context_to_dict(self, ctx: MatchedContext) -> Dict[str, Any]:
-        """Convert MatchedContext to dict."""
+        """Convert MatchedContext to dict.
+
+        Only fields the retrieval pipeline actually populates are exposed.
+        ``search_tags`` is surfaced under the ``tags`` key to match the
+        ``tags`` filter parameter accepted by find/search.
+        """
         return {
             "context_type": ctx.context_type.value,
             "uri": ctx.uri,
             "level": ctx.level,
             "score": ctx.score,
-            "category": ctx.category,
-            "match_reason": ctx.match_reason,
-            "relations": [{"uri": r.uri, "abstract": r.abstract} for r in ctx.relations],
             "abstract": ctx.abstract,
-            "overview": ctx.overview,
+            "tags": ctx.search_tags,
         }
 
     def _query_to_dict(self, q: TypedQuery) -> Dict[str, Any]:
@@ -431,6 +434,7 @@ class FindResult:
                     RelatedContext(uri=r.get("uri", ""), abstract=r.get("abstract", ""))
                     for r in d.get("relations", [])
                 ],
+                search_tags=list(d.get("tags") or d.get("search_tags") or []),
             )
 
         return cls(

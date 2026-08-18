@@ -189,6 +189,10 @@ pub struct BaseClient {
     pub(crate) profile_enabled: bool,
     pub(crate) extra_headers: Option<std::collections::HashMap<String, String>>,
     gateway_token: Option<String>,
+    auth_mode: Option<String>,
+    ldap_username: Option<String>,
+    ldap_password: Option<String>,
+    oidc_token: Option<String>,
 }
 
 impl BaseClient {
@@ -217,7 +221,33 @@ impl BaseClient {
             profile_enabled,
             extra_headers,
             gateway_token: None,
+            auth_mode: None,
+            ldap_username: None,
+            ldap_password: None,
+            oidc_token: None,
         }
+    }
+
+    pub fn with_auth_mode(mut self, auth_mode: Option<String>) -> Self {
+        self.auth_mode = auth_mode;
+        self
+    }
+
+    pub fn with_ldap_username(mut self, username: Option<String>) -> Self {
+        self.ldap_username = username;
+        self
+    }
+
+    pub fn with_ldap_password(mut self, password: Option<String>) -> Self {
+        self.ldap_password = password;
+        self
+    }
+
+    pub fn with_oidc_token(mut self, token: Option<String>) -> Self {
+        self.oidc_token = token
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty());
+        self
     }
 
     pub fn with_gateway_token(mut self, gateway_token: Option<String>) -> Self {
@@ -273,6 +303,53 @@ impl BaseClient {
                 headers.insert("X-OpenViking-Actor-Peer", value);
             }
         }
+
+        // LDAP Basic Auth support
+        if let (Some(auth_mode), Some(username), Some(password)) =
+            (&self.auth_mode, &self.ldap_username, &self.ldap_password)
+        {
+            if auth_mode == "ldap" {
+                let credentials = format!("{}:{}", username, password);
+                use base64::engine::Engine;
+                use base64::engine::general_purpose;
+                let encoded = general_purpose::STANDARD.encode(credentials);
+                if let Ok(value) =
+                    reqwest::header::HeaderValue::from_str(&format!("Basic {}", encoded))
+                {
+                    headers.insert(reqwest::header::AUTHORIZATION, value);
+                }
+            }
+        }
+
+        // OIDC Bearer Token support
+        if let (Some(auth_mode), Some(token)) = (&self.auth_mode, &self.oidc_token) {
+            if auth_mode == "oidc" {
+                if let Ok(value) =
+                    reqwest::header::HeaderValue::from_str(&format!("Bearer {}", token))
+                {
+                    headers.insert(reqwest::header::AUTHORIZATION, value);
+                }
+            }
+        }
+
+        // Also support OIDC token when api_key looks like a JWT (for backwards compatibility)
+        if self
+            .api_key
+            .as_ref()
+            .map_or(false, |k| k.contains('.') && k.matches('.').count() >= 2)
+        {
+            if let Some(token) = &self.api_key {
+                if let Ok(value) =
+                    reqwest::header::HeaderValue::from_str(&format!("Bearer {}", token))
+                {
+                    // Only insert if not already set by explicit OIDC
+                    if !headers.contains_key(reqwest::header::AUTHORIZATION) {
+                        headers.insert(reqwest::header::AUTHORIZATION, value);
+                    }
+                }
+            }
+        }
+
         if let Some(extra_headers) = &self.extra_headers {
             for (key, value) in extra_headers {
                 if let Ok(header_name) = reqwest::header::HeaderName::from_str(key) {
@@ -348,7 +425,7 @@ impl BaseClient {
     ) -> Result<T> {
         let status = response.status();
 
-        if status == StatusCode::NO_CONTENT || status == StatusCode::ACCEPTED {
+        if status == StatusCode::NO_CONTENT {
             return serde_json::from_value(Value::Null)
                 .map_err(|e| Error::Parse(format!("Failed to parse empty response: {}", e)));
         }

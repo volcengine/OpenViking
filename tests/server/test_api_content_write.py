@@ -323,14 +323,14 @@ async def test_set_tags_rejects_wait_and_timeout_fields(client_with_resource):
     assert body["status"] == "error"
 
 
-async def test_set_tags_rejects_invalid_kv_tag(client_with_resource):
+async def test_set_tags_discards_invalid_kv_tag(client_with_resource):
     client, uri = client_with_resource
     file_uri = await _first_file_uri(client, uri)
     resp = await client.post(
         "/api/v1/fs/attrs/set_tags",
-        json={"uri": file_uri, "tags": ["project-a"]},
+        json={"uri": file_uri, "tags": ["project-a", "team=search"]},
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 200
     body = resp.json()
-    assert body["status"] == "error"
-    assert body["error"]["code"] == "INVALID_ARGUMENT"
+    assert body["status"] == "ok"
+    assert body["result"]["tags"] == ["team=search"]

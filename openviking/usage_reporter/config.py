@@ -10,7 +10,7 @@ from typing import Any
 from openviking.server.config import UsageReporterConfig, UsageReporterSinkConfig
 
 from .extractors import MemoryUsageExtractor
-from .http_sink import HttpUsageSink
+from .file_log_sink import FileLogUsageSink
 from .reporter import UsageReporter
 from .sinks import UsageSink
 
@@ -25,8 +25,8 @@ def _load_class(class_path: str) -> type:
 
 
 def _build_sink(config: UsageReporterSinkConfig) -> UsageSink:
-    if config.type == "http":
-        return HttpUsageSink(**dict(config.config))
+    if config.type == "file_log":
+        return FileLogUsageSink(**dict(config.config))
 
     if config.type == "custom":
         if not config.class_path:

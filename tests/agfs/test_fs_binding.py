@@ -13,8 +13,8 @@ import uuid
 
 import pytest
 
-from openviking.storage.transaction import init_lock_manager, reset_lock_manager
 from openviking.storage.viking_fs import init_viking_fs
+from openviking.utils.resource_processor import ResourceProcessor
 from openviking_cli.utils.config.agfs_config import AGFSConfig
 
 # Direct configuration for testing
@@ -33,15 +33,11 @@ async def viking_fs_binding_instance():
     # Create AGFS client
     agfs_client = create_agfs_client(RagfsBindingConfig(agfs=AGFS_CONF))
 
-    # Initialize LockManager and VikingFS with client
-    init_lock_manager(agfs=agfs_client)
     vfs = init_viking_fs(agfs=agfs_client)
     # make sure default/temp directory exists
     await vfs.mkdir("viking://temp/", exist_ok=True)
 
     yield vfs
-
-    reset_lock_manager()
 
 
 @pytest.mark.asyncio
@@ -95,6 +91,114 @@ class TestVikingFSBindingLocal:
 
         root_entries = await vfs.ls("viking://temp/")
         assert not any(e["name"] == test_dir for e in root_entries)
+
+    async def test_flat_file_lock_keeps_persisted_target_a_file(
+        self,
+        viking_fs_binding_instance,
+    ):
+        """An exact resource lock must not materialize a file target as a directory."""
+        vfs = viking_fs_binding_instance
+        unique = uuid.uuid4().hex
+        temp_uri = f"viking://temp/flat_lock_{unique}.md"
+        target_uri = f"viking://resources/flat_lock_{unique}.md"
+        target_path = vfs._uri_to_path(target_uri)
+        lease = None
+
+        try:
+            await vfs.write(temp_uri, "flat file content")
+            lease = await ResourceProcessor.acquire_resource_lock(
+                target_path,
+                uri=target_uri,
+                root_is_file=True,
+            )
+            await vfs.persist_temp_tree(
+                temp_uri,
+                target_uri,
+                lease_ref=lease,
+            )
+
+            stat_info = await vfs.stat(target_uri)
+            assert stat_info["isDir"] is False
+            assert await vfs.read(target_uri) == b"flat file content"
+        finally:
+            if lease is not None:
+                await vfs._async_agfs.pathlock_release(lease)
+            for uri in (temp_uri, target_uri):
+                if await vfs.exists(uri):
+                    stat_info = await vfs.stat(uri)
+                    await vfs.rm(uri, recursive=bool(stat_info.get("isDir")))
+
+    async def test_borrowed_pathlock_cannot_release_via_raw_ref(self, viking_fs_binding_instance):
+        """Reject borrowed lifecycle control through typed and raw lease refs."""
+        vfs = viking_fs_binding_instance
+        path = f"/local/default/temp/borrowed_release_{uuid.uuid4().hex}.txt"
+        owned = await vfs._async_agfs.pathlock_acquire_exact(path)
+        borrowed = await vfs._async_agfs.pathlock_as_borrowed(owned)
+
+        try:
+            with pytest.raises(ValueError):
+                await vfs._async_agfs.pathlock_release(borrowed)
+            with pytest.raises((TypeError, ValueError)):
+                await vfs._async_agfs.pathlock_release(borrowed["lease_ref"])
+        finally:
+            await vfs._async_agfs.pathlock_release(owned)
+
+    async def test_pathlock_adopt_rejects_forged_tree_coverage(self, viking_fs_binding_instance):
+        """Reject handoff coverage that is stronger than the live token."""
+        vfs = viking_fs_binding_instance
+        path = f"/local/default/temp/handoff_forge_{uuid.uuid4().hex}.txt"
+        owned = await vfs._async_agfs.pathlock_acquire_exact(path)
+        handoff = await vfs._async_agfs.pathlock_to_handoff(owned)
+        handoff["covered_paths"] = [{"path": path, "kind": "tree"}]
+        adopted = None
+
+        try:
+            with pytest.raises(ValueError):
+                adopted = await vfs._async_agfs.pathlock_adopt(handoff)
+        finally:
+            if adopted is not None:
+                await vfs._async_agfs.pathlock_release(adopted)
+            await vfs._async_agfs.pathlock_release(owned)
+
+    async def test_pathlock_adopt_accepts_legacy_handle_id_handoff(
+        self, viking_fs_binding_instance
+    ):
+        """Accept legacy durable handoffs that use handle_id instead of owner_id."""
+        vfs = viking_fs_binding_instance
+        path = f"/local/default/temp/handoff_legacy_{uuid.uuid4().hex}.txt"
+        owned = await vfs._async_agfs.pathlock_acquire_exact(path)
+        handoff = await vfs._async_agfs.pathlock_to_handoff(owned)
+        legacy_handoff = {
+            "handle_id": handoff["owner_id"],
+            "lock_paths": handoff["lock_paths"],
+        }
+        adopted = None
+
+        try:
+            adopted = await vfs._async_agfs.pathlock_adopt(legacy_handoff)
+            assert adopted["owner_id"] == owned["owner_id"]
+            assert adopted["owned"] is True
+        finally:
+            if adopted is not None:
+                await vfs._async_agfs.pathlock_release(adopted)
+            await vfs._async_agfs.pathlock_release(owned)
+
+    @pytest.mark.parametrize(
+        "requests",
+        [
+            [],
+            [{"kind": "exact"}],
+            [{"path": "", "kind": "exact"}],
+            [{"path": "relative", "kind": "tree"}],
+            [{"path": "/local/default/temp/file", "kind": "other"}],
+        ],
+    )
+    async def test_pathlock_batch_rejects_invalid_requests(
+        self, viking_fs_binding_instance, requests
+    ):
+        """Reject malformed pathlock requests without applying defaults."""
+        with pytest.raises(ValueError):
+            await viking_fs_binding_instance._async_agfs.pathlock_acquire_batch(requests)
 
     async def test_tree_operations(self, viking_fs_binding_instance):
         """Test VikingFS tree operations."""

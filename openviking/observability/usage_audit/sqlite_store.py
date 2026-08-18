@@ -103,6 +103,34 @@ class SQLiteUsageAuditStore:
             self._conn.close()
             self._conn = None
 
+    async def delete_user_data(self, *, account_id: str, user_id: str) -> dict[str, int]:
+        """Delete all usage/audit rows for an account/user pair."""
+        async with self._lock:
+            return await asyncio.to_thread(self._delete_user_data_sync, account_id, user_id)
+
+    def _delete_user_data_sync(self, account_id: str, user_id: str) -> dict[str, int]:
+        assert self._conn is not None
+        tables = (
+            "usage_token_hourly",
+            "usage_retrieval_hourly",
+            "usage_context_write_bucket",
+            "request_audit",
+        )
+        self._conn.execute("BEGIN")
+        try:
+            deleted = {
+                table: self._conn.execute(
+                    f"DELETE FROM {table} WHERE account_id = ? AND user_id = ?",
+                    (account_id, user_id),
+                ).rowcount
+                for table in tables
+            }
+            self._conn.execute("COMMIT")
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
+        return deleted
+
     async def record_batch(self, events: Sequence[ObservabilityEvent]) -> None:
         if not events:
             return

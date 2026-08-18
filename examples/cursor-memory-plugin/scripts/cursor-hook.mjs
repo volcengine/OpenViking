@@ -106,7 +106,7 @@ async function main() {
         : state.promptHash === promptHash && now - Number(state.promptAt || 0) < 500;
       if (duplicateEvent) return { continue: true };
       if (state.promptHash !== promptHash || !state.recallBlock) {
-        const recallBlock = await recallForPrompt(fetchJSON, cfg, prompt, cwd, log).catch((error) => {
+        const recallBlock = await recallForPrompt(fetchJSON, cfg, prompt, cwd, log, { sessionId }).catch((error) => {
           logError("recall", error);
           return null;
         });
@@ -129,7 +129,7 @@ async function main() {
       state = captured.state;
       const shouldCommit = eventName !== "stop" || state.capturedSinceCommit >= cfg.commitTurnThreshold;
       if (shouldCommit) {
-        const result = await commitAgentSession(fetchJSON, sessionId);
+        const result = await commitAgentSession(fetchJSON, sessionId, log);
         if (result.ok) state.capturedSinceCommit = 0;
       }
       await writeHookState(CLIENT_ID, nativeSessionId, state);

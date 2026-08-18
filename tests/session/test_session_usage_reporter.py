@@ -4,7 +4,7 @@
 import pytest
 
 from openviking.message import ToolPart
-from openviking.server.dependencies import get_service
+from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
 from openviking.usage_reporter import MemoryUsageExtractor, UsageReporter
 
@@ -22,7 +22,10 @@ async def _wait_for_task(task_id: str, timeout: float = 30.0) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_commit_reports_memory_usage_events_to_sink(session):
+async def test_commit_reports_memory_usage_events_to_sink(
+    session,
+    service: OpenVikingService,
+):
     reported_events = []
 
     class RecordingSink:
@@ -34,13 +37,13 @@ async def test_commit_reports_memory_usage_events_to_sink(session):
         extractors=[MemoryUsageExtractor()],
         sinks=[RecordingSink()],
     )
-    get_service().sessions.set_usage_reporter(reporter)
+    service.sessions.set_usage_reporter(reporter)
     session.add_message(
         "user",
         [
             ToolPart(
                 tool_id="call-read",
-                tool_name="read_experience",
+                tool_name="read",
                 tool_status="completed",
                 tool_input={"uri": experience_uri},
             )

@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Resource endpoints for OpenViking HTTP Server."""
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.server.auth import get_request_context, get_upload_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
@@ -30,10 +31,17 @@ class AddResourceRequest(BaseModel):
             Either path or temp_file_id must be provided.
         temp_file_id: Temporary upload id returned by /api/v1/resources/temp_upload.
             Either path or temp_file_id must be provided.
+        add_type: Explicit Connector source type (e.g. "tos", "git"). When set, the
+            request routes to the Connector integration: the type must be enabled in
+            connector.allowed_add_types, and args are forwarded to the source plugin
+            (credentials under args.auth_config). Never degrades to the standard
+            pipeline. Requires 'path' and an exact 'to' target; cannot be combined
+            with 'temp_file_id' or 'parent'.
         to: Target URI for the resource (e.g., "viking://resources/my_resource").
-            If not specified, an auto-generated URI will be used.
+            Required when add_type is set. Otherwise, if not specified, an
+            auto-generated URI will be used.
         parent: Parent URI under which the resource will be stored.
-            Cannot be used together with 'to'.
+            Cannot be used together with 'to' or 'add_type'.
         create_parent: Whether to automatically create the parent directory if it doesn't exist.
             Default is False.
         reason: Reason for adding the resource. Used for documentation and monitoring.
@@ -48,7 +56,10 @@ class AddResourceRequest(BaseModel):
         exclude: Glob pattern for files to exclude during parsing.
         directly_upload_media: Whether to directly upload media files. Default is True.
         preserve_structure: Whether to preserve directory structure when adding directories.
-        args: Parser-specific import options. For Feishu one-time user-token imports,
+        args: Parser-specific import options. Native HTTPS Git imports accept
+            {"auth_config": {"username": "oauth2", "token": "..."}}; when
+            watch_interval > 0 the credentials are stored in private watch state.
+            For Feishu one-time user-token imports,
             pass {"feishu_access_token": "..."}. For Feishu user-token watches,
             pass {"feishu_access_token": "...", "feishu_refresh_token": "..."}.
         watch_interval: Watch interval in minutes for automatic resource monitoring.
@@ -59,15 +70,16 @@ class AddResourceRequest(BaseModel):
             - watch_interval < 0: Same as watch_interval = 0, cancels any existing watch task.
             Default is 0 (no monitoring).
 
-            Note: If the target URI already has an active watch task, a ConflictError will be
-            raised. You must first cancel the existing watch (set watch_interval <= 0) before
-            creating a new one.
+            Note: Re-adding the same source to the same target updates its active watch task.
+            A different source targeting an active watch raises ConflictError; cancel that
+            watch first with watch_interval <= 0.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     path: Optional[str] = None
     temp_file_id: Optional[str] = None
+    add_type: Optional[str] = None
     to: Optional[str] = None
     parent: Optional[str] = None
     create_parent: bool = False
@@ -85,11 +97,28 @@ class AddResourceRequest(BaseModel):
     args: Dict[str, Any] = Field(default_factory=dict)
     telemetry: TelemetryRequest = False
     watch_interval: float = 0
+    processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
+    tags: Optional[list[str]] = None
+    tag_mode: str = "replace"
 
     @model_validator(mode="after")
     def check_path_or_temp_file_id(self):
         if not self.path and not self.temp_file_id:
             raise ValueError("Either 'path' or 'temp_file_id' must be provided")
+        return self
+
+    @model_validator(mode="after")
+    def check_add_type(self):
+        if self.add_type is not None:
+            self.add_type = self.add_type.strip() or None
+        if self.add_type and self.temp_file_id:
+            raise ValueError("'add_type' cannot be combined with 'temp_file_id'")
+        if self.add_type and not self.path:
+            raise ValueError("'add_type' requires 'path'")
+        if self.add_type and self.parent:
+            raise ValueError("'add_type' cannot be combined with 'parent'")
+        if self.add_type and not self.to:
+            raise ValueError("'add_type' requires an exact 'to' target")
         return self
 
 
@@ -126,7 +155,7 @@ async def temp_upload(
     request: Request,
     file: UploadFile = File(...),
     telemetry: bool = Form(False),
-    upload_mode: str = Form("local"),
+    upload_mode: Optional[Literal["local", "shared"]] = Form(None),
     _ctx: RequestContext = Depends(get_upload_request_context),
 ):
     """Upload a temporary file for add_resource or import_ovpack.
@@ -140,14 +169,23 @@ async def temp_upload(
     dependency.
     """
     signed = getattr(request.state, "signed_upload", None)
+    effective_upload_mode = upload_mode or request.app.state.config.temp_upload.default_mode
 
     async def _upload() -> dict[str, Any]:
         store = TempUploadStore.build(request.app.state.config)
-        temp_file_id = await store.save_upload(file, upload_mode, _ctx)
+        temp_file_id = await store.save_upload(file, effective_upload_mode, _ctx)
         if signed is None:
             return {"temp_file_id": temp_file_id}
         return await ingest_temp_upload(
-            store, temp_file_id, _ctx, to=signed.to, reason=signed.reason
+            store,
+            temp_file_id,
+            _ctx,
+            to=signed.to,
+            reason=signed.reason,
+            processing_mode=signed.processing_mode,
+            tags=signed.tags,
+            tag_mode=signed.tag_mode,
+            parse_mode=signed.parse_mode,
         )
 
     try:
@@ -181,15 +219,23 @@ async def add_resource(
     allow_local_path_resolution = False
     original_filename = None
     resolved = None
-    store = None
     if request.temp_file_id:
-        store = TempUploadStore.build(http_request.app.state.config)
-        resolved = await store.resolve_for_consume(request.temp_file_id, _ctx)
+        if request.watch_interval > 0:
+            raise InvalidArgumentError(
+                "watch_interval > 0 is not supported for uploaded content: an "
+                "upload is a static snapshot, so the watch would re-process "
+                "stale content forever. Watch a URL / "
+                "sitemap / RSS source instead, or re-add the resource when the "
+                "source changes."
+            )
+        resolved = await TempUploadStore.build(http_request.app.state.config).resolve_for_consume(
+            request.temp_file_id, _ctx
+        )
         path = resolved.local_path
         original_filename = resolved.original_filename
         allow_local_path_resolution = True
     elif path is not None:
-        path = require_remote_resource_source(path)
+        path = require_remote_resource_source(path, declared_connector_add_type=request.add_type)
     if path is None:
         raise InvalidArgumentError("Either 'path' or 'temp_file_id' must be provided.")
 
@@ -206,13 +252,14 @@ async def add_resource(
         "exclude": request.exclude,
         "directly_upload_media": request.directly_upload_media,
         "watch_interval": request.watch_interval,
+        "processing_mode": request.processing_mode,
     }
     # Connector routing needs to distinguish an omitted create_parent from an
     # explicit false.  Standard imports still observe false when the field is
     # omitted because ResourceService reads it with kwargs.get(..., False).
     if "create_parent" in request.model_fields_set:
         kwargs["create_parent"] = request.create_parent
-    if request.temp_file_id:
+    if request.temp_file_id and request.watch_interval <= 0:
         kwargs["temp_file_id"] = request.temp_file_id
     if request.preserve_structure is not None:
         kwargs["preserve_structure"] = request.preserve_structure
@@ -222,24 +269,23 @@ async def add_resource(
             result = await service.resources.add_resource(
                 path=path,
                 ctx=_ctx,
+                add_type=request.add_type,
                 to=request.to,
                 parent=request.parent,
                 reason=request.reason,
                 instruction=request.instruction,
                 wait=request.wait,
                 timeout=request.timeout,
+                tags=request.tags,
+                tag_mode=request.tag_mode,
                 allow_local_path_resolution=allow_local_path_resolution,
                 enforce_public_remote_targets=True,
                 args=request.args,
                 **kwargs,
             )
         except Exception:
-            if resolved and store:
-                await store.mark_failed(resolved, _ctx)
             raise
         else:
-            if resolved and store:
-                await store.mark_consumed(resolved, _ctx)
             return result
         finally:
             if resolved:
@@ -285,8 +331,6 @@ async def add_skill(
             source_metadata["original_filename"] = resolved.original_filename
 
     source_path_hint = resolved.original_filename if resolved else None
-    store = TempUploadStore.build(http_request.app.state.config) if resolved else None
-
     async def _add() -> dict[str, Any]:
         try:
             result = await service.resources.add_skill(
@@ -300,12 +344,8 @@ async def add_skill(
             )
             await persist_skill_source_metadata(service, _ctx, result, source_metadata)
         except Exception:
-            if resolved and store:
-                await store.mark_failed(resolved, _ctx)
             raise
         else:
-            if resolved and store:
-                await store.mark_consumed(resolved, _ctx)
             return result
         finally:
             if resolved:

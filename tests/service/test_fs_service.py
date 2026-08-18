@@ -13,10 +13,11 @@ from openviking_cli.session.user_id import UserIdentifier
 
 
 class _FakeVikingFS:
-    def __init__(self, *, rm_error=None):
+    def __init__(self, *, rm_error=None, events=None):
         self.rm_calls = []
         self.mv_calls = []
         self.rm_error = rm_error
+        self.events = events
 
     async def rm(self, uri, recursive=False, ctx=None):
         self.rm_calls.append({"uri": uri, "recursive": recursive, "ctx": ctx})
@@ -26,40 +27,33 @@ class _FakeVikingFS:
 
     async def mv(self, from_uri, to_uri, ctx=None):
         self.mv_calls.append({"from_uri": from_uri, "to_uri": to_uri, "ctx": ctx})
+        if self.events is not None:
+            self.events.append(("mv", from_uri, to_uri))
 
 
 class _FakeWatchManager:
-    def __init__(self):
-        self.plan_calls = []
-        self.move_calls = []
-        self.sync_calls = []
+    def __init__(self, *, events=None):
+        self.validate_calls = []
+        self.rewrite_calls = []
         self.deactivate_calls = []
-        self.plan_error = None
+        self.validate_error = None
+        self.events = events
 
-    async def plan_move_tasks_under_uri_internal(self, from_uri, to_uri):
-        self.plan_calls.append({"from_uri": from_uri, "to_uri": to_uri})
-        if self.plan_error:
-            raise self.plan_error
-        return {}
-
-    async def move_tasks_under_uri_internal(self, from_uri, to_uri):
-        self.move_calls.append({"from_uri": from_uri, "to_uri": to_uri})
-        return [SimpleNamespace(task_id="watch-1")]
-
-    async def sync_tasks_with_resource_move_internal(
-        self,
-        from_uri,
-        to_uri,
-        account_id,
-        move_resource,
-        rollback_resource=None,
-    ):
-        self.sync_calls.append(
+    async def validate_target_prefix_rewrite_internal(self, from_uri, to_uri, account_id):
+        self.validate_calls.append(
             {"from_uri": from_uri, "to_uri": to_uri, "account_id": account_id}
         )
-        if self.plan_error:
-            raise self.plan_error
-        await move_resource()
+        if self.events is not None:
+            self.events.append(("validate", from_uri, to_uri))
+        if self.validate_error:
+            raise self.validate_error
+
+    async def rewrite_target_prefix_internal(self, from_uri, to_uri, account_id):
+        self.rewrite_calls.append(
+            {"from_uri": from_uri, "to_uri": to_uri, "account_id": account_id}
+        )
+        if self.events is not None:
+            self.events.append(("rewrite", from_uri, to_uri))
         return [SimpleNamespace(task_id="watch-1")]
 
     async def deactivate_tasks_under_uri_internal(self, uri, account_id):
@@ -92,11 +86,11 @@ class _FakeWaitTracker:
     def register_request(self, telemetry_id):
         self.registered_requests.append(telemetry_id)
 
-    def register_semantic_root(self, telemetry_id, semantic_msg_id):
+    def register_semantic_root(self, telemetry_id, root_id):
         self.registered_roots.append(
             {
                 "telemetry_id": telemetry_id,
-                "semantic_msg_id": semantic_msg_id,
+                "root_id": root_id,
                 "request_was_registered": telemetry_id in self.registered_requests,
             }
         )
@@ -110,7 +104,7 @@ class _FakeWaitTracker:
             "Embedding": {"processed": 0, "error_count": 0, "errors": []},
         }
 
-    def mark_semantic_failed(self, telemetry_id, semantic_msg_id, message):
+    def mark_semantic_failed(self, telemetry_id, root_id, message):
         pass
 
     def cleanup(self, telemetry_id):
@@ -138,6 +132,80 @@ def request_context():
         user=UserIdentifier("default", "ryoma"),
         role=Role.USER,
     )
+
+
+@pytest.mark.asyncio
+async def test_read_visible_strips_memory_metadata_before_slicing(request_context):
+    raw = 'line one\nline two\n\n<!-- MEMORY_FIELDS\n{"secret":"hidden"}\n-->'
+    viking_fs = SimpleNamespace(read_file=AsyncMock(return_value=raw))
+    service = FSService(viking_fs=viking_fs)
+    uri = "viking://user/ryoma/memories/notes/private.md"
+
+    assert await service.read_visible(uri, ctx=request_context, offset=3, limit=1) == ""
+    viking_fs.read_file.assert_awaited_once_with(uri, ctx=request_context)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        'visible\n<!-- MEMORY_FIELDS\n{"secret":"hidden"}\n-->',
+        'visible\n\n<!-- MEMORY_FIELDS {"secret":"hidden"} -->',
+        'visible <!-- MEMORY_FIELDS {"secret":"hidden"} -->',
+    ],
+)
+@pytest.mark.asyncio
+async def test_read_visible_strips_supported_memory_metadata_trailers(
+    request_context,
+    raw,
+):
+    uri = "viking://user/ryoma/memories/notes/private.md"
+    service = FSService(
+        viking_fs=SimpleNamespace(read_file=AsyncMock(return_value=raw)),
+    )
+
+    assert await service.read_visible(uri, ctx=request_context) == "visible"
+
+
+@pytest.mark.asyncio
+async def test_read_visible_preserves_non_memory_content(request_context):
+    raw = 'visible\n<!-- MEMORY_FIELDS {"example":true} -->'
+    viking_fs = SimpleNamespace(read_file=AsyncMock(return_value=raw))
+    service = FSService(viking_fs=viking_fs)
+
+    assert (
+        await service.read_visible(
+            "viking://resources/example.md",
+            ctx=request_context,
+            offset=1,
+            limit=1,
+        )
+        == '<!-- MEMORY_FIELDS {"example":true} -->'
+    )
+
+
+@pytest.mark.asyncio
+async def test_grep_projects_memory_content_but_keeps_resource_fast_path(request_context):
+    viking_fs = SimpleNamespace(grep=AsyncMock(return_value={"matches": []}))
+    service = FSService(viking_fs=viking_fs)
+
+    await service.grep(
+        "viking://user/ryoma/memories",
+        "secret",
+        ctx=request_context,
+    )
+    memory_kwargs = viking_fs.grep.await_args.kwargs
+    transform = memory_kwargs["content_transform"]
+    assert (
+        transform(
+            'visible\n<!-- MEMORY_FIELDS {"secret":"hidden"} -->',
+            "viking://user/ryoma/memories/private.md",
+        )
+        == "visible"
+    )
+
+    viking_fs.grep.reset_mock()
+    await service.grep("viking://resources", "secret", ctx=request_context)
+    assert "content_transform" not in viking_fs.grep.await_args.kwargs
 
 
 @pytest.mark.asyncio
@@ -212,6 +280,24 @@ async def test_resource_rm_without_wait_only_queues_refresh(request_context):
 
 
 @pytest.mark.asyncio
+async def test_resource_scope_rm_does_not_refresh_global_root(request_context):
+    service = FSService(viking_fs=_FakeVikingFS())
+    service._enqueue_delete_refresh = AsyncMock()
+    service._wait_for_refresh = AsyncMock()
+
+    result = await service.rm(
+        "viking://resources",
+        ctx=request_context,
+        recursive=True,
+        wait=True,
+    )
+
+    service._enqueue_delete_refresh.assert_not_awaited()
+    service._wait_for_refresh.assert_not_awaited()
+    assert "semantic_root_uri" not in result
+
+
+@pytest.mark.asyncio
 async def test_resource_rm_deactivates_watch_tasks(request_context):
     viking_fs = _FakeVikingFS()
     watch_manager = _FakeWatchManager()
@@ -243,9 +329,10 @@ async def test_resource_rm_does_not_deactivate_watch_task_control_uri(request_co
 
 
 @pytest.mark.asyncio
-async def test_resource_mv_plans_then_moves_then_rewrites_watch_tasks(request_context):
-    viking_fs = _FakeVikingFS()
-    watch_manager = _FakeWatchManager()
+async def test_resource_mv_validates_then_moves_then_rewrites_watch_tasks(request_context):
+    events = []
+    viking_fs = _FakeVikingFS(events=events)
+    watch_manager = _FakeWatchManager(events=events)
     service = FSService(
         viking_fs=viking_fs,
         watch_scheduler=_FakeWatchScheduler(watch_manager),
@@ -257,13 +344,15 @@ async def test_resource_mv_plans_then_moves_then_rewrites_watch_tasks(request_co
         ctx=request_context,
     )
 
-    assert watch_manager.sync_calls == [
+    expected_watch_call = [
         {
             "from_uri": "viking://resources/codeask/wiki",
             "to_uri": "viking://resources/codeask/wiki-renamed",
             "account_id": "default",
         }
     ]
+    assert watch_manager.validate_calls == expected_watch_call
+    assert watch_manager.rewrite_calls == expected_watch_call
     assert viking_fs.mv_calls == [
         {
             "from_uri": "viking://resources/codeask/wiki",
@@ -271,15 +360,14 @@ async def test_resource_mv_plans_then_moves_then_rewrites_watch_tasks(request_co
             "ctx": request_context,
         }
     ]
-    assert watch_manager.plan_calls == []
-    assert watch_manager.move_calls == []
+    assert [event[0] for event in events] == ["validate", "mv", "rewrite"]
 
 
 @pytest.mark.asyncio
 async def test_resource_mv_conflict_fails_before_resource_move(request_context):
     viking_fs = _FakeVikingFS()
     watch_manager = _FakeWatchManager()
-    watch_manager.plan_error = RuntimeError("watch conflict")
+    watch_manager.validate_error = RuntimeError("watch conflict")
     service = FSService(
         viking_fs=viking_fs,
         watch_scheduler=_FakeWatchScheduler(watch_manager),
@@ -293,7 +381,7 @@ async def test_resource_mv_conflict_fails_before_resource_move(request_context):
         )
 
     assert viking_fs.mv_calls == []
-    assert watch_manager.move_calls == []
+    assert watch_manager.rewrite_calls == []
 
 
 @pytest.mark.asyncio

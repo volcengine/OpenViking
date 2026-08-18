@@ -29,6 +29,8 @@ variables:
 
 template: |
   Output Language: {{ output_language }}
+  Write the entire overview consistently in {{ output_language }}; do not mix languages in headings, paragraphs, or list items.
+  Translate or rewrite all source summaries into {{ output_language }}; do not copy source text in another language.
 
   Generate an overview document based on the following directory content:
 
@@ -48,25 +50,29 @@ template: |
   Relationship rules:
   - Treat child directories as parts of the same repository unless the summaries clearly show they are independent projects.
   - Do not describe every child directory as an independent project by default.
-  - When the summaries suggest a code repository, explain how subdirectories relate to the whole repo, such as services, libraries, apps, modules, or support folders.
+  - When the summaries indicate a code repository, explain how subdirectories relate to the whole repo, such as services, libraries, apps, modules, or support folders.
+
+  Faithfulness rules:
+  - Describe only what the provided summaries state; do not invent or generalize entities, facts, or relationships not present in them.
+  - Before output, remove any named entity absent from the provided summaries—including organization, company, product, and brand names—and any unstated ownership, affiliation, or other relationship; never fill gaps with outside knowledge.
 
   Output in Markdown format, strictly following this structure:
 
   1. **Title** (H1): Directory name
 
-  2. **Brief Description** (plain text paragraph, 50-150 words):
+  2. **{{ "简要描述" if output_language == "zh-CN" else "Brief Description" }}** (plain text paragraph, 50-150 words):
      - Immediately following the title, without any H2 heading
      - Explain what this is, what it's about, what it covers
-     - Include core keywords for easy searching
-     - Who it's suitable for
+     - Include core keywords from the provided summaries for easy searching
+     - Who it's suitable for, if stated in the provided summaries
 
-  3. **Quick Navigation** (H2): Decision Tree style
+  3. **{{ "快速导航" if output_language == "zh-CN" else "Quick Navigation" }}** (H2): Decision Tree style
      - Guide with "What do you want to learn?" or "What do you want to do?"
      - Use → arrow to point to specific files or directories
      - **Use file number references**: such as [1], [2], [3]
      - Concise keyword descriptions
 
-  4. **Detailed Description** (H2): One H3 subsection for each file/subdirectory
+  4. **{{ "详细说明" if output_language == "zh-CN" else "Detailed Description" }}** (H2): One H3 subsection for each file/subdirectory
      - Use the file summaries or subdirectory summaries provided above as description content
 
   Total length: 400-800 words

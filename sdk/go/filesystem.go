@@ -209,6 +209,14 @@ func (c *Client) Reindex(ctx context.Context, uri string, opts *ReindexOptions) 
 		"wait":    opts.Wait,
 		"dry_run": opts.DryRun,
 	}
+	if opts.Tags != nil {
+		payload["tags"] = opts.Tags
+		tagMode := opts.TagMode
+		if tagMode == "" {
+			tagMode = "replace"
+		}
+		payload["tag_mode"] = tagMode
+	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/content/reindex", nil, payload, &result)
 	return result, err

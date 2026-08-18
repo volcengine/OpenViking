@@ -9,12 +9,52 @@ use serde_json::json;
 
 pub async fn new_session(
     client: &HttpClient,
+    session_id: Option<&str>,
+    event_tags: &[String],
+    auto_commit_policy_json: Option<&str>,
+    no_auto_commit: bool,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let response: serde_json::Value = client.post("/api/v1/sessions", &json!({})).await?;
+    let body = create_session_body(
+        session_id,
+        event_tags,
+        auto_commit_policy_json,
+        no_auto_commit,
+    )?;
+    let response: serde_json::Value = client.post("/api/v1/sessions", &body).await?;
     output_success(&response, output_format, compact);
     Ok(())
+}
+
+fn create_session_body(
+    session_id: Option<&str>,
+    event_tags: &[String],
+    auto_commit_policy_json: Option<&str>,
+    no_auto_commit: bool,
+) -> Result<Value> {
+    let mut body = json!({});
+    let object = body
+        .as_object_mut()
+        .expect("session create request body must be an object");
+    if let Some(session_id) = session_id {
+        object.insert("session_id".to_string(), json!(session_id));
+    }
+    if !event_tags.is_empty() {
+        object.insert(
+            "memory_extraction_config".to_string(),
+            json!({"events": {"tags": event_tags}}),
+        );
+    }
+    if no_auto_commit {
+        object.insert("auto_commit_policy".to_string(), Value::Null);
+    } else if let Some(raw) = auto_commit_policy_json {
+        object.insert(
+            "auto_commit_policy".to_string(),
+            parse_auto_commit_policy(raw)?,
+        );
+    }
+    Ok(body)
 }
 
 pub async fn list_sessions(
@@ -100,6 +140,13 @@ fn render_session_get_for_table(value: &Value) -> Option<String> {
                 ],
             ),
         );
+    }
+    if let Some(tags) = object
+        .get("memory_extraction_config")
+        .and_then(|config| config.get("events"))
+        .and_then(|events| events.get("tags"))
+    {
+        push_optional_row(&mut lines, "event tags", Some(tags));
     }
 
     lines.push(String::new());
@@ -340,13 +387,91 @@ pub async fn add_messages(
 pub async fn commit_session(
     client: &HttpClient,
     session_id: &str,
+    event_tags: &[String],
+    no_event_tags: bool,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     let path = format!("/api/v1/sessions/{}/commit", url_encode(session_id));
-    let response: serde_json::Value = client.post(&path, &json!({})).await?;
+    let tags = if no_event_tags {
+        Some(&[][..])
+    } else if event_tags.is_empty() {
+        None
+    } else {
+        Some(event_tags)
+    };
+    let body = event_tags_body(tags);
+    let response: serde_json::Value = client.post(&path, &body).await?;
     output_success(&response, output_format, compact);
     Ok(())
+}
+
+pub async fn set_session_config(
+    client: &HttpClient,
+    session_id: &str,
+    event_tags: &[String],
+    no_event_tags: bool,
+    auto_commit_policy_json: Option<&str>,
+    no_auto_commit: bool,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let path = format!("/api/v1/sessions/{}/config", url_encode(session_id));
+    let body = session_config_body(
+        event_tags,
+        no_event_tags,
+        auto_commit_policy_json,
+        no_auto_commit,
+    )?;
+    let response: serde_json::Value = client.patch(&path, &body, &[]).await?;
+    output_success(&response, output_format, compact);
+    Ok(())
+}
+
+fn session_config_body(
+    event_tags: &[String],
+    no_event_tags: bool,
+    auto_commit_policy_json: Option<&str>,
+    no_auto_commit: bool,
+) -> Result<Value> {
+    let mut body = json!({});
+    let object = body
+        .as_object_mut()
+        .expect("session config request body must be an object");
+    if no_event_tags || !event_tags.is_empty() {
+        let tags = if no_event_tags { &[][..] } else { event_tags };
+        object.insert(
+            "memory_extraction_config".to_string(),
+            json!({"events": {"tags": tags}}),
+        );
+    }
+    if no_auto_commit {
+        object.insert("auto_commit_policy".to_string(), Value::Null);
+    } else if let Some(raw) = auto_commit_policy_json {
+        object.insert(
+            "auto_commit_policy".to_string(),
+            parse_auto_commit_policy(raw)?,
+        );
+    }
+    Ok(body)
+}
+
+fn parse_auto_commit_policy(raw: &str) -> Result<Value> {
+    let policy = serde_json::from_str::<Value>(raw)
+        .map_err(|error| Error::Client(format!("invalid auto-commit policy JSON: {error}")))?;
+    if !policy.is_object() {
+        return Err(Error::Client(
+            "--auto-commit-policy-json must be a JSON object".to_string(),
+        ));
+    }
+    Ok(policy)
+}
+
+fn event_tags_body(event_tags: Option<&[String]>) -> Value {
+    match event_tags {
+        Some(tags) => json!({"extraction_metadata": {"event": {"tags": tags}}}),
+        None => json!({}),
+    }
 }
 
 /// Add memory in one shot: creates a session, adds messages, and commits.
@@ -414,7 +539,10 @@ fn url_encode(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_messages, render_session_get_for_table};
+    use super::{
+        create_session_body, event_tags_body, parse_messages, render_session_get_for_table,
+        session_config_body,
+    };
     use crate::error::Error;
     use serde_json::json;
 
@@ -429,6 +557,54 @@ mod tests {
             }
             other => panic!("expected client error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn session_event_tag_request_bodies_preserve_explicit_empty_tags() {
+        let create = create_session_body(
+            Some("s1"),
+            &["team=search".to_string()],
+            Some(r#"{"message_count_threshold":25}"#),
+            false,
+        )
+        .expect("create body");
+        assert_eq!(create["session_id"], "s1");
+        assert_eq!(
+            create["memory_extraction_config"]["events"]["tags"],
+            json!(["team=search"])
+        );
+        assert_eq!(
+            create["auto_commit_policy"]["message_count_threshold"],
+            json!(25)
+        );
+        assert_eq!(
+            create_session_body(None, &[], None, true).expect("disabled create body"),
+            json!({"auto_commit_policy": null})
+        );
+
+        assert_eq!(event_tags_body(None), json!({}));
+        assert_eq!(
+            event_tags_body(Some(&[])),
+            json!({"extraction_metadata": {"event": {"tags": []}}})
+        );
+
+        assert_eq!(
+            session_config_body(
+                &["channel=app".to_string()],
+                false,
+                Some(r#"{"message_count_threshold":25}"#),
+                false,
+            )
+            .expect("combined config body"),
+            json!({
+                "memory_extraction_config": {"events": {"tags": ["channel=app"]}},
+                "auto_commit_policy": {"message_count_threshold": 25}
+            })
+        );
+        assert_eq!(
+            session_config_body(&[], false, None, true).expect("disable config body"),
+            json!({"auto_commit_policy": null})
+        );
     }
 
     #[test]
@@ -478,6 +654,11 @@ mod tests {
                 "events": 0,
                 "total": 3
             },
+            "memory_extraction_config": {
+                "events": {
+                    "tags": ["team=search", "channel=web"]
+                }
+            },
             "llm_token_usage": {
                 "prompt_tokens": 14807,
                 "completion_tokens": 1087,
@@ -503,6 +684,8 @@ mod tests {
         assert!(rendered.contains("Tokens"));
         assert!(rendered.contains("d34f8a7c-eb14-49c4-b689-2743ddb9b75e"));
         assert!(rendered.contains("memories extracted"));
+        assert!(rendered.contains("event tags"));
+        assert!(rendered.contains("team=search"));
         assert!(rendered.contains("profile 0, preferences 0, entities 0, events 0, total 3"));
         assert!(!rendered.contains("{\"profile\":0"));
     }

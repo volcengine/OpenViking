@@ -120,7 +120,7 @@ curl -X POST http://localhost:1933/api/v1/resources/temp_upload \
 ```
 
 这个接口当前只支持布尔形态的表单参数。
-这个接口的 `upload_mode` 也是表单字段；默认值为 `local`，只有在明确需要分布式共享临时上传时，才应设置为 `shared`。Python HTTP client / CLI 用户也可以通过 `ovcli.conf` 的 `upload.mode = "shared"` 达到同样效果。
+这个接口的 `upload_mode` 也是表单字段；默认值为 `local`，只有在明确需要分布式共享临时上传时，才应设置为 `shared`。Python HTTP client 也可以在 `ovcli.conf` 中设置 `upload.mode = "shared"`；Rust `ov` CLI 则使用 `OPENVIKING_UPLOAD_MODE=shared`。
 
 ## 常见 summary 分组
 
@@ -264,7 +264,6 @@ admission，所以其 `gpu_gate_queue` 为零；worker 侧等待仍计入 `batch
 | `summary.memory.extract.duration_ms` | memory extract 主流程总耗时 |
 | `summary.memory.extract.candidates.total` | 最终动作执行前的候选总数 |
 | `summary.memory.extract.candidates.standard` | 普通 memory candidate 数量 |
-| `summary.memory.extract.candidates.tool_skill` | tool 或 skill candidate 数量 |
 | `summary.memory.extract.actions.created` | 新建 memory 数量 |
 | `summary.memory.extract.actions.merged` | 合并到已有 memory 的次数 |
 | `summary.memory.extract.actions.deleted` | 删除旧 memory 的次数 |
@@ -272,9 +271,7 @@ admission，所以其 `gpu_gate_queue` 为零；worker 侧等待仍计入 `batch
 | `summary.memory.extract.stages.prepare_inputs_ms` | 提取前准备输入数据的耗时 |
 | `summary.memory.extract.stages.llm_extract_ms` | 调用 LLM 做提取的耗时 |
 | `summary.memory.extract.stages.normalize_candidates_ms` | 解析并归一化候选的耗时 |
-| `summary.memory.extract.stages.tool_skill_stats_ms` | 聚合 tool 或 skill 统计的耗时 |
 | `summary.memory.extract.stages.profile_create_ms` | 创建或更新 profile memory 的耗时 |
-| `summary.memory.extract.stages.tool_skill_merge_ms` | 合并 tool 或 skill memory 的耗时 |
 | `summary.memory.extract.stages.dedup_ms` | candidate 去重耗时 |
 | `summary.memory.extract.stages.create_memory_ms` | 创建新 memory 的耗时 |
 | `summary.memory.extract.stages.merge_existing_ms` | 合并到已有 memory 的耗时 |
@@ -332,9 +329,9 @@ curl -X POST http://localhost:1933/api/v1/resources \
 ### Python SDK
 
 ```python
-from openviking import AsyncOpenVikingClient
+from openviking_sdk import AsyncHTTPClient
 
-client = AsyncOpenVikingClient(config_path="/path/to/config.yaml")
+client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 await client.initialize()
 
 result = await client.find("memory dedup", telemetry=True)

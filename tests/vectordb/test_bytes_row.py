@@ -125,6 +125,22 @@ class TestBytesRow(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "text.*exceeds 65535 bytes"):
             py_row.serialize({"text": text})
 
+    def test_oversized_list_string_element_serialization_raises(self):
+        # A list<string> element uses the same UINT16 length prefix as a scalar
+        # string, so it must reject >65535-byte elements with the same clean,
+        # field-attributed ValueError — not a raw struct.error from deep inside
+        # struct.pack_into.
+        py_schema = _PySchema(
+            [{"name": "tags", "data_type": _PyFieldType.list_string, "id": 0}]
+        )
+        py_row = _PyBytesRow(py_schema)
+        with self.assertRaisesRegex(ValueError, "tags.*exceeds 65535 bytes"):
+            py_row.serialize({"tags": ["x" * 65536, "ok"]})
+
+        # A list of in-bounds strings (including multibyte) still round-trips.
+        blob = py_row.serialize({"tags": ["hello", "世界"]})
+        self.assertEqual(py_row.deserialize_field(blob, "tags"), ["hello", "世界"])
+
     def test_binary_data(self):
         @serializable
         @dataclass
@@ -299,6 +315,70 @@ class TestBytesRowConsistency(unittest.TestCase):
 
         self.assertEqual(len(py_bytes), len(cpp_bytes), "Binary length mismatch")
         self.assertEqual(py_bytes, cpp_bytes, "Binary content mismatch")
+
+
+class TestTextFieldType(unittest.TestCase):
+    """The `text` field type mirrors STRING but uses a uint32 length prefix,
+    so it supports values larger than the 65535-byte STRING limit."""
+
+    def setUp(self):
+        self.cpp_fields = [
+            {"name": "label", "data_type": engine.FieldType.int64, "id": 0},
+            {"name": "body", "data_type": engine.FieldType.text, "id": 1},
+        ]
+        self.cpp_schema = engine.Schema(self.cpp_fields)
+        self.cpp_row = engine.BytesRow(self.cpp_schema)
+
+        self.py_fields = [
+            {"name": "label", "data_type": _PyFieldType.int64, "id": 0},
+            {"name": "body", "data_type": _PyFieldType.text, "id": 1},
+        ]
+        self.py_schema = _PySchema(self.py_fields)
+        self.py_row = _PyBytesRow(self.py_schema)
+
+    def _make_data(self):
+        # Well beyond the 65535-byte STRING limit, plus multibyte content.
+        return {"label": 42, "body": ("你好x" * 40000)}
+
+    def test_large_text_roundtrip_cpp(self):
+        data = self._make_data()
+        serialized = self.cpp_row.serialize(data)
+        self.assertEqual(self.cpp_row.deserialize_field(serialized, "body"), data["body"])
+        self.assertEqual(self.cpp_row.deserialize_field(serialized, "label"), 42)
+
+    def test_large_text_roundtrip_py(self):
+        data = self._make_data()
+        serialized = self.py_row.serialize(data)
+        self.assertEqual(self.py_row.deserialize_field(serialized, "body"), data["body"])
+        self.assertEqual(self.py_row.deserialize_field(serialized, "label"), 42)
+
+    def test_py_write_cpp_read(self):
+        data = self._make_data()
+        py_bytes = self.py_row.serialize(data)
+        self.assertEqual(self.cpp_row.deserialize_field(py_bytes, "body"), data["body"])
+
+    def test_cpp_write_py_read(self):
+        data = self._make_data()
+        cpp_bytes = self.cpp_row.serialize(data)
+        self.assertEqual(self.py_row.deserialize_field(cpp_bytes, "body"), data["body"])
+
+    def test_binary_consistency(self):
+        data = self._make_data()
+        py_bytes = self.py_row.serialize(data)
+        cpp_bytes = self.cpp_row.serialize(data)
+        self.assertEqual(len(py_bytes), len(cpp_bytes), "Binary length mismatch")
+        self.assertEqual(py_bytes, cpp_bytes, "Binary content mismatch")
+
+    def test_text_declared_via_metadata(self):
+        @serializable
+        @dataclass
+        class TextData:
+            body: str = field(default="", metadata={"field_type": FieldType.text})
+
+        text = "y" * 70000
+        data = TextData(body=text)
+        serialized = data.serialize()
+        self.assertEqual(TextData.from_bytes(serialized).body, text)
 
 
 if __name__ == "__main__":

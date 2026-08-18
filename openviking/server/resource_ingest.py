@@ -4,14 +4,16 @@
 
 Used by both the MCP ``add_resource`` tool (``temp_file_id`` branch) and the signed
 ``temp_upload`` route (automatic post-upload ingestion). Resolves the temp file, calls
-``ResourceService.add_resource`` (async, ``wait=False``), and drives the ``TempUploadStore``
-lifecycle: mark_consumed on success / mark_failed on error, always cleaning up.
+``ResourceService.add_resource`` (async, ``wait=False``), then cleans up the local
+working copy.
 """
 
 from __future__ import annotations
 
 from typing import Any, Optional
 
+from openviking.parse.mode import ParseMode
+from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.temp_upload_store import TempUploadStore
@@ -25,6 +27,10 @@ async def ingest_temp_upload(
     to: str = "",
     reason: str = "",
     args: Optional[dict[str, Any]] = None,
+    processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
+    tags: Optional[list[str]] = None,
+    tag_mode: str = "replace",
+    parse_mode: ParseMode | str = ParseMode.DEFAULT,
 ) -> dict[str, Any]:
     """Resolve a temp upload and ingest it as a resource; return the raw add_resource result.
 
@@ -32,14 +38,16 @@ async def ingest_temp_upload(
     ``root_uri``) or a business-error dict (``{"status": "error", ...}``) that ``add_resource``
     returns WITHOUT raising. Callers MUST inspect ``status``: HTTP callers pass it through
     ``response_from_result`` (which maps errors to the right status code); the MCP tool formats
-    it — so an ingestion failure is never reported as success. The upload is marked consumed
-    only on success (mark_failed on business error or exception), and its temp file is always
-    cleaned up. ``resolve_for_consume`` may raise (PermissionDenied / InvalidArgument) before
-    anything is resolved — the caller surfaces that.
+    it — so an ingestion failure is never reported as success. ``resolve_for_consume`` may
+    raise (PermissionDenied / InvalidArgument) before anything is resolved — the caller
+    surfaces that.
     """
     resolved = await store.resolve_for_consume(temp_file_id, ctx)
     try:
         try:
+            ingest_args = dict(args or {})
+            if parse_mode != ParseMode.DEFAULT and parse_mode != ParseMode.DEFAULT.value:
+                ingest_args.setdefault("parse_mode", str(parse_mode.value if isinstance(parse_mode, ParseMode) else parse_mode))
             result = await get_service().resources.add_resource(
                 path=resolved.local_path,
                 ctx=ctx,
@@ -47,17 +55,15 @@ async def ingest_temp_upload(
                 reason=reason,
                 source_name=resolved.original_filename,
                 wait=False,
+                processing_mode=processing_mode,
                 allow_local_path_resolution=True,
                 enforce_public_remote_targets=True,
-                args=args,
+                args=ingest_args,
+                tags=tags,
+                tag_mode=tag_mode,
             )
         except Exception:
-            await store.mark_failed(resolved, ctx)
             raise
-        if isinstance(result, dict) and result.get("status") == "error":
-            await store.mark_failed(resolved, ctx)
-        else:
-            await store.mark_consumed(resolved, ctx)
     finally:
         await resolved.cleanup()
 

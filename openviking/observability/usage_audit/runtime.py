@@ -36,6 +36,11 @@ class UsageAuditRuntime:
     api_service: UsageAuditQueryService
     shutdown_flush_timeout_seconds: float
 
+    async def delete_user_data(self, *, account_id: str, user_id: str) -> dict[str, int]:
+        """Drain accepted events before purging one user's projections."""
+        await self.worker.flush()
+        return await self.store.delete_user_data(account_id=account_id, user_id=user_id)
+
 
 def _resolve_sqlite_path(config: ServerConfig) -> Path:
     configured = config.observability.usage_audit.sqlite_path

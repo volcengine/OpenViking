@@ -38,6 +38,8 @@ def test_context_type_for_uri_uses_path_segments():
     assert context_type_for_uri("viking://agent/code-agent/memories/profile.md") == "memory"
     assert context_type_for_uri("viking://agent/code-agent/resources/faq.md") == "resource"
     assert context_type_for_uri("viking://agent/code-agent/skills/demo") == "skill"
+    assert context_type_for_uri("viking://agent/skills") == "skill"
+    assert context_type_for_uri("viking://agent/skills/demo") == "skill"
     assert context_type_for_uri("viking://resources/memories-report.md") == "resource"
     assert context_type_for_uri("viking://user/alice/resources/skills-report.md") == "resource"
 
@@ -79,6 +81,8 @@ def test_exact_memory_and_skill_root_detection():
     assert classify_uri("viking://user/alice/skills/demo/SKILL.md").is_skill
     assert classify_uri("viking://user/alice/skills/demo").is_skill_root
     assert classify_uri("viking://user/skills/demo").is_skill_root
+    assert classify_uri("viking://agent/skills").is_skill_namespace
+    assert classify_uri("viking://agent/skills/demo").is_skill_root
     assert not classify_uri("viking://user/alice/skills").is_skill_root
     assert not classify_uri("viking://user/alice/skills/demo/assets").is_skill_root
 
@@ -142,3 +146,37 @@ def test_current_user_short_content_roots_are_canonicalized_from_content_segment
         "viking://user/alice/resources"
     )
     assert is_content_root_uri("viking://resources", ctx, kind="resource")
+
+
+def test_unreserved_user_root_segment_keeps_canonical_meaning():
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="acct", user_id="alice"),
+        role=Role.USER,
+    )
+
+    # The generic namespace parser stays canonical-first. Callers that expose
+    # a current-user workspace dialect (such as MCP) must opt into that policy
+    # at their boundary instead of guessing from file extensions or server state.
+    assert canonicalize_uri("viking://user/notes/todo.md", ctx) == "viking://user/notes/todo.md"
+    assert (
+        canonicalize_uri("viking://user/bob/zeus-persona.md", ctx)
+        == "viking://user/bob/zeus-persona.md"
+    )
+    # A valid canonical user id may itself end in a common file extension.
+    assert (
+        canonicalize_uri("viking://user/writer.md/memories/profile.md", ctx)
+        == "viking://user/writer.md/memories/profile.md"
+    )
+    assert (
+        canonicalize_uri("viking://user/alice.smith/memories/preferences/p.md", ctx)
+        == "viking://user/alice.smith/memories/preferences/p.md"
+    )
+    assert (
+        canonicalize_uri("viking://user/bob@corp.com/resources/r.md", ctx)
+        == "viking://user/bob@corp.com/resources/r.md"
+    )
+    # The current user's own canonical form remains unchanged.
+    assert (
+        canonicalize_uri("viking://user/alice/notes/todo.md", ctx)
+        == "viking://user/alice/notes/todo.md"
+    )

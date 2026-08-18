@@ -94,7 +94,14 @@ Every message carries a peer_id so OpenViking can profile both the human and the
 - assistant turns: `{harness}/{model}` (or `{harness}/{provider}/{model}` when the provider is meaningful), e.g. `claude_code/claude-opus-4-8`, `opencode/bytedance_ark/doubao-...`;
 - user turns: single-user dev harnesses (claude_code / codex / opencode) use the git identity of the session cwd repo (`user.email` / `user.name`), falling back to the configured `ingest.user` when there is no git repo; group-chat harnesses (hermes / openclaw) use the original username from the log (selected by `user_field`).
 
-Non-ASCII identifiers (e.g. a CJK username) fall back to a valid `ext-<base64>` form.
+Identifiers containing any non-ASCII characters (for example, a CJK or mixed-script
+username) use a collision-free `ext-<base64>` form that encodes the complete identifier.
+The `ext-` namespace is reserved: an ASCII identity that would sanitize to an `ext-` id is
+also encoded so it cannot impersonate an encoded identity. New reads and writes use only
+the canonical id. Older versions may have collapsed multiple mixed-script identities—or
+a mixed-script identity and a real ASCII identity—into the same peer directory. OpenViking
+therefore does not attach those ambiguous directories as automatic aliases; operators must
+decide ownership before migrating existing data.
 
 ## How it works
 

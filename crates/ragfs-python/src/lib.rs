@@ -7,11 +7,208 @@
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyType};
+use pyo3::wrap_pyfunction;
 use std::collections::HashMap;
+use std::fs::OpenOptions;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
+use tracing::Level;
+use tracing_subscriber::fmt::writer::BoxMakeWriter;
+use tracing_appender::non_blocking::WorkerGuard;
+
+/// Cached reference to the Python `openviking.storage.errors.LockAcquisitionError` class,
+/// imported at module init so that native and Python code share the same exception type.
+static LOCK_ACQUISITION_ERROR_TYPE: OnceLock<Py<PyType>> = OnceLock::new();
+static RUST_TRACING_INIT_RESULT: OnceLock<Result<(), String>> = OnceLock::new();
+static RUST_TRACING_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
+static RUST_TRACING_FILE_STATE: OnceLock<TracingFileState> = OnceLock::new();
+
+#[derive(Clone)]
+struct SharedFileWriter {
+    file: Arc<Mutex<std::fs::File>>,
+}
+
+impl Write for SharedFileWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let mut file = self
+            .file
+            .lock()
+            .map_err(|_| io::Error::other("shared tracing log file lock poisoned"))?;
+        file.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        let mut file = self
+            .file
+            .lock()
+            .map_err(|_| io::Error::other("shared tracing log file lock poisoned"))?;
+        file.flush()
+    }
+}
+
+struct TracingFileState {
+    path: PathBuf,
+    file: Arc<Mutex<std::fs::File>>,
+}
+
+/// Open the configured Rust tracing log file.
+fn open_tracing_log_file(path: &Path) -> Result<std::fs::File, String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create Rust tracing log dir: {e}"))?;
+    }
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| format!("failed to open Rust tracing log file: {e}"))
+}
+
+/// Swap the shared Rust tracing file handle to the current active log file.
+fn replace_tracing_log_file(
+    shared: &Arc<Mutex<std::fs::File>>,
+    path: &Path,
+) -> Result<(), String> {
+    let new_file = open_tracing_log_file(path)?;
+    let mut file = shared
+        .lock()
+        .map_err(|_| "shared tracing log file lock poisoned".to_string())?;
+    *file = new_file;
+    Ok(())
+}
+
+/// Parse the configured OpenViking log level into a Rust tracing level.
+fn parse_tracing_level(log_level: &str) -> Result<Level, String> {
+    match log_level.to_ascii_uppercase().as_str() {
+        "TRACE" => Ok(Level::TRACE),
+        "DEBUG" => Ok(Level::DEBUG),
+        "INFO" => Ok(Level::INFO),
+        "WARN" | "WARNING" => Ok(Level::WARN),
+        "CRITICAL" => Ok(Level::ERROR),
+        "ERROR" => Ok(Level::ERROR),
+        other => Err(format!("unsupported Rust tracing level: {other}")),
+    }
+}
+
+/// Build the tracing writer from the configured OpenViking log output target.
+fn build_tracing_writer(log_output: &str) -> Result<(BoxMakeWriter, WorkerGuard), String> {
+    match log_output {
+        "stdout" => {
+            let (writer, guard) = tracing_appender::non_blocking(std::io::stdout());
+            Ok((BoxMakeWriter::new(writer), guard))
+        }
+        "stderr" => {
+            let (writer, guard) = tracing_appender::non_blocking(std::io::stderr());
+            Ok((BoxMakeWriter::new(writer), guard))
+        }
+        path => {
+            let path = Path::new(path);
+            let shared = Arc::new(Mutex::new(open_tracing_log_file(path)?));
+            let state = TracingFileState {
+                path: path.to_path_buf(),
+                file: shared.clone(),
+            };
+            RUST_TRACING_FILE_STATE
+                .set(state)
+                .map_err(|_| "Rust tracing file state already initialized".to_string())?;
+            let (writer, guard) = tracing_appender::non_blocking(SharedFileWriter { file: shared });
+            Ok((BoxMakeWriter::new(writer), guard))
+        }
+    }
+}
+
+/// Reopen the Rust tracing file writer after Python log rotation.
+fn reopen_tracing_file_impl() -> Result<(), String> {
+    let Some(state) = RUST_TRACING_FILE_STATE.get() else {
+        return Ok(());
+    };
+    replace_tracing_log_file(&state.file, &state.path)
+}
+
+/// Reopen the Rust tracing log file after Python rotates the active log file.
+#[pyfunction]
+fn reopen_tracing_file() -> PyResult<()> {
+    reopen_tracing_file_impl().map_err(PyRuntimeError::new_err)
+}
+
+/// Initialize Rust tracing once for the embedded ragfs binding process.
+fn init_tracing(log_level: &str, log_output: &str) -> PyResult<()> {
+    let result = RUST_TRACING_INIT_RESULT.get_or_init(|| {
+        let max_level = parse_tracing_level(log_level)?;
+        let (writer, guard) = build_tracing_writer(log_output)?;
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(max_level)
+            .with_target(true)
+            .with_file(true)
+            .with_line_number(true)
+            .with_ansi(false)
+            .with_writer(writer)
+            .finish();
+        tracing::subscriber::set_global_default(subscriber)
+            .map_err(|e| format!("failed to install Rust tracing subscriber: {e}"))?;
+        RUST_TRACING_GUARD
+            .set(guard)
+            .map_err(|_| "failed to retain Rust tracing worker guard".to_string())?;
+        Ok(())
+    });
+    result
+        .as_ref()
+        .map(|_| ())
+        .map_err(|err| PyRuntimeError::new_err(err.clone()))
+}
+
+/// Map a PathLockError to the appropriate Python exception.
+fn pathlock_err_to_py(err: PathLockError) -> PyErr {
+    match &err {
+        PathLockError::Conflict { .. }
+        | PathLockError::Timeout { .. }
+        | PathLockError::HandoffFailed(_)
+        | PathLockError::Busy { .. } => {
+            #[allow(deprecated)]
+            Python::with_gil(|py| {
+                let ty = LOCK_ACQUISITION_ERROR_TYPE
+                    .get()
+                    .expect("LockAcquisitionError not initialized");
+                PyErr::from_type(ty.bind(py).clone(), err.to_string())
+            })
+        }
+        PathLockError::InvalidRequest(_) => PyValueError::new_err(err.to_string()),
+        PathLockError::Io(_) | PathLockError::InvalidToken(_) | PathLockError::Internal(_) => {
+            PyRuntimeError::new_err(err.to_string())
+        }
+    }
+}
 use std::fs;
 use std::future::Future;
-use std::sync::Arc;
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, UNIX_EPOCH};
+
+/// Validate and convert a wait timeout from Python.
+///
+/// Must be finite and non-negative. Returns `Duration::from_secs_f64(v)`.
+/// NaN, negative, or infinite → `ValueError`.
+fn validate_timeout_secs(v: f64) -> PyResult<Duration> {
+    if v.is_finite() && v >= 0.0 {
+        Ok(Duration::from_secs_f64(v))
+    } else {
+        Err(PyValueError::new_err(
+            "timeout_secs must be a finite non-negative number",
+        ))
+    }
+}
+
+/// Validate and convert a lock expire duration from Python config.
+///
+/// Must be finite, positive, and at least 1.0 second.
+fn validate_expire_secs(v: f64) -> PyResult<f64> {
+    if v.is_finite() && v >= 1.0 {
+        Ok(v)
+    } else {
+        Err(PyValueError::new_err(
+            "lock_expire_secs must be a finite number >= 1.0",
+        ))
+    }
+}
 
 use ragfs::cache::{
     CacheError, CacheNamespace, CachePolicy, CacheProvider, CacheResult, CacheTraversalMode,
@@ -19,10 +216,48 @@ use ragfs::cache::{
 };
 use ragfs::core::builder::EncryptionConfig;
 use ragfs::core::{
-    build_default_stack, register_builtin_plugins, ConfigValue, FileInfo, FileSystem,
+    build_default_stack, build_stack_with_mountable, ConfigValue, FileInfo, FileSystem,
     FilesystemStats, FsContext, FsContextInner, FsOperation, GlobPage, GrepResult, MountableFS,
-    OperationStats, PluginConfig, RagfsConfig, StatsWrappedFS, TreeEntry, WriteFlag, FS_CTX,
+    OperationStats, PathLockContext, PluginConfig, RagfsConfig, TreeEntry, WriteFlag, FS_CTX,
 };
+use ragfs::lock::{
+    BorrowedPathLockLease, OwnedPathLockLease, PathLockConfig, PathLockHandoffRef, PathLockKind,
+    PathLockManager, PathLockRequest,
+};
+use ragfs::lock::types::PathLockError;
+
+/// Parse one Python pathlock request without silently defaulting invalid fields.
+fn parse_pathlock_request(raw: &HashMap<String, String>) -> PyResult<PathLockRequest> {
+    let path = raw
+        .get("path")
+        .filter(|path| !path.is_empty() && path.starts_with('/'))
+        .ok_or_else(|| PyValueError::new_err("pathlock request.path must be an absolute path"))?;
+    let kind = match raw.get("kind").map(String::as_str) {
+        Some("exact") => PathLockKind::Exact,
+        Some("tree") => PathLockKind::Tree,
+        _ => {
+            return Err(PyValueError::new_err(
+                "pathlock request.kind must be 'exact' or 'tree'",
+            ));
+        }
+    };
+    Ok(PathLockRequest {
+        path: path.clone(),
+        kind,
+    })
+}
+
+/// Parse a non-empty Python pathlock request batch.
+fn parse_pathlock_request_batch(
+    requests: &[HashMap<String, String>],
+) -> PyResult<Vec<PathLockRequest>> {
+    if requests.is_empty() {
+        return Err(PyValueError::new_err(
+            "pathlock request batch must not be empty",
+        ));
+    }
+    requests.iter().map(parse_pathlock_request).collect()
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CacheProviderKind {
@@ -552,6 +787,7 @@ fn to_py_err(e: ragfs::core::Error) -> PyErr {
         ragfs::core::Error::Serialization(_) => new_py_err("AGFSSerializationError", msg),
         ragfs::core::Error::Network(_) => new_py_err("AGFSNetworkError", msg),
         ragfs::core::Error::Timeout(_) => new_py_err("AGFSTimeoutError", msg),
+        ragfs::core::Error::WouldBlock(_) => new_py_err("AGFSTimeoutError", msg),
         ragfs::core::Error::SyncWriteQuorum { .. } => new_py_err("AGFSInternalError", msg),
         ragfs::core::Error::ContextMissing(_) => new_py_err("AGFSInternalError", msg),
         ragfs::core::Error::Internal(_) => new_py_err("AGFSInternalError", msg),
@@ -800,11 +1036,138 @@ fn py_to_json_value(v: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
 /// "every ragfs call carries a ctx" invariant holds. Missing `account_id` is represented as an
 /// empty field; `FsContextView::account_id()` treats it as absent, so encrypted content operations
 /// fail fast instead of using an accidental empty tenant key.
+///
+/// When the dict contains `"disable_auto_pathlock": "true"`, the `PathLockWrappedFS` auto-lock
+/// layer is suppressed so callers that already hold a pathlock lease can safely delegate to the
+/// inner filesystem without double-locking.
 fn build_fs_context(ctx: Option<HashMap<String, String>>) -> FsContext {
-    let account_id = ctx
-        .and_then(|m| m.get("account_id").cloned())
-        .unwrap_or_default();
-    Arc::new(FsContextInner::new(account_id))
+    let mut account_id = String::new();
+    let mut disable_auto_pathlock = false;
+    let mut lease_ref: Option<String> = None;
+    if let Some(m) = &ctx {
+        account_id = m.get("account_id").cloned().unwrap_or_default();
+        disable_auto_pathlock = m.get("disable_auto_pathlock").map(|s| s == "true").unwrap_or(false);
+        lease_ref = m.get("lease_ref").cloned();
+    }
+    let pathlock = if disable_auto_pathlock || lease_ref.is_some() {
+        Some(PathLockContext {
+            lease_ref,
+            disable_auto_pathlock,
+        })
+    } else {
+        None
+    };
+    Arc::new(FsContextInner::with_pathlock(account_id, pathlock.unwrap_or_default()))
+}
+
+/// Convert an OwnedPathLockLease to a Python dict.
+fn owned_lease_to_py_dict(py: Python<'_>, lease: &OwnedPathLockLease) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new(py);
+    dict.set_item("lease_ref", &lease.lease.lease_ref)?;
+    dict.set_item("owner_id", &lease.lease.owner_id)?;
+    dict.set_item("lock_paths", &lease.lease.lock_paths)?;
+    dict.set_item("ownership_ref", &lease.ownership_ref)?;
+    dict.set_item("owned", true)?;
+    Ok(dict.into())
+}
+
+/// Convert a BorrowedPathLockLease to a Python dict.
+fn borrowed_lease_to_py_dict(py: Python<'_>, lease: &BorrowedPathLockLease) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new(py);
+    dict.set_item("lease_ref", &lease.lease.lease_ref)?;
+    dict.set_item("owner_id", &lease.lease.owner_id)?;
+    dict.set_item("lock_paths", &lease.lease.lock_paths)?;
+    dict.set_item("owned", false)?;
+    Ok(dict.into())
+}
+
+/// Require an owned marker and return its opaque lease and lifecycle capability refs.
+fn require_owned_lease_ref(
+    py: Python<'_>,
+    ref_dict: &HashMap<String, Py<PyAny>>,
+) -> PyResult<(String, String)> {
+    let owned: bool = ref_dict
+        .get("owned")
+        .map(|v| v.extract(py))
+        .transpose()?
+        .unwrap_or(false);
+    if !owned {
+        return Err(PyValueError::new_err(
+            "lease ref is not owned; release/refresh/handoff require an owned lease",
+        ));
+    }
+    let lease_ref: String = ref_dict
+        .get("lease_ref")
+        .ok_or_else(|| PyValueError::new_err("owned_lease_ref.lease_ref required"))?
+        .extract(py)?;
+    let ownership_ref: String = ref_dict
+        .get("ownership_ref")
+        .ok_or_else(|| PyValueError::new_err("owned_lease_ref.ownership_ref required"))?
+        .extract(py)?;
+    if lease_ref.is_empty() || ownership_ref.is_empty() {
+        return Err(PyValueError::new_err(
+            "owned lease and ownership refs must not be empty",
+        ));
+    }
+    Ok((lease_ref, ownership_ref))
+}
+
+/// Extract an opaque PathLock lease ref without granting lifecycle permissions.
+fn extract_lease_ref(py: Python<'_>, lease_ref: &Py<PyAny>) -> PyResult<String> {
+    if let Ok(raw) = lease_ref.extract::<String>(py) {
+        if !raw.is_empty() {
+            return Ok(raw);
+        }
+    }
+    let ref_dict: HashMap<String, Py<PyAny>> = lease_ref.extract(py)?;
+    ref_dict
+        .get("lease_ref")
+        .ok_or_else(|| PyValueError::new_err("lease_ref.lease_ref required"))?
+        .extract(py)
+}
+
+/// Extract an owned PathLock lease and lifecycle capability from a typed dictionary.
+fn extract_owned_lease_ref(
+    py: Python<'_>,
+    lease_ref: &Py<PyAny>,
+) -> PyResult<(String, String)> {
+    let ref_dict: HashMap<String, Py<PyAny>> = lease_ref.extract(py)?;
+    require_owned_lease_ref(py, &ref_dict)
+}
+
+/// Extract an optional owned lease capability used for reentrant acquisition.
+fn extract_optional_owned_lease_ref(
+    py: Python<'_>,
+    lease_ref: Option<&Py<PyAny>>,
+) -> PyResult<Option<(String, String)>> {
+    lease_ref
+        .map(|value| extract_owned_lease_ref(py, value))
+        .transpose()
+}
+
+/// Convert a PathLockHandoffRef to a Python dict.
+fn handoff_ref_to_py_dict(py: Python<'_>, handoff: &PathLockHandoffRef) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new(py);
+    if let Some(lease_ref) = &handoff.lease_ref {
+        dict.set_item("lease_ref", lease_ref)?;
+    }
+    dict.set_item("owner_id", &handoff.owner_id)?;
+    dict.set_item("lock_paths", &handoff.lock_paths)?;
+    let covered = PyList::empty(py);
+    for req in &handoff.covered_paths {
+        let item = PyDict::new(py);
+        item.set_item("path", &req.path)?;
+        item.set_item(
+            "kind",
+            match req.kind {
+                PathLockKind::Exact => "exact",
+                PathLockKind::Tree => "tree",
+            },
+        )?;
+        covered.append(item)?;
+    }
+    dict.set_item("covered_paths", covered)?;
+    Ok(dict.into())
 }
 
 #[derive(serde::Deserialize)]
@@ -854,6 +1217,8 @@ struct RAGFSBindingClient {
     rt: tokio::runtime::Runtime,
     git_service: Option<Arc<ragfs::git::GitService>>,
     git_backend: Option<String>,
+    /// PathLock manager. OpenViking always builds ragfs with PathLock enabled.
+    pathlock_manager: Arc<PathLockManager>,
 }
 
 impl RAGFSBindingClient {
@@ -871,6 +1236,11 @@ impl RAGFSBindingClient {
             self.rt
                 .block_on(FS_CTX.scope(ctx, async move { f().await }))
         })
+    }
+
+    /// Clone the PathLock manager shared by this binding client.
+    fn clone_pathlock_manager(&self) -> Arc<PathLockManager> {
+        self.pathlock_manager.clone()
     }
 }
 
@@ -899,6 +1269,20 @@ impl RAGFSBindingClient {
         let mut runtime_cache_config = None;
         let mut inline_git_cfg: Option<ragfs::git::GitConfig> = None;
         if let Some(cfg) = config {
+            if let Some(log_obj) = cfg.get("log") {
+                let log_cfg: HashMap<String, Py<PyAny>> = log_obj.extract(py)?;
+                let log_level = log_cfg
+                    .get("level")
+                    .map(|value| value.extract::<String>(py))
+                    .transpose()?
+                    .unwrap_or_else(|| "INFO".to_string());
+                let log_output = log_cfg
+                    .get("output")
+                    .map(|value| value.extract::<String>(py))
+                    .transpose()?
+                    .unwrap_or_else(|| "stderr".to_string());
+                init_tracing(&log_level, &log_output)?;
+            }
             if let Some(enc_obj) = cfg.get("encryption") {
                 let enc: HashMap<String, Py<PyAny>> = enc_obj.extract(py)?;
                 let rk: Vec<u8> = enc
@@ -931,6 +1315,36 @@ impl RAGFSBindingClient {
                     .map_err(|e| PyRuntimeError::new_err(format!("Invalid git config: {e}")))?;
                 inline_git_cfg = Some(git_cfg);
             }
+            if let Some(pl_obj) = cfg.get("pathlock") {
+                let pl_value = py_to_json_value(pl_obj.bind(py))?;
+                let provider = pl_value
+                    .get("provider")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("filesystem");
+                if !matches!(provider, "filesystem" | "memory") {
+                    return Err(PyValueError::new_err(
+                        "pathlock.provider must be 'filesystem' or 'memory'",
+                    ));
+                }
+                let lock_expire_secs = validate_expire_secs(
+                    pl_value
+                        .get("lock_expire_secs")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(30.0),
+                )?;
+                let lock_timeout_secs = validate_timeout_secs(
+                    pl_value
+                        .get("lock_timeout_secs")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.0),
+                )?
+                .as_secs_f64();
+                ragfs_cfg.pathlock = PathLockConfig {
+                    provider: provider.to_string(),
+                    lock_timeout_secs,
+                    lock_expire_secs,
+                };
+            }
         }
 
         let cache_config = match runtime_cache_config {
@@ -957,18 +1371,7 @@ impl RAGFSBindingClient {
                 CacheNamespace::new(&cache_config.namespace),
                 cache_policy_from_config(&cache_config),
             ));
-            rt.block_on(async {
-                register_builtin_plugins(&mountable).await;
-                if let Some(enc) = &ragfs_cfg.encryption {
-                    mountable
-                        .set_encryption_config(Some(enc.root_key), Some(enc.provider_type))
-                        .await;
-                }
-            });
-            let top: Arc<dyn FileSystem> = Arc::new(StatsWrappedFS::with_arc(
-                mountable.clone() as Arc<dyn FileSystem>
-            ));
-            ragfs::core::RagfsStack { mountable, top }
+            rt.block_on(build_stack_with_mountable(ragfs_cfg, mountable))
         } else {
             rt.block_on(build_default_stack(ragfs_cfg))
         };
@@ -989,6 +1392,7 @@ impl RAGFSBindingClient {
             rt,
             git_service,
             git_backend,
+            pathlock_manager: stack.pathlock_manager,
         })
     }
 
@@ -1783,6 +2187,497 @@ impl RAGFSBindingClient {
         ))
     }
 
+    // ── PathLock API ──
+
+    /// Acquire an exact lock on a single path.
+    #[pyo3(signature = (ctx, path, timeout_secs=0.0, owner_lease_ref=None))]
+    fn pathlock_acquire_exact(
+        &self,
+        py: Python<'_>,
+        ctx: Option<HashMap<String, String>>,
+        path: String,
+        timeout_secs: f64,
+        owner_lease_ref: Option<Py<PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        let mgr = self.clone_pathlock_manager();
+        let fs_ctx = build_fs_context(ctx);
+        let timeout = validate_timeout_secs(timeout_secs)?;
+        let owner_capability =
+            extract_optional_owned_lease_ref(py, owner_lease_ref.as_ref())?;
+        let lease = self.run_scoped(py, fs_ctx, move || {
+            let mgr = mgr.clone();
+            let path = path.clone();
+            let capability = owner_capability.clone();
+            async move {
+                let capability = capability
+                    .as_ref()
+                    .map(|(lease_ref, ownership_ref)| {
+                        (lease_ref.as_str(), ownership_ref.as_str())
+                    });
+                mgr.acquire_exact(&path, timeout, capability).await
+            }
+        })
+        .map_err(pathlock_err_to_py)?;
+        Python::attach(|py| owned_lease_to_py_dict(py, &lease))
+    }
+
+    /// Acquire exact locks on multiple paths.
+    #[pyo3(signature = (ctx, paths, timeout_secs=0.0, owner_lease_ref=None))]
+    fn pathlock_acquire_exact_batch(
+        &self,
+        py: Python<'_>,
+        ctx: Option<HashMap<String, String>>,
+        paths: Vec<String>,
+        timeout_secs: f64,
+        owner_lease_ref: Option<Py<PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        let mgr = self.clone_pathlock_manager();
+        let fs_ctx = build_fs_context(ctx);
+        let timeout = validate_timeout_secs(timeout_secs)?;
+        let owner_capability =
+            extract_optional_owned_lease_ref(py, owner_lease_ref.as_ref())?;
+        let lease = self.run_scoped(py, fs_ctx, move || {
+            let mgr = mgr.clone();
+            let paths = paths.clone();
+            let capability = owner_capability.clone();
+            async move {
+                let capability = capability
+                    .as_ref()
+                    .map(|(lease_ref, ownership_ref)| {
+                        (lease_ref.as_str(), ownership_ref.as_str())
+                    });
+                mgr.acquire_exact_batch(&paths, timeout, capability).await
+            }
+        })
+        .map_err(pathlock_err_to_py)?;
+        Python::attach(|py| owned_lease_to_py_dict(py, &lease))
+    }
+
+    /// Acquire a tree lock on a single path.
+    #[pyo3(signature = (ctx, path, timeout_secs=0.0, owner_lease_ref=None))]
+    fn pathlock_acquire_tree(
+        &self,
+        py: Python<'_>,
+        ctx: Option<HashMap<String, String>>,
+        path: String,
+        timeout_secs: f64,
+        owner_lease_ref: Option<Py<PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        let mgr = self.clone_pathlock_manager();
+        let fs_ctx = build_fs_context(ctx);
+        let timeout = validate_timeout_secs(timeout_secs)?;
+        let owner_capability =
+            extract_optional_owned_lease_ref(py, owner_lease_ref.as_ref())?;
+        let lease = self.run_scoped(py, fs_ctx, move || {
+            let mgr = mgr.clone();
+            let path = path.clone();
+            let capability = owner_capability.clone();
+            async move {
+                let capability = capability
+                    .as_ref()
+                    .map(|(lease_ref, ownership_ref)| {
+                        (lease_ref.as_str(), ownership_ref.as_str())
+                    });
+                mgr.acquire_tree(&path, timeout, capability).await
+            }
+        })
+        .map_err(pathlock_err_to_py)?;
+        Python::attach(|py| owned_lease_to_py_dict(py, &lease))
+    }
+
+    /// Acquire tree locks on multiple paths.
+    #[pyo3(signature = (ctx, paths, timeout_secs=0.0, owner_lease_ref=None))]
+    fn pathlock_acquire_tree_batch(
+        &self,
+        py: Python<'_>,
+        ctx: Option<HashMap<String, String>>,
+        paths: Vec<String>,
+        timeout_secs: f64,
+        owner_lease_ref: Option<Py<PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        let mgr = self.clone_pathlock_manager();
+        let fs_ctx = build_fs_context(ctx);
+        let timeout = validate_timeout_secs(timeout_secs)?;
+        let owner_capability =
+            extract_optional_owned_lease_ref(py, owner_lease_ref.as_ref())?;
+        let lease = self.run_scoped(py, fs_ctx, move || {
+            let mgr = mgr.clone();
+            let paths = paths.clone();
+            let capability = owner_capability.clone();
+            async move {
+                let capability = capability
+                    .as_ref()
+                    .map(|(lease_ref, ownership_ref)| {
+                        (lease_ref.as_str(), ownership_ref.as_str())
+                    });
+                mgr.acquire_tree_batch(&paths, timeout, capability).await
+            }
+        })
+        .map_err(pathlock_err_to_py)?;
+        Python::attach(|py| owned_lease_to_py_dict(py, &lease))
+    }
+
+    /// Acquire a mixed batch of exact and tree locks.
+    #[pyo3(signature = (ctx, exact_paths, tree_paths, timeout_secs=0.0, owner_lease_ref=None))]
+    fn pathlock_acquire_exact_tree_batch(
+        &self,
+        py: Python<'_>,
+        ctx: Option<HashMap<String, String>>,
+        exact_paths: Vec<String>,
+        tree_paths: Vec<String>,
+        timeout_secs: f64,
+        owner_lease_ref: Option<Py<PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        let mgr = self.clone_pathlock_manager();
+        let fs_ctx = build_fs_context(ctx);
+        let timeout = validate_timeout_secs(timeout_secs)?;
+        let owner_capability =
+            extract_optional_owned_lease_ref(py, owner_lease_ref.as_ref())?;
+        let lease = self.run_scoped(py, fs_ctx, move || {
+            let mgr = mgr.clone();
+            let exact = exact_paths.clone();
+            let tree = tree_paths.clone();
+            let capability = owner_capability.clone();
+            async move {
+                let capability = capability
+                    .as_ref()
+                    .map(|(lease_ref, ownership_ref)| {
+                        (lease_ref.as_str(), ownership_ref.as_str())
+                    });
+                mgr.acquire_exact_tree_batch(&exact, &tree, timeout, capability)
+                    .await
+            }
+        })
+        .map_err(pathlock_err_to_py)?;
+        Python::attach(|py| owned_lease_to_py_dict(py, &lease))
+    }
+
+    /// Acquire a batch of locks from a list of request dicts.
+    /// Each request dict: {"path": str, "kind": "exact"|"tree"}
+    #[pyo3(signature = (ctx, requests, timeout_secs=0.0, owner_lease_ref=None))]
+    fn pathlock_acquire_batch(
+        &self,
+        py: Python<'_>,
+        ctx: Option<HashMap<String, String>>,
+        requests: Vec<HashMap<String, String>>,
+        timeout_secs: f64,
+        owner_lease_ref: Option<Py<PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        let mgr = self.clone_pathlock_manager();
+        let fs_ctx = build_fs_context(ctx);
+        let timeout = validate_timeout_secs(timeout_secs)?;
+        let owner_capability =
+            extract_optional_owned_lease_ref(py, owner_lease_ref.as_ref())?;
+
+        let lock_requests = parse_pathlock_request_batch(&requests)?;
+
+        let lease = self.run_scoped(py, fs_ctx, move || {
+            let mgr = mgr.clone();
+            let reqs = lock_requests.clone();
+            let capability = owner_capability.clone();
+            async move {
+                let capability = capability
+                    .as_ref()
+                    .map(|(lease_ref, ownership_ref)| {
+                        (lease_ref.as_str(), ownership_ref.as_str())
+                    });
+                mgr.acquire_batch(&reqs, timeout, capability).await
+            }
+        })
+        .map_err(pathlock_err_to_py)?;
+        Python::attach(|py| owned_lease_to_py_dict(py, &lease))
+    }
+
+    /// Create a borrowed view of an owned lease.
+    #[pyo3(signature = (ctx, owned_lease_ref))]
+    fn pathlock_as_borrowed(
+        &self,
+        py: Python<'_>,
+        ctx: Option<HashMap<String, String>>,
+        owned_lease_ref: Py<PyAny>,
+    ) -> PyResult<Py<PyAny>> {
+        let mgr = self.clone_pathlock_manager();
+        let mgr2 = mgr.clone();
+        let fs_ctx = build_fs_context(ctx);
+        let lease_ref = extract_lease_ref(py, &owned_lease_ref)?;
+        let lease = self.run_scoped(py, fs_ctx, move || {
+            let mgr = mgr2.clone();
+            let lr = lease_ref.clone();
+            async move {
+                mgr.get_owned_lease_by_ref(&lr).await.ok_or_else(|| {
+                    PathLockError::Internal(format!("lease not found for ref '{lr}'"))
+                })
+            }
+        })
+        .map_err(|e: PathLockError| PyRuntimeError::new_err(e.to_string()))?;
+        let borrowed = mgr.as_borrowed(&lease);
+        Python::attach(|py| borrowed_lease_to_py_dict(py, &borrowed))
+    }
+
+    /// Refresh an owned lease. Returns "refreshed", "lost", or "failed".
+    #[pyo3(signature = (ctx, owned_lease_ref))]
+    fn pathlock_refresh(
+        &self,
+        py: Python<'_>,
+        ctx: Option<HashMap<String, String>>,
+        owned_lease_ref: Py<PyAny>,
+    ) -> PyResult<String> {
+        let mgr = self.clone_pathlock_manager();
+        let fs_ctx = build_fs_context(ctx);
+        let (lease_ref, ownership_ref) = extract_owned_lease_ref(py, &owned_lease_ref)?;
+        let status = self.run_scoped(py, fs_ctx, move || {
+            let mgr = mgr.clone();
+            let lr = lease_ref.clone();
+            let ownership = ownership_ref.clone();
+            async move {
+                let lease = mgr
+                    .get_owned_lease_by_capability(&lr, &ownership)
+                    .await
+                    .ok_or_else(|| {
+                        PathLockError::InvalidRequest(format!(
+                            "owned lease capability does not match ref '{lr}'"
+                        ))
+                    })?;
+                mgr.refresh(&lease).await
+            }
+        })
+        .map_err(pathlock_err_to_py)?;
+        Ok(status)
+    }
+
+    /// Release an owned lease.
+    #[pyo3(signature = (ctx, owned_lease_ref))]
+    fn pathlock_release(
+        &self,
+        py: Python<'_>,
+        ctx: Option<HashMap<String, String>>,
+        owned_lease_ref: Py<PyAny>,
+    ) -> PyResult<()> {
+        let mgr = self.clone_pathlock_manager();
+        let fs_ctx = build_fs_context(ctx);
+        let (lease_ref, ownership_ref) = extract_owned_lease_ref(py, &owned_lease_ref)?;
+        self.run_scoped(py, fs_ctx, move || {
+            let mgr = mgr.clone();
+            let lr = lease_ref.clone();
+            let ownership = ownership_ref.clone();
+            async move {
+                let lease = mgr
+                    .get_owned_lease_by_capability(&lr, &ownership)
+                    .await
+                    .ok_or_else(|| {
+                        PathLockError::InvalidRequest(format!(
+                            "owned lease capability does not match ref '{lr}'"
+                        ))
+                    })?;
+                mgr.release(&lease).await
+            }
+        })
+        .map_err(pathlock_err_to_py)?;
+        Ok(())
+    }
+
+    /// Release selected lock paths from an owned lease.
+    #[pyo3(signature = (ctx, owned_lease_ref, lock_paths))]
+    fn pathlock_release_selected(
+        &self,
+        py: Python<'_>,
+        ctx: Option<HashMap<String, String>>,
+        owned_lease_ref: Py<PyAny>,
+        lock_paths: Vec<String>,
+    ) -> PyResult<()> {
+        let mgr = self.clone_pathlock_manager();
+        let fs_ctx = build_fs_context(ctx);
+        let (lease_ref, ownership_ref) = extract_owned_lease_ref(py, &owned_lease_ref)?;
+        self.run_scoped(py, fs_ctx, move || {
+            let mgr = mgr.clone();
+            let lr = lease_ref.clone();
+            let ownership = ownership_ref.clone();
+            let paths = lock_paths.clone();
+            async move {
+                let lease = mgr
+                    .get_owned_lease_by_capability(&lr, &ownership)
+                    .await
+                    .ok_or_else(|| {
+                        PathLockError::InvalidRequest(format!(
+                            "owned lease capability does not match ref '{lr}'"
+                        ))
+                    })?;
+                mgr.release_selected(&lease, &paths).await
+            }
+        })
+        .map_err(pathlock_err_to_py)?;
+        Ok(())
+    }
+
+    /// Export a handoff ref from an owned lease.
+    #[pyo3(signature = (ctx, owned_lease_ref))]
+    fn pathlock_to_handoff(
+        &self,
+        py: Python<'_>,
+        ctx: Option<HashMap<String, String>>,
+        owned_lease_ref: Py<PyAny>,
+    ) -> PyResult<Py<PyAny>> {
+        let mgr = self.clone_pathlock_manager();
+        let fs_ctx = build_fs_context(ctx);
+        let (lease_ref, ownership_ref) = extract_owned_lease_ref(py, &owned_lease_ref)?;
+        let handoff = self.run_scoped(py, fs_ctx, move || {
+            let mgr = mgr.clone();
+            let lr = lease_ref.clone();
+            let ownership = ownership_ref.clone();
+            async move {
+                let lease = mgr
+                    .get_owned_lease_by_capability(&lr, &ownership)
+                    .await
+                    .ok_or_else(|| {
+                        PathLockError::InvalidRequest(format!(
+                            "owned lease capability does not match ref '{lr}'"
+                        ))
+                    })?;
+                Ok(mgr.to_handoff(&lease))
+            }
+        })
+        .map_err(pathlock_err_to_py)?;
+        Python::attach(|py| handoff_ref_to_py_dict(py, &handoff))
+    }
+
+    /// Mark an owned lease as handed off.
+    #[pyo3(signature = (ctx, owned_lease_ref))]
+    fn pathlock_handoff(
+        &self,
+        py: Python<'_>,
+        ctx: Option<HashMap<String, String>>,
+        owned_lease_ref: Py<PyAny>,
+    ) -> PyResult<()> {
+        let mgr = self.clone_pathlock_manager();
+        let fs_ctx = build_fs_context(ctx);
+        let (lease_ref, ownership_ref) = extract_owned_lease_ref(py, &owned_lease_ref)?;
+        self.run_scoped(py, fs_ctx, move || {
+            let mgr = mgr.clone();
+            let lr = lease_ref.clone();
+            let ownership = ownership_ref.clone();
+            async move {
+                let lease = mgr
+                    .get_owned_lease_by_capability(&lr, &ownership)
+                    .await
+                    .ok_or_else(|| {
+                        PathLockError::InvalidRequest(format!(
+                            "owned lease capability does not match ref '{lr}'"
+                        ))
+                    })?;
+                mgr.handoff(&lease).await
+            }
+        })
+        .map_err(pathlock_err_to_py)?;
+        Ok(())
+    }
+
+    /// Adopt a handoff ref, returning a new owned lease.
+    #[pyo3(signature = (ctx, handoff_ref))]
+    fn pathlock_adopt(
+        &self,
+        py: Python<'_>,
+        ctx: Option<HashMap<String, String>>,
+        handoff_ref: HashMap<String, Py<PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        let mgr = self.clone_pathlock_manager();
+        let fs_ctx = build_fs_context(ctx);
+        let owner_id: String = handoff_ref
+            .get("owner_id")
+            .or_else(|| handoff_ref.get("handle_id"))
+            .ok_or_else(|| {
+                PyValueError::new_err("handoff_ref.owner_id or handoff_ref.handle_id required")
+            })?
+            .extract(py)?;
+        let lock_paths: Vec<String> = handoff_ref
+            .get("lock_paths")
+            .ok_or_else(|| PyValueError::new_err("handoff_ref.lock_paths required"))?
+            .extract(py)?;
+        if owner_id.is_empty()
+            || lock_paths.is_empty()
+            || lock_paths.iter().any(|path| !path.starts_with('/'))
+        {
+            return Err(PyValueError::new_err(
+                "handoff_ref owner_id/handle_id and absolute lock_paths are required",
+            ));
+        }
+        let covered_paths: Vec<PathLockRequest> = handoff_ref
+            .get("covered_paths")
+            .map(|v| {
+                let raw: Vec<HashMap<String, String>> = v.extract(py)?;
+                raw.iter().map(parse_pathlock_request).collect()
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let lease_ref: Option<String> = handoff_ref
+            .get("lease_ref")
+            .map(|v| v.extract(py))
+            .transpose()?
+            .filter(|s: &String| !s.is_empty());
+        let handoff = PathLockHandoffRef {
+            lease_ref,
+            owner_id,
+            lock_paths,
+            covered_paths,
+        };
+        let lease = self.run_scoped(py, fs_ctx, move || {
+            let mgr = mgr.clone();
+            let h = handoff.clone();
+            async move { mgr.adopt(&h).await }
+        })
+        .map_err(pathlock_err_to_py)?;
+        Python::attach(|py| owned_lease_to_py_dict(py, &lease))
+    }
+
+    /// Check if a path is locked.
+    #[pyo3(signature = (ctx, path, ignore_stale=true))]
+    fn pathlock_is_locked(
+        &self,
+        py: Python<'_>,
+        ctx: Option<HashMap<String, String>>,
+        path: String,
+        ignore_stale: bool,
+    ) -> PyResult<bool> {
+        let mgr = self.clone_pathlock_manager();
+        let fs_ctx = build_fs_context(ctx);
+        self.run_scoped(py, fs_ctx, move || {
+            let mgr = mgr.clone();
+            let p = path.clone();
+            async move { mgr.is_locked(&p, ignore_stale).await }
+        })
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Return an observability snapshot of current lock state.
+    #[pyo3(signature = (ctx=None))]
+    fn pathlock_observe(
+        &self,
+        py: Python<'_>,
+        ctx: Option<HashMap<String, String>>,
+    ) -> PyResult<Py<PyAny>> {
+        let mgr = self.clone_pathlock_manager();
+        let fs_ctx = build_fs_context(ctx);
+        let snapshot = self.run_scoped(py, fs_ctx, move || {
+            let mgr = mgr.clone();
+            async move { mgr.observe().await }
+        });
+        Python::attach(|py| {
+            let dict = PyDict::new(py);
+            dict.set_item("active_locks", snapshot.active_locks)?;
+            dict.set_item("waiting_locks", snapshot.waiting_locks)?;
+            dict.set_item("stale_locks_removed", snapshot.stale_locks_removed)?;
+            let conflicts = PyList::empty(py);
+            for c in &snapshot.conflicts {
+                let cd = PyDict::new(py);
+                cd.set_item("lock_path", &c.lock_path)?;
+                cd.set_item("conflicting_owner", &c.conflicting_owner)?;
+                cd.set_item("conflicting_kind", format!("{:?}", c.conflicting_kind))?;
+                conflicts.append(cd)?;
+            }
+            dict.set_item("conflicts", conflicts)?;
+            Ok(dict.into())
+        })
+    }
+
     /// Get filesystem statistics.
     ///
     /// Args:
@@ -1851,6 +2746,17 @@ impl RAGFSBindingClient {
 #[pymodule]
 fn ragfs_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RAGFSBindingClient>()?;
+    m.add_function(wrap_pyfunction!(reopen_tracing_file, m)?)?;
+
+    // Import the Python business exception so native code raises the same type
+    // that `openviking.storage.errors` defines, enabling `except LockAcquisitionError`.
+    let py = m.py();
+    let errors_mod = py.import("openviking.storage.errors")?;
+    let exc_type: Py<PyType> = errors_mod.getattr("LockAcquisitionError")?.extract()?;
+    LOCK_ACQUISITION_ERROR_TYPE
+        .set(exc_type)
+        .map_err(|_| PyRuntimeError::new_err("LockAcquisitionError already initialized"))?;
+
     Ok(())
 }
 
@@ -1865,6 +2771,46 @@ mod tests {
         Python::attach(|py| {
             let value: i32 = py_detach_blocking(py, || 40 + 2);
             assert_eq!(value, 42);
+        });
+    }
+
+    #[test]
+    fn pathlock_io_error_maps_to_runtime_error() {
+        Python::initialize();
+        Python::attach(|py| {
+            let errors_mod = py.import("openviking.storage.errors").unwrap();
+            let lock_error_type: Py<PyType> = errors_mod
+                .getattr("LockAcquisitionError")
+                .unwrap()
+                .extract()
+                .unwrap();
+            let _ = LOCK_ACQUISITION_ERROR_TYPE.set(lock_error_type.clone_ref(py));
+
+            let error =
+                pathlock_err_to_py(PathLockError::Io("failed to create lock dir".to_string()));
+
+            assert!(error.is_instance_of::<PyRuntimeError>(py));
+        });
+    }
+
+    #[test]
+    fn pathlock_busy_error_maps_to_lock_acquisition_error() {
+        Python::initialize();
+        Python::attach(|py| {
+            let errors_mod = py.import("openviking.storage.errors").unwrap();
+            let lock_error_type: Py<PyType> = errors_mod
+                .getattr("LockAcquisitionError")
+                .unwrap()
+                .extract()
+                .unwrap();
+            let _ = LOCK_ACQUISITION_ERROR_TYPE.set(lock_error_type.clone_ref(py));
+
+            let error = pathlock_err_to_py(PathLockError::Busy {
+                lock_path: "/data/.path.ovlock".to_string(),
+                operation: "remove".to_string(),
+            });
+
+            assert!(error.is_instance(py, lock_error_type.bind(py)));
         });
     }
 
@@ -1887,6 +2833,42 @@ mod tests {
         });
 
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn parse_tracing_level_accepts_critical_as_error() {
+        assert_eq!(parse_tracing_level("CRITICAL").unwrap(), Level::ERROR);
+    }
+
+    #[test]
+    fn replace_tracing_log_file_switches_shared_writer_to_new_active_file() {
+        let active = std::env::temp_dir().join(format!(
+            "openviking-rust-tracing-active-{}.log",
+            std::process::id()
+        ));
+        let rotated = std::env::temp_dir().join(format!(
+            "openviking-rust-tracing-rotated-{}.log",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&active);
+        let _ = fs::remove_file(&rotated);
+
+        let shared = Arc::new(Mutex::new(open_tracing_log_file(&active).unwrap()));
+        let mut writer = SharedFileWriter { file: shared.clone() };
+        writer.write_all(b"before-rotate\n").unwrap();
+        writer.flush().unwrap();
+
+        fs::rename(&active, &rotated).unwrap();
+        replace_tracing_log_file(&shared, &active).unwrap();
+
+        writer.write_all(b"after-rotate\n").unwrap();
+        writer.flush().unwrap();
+
+        assert!(fs::read_to_string(&rotated).unwrap().contains("before-rotate"));
+        assert!(fs::read_to_string(&active).unwrap().contains("after-rotate"));
+
+        let _ = fs::remove_file(&active);
+        let _ = fs::remove_file(&rotated);
     }
 
     #[tokio::test]

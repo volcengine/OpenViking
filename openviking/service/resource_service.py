@@ -17,16 +17,21 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
 
-import httpx
-
-from openviking.connector.client import ConnectorClient
 from openviking.core.content_targets import ContentTargetSpec
 from openviking.core.uri_validation import validate_optional_content_target_uri
+from openviking.parse.mode import ParseMode, normalize_parse_mode
+from openviking.parse.parsers.constants import MPEG_TS_EXTENSION_ALIAS
 from openviking.resource.feishu_watch_auth import (
     FEISHU_ACCESS_TOKEN_ARG,
     FEISHU_REFRESH_TOKEN_ARG,
     create_feishu_auth_state,
     load_feishu_app_credentials,
+)
+from openviking.resource.git_watch_auth import create_git_http_auth_state
+from openviking.resource.processing_mode import (
+    DEFAULT_PROCESSING_MODE,
+    ProcessingMode,
+    normalize_processing_mode,
 )
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import (
@@ -37,19 +42,17 @@ from openviking.server.user_config import (
     effective_resource_add_target,
     effective_skill_add_target,
 )
-from openviking.storage import VikingDBManager
 from openviking.storage.queuefs import QueueManager, get_queue_manager
-from openviking.storage.transaction import NO_LOCK, LockLease
 from openviking.storage.viking_fs import VikingFS
-from openviking.telemetry import get_current_telemetry
+from openviking.storage.vikingdb_manager import VikingDBManager
+from openviking.telemetry import get_current_telemetry, register_telemetry, unregister_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import (
     build_queue_status_payload,
-    record_resource_wait_metrics,
-    register_wait_telemetry,
-    unregister_wait_telemetry,
 )
 from openviking.utils import is_git_repo_url, parse_code_hosting_url
+from openviking.utils.git_auth import parse_git_http_auth_config
+from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.media_processor import _smart_stem
 from openviking.utils.network_guard import ensure_public_remote_target
 from openviking.utils.resource_processor import ResourceProcessor
@@ -64,6 +67,7 @@ from openviking_cli.exceptions import (
 from openviking_cli.utils import get_logger
 
 if TYPE_CHECKING:
+    from openviking.connector.delegate import ConnectorDelegate
     from openviking.parse.accessors.base import LocalResource
     from openviking.resource.watch_manager import WatchManager
     from openviking.resource.watch_scheduler import WatchScheduler
@@ -77,6 +81,7 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "path",
         "ctx",
         "to",
+        "to_is_directory",
         "parent",
         "reason",
         "instruction",
@@ -84,6 +89,7 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "timeout",
         "build_index",
         "summarize",
+        "processing_mode",
         "watch_interval",
         "skip_watch_management",
         "allow_local_path_resolution",
@@ -105,8 +111,11 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "parser_backend",
         "resolved_extension",
         "defer_post_processing",
+        "tags",
+        "tag_mode",
     }
 )
+_ADD_RESOURCE_TAG_MODES = frozenset({"replace", "append"})
 
 _INTERNAL_INGESTION_FIELDS = frozenset(
     {
@@ -116,6 +125,7 @@ _INTERNAL_INGESTION_FIELDS = frozenset(
         "route_source",
         "skip_watch_management",
         "stage_callback",
+        "to_is_directory",
         "watch_auth_state",
         "understanding_response_id",
         "parser_backend",
@@ -135,6 +145,7 @@ class _ResourceSourceInfo:
 class _NormalizedAddResourceArgs:
     processor_kwargs: Dict[str, Any]
     watch_auth_state: Optional[Dict[str, Any]] = None
+    parse_mode: ParseMode = ParseMode.DEFAULT
 
 
 class ResourceService:
@@ -156,6 +167,7 @@ class ResourceService:
         self._watch_scheduler = watch_scheduler
         self._resource_memory_link_service = resource_memory_link_service
         self._background_tasks: set[asyncio.Task[Any]] = set()
+        self._connector_delegate: Optional["ConnectorDelegate"] = None
 
     def set_dependencies(
         self,
@@ -182,12 +194,52 @@ class ResourceService:
     def _sanitize_watch_processor_kwargs(self, processor_kwargs: Dict[str, Any]) -> Dict[str, Any]:
         sanitized: Dict[str, Any] = {}
         for key, value in processor_kwargs.items():
+            if key in {
+                "auth_config",
+                FEISHU_ACCESS_TOKEN_ARG,
+                FEISHU_REFRESH_TOKEN_ARG,
+            }:
+                continue
             try:
                 json.dumps(value, ensure_ascii=False)
             except TypeError:
                 continue
             sanitized[key] = value
         return sanitized
+
+    def _watch_processor_kwargs(
+        self,
+        processor_kwargs: Dict[str, Any],
+        tags: Optional[List[str]],
+        tag_mode: str,
+    ) -> Dict[str, Any]:
+        watch_kwargs = dict(processor_kwargs)
+        if tags is not None:
+            watch_kwargs["tags"] = tags
+            watch_kwargs["tag_mode"] = tag_mode
+        return watch_kwargs
+
+    def _processor_args_for_watch_run(self, processor_kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        return self._sanitize_watch_processor_kwargs(processor_kwargs)
+
+    def _validate_add_resource_tag_policy(
+        self,
+        *,
+        tags: Optional[List[str]],
+        tag_mode: str,
+    ) -> None:
+        if tags is not None and tag_mode not in _ADD_RESOURCE_TAG_MODES:
+            raise InvalidArgumentError(f"unsupported tag mode: {tag_mode}")
+
+    def _add_resource_ingest_tag_kwargs(
+        self,
+        *,
+        tags: Optional[List[str]],
+        tag_mode: str,
+    ) -> Dict[str, Any]:
+        if tags is None:
+            return {}
+        return {"ingest_options": IngestOptions.from_search_tags(tags, mode=tag_mode)}
 
     async def _manage_watch_if_needed(
         self,
@@ -196,12 +248,14 @@ class ResourceService:
         manage_watch: bool,
         watch_interval: float,
         target: ContentTargetSpec,
+        to_is_directory: bool,
         root_uri: str,
         path: str,
         reason: str,
         instruction: str,
         build_index: bool,
         summarize: bool,
+        processing_mode: ProcessingMode,
         processor_kwargs: Dict[str, Any],
         watch_auth_state: Optional[Dict[str, Any]],
         ctx: RequestContext,
@@ -227,31 +281,28 @@ class ResourceService:
                         "Pass 'to' explicitly, or add a resource type that returns root_uri."
                     )
                 if processor_kwargs.get("temp_file_id"):
-                    # An uploaded source is a one-time snapshot: the staged upload is
-                    # consumed at ingest, so a watch task recorded against it would
-                    # re-process the frozen snapshot every interval — silently ignoring
-                    # all edits to the client-side source — instead of watching anything
-                    # live. Reject at creation instead of pretending to watch.
+                    # An uploaded source is a static snapshot, so a watch task recorded
+                    # against it would re-process the frozen snapshot every interval.
                     raise InvalidArgumentError(
                         "watch_interval > 0 is not supported for uploaded content: an "
-                        "upload is consumed as a one-time snapshot at ingest, so the "
-                        "watch would re-process stale content forever. Watch a URL / "
+                        "upload is a static snapshot, so the watch would re-process "
+                        "stale content forever. Watch a URL / "
                         "sitemap / RSS source instead, or re-add the resource when the "
                         "source changes."
                     )
                 try:
                     sanitized = self._sanitize_watch_processor_kwargs(processor_kwargs)
-                    if watch_auth_state is not None:
-                        sanitized.pop(FEISHU_ACCESS_TOKEN_ARG, None)
                     await self._handle_watch_task_creation(
                         path=path,
                         to_uri=watch_to,
+                        to_is_directory=to_is_directory,
                         parent_uri=parent_uri,
                         reason=reason,
                         instruction=instruction,
                         watch_interval=watch_interval,
                         build_index=build_index,
                         summarize=summarize,
+                        processing_mode=processing_mode,
                         processor_kwargs=sanitized,
                         auth_state=watch_auth_state,
                         ctx=ctx,
@@ -290,6 +341,11 @@ class ResourceService:
             )
 
         normalized = dict(args)
+        raw_parse_mode = normalized.pop("parse_mode", ParseMode.DEFAULT)
+        try:
+            parse_mode = normalize_parse_mode(raw_parse_mode)
+        except InvalidArgumentError as exc:
+            raise InvalidArgumentError(str(exc).replace("parse_mode", "args.parse_mode")) from exc
         token = normalized.get(FEISHU_ACCESS_TOKEN_ARG)
         refresh_token = normalized.pop(FEISHU_REFRESH_TOKEN_ARG, None)
         watch_auth_state = None
@@ -316,7 +372,7 @@ class ResourceService:
                 "args.feishu_refresh_token requires args.feishu_access_token."
             )
 
-        return _NormalizedAddResourceArgs(normalized, watch_auth_state)
+        return _NormalizedAddResourceArgs(normalized, watch_auth_state, parse_mode)
 
     def _ensure_feishu_credentials_for_watch(self) -> None:
         try:
@@ -336,6 +392,47 @@ class ResourceService:
         if not self._viking_fs:
             raise NotInitializedError("VikingFS")
 
+    async def _lock_to_handoff_payload(self, lock_ref: Any) -> Optional[Dict[str, Any]]:
+        """Convert either a native pathlock ref or legacy lease into a handoff payload."""
+        if lock_ref is None:
+            return None
+        async_agfs = getattr(self._viking_fs, "_async_agfs", None)
+        if async_agfs is not None:
+            return await async_agfs.pathlock_to_handoff(lock_ref)
+        to_handoff = getattr(lock_ref, "to_handoff", None)
+        if callable(to_handoff):
+            handoff = to_handoff()
+            return handoff.to_dict() if hasattr(handoff, "to_dict") else handoff
+        return lock_ref if isinstance(lock_ref, dict) else None
+
+    async def _handoff_lock_ref(self, lock_ref: Any) -> None:
+        """Transfer ownership for either a native pathlock ref or legacy lease."""
+        if lock_ref is None:
+            return
+        async_agfs = getattr(self._viking_fs, "_async_agfs", None)
+        if async_agfs is not None:
+            await async_agfs.pathlock_handoff(lock_ref)
+            return
+        handoff = getattr(lock_ref, "handoff", None)
+        if callable(handoff):
+            result = handoff()
+            if inspect.isawaitable(result):
+                await result
+
+    async def _release_lock_ref(self, lock_ref: Any) -> None:
+        """Release either a native pathlock ref or legacy lease."""
+        if lock_ref is None:
+            return
+        async_agfs = getattr(self._viking_fs, "_async_agfs", None)
+        if async_agfs is not None:
+            await async_agfs.pathlock_release(lock_ref)
+            return
+        close = getattr(lock_ref, "close", None)
+        if callable(close):
+            result = close()
+            if inspect.isawaitable(result):
+                await result
+
     async def close_background_tasks(self) -> None:
         """Cancel in-flight connector monitoring tasks during service shutdown."""
         if not self._background_tasks:
@@ -351,33 +448,37 @@ class ResourceService:
         msg: Any,
         *,
         queue_name: str,
-        resource_lock: LockLease = NO_LOCK,
+        resource_lock: Optional[Dict[str, Any]] = None,
     ) -> Any:
-        """Persist a job before its TaskRecord so a crash cannot orphan the task."""
+        """Persist a job and fully own the passed lock until handoff or release completes."""
         from openviking.service.task_tracker import get_task_tracker
         from openviking.storage.queuefs import get_queue_manager
 
+        tracker = get_task_tracker()
         try:
             await get_queue_manager().enqueue(queue_name, msg.to_dict())
-            await resource_lock.handoff()
+            if resource_lock is not None:
+                await self._handoff_lock_ref(resource_lock)
+                resource_lock = None
+            task = await tracker.create(
+                "add_resource",
+                resource_id=None if msg.defer_target_resolution else msg.root_uri,
+                account_id=msg.account_id,
+                user_id=msg.user_id,
+                task_id=msg.task_id,
+                meta={"source_path": msg.source_path},
+            )
+            await tracker.update_stage(
+                task.task_id,
+                "queued",
+                account_id=msg.account_id,
+                user_id=msg.user_id,
+            )
         except BaseException:
-            await resource_lock.close()
+            if resource_lock is not None:
+                await self._release_lock_ref(resource_lock)
             raise
 
-        tracker = get_task_tracker()
-        task = await tracker.create(
-            "add_resource",
-            resource_id=None if msg.defer_target_resolution else msg.root_uri,
-            account_id=msg.account_id,
-            user_id=msg.user_id,
-            task_id=msg.task_id,
-        )
-        await tracker.update_stage(
-            task.task_id,
-            "queued",
-            account_id=msg.account_id,
-            user_id=msg.user_id,
-        )
         return task
 
     async def execute_add_resource_job(
@@ -385,11 +486,10 @@ class ResourceService:
         msg: Any,
         *,
         ctx: RequestContext,
-        resource_lock: Optional[LockLease],
+        resource_lock: Optional[Dict[str, Any]],
         stage_callback: Callable[[str], Any],
     ) -> Dict[str, Any]:
         """Execute one durable add-resource job inside its QueueFS consumer."""
-        resource_lock = resource_lock or NO_LOCK
         if msg.prepared is None:
             target_uri = msg.root_uri
             parent_uri = None
@@ -412,19 +512,23 @@ class ResourceService:
                 from openviking.parse.understanding_api import PREPARED_RESPONSE_ID_ARG
 
                 internal_kwargs[PREPARED_RESPONSE_ID_ARG] = msg.understanding_response_id
-            return await self._execute_resource_ingestion(
+            result = await self._execute_resource_ingestion(
                 path=msg.path,
                 ctx=ctx,
                 to=target_uri,
                 parent=parent_uri,
                 reason=msg.reason,
                 instruction=msg.instruction,
-                wait=True,
+                defer_post_processing=False,
                 timeout=msg.timeout,
                 build_index=msg.build_index,
                 summarize=msg.summarize,
+                processing_mode=msg.processing_mode,
+                parse_mode=msg.parse_mode,
                 watch_interval=msg.watch_interval,
                 manage_watch=not msg.skip_watch_management,
+                tags=msg.tags,
+                tag_mode=msg.tag_mode,
                 allow_local_path_resolution=msg.allow_local_path_resolution,
                 enforce_public_remote_targets=msg.enforce_public_remote_targets,
                 resource_lock=resource_lock,
@@ -440,57 +544,40 @@ class ResourceService:
                 create_parent=msg.create_parent,
                 **internal_kwargs,
             )
-
-        telemetry_id = get_current_telemetry().telemetry_id
-        request_wait_tracker = get_request_wait_tracker()
-        request_wait_tracker.register_request(telemetry_id)
-        try:
             stage_result = stage_callback("processing_queue")
             if inspect.isawaitable(stage_result):
                 await stage_result
-            result = await self._resource_processor.finish_prepared_resource(
-                msg.prepared,
-                ctx=ctx,
-                resource_lock=resource_lock,
-                summarize=msg.summarize,
-                build_index=msg.build_index,
-            )
-            await request_wait_tracker.wait_for_request(
-                telemetry_id,
-                timeout=msg.timeout,
-            )
-            status = request_wait_tracker.build_queue_status(telemetry_id)
-            result["queue_status"] = status
-            await self._link_resource_reason_memory(
-                result=result,
-                ctx=ctx,
-                reason=msg.reason,
-                source_name=msg.source_name,
-                timeout=msg.timeout,
-            )
             return result
-        except TimeoutError as exc:
-            raise DeadlineExceededError("queue processing", msg.timeout) from exc
-        finally:
-            request_wait_tracker.cleanup(telemetry_id)
-            unregister_wait_telemetry(telemetry_id)
+
+        stage_result = stage_callback("processing_queue")
+        if inspect.isawaitable(stage_result):
+            await stage_result
+        return await self._resource_processor.finish_prepared_resource(
+            msg.prepared,
+            ctx=ctx,
+            resource_lock=resource_lock,
+            summarize=msg.summarize,
+            build_index=msg.build_index,
+            processing_mode=msg.processing_mode,
+            **self._add_resource_ingest_tag_kwargs(
+                tags=msg.tags,
+                tag_mode=msg.tag_mode,
+            ),
+        )
 
     async def reacquire_add_resource_job_lock(
         self,
         root_uri: str,
         ctx: RequestContext,
-    ) -> LockLease:
+    ) -> Dict[str, Any]:
         """Acquire a fresh lock when a recovered job's old handoff was released."""
         if not self._resource_processor or not self._viking_fs:
             raise NotInitializedError("ResourceProcessor")
-        from openviking.storage.transaction import get_lock_manager
 
         dst_path = self._viking_fs._uri_to_path(root_uri, ctx=ctx)
-        return await self._resource_processor.acquire_resource_lock(
-            get_lock_manager(),
+        return await self._viking_fs._async_agfs.pathlock_acquire_tree(
             dst_path,
-            uri=root_uri,
-            timeout=0.0,
+            timeout_secs=0.0,
         )
 
     async def enqueue_git_add_resource(
@@ -504,8 +591,12 @@ class ResourceService:
         timeout: Optional[float] = None,
         build_index: bool = True,
         summarize: bool = False,
+        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
+        parse_mode: ParseMode | str | None = None,
         watch_interval: float = 0,
         manage_watch: bool = True,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
         allow_local_path_resolution: bool = True,
         enforce_public_remote_targets: bool = False,
         args: Optional[Dict[str, Any]] = None,
@@ -513,13 +604,24 @@ class ResourceService:
     ) -> Dict[str, Any]:
         """Start background ingestion for Git repositories while reserving the target URI."""
         self._ensure_initialized()
+        processing_mode = normalize_processing_mode(processing_mode)
+        self._validate_add_resource_tag_policy(tags=tags, tag_mode=tag_mode)
         normalized_args = self._normalize_add_resource_args(args, watch_interval=watch_interval)
-        kwargs.update(normalized_args.processor_kwargs)
-        from openviking.connector.routing import CONNECTOR_CREDENTIAL_ARGS
-
-        credential_args = sorted(
-            set(kwargs).intersection(CONNECTOR_CREDENTIAL_ARGS.get("git", frozenset()))
+        mode = (
+            normalize_parse_mode(parse_mode)
+            if parse_mode is not None
+            else normalized_args.parse_mode
         )
+        kwargs.update(normalized_args.processor_kwargs)
+        if "auth_config" in kwargs:
+            raise InvalidArgumentError(
+                "args.auth_config cannot be used with enqueue_git_add_resource because "
+                "native Git credentials must be consumed before durable queue submission. "
+                "Call add_resource instead."
+            )
+        from openviking.connector.routing import credential_arg_names
+
+        credential_args = credential_arg_names("git", kwargs)
         if credential_args:
             raise InvalidArgumentError(
                 "Git credential args "
@@ -538,7 +640,7 @@ class ResourceService:
 
         from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 
-        resource_lock: LockLease = NO_LOCK
+        resource_lock: Optional[Dict[str, Any]] = None
         try:
             if enforce_public_remote_targets and is_remote_resource_source(path):
                 path = require_remote_resource_source(path)
@@ -557,7 +659,11 @@ class ResourceService:
             )
 
             task_id = str(uuid4())
-            lock_handoff = resource_lock.to_handoff()
+            lock_handoff = (
+                await self._viking_fs._async_agfs.pathlock_to_handoff(resource_lock)
+                if resource_lock is not None
+                else None
+            )
             processor_args = {
                 key: value
                 for key, value in kwargs.items()
@@ -566,20 +672,25 @@ class ResourceService:
             msg = AddResourceMsg(
                 task_id=task_id,
                 path=path,
+                source_path=(source_name or "") if kwargs.get("temp_file_id") else path,
                 root_uri=root_uri,
                 telemetry_id=get_current_telemetry().telemetry_id or None,
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
                 role=str(ctx.role),
                 actor_peer_id=ctx.actor_peer_id,
-                lock_handoff=lock_handoff.to_dict() if lock_handoff else None,
+                lock_handoff=lock_handoff,
                 reason=reason,
                 instruction=instruction,
                 timeout=timeout,
                 build_index=build_index,
                 summarize=summarize,
+                processing_mode=processing_mode,
+                parse_mode=mode.value,
                 watch_interval=watch_interval,
                 skip_watch_management=not manage_watch,
+                tags=tags,
+                tag_mode=tag_mode,
                 allow_local_path_resolution=allow_local_path_resolution,
                 enforce_public_remote_targets=enforce_public_remote_targets,
                 strict=bool(kwargs.get("strict", False)),
@@ -590,21 +701,23 @@ class ResourceService:
                 preserve_structure=kwargs.get("preserve_structure"),
                 create_parent=bool(kwargs.get("create_parent", False)),
                 source_name=source_name,
-                args=self._sanitize_watch_processor_kwargs(processor_args),
+                args=self._processor_args_for_watch_run(processor_args),
             )
+            enqueue_lock = resource_lock
+            resource_lock = None
             task = await self._enqueue_add_resource_job(
                 msg,
                 queue_name=QueueManager.ADD_RESOURCE,
-                resource_lock=resource_lock,
+                resource_lock=enqueue_lock,
             )
-            resource_lock = NO_LOCK
             return {
                 "status": "success",
                 "root_uri": root_uri,
                 "task_id": task.task_id,
             }
         except Exception:
-            await resource_lock.close()
+            if resource_lock is not None:
+                await self._viking_fs._async_agfs.pathlock_release(resource_lock)
             raise
 
     async def _plan_resource_target(
@@ -615,7 +728,7 @@ class ResourceService:
         target: ContentTargetSpec,
         source_name: Optional[str],
         source_info: _ResourceSourceInfo,
-    ) -> tuple[str, LockLease]:
+    ) -> tuple[str, Optional[Dict[str, Any]]]:
         if not self._resource_processor or not self._viking_fs:
             raise NotInitializedError("ResourceProcessor")
 
@@ -637,14 +750,10 @@ class ResourceService:
                 ctx=ctx,
             )
 
-        from openviking.storage.transaction import get_lock_manager
-
         dst_path = self._viking_fs._uri_to_path(root_uri, ctx=ctx)
-        resource_lock = await self._resource_processor.acquire_resource_lock(
-            get_lock_manager(),
+        resource_lock = await self._viking_fs._async_agfs.pathlock_acquire_tree(
             dst_path,
-            uri=root_uri,
-            timeout=0.0,
+            timeout_secs=0.0,
         )
         return root_uri, resource_lock
 
@@ -709,9 +818,13 @@ class ResourceService:
         timeout: Optional[float] = None,
         build_index: bool = True,
         summarize: bool = False,
+        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
         watch_interval: float = 0,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
         allow_local_path_resolution: bool = True,
         enforce_public_remote_targets: bool = False,
+        add_type: Optional[str] = None,
         args: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
@@ -722,9 +835,12 @@ class ResourceService:
                 "add_resource does not accept internal execution fields: "
                 + ", ".join(internal_fields)
             )
+        if isinstance(add_type, str):
+            add_type = add_type.strip() or None
         return await self._submit_resource_ingestion(
             path=path,
             ctx=ctx,
+            add_type=add_type,
             to=to,
             parent=parent,
             reason=reason,
@@ -733,8 +849,11 @@ class ResourceService:
             timeout=timeout,
             build_index=build_index,
             summarize=summarize,
+            processing_mode=processing_mode,
             watch_interval=watch_interval,
             manage_watch=True,
+            tags=tags,
+            tag_mode=tag_mode,
             allow_local_path_resolution=allow_local_path_resolution,
             enforce_public_remote_targets=enforce_public_remote_targets,
             args=args,
@@ -746,12 +865,14 @@ class ResourceService:
         path: str,
         ctx: RequestContext,
         to: Optional[str] = None,
+        to_is_directory: Optional[bool] = None,
         parent: Optional[str] = None,
         reason: str = "",
         instruction: str = "",
         timeout: Optional[float] = None,
         build_index: bool = True,
         summarize: bool = False,
+        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
         watch_interval: float = 0,
         allow_local_path_resolution: bool = True,
         enforce_public_remote_targets: bool = False,
@@ -762,6 +883,7 @@ class ResourceService:
             path=path,
             ctx=ctx,
             to=to,
+            to_is_directory=to_is_directory,
             parent=parent,
             reason=reason,
             instruction=instruction,
@@ -769,6 +891,7 @@ class ResourceService:
             timeout=timeout,
             build_index=build_index,
             summarize=summarize,
+            processing_mode=processing_mode,
             watch_interval=watch_interval,
             manage_watch=False,
             allow_local_path_resolution=allow_local_path_resolution,
@@ -781,7 +904,9 @@ class ResourceService:
         self,
         path: str,
         ctx: RequestContext,
+        add_type: Optional[str] = None,
         to: Optional[str] = None,
+        to_is_directory: Optional[bool] = None,
         parent: Optional[str] = None,
         reason: str = "",
         instruction: str = "",
@@ -789,8 +914,12 @@ class ResourceService:
         timeout: Optional[float] = None,
         build_index: bool = True,
         summarize: bool = False,
+        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
         watch_interval: float = 0,
         manage_watch: bool = True,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
+        parse_mode: ParseMode | str | None = None,
         allow_local_path_resolution: bool = True,
         enforce_public_remote_targets: bool = False,
         args: Optional[Dict[str, Any]] = None,
@@ -800,14 +929,22 @@ class ResourceService:
 
         Args:
             path: Resource path (local file or URL)
-            to: Target URI (e.g., "viking://resources/my_resource")
-            parent: Parent URI under which the resource will be stored
+            add_type: Explicitly declared Connector source type. Routes the
+                request to the Connector integration without probing the path;
+                the type must be enabled in connector.allowed_add_types. A
+                declared request never degrades to the standard pipeline and
+                requires an exact ``to`` target.
+            to: Target URI (e.g., "viking://resources/my_resource"). Required
+                when ``add_type`` is set.
+            parent: Parent URI under which the resource will be stored. Not
+                supported when ``add_type`` is set.
             reason: Reason for adding the resource
             instruction: Processing instruction for semantic extraction
             wait: Whether to wait for semantic extraction and vectorization to complete
             timeout: Wait timeout in seconds
             build_index: Whether to build vector index immediately (default: True)
             summarize: Whether to generate summary (default: False)
+            processing_mode: Post-ingest processing mode for semantic/vector work
             watch_interval: Watch interval in minutes for automatic resource monitoring.
                 - watch_interval > 0: Creates or updates a watch task. The resource will be
                   automatically re-processed at the specified interval by the scheduler.
@@ -816,9 +953,9 @@ class ResourceService:
                 - watch_interval < 0: Same as watch_interval = 0, cancels any existing watch task.
                 Default is 0 (no monitoring).
 
-                Note: If the target URI already has an active watch task, a ConflictError will be
-                raised. You must first cancel the existing watch (set watch_interval <= 0) before
-                creating a new one.
+                Note: Re-adding the same source to the same target updates its active watch
+                task in place. A different source targeting an active watch raises
+                ConflictError; cancel that watch first with watch_interval <= 0.
             enforce_public_remote_targets: When True, reject non-public remote hosts and
                 validate each outbound HTTP request URL during fetch.
             args: Parser/accessor-specific options forwarded to the processing chain.
@@ -828,21 +965,27 @@ class ResourceService:
             Processing result containing 'root_uri' and other metadata
 
         Raises:
-            ConflictError: If the target URI already has an active watch task
+            ConflictError: If a different source targets an active watch task
             InvalidArgumentError: If the URI scope is not 'resources'
         """
         self._ensure_initialized()
+        processing_mode = normalize_processing_mode(processing_mode)
+        self._validate_add_resource_tag_policy(tags=tags, tag_mode=tag_mode)
         normalized_args = self._normalize_add_resource_args(args, watch_interval=watch_interval)
+        mode = (
+            normalize_parse_mode(parse_mode)
+            if parse_mode is not None
+            else normalized_args.parse_mode
+        )
         kwargs.update(normalized_args.processor_kwargs)
+        git_repo_source = is_git_repo_url(path)
         if watch_interval > 0 and kwargs.get("temp_file_id"):
-            # Fail fast, before any ingestion: an uploaded source is a one-time
-            # snapshot, so a watch on it can never observe the live source (see the
-            # matching guard in _manage_watch_if_needed, the watch-creation choke
-            # point that protects all other call paths).
+            # Fail fast: a watch on a static upload snapshot can never observe the
+            # live source.
             raise InvalidArgumentError(
                 "watch_interval > 0 is not supported for uploaded content: an "
-                "upload is consumed as a one-time snapshot at ingest, so the "
-                "watch would re-process stale content forever. Watch a URL / "
+                "upload is a static snapshot, so the watch would re-process "
+                "stale content forever. Watch a URL / "
                 "sitemap / RSS source instead, or re-add the resource when the "
                 "source changes."
             )
@@ -858,102 +1001,200 @@ class ResourceService:
                 parent = default_parent
                 kwargs["create_parent"] = True
 
-        if self._should_use_connector(
+        if self._connector.should_delegate(
             path,
             ctx=ctx,
+            declared_add_type=add_type,
             to=to,
             parent=parent,
             wait=wait,
             instruction=instruction,
             build_index=build_index,
             summarize=summarize,
+            processing_mode=processing_mode,
+            parse_mode=mode,
             watch_interval=watch_interval,
-            connector_args=args or {},
+            connector_args=normalized_args.processor_kwargs,
             kwargs=kwargs,
         ):
-            return await self._add_resource_via_connector(
+            return await self._connector.submit(
                 path=path,
                 ctx=ctx,
+                declared_add_type=add_type,
                 to=to,
                 reason=reason,
-                connector_args=args or {},
+                connector_args=normalized_args.processor_kwargs,
+                tags=tags,
+                tag_mode=tag_mode,
                 **kwargs,
             )
 
-        if not wait and is_git_repo_url(path):
-            return await self.enqueue_git_add_resource(
+        if git_repo_source:
+            if "auth_config" in kwargs:
+                git_auth = parse_git_http_auth_config(
+                    kwargs["auth_config"],
+                    path,
+                )
+                if git_auth is None:
+                    raise InvalidArgumentError("args.auth_config must be an object.")
+
+                watch_auth_state = normalized_args.watch_auth_state
+                if watch_interval > 0:
+                    watch_auth_state = create_git_http_auth_state(git_auth, path)
+
+                # The native Git queue is durable, so credentials must be consumed
+                # before crossing that boundary. Fetch and parse in this request;
+                # _execute_resource_ingestion only queues the credential-free
+                # prepared post-processing payload when defer_post_processing=True.
+                request_local_kwargs = dict(kwargs)
+                request_local_kwargs["auth_config"] = {
+                    "username": git_auth.username,
+                    "token": git_auth.token,
+                }
+                result = await self._execute_resource_ingestion(
+                    path=path,
+                    ctx=ctx,
+                    to=to,
+                    to_is_directory=to_is_directory,
+                    parent=parent,
+                    reason=reason,
+                    instruction=instruction,
+                    defer_post_processing=True,
+                    timeout=timeout,
+                    build_index=build_index,
+                    summarize=summarize,
+                    processing_mode=processing_mode,
+                    parse_mode=mode,
+                    watch_interval=watch_interval,
+                    manage_watch=manage_watch,
+                    tags=tags,
+                    tag_mode=tag_mode,
+                    allow_local_path_resolution=allow_local_path_resolution,
+                    enforce_public_remote_targets=enforce_public_remote_targets,
+                    watch_auth_state=watch_auth_state,
+                    **request_local_kwargs,
+                )
+            else:
+                result = await self.enqueue_git_add_resource(
+                    path=path,
+                    ctx=ctx,
+                    to=to,
+                    to_is_directory=to_is_directory,
+                    parent=parent,
+                    reason=reason,
+                    instruction=instruction,
+                    timeout=timeout,
+                    build_index=build_index,
+                    summarize=summarize,
+                    processing_mode=processing_mode,
+                    parse_mode=mode,
+                    watch_interval=watch_interval,
+                    manage_watch=manage_watch,
+                    tags=tags,
+                    tag_mode=tag_mode,
+                    allow_local_path_resolution=allow_local_path_resolution,
+                    enforce_public_remote_targets=enforce_public_remote_targets,
+                    **kwargs,
+                )
+        else:
+            result = await self._execute_resource_ingestion(
                 path=path,
                 ctx=ctx,
                 to=to,
+                to_is_directory=to_is_directory,
                 parent=parent,
                 reason=reason,
                 instruction=instruction,
+                defer_post_processing=True,
                 timeout=timeout,
                 build_index=build_index,
                 summarize=summarize,
+                processing_mode=processing_mode,
+                parse_mode=mode,
                 watch_interval=watch_interval,
                 manage_watch=manage_watch,
+                tags=tags,
+                tag_mode=tag_mode,
                 allow_local_path_resolution=allow_local_path_resolution,
                 enforce_public_remote_targets=enforce_public_remote_targets,
+                watch_auth_state=normalized_args.watch_auth_state,
+                parser_args=normalized_args.processor_kwargs,
                 **kwargs,
             )
+        get_current_telemetry().set("resource.flags.wait", wait)
+        if not wait:
+            return result
+        if result.get("status") == "error":
+            return result
+        from openviking.service.task_tracker import TaskStatus, get_task_tracker
 
-        return await self._execute_resource_ingestion(
-            path=path,
-            ctx=ctx,
-            to=to,
-            parent=parent,
-            reason=reason,
-            instruction=instruction,
-            wait=wait,
-            timeout=timeout,
-            build_index=build_index,
-            summarize=summarize,
-            watch_interval=watch_interval,
-            manage_watch=manage_watch,
-            allow_local_path_resolution=allow_local_path_resolution,
-            enforce_public_remote_targets=enforce_public_remote_targets,
-            watch_auth_state=normalized_args.watch_auth_state,
-            parser_args=normalized_args.processor_kwargs,
-            **kwargs,
-        )
+        task_id = result["task_id"]
+        try:
+            task = await get_task_tracker().wait(
+                task_id,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+                timeout=timeout,
+            )
+        except TimeoutError as exc:
+            raise DeadlineExceededError("add resource task", timeout) from exc
+
+        if task.status == TaskStatus.COMPLETED:
+            completed = dict(task.result)
+            completed.pop("task_id", None)
+            return completed
+        if task.status == TaskStatus.CANCELLED:
+            return {"status": "cancelled"}
+        return {
+            "status": "error",
+            "errors": [task.error],
+        }
 
     async def _execute_resource_ingestion(
         self,
         path: str,
         ctx: RequestContext,
+        defer_post_processing: bool,
         to: Optional[str] = None,
+        to_is_directory: Optional[bool] = None,
         parent: Optional[str] = None,
         reason: str = "",
         instruction: str = "",
-        wait: bool = False,
         timeout: Optional[float] = None,
         build_index: bool = True,
         summarize: bool = False,
+        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
+        parse_mode: ParseMode | str = ParseMode.DEFAULT,
         watch_interval: float = 0,
         manage_watch: bool = True,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
         allow_local_path_resolution: bool = True,
         enforce_public_remote_targets: bool = False,
         watch_auth_state: Optional[Dict[str, Any]] = None,
         parser_args: Optional[Dict[str, Any]] = None,
-        resource_lock: Optional[LockLease] = None,
+        resource_lock: Optional[Dict[str, Any]] = None,
         stage_callback: Optional[Callable[[str], Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Execute an already-routed resource ingestion."""
         self._ensure_initialized()
+        mode = normalize_parse_mode(parse_mode)
+        if mode is ParseMode.NO_SPLIT:
+            kwargs["parse_mode"] = mode.value
         request_start = time.perf_counter()
         telemetry = get_current_telemetry()
-        telemetry_id = register_wait_telemetry(wait)
-        request_wait_tracker = get_request_wait_tracker()
+        telemetry_id = telemetry.telemetry_id
+        register_telemetry(telemetry)
         job_enqueued = False
-        deferred_lock: LockLease = NO_LOCK
-        if telemetry_id:
-            request_wait_tracker.register_request(telemetry_id)
+        deferred_lock: Optional[Dict[str, Any]] = None
+        ingest_tag_kwargs = self._add_resource_ingest_tag_kwargs(
+            tags=tags,
+            tag_mode=tag_mode,
+        )
         watch_manager = self._get_watch_manager()
         watch_enabled = bool(watch_manager and manage_watch and watch_interval > 0)
 
-        telemetry.set("resource.flags.wait", wait)
         telemetry.set("resource.flags.build_index", build_index)
         telemetry.set("resource.flags.summarize", summarize)
         telemetry.set("resource.flags.watch_enabled", watch_enabled)
@@ -967,6 +1208,9 @@ class ResourceService:
                 parent=parent,
                 create_parent=bool(kwargs.get("create_parent", False)),
             )
+            if to_is_directory is None:
+                to_is_directory = bool(target.to)
+            watch_to_is_directory = to_is_directory
             if enforce_public_remote_targets and is_remote_resource_source(path):
                 path = require_remote_resource_source(path)
                 kwargs.setdefault("request_validator", ensure_public_remote_target)
@@ -974,7 +1218,8 @@ class ResourceService:
                 kwargs["resource_lock"] = resource_lock
 
             async_understanding_candidate = (
-                not wait
+                mode is ParseMode.DEFAULT
+                and defer_post_processing
                 and not is_git_repo_url(path)
                 and not allow_local_path_resolution
                 and self._resource_processor is not None
@@ -1017,14 +1262,22 @@ class ResourceService:
                         or prepared_resource.meta.get("original_filename")
                         or prepared_resource.meta.get("resolved_name")
                     )
+                    source_format = resolved_extension.lstrip(".") or "file"
+                    if resolved_extension.lower().lstrip(".") == MPEG_TS_EXTENSION_ALIAS:
+                        source_format = "video"
+                    source_info = _ResourceSourceInfo(
+                        source_name=source_name,
+                        source_path=path,
+                        source_format=source_format,
+                    )
                 else:
                     resolved_extension = ""
                     source_name = kwargs.get("source_name")
-                source_info = _ResourceSourceInfo(
-                    source_name=source_name,
-                    source_path=path,
-                    source_format=resolved_extension.lstrip(".") or "file",
-                )
+                    source_info = _ResourceSourceInfo(
+                        source_name=source_name,
+                        source_path=path,
+                        source_format=resolved_extension.lstrip(".") or "file",
+                    )
                 doc_name = self._target_doc_name(path, source_name, source_info)
                 source_path = source_info.source_path or source_name or path
                 (
@@ -1045,19 +1298,18 @@ class ResourceService:
                 )
                 if self._viking_fs is None:
                     raise NotInitializedError("VikingFS")
-                from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
-                from openviking.storage.transaction import OwnedLockLease, get_lock_manager
+                from openviking.storage.errors import ResourceBusyError
 
-                lock_manager = get_lock_manager()
-                lock_lease: LockLease = NO_LOCK
+                lock_lease: Optional[Dict[str, Any]] = None
 
-                async def _reserve_tree(uri: str) -> LockLease:
+                async def _reserve_tree(uri: str) -> Dict[str, Any]:
                     dst_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
                     try:
-                        return await OwnedLockLease.acquire_tree(
-                            lock_manager, dst_path, timeout=0.0
+                        return await self._viking_fs._async_agfs.pathlock_acquire_tree(
+                            dst_path,
+                            timeout_secs=0.0,
                         )
-                    except LockAcquisitionError as exc:
+                    except Exception as exc:
                         raise ResourceBusyError(
                             f"Resource is busy: {uri}",
                             uri=uri,
@@ -1090,11 +1342,12 @@ class ResourceService:
                     if resolved_extension:
                         processor_args["resolved_extension"] = resolved_extension
 
-                    lock_handoff = lock_lease.to_handoff()
+                    lock_handoff = await self._lock_to_handoff_payload(lock_lease)
                     msg = AddResourceMsg(
                         task_id=str(uuid4()),
                         telemetry_id=telemetry_id or None,
                         path=path,
+                        source_path=(source_name or "") if kwargs.get("temp_file_id") else path,
                         root_uri=root_uri,
                         account_id=ctx.account_id,
                         user_id=ctx.user.user_id,
@@ -1105,6 +1358,7 @@ class ResourceService:
                         timeout=timeout,
                         build_index=build_index,
                         summarize=summarize,
+                        processing_mode=processing_mode,
                         strict=bool(kwargs.get("strict", False)),
                         ignore_dirs=kwargs.get("ignore_dirs"),
                         include=kwargs.get("include"),
@@ -1116,22 +1370,25 @@ class ResourceService:
                         enforce_public_remote_targets=enforce_public_remote_targets,
                         args=processor_args,
                         source_name=source_name,
-                        lock_handoff=lock_handoff.to_dict() if lock_handoff else None,
+                        lock_handoff=lock_handoff,
                         skip_watch_management=True,
                         defer_target_resolution=defer_target_resolution,
                         understanding_response_id=understanding_response_id,
+                        tags=tags,
+                        tag_mode=tag_mode,
                     )
                     enqueue_started = True
+                    enqueue_lock = lock_lease
+                    lock_lease = None
                     task = await self._enqueue_add_resource_job(
                         msg,
                         queue_name=QueueManager.EXTERNAL_PARSE,
-                        resource_lock=lock_lease,
+                        resource_lock=enqueue_lock,
                     )
                 except BaseException:
-                    if not enqueue_started:
-                        await lock_lease.close()
+                    if not enqueue_started and lock_lease is not None:
+                        await self._release_lock_ref(lock_lease)
                     raise
-                lock_lease = NO_LOCK
                 job_enqueued = True
                 logger.info(
                     "[ResourceService] Enqueued AddResourceMsg task_id=%s root_uri=%s",
@@ -1143,13 +1400,15 @@ class ResourceService:
                     manage_watch=manage_watch,
                     watch_interval=watch_interval,
                     target=target,
+                    to_is_directory=watch_to_is_directory,
                     root_uri=root_uri,
                     path=path,
                     reason=reason,
                     instruction=instruction,
                     build_index=build_index,
                     summarize=summarize,
-                    processor_kwargs=kwargs,
+                    processing_mode=processing_mode,
+                    processor_kwargs=self._watch_processor_kwargs(kwargs, tags, tag_mode),
                     watch_auth_state=watch_auth_state,
                     ctx=ctx,
                 )
@@ -1169,12 +1428,15 @@ class ResourceService:
                 scope="resources",
                 to=target.to,
                 parent=target.parent,
+                to_is_directory=to_is_directory,
                 build_index=build_index,
                 summarize=summarize,
+                processing_mode=processing_mode,
                 stage_callback=stage_callback,
                 allow_local_path_resolution=allow_local_path_resolution,
                 prepared_resource=prepared_resource,
-                defer_post_processing=not wait,
+                defer_post_processing=defer_post_processing,
+                **ingest_tag_kwargs,
                 **kwargs,
             )
             prepared_resource = None
@@ -1182,76 +1444,41 @@ class ResourceService:
             if result.get("status") == "error":
                 return result
             prepared = result.pop("_post_process", None)
-            deferred_lock = result.pop("_resource_lock", NO_LOCK)
-            if wait:
-                if stage_callback is not None:
-                    stage_result = stage_callback("processing_queue")
-                    if inspect.isawaitable(stage_result):
-                        await stage_result
-                wait_start = time.perf_counter()
-                try:
-                    with telemetry.measure("resource.wait"):
-                        if telemetry_id:
-                            await request_wait_tracker.wait_for_request(
-                                telemetry_id,
-                                timeout=timeout,
-                                poll_interval=0.05,
-                            )
-                            status = request_wait_tracker.build_queue_status(telemetry_id)
-                        else:
-                            qm = get_queue_manager()
-                            status = build_queue_status_payload(
-                                await qm.wait_complete(timeout=timeout)
-                            )
-                except TimeoutError as exc:
-                    telemetry.set_error(
-                        "resource_service.wait_complete",
-                        "DEADLINE_EXCEEDED",
-                        str(exc),
-                    )
-                    raise DeadlineExceededError("queue processing", timeout) from exc
-                queue_wait_duration_ms = round((time.perf_counter() - wait_start) * 1000, 3)
-                try:
-                    from openviking.metrics.datasources.resource import (
-                        ResourceIngestionEventDataSource,
-                    )
-
-                    ResourceIngestionEventDataSource.record_wait(
-                        operation="queue_processing",
-                        duration_seconds=float(queue_wait_duration_ms) / 1000.0,
-                        account_id=getattr(ctx, "account_id", None),
-                    )
-                except Exception:
-                    pass
-                result["queue_status"] = status
-                record_resource_wait_metrics(
-                    telemetry_id=telemetry_id,
-                    queue_status=status,
-                    root_uri=result.get("root_uri"),
-                )
-                telemetry.set("queue.wait.duration_ms", queue_wait_duration_ms)
-            if not wait:
+            deferred_lock = result.pop("_resource_lock", None)
+            if (
+                not target.to
+                and isinstance(prepared, dict)
+                and isinstance(prepared.get("root_is_file"), bool)
+            ):
+                watch_to_is_directory = not prepared["root_is_file"]
+            if defer_post_processing:
                 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 
                 root_uri = result.get("root_uri", "")
                 if not isinstance(prepared, dict):
                     raise InternalError("Deferred resource processing payload is missing")
-                lock_handoff = deferred_lock.to_handoff()
+                lock_handoff = await self._lock_to_handoff_payload(deferred_lock)
                 msg = AddResourceMsg(
                     task_id=str(uuid4()),
                     root_uri=root_uri,
                     prepared=prepared,
+                    source_path=str(
+                        (kwargs.get("source_name") or "")
+                        if kwargs.get("temp_file_id")
+                        else result.get("source_path") or ""
+                    ),
                     telemetry_id=telemetry_id or None,
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
                     role=str(ctx.role),
                     actor_peer_id=ctx.actor_peer_id,
-                    lock_handoff=lock_handoff.to_dict() if lock_handoff else None,
+                    lock_handoff=lock_handoff,
                     reason=reason,
                     instruction=instruction,
                     timeout=timeout,
                     build_index=build_index,
                     summarize=summarize,
+                    processing_mode=processing_mode,
                     strict=bool(kwargs.get("strict", False)),
                     ignore_dirs=kwargs.get("ignore_dirs"),
                     include=kwargs.get("include"),
@@ -1263,13 +1490,16 @@ class ResourceService:
                     enforce_public_remote_targets=enforce_public_remote_targets,
                     source_name=kwargs.get("source_name"),
                     skip_watch_management=True,
+                    tags=tags,
+                    tag_mode=tag_mode,
                 )
+                enqueue_lock = deferred_lock
+                deferred_lock = None
                 task = await self._enqueue_add_resource_job(
                     msg,
                     queue_name=QueueManager.ADD_RESOURCE,
-                    resource_lock=deferred_lock,
+                    resource_lock=enqueue_lock,
                 )
-                deferred_lock = NO_LOCK
                 result["task_id"] = task.task_id
                 job_enqueued = True
             await self._manage_watch_if_needed(
@@ -1277,24 +1507,18 @@ class ResourceService:
                 manage_watch=manage_watch,
                 watch_interval=watch_interval,
                 target=target,
+                to_is_directory=watch_to_is_directory,
                 root_uri=str(result.get("root_uri") or ""),
                 path=path,
                 reason=reason,
                 instruction=instruction,
                 build_index=build_index,
                 summarize=summarize,
-                processor_kwargs=kwargs,
+                processing_mode=processing_mode,
+                processor_kwargs=self._watch_processor_kwargs(kwargs, tags, tag_mode),
                 watch_auth_state=watch_auth_state,
                 ctx=ctx,
             )
-            if wait:
-                await self._link_resource_reason_memory(
-                    result=result,
-                    ctx=ctx,
-                    reason=reason,
-                    source_name=kwargs.get("source_name"),
-                    timeout=timeout,
-                )
             return result
         except Exception as exc:
             telemetry.set_error(
@@ -1310,11 +1534,10 @@ class ResourceService:
                 "resource.request.duration_ms",
                 round((time.perf_counter() - request_start) * 1000, 3),
             )
-            if wait or not telemetry_id or not job_enqueued:
-                get_request_wait_tracker().cleanup(telemetry_id)
-                unregister_wait_telemetry(telemetry_id)
-            if deferred_lock.active:
-                await deferred_lock.close()
+            if not telemetry_id or (defer_post_processing and not job_enqueued):
+                unregister_telemetry(telemetry_id)
+            if deferred_lock is not None:
+                await self._release_lock_ref(deferred_lock)
 
     async def _link_resource_reason_memory(
         self,
@@ -1379,487 +1602,35 @@ class ResourceService:
             await task_tracker.fail(task_id, str(exc), account_id=account_id, user_id=user_id)
         finally:
             request_wait_tracker.cleanup(telemetry_id)
-            unregister_wait_telemetry(telemetry_id)
+            unregister_telemetry(telemetry_id)
 
     # ── Connector routing ──
 
-    def _should_use_connector(
-        self,
-        path: str,
-        *,
-        ctx: Optional[RequestContext] = None,
-        to: Optional[str] = None,
-        parent: Optional[str] = None,
-        wait: bool = False,
-        instruction: str = "",
-        build_index: bool = True,
-        summarize: bool = False,
-        watch_interval: float = 0,
-        connector_args: Optional[Dict[str, Any]] = None,
-        kwargs: Optional[Dict[str, Any]] = None,
-    ) -> bool:
-        """Decide whether a top-level resource path belongs to Connector.
+    @property
+    def _connector(self) -> "ConnectorDelegate":
+        """Connector delegation (lazy: viking_fs may be injected after init)."""
+        if self._connector_delegate is None:
+            from openviking.connector.delegate import ConnectorDelegate
 
-        Returns True to delegate to the Connector, False to route to the
-        standard pipeline. Source types are detected the same way the
-        standard pipeline routes them (see connector.routing), not by raw
-        URL scheme. A source type only the Connector can import (tos)
-        raises InvalidArgumentError when the Connector is disabled, does
-        not allow the type, or cannot honor the request parameters —
-        degrading such a request would only fail later with a misleading
-        parse error. Source types the standard pipeline can also handle
-        degrade to it instead when parameters are unsupported, unless the
-        request carries Connector-only credentials; credentialed requests
-        fail closed so secrets never enter a durable native job.
-        """
-        from openviking.connector.routing import (
-            CONNECTOR_CREDENTIAL_ARGS,
-            detect_connector_add_type,
-            is_full_commit_sha,
-        )
-        from openviking_cli.utils.config.open_viking_config import get_openviking_config
-
-        detected = detect_connector_add_type(path)
-        if detected is None:
-            return False
-        add_type, connector_only = detected
-        connector_args = connector_args or {}
-        credential_args = sorted(
-            set(connector_args).intersection(CONNECTOR_CREDENTIAL_ARGS.get(add_type, frozenset()))
-        )
-
-        config = get_openviking_config().connector
-        if not config.enable or add_type not in config.allowed_add_types:
-            if credential_args:
-                raise InvalidArgumentError(
-                    f"Credential args {credential_args} for '{add_type}' require Connector "
-                    "import, but the Connector is disabled or does not allow this source type."
-                )
-            if connector_only:
-                raise InvalidArgumentError(
-                    f"'{path}' can only be imported through the Connector integration, "
-                    "which is disabled or does not allow this source type."
-                )
-            return False
-
-        if add_type == "git":
-            from openviking.parse.accessors.git_accessor import GitAccessor
-
-            _, _, commit = GitAccessor()._parse_repo_source(path, **connector_args)
-            if commit and not is_full_commit_sha(str(commit)):
-                # The plugin fetches pinned commits by SHA over the wire and
-                # cannot resolve abbreviated forms; the standard pipeline
-                # resolves them locally after a full clone.
-                if credential_args:
-                    raise InvalidArgumentError(
-                        f"Credential args {credential_args} for 'git' cannot fall back to the "
-                        "standard import pipeline; pass a full 40-character commit SHA."
-                    )
-                logger.info(
-                    "Connector git import degrades to the standard pipeline: "
-                    "abbreviated commit SHA %r needs a local clone to resolve.",
-                    commit,
-                )
-                return False
-
-        if ctx is not None and (to or parent):
-            target = ContentTargetSpec.from_fields(
-                ctx=ctx,
-                kind="resource",
-                to=to,
-                parent=parent,
-                create_parent=bool((kwargs or {}).get("create_parent", False)),
+            self._connector_delegate = ConnectorDelegate(
+                viking_fs=self._viking_fs,
+                background_tasks=self._background_tasks,
+                link_reason_memory=self._link_resource_reason_memory,
             )
-            to = target.to
-            parent = target.parent
-
-        unsupported = self._unsupported_connector_params(
-            add_type=add_type,
-            wait=wait,
-            instruction=instruction,
-            build_index=build_index,
-            summarize=summarize,
-            watch_interval=watch_interval,
-            connector_args=connector_args,
-            kwargs=kwargs or {},
-            to=to,
-            parent=parent,
-        )
-        if not unsupported:
-            return True
-        detail = "; ".join(unsupported)
-        if connector_only:
-            raise InvalidArgumentError(f"Connector import does not support: {detail}")
-        if credential_args:
-            raise InvalidArgumentError(
-                f"Credential args {credential_args} for '{add_type}' cannot fall back to the "
-                f"standard import pipeline. Connector import does not support: {detail}"
-            )
-        logger.info(
-            f"[ResourceService] Connector does not support {detail} for path {path}; "
-            "falling back to the standard import pipeline"
-        )
-        return False
-
-    @staticmethod
-    def _unsupported_connector_params(
-        *,
-        add_type: str,
-        wait: bool,
-        instruction: str,
-        build_index: bool,
-        summarize: bool,
-        watch_interval: float,
-        connector_args: Dict[str, Any],
-        kwargs: Dict[str, Any],
-        to: Optional[str] = None,
-        parent: Optional[str] = None,
-    ) -> List[str]:
-        """add_resource params the Connector delegation cannot honor.
-
-        Returns an empty list when the request is fully supported.
-        """
-        from openviking.connector.routing import (
-            CONNECTOR_CREDENTIAL_ARGS,
-            CONNECTOR_SUPPORTED_ARGS,
-        )
-
-        unsupported: List[str] = []
-        if wait:
-            unsupported.append("wait=true (Connector imports run asynchronously)")
-        if parent:
-            unsupported.append("parent targets (Connector imports require an exact 'to' target)")
-        if not to:
-            unsupported.append("missing exact 'to' target")
-        elif to != "viking://resources" and not to.startswith("viking://resources/"):
-            unsupported.append("to outside the public resources root (viking://resources/...)")
-        if watch_interval > 0:
-            unsupported.append("watch_interval>0 (Connector imports cannot be watched yet)")
-        if instruction:
-            unsupported.append("instruction")
-        if not build_index:
-            unsupported.append("build_index=false")
-        if summarize:
-            unsupported.append("summarize=true")
-        if kwargs.get("strict"):
-            unsupported.append("strict=true (Connector imports fail per file, not all-or-nothing)")
-        for field in ("ignore_dirs", "include", "exclude"):
-            if kwargs.get(field):
-                unsupported.append(f"{field} (Connector imports cannot filter the source tree)")
-        if kwargs.get("preserve_structure") is False:
-            unsupported.append(
-                "preserve_structure=false (Connector always mirrors the source directory tree)"
-            )
-        if not kwargs.get("directly_upload_media", True):
-            unsupported.append("directly_upload_media=false")
-        if kwargs.get("source_name"):
-            unsupported.append("source_name")
-        supported_args = CONNECTOR_SUPPORTED_ARGS.get(
-            add_type, frozenset()
-        ) | CONNECTOR_CREDENTIAL_ARGS.get(add_type, frozenset())
-        unknown_args = sorted(set(connector_args) - supported_args)
-        if unknown_args:
-            supported_hint = (
-                f"supported: {sorted(supported_args)}" if supported_args else "no args supported"
-            )
-            unsupported.append(f"args keys {unknown_args} ({supported_hint} for '{add_type}')")
-        return unsupported
-
-    async def _add_resource_via_connector(
-        self,
-        path: str,
-        ctx: RequestContext,
-        to: Optional[str],
-        reason: str = "",
-        connector_args: Optional[Dict[str, Any]] = None,
-        **kwargs: Any,
-    ) -> Dict[str, Any]:
-        """Route add_resource to the external Connector service."""
-        from openviking.connector.routing import (
-            CONNECTOR_CREDENTIAL_ARGS,
-            CONNECTOR_SUPPORTED_ARGS,
-            detect_connector_add_type,
-        )
-        from openviking.service.task_tracker import get_task_tracker
-        from openviking_cli.utils.config.open_viking_config import get_openviking_config
-
-        config = get_openviking_config().connector
-        if not ctx.api_key:
-            raise InvalidArgumentError("Connector import requires an API key in the request.")
-
-        detected = detect_connector_add_type(path)
-        if detected is None:
-            raise InvalidArgumentError(f"'{path}' does not match any Connector source type.")
-        add_type, _ = detected
-
-        target = ContentTargetSpec.from_fields(
-            ctx=ctx,
-            kind="resource",
-            to=to,
-            create_parent=bool(kwargs.get("create_parent", False)),
-        )
-        if not target.to:
-            raise InvalidArgumentError("Connector import requires an exact 'to' target.")
-        task_resource_id = target.to
-
-        if not kwargs.get("create_parent", False):
-            # Match the native pipeline default: unless create_parent=true is
-            # given, the parent of the exact target must pre-exist.
-            parent_uri, _, _ = task_resource_id.rpartition("/")
-            if parent_uri.startswith("viking://") and not await self._viking_fs.exists(
-                parent_uri, ctx
-            ):
-                raise InvalidArgumentError(
-                    f"Parent directory '{parent_uri}' does not exist; "
-                    "pass create_parent=true to create it."
-                )
-
-        forwarded_args = {
-            key: value
-            for key, value in (connector_args or {}).items()
-            if key in CONNECTOR_SUPPORTED_ARGS.get(add_type, frozenset()) and value
-        }
-        # Credentials travel exclusively in the dedicated auth_config field:
-        # param_config is logged verbatim by the Connector and the plugin,
-        # auth_config is redacted on every hop.
-        auth_config = {
-            key: str(value)
-            for key, value in (connector_args or {}).items()
-            if key in CONNECTOR_CREDENTIAL_ARGS.get(add_type, frozenset()) and value
-        }
-
-        tos_path: Optional[str] = None
-        param_config: Optional[Dict[str, Any]] = None
-        if add_type == "tos":
-            source_path = path[len("tos://") :].strip()
-            if not source_path:
-                raise InvalidArgumentError(
-                    "Connector TOS import requires path='tos://<bucket>/<path>'."
-                )
-            tos_path = source_path
-        elif add_type == "git":
-            from openviking.parse.accessors.git_accessor import GitAccessor
-
-            # Source-specific settings stay in param_config. The exact target
-            # is transported separately as the top-level ``to`` field.
-            repo_url, branch, commit = GitAccessor()._parse_repo_source(
-                path.strip(), **forwarded_args
-            )
-            param_config = {"repo_url": repo_url}
-            if commit:
-                # Routing already degraded abbreviated SHAs to the standard
-                # pipeline. Preserve the native accessor's historical precedence:
-                # when both commit and branch/ref are present, send only the full
-                # commit SHA so the plugin receives an unambiguous pinned request.
-                param_config["commit"] = str(commit)
-            elif branch:
-                param_config["branch"] = str(branch)
-        else:  # pragma: no cover - detection only yields tos/git today
-            raise InvalidArgumentError(f"Connector add_type '{add_type}' is not supported.")
-
-        client = ConnectorClient(
-            doc_add_url=config.connector,
-            task_info_url=config.tracker,
-            account_id=ctx.account_id,
-        )
-
-        task_tracker = get_task_tracker()
-        task = await task_tracker.create(
-            "connector_import",
-            resource_id=task_resource_id,
-            account_id=ctx.account_id,
-            user_id=ctx.user.user_id,
-        )
-        try:
-            result = await client.submit_doc_add(
-                add_type=add_type,
-                api_key=ctx.api_key,
-                tos_path=tos_path,
-                to=task_resource_id,
-                include_child=True,
-                param_config=param_config,
-                auth_config=auth_config or None,
-                extra_params=None,
-            )
-
-            connector_task_key = result.get("task_key") or result.get("TaskKey") or ""
-            if not connector_task_key:
-                raise InternalError(
-                    f"Connector accepted the import but returned no task key: {result}"
-                )
-        except asyncio.CancelledError:
-            await task_tracker.fail(
-                task.task_id,
-                "connector task submission cancelled",
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
-            )
-            raise
-        except Exception as exc:
-            await task_tracker.fail(
-                task.task_id,
-                str(exc),
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
-            )
-            raise
-
-        monitor = self._monitor_connector_task(
-            client=client,
-            connector_task_key=connector_task_key,
-            ov_task_id=task.task_id,
-            poll_interval_ms=config.poll_interval_ms,
-            timeout_seconds=config.timeout_seconds,
-            ctx=ctx,
-            reason=reason,
-            link_root_uri=task_resource_id or "viking://resources",
-        )
-
-        background = asyncio.create_task(monitor)
-        self._background_tasks.add(background)
-        background.add_done_callback(self._background_tasks.discard)
-
-        response = {
-            "status": "accepted",
-            "task_id": task.task_id,
-            "connector_task_key": connector_task_key,
-        }
-        if task_resource_id:
-            response["resource_id"] = task_resource_id
-        return response
-
-    async def _monitor_connector_task(
-        self,
-        client: ConnectorClient,
-        connector_task_key: str,
-        ov_task_id: str,
-        poll_interval_ms: int,
-        timeout_seconds: int,
-        ctx: RequestContext,
-        reason: str = "",
-        link_root_uri: str = "",
-    ) -> Dict[str, Any]:
-        """Poll the Connector task until terminal state, then update OV TaskRecord.
-
-        Returns a terminal payload: ``{"status": "completed", ...}`` on
-        success, ``{"status": "failed", "error": ...}`` otherwise. When
-        *reason* is set, a successful import links one reason memory to
-        *link_root_uri* (the import root), matching the native add_resource
-        reason semantics of one reason entry referencing the resource root.
-        """
-        from openviking.service.task_tracker import get_task_tracker
-
-        task_tracker = get_task_tracker()
-        await task_tracker.start(
-            ov_task_id,
-            account_id=ctx.account_id,
-            user_id=ctx.user.user_id,
-        )
-
-        poll_interval = poll_interval_ms / 1000.0
-        deadline = time.perf_counter() + timeout_seconds
-        terminal_statuses = {"succeeded", "failed", "cancelled"}
-
-        try:
-            while time.perf_counter() < deadline:
-                await asyncio.sleep(poll_interval)
-                try:
-                    info = await client.get_task_info(connector_task_key, ctx.api_key)
-                except httpx.HTTPStatusError as exc:
-                    status_code = exc.response.status_code
-                    if status_code not in {408, 429} and status_code < 500:
-                        raise
-                    logger.warning(
-                        "[ResourceService] Transient Connector task polling HTTP error "
-                        f"for {connector_task_key}: {status_code}; retrying"
-                    )
-                    continue
-                except httpx.RequestError as exc:
-                    logger.warning(
-                        "[ResourceService] Transient Connector task polling error "
-                        f"for {connector_task_key}: {exc}; retrying"
-                    )
-                    continue
-                status = (info.get("Status") or info.get("status") or "").lower()
-
-                await task_tracker.update_stage(
-                    ov_task_id,
-                    f"connector:{status}",
-                    account_id=ctx.account_id,
-                    user_id=ctx.user.user_id,
-                )
-
-                if status in terminal_statuses:
-                    if status == "succeeded":
-                        completion: Dict[str, Any] = {
-                            "connector_status": status,
-                            "connector_task_key": connector_task_key,
-                        }
-                        if (reason or "").strip() and link_root_uri:
-                            link_result: Dict[str, Any] = {"root_uri": link_root_uri}
-                            await self._link_resource_reason_memory(
-                                result=link_result,
-                                ctx=ctx,
-                                reason=reason,
-                                source_name=None,
-                                timeout=None,
-                            )
-                            for key in ("memory_linking", "warnings"):
-                                if key in link_result:
-                                    completion[key] = link_result[key]
-                        await task_tracker.complete(
-                            ov_task_id,
-                            completion,
-                            account_id=ctx.account_id,
-                            user_id=ctx.user.user_id,
-                        )
-                        return {"status": "completed", **completion}
-                    error_msg = info.get("ErrorMessage") or info.get("error_message") or status
-                    failure = f"connector task {status}: {error_msg}"
-                    await task_tracker.fail(
-                        ov_task_id,
-                        failure,
-                        account_id=ctx.account_id,
-                        user_id=ctx.user.user_id,
-                    )
-                    return {"status": "failed", "error": failure}
-
-            timeout_msg = f"connector task timed out after {timeout_seconds}s"
-            await task_tracker.fail(
-                ov_task_id,
-                timeout_msg,
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
-            )
-            return {"status": "failed", "error": timeout_msg}
-        except asyncio.CancelledError:
-            await task_tracker.fail(
-                ov_task_id,
-                "background connector task monitoring cancelled",
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
-            )
-            raise
-        except Exception as exc:
-            logger.error(f"[ResourceService] Connector task monitor error: {exc}")
-            await task_tracker.fail(
-                ov_task_id,
-                str(exc),
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
-            )
-            return {"status": "failed", "error": str(exc)}
+        return self._connector_delegate
 
     async def _handle_watch_task_creation(
         self,
         path: str,
         to_uri: str,
+        to_is_directory: bool,
         parent_uri: Optional[str],
         reason: str,
         instruction: str,
         watch_interval: float,
         build_index: bool,
         summarize: bool,
+        processing_mode: ProcessingMode,
         processor_kwargs: Dict[str, Any],
         auth_state: Optional[Dict[str, Any]],
         ctx: RequestContext,
@@ -1876,7 +1647,7 @@ class ResourceService:
             ctx: Request context with user identity
 
         Raises:
-            ConflictError: If target URI is already used by another active task
+            ConflictError: If target URI is actively watched from a different source
         """
         watch_manager = self._get_watch_manager()
         if not watch_manager:
@@ -1889,12 +1660,13 @@ class ResourceService:
             role=str(ctx.role),
         )
         if existing_task:
-            if existing_task.is_active:
+            if existing_task.is_active and existing_task.path != path:
                 raise ConflictError(
                     f"Target URI '{to_uri}' is already being monitored by task {existing_task.task_id}. "
                     f"Please cancel the existing task first.",
                     resource=to_uri,
                 )
+            was_active = existing_task.is_active
             await watch_manager.update_task(
                 task_id=existing_task.task_id,
                 account_id=ctx.account_id,
@@ -1902,18 +1674,21 @@ class ResourceService:
                 role=str(ctx.role),
                 path=path,
                 to_uri=to_uri,
+                to_is_directory=to_is_directory,
                 parent_uri=parent_uri,
                 reason=reason,
                 instruction=instruction,
                 watch_interval=watch_interval,
                 build_index=build_index,
                 summarize=summarize,
+                processing_mode=processing_mode,
                 processor_kwargs=processor_kwargs,
                 auth_state=auth_state,
                 is_active=True,
             )
             logger.info(
-                f"[ResourceService] Reactivated and updated watch task {existing_task.task_id} for {to_uri}"
+                f"[ResourceService] {'Updated active' if was_active else 'Reactivated and updated'} "
+                f"watch task {existing_task.task_id} for {to_uri}"
             )
         else:
             task = await watch_manager.create_task(
@@ -1922,12 +1697,14 @@ class ResourceService:
                 user_id=ctx.user.user_id,
                 original_role=str(ctx.role),
                 to_uri=to_uri,
+                to_is_directory=to_is_directory,
                 parent_uri=parent_uri,
                 reason=reason,
                 instruction=instruction,
                 watch_interval=watch_interval,
                 build_index=build_index,
                 summarize=summarize,
+                processing_mode=processing_mode,
                 processor_kwargs=processor_kwargs,
                 auth_state=auth_state,
             )
@@ -2080,7 +1857,7 @@ class ResourceService:
         finally:
             if wait or not telemetry_id or not monitor_started:
                 request_wait_tracker.cleanup(telemetry_id)
-                unregister_wait_telemetry(telemetry_id)
+                unregister_telemetry(telemetry_id)
 
     async def build_index(
         self, resource_uris: List[str], ctx: RequestContext, **kwargs

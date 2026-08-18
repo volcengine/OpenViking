@@ -4,6 +4,8 @@
 
 源码：[examples/opencode-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-plugin)
 
+工具调用和结果会作为独立的 `tool` part 捕获，`tool_output` 原样上报。截断由服务端负责：超过 `tool_output_externalization.threshold_chars`（默认 `20000`）的输出会写入 session 的 tool-result 存储，part 中只保留 synopsis stub 和 `tool_output_ref`，原文仍可通过 [`/api/v1/sessions/{id}/tool-results`](../api/05-sessions.md#read_tool_result) 读回。
+
 ## 前置条件
 
 - [OpenCode](https://opencode.ai/)
@@ -136,7 +138,6 @@ API key 会由 hooks 和 MCP proxy 作为 `Authorization: Bearer ...` 发送；`
 - `openviking_recall`、`openviking_search`、`openviking_find`
 - `openviking_read`、`openviking_list`、`openviking_grep`、`openviking_glob`
 - `openviking_remember`、`openviking_add_resource`、`openviking_forget`、`openviking_health`
-- `openviking_code_search`、`openviking_code_outline`、`openviking_code_expand`
 
 可以让 OpenCode 搜索或浏览 OpenViking memory。运行时状态和错误日志会写入：
 

@@ -408,9 +408,6 @@ def is_valid_fields_data(field_data_dict: dict, field_meta_dict: dict) -> bool:
 
 
 def fix_fields_data(field_data_dict: dict, field_meta_dict: dict) -> dict:
-    if len(field_data_dict) >= len(field_meta_dict):
-        return field_data_dict
-
     for field_name, field_meta in field_meta_dict.items():
         if field_name not in field_data_dict:
             # Handle both dict access and object access if field_meta is a Model (though here it's likely a dict)

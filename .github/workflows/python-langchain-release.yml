@@ -1,0 +1,131 @@
+name: LangChain Integration Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Publish target"
+        required: true
+        type: choice
+        default: "testpypi"
+        options:
+          - testpypi
+          - pypi
+          - both
+
+permissions:
+  contents: read
+
+jobs:
+  build-package:
+    name: Build langchain-openviking
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'langchain-openviking@')
+    runs-on: ubuntu-24.04
+    outputs:
+      package_version: ${{ steps.version.outputs.package_version }}
+      publish_target: ${{ steps.target.outputs.publish_target }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Fetch all tags
+        run: git fetch --force --tags
+
+      - name: Set publish target
+        id: target
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "publish_target=${{ inputs.target }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish_target=pypi" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install build dependencies
+        working-directory: integrations/langchain
+        run: python -m pip install build setuptools setuptools-scm twine wheel
+
+      - name: Resolve package version
+        id: version
+        working-directory: integrations/langchain
+        run: |
+          PACKAGE_VERSION=$(python -m setuptools_scm)
+          echo "package_version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Resolved package version: $PACKAGE_VERSION"
+
+      - name: Validate release tag
+        if: github.event_name == 'release'
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name }}
+          PACKAGE_VERSION: ${{ steps.version.outputs.package_version }}
+        run: |
+          EXPECTED_TAG="langchain-openviking@${PACKAGE_VERSION}"
+          if [ "$TAG_NAME" != "$EXPECTED_TAG" ]; then
+            echo "Tag $TAG_NAME does not match resolved package version $PACKAGE_VERSION"
+            exit 1
+          fi
+
+      - name: Build distributions
+        working-directory: integrations/langchain
+        run: python -m build
+
+      - name: Validate distributions
+        working-directory: integrations/langchain
+        run: python -m twine check dist/*
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v7
+        with:
+          name: langchain-openviking-distributions
+          path: integrations/langchain/dist/*
+
+  publish-testpypi:
+    name: Publish to TestPyPI
+    needs: [build-package]
+    if: needs.build-package.outputs.publish_target == 'testpypi' || needs.build-package.outputs.publish_target == 'both'
+    runs-on: ubuntu-24.04
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/langchain-openviking
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: langchain-openviking-distributions
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+          verbose: true
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [build-package]
+    if: needs.build-package.outputs.publish_target == 'pypi' || needs.build-package.outputs.publish_target == 'both'
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+      url: https://pypi.org/p/langchain-openviking
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: langchain-openviking-distributions
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+          verbose: true

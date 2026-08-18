@@ -65,10 +65,10 @@ results = client.find(
 | **cases** | `user/memories/cases/` | 用于训练和评估的任务案例 |
 | **trajectories** | `user/memories/trajectories/` | 可复用的任务执行轨迹 |
 | **experiences** | `user/memories/experiences/` | 从执行结果中提炼的可复用经验 |
-| **tools** | `user/memories/tools/` | 工具使用经验与最佳实践 |
-| **skills** | `user/memories/skills/` | 技能执行经验与工作流策略 |
 
 表中的 `user/...` 是当前用户短路径，服务端会将其解析为 `viking://user/{user_id}/...`。当记忆策略允许 Peer 记忆时，支持 Peer 的类型会写入 `viking://user/{user_id}/peers/{peer_id}/memories/...`。记忆类型可通过自定义模板扩展或调整。
+
+Schema 定义的 `memories/tools/` 和 `memories/skills/` 类型已禁用。它们与存放在 `viking://user/{user_id}/skills/{skill_name}/SKILL.md` 下的独立 Skill 不同，后者仍然保留并受支持。
 
 ### 使用
 

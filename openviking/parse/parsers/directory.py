@@ -103,7 +103,7 @@ class DirectoryParser(BaseParser):
             # Don't add git metadata if we already have _source_meta from DataAccessor
             # This is crucial:
             #   1. _source_meta already contains repo_name in org/repo format from GitAccessor
-            #   2. kwargs also has original_source with the full GitHub/GitLab URL
+            #   2. kwargs also has original_source with the full code-hosting URL
             #   3. Calling _add_git_metadata would overwrite repo_name with just directory name
             #      and lose the org prefix!
             if "_source_meta" not in kwargs:
@@ -142,6 +142,14 @@ class DirectoryParser(BaseParser):
                     preserve_structure = True
             processable_files = scan_result.all_processable_files()
             warnings.extend(scan_result.warnings)
+            source_skipped_items = self._source_skipped_items(
+                kwargs.get("_source_meta"),
+                source_path,
+            )
+            warnings.extend(
+                f"Skipped Feishu Drive item {item['path']}: {item.get('reason', 'unknown error')}"
+                for item in source_skipped_items
+            )
 
             viking_fs = self._get_viking_fs()
             temp_uri = self._create_temp_uri()
@@ -164,6 +172,13 @@ class DirectoryParser(BaseParser):
                     warnings=warnings,
                 )
                 result.temp_dir_path = temp_uri
+                result.meta["file_count"] = 0
+                result.meta["dir_name"] = dir_name
+                result.meta["total_processable"] = 0
+                result.meta["processed_files"] = []
+                result.meta["failed_files"] = source_skipped_items
+                result.meta["unsupported_files"] = []
+                result.meta["skipped_files"] = []
                 return result
 
             # ── Phase 2: process each file ────────────────────────────
@@ -204,6 +219,7 @@ class DirectoryParser(BaseParser):
                         warnings,
                         preserve_structure=preserve_structure,
                         import_root=str(source_path),
+                        split_content=kwargs.get("split_content", True),
                     )
 
                 if ok:
@@ -258,7 +274,7 @@ class DirectoryParser(BaseParser):
             result.meta["dir_name"] = dir_name
             result.meta["total_processable"] = len(processable_files)
             result.meta["processed_files"] = processed_files
-            result.meta["failed_files"] = failed_files
+            result.meta["failed_files"] = failed_files + source_skipped_items
             result.meta["unsupported_files"] = unsupported_files
             result.meta["skipped_files"] = skipped_files
 
@@ -328,6 +344,41 @@ class DirectoryParser(BaseParser):
             result.append({"path": path, "status": status})
         return result
 
+    @staticmethod
+    def _source_skipped_items(source_meta: Any, source_path: Path) -> List[Dict[str, str]]:
+        """Normalize skipped items reported by a remote source accessor."""
+        if not isinstance(source_meta, dict):
+            return []
+        items = source_meta.get("feishu_folder_skipped_items") or []
+        if not isinstance(items, list):
+            return []
+
+        normalized: List[Dict[str, str]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            raw_path = str(item.get("path") or item.get("name") or item.get("token") or "unknown")
+            display_path = raw_path
+            try:
+                path = Path(raw_path).resolve(strict=False)
+                if path.is_absolute():
+                    display_path = str(path.relative_to(source_path.resolve(strict=False)))
+            except Exception:
+                pass
+            display_path = display_path.replace("\\", "/")
+
+            normalized.append(
+                {
+                    "path": display_path,
+                    "parser": "feishu",
+                    "status": "failed",
+                    "type": str(item.get("type") or ""),
+                    "token": str(item.get("token") or ""),
+                    "reason": str(item.get("reason") or "unknown error"),
+                }
+            )
+        return normalized
+
     # ------------------------------------------------------------------
     # Parser assignment
     # ------------------------------------------------------------------
@@ -358,6 +409,7 @@ class DirectoryParser(BaseParser):
         warnings: List[str],
         preserve_structure: bool = True,
         import_root: Optional[str] = None,
+        split_content: bool = True,
     ) -> bool:
         """Process one file into the VikingFS directory temp.
 
@@ -388,6 +440,8 @@ class DirectoryParser(BaseParser):
                     # an md may reference shared images outside its own directory
                     # (e.g. ../images/x.gif) that still live inside the import.
                     allowed_media_dirs=[Path(import_root)] if import_root else None,
+                    split_content=split_content,
+                    flatten_single_output=bool(not split_content and preserve_structure),
                 )
                 if sub_result.temp_dir_path:
                     if preserve_structure:
@@ -399,6 +453,7 @@ class DirectoryParser(BaseParser):
                         viking_fs,
                         sub_result.temp_dir_path,
                         dest,
+                        flatten_single_output=bool(not split_content and preserve_structure),
                     )
                 return True
             except Exception as exc:
@@ -466,15 +521,77 @@ class DirectoryParser(BaseParser):
         viking_fs: Any,
         src_temp_uri: str,
         dest_uri: str,
+        *,
+        flatten_single_output: bool = False,
     ) -> None:
         """Move all content from a parser's temp directory into *dest_uri*.
 
         After the move the source temp is deleted. Hidden files stay filtered,
         except the sidecars in :data:`_MERGE_SIDECAR_ALLOWLIST` that downstream
         steps depend on (e.g. ``.image_mappings.json`` for the post-commit
-        image rewrite).
+        image rewrite). In no-split directory imports, a wrapper containing one
+        standalone file is promoted into ``dest_uri``; wrappers with additional
+        files, directories, sidecars, or destination-name conflicts are retained.
         """
         entries = await viking_fs.ls(src_temp_uri, show_all_hidden=True, node_limit=LS_ALL_NODES)
+        merge_entries = [
+            entry
+            for entry in entries
+            if entry.get("name") not in ("", ".", "..")
+            and (
+                DirectoryParser._is_dir_entry(entry)
+                or not entry.get("name", "").startswith(".")
+                or entry.get("name") in _MERGE_SIDECAR_ALLOWLIST
+            )
+        ]
+        if flatten_single_output and len(merge_entries) == 1:
+            wrapper = merge_entries[0]
+            if DirectoryParser._is_dir_entry(wrapper):
+                wrapper_uri = wrapper.get(
+                    "uri",
+                    f"{src_temp_uri.rstrip('/')}/{wrapper['name']}",
+                )
+                wrapper_entries = await viking_fs.ls(
+                    wrapper_uri,
+                    show_all_hidden=True,
+                    node_limit=LS_ALL_NODES,
+                )
+                payloads = [
+                    entry
+                    for entry in wrapper_entries
+                    if entry.get("name") not in ("", ".", "..")
+                    and (
+                        not entry.get("name", "").startswith(".")
+                        or entry.get("name") in _MERGE_SIDECAR_ALLOWLIST
+                    )
+                ]
+                if len(payloads) == 1 and not DirectoryParser._is_dir_entry(payloads[0]):
+                    payload = payloads[0]
+                    await viking_fs.mkdir(dest_uri, exist_ok=True)
+                    destination_entries = await viking_fs.ls(
+                        dest_uri,
+                        show_all_hidden=True,
+                        node_limit=LS_ALL_NODES,
+                    )
+                    destination_names = {
+                        entry.get("name")
+                        for entry in destination_entries
+                        if entry.get("name") not in ("", ".", "..")
+                    }
+                    if payload.get("name") not in destination_names:
+                        src = payload.get(
+                            "uri",
+                            f"{wrapper_uri.rstrip('/')}/{payload['name']}",
+                        )
+                        await viking_fs.move_file(
+                            src,
+                            f"{dest_uri.rstrip('/')}/{payload['name']}",
+                        )
+                        try:
+                            await viking_fs.delete_temp(src_temp_uri)
+                        except Exception:
+                            pass
+                        return
         for entry in entries:
             name = entry.get("name", "")
             if not name or name in (".", ".."):

@@ -127,7 +127,8 @@ ov find "我的回答偏好"
     "agents": {
       "provider": "openai",
       "model": "gpt-4o-mini",
-      "api_key": "<your-model-api-key>"
+      "api_key": "<your-model-api-key>",
+      "max_tokens": 8192
     }
   }
 }
@@ -140,12 +141,14 @@ ov find "我的回答偏好"
 {
   "bot": {
     "agents": {
+      "max_tokens": 8192,
       "credentials": [
         {
           "id": "bot-primary",
           "provider": "volcengine",
           "model": "bot-primary-model",
-          "api_key": "${BOT_PRIMARY_API_KEY}"
+          "api_key": "${BOT_PRIMARY_API_KEY}",
+          "max_tokens": 4096
         },
         {
           "id": "bot-backup",
@@ -165,6 +168,9 @@ ov find "我的回答偏好"
 使用 Bot 自己的模型/credentials；两者都省略时，完整继承根级 `vlm` 的模型、
 credentials 和 failover/failback 设置。配置 Bot credentials 但省略外层 model
 时，每个 credential 都必须配置自己的 `model`。两条 credentials 链不会混用。
+`max_tokens` 是可选项：credential 自己的值优先于 `bot.agents.max_tokens`，未配置
+时继承 Agent 级值；两层都未配置时，VikingBot 不发送该请求字段，由模型服务决定
+默认输出上限。
 
 ### 2. 启动对话
 

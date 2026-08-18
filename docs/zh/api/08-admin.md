@@ -23,7 +23,7 @@ Admin API 用于多租户环境下的账户和用户管理。包括工作区（a
 | 注册/移除用户 | Y | Y（本 account） | N |
 | 列出 agents（已废弃，返回空列表） | Y | Y（本 account） | N |
 | 重新生成 User Key | Y | Y（本 account） | N |
-| 修改用户角色 | Y | N | N |
+| 将用户提升为 ADMIN | Y | Y（本 account） | N |
 
 ## CLI `--sudo` 选项
 
@@ -56,6 +56,66 @@ Admin API 用于多租户环境下的账户和用户管理。包括工作区（a
 - 必须配置 `root_api_key` 才能使用 `--sudo`
 
 ## API 参考
+
+### get_agent_evolution_status
+
+返回调用方所属 account 的 Agent 进化实时状态。ROOT 操作已配置的默认
+account，ADMIN 仅操作自己所属的 account。
+
+**HTTP API**
+
+```
+GET /api/v1/admin/agent-evolution
+```
+
+```bash
+curl http://localhost:1933/api/v1/admin/agent-evolution \
+  -H "X-API-Key: <root-key>"
+```
+
+**响应示例**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "enabled": false,
+    "account_id": "default"
+  },
+  "time": 0.1
+}
+```
+
+`enabled` 优先读取
+`/local/{account_id}/_system/setting.json` 中的 account 级覆盖值；未配置时使用
+`server.agent_evolution.enabled`。Session commit 会实时读取生效值，无需重启。
+
+现有更新接口名保持不变：
+
+```http
+PUT /api/v1/admin/agent-evolution
+Content-Type: application/json
+
+{"enabled": true}
+```
+
+### account_settings
+
+ROOT 可管理任意 account，ADMIN 仅可管理自己所属的 account。通用配置接口仅允许
+显式列入白名单的字段；当前只允许修改 `agent_evolution.enabled`。
+
+```http
+GET /api/v1/admin/accounts/{account_id}/settings
+PATCH /api/v1/admin/accounts/{account_id}/settings
+Content-Type: application/json
+
+{"agent_evolution": {"enabled": true}}
+```
+
+覆盖已有配置前，内核会先备份到
+`/local/{account_id}/_system/setting.backup.json`。
+
+---
 
 ### create_account
 
@@ -125,13 +185,7 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
     "admin_user_id": "gateway-admin"
   }'
 
-# 然后提升为 root，以便执行跨 account 的管理操作
-curl -X PUT http://localhost:1933/api/v1/admin/accounts/platform/users/gateway-admin/role \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: <root-key>" \
-  -d '{"role": "root"}'
-
-# 然后在 trusted 模式下使用
+# 然后在 trusted 模式下使用；管理权限来自 root_api_key
 curl -X POST http://localhost:1933/api/v1/admin/accounts \
   -H "Content-Type: application/json" \
   -H "X-API-Key: <root-key>" \
@@ -435,7 +489,7 @@ ov --sudo admin delete-account acme
 |------|------|------|--------|------|
 | account_id | str | 是 | - | 工作区 ID |
 | user_id | str | 是 | - | 用户 ID |
-| role | str | 否 | "user" | 要分配的角色。`ROOT` 和同 account 的 `ADMIN` 可直接注册 `"user"` 或 `"admin"`。`"root"` 必须通过专门的改角色接口分配。 |
+| role | str | 否 | "user" | 要分配的角色。`ROOT` 和同 account 的 `ADMIN` 可直接注册 `"user"` 或 `"admin"`。ROOT 身份只来自 `server.root_api_key`。 |
 | seed | str | 否 | `null` | 可选的确定性 API Key seed。传入后，key secret 为 `sha256(user_id + "\0" + seed)` |
 | user_config | object | 否 | `null` | 新用户的初始配置。当前支持 `add_targets.resource_uri` 和 `add_targets.skill_uri` |
 
@@ -742,10 +796,10 @@ ov --sudo admin remove-user acme bob
 
 #### 1. API 实现介绍
 
-修改用户角色（仅 ROOT）。
+将账户用户提升为 ADMIN。ROOT 可以操作任意账户；ADMIN 只能操作自己的账户。
 
 **处理流程：**
-1. 验证请求者具有 ROOT 权限
+1. 验证请求者具有 ROOT 或 ADMIN 权限，并限制 ADMIN 只能操作自己的账户
 2. 调用 API Key Manager 更新用户角色
 3. 返回更新后的用户信息
 
@@ -762,11 +816,11 @@ ov --sudo admin remove-user acme bob
 |------|------|------|--------|------|
 | account_id | str | 是 | - | 工作区 ID |
 | user_id | str | 是 | - | 用户 ID |
-| role | str | 是 | - | 新角色："admin" 或 "user" 或 "root" |
+| role | str | 是 | - | 固定为 "admin" |
 
 **说明：**
-- 只有 ROOT 可以修改用户角色
-- 角色可以设置为 "admin"、"user" 或 "root"
+- ROOT 和 ADMIN 可以将用户提升为 ADMIN；ADMIN 只能操作自己的账户
+- 该接口不支持设置 "user" 或 "root"；ROOT 身份只来自 `server.root_api_key`
 
 #### 3. 使用示例
 
@@ -1101,10 +1155,10 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users \
 curl -X GET http://localhost:1933/api/v1/admin/accounts/acme/users \
   -H "X-API-Key: <alice-key>"
 
-# 步骤 4：修改角色（需要 ROOT key）
+# 步骤 4：将用户提升为 admin
 curl -X PUT http://localhost:1933/api/v1/admin/accounts/acme/users/bob/role \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: <root-key>" \
+  -H "X-API-Key: <alice-key>" \
   -d '{"role": "admin"}'
 
 # 步骤 5：重新生成 key

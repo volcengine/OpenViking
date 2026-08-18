@@ -50,7 +50,8 @@
   },
   "skills": [
     "./skills/install-openviking-memory",
-    "./skills/openviking-context-database"
+    "./skills/openviking-context-database",
+    "./skills/ov-experience-memory"
   ],
   "setup": {
     "providers": [
@@ -98,7 +99,7 @@
       "label": "OpenViking API Key",
       "sensitive": true,
       "placeholder": "${OPENVIKING_API_KEY}",
-      "help": "Optional API key for OpenViking server"
+      "help": "Optional API key for OpenViking server. Accepts a plain string, ${ENV_VAR} interpolation, or a SecretRef object ({source: env/file, id}). Prefer a SecretRef so the key is never stored as plaintext in openclaw.json."
     },
     "headers": {
       "label": "Headers",
@@ -260,6 +261,12 @@
       "placeholder": "memory",
       "help": "Agent-visible tool blocklist applied after enabledTools. Accepts the same tool names or groups.",
       "advanced": true
+    },
+    "runtimeQueryConfigPath": {
+      "label": "Runtime Query Config Path",
+      "placeholder": "~/.openclaw/openviking/runtime-query-config.json",
+      "help": "Optional JSON file for /ov-query-config runtime overrides. Empty keeps overrides in memory only.",
+      "advanced": true
     }
   },
   "configSchema": {
@@ -292,7 +299,34 @@
         "description": "Deprecated and ignored. Tenant identity headers are controlled by explicit accountId/userId."
       },
       "apiKey": {
-        "type": "string"
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "Plain API key or ${ENV_VAR} interpolation. For secret-manager-managed keys, prefer the SecretRef object shape below."
+          },
+          {
+            "type": "object",
+            "title": "SecretRef (env)",
+            "description": "Read the API key from an environment variable.",
+            "additionalProperties": false,
+            "required": ["source", "id"],
+            "properties": {
+              "source": { "type": "string", "const": "env", "description": "Look up the key in process.env[id] at plugin load time. Equivalent to ${ENV} interpolation but declarative and visible in the UI." },
+              "id": { "type": "string", "description": "Name of the environment variable. Example: OPENVIKING_API_KEY." }
+            }
+          },
+          {
+            "type": "object",
+            "title": "SecretRef (file)",
+            "description": "Read the API key from a file on disk, e.g. a Kubernetes secretKeyRef mount volume or a 0600-permission managed file. ~ is expanded and trailing whitespace is trimmed.",
+            "additionalProperties": false,
+            "required": ["source", "id"],
+            "properties": {
+              "source": { "type": "string", "const": "file" },
+              "id": { "type": "string", "description": "Absolute file path or ~/relative path. Example: /etc/secrets/openviking.key." }
+            }
+          }
+        ]
       },
       "headers": {
         "type": "object",
@@ -486,6 +520,10 @@
             "type": "string"
           }
         ]
+      },
+      "runtimeQueryConfigPath": {
+        "type": "string",
+        "description": "Optional JSON file path for runtime query config overrides. Empty means in-memory only."
       },
       "agentExperience": {
         "type": "object",

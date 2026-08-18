@@ -6,18 +6,21 @@ File System Service for OpenViking.
 Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, overview, grep, glob.
 """
 
+import asyncio
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from openviking.core.namespace import context_type_for_uri
+from openviking.core.namespace import classify_uri, context_type_for_uri
 from openviking.core.uri_validation import validate_optional_viking_uri, validate_viking_uri
 from openviking.privacy import (
     UserPrivacyConfigService,
     get_skill_name_from_uri,
     restore_skill_content,
 )
+from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
 from openviking.session.memory.memory_updater import MemoryUpdater
+from openviking.session.memory.utils.content_visibility import visible_content
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
@@ -30,6 +33,21 @@ from openviking_cli.exceptions import DeadlineExceededError, NotInitializedError
 from openviking_cli.utils import VikingURI, get_logger
 
 logger = get_logger(__name__)
+
+
+def _may_include_memory_content(uri: str) -> bool:
+    """Return whether a public subtree read can contain memory files."""
+    classification = classify_uri(uri)
+    if classification.is_memory:
+        return True
+    if classification.content_index is not None:
+        return False
+    return not classification.parts or classification.scope in {"user", "agent"}
+
+
+def _visible_grep_content(content: str, uri: str) -> str:
+    return visible_content(content, uri=uri)
+
 
 if TYPE_CHECKING:
     from openviking.resource.watch_manager import WatchManager
@@ -48,12 +66,14 @@ class FSService:
         privacy_config_service: Optional[UserPrivacyConfigService] = None,
         resource_memory_link_service: Optional["ResourceMemoryLinkService"] = None,
         watch_scheduler: Optional["WatchScheduler"] = None,
+        uri_mutation_coordinator: Optional[UriMutationCoordinator] = None,
     ):
         self._viking_fs = viking_fs
         self._vikingdb = vikingdb
         self._privacy_config_service = privacy_config_service
         self._resource_memory_link_service = resource_memory_link_service
         self._watch_scheduler = watch_scheduler
+        self._uri_mutation_coordinator = uri_mutation_coordinator or UriMutationCoordinator()
 
     def set_dependencies(
         self,
@@ -62,6 +82,7 @@ class FSService:
         privacy_config_service: Optional[UserPrivacyConfigService] = None,
         resource_memory_link_service: Optional["ResourceMemoryLinkService"] = None,
         watch_scheduler: Optional["WatchScheduler"] = None,
+        uri_mutation_coordinator: Optional[UriMutationCoordinator] = None,
     ) -> None:
         """Set service dependencies (for deferred initialization)."""
         self._viking_fs = viking_fs
@@ -69,6 +90,8 @@ class FSService:
         self._privacy_config_service = privacy_config_service
         self._resource_memory_link_service = resource_memory_link_service
         self._watch_scheduler = watch_scheduler
+        if uri_mutation_coordinator is not None:
+            self._uri_mutation_coordinator = uri_mutation_coordinator
 
     def _ensure_initialized(self) -> VikingFS:
         """Ensure VikingFS is initialized."""
@@ -291,7 +314,7 @@ class FSService:
         if context_type != "resource":
             return None
         parent = VikingURI(uri).parent
-        return parent.uri if parent else None
+        return parent.uri if parent and parent.scope else None
 
     @staticmethod
     def _memory_overview_parent_uri(uri: str, context_type: str) -> Optional[str]:
@@ -405,17 +428,74 @@ class FSService:
             await viking_fs.mv(from_uri, to_uri, ctx=ctx)
             return
 
-        await watch_manager.sync_tasks_with_resource_move_internal(
-            from_uri,
-            to_uri,
-            account_id=ctx.account_id,
-            move_resource=lambda: viking_fs.mv(from_uri, to_uri, ctx=ctx),
-            rollback_resource=lambda: viking_fs.mv(to_uri, from_uri, ctx=ctx),
+        transaction_task = asyncio.create_task(
+            self._move_resource_with_watch_transaction(
+                viking_fs,
+                watch_manager,
+                from_uri,
+                to_uri,
+                ctx,
+            )
         )
+        try:
+            await asyncio.shield(transaction_task)
+        except asyncio.CancelledError:
+            while not transaction_task.done():
+                try:
+                    await asyncio.shield(transaction_task)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            try:
+                transaction_task.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.error(
+                    "Resource move transaction failed while caller was cancelled",
+                    exc_info=True,
+                )
+            raise
 
-    async def _sync_watch_after_rm(
-        self, uri: str, *, account_id: str, context_type: str
+    async def _move_resource_with_watch_transaction(
+        self,
+        viking_fs: VikingFS,
+        watch_manager: "WatchManager",
+        from_uri: str,
+        to_uri: str,
+        ctx: RequestContext,
     ) -> None:
+        async with self._uri_mutation_coordinator.mutation(
+            ctx.account_id,
+            [from_uri, to_uri],
+        ):
+            await watch_manager.validate_target_prefix_rewrite_internal(
+                from_uri,
+                to_uri,
+                account_id=ctx.account_id,
+            )
+            await viking_fs.mv(from_uri, to_uri, ctx=ctx)
+            try:
+                await watch_manager.rewrite_target_prefix_internal(
+                    from_uri,
+                    to_uri,
+                    account_id=ctx.account_id,
+                )
+            except Exception as commit_error:
+                try:
+                    await viking_fs.mv(to_uri, from_uri, ctx=ctx)
+                except Exception as rollback_error:
+                    logger.error(
+                        "Failed to roll back resource move from %s to %s",
+                        to_uri,
+                        from_uri,
+                        exc_info=True,
+                    )
+                    raise rollback_error from commit_error
+                raise
+
+    async def _sync_watch_after_rm(self, uri: str, *, account_id: str, context_type: str) -> None:
         if context_type != "resource":
             return
         if is_watch_task_control_uri(uri):
@@ -493,6 +573,20 @@ class FSService:
         sliced = lines[offset:] if limit == -1 else lines[offset : offset + limit]
         return "".join(sliced)
 
+    async def read_visible(
+        self,
+        uri: str,
+        ctx: RequestContext,
+        offset: int = 0,
+        limit: int = -1,
+    ) -> str:
+        """Read public content, hiding reserved metadata from memory files."""
+        uri = validate_viking_uri(uri)
+        if not classify_uri(uri).is_memory:
+            return await self.read(uri, ctx=ctx, offset=offset, limit=limit)
+        content = await self.read(uri, ctx=ctx)
+        return visible_content(content, uri=uri, offset=offset, limit=limit)
+
     async def abstract(self, uri: str, ctx: RequestContext) -> str:
         """Read L0 abstract (.abstract.md)."""
         viking_fs = self._ensure_initialized()
@@ -519,15 +613,16 @@ class FSService:
         viking_fs = self._ensure_initialized()
         uri = validate_viking_uri(uri)
         exclude_uri = validate_optional_viking_uri(exclude_uri, field_name="exclude_uri") or None
-        return await viking_fs.grep(
-            uri,
-            pattern,
-            exclude_uri=exclude_uri,
-            case_insensitive=case_insensitive,
-            node_limit=node_limit,
-            level_limit=level_limit,
-            ctx=ctx,
-        )
+        kwargs = {
+            "exclude_uri": exclude_uri,
+            "case_insensitive": case_insensitive,
+            "node_limit": node_limit,
+            "level_limit": level_limit,
+            "ctx": ctx,
+        }
+        if _may_include_memory_content(uri):
+            kwargs["content_transform"] = _visible_grep_content
+        return await viking_fs.grep(uri, pattern, **kwargs)
 
     async def glob(
         self,
@@ -555,6 +650,7 @@ class FSService:
         mode: str = "replace",
         wait: bool = False,
         timeout: Optional[float] = None,
+        processing_mode: str = "semantic_and_vectors",
     ) -> Dict[str, Any]:
         """Write to an existing file and refresh semantics/vectors."""
         uri = validate_viking_uri(uri)
@@ -565,6 +661,28 @@ class FSService:
             content=content,
             ctx=ctx,
             mode=mode,
+            wait=wait,
+            timeout=timeout,
+            processing_mode=processing_mode,
+        )
+
+    async def batch_write(
+        self,
+        *,
+        root_uri: str,
+        operations: list[dict[str, Any]],
+        ctx: RequestContext,
+        wait: bool = True,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Apply a preconditioned multi-file write and aggregate downstream refresh."""
+        root_uri = validate_viking_uri(root_uri, field_name="root_uri")
+        viking_fs = self._ensure_initialized()
+        coordinator = ContentWriteCoordinator(viking_fs=viking_fs, vikingdb=self._vikingdb)
+        return await coordinator.batch_write(
+            root_uri=root_uri,
+            operations=operations,
+            ctx=ctx,
             wait=wait,
             timeout=timeout,
         )
@@ -601,9 +719,7 @@ class FSService:
     ) -> Dict[str, Any]:
         """Forward to VikingFS.commit. See viking_fs.commit for semantics."""
         viking_fs = self._ensure_initialized()
-        validated = (
-            [validate_viking_uri(p) for p in paths] if paths is not None else None
-        )
+        validated = [validate_viking_uri(p) for p in paths] if paths is not None else None
         return await viking_fs.commit(
             message=message,
             paths=validated,
@@ -671,12 +787,19 @@ class FSService:
         path: str,
         from_ref: Optional[str],
         to_ref: str,
+        raw: bool = True,
         ctx: RequestContext,
     ) -> Dict[str, Any]:
         """Return a unified text diff for one path between two snapshots."""
         viking_fs = self._ensure_initialized()
         path = validate_viking_uri(path, field_name="path")
-        return await viking_fs.diff(path=path, from_ref=from_ref, to_ref=to_ref, ctx=ctx)
+        return await viking_fs.diff(
+            path=path,
+            from_ref=from_ref,
+            to_ref=to_ref,
+            raw=raw,
+            ctx=ctx,
+        )
 
     async def log(
         self,
@@ -700,9 +823,7 @@ class FSService:
         viking_fs = self._ensure_initialized()
         return await viking_fs.get_gitignore(ctx=ctx)
 
-    async def set_gitignore(
-        self, *, content: str, ctx: RequestContext
-    ) -> None:
+    async def set_gitignore(self, *, content: str, ctx: RequestContext) -> None:
         """Forward to VikingFS.set_gitignore. Writes the account .ovgitignore
         control file (validates the size limit)."""
         viking_fs = self._ensure_initialized()

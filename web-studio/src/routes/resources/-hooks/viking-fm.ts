@@ -90,6 +90,7 @@ export function useVikingFilePreview(
 ) {
   const maxAutoReadBytes = policy.maxAutoReadBytes ?? 2 * 1024 * 1024
   const defaultReadLimit = policy.defaultReadLimit ?? 500
+  const requireKnownSize = policy.requireKnownSize ?? false
   const effectiveReadOptions = useMemo(
     () => ({
       offset: readOptions.offset ?? 0,
@@ -102,9 +103,9 @@ export function useVikingFilePreview(
   const autoRead = useMemo(
     () =>
       entry
-        ? shouldAutoRead(entry, maxAutoReadBytes)
+        ? shouldAutoRead(entry, maxAutoReadBytes, requireKnownSize)
         : { shouldRead: false as const },
-    [entry, maxAutoReadBytes],
+    [entry, maxAutoReadBytes, requireKnownSize],
   )
 
   const readQuery = useQuery({
@@ -131,10 +132,10 @@ export function useVikingFilePreview(
         fileType,
         shouldAutoRead: false,
         reason: autoRead.reason,
-        content: '',
-        offset: effectiveReadOptions.offset,
-        limit: effectiveReadOptions.limit,
-        truncated: true,
+        content: readQuery.data?.content || '',
+        offset: readQuery.data?.offset ?? effectiveReadOptions.offset,
+        limit: readQuery.data?.limit ?? effectiveReadOptions.limit,
+        truncated: readQuery.data?.truncated ?? true,
       }
     }
 
@@ -152,7 +153,9 @@ export function useVikingFilePreview(
   return {
     ...readQuery,
     preview,
-    canLoadContent: Boolean(entry) && autoRead.shouldRead,
+    isContentLoaded: readQuery.data !== undefined,
+    canLoadContent:
+      Boolean(entry) && !autoRead.shouldRead && autoRead.reason !== 'binary',
   }
 }
 

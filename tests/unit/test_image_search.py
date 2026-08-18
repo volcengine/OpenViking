@@ -1,9 +1,16 @@
+import base64
+import io
+
+from PIL import Image
+
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
 from openviking.utils.image_search import (
     build_multimodal_embedding_input,
     image_bytes_to_data_uri,
+    image_bytes_to_model_data_uri,
     normalize_client_image_input,
 )
+from openviking_cli.utils.config.parser_config import ImageConfig
 
 
 class TextOnlyEmbedder(DenseEmbedderBase):
@@ -36,3 +43,24 @@ def test_image_helpers_accept_base64_bytes_and_image_uris(tmp_path):
 
     assert image_bytes_to_data_uri(b"png").startswith("data:image/png;base64,")
     assert normalize_client_image_input(image_path).startswith("data:image/jpeg;base64,")
+
+
+def test_model_image_input_downsamples_jpeg_incompatible_modes():
+    buf = io.BytesIO()
+    Image.new("LA", (80, 220), color=(255, 255)).save(buf, format="PNG")
+
+    data_uri = image_bytes_to_model_data_uri(
+        buf.getvalue(),
+        "large-la.png",
+        config=ImageConfig(
+            preview_max_dimension=64,
+            max_file_size_mb=100.0,
+            large_image_threshold_dimension=100,
+        ),
+    )
+
+    assert data_uri.startswith("data:image/jpeg;base64,")
+    _, encoded = data_uri.split(";base64,", 1)
+    with Image.open(io.BytesIO(base64.b64decode(encoded))) as img:
+        assert img.mode == "RGB"
+        assert max(img.size) <= 64

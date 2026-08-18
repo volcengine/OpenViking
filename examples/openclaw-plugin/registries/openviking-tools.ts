@@ -73,6 +73,8 @@ const OPENVIKING_TOOL_GROUP_ORDER: readonly OpenVikingToolGroup[] = [
 export const OPENVIKING_TOOL_GROUPS: Record<string, readonly OpenVikingToolName[]> = {
   all: OPENVIKING_ALL_TOOL_NAMES,
   default: OPENVIKING_DEFAULT_ENABLED_TOOL_NAMES,
+  // Migration alias for the removed dedicated Experience tools.
+  experience: ["ov_search", "ov_read"],
   ...Object.fromEntries(
     OPENVIKING_TOOL_GROUP_ORDER.map((group) => [
       group,

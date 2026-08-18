@@ -60,6 +60,7 @@ def test_http_observability_middleware_updates_route_template_after_routing(monk
 
     @app.middleware("http")
     async def _mw(request, call_next):
+        request.state.request_id = "test-request"
         return await http_mw(request, call_next)
 
     @app.get("/hello")
@@ -67,9 +68,11 @@ def test_http_observability_middleware_updates_route_template_after_routing(monk
         return {"ok": True}
 
     with TestClient(app) as client:
-        resp = client.get("/hello")
+        resp = client.get("/hello?token=top-secret")
         assert resp.status_code == 200
 
     root_attrs = captured["root_attrs"]
     assert root_attrs.http_route == "/hello"
+    assert root_attrs.url_query is None
+    assert "url.query" not in root_attrs.to_otel_attributes()
     assert "GET /hello" in dummy_span.updated_names

@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Content endpoints for OpenViking HTTP Server."""
 
+from typing import Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, Query
 from fastapi.responses import Response as FastAPIResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from openviking.core.namespace import (
     canonicalize_uri,
@@ -17,6 +18,7 @@ from openviking.core.namespace import (
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_viking_uri
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
+from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.server.auth import (
     get_request_context,
     require_role,
@@ -44,6 +46,47 @@ class WriteContentRequest(BaseModel):
     wait: bool = False
     timeout: float | None = None
     telemetry: TelemetryRequest = False
+    processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
+
+
+class BatchWritePrecondition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["create_if_absent", "replace_if_hash"]
+    base_hash: str | None = None
+
+    @model_validator(mode="after")
+    def validate_hash_shape(self) -> "BatchWritePrecondition":
+        if self.kind == "replace_if_hash" and not self.base_hash:
+            raise ValueError("base_hash is required for replace_if_hash")
+        if self.kind == "create_if_absent" and self.base_hash is not None:
+            raise ValueError("base_hash is not allowed for create_if_absent")
+        return self
+
+
+class BatchWriteOperation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    uri: str
+    content: str | None = None
+    content_base64: str | None = None
+    precondition: BatchWritePrecondition
+
+    @model_validator(mode="after")
+    def validate_content_shape(self) -> "BatchWriteOperation":
+        if (self.content is None) == (self.content_base64 is None):
+            raise ValueError("exactly one of content or content_base64 is required")
+        return self
+
+
+class BatchWriteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    root_uri: str
+    operations: list[BatchWriteOperation]
+    wait: bool = True
+    timeout: float | None = None
+    telemetry: TelemetryRequest = False
 
 
 class SetTagsRequest(BaseModel):
@@ -65,6 +108,8 @@ class ReindexRequest(BaseModel):
     mode: str = "vectors_only"
     wait: bool = True
     dry_run: bool = False
+    tags: list[str] | None = None
+    tag_mode: str = "replace"
 
 
 router = APIRouter(prefix="/api/v1/content", tags=["content"])
@@ -109,7 +154,10 @@ async def read(
     service = get_service()
     uri = resolve_path_variables(uri)
     try:
-        result = await service.fs.read(uri, ctx=_ctx, offset=offset, limit=limit)
+        if raw:
+            result = await service.fs.read(uri, ctx=_ctx, offset=offset, limit=limit)
+        else:
+            result = await service.fs.read_visible(uri, ctx=_ctx, offset=offset, limit=limit)
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:
@@ -117,21 +165,6 @@ async def read(
         if mapped is not None:
             raise mapped from e
         raise
-
-    if not raw:
-        # 清理MEMORY_FIELDS隐藏注释（v2记忆加工过程中的临时内部数据，不暴露给外部用户）
-        if isinstance(result, bytes):
-            text = result.decode("utf-8")
-        elif isinstance(result, str):
-            text = result
-        else:
-            text = None
-
-        if text:
-            from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
-
-            mf = MemoryFileUtils.read(text)
-            result = mf.content
 
     return Response(status="ok", result=result)
 
@@ -228,6 +261,36 @@ async def write(
             mode=request.mode,
             wait=request.wait,
             timeout=request.timeout,
+            processing_mode=request.processing_mode,
+        ),
+    )
+    return Response(
+        status="ok",
+        result=execution.result,
+        telemetry=execution.telemetry,
+    ).model_dump(exclude_none=True)
+
+
+@router.post("/batch-write")
+async def batch_write(
+    request: BatchWriteRequest = Body(...),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Apply preconditioned file writes and refresh their indexes as one request."""
+    service = get_service()
+    root_uri = resolve_path_variables(request.root_uri)
+    operations = [operation.model_dump(exclude_none=True) for operation in request.operations]
+    for operation in operations:
+        operation["uri"] = resolve_path_variables(operation["uri"])
+    execution = await run_operation(
+        operation="content.batch_write",
+        telemetry=request.telemetry,
+        fn=lambda: service.fs.batch_write(
+            root_uri=root_uri,
+            operations=operations,
+            ctx=_ctx,
+            wait=request.wait,
+            timeout=request.timeout,
         ),
     )
     return Response(
@@ -275,11 +338,17 @@ async def reindex(
     uri = _validate_reindex_uri(uri)
     uri = _authorize_reindex_uri(uri, ctx)
     service = get_service()
+    reindex_kwargs = {
+        "uri": uri,
+        "mode": body.mode,
+        "wait": body.wait,
+        "dry_run": body.dry_run,
+        "ctx": ctx,
+    }
+    if body.tags is not None:
+        reindex_kwargs["tags"] = body.tags
+        reindex_kwargs["tag_mode"] = body.tag_mode
     result = await service.reindex(
-        uri=uri,
-        mode=body.mode,
-        wait=body.wait,
-        dry_run=body.dry_run,
-        ctx=ctx,
+        **reindex_kwargs,
     )
     return Response(status="ok", result=result)

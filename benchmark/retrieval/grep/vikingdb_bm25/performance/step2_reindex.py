@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Step 2 (Performance): Build vector indexes for imported data.
+"""Step 2 (Performance): Optionally rebuild vector indexes for imported data.
 
 Submits async reindex tasks for each first-level subdirectory via
 SyncHTTPClient.reindex(wait=False), with a concurrency limit of 2
@@ -7,7 +7,7 @@ running tasks.  When a task completes, the next one is submitted.
 This avoids tree-lock conflicts and prevents resource exhaustion.
 
 Prerequisites:
-  1. Run step1_add_resource.py to import data (without indexing)
+  1. Run step1_add_resource.py to import data in vectors-only mode
   2. Start openviking-server manually
 
 Usage:

@@ -1,6 +1,8 @@
 import type { TaskTimestamp } from './task-time'
 
 export type TaskStatus =
+  | 'cancelled'
+  | 'cancelling'
   | 'completed'
   | 'failed'
   | 'pending'
@@ -37,6 +39,8 @@ export function normalizeTasks(value: unknown): TaskRecord[] {
 
 export function normalizeTaskStatus(status: string | undefined): TaskStatus {
   if (
+    status === 'cancelled' ||
+    status === 'cancelling' ||
     status === 'completed' ||
     status === 'failed' ||
     status === 'pending' ||
@@ -45,6 +49,15 @@ export function normalizeTaskStatus(status: string | undefined): TaskStatus {
     return status
   }
   return 'unknown'
+}
+
+export function isActiveTaskStatus(status: string | undefined): boolean {
+  const normalized = normalizeTaskStatus(status)
+  return (
+    normalized === 'pending' ||
+    normalized === 'running' ||
+    normalized === 'cancelling'
+  )
 }
 
 export function hasTaskResult(result: unknown): boolean {

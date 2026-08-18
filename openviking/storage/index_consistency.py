@@ -135,6 +135,9 @@ def _file_candidates(
     for entry in entries:
         if entry.get("isDir"):
             continue
+        size = entry.get("size")
+        if isinstance(size, int) and not isinstance(size, bool) and size == 0:
+            continue
         uri = _entry_uri(root_uri, entry)
         if not _is_index_scope(uri):
             continue
