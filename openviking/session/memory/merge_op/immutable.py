@@ -25,7 +25,7 @@ class ImmutableOp(MergeOpBase):
     def get_output_schema_description(self, field_description: str) -> str:
         return f"Immutable field '{field_description}' - can only be set once, cannot be modified"
 
-    def apply(self, current_value: Any, patch_value: Any) -> Any:
+    async def apply(self, current_value: Any, patch_value: Any) -> Any:
         if current_value is None:
             return patch_value
         # Keep current value if already set

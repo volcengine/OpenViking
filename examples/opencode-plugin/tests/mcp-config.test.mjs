@@ -26,10 +26,20 @@ test("injectOpenVikingMcpConfig respects explicit disabled MCP server", () => {
   assert.deepEqual(config.mcp.openviking, { enabled: false })
 })
 
+test("injectOpenVikingMcpConfig leaves OpenCode MCP config untouched in hook-only mode", () => {
+  const config = { mcp: { external: { type: "remote", url: "https://example.com/mcp" } } }
+
+  assert.equal(injectOpenVikingMcpConfig(config, "/tmp/openviking-plugin", false), false)
+  assert.deepEqual(config, {
+    mcp: { external: { type: "remote", url: "https://example.com/mcp" } },
+  })
+})
+
 test("OpenCode plugin keeps tools on MCP rather than native tool hook", async () => {
   const source = await readFile(join(testDir, "../index.mjs"), "utf8")
 
   assert.match(source, /injectOpenVikingMcpConfig/)
+  assert.match(source, /injectOpenVikingMcpConfig\(opencodeConfig, pluginRoot, config\.mcp\.enabled\)/)
   assert.doesNotMatch(source, /createMemoryTools/)
   assert.doesNotMatch(source, /createCodeTools/)
   assert.doesNotMatch(source, /\btool:\s*\{/)

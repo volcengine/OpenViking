@@ -65,10 +65,10 @@ Memories are durable knowledge learned from interactions and task execution. The
 | **cases** | `user/memories/cases/` | Task cases used for training and evaluation |
 | **trajectories** | `user/memories/trajectories/` | Reusable task-execution trajectories |
 | **experiences** | `user/memories/experiences/` | Reusable experience distilled from execution outcomes |
-| **tools** | `user/memories/tools/` | Tool usage knowledge and best practices |
-| **skills** | `user/memories/skills/` | Skill-execution knowledge and workflow strategies |
 
 The `user/...` entries above are current-user short paths. The server resolves them to `viking://user/{user_id}/...`. When the memory policy permits Peer memory, supported types may instead be written under `viking://user/{user_id}/peers/{peer_id}/memories/...`. Applications can extend or adjust memory types with custom templates.
+
+The schema-defined `memories/tools/` and `memories/skills/` types are disabled. They are separate from standalone Skills stored under `viking://user/{user_id}/skills/{skill_name}/SKILL.md`, which remain supported.
 
 ### Usage
 

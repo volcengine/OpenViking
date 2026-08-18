@@ -17,12 +17,12 @@ import pytest
 import pytest_asyncio
 import uvicorn
 
-from openviking import AsyncOpenViking
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
 from openviking.server.identity import RequestContext, Role
 from openviking.service.core import OpenVikingService
+from openviking.service.task_tracker import get_task_tracker
 from openviking.storage.queuefs import QueueManager, SessionCommitMsg, get_queue_manager
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig
@@ -90,10 +90,20 @@ def _install_session_commit_queue_fallback(service: OpenVikingService, monkeypat
     """Execute SessionCommit jobs when MockLocalAGFS cannot dequeue QueueFS entries."""
     queue_manager = get_queue_manager()
     original_enqueue = queue_manager.enqueue
+    queued_commit_tasks: set[str] = set()
+    tracker = get_task_tracker()
+    original_has_work = tracker.has_work
+    monkeypatch.setattr(
+        tracker,
+        "has_work",
+        lambda task_id: task_id in queued_commit_tasks or original_has_work(task_id),
+    )
 
     async def enqueue_with_session_commit_fallback(queue_name, data):
         if queue_name != QueueManager.SESSION_COMMIT:
             return await original_enqueue(queue_name, data)
+
+        queued_commit_tasks.add(data["task_id"])
 
         async def process_commit() -> None:
             await asyncio.sleep(0)
@@ -107,8 +117,20 @@ def _install_session_commit_queue_fallback(service: OpenVikingService, monkeypat
                 msg.session_id,
                 session_uri=msg.session_uri,
             )
+            while True:
+                phase1 = await queued_session._read_phase1_meta(msg.archive_uri)
+                if phase1.get("status") == "ready" or await queued_session._archive_file_exists(
+                    msg.archive_uri,
+                    ".failed.json",
+                ):
+                    break
+                await asyncio.sleep(0)
             await queued_session.load()
-            await queued_session.resume_queued_commit(msg)
+            try:
+                while not await queued_session.resume_queued_commit(msg):
+                    await asyncio.sleep(0)
+            finally:
+                queued_commit_tasks.discard(msg.task_id)
 
         asyncio.create_task(process_commit())
         return data["task_id"]
@@ -165,7 +187,7 @@ def upload_temp_dir(temp_dir: Path, monkeypatch) -> Path:
 
 @pytest_asyncio.fixture(scope="function")
 async def service(temp_dir: Path, monkeypatch):
-    """Create and initialize an OpenVikingService in embedded mode."""
+    """Create and initialize an OpenVikingService for in-process API tests."""
     fake_embedder_cls = _install_fake_embedder(monkeypatch)
     _install_fake_vlm(monkeypatch)
     svc = OpenVikingService(
@@ -228,7 +250,6 @@ async def client_with_resource(client, service, sample_markdown_file):
 @pytest_asyncio.fixture(scope="function")
 async def running_server(temp_dir: Path, monkeypatch):
     """Start a real uvicorn server in a background thread."""
-    await AsyncOpenViking.reset()
     fake_embedder_cls = _install_fake_embedder(monkeypatch)
     _install_fake_vlm(monkeypatch)
 
@@ -289,4 +310,3 @@ async def running_server(temp_dir: Path, monkeypatch):
     server.should_exit = True
     thread.join(timeout=5)
     await svc.close()
-    await AsyncOpenViking.reset()

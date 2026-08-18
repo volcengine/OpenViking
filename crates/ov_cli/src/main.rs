@@ -94,7 +94,7 @@ impl CliContext {
 
     pub fn get_client_with_timeout(&self, timeout_secs: Option<f64>) -> client::HttpClient {
         let auth = self.config.effective_auth(self.sudo);
-        client::HttpClient::new(
+        let mut client = client::HttpClient::new(
             &self.config.url,
             auth.api_key,
             auth.account,
@@ -104,7 +104,34 @@ impl CliContext {
             self.profile.unwrap_or(self.config.profile),
             self.config.effective_extra_headers(),
         )
-        .with_gateway_token(self.config.effective_gateway_token())
+        .with_gateway_token(self.config.effective_gateway_token());
+
+        // Add LDAP or OIDC authentication if configured
+        if let Some(auth_mode) = &self.config.auth_mode {
+            match auth_mode.as_str() {
+                "ldap" => {
+                    client = client.with_auth_mode(Some("ldap".to_string()));
+                    if let Some(ldap_username) = &self.config.ldap_username {
+                        client = client.with_ldap_username(Some(ldap_username.clone()));
+                    }
+                    if let Some(ldap_password) = &self.config.ldap_password {
+                        client = client.with_ldap_password(Some(ldap_password.clone()));
+                    }
+                }
+                "oidc" => {
+                    client = client.with_auth_mode(Some("oidc".to_string()));
+                    if let Some(token) = &self.config.oidc_token {
+                        client = client.with_oidc_token(Some(token.clone()));
+                    } else if let Some(api_key) = &self.config.api_key {
+                        // Fallback: use api_key as OIDC token if it looks like a JWT
+                        client = client.with_oidc_token(Some(api_key.clone()));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        client
     }
 }
 
@@ -347,7 +374,7 @@ enum Commands {
         /// Wait until processing is complete
         #[arg(long, help_heading = "Common options")]
         wait: bool,
-        /// Wait timeout in seconds (only used with --wait)
+        /// Request timeout in seconds. Used with --wait and by Manifest private Git imports
         #[arg(
             long,
             value_parser = config::parse_positive_timeout,
@@ -619,6 +646,14 @@ enum Commands {
         /// Wait for async processing to finish
         #[arg(long, default_value = "false", help_heading = "Common options")]
         wait: bool,
+        /// Content post-write processing mode
+        #[arg(
+            long = "processing-mode",
+            default_value = "semantic_and_vectors",
+            value_parser = ["semantic_and_vectors", "vectors_only"],
+            help_heading = "Advanced options"
+        )]
+        processing_mode: String,
         /// Optional wait timeout in seconds
         #[arg(
             long,
@@ -1045,6 +1080,13 @@ enum Commands {
             value_name = "seconds"
         )]
         timeout: Option<f64>,
+        /// Server-side runtime limit in seconds; reaching it saves partial resource output
+        #[arg(
+            long = "runtime-timeout",
+            value_parser = config::parse_positive_timeout,
+            value_name = "seconds"
+        )]
+        runtime_timeout: Option<f64>,
     },
 
     // --- Status & Observability ---
@@ -1134,6 +1176,17 @@ enum Commands {
         /// Preview prune_orphans deletions without mutating vectors
         #[arg(long, help_heading = "Common options")]
         dry_run: bool,
+        /// Explicit k=v retrieval tag for rebuilt vector records. Can be repeated.
+        #[arg(long = "tag", value_name = "k=v", help_heading = "Common options")]
+        tags: Vec<String>,
+        /// Tag update mode when --tag is provided
+        #[arg(
+            long = "tag-mode",
+            default_value = "replace",
+            value_parser = ["replace", "append"],
+            help_heading = "Common options"
+        )]
+        tag_mode: String,
     },
 }
 
@@ -1345,7 +1398,24 @@ enum ObserverCommands {
 #[derive(Subcommand)]
 enum SessionCommands {
     /// Create a new session
-    New,
+    New {
+        /// Optional session ID
+        #[arg(long = "session-id", value_name = "session-id")]
+        session_id: Option<String>,
+        /// Default event-memory tags as comma-separated key=value pairs
+        #[arg(long = "event-tags", value_name = "key=value", value_delimiter = ',')]
+        event_tags: Vec<String>,
+        /// Auto-commit policy as a JSON object
+        #[arg(
+            long = "auto-commit-policy-json",
+            value_name = "json",
+            conflicts_with = "no_auto_commit"
+        )]
+        auto_commit_policy_json: Option<String>,
+        /// Disable automatic commits for this session
+        #[arg(long = "no-auto-commit", conflicts_with = "auto_commit_policy_json")]
+        no_auto_commit: bool,
+    },
     /// List sessions
     List,
     /// Get session details
@@ -1402,11 +1472,80 @@ enum SessionCommands {
         #[arg(value_name = "messages-json")]
         messages: String,
     },
+    /// Update mutable session configuration
+    Config {
+        #[command(subcommand)]
+        action: SessionConfigCommands,
+    },
     /// Commit a session (archive messages and extract memories)
     Commit {
         /// Session ID
         #[arg(value_name = "session-id")]
         session_id: String,
+        /// Event-memory tags for this commit as comma-separated key=value pairs
+        #[arg(
+            long = "event-tags",
+            value_name = "key=value",
+            value_delimiter = ',',
+            conflicts_with = "no_event_tags"
+        )]
+        event_tags: Vec<String>,
+        /// Do not apply the session's default event tags to this commit
+        #[arg(long = "no-event-tags", conflicts_with = "event_tags")]
+        no_event_tags: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum SessionConfigCommands {
+    /// Set mutable session configuration
+    Set {
+        /// Session ID
+        #[arg(value_name = "session-id")]
+        session_id: String,
+        /// Default event-memory tags as comma-separated key=value pairs
+        #[arg(
+            long = "event-tags",
+            value_name = "key=value",
+            value_delimiter = ',',
+            required_unless_present_any = [
+                "no_event_tags",
+                "auto_commit_policy_json",
+                "no_auto_commit"
+            ],
+            conflicts_with = "no_event_tags"
+        )]
+        event_tags: Vec<String>,
+        /// Clear the session's default event-memory tags
+        #[arg(
+            long = "no-event-tags",
+            required_unless_present_any = [
+                "event_tags",
+                "auto_commit_policy_json",
+                "no_auto_commit"
+            ],
+            conflicts_with = "event_tags"
+        )]
+        no_event_tags: bool,
+        /// Auto-commit policy fields as a JSON object
+        #[arg(
+            long = "auto-commit-policy-json",
+            value_name = "json",
+            required_unless_present_any = ["event_tags", "no_event_tags", "no_auto_commit"],
+            conflicts_with = "no_auto_commit"
+        )]
+        auto_commit_policy_json: Option<String>,
+        /// Disable automatic commits for this session
+        #[arg(
+            long = "no-auto-commit",
+            required_unless_present_any = [
+                "event_tags",
+                "no_event_tags",
+                "auto_commit_policy_json"
+            ],
+            conflicts_with = "auto_commit_policy_json"
+        )]
+        no_auto_commit: bool,
     },
 }
 
@@ -3317,6 +3456,7 @@ async fn main() {
             reason,
             wait,
             timeout,
+            runtime_timeout,
         } => {
             let client = ctx.get_client();
             commands::compile::run(
@@ -3327,6 +3467,7 @@ async fn main() {
                 reason,
                 wait,
                 timeout,
+                runtime_timeout,
                 ctx.output_format,
                 ctx.compact,
             )
@@ -3369,6 +3510,7 @@ async fn main() {
             append,
             mode,
             wait,
+            processing_mode,
             timeout,
         } => {
             let effective_mode = if let Some(m) = mode {
@@ -3378,8 +3520,17 @@ async fn main() {
             } else {
                 "replace".to_string()
             };
-            handlers::handle_write(uri, content, from_file, effective_mode, wait, timeout, ctx)
-                .await
+            handlers::handle_write(
+                uri,
+                content,
+                from_file,
+                effective_mode,
+                wait,
+                timeout,
+                processing_mode,
+                ctx,
+            )
+            .await
         }
         Commands::SetTags {
             uri,
@@ -3392,7 +3543,9 @@ async fn main() {
             mode,
             wait,
             dry_run,
-        } => handlers::handle_reindex(uri, mode, wait, dry_run, ctx).await,
+            tags,
+            tag_mode,
+        } => handlers::handle_reindex(uri, mode, wait, dry_run, tags, tag_mode, ctx).await,
         Commands::Get { uri, local_path } => handlers::handle_get(uri, local_path, ctx).await,
         Commands::Find {
             query,
@@ -3705,6 +3858,8 @@ mod tests {
             "--wait",
             "--timeout",
             "10",
+            "--runtime-timeout",
+            "86400",
         ])
         .expect("compile flags should parse");
         match cli.command {
@@ -3714,6 +3869,7 @@ mod tests {
                 reason,
                 wait,
                 timeout,
+                runtime_timeout,
                 ..
             } => {
                 assert_eq!(from_uris.len(), 3);
@@ -3721,6 +3877,7 @@ mod tests {
                 assert!(reason.is_none());
                 assert!(wait);
                 assert_eq!(timeout, Some(10.0));
+                assert_eq!(runtime_timeout, Some(86_400.0));
             }
             _ => panic!("expected compile command"),
         }
@@ -4118,6 +4275,22 @@ mod tests {
         assert!(help.contains("--progress"));
         assert!(help.contains("--no-progress"));
         assert!(help.contains("--verbose"));
+        assert!(!help.contains("--parse-mode"));
+        assert!(help.contains("--args"));
+    }
+
+    #[test]
+    fn cli_add_resource_rejects_top_level_parse_mode() {
+        assert!(
+            Cli::try_parse_from([
+                "ov",
+                "add-resource",
+                "./README.md",
+                "--parse-mode",
+                "no_split",
+            ])
+            .is_err()
+        );
     }
 
     #[test]
@@ -4961,6 +5134,10 @@ mod tests {
             extra_headers: None,
             profile: false,
             gateway_token: None,
+            auth_mode: None,
+            ldap_username: None,
+            ldap_password: None,
+            oidc_token: None,
         };
 
         let ctx = CliContext::from_config(
@@ -5001,6 +5178,10 @@ mod tests {
             extra_headers: None,
             profile: false,
             gateway_token: None,
+            auth_mode: None,
+            ldap_username: None,
+            ldap_password: None,
+            oidc_token: None,
         };
 
         let ctx = CliContext::from_config(
@@ -5039,6 +5220,10 @@ mod tests {
             upload: Default::default(),
             extra_headers: None,
             gateway_token: None,
+            auth_mode: None,
+            ldap_username: None,
+            ldap_password: None,
+            oidc_token: None,
         };
 
         // Without sudo: use api_key
@@ -5213,9 +5398,20 @@ mod tests {
             "prune_orphans",
             "--wait=false",
             "--dry-run",
+            "--tag",
+            "team=search",
+            "--tag-mode",
+            "append",
         ]);
 
-        assert!(result.is_ok(), "reindex command should parse");
+        let cli = result.expect("reindex command should parse");
+        match cli.command {
+            Commands::Reindex { tags, tag_mode, .. } => {
+                assert_eq!(tags, vec!["team=search"]);
+                assert_eq!(tag_mode, "append");
+            }
+            _ => panic!("expected reindex command"),
+        }
     }
 
     #[test]

@@ -63,7 +63,7 @@ protocol: openviking-assets/1
 defaults:
   git:
     auth_ref: team-git
-    watch_interval: 1440
+    watch_interval: 60
 
 catalog:
   - name: openviking
@@ -131,7 +131,7 @@ protocol: openviking-assets/1
 defaults:
   git:
     auth_ref: team-git
-    watch_interval: 1440
+    watch_interval: 60
 
 catalog:
   - name: openviking
@@ -275,9 +275,23 @@ export OPENVIKING_ASSETS_CREDENTIALS_FILE=/secure/path/assets-credentials.yaml
 
 执行前，CLI 会先解析所有选中资产的 `auth_ref`，然后由服务端在实际执行环境中用
 `git ls-remote` 校验每个仓库的读取权限。只要有一个别名不存在或仓库不可读，整个操作都会
-在提交任何资源之前失败；`dry_run` 也执行相同预检。解析出的 Git 参数会通过当前配置的
-OpenViking 服务连接发送给 preflight 和资源接口，因此远程部署应使用 TLS，并限制凭据文件
-的本地访问权限。
+在提交任何资源之前失败；`dry_run` 也执行相同预检。原生 Git 凭据别名只支持 `username` 和
+`token`，并保持上述扁平结构。使用默认的原生 Git 链路时，CLI 会在调用 `add_resource` 时将它们放入
+`args.auth_config`，而 `branch` 或 `commit` 仍留在 `args` 顶层。解析出的 Git 参数会通过
+当前配置的 OpenViking 服务连接发送，因此远程部署应使用 TLS，并限制凭据文件的本地访问权限。
+
+当最终 `watch_interval` 大于 `0` 时，OpenViking 会把通过 `auth_ref` 解析出的 HTTPS Git
+token 保存到 Watch task 私有且与仓库 URL 绑定的鉴权状态中。token 不会写入 Manifest
+State、普通入库队列或 Watch API/MCP/CLI 返回。周期为 `0` 时，token 仍只在本次请求内使用。
+Git PAT 没有通用刷新流程，token 过期或被撤销后需要重建 Watch。
+
+Watch 私有状态保存在 `viking://resources/.watch_tasks.json`。启用 VikingFS 文件加密时会
+静态加密；否则服务端控制文件及其备份包含明文 token 状态。生产环境应限制服务端存储访问并
+启用加密。
+
+即使没有指定 `--wait`，原生凭据导入也需要等 clone 和 parse 完成后，服务端才会返回 task；
+因此 CLI 对这类资产默认使用 300 秒请求超时，大仓库可通过 `--timeout <秒>` 调大。token
+会放在 HTTPS 请求体中传输，生产环境应保持诊断请求体 dump 关闭。
 
 如果目标服务已经具备访问仓库所需的 SSH key 或其他认证配置，可以不设置 `auth_ref`。
 
@@ -336,8 +350,9 @@ State 属于执行环境，不是 Catalog 或 Manifest 协议的一部分。共�
 ov add-resource --manifest manifest.yaml --watch-interval 60
 ```
 
-后续内容刷新由 Watch 执行，不需要周期性重新运行 Manifest。重新运行 Manifest 主要用于应用
-Catalog 或 Manifest 的构成变化、恢复失败资产，或显式触发同步。
+后续内容刷新由 Watch 执行。原生 HTTPS Git 资产使用 `auth_ref` 时，服务端会在每次刷新时
+从 Watch 私有状态恢复与仓库绑定的 token。重新运行 Manifest 仍可用于应用 Catalog/Manifest
+构成变化、恢复失败资产或显式触发同步。
 
 ## 失败处理
 
@@ -375,7 +390,7 @@ ov add-resource --manifest manifest.yaml --args skip_failed:true
 | `-m, --manifest <file>` | Manifest 文件。 |
 | `--args <key:value,...>` | Manifest 运行选项，多个选项用逗号分隔，支持的键见下表。 |
 | `--wait` | 等待每个资源处理完成。 |
-| `--timeout <seconds>` | `--wait` 的超时时间。 |
+| `--timeout <seconds>` | HTTP 请求超时。原生私有 Git 即使没有 `--wait` 也会使用该值，默认 300 秒。 |
 | `--watch-interval <minutes>` | 覆盖全部资产的更新周期。 |
 
 `--args` 支持的运行选项：

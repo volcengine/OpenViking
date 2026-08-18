@@ -2,7 +2,8 @@
 
 from pathlib import Path
 
-from openviking.async_client import logger
+from loguru import logger
+
 from vikingbot.config.schema import Config, SessionKey
 from vikingbot.sandbox.backends import get_backend
 from vikingbot.sandbox.base import SandboxBackend, UnsupportedBackendError
@@ -20,7 +21,12 @@ class SandboxManager:
         self.workspace = sandbox_parent_path
         self.source_workspace = source_workspace_path
         self._sandboxes: dict[str, SandboxBackend] = {}
-        self.remote_skill_cache = RemoteSkillSnapshotCache(config)
+        self.remote_skill_cache = (
+            RemoteSkillSnapshotCache(config)
+            if getattr(config, "remote_skills", None) is not None
+            and getattr(config, "bot_data_path", None) is not None
+            else None
+        )
         backend_cls = get_backend(config.sandbox.backend)
         if not backend_cls:
             raise UnsupportedBackendError(f"Unknown sandbox backend: {config.backend}")

@@ -3,6 +3,8 @@ import type { ComponentProps, ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import hljs from 'highlight.js/lib/core'
 import ReactMarkdown from 'react-markdown'
+import rehypeRaw from 'rehype-raw'
+import rehypeSanitize from 'rehype-sanitize'
 import remarkGfm from 'remark-gfm'
 import { X, Pencil, Save, XCircle, Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -106,6 +108,7 @@ interface FilePreviewProps {
   file: VikingFsEntry | null
   hideDirectoryHeader?: boolean
   onClose: () => void
+  onNavigate?: (uri: string) => void
   showCloseButton?: boolean
 }
 
@@ -628,15 +631,27 @@ const markdownComponents = {
   code: MarkdownCode,
   pre: MarkdownPre,
   table: ({ children }: ComponentProps<'table'>) => (
-    <div className="my-4 overflow-x-auto rounded-md border">
+    <div className="overflow-x-auto">
       <table className="w-full border-collapse text-sm">{children}</table>
     </div>
   ),
-  td: ({ children }: ComponentProps<'td'>) => (
-    <td className="border-t px-3 py-2 align-top">{children}</td>
+  td: ({ children, colSpan, rowSpan }: ComponentProps<'td'>) => (
+    <td
+      className="border px-3 py-2 text-center align-middle"
+      colSpan={colSpan}
+      rowSpan={rowSpan}
+    >
+      {children}
+    </td>
   ),
-  th: ({ children }: ComponentProps<'th'>) => (
-    <th className="bg-muted/50 px-3 py-2 text-left font-medium">{children}</th>
+  th: ({ children, colSpan, rowSpan }: ComponentProps<'th'>) => (
+    <th
+      className="border bg-muted/50 px-3 py-2 text-center align-middle font-medium"
+      colSpan={colSpan}
+      rowSpan={rowSpan}
+    >
+      {children}
+    </th>
   ),
 }
 
@@ -1024,6 +1039,7 @@ export function FilePreview({
   file,
   hideDirectoryHeader = false,
   onClose,
+  onNavigate,
   showCloseButton = true,
 }: FilePreviewProps) {
   const { t } = useTranslation('resources')
@@ -1587,6 +1603,7 @@ export function FilePreview({
               <article className="prose prose-sm max-w-none break-words dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm]}
+                  rehypePlugins={[rehypeRaw, rehypeSanitize]}
                   urlTransform={(url) => url}
                   components={{
                     ...markdownComponents,
@@ -1598,15 +1615,28 @@ export function FilePreview({
                       />
                     ),
                     a: ({ href, children }) => {
-                      const resolvedHref = href
-                        ? resolveMarkdownAssetUrl(String(href), file.uri)
-                        : String(href || '')
+                      const target = href
+                        ? resolveMarkdownAssetTarget(String(href), file.uri)
+                        : null
+                      const isInternal =
+                        target?.kind === 'viking' && Boolean(onNavigate)
+                      const resolvedHref = target
+                        ? isInternal
+                          ? target.value
+                          : resolveMarkdownAssetUrl(target.value, file.uri)
+                        : ''
                       const isExternal = /^(https?:|mailto:|tel:)/i.test(
                         resolvedHref,
                       )
                       return (
                         <a
                           href={resolvedHref}
+                          onClick={(event) => {
+                            if (target?.kind === 'viking' && onNavigate) {
+                              event.preventDefault()
+                              onNavigate(target.value)
+                            }
+                          }}
                           target={isExternal ? '_blank' : undefined}
                           rel={isExternal ? 'noreferrer noopener' : undefined}
                         >

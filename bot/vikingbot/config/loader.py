@@ -302,12 +302,17 @@ def _bot_auth_mode_from_api_key_type(api_key_type: str, server_auth_mode: str) -
         return "trusted"
     if server_auth_mode == "dev":
         return "dev"
+    # Preserve external-auth modes inherited from the server config so that
+    # downstream code can produce a clear "unsupported with bot" error instead
+    # of silently treating them as api_key.
+    if server_auth_mode in {"oidc", "ldap"}:
+        return server_auth_mode
     return "api_key"
 
 
 def _ov_server_auth_mode(ov_server: Any) -> str:
     effective_auth_mode = str(getattr(ov_server, "effective_auth_mode", "") or "").strip().lower()
-    if effective_auth_mode in {"trusted", "api_key", "dev"}:
+    if effective_auth_mode in {"trusted", "api_key", "dev", "oidc", "ldap"}:
         return effective_auth_mode
 
     api_key_type = _normalize_api_key_type(getattr(ov_server, "api_key_type", "user"))
@@ -696,6 +701,13 @@ def validate_openviking_auth(config: Config) -> None:
     api_key = getattr(ov_server, "api_key", None)
     if api_key:
         headers["X-API-Key"] = api_key
+    if auth_mode == "trusted":
+        headers["X-OpenViking-Account"] = str(
+            getattr(ov_server, "account_id", "") or "default"
+        ).strip()
+        headers["X-OpenViking-User"] = str(
+            getattr(ov_server, "admin_user_id", "") or "default"
+        ).strip()
 
     health = _request_openviking_json(server_url, "/health", headers=headers)
     if not health.ok:
@@ -746,6 +758,20 @@ def validate_openviking_auth(config: Config) -> None:
     if auth_mode == "dev":
         _validate_dev_boundary(config, server_url)
         return
+    if auth_mode in {"oidc", "ldap"}:
+        # External-auth modes are not yet wired through VikingBot's tool
+        # credential propagation. Fail fast with an actionable message
+        # instead of silently defaulting to api_key and then 401-ing.
+        print(
+            f"Error: OpenViking server at {server_url} is running in "
+            f"'{auth_mode}' auth mode, which is not supported by "
+            "VikingBot yet.\n"
+            f"Either switch the server to a supported auth mode "
+            "(trusted, api_key, dev) or start openviking-server without "
+            "the --with-bot flag.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
     return
 
 

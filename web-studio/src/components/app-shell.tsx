@@ -6,6 +6,7 @@ import {
   BracesIcon,
   ChevronRightIcon,
   ClipboardListIcon,
+  Clock3Icon,
   HomeIcon,
   GithubIcon,
   KeyRoundIcon,
@@ -127,6 +128,13 @@ const NAV_ITEMS: readonly NavItem[] = [
     section: 'operations',
     titleKey: 'navigation.tasks.title',
     to: '/tasks',
+  },
+  {
+    icon: Clock3Icon,
+    id: 'watches',
+    section: 'operations',
+    titleKey: 'navigation.watches.title',
+    to: '/watches',
   },
   {
     icon: MonitorUpIcon,

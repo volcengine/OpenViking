@@ -5,36 +5,19 @@
 
 import asyncio
 import json
-from unittest.mock import patch
+from functools import partial
 
 import pytest
 import pytest_asyncio
 
-from openviking import AsyncOpenViking
 from openviking.message import Message, TextPart
-from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
+from openviking.server.identity import RequestContext
+from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
 from openviking.storage.queuefs import QueueManager, SessionCommitMsg, get_queue_manager
-from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
-from openviking_cli.utils.config.embedding_config import EmbeddingConfig
-from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.config.vlm_config import VLMConfig
-from tests.utils.mock_agfs import MockLocalAGFS
-
-
-def _install_fake_embedder(monkeypatch):
-    class FakeEmbedder(DenseEmbedderBase):
-        def __init__(self):
-            super().__init__(model_name="test-fake-embedder")
-
-        def embed(self, text: str, is_query: bool = False) -> EmbedResult:
-            return EmbedResult(dense_vector=[0.1] * 1024)
-
-        def get_dimension(self) -> int:
-            return 1024
-
-    monkeypatch.setattr(EmbeddingConfig, "get_embedder", lambda self: FakeEmbedder())
 
 
 def _install_fake_vlm(monkeypatch):
@@ -49,74 +32,56 @@ def _install_fake_vlm(monkeypatch):
     monkeypatch.setattr(VLMConfig, "get_vision_completion_async", _fake_get_vision_completion)
 
 
-def _write_test_config(tmp_path):
-    config_path = tmp_path / "ov.conf"
-    config_path.write_text(
-        json.dumps(
-            {
-                "storage": {
-                    "workspace": str(tmp_path / "workspace"),
-                    "agfs": {"backend": "local"},
-                    "vectordb": {"backend": "local"},
-                },
-                "embedding": {
-                    "dense": {
-                        "provider": "openai",
-                        "model": "test-embedder",
-                        "api_base": "http://127.0.0.1:11434/v1",
-                        "dimension": 1024,
-                    }
-                },
-                "encryption": {"enabled": False},
-                "memory": {"extraction_enabled": False},
-            }
-        ),
-        encoding="utf-8",
-    )
-    return config_path
-
-
 @pytest_asyncio.fixture(scope="function")
-async def client(test_data_dir, monkeypatch, tmp_path):
-    config_path = _write_test_config(tmp_path)
-    mock_agfs = MockLocalAGFS(root_path=tmp_path / "mock_agfs_root")
-
-    OpenVikingConfigSingleton.reset_instance()
-    await AsyncOpenViking.reset()
-    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, str(config_path))
-    _install_fake_embedder(monkeypatch)
+async def client(
+    service: OpenVikingService,
+    request_context: RequestContext,
+    monkeypatch,
+):
     _install_fake_vlm(monkeypatch)
+    monkeypatch.setattr(get_openviking_config().memory, "extraction_enabled", False)
+    client = partial(service.sessions.session, request_context)
 
-    with patch("openviking.utils.agfs_utils.create_agfs_client", return_value=mock_agfs):
-        client = AsyncOpenViking(path=str(test_data_dir))
-        await client.initialize()
+    queue_manager = get_queue_manager()
+    original_enqueue = queue_manager.enqueue
+    commit_tasks: list[asyncio.Task] = []
+    queued_commit_tasks: set[str] = set()
+    tracker = get_task_tracker()
+    original_has_work = tracker.has_work
+    monkeypatch.setattr(
+        tracker,
+        "has_work",
+        lambda task_id: task_id in queued_commit_tasks or original_has_work(task_id),
+    )
 
-        # MockLocalAGFS provides ordinary file operations but not QueueFS's
-        # virtual enqueue/dequeue endpoints. Execute SessionCommit jobs through
-        # the real resume path so these context tests remain about context
-        # assembly rather than the storage mock's missing queue protocol.
-        queue_manager = get_queue_manager()
-        original_enqueue = queue_manager.enqueue
+    async def enqueue_with_session_commit_fallback(queue_name, data):
+        if queue_name != QueueManager.SESSION_COMMIT:
+            return await original_enqueue(queue_name, data)
 
-        async def enqueue_with_session_commit_fallback(queue_name, data):
-            if queue_name != QueueManager.SESSION_COMMIT:
-                return await original_enqueue(queue_name, data)
+        queued_commit_tasks.add(data["task_id"])
 
-            async def process_commit():
+        async def process_commit():
+            message = SessionCommitMsg(**data)
+            queued_session = client(session_id=message.session_id)
+            while True:
+                phase1 = await queued_session._read_phase1_meta(message.archive_uri)
+                if phase1.get("status") == "ready":
+                    break
                 await asyncio.sleep(0)
-                queued_session = client.session(session_id=data["session_id"])
-                await queued_session.load()
-                await queued_session.resume_queued_commit(SessionCommitMsg(**data))
+            await queued_session.load()
+            try:
+                while not await queued_session.resume_queued_commit(message):
+                    await asyncio.sleep(0)
+            finally:
+                queued_commit_tasks.discard(message.task_id)
 
-            asyncio.create_task(process_commit())
-            return data["task_id"]
+        commit_tasks.append(asyncio.create_task(process_commit()))
+        return data["task_id"]
 
-        monkeypatch.setattr(queue_manager, "enqueue", enqueue_with_session_commit_fallback)
-        yield client
-        await client.close()
-
-    OpenVikingConfigSingleton.reset_instance()
-    await AsyncOpenViking.reset()
+    monkeypatch.setattr(queue_manager, "enqueue", enqueue_with_session_commit_fallback)
+    yield client
+    if commit_tasks:
+        await asyncio.gather(*commit_tasks, return_exceptions=True)
 
 
 def _estimate_tokens(text: str) -> int:
@@ -134,9 +99,10 @@ async def _wait_for_task(task_id: str, timeout: float = 30.0) -> dict:
 
 
 async def test_oversized_legacy_assistant_only_commit_completes_without_checkpoint(
-    client: AsyncOpenViking,
+    client: partial,
 ):
-    session = client.session(session_id="legacy_assistant_only_turn_test")
+    session = client(session_id="legacy_assistant_only_turn_test")
+    await session.ensure_exists()
     for index in range(3):
         session.add_message("assistant", [TextPart(str(index) * 1000)])
 
@@ -181,9 +147,10 @@ class TestGetContextForSearch:
         assert isinstance(context, dict)
         assert len(context["current_messages"]) <= 2
 
-    async def test_get_context_returns_latest_completed_archive_only(self, client: AsyncOpenViking):
+    async def test_get_context_returns_latest_completed_archive_only(self, client: partial):
         """Current context should expose only the latest completed archive overview."""
-        session = client.session(session_id="archive_context_test")
+        session = client(session_id="archive_context_test")
+        await session.ensure_exists()
 
         session.add_message("user", [TextPart("First message")])
         session.add_message("assistant", [TextPart("First response")])
@@ -207,9 +174,10 @@ class TestGetContextForSearch:
         assert context["latest_archive_overview"] == latest_overview
         assert len(context["current_messages"]) == 1
 
-    async def test_get_context_skips_incomplete_latest_archive(self, client: AsyncOpenViking):
+    async def test_get_context_skips_incomplete_latest_archive(self, client: partial):
         """Incomplete archives without .done must not replace the latest completed overview."""
-        session = client.session(session_id="archive_context_incomplete_test")
+        session = client(session_id="archive_context_incomplete_test")
+        await session.ensure_exists()
 
         session.add_message("user", [TextPart("First message")])
         session.add_message("assistant", [TextPart("First response")])
@@ -230,9 +198,10 @@ class TestGetContextForSearch:
 
         assert context["latest_archive_overview"] == completed_overview
 
-    async def test_get_context_includes_incomplete_archive_messages(self, client: AsyncOpenViking):
+    async def test_get_context_includes_incomplete_archive_messages(self, client: partial):
         """Pending archive messages should be merged with current live messages."""
-        session = client.session(session_id="archive_context_pending_messages_test")
+        session = client(session_id="archive_context_pending_messages_test")
+        await session.ensure_exists()
 
         session.add_message("user", [TextPart("First message")])
         result = await session.commit_async()
@@ -261,11 +230,10 @@ class TestGetContextForSearch:
             "Current live message",
         ]
 
-    async def test_get_context_max_messages_applies_after_pending_merge(
-        self, client: AsyncOpenViking
-    ):
+    async def test_get_context_max_messages_applies_after_pending_merge(self, client: partial):
         """max_messages should trim the merged pending + live message sequence."""
-        session = client.session(session_id="archive_context_pending_max_messages_test")
+        session = client(session_id="archive_context_pending_max_messages_test")
+        await session.ensure_exists()
 
         session.add_message("user", [TextPart("First message")])
         result = await session.commit_async()
@@ -300,9 +268,10 @@ class TestGetContextForSearch:
         assert context["latest_archive_overview"] == ""
         assert context["current_messages"] == []
 
-    async def test_get_context_after_commit(self, client: AsyncOpenViking):
+    async def test_get_context_after_commit(self, client: partial):
         """Test getting context after commit"""
-        session = client.session(session_id="post_commit_context_test")
+        session = client(session_id="post_commit_context_test")
+        await session.ensure_exists()
 
         session.add_message("user", [TextPart("Test message before commit")])
         session.add_message("assistant", [TextPart("Response before commit")])
@@ -319,10 +288,11 @@ class TestGetContextForSearch:
         assert len(context["current_messages"]) == 1
 
     async def test_get_context_tracks_multiple_rapid_commits_by_done_boundary(
-        self, client: AsyncOpenViking, monkeypatch
+        self, client: partial, monkeypatch
     ):
         """Context should only advance latest overview when the earlier archive is .done."""
-        session = client.session(session_id="archive_context_done_boundary_test")
+        session = client(session_id="archive_context_done_boundary_test")
+        await session.ensure_exists()
         first_gate = asyncio.Event()
         second_gate = asyncio.Event()
         second_started = asyncio.Event()
@@ -386,9 +356,10 @@ class TestGetSessionContext:
     """Test get_session_context"""
 
     async def test_get_session_context_returns_latest_archive_overview_and_history(
-        self, client: AsyncOpenViking, monkeypatch
+        self, client: partial, monkeypatch
     ):
-        session = client.session(session_id="assemble_trim_test")
+        session = client(session_id="assemble_trim_test")
+        await session.ensure_exists()
         summaries = [
             "# Session Summary\n\n" + ("A" * 80),
             "# Session Summary\n\n" + ("B" * 20),
@@ -446,10 +417,11 @@ class TestGetSessionContext:
         assert context["stats"]["activeTokens"] > _estimate_tokens("Executing tool...")
 
     async def test_get_session_context_stops_at_newest_terminal_without_abstracts(
-        self, client: AsyncOpenViking, monkeypatch
+        self, client: partial, monkeypatch
     ):
         """Newest completed supplies overview; abstracts are never read for context."""
-        session = client.session(session_id="assemble_lazy_read_test")
+        session = client(session_id="assemble_lazy_read_test")
+        await session.ensure_exists()
         summaries = [
             "# Summary\n\n" + ("A" * 80),
             "# Summary\n\n" + ("B" * 80),
@@ -494,13 +466,15 @@ class TestGetSessionContext:
         abstract_reads = [u for u in read_uris if u.endswith(".abstract.md")]
         assert abstract_reads == [], f"Old abstracts must not be read, got: {abstract_reads}"
         overview_reads = [u for u in read_uris if u.endswith(".overview.md")]
-        assert overview_reads, f"Newest terminal overview should be available, got: {overview_reads}"
+        assert overview_reads, (
+            f"Newest terminal overview should be available, got: {overview_reads}"
+        )
         assert any("archive_003" in u for u in overview_reads), (
             f"Newest completed overview should be read, got: {overview_reads}"
         )
 
     async def test_get_session_context_does_not_touch_archives_older_than_terminal(
-        self, client: AsyncOpenViking, monkeypatch
+        self, client: partial, monkeypatch
     ):
         """Scan cost must not grow with history length.
 
@@ -508,7 +482,8 @@ class TestGetSessionContext:
         terminal marker: no marker, overview, meta or messages read may reference
         an older archive.
         """
-        session = client.session(session_id="assemble_terminal_stop_cost_test")
+        session = client(session_id="assemble_terminal_stop_cost_test")
+        await session.ensure_exists()
         summaries = [f"# Summary\n\narchive {index}" for index in range(1, 5)]
 
         async def fake_generate(self, _messages, latest_archive_overview="", **kwargs):
@@ -546,15 +521,15 @@ class TestGetSessionContext:
         stale = [
             uri
             for uri in touched
-            if isinstance(uri, str)
-            and any(f"archive_{index:03d}" in uri for index in (1, 2, 3))
+            if isinstance(uri, str) and any(f"archive_{index:03d}" in uri for index in (1, 2, 3))
         ]
         assert stale == [], f"Archives older than the terminal must not be read: {stale}"
 
     async def test_get_session_context_pre_archive_abstracts_always_empty(
-        self, client: AsyncOpenViking, monkeypatch
+        self, client: partial, monkeypatch
     ):
-        session = client.session(session_id="assemble_trim_oldest_abstracts_test")
+        session = client(session_id="assemble_trim_oldest_abstracts_test")
+        await session.ensure_exists()
         summaries = [
             "# Summary\n\n" + ("A" * 80),
             "# Summary\n\n" + ("B" * 80),
@@ -583,17 +558,16 @@ class TestGetSessionContext:
 
         assert context["latest_archive_overview"] == newest_summary
         assert context["pre_archive_abstracts"] == []
-        assert context["estimatedTokens"] == (
-            active_tokens + _estimate_tokens(newest_summary)
-        )
+        assert context["estimatedTokens"] == (active_tokens + _estimate_tokens(newest_summary))
         assert context["stats"]["totalArchives"] == 3
         assert context["stats"]["includedArchives"] == 0
         assert context["stats"]["droppedArchives"] == 3
 
     async def test_get_session_context_newest_done_unreadable_overview_does_not_fallback(
-        self, client: AsyncOpenViking, monkeypatch
+        self, client: partial, monkeypatch
     ):
-        session = client.session(session_id="assemble_failed_archive_test")
+        session = client(session_id="assemble_failed_archive_test")
+        await session.ensure_exists()
         summaries = [
             "# Session Summary\n\narchive one",
             "# Session Summary\n\narchive two",
@@ -633,9 +607,10 @@ class TestGetSessionContext:
         assert context["stats"]["failedArchives"] == 1
 
     async def test_get_session_context_newest_failed_skips_overview(
-        self, client: AsyncOpenViking, monkeypatch
+        self, client: partial, monkeypatch
     ):
-        session = client.session(session_id="assemble_newest_failed_test")
+        session = client(session_id="assemble_newest_failed_test")
+        await session.ensure_exists()
 
         async def fake_generate(self, _messages, latest_archive_overview="", **kwargs):
             del self, latest_archive_overview, kwargs
@@ -675,9 +650,10 @@ class TestGetSessionContext:
         assert context["stats"]["failedArchives"] == 1
 
     async def test_get_session_context_budget_trim_drops_latest_archive_abstract(
-        self, client: AsyncOpenViking, monkeypatch
+        self, client: partial, monkeypatch
     ):
-        session = client.session(session_id="assemble_trim_id_test")
+        session = client(session_id="assemble_trim_id_test")
+        await session.ensure_exists()
 
         async def fake_generate(self, _messages, latest_archive_overview="", **kwargs):
             del self, latest_archive_overview, kwargs
@@ -697,7 +673,7 @@ class TestGetSessionContext:
         assert context["stats"]["droppedArchives"] == 1
 
     async def test_get_session_context_returns_pending_messages_while_commit_running(
-        self, client: AsyncOpenViking
+        self, client: partial
     ):
         """Regression for #3129: when an archive has been written (Phase 1 done,
         commit_count advanced) but its ``.done`` marker has not been written yet
@@ -710,7 +686,8 @@ class TestGetSessionContext:
         through ``commit_async``, so it is deterministic regardless of the
         queue-worker architecture."""
         session_id = "deterministic_pending_archive_test"
-        session = client.session(session_id=session_id)
+        session = client(session_id=session_id)
+        await session.ensure_exists()
 
         # Add messages to the session (in-memory only at this point).
         session.add_message("user", [TextPart("Pending user message")])
@@ -749,7 +726,7 @@ class TestGetSessionContext:
         # running, so the archive must be treated as pending.
 
         # Load a fresh session from the filesystem state we just wrote.
-        fresh_session = client.session(session_id=session_id)
+        fresh_session = client(session_id=session_id)
 
         # The pending archive's messages must be visible.
         context = await fresh_session.get_session_context()
@@ -763,9 +740,10 @@ class TestGetSessionArchive:
     """Test get_session_archive"""
 
     async def test_get_session_archive_returns_messages_and_summary(
-        self, client: AsyncOpenViking, monkeypatch
+        self, client: partial, monkeypatch
     ):
-        session = client.session(session_id="session_archive_expand_test")
+        session = client(session_id="session_archive_expand_test")
+        await session.ensure_exists()
         summaries = [
             "# Session Summary\n\narchive one",
             "# Session Summary\n\narchive two",
@@ -793,8 +771,9 @@ class TestGetSessionArchive:
         assert archive["overview"] == "# Session Summary\n\narchive one"
         assert [m["parts"][0]["text"] for m in archive["messages"]] == ["turn one", "reply one"]
 
-    async def test_get_session_archive_raises_for_missing_archive(self, client: AsyncOpenViking):
-        session = client.session(session_id="missing_session_archive_test")
+    async def test_get_session_archive_raises_for_missing_archive(self, client: partial):
+        session = client(session_id="missing_session_archive_test")
+        await session.ensure_exists()
 
         with pytest.raises(Exception, match="Session archive not found: archive_999"):
             await session.get_session_archive("archive_999")

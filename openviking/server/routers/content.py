@@ -18,6 +18,7 @@ from openviking.core.namespace import (
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_viking_uri
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
+from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.server.auth import (
     get_request_context,
     require_role,
@@ -45,6 +46,7 @@ class WriteContentRequest(BaseModel):
     wait: bool = False
     timeout: float | None = None
     telemetry: TelemetryRequest = False
+    processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
 
 
 class BatchWritePrecondition(BaseModel):
@@ -106,6 +108,8 @@ class ReindexRequest(BaseModel):
     mode: str = "vectors_only"
     wait: bool = True
     dry_run: bool = False
+    tags: list[str] | None = None
+    tag_mode: str = "replace"
 
 
 router = APIRouter(prefix="/api/v1/content", tags=["content"])
@@ -257,6 +261,7 @@ async def write(
             mode=request.mode,
             wait=request.wait,
             timeout=request.timeout,
+            processing_mode=request.processing_mode,
         ),
     )
     return Response(
@@ -333,11 +338,17 @@ async def reindex(
     uri = _validate_reindex_uri(uri)
     uri = _authorize_reindex_uri(uri, ctx)
     service = get_service()
+    reindex_kwargs = {
+        "uri": uri,
+        "mode": body.mode,
+        "wait": body.wait,
+        "dry_run": body.dry_run,
+        "ctx": ctx,
+    }
+    if body.tags is not None:
+        reindex_kwargs["tags"] = body.tags
+        reindex_kwargs["tag_mode"] = body.tag_mode
     result = await service.reindex(
-        uri=uri,
-        mode=body.mode,
-        wait=body.wait,
-        dry_run=body.dry_run,
-        ctx=ctx,
+        **reindex_kwargs,
     )
     return Response(status="ok", result=result)

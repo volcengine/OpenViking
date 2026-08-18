@@ -92,7 +92,6 @@ class OpenVikingContextMiddleware(AgentMiddleware):
         user: str | None = None,
         user_id: str | None = None,
         actor_peer_id: str | None = None,
-        path: str | None = None,
         target_uri: str | list[str] = "",
         limit: int = 5,
         peer_id: str | None = None,
@@ -113,7 +112,6 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             client=client,
             async_client=async_client,
             retriever=retriever,
-            path=path,
         )
         self.recorder = OpenVikingSessionRecorder(
             client=client,
@@ -124,7 +122,6 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             user=user,
             user_id=user_id,
             actor_peer_id=actor_peer_id,
-            path=path,
             commit_policy=None,
         )
         self._owns_retriever = retriever is None
@@ -137,7 +134,6 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             user=user,
             user_id=user_id,
             actor_peer_id=actor_peer_id,
-            path=path,
             target_uri=target_uri,
             limit=limit,
             score_threshold=score_threshold,
@@ -153,7 +149,6 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             user=user,
             user_id=user_id,
             actor_peer_id=actor_peer_id,
-            path=path,
             target_uri=target_uri,
             limit=limit,
             score_threshold=score_threshold,
@@ -497,13 +492,10 @@ def _validate_actor_peer_transport(
     client: Any,
     async_client: Any,
     retriever: OpenVikingRetriever | None,
-    path: str | None,
 ) -> None:
     if actor_peer_resolver is None:
         return
     require_request_actor_peer_support()
-    if path is not None or (retriever is not None and retriever.path is not None):
-        raise ValueError("actor_peer_resolver requires an OpenViking HTTP connection")
     transports = [client, async_client]
     if retriever is not None:
         transports.extend([retriever.client, retriever.async_client])

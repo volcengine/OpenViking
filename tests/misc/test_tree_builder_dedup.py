@@ -84,7 +84,7 @@ class TestFinalizeFromTemp:
         assert tree._candidate_uri == "viking://resources/tt_b"
 
     @pytest.mark.asyncio
-    async def test_resources_root_to_keeps_single_file_wrapper_directory(self):
+    async def test_resources_root_to_flattens_single_no_split_file(self):
         from openviking.parse.tree_builder import TreeBuilder
         from openviking.server.identity import RequestContext, Role
         from openviking_cli.session.user_id import UserIdentifier
@@ -103,8 +103,87 @@ class TestFinalizeFromTemp:
                 ctx=ctx,
                 scope="resources",
                 to_uri="viking://resources",
+                flatten_single_file=True,
+            )
+
+        assert tree.root.uri == "viking://resources/aa.md"
+        assert tree.root.temp_uri == "viking://temp/import/aa/aa.md"
+        assert tree._candidate_uri == "viking://resources/aa.md"
+        assert tree._root_is_file is True
+
+    @pytest.mark.asyncio
+    async def test_explicit_to_is_preserved_for_single_no_split_file(self):
+        from openviking.parse.tree_builder import TreeBuilder
+        from openviking.server.identity import RequestContext, Role
+        from openviking_cli.session.user_id import UserIdentifier
+
+        entries = {
+            "viking://temp/import": [{"name": "aa", "isDir": True}],
+            "viking://temp/import/aa": [{"name": "aa.md", "isDir": False}],
+        }
+        fs = self._make_fs(entries, {"viking://resources"})
+        ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+        with patch("openviking.parse.tree_builder.get_viking_fs", return_value=fs):
+            tree = await TreeBuilder().finalize_from_temp(
+                temp_dir_path="viking://temp/import",
+                ctx=ctx,
+                to_uri="viking://resources/custom-name",
+                flatten_single_file=True,
+            )
+
+        assert tree.root.uri == "viking://resources/custom-name"
+        assert tree.root.temp_uri == "viking://temp/import/aa/aa.md"
+        assert tree._root_is_file is True
+
+    @pytest.mark.asyncio
+    async def test_explicit_directory_to_keeps_single_no_split_wrapper(self):
+        from openviking.parse.tree_builder import TreeBuilder
+        from openviking.server.identity import RequestContext, Role
+        from openviking_cli.session.user_id import UserIdentifier
+
+        entries = {
+            "viking://temp/import": [{"name": "aa", "isDir": True}],
+        }
+        fs = self._make_fs(entries, {"viking://resources"})
+        ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+        with patch("openviking.parse.tree_builder.get_viking_fs", return_value=fs):
+            tree = await TreeBuilder().finalize_from_temp(
+                temp_dir_path="viking://temp/import",
+                ctx=ctx,
+                to_uri="viking://resources/custom-dir",
+                flatten_single_file=False,
+            )
+
+        assert tree.root.uri == "viking://resources/custom-dir"
+        assert tree.root.temp_uri == "viking://temp/import/aa"
+        assert tree._root_is_file is False
+
+    @pytest.mark.asyncio
+    async def test_multiple_outputs_keep_no_split_wrapper_directory(self):
+        from openviking.parse.tree_builder import TreeBuilder
+        from openviking.server.identity import RequestContext, Role
+        from openviking_cli.session.user_id import UserIdentifier
+
+        entries = {
+            "viking://temp/import": [{"name": "aa", "isDir": True}],
+            "viking://temp/import/aa": [
+                {"name": "aa.md", "isDir": False},
+                {"name": "cover.png", "isDir": False},
+            ],
+        }
+        fs = self._make_fs(entries, {"viking://resources"})
+        ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+        with patch("openviking.parse.tree_builder.get_viking_fs", return_value=fs):
+            tree = await TreeBuilder().finalize_from_temp(
+                temp_dir_path="viking://temp/import",
+                ctx=ctx,
+                to_uri="viking://resources",
+                flatten_single_file=True,
             )
 
         assert tree.root.uri == "viking://resources/aa"
         assert tree.root.temp_uri == "viking://temp/import/aa"
-        assert tree._candidate_uri == "viking://resources/aa"
+        assert tree._root_is_file is False

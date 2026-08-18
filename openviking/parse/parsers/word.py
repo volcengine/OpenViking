@@ -69,6 +69,7 @@ class WordParser(BaseParser):
                 # docx images are extracted into storage.media_dir, so (like pdf)
                 # that is the only derived-media root needed.
                 allowed_media_dirs=[storage.media_dir],
+                split_content=kwargs.get("split_content", True),
             )
         else:
             result = await self._md_parser.parse_content(
@@ -76,6 +77,7 @@ class WordParser(BaseParser):
                 instruction=instruction,
                 resource_name=kwargs.get("resource_name"),
                 source_name=kwargs.get("source_name"),
+                split_content=kwargs.get("split_content", True),
             )
         result.source_format = "docx"
         result.parser_name = "WordParser"

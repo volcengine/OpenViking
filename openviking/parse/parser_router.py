@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 from openviking.parse.accessors.base import LocalResource, SourceType
 from openviking.parse.base import ParseResult
 from openviking.parse.registry import ParserRegistry
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -119,6 +120,12 @@ class ParserRouter:
                 )
             )
         )
+
+        if use_understanding and kwargs.get("split_content") is False:
+            raise InvalidArgumentError(
+                "parse_mode='no_split' is not supported by the configured "
+                "Understanding parser."
+            )
 
         if use_understanding:
             display = source_path

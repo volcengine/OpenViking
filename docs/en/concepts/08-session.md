@@ -147,7 +147,9 @@ Unfinished tasks
 
 After a session is committed, OpenViking uses the conversation and active memory policy to extract information that can improve future interactions. It stores the result in the current user's memory space. When a conversation involves a stable Peer, relevant memories can also be stored in that Peer's space.
 
-OpenViking includes memory types such as `profile`, `preferences`, `entities`, `events`, `identity`, `soul`, `cases`, `trajectories`, `experiences`, `tools`, and `skills`, and supports custom types for application-specific needs. See [Context Types](./02-context-types.md) for the complete purpose and path mapping.
+OpenViking includes memory types such as `profile`, `preferences`, `entities`, `events`, `identity`, `soul`, `cases`, `trajectories`, and `experiences`, and supports custom types for application-specific needs. See [Context Types](./02-context-types.md) for the complete purpose and path mapping.
+
+Within `memory_policy.memory_types`, `experiences` enables the complete Agent Evolution pipeline and automatically activates `cases` and `trajectories`. If `experiences` is absent, explicitly supplied `cases` and `trajectories` entries are ignored without an error.
 
 ### Extraction Flow
 
@@ -249,9 +251,7 @@ viking://user/memories/
 ├── events/
 ├── cases/
 ├── trajectories/
-├── experiences/
-├── tools/
-└── skills/
+└── experiences/
 ```
 
 `viking://user/sessions/{session_id}` is accepted as a short form relative to

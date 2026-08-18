@@ -39,11 +39,6 @@ export function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
 }
 
-export function getExtensionFromName(name: string): string {
-  const dot = name.lastIndexOf('.')
-  return dot > 0 ? name.slice(dot + 1).toLowerCase() : ''
-}
-
 export function isBlockedFile(name: string): boolean {
   const dot = name.lastIndexOf('.')
   if (dot <= 0) return false

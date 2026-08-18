@@ -1889,10 +1889,10 @@ PPR 传播（多种子叠加，按 3.2.7.4 配置表）:
 | `memory_updater.py` | `apply_operations()` 中链接分发（from→links, to→backlinks 写入 `.relations.json`）+ 行号修正 |
 | `memory_type_registry.py` | `_parse_memory_type()` 解析 `link_enabled` 字段；支持 `dream_tasks` 配置 |
 | `tools.py` | 搜索 API 新增 PPR 后处理层（6.1.1）；prefetch 扩展 PPR（6.1.2） |
-| `session/compressor_v2.py` | `_create_relations()` 使用新 `link()` 签名 |
+| `session/compressor_v3.py` | 通过共享 `MemoryUpdater` 应用并持久化 memory links |
 | `session/session.py` | `_run_memory_extraction()` 使用新 `link()` 签名 |
 | `server/routers/relations.py` | `LinkRequest` 扩展 `direction`/`link_type`/`weight` 等字段 |
-| `openviking_cli/client/base.py` | `link()` 方法签名扩展 |
+| `sdk/python/openviking_sdk/client.py` | `link()` 方法签名扩展 |
 | YAML templates | 新增 `report` + `report_candidate` memory_type 定义 + `dream_tasks` 配置；现有模板默认 link_enabled=true |
 | 新增模块 | `memory/dream_context_provider.py` — 整理上下文提供者；`utils/links_merge.py` — links/backlinks 合并逻辑；`retrieve/ppr.py` — PPR 算法 |
 

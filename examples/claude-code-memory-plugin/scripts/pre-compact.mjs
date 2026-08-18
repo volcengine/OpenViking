@@ -66,7 +66,12 @@ async function main() {
   }
 
   const res = await commitSession(fetchJSON, ovSessionId);
-  log("commit", { ovSessionId, ok: res.ok, error: res.ok ? undefined : res.error?.message });
+  log("commit", {
+    ovSessionId,
+    ok: res.ok,
+    trace_id: res.traceId || res.result?.trace_id,
+    error: res.ok ? undefined : res.error?.message,
+  });
   approve();
 }
 

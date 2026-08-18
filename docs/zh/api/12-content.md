@@ -352,7 +352,7 @@ openviking write viking://resources/docs/api.md \
 
 **说明**
 
-- 单次请求最多包含 128 个 operation，单文件不超过 8 MiB，总内容不超过 16 MiB。
+- 单次请求最多包含 256 个 operation，单文件不超过 8 MiB，总内容不超过 16 MiB。
 - 所有目标必须是 `root_uri` 下的文件、属于同一 context type，且 canonical URI 不能重复。
 - Resource 目标允许任意安全文件扩展名；Memory 目标仍使用文本扩展名白名单，且不接受二进制内容。
 - 系统会在目标 tree lock 内、首次产生新写入之前检查所有非幂等前置条件；不满足时返回 `409 Conflict`。
@@ -572,7 +572,6 @@ ov set-tags viking://resources/project/ \
 **认证**
 
 - HTTP 端点：在开启认证时要求 admin/root 角色。`api_key` 模式下，租户内容重建请使用 admin key；裸 root key 不能访问租户级数据。
-- Python embedded 模式：使用当前 service context
 - Python HTTP client / CLI：使用当前认证身份发起请求
 
 **参数**
@@ -583,6 +582,8 @@ ov set-tags viking://resources/project/ \
 | mode | str | 否 | `vectors_only` | 重建模式：`vectors_only`、`semantic_and_vectors` 或 `prune_orphans` |
 | wait | bool | 否 | `true` | 是否等待任务完成 |
 | dry_run | bool | 否 | `false` | 仅适用于 `mode="prune_orphans"`；只报告 orphan 向量记录，不实际删除 |
+| tags | list[str] | 否 | `null` | 写入本次成功重建的全部向量记录。省略时保留已有 tags；空数组配合 `replace` 可清空 |
+| tag_mode | str | 否 | `replace` | `tags` 的写入模式：`replace` 或 `append` |
 
 HTTP 请求体不接受未知字段。`uri` 可以使用其他 content API 支持的 OpenViking 路径变量，服务端会先解析再校验。
 
@@ -613,6 +614,10 @@ session 子树会被跳过。
 
 对于 `prune_orphans`，源文件是否存在以当前文件系统为准。如果整个目录已经不存在，该目录下的正文文件向量和语义 sidecar 向量（例如 `.abstract.md`、`.overview.md`）会一起清理。`dry_run` 用在其他模式时会被拒绝。
 
+传入 `tags` 时，标签会随 reindex 生成的向量记录在同一次 upsert 中写入，不会在完成后额外调用 `set_tags`。目录或 namespace reindex 会把标签应用到本次成功重建的目录 L0/L1 和叶子 L2 记录。`replace` 覆盖已有标签，`append` 按 key 合并；省略 `tags` 时不校验 `tag_mode` 且不修改已有标签。`prune_orphans` 不生成向量，因此会忽略 `tags` 和 `tag_mode`。
+
+子树 reindex 不是事务性操作。如果部分记录因缺少语义来源或 embedding 失败而未重建，只有成功写入的记录会更新标签。
+
 **Python SDK**
 
 ```python
@@ -620,6 +625,8 @@ result = client.reindex(
     uri="viking://resources",
     mode="vectors_only",
     wait=True,
+    tags=["team=search", "env=prod"],
+    tag_mode="replace",
 )
 print(result)
 ```
@@ -645,15 +652,23 @@ print(result["would_delete_records"])
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.reindex("viking://resources/docs/"));
+console.log(await client.reindex("viking://resources/docs/", {
+  tags: ["team=search"],
+  tagMode: "append",
+}));
 ```
 
 **Go SDK**
+
+传入非 `nil` 的 `ReindexOptions` 时，需要显式设置 `Wait`。Go 的布尔零值为
+`false`；只有 `opts=nil` 时 SDK 才会应用 `wait=true` 的默认值。
 
 ```go
 result, err := client.Reindex(ctx, "viking://resources", &openviking.ReindexOptions{
     Mode: "vectors_only",
     Wait: true,
+    Tags: []string{"team=search"},
+    TagMode: "replace",
 })
 if err != nil {
     return err
@@ -688,17 +703,21 @@ curl -X POST http://localhost:1933/api/v1/content/reindex \
   -H "X-OpenViking-Account: default" \
   -d '{
     "uri": "viking://resources",
-    "mode": "prune_orphans",
+    "mode": "vectors_only",
     "wait": true,
-    "dry_run": true
+    "tags": ["team=search", "env=prod"],
+    "tag_mode": "replace"
   }'
 ```
 
 **CLI**
 
 ```bash
-openviking reindex viking://resources --mode vectors_only
+openviking reindex viking://resources --mode vectors_only \
+  --tag team=search --tag env=prod --tag-mode replace
 ```
+
+CLI 仅在至少传入一个 `--tag` 时发送标签字段；如需用 `tags: []` 清空标签，请使用 HTTP 或 SDK。
 
 ```bash
 openviking reindex viking://user/default/skills --mode semantic_and_vectors --wait false

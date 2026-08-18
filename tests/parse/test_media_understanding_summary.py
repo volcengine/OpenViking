@@ -1,11 +1,14 @@
 import asyncio
+import io
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from PIL import Image
 
 from openviking.parse.parsers.media import utils as media_utils
+from openviking_cli.utils.config.parser_config import ImageConfig
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
@@ -23,6 +26,9 @@ class _FS:
         if offset >= len(self.content):
             return b""
         return self.content[offset : offset + size]
+
+    async def read_file_bytes(self, _uri, ctx=None):
+        return self.content
 
 
 class _BlockingReadFS:
@@ -102,6 +108,15 @@ class _CapturingPathClient(_MediaVLM):
         return "# Clip\n\nUseful summary."
 
 
+class _ImageVLM:
+    def __init__(self):
+        self.images = []
+
+    async def get_vision_completion_async(self, *, prompt, images):
+        self.images = images
+        return "image summary"
+
+
 def _config(model_config, *, max_chars=4000):
     if hasattr(model_config, "get_client_instance"):
         vlm = model_config.get_client_instance()
@@ -116,6 +131,17 @@ def _config(model_config, *, max_chars=4000):
         ),
         output_language_override="en",
     )
+
+
+def _jpeg_bytes(width: int, height: int) -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (width, height), "white").save(buf, format="JPEG")
+    return buf.getvalue()
+
+
+def _image_size(data: bytes) -> tuple[int, int]:
+    with Image.open(io.BytesIO(data)) as img:
+        return img.size
 
 
 def _lazy_client(*, return_value=None, side_effect=None):
@@ -174,6 +200,32 @@ async def test_media_concurrency_bounds_staging_and_inference(monkeypatch):
 
     assert all(result["summary"] for result in results)
     assert fs.peak_reads == 2
+
+
+async def test_image_summary_downsamples_large_model_input(monkeypatch):
+    original = _jpeg_bytes(80, 220)
+    fs = _FS(original)
+    vlm = _ImageVLM()
+    config = SimpleNamespace(
+        vlm=vlm,
+        image=ImageConfig(
+            preview_max_dimension=64,
+            max_file_size_mb=100.0,
+            large_image_threshold_dimension=100,
+        ),
+    )
+    monkeypatch.setattr(media_utils, "get_viking_fs", lambda: fs)
+    monkeypatch.setattr(media_utils, "get_openviking_config", lambda: config)
+
+    result = await media_utils.generate_image_summary(
+        "viking://resources/docs/large.jpg",
+        "large.jpg",
+    )
+
+    assert result == {"name": "large.jpg", "summary": "image summary"}
+    assert len(vlm.images) == 1
+    assert max(_image_size(vlm.images[0])) <= 64
+    assert fs.content == original
 
 
 async def test_unknown_size_media_stops_at_hard_staging_limit(

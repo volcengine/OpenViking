@@ -32,6 +32,7 @@ from openviking.connector.routing import (
     is_full_commit_sha,
 )
 from openviking.core.content_targets import ContentTargetSpec
+from openviking.parse.mode import ParseMode
 from openviking.resource.processing_mode import (
     DEFAULT_PROCESSING_MODE,
     VECTORS_ONLY,
@@ -113,6 +114,7 @@ class ConnectorDelegate:
         build_index: bool = True,
         summarize: bool = False,
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
+        parse_mode: ParseMode = ParseMode.DEFAULT,
         watch_interval: float = 0,
         connector_args: Optional[Dict[str, Any]] = None,
         kwargs: Optional[Dict[str, Any]] = None,
@@ -203,6 +205,7 @@ class ConnectorDelegate:
             build_index=build_index,
             summarize=summarize,
             processing_mode=processing_mode,
+            parse_mode=parse_mode,
             watch_interval=watch_interval,
             connector_args=connector_args,
             kwargs=kwargs or {},
@@ -234,6 +237,7 @@ class ConnectorDelegate:
         build_index: bool,
         summarize: bool,
         processing_mode: ProcessingMode,
+        parse_mode: ParseMode,
         watch_interval: float,
         connector_args: Dict[str, Any],
         kwargs: Dict[str, Any],
@@ -245,6 +249,8 @@ class ConnectorDelegate:
         Returns an empty list when the request is fully supported.
         """
         unsupported: List[str] = []
+        if parse_mode is ParseMode.NO_SPLIT:
+            unsupported.append("parse_mode=no_split")
         if wait:
             unsupported.append("wait=true (Connector imports run asynchronously)")
         if parent:

@@ -8,6 +8,7 @@ import {
   ExternalLinkIcon,
   KeyRoundIcon,
   ShieldCheckIcon,
+  TriangleAlertIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
@@ -192,6 +193,7 @@ function ConnectionSettingsRoute() {
     staleTime: 15_000,
   })
   const isDevMode = serverMode === 'dev'
+  const isUnsupportedAuthMode = serverMode === 'oidc' || serverMode === 'ldap'
   const rootApiKey = connection.adminApiKey.trim()
   const hasControlCredential = Boolean(draft.adminApiKey.trim())
   const hasDataCredential = Boolean(draft.apiKey.trim())
@@ -283,6 +285,33 @@ function ConnectionSettingsRoute() {
             <p className="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
               {t('connection.devMode')}
             </p>
+          ) : isUnsupportedAuthMode ? (
+            <Alert variant="destructive" className="border-destructive/50">
+              <TriangleAlertIcon className="size-5" />
+              <AlertTitle>{t('connection.unsupportedAuthMode.title')}</AlertTitle>
+              <AlertDescription className="grid gap-2">
+                <p>
+                  {t('connection.unsupportedAuthMode.primary', {
+                    mode: serverMode,
+                  })}
+                </p>
+                <p>
+                  {t('connection.unsupportedAuthMode.description', {
+                    mode: serverMode,
+                    ov: 'ov',
+                  })}
+                </p>
+                <a
+                  href={authenticationGuideUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-1 inline-flex w-fit items-center gap-1 font-medium text-foreground underline underline-offset-2"
+                >
+                  {t('connection.keyGuide.learnMore')}
+                  <ExternalLinkIcon className="size-3.5" />
+                </a>
+              </AlertDescription>
+            </Alert>
           ) : (
             <>
               <div className="grid gap-4 md:grid-cols-2">

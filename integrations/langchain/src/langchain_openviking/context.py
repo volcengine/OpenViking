@@ -179,7 +179,6 @@ class OpenVikingSessionContextAssembler:
         user: str | None = None,
         user_id: str | None = None,
         actor_peer_id: str | None = None,
-        path: str | None = None,
         timeout: float = 60.0,
         extra_headers: dict[str, str] | None = None,
         auto_initialize: bool = True,
@@ -201,7 +200,6 @@ class OpenVikingSessionContextAssembler:
             user=user,
             user_id=user_id,
             actor_peer_id=actor_peer_id,
-            path=path,
             timeout=timeout,
             extra_headers=extra_headers,
             auto_initialize=auto_initialize,
@@ -215,7 +213,6 @@ class OpenVikingSessionContextAssembler:
             user=user,
             user_id=user_id,
             actor_peer_id=actor_peer_id,
-            path=path,
             timeout=timeout,
             extra_headers=extra_headers,
             auto_initialize=auto_initialize,
@@ -327,15 +324,12 @@ class OpenVikingSessionContextAssembler:
         whose method calls support recovery. Direct attributes on that handle
         are best-effort during recovery; use ``await handle.get()`` only to read
         raw properties immediately because recovery may replace that snapshot.
-        Embedded ``path=`` connections return an adapter-owned synchronous
-        client whose calls are dispatched through a worker thread.
         """
 
         self._raise_if_closed()
         client = await ensure_async_client(
             self._connection,
             client_cache=self._async_clients,
-            embedded_client_factory=self._get_client,
         )
         self._raise_if_closed()
         return client
@@ -632,7 +626,6 @@ def with_openviking_context(
     account: str | None = None,
     user: str | None = None,
     user_id: str | None = None,
-    path: str | None = None,
     timeout: float = 60.0,
     extra_headers: dict[str, str] | None = None,
     auto_initialize: bool = True,
@@ -666,7 +659,6 @@ def with_openviking_context(
         user=user,
         user_id=user_id,
         actor_peer_id=actor_peer_id,
-        path=path,
         timeout=timeout,
         extra_headers=extra_headers,
         auto_initialize=auto_initialize,
@@ -686,7 +678,6 @@ def with_openviking_context(
         user=user,
         user_id=user_id,
         actor_peer_id=actor_peer_id,
-        path=path,
         timeout=timeout,
         extra_headers=extra_headers,
         auto_initialize=auto_initialize,

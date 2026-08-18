@@ -134,7 +134,7 @@ class VLMConfig(BaseModel):
     thinking: bool = Field(default=False, description="Enable thinking mode for VolcEngine models")
 
     max_concurrent: int = Field(
-        default=64, description="Maximum number of concurrent LLM calls for semantic processing"
+        default=32, description="Maximum number of concurrent LLM calls for semantic processing"
     )
 
     media: VLMMediaConfig = Field(

@@ -1231,9 +1231,10 @@ async def test_add_resource_uploads_materialized_sandbox_file(monkeypatch):
     captured = {}
 
     class _UploadClient:
-        async def add_resource(self, path, description):
+        async def add_resource(self, path, description, *, to=None):
             captured["content"] = Path(path).read_bytes()
             captured["description"] = description
+            captured["to"] = to
             return {"root_uri": "viking://user/u1/resources/template"}
 
     tool = VikingAddResourceTool()
@@ -1256,7 +1257,11 @@ async def test_add_resource_uploads_materialized_sandbox_file(monkeypatch):
     )
 
     assert result.startswith("Successfully added resource")
-    assert captured == {"content": b"binary-template", "description": "template"}
+    assert captured == {
+        "content": b"binary-template",
+        "description": "template",
+        "to": None,
+    }
 
 
 @pytest.mark.asyncio
@@ -1322,9 +1327,15 @@ async def test_opensandbox_reads_binary_files_through_vke_sdk(tmp_path):
     captured = {}
 
     class _Files:
-        async def read_bytes(self, path):
+        async def read_bytes_stream(self, path, *, range_header):
             captured["path"] = path
-            return b"binary-payload"
+            captured["range_header"] = range_header
+
+            async def chunks():
+                yield b"binary-"
+                yield b"payload"
+
+            return chunks()
 
     backend = OpenSandboxBackend.__new__(OpenSandboxBackend)
     backend._sandbox = SimpleNamespace(files=_Files())
@@ -1333,3 +1344,4 @@ async def test_opensandbox_reads_binary_files_through_vke_sdk(tmp_path):
 
     assert await backend.read_file_bytes("assets/template.bin") == b"binary-payload"
     assert captured["path"] == "/workspace/assets/template.bin"
+    assert captured["range_header"] is None

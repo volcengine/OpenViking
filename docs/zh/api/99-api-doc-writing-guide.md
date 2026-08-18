@@ -146,7 +146,7 @@ API 文档按模块组织，每个模块一个文件，使用两位数字序号�
 示例切换由加粗标签自动生成。调用方式标签必须单独成段，并使用以下固定基础写法：
 `**Python SDK**`、`**TypeScript SDK**`、`**Go SDK**`、`**HTTP API**`、`**CLI**`。
 需要区分调用形态时，可以在同一个加粗标签内追加半角括号限定词，例如
-`**Python SDK (Embedded / HTTP)**`；不要把限定词写在加粗标签外，也不要使用全角括号。
+`**Python HTTP SDK**`；不要把限定词写在加粗标签外，也不要使用全角括号。
 只展示实现中真实存在的调用方式；某个 SDK 或 CLI 没有对应能力时应省略该 Tab，并简短说明
 可用的替代入口。不要把手写 HTTP 请求包装成不存在的 SDK 方法。
 
@@ -174,8 +174,8 @@ API 文档应按 API 模块和具体接口组织，而不是按客户端语言�
 5. 建立向量索引
 
 **代码入口**：
-- `openviking/async_client.py:AsyncOpenViking.add_resource()` - 异步 SDK 入口
-- `openviking/sync_client.py:SyncOpenViking.add_resource()` - 同步 SDK 入口
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.add_resource()` - 异步 SDK 入口
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.add_resource()` - 同步 SDK 入口
 - `openviking/service/resource_service.py:ResourceService.add_resource()` - 核心实现
 - `openviking/server/routers/resources.py:add_resource()` - HTTP 路由
 - `crates/ov_cli/src/handlers.rs:handle_add_resource()` - CLI 处理函数
@@ -218,10 +218,9 @@ curl -X POST http://localhost:1933/api/v1/resources \
 **Python SDK**
 
 ```python
-import openviking as ov
+from openviking_sdk import SyncHTTPClient
 
-client = ov.OpenViking(path="./data")
-client.initialize()
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 
 result = client.add_resource(
     "./documents/guide.md",

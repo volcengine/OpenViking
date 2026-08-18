@@ -21,10 +21,8 @@ from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSHTTPError, AGFSNotFoundError
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext, Role
-from openviking.session.memory.constants import (
-    AGENT_EVOLUTION_MEMORY_TYPES,
-    EXECUTION_MEMORY_TYPES,
-)
+from openviking.session.auto_commit_policy import AutoCommitPolicy
+from openviking.session.memory.constants import AGENT_EVOLUTION_MEMORY_TYPES
 from openviking.session.memory_policy import MemoryPolicy
 from openviking.session.retention import (
     RETENTION_MODE_TURN_BUDGET,
@@ -59,7 +57,7 @@ from openviking_cli.utils import get_logger, run_async
 from openviking_cli.utils.config import get_openviking_config
 
 if TYPE_CHECKING:
-    from openviking.session.compressor_v2 import SessionCompressorV2 as SessionCompressor
+    from openviking.session.compressor_v3 import SessionCompressorV3 as SessionCompressor
     from openviking.storage import VikingDBManager
     from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
     from openviking.storage.viking_fs import VikingFS
@@ -67,14 +65,13 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-_ARCHIVE_WAIT_POLL_SECONDS = 0.1
 _PHASE2_QUEUE_WAIT_TIMEOUT_SECONDS = 1800.0
 _MEMORY_EXTRACTION_MAX_RETRIES = 3
 _MEMORY_EXTRACTION_RETRY_BASE_DELAY_SECONDS = 1.0
 _MEMORY_EXTRACTION_RETRY_MAX_DELAY_SECONDS = 8.0
-_AGENT_TRAINING_REQUIRED_MEMORY_TYPES = frozenset({"cases", "trajectories"})
+_AGENT_TRAINING_REQUIRED_MEMORY_TYPES = frozenset({"experiences"})
 _SESSION_PHASE1_LOCK_TIMEOUT_SECONDS = 30.0
-_MEMORY_STEP_NAMES = ("long_term", "execution")
+_MEMORY_STEP_NAMES = ("long_term",)
 _CUMULATIVE_CHECKPOINT_VERSION = 2
 
 
@@ -151,16 +148,27 @@ def _agent_memory_skip_reason(
     return None
 
 
-def _split_policy_memory_types(
-    memory_types: Optional[set[str]],
-) -> tuple[Optional[set[str]], Optional[set[str]]]:
-    if memory_types is None:
-        return None, None
-    return memory_types - EXECUTION_MEMORY_TYPES, memory_types & EXECUTION_MEMORY_TYPES
-
-
 def _default_memory_counts() -> Dict[str, int]:
     return {"total": 0}
+
+
+def _resolve_event_search_tags(
+    commit_tags: Optional[List[str]],
+    session_default_tags: Optional[List[str]],
+) -> List[str]:
+    """Resolve the event tags for a commit against the session default.
+
+    Three-state precedence:
+      - ``commit_tags is None``  -> use the session default (may be empty)
+      - ``commit_tags == []``    -> do not inject default tags for this commit
+      - non-empty ``commit_tags`` -> override the session default
+
+    The chosen list is normalized to canonical ``key=value`` tags.
+    """
+    from openviking.utils.tags import normalize_search_tags
+
+    chosen = commit_tags if commit_tags is not None else session_default_tags
+    return normalize_search_tags(chosen)
 
 
 def _message_peer_ids(messages: List[Message]) -> set[str]:
@@ -458,6 +466,19 @@ class SessionMeta:
     retained_message_token_budget: int = 0
     min_raw_tail_steps: int = 1
     memory_policy: Optional[Dict[str, Any]] = None
+    # Automatic-commit policy. None keeps auto-commit disabled; a dict enables
+    # it with the stored bounds. Session config PATCH may update it.
+    auto_commit_policy: Optional[Dict[str, Any]] = None
+    # Timestamp of the most recent add_message, used by the idle scan to decide
+    # whether an idle-timeout commit is due.
+    last_message_at: str = ""
+    # Timestamp of the most recent successful auto-commit, surfaced via session
+    # GET and used to throttle auto-commit frequency.
+    last_auto_commit_at: str = ""
+    # Default custom scalar tags applied to event memories extracted from this
+    # session. Maps to config.memory_extraction_config.events.tags in the API.
+    # None means no session default; a commit may still override per-call.
+    event_search_tags: Optional[List[str]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         data = {
@@ -479,9 +500,16 @@ class SessionMeta:
             "retained_message_token_budget": self.retained_message_token_budget,
             "min_raw_tail_steps": self.min_raw_tail_steps,
             "memory_policy": dict(self.memory_policy) if self.memory_policy is not None else None,
+            "auto_commit_policy": (
+                dict(self.auto_commit_policy) if self.auto_commit_policy is not None else None
+            ),
+            "last_message_at": self.last_message_at,
+            "last_auto_commit_at": self.last_auto_commit_at,
         }
         if self.total_message_count is not None:
             data["total_message_count"] = self.total_message_count
+        if self.event_search_tags is not None:
+            data["event_search_tags"] = list(self.event_search_tags)
         return data
 
     @classmethod
@@ -528,6 +556,10 @@ class SessionMeta:
             ),
             min_raw_tail_steps=max(0, int(data.get("min_raw_tail_steps", 1) or 0)),
             memory_policy=data.get("memory_policy"),
+            auto_commit_policy=data.get("auto_commit_policy"),
+            last_message_at=data.get("last_message_at", ""),
+            last_auto_commit_at=data.get("last_auto_commit_at", ""),
+            event_search_tags=data.get("event_search_tags"),
         )
 
 
@@ -595,8 +627,6 @@ class Session:
         self._agent_evolution_enabled_provider = agent_evolution_enabled_provider
         self._usage_reporter = usage_reporter
 
-        logger.info(f"Session created: {self.session_id} for user {self.user}")
-
     async def load(self):
         """Load session data from storage."""
         if self._loaded:
@@ -611,26 +641,10 @@ class Session:
                 for line in content.strip().split("\n")
                 if line.strip()
             ]
-            logger.info(f"Session loaded: {self.session_id} ({len(self._messages)} messages)")
         except Exception as exc:
             if not _is_storage_not_found(exc):
                 raise
             logger.debug(f"Session {self.session_id} not found, starting fresh")
-
-        # Restore compression_index (scan history directory)
-        try:
-            history_items = await self._viking_fs.ls(f"{self._session_uri}/history", ctx=self.ctx)
-            archives = [
-                item["name"] for item in history_items if item["name"].startswith("archive_")
-            ]
-            if archives:
-                max_index = max(int(a.split("_")[1]) for a in archives)
-                self._compression.compression_index = max_index
-                self._stats.compression_count = len(archives)
-                logger.debug(f"Restored compression_index: {max_index}")
-        except Exception as exc:
-            if not _is_storage_not_found(exc):
-                raise
 
         # Load .meta.json
         try:
@@ -638,18 +652,47 @@ class Session:
                 f"{self._session_uri}/.meta.json", ctx=self.ctx
             )
             self._meta = SessionMeta.from_dict(json.loads(meta_content))
+            self._compression.compression_index = max(0, int(self._meta.commit_count))
+            self._stats.compression_count = self._compression.compression_index
         except Exception as exc:
             if not _is_storage_not_found(exc):
                 raise
             # Old session without meta — derive from existing data
-            self._meta.message_count = len(self._messages)
+            try:
+                history_items = await self._viking_fs.ls(
+                    f"{self._session_uri}/history", ctx=self.ctx
+                )
+                archive_indices = [
+                    int(match.group(1))
+                    for item in history_items
+                    if (match := re.fullmatch(r"archive_(\d+)", item["name"]))
+                ]
+                if archive_indices:
+                    self._compression.compression_index = max(archive_indices)
+                    self._stats.compression_count = len(archive_indices)
+            except Exception as exc:
+                if not _is_storage_not_found(exc):
+                    raise
             self._meta.commit_count = self._compression.compression_index
             self._meta.total_message_count = None
+
+        # message_count mirrors the live message list, maintained by every write
+        # path. Recompute on load so a stale persisted value can't drift.
+        self._meta.message_count = len(self._messages)
 
         if not self._meta.created_by_account_id:
             self._meta.created_by_account_id = self.ctx.account_id
         if not self._meta.created_by_user_id:
             self._meta.created_by_user_id = self.ctx.user.user_id
+        # Auto-commit stays disabled when no policy is stored. When present,
+        # normalize the stored policy so missing fields are filled and bounds
+        # are clamped. The policy's keep_recent_count is a commit-time
+        # reservation only and is intentionally NOT mirrored onto
+        # meta.keep_recent_count.
+        if self._meta.auto_commit_policy is not None:
+            self._meta.auto_commit_policy = AutoCommitPolicy.from_dict(
+                self._meta.auto_commit_policy
+            ).to_dict()
         # WM v2: always rebuild pending_tokens from current messages so the
         # counter stays consistent across restarts and is also backfilled for
         # legacy sessions whose .meta.json predates these fields. O(n) once,
@@ -706,12 +749,29 @@ class Session:
                 raise
             return False
 
+    async def is_materialized(self) -> bool:
+        """Check whether the session's authoritative live-message file exists."""
+        try:
+            await self._viking_fs.stat(
+                f"{self._session_uri}/messages.jsonl",
+                ctx=self.ctx,
+            )
+            return True
+        except Exception as exc:
+            if not _is_storage_not_found(exc):
+                raise
+            return False
+
     async def ensure_exists(self) -> None:
         """Materialize session root and messages file if missing."""
         if await self.exists():
             return
         await self._viking_fs.mkdir(self._session_uri, exist_ok=True, ctx=self.ctx)
-        await self._viking_fs.write_file(f"{self._session_uri}/messages.jsonl", "", ctx=self.ctx)
+        await self._viking_fs.write_file(
+            f"{self._session_uri}/messages.jsonl",
+            "",
+            ctx=self.ctx,
+        )
         await self._save_meta()
 
     async def _save_meta(self, lease_ref: Optional[Any] = None) -> None:
@@ -725,6 +785,48 @@ class Session:
             ctx=self.ctx,
             lease_ref=lease_ref,
         )
+
+    async def update_config(
+        self,
+        *,
+        event_search_tags: Optional[List[str]] = None,
+        auto_commit_policy: Optional[Dict[str, Any]] = None,
+        update_auto_commit_policy: bool = False,
+    ) -> None:
+        """Update mutable session config without overwriting concurrent meta changes."""
+        update_auto_commit_policy = (
+            update_auto_commit_policy or auto_commit_policy is not None
+        )
+        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
+        lease = await self._viking_fs._async_agfs.pathlock_acquire_tree(
+            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
+        )
+        try:
+            try:
+                meta_content = await self._viking_fs.read_file(
+                    f"{self._session_uri}/.meta.json",
+                    ctx=self.ctx,
+                )
+                self._meta = SessionMeta.from_dict(json.loads(meta_content))
+            except Exception as exc:
+                if not _is_storage_not_found(exc):
+                    raise
+            if event_search_tags is not None:
+                self._meta.event_search_tags = list(event_search_tags)
+            if update_auto_commit_policy:
+                if auto_commit_policy is None:
+                    self._meta.auto_commit_policy = None
+                else:
+                    existing = dict(self._meta.auto_commit_policy or {})
+                    existing.update(auto_commit_policy)
+                    self._meta.auto_commit_policy = AutoCommitPolicy.from_dict(existing).to_dict()
+            await self._save_meta(lease_ref=lease)
+        finally:
+            await self._viking_fs._async_agfs.pathlock_release(lease)
+
+    async def update_event_search_tags(self, event_search_tags: List[str]) -> None:
+        """Update event-memory default tags."""
+        await self.update_config(event_search_tags=event_search_tags)
 
     @property
     def messages(self) -> List[Message]:
@@ -1134,20 +1236,19 @@ class Session:
             self._apply_appended_messages_to_state(messages)
             return
 
-        uri_to_path = getattr(self._viking_fs, "_uri_to_path", None)
-        if not callable(uri_to_path):
-            # Minimal/embedded VikingFS implementations predate transaction
-            # locks. Preserve their existing append contract; production
-            # VikingFS always takes the authoritative path-lock branch below.
-            await self._append_messages_without_path_lock(messages)
-            return
-
-        session_path = uri_to_path(self._session_uri, ctx=self.ctx)
+        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
         lease = await self._viking_fs._async_agfs.pathlock_acquire_tree(
             session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
         )
         try:
-            self._messages = await self._read_live_messages_strict()
+            live_messages_missing = False
+            try:
+                self._messages = await self._read_live_messages_strict()
+            except Exception as exc:
+                if not _is_storage_not_found(exc):
+                    raise
+                self._messages = []
+                live_messages_missing = True
             in_memory_meta = self._meta
             try:
                 meta_content = await self._viking_fs.read_file(
@@ -1162,47 +1263,23 @@ class Session:
 
             self._apply_appended_messages_to_state(messages)
             batch_content = "".join(message.to_jsonl() + "\n" for message in messages)
-            await self._viking_fs.append_file(
-                f"{self._session_uri}/messages.jsonl",
-                batch_content,
-                ctx=self.ctx,
-                lease_ref=lease,
-            )
+            if live_messages_missing:
+                await self._viking_fs.write_file(
+                    f"{self._session_uri}/messages.jsonl",
+                    batch_content,
+                    ctx=self.ctx,
+                    lease_ref=lease,
+                )
+            else:
+                await self._viking_fs.append_file(
+                    f"{self._session_uri}/messages.jsonl",
+                    batch_content,
+                    ctx=self.ctx,
+                    lease_ref=lease,
+                )
             await self._save_meta(lease_ref=lease)
         finally:
             await self._viking_fs._async_agfs.pathlock_release(lease)
-
-    async def _append_messages_without_path_lock(self, messages: List[Message]) -> None:
-        """Compatibility append for storage adapters without path locking."""
-        from openviking_cli.exceptions import NotFoundError
-
-        try:
-            self._messages = await self._read_live_messages_strict()
-        except (FileNotFoundError, NotFoundError):
-            # A fresh lightweight adapter may not materialize messages.jsonl
-            # until its first append.
-            pass
-
-        in_memory_meta = self._meta
-        try:
-            meta_content = await self._viking_fs.read_file(
-                f"{self._session_uri}/.meta.json",
-                ctx=self.ctx,
-            )
-            self._meta = SessionMeta.from_dict(json.loads(meta_content))
-        except Exception:
-            # Keep the in-memory legacy metadata if the lightweight adapter
-            # has no metadata file or cannot decode an older one.
-            self._meta = in_memory_meta
-
-        self._apply_appended_messages_to_state(messages)
-        batch_content = "".join(message.to_jsonl() + "\n" for message in messages)
-        await self._viking_fs.append_file(
-            f"{self._session_uri}/messages.jsonl",
-            batch_content,
-            ctx=self.ctx,
-        )
-        await self._save_meta()
 
     def _apply_appended_messages_to_state(self, messages: List[Message]) -> None:
         """Update in-memory counters after an authoritative root reload."""
@@ -1228,6 +1305,11 @@ class Session:
         self._meta.message_count = len(self._messages)
         if self._meta.total_message_count is not None:
             self._meta.total_message_count += len(messages)
+        if messages:
+            # Track the newest activity so the idle scan can decide when an
+            # idle-timeout auto-commit is due. Written under the same append
+            # path lock as the counters above.
+            self._meta.last_message_at = get_current_timestamp()
 
     def _build_messages(
         self,
@@ -1584,6 +1666,28 @@ class Session:
             if await self._archive_file_exists(archive_uri, ".failed.json"):
                 return False
 
+            queue_message = marker.get("queue_message")
+            task_id = queue_message.get("task_id") if isinstance(queue_message, dict) else None
+            from openviking.service.task_tracker import get_task_tracker
+
+            tracker = get_task_tracker()
+            if not task_id or not tracker.has_work(str(task_id)):
+                error = "Phase 1 has no QueueFS work to resume"
+                await self._write_failed_marker(
+                    archive_uri,
+                    stage="phase1_recovery",
+                    error=error,
+                    lease_ref=lease,
+                )
+                if task_id:
+                    await tracker.fail(
+                        str(task_id),
+                        error,
+                        account_id=self.ctx.account_id,
+                        user_id=self.ctx.user.user_id,
+                    )
+                return False
+
             try:
                 if not marker:
                     raise ValueError("Phase 1 metadata is missing")
@@ -1683,12 +1787,15 @@ class Session:
         keep_recent_turn_count: Optional[int] = None,
         retained_message_token_budget: Optional[int] = None,
         min_raw_tail_steps: Optional[int] = None,
+        persist_keep_recent_count: bool = True,
+        record_auto_commit_success: bool = False,
+        event_tags: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Archive immediately and enqueue restart-safe Phase 2 processing.
 
         Phase 1 (Archive prep, path-lock protected): Split messages into
         archive/retain parts, persist a recoverable intent and archive raw,
-        enqueue Phase 2, then atomically publish the retained root state with
+        enqueue Phase 2, then publish the retained root state with
         ``phase1.status=ready``. Uses a distributed filesystem lock across
         workers and processes.
         Phase 2 (Memory extraction): Runs through the persistent QueueFS queue.
@@ -1699,6 +1806,18 @@ class Session:
                 behavior of archiving everything. The plugin's afterTurn path
                 typically passes its configured value (default 10); the compact
                 path passes ``0``.
+            persist_keep_recent_count: When ``True`` (default), ``keep_recent_count``
+                is remembered in meta for subsequent add_message() accounting.
+                The idle full-commit path passes ``False`` with
+                ``keep_recent_count=0`` so a one-off full archive does not wipe
+                the stored keep preference.
+            record_auto_commit_success: When ``True``, clear the auto-commit
+                error fields and stamp ``last_auto_commit_at`` in the same
+                lock-protected meta update as the commit boundary.
+            event_tags: Per-commit override for the custom scalar tags applied
+                to event memories. ``None`` uses the session default
+                (``meta.event_search_tags``); an empty list disables default-tag
+                injection for this commit; a non-empty list overrides it.
 
         Returns a task_id for tracking Phase 2 progress.
         """
@@ -1789,6 +1908,22 @@ class Session:
                 # legacy sessions may not have metadata yet.
                 pass
 
+            effective_event_tags = _resolve_event_search_tags(
+                event_tags, self._meta.event_search_tags
+            )
+
+            # keep_recent_count controls how many live messages survive this
+            # commit. stored_keep_recent_count is what we persist for future
+            # add_message accounting: the idle full-commit path archives
+            # everything once (keep_recent_count=0) without discarding the
+            # caller's stored keep preference. Read it from the freshly reloaded
+            # meta so a concurrent manual commit's value is not reverted.
+            stored_keep_recent_count = (
+                keep_recent_count
+                if persist_keep_recent_count
+                else max(0, int(self._meta.keep_recent_count or 0))
+            )
+
             # A Session object may have been loaded by another worker before a
             # different worker updated the persisted default policy. Phase 2
             # must use the policy from the same lock-protected snapshot as the
@@ -1808,15 +1943,23 @@ class Session:
                     effective_memory_types=set(effective_memory_types),
                 )
 
-            archive_refs = await self._list_archive_refs()
             self._compression.compression_index = max(
-                [archive["index"] for archive in archive_refs],
-                default=0,
+                self._compression.compression_index,
+                int(self._meta.commit_count),
             )
+            while await self._viking_fs.exists(
+                (
+                    f"{self._session_uri}/history/"
+                    f"archive_{self._compression.compression_index + 1:03d}"
+                ),
+                ctx=self.ctx,
+            ):
+                self._compression.compression_index += 1
+
             if not self._messages:
                 self._meta.pending_tokens = 0
                 self._remember_retention_policy(
-                    keep_recent_count=keep_recent_count,
+                    keep_recent_count=stored_keep_recent_count,
                     retention_mode=retention_mode,
                     keep_recent_turn_count=effective_keep_turns if turn_mode else 0,
                     retained_message_token_budget=effective_token_budget if turn_mode else 0,
@@ -1866,7 +2009,7 @@ class Session:
                 self._meta.pending_tokens = 0
                 self._meta.message_count = total
                 self._remember_retention_policy(
-                    keep_recent_count=keep_recent_count,
+                    keep_recent_count=stored_keep_recent_count,
                     retention_mode=retention_mode,
                     keep_recent_turn_count=effective_keep_turns if turn_mode else 0,
                     retained_message_token_budget=effective_token_budget if turn_mode else 0,
@@ -1903,12 +2046,11 @@ class Session:
                 user=self.ctx.user.to_dict(),
                 memory_policy=effective_memory_policy,
                 usage_uris=list(dict.fromkeys(u.uri for u in usage_snapshot if u.uri)),
+                record_auto_commit_success=record_auto_commit_success,
+                event_search_tags=list(effective_event_tags),
             )
             phase1_stage = "phase1_persist"
             try:
-                # Persist the full intent before any root rewrite. Queueing while
-                # holding the same session lock lets a consumer either observe
-                # final ready metadata or recover the exact interrupted state.
                 await self._write_phase1_marker(
                     archive_uri,
                     queue_message=queue_msg.to_dict(),
@@ -1955,11 +2097,6 @@ class Session:
                     queue_msg.to_dict(),
                 )
 
-                # Register after the durable queue write but before publishing
-                # ready. The consumer is blocked by this session lock until
-                # ready, so it cannot complete the task before registration;
-                # if registration fails, the queued consumer will observe the
-                # Phase 1 failure marker and create/fail the task itself.
                 phase1_stage = "task_tracker_create"
                 await get_task_tracker().create(
                     "session_commit",
@@ -1975,7 +2112,7 @@ class Session:
                 self._meta.message_count = len(self._messages)
                 self._meta.pending_tokens = 0
                 self._remember_retention_policy(
-                    keep_recent_count=keep_recent_count,
+                    keep_recent_count=stored_keep_recent_count,
                     retention_mode=retention_mode,
                     keep_recent_turn_count=effective_keep_turns if turn_mode else 0,
                     retained_message_token_budget=effective_token_budget if turn_mode else 0,
@@ -1986,6 +2123,11 @@ class Session:
                     self._compression.compression_index,
                 )
                 self._meta.last_commit_at = get_current_timestamp()
+                if record_auto_commit_success:
+                    # Stamp success in the same lock-protected meta write as the
+                    # commit boundary, so an idle scan and a concurrent worker
+                    # never see a stale state.
+                    self._meta.last_auto_commit_at = get_current_timestamp()
                 await self._save_meta(lease_ref=lease)
                 await self._write_phase1_ready_marker(archive_uri, lease_ref=lease)
             except Exception as e:
@@ -2040,7 +2182,7 @@ class Session:
             error="session commit cancelled",
         )
 
-    async def resume_queued_commit(self, msg: "SessionCommitMsg") -> None:
+    async def resume_queued_commit(self, msg: "SessionCommitMsg") -> bool:
         """Run one durable Phase 2 job from its archived messages."""
         from openviking.service.task_tracker import get_task_tracker
 
@@ -2060,14 +2202,14 @@ class Session:
                 raise
         else:
             if task.status.value == "completed":
-                return
+                return True
             await tracker.complete(
                 msg.task_id,
                 {"session_id": self.session_id, "archive_uri": msg.archive_uri},
                 account_id=self.ctx.account_id,
                 user_id=self.ctx.user.user_id,
             )
-            return
+            return True
 
         try:
             failed = json.loads(
@@ -2083,7 +2225,7 @@ class Session:
                 account_id=self.ctx.account_id,
                 user_id=self.ctx.user.user_id,
             )
-            return
+            return True
 
         if not await self._ensure_phase1_ready(msg.archive_uri):
             try:
@@ -2102,7 +2244,10 @@ class Session:
                 account_id=self.ctx.account_id,
                 user_id=self.ctx.user.user_id,
             )
-            return
+            return True
+
+        if not await self._can_run_archive(self._archive_index_from_uri(msg.archive_uri)):
+            return False
 
         archive_error = ""
         try:
@@ -2127,7 +2272,7 @@ class Session:
                 account_id=self.ctx.account_id,
                 user_id=self.ctx.user.user_id,
             )
-            return
+            return True
 
         queued_policy = MemoryPolicy.from_dict(msg.memory_policy)
         archive_meta = await self._read_archive_meta(msg.archive_uri)
@@ -2168,7 +2313,10 @@ class Session:
             agent_evolution_enabled=agent_evolution_enabled,
             agent_memory_skip_reason=agent_memory_skip_reason,
             user_config_error=user_config_error,
+            record_auto_commit_success=msg.record_auto_commit_success,
+            event_search_tags=list(msg.event_search_tags or []),
         )
+        return True
 
     async def _run_usage_reporting(
         self,
@@ -2205,6 +2353,8 @@ class Session:
         agent_evolution_enabled: bool = True,
         agent_memory_skip_reason: Optional[str] = None,
         user_config_error: Optional[str] = None,
+        record_auto_commit_success: bool = False,
+        event_search_tags: Optional[List[str]] = None,
     ) -> None:
         """Phase 2: Extract memories, write relations, enqueue — runs in background."""
         from openviking.service.task_tracker import get_task_tracker
@@ -2224,7 +2374,6 @@ class Session:
         archive_index = self._archive_index_from_uri(archive_uri)
 
         try:
-            await self._wait_for_previous_archive_done(archive_index)
             (
                 messages,
                 coverage_start_archive,
@@ -2368,7 +2517,7 @@ class Session:
                         )
                         return result
 
-                    # Summary, long-term memory, and execution-derived memory run concurrently.
+                    # Summary and V3 long-term memory extraction run concurrently.
                     memory_extraction_enabled = ov_config.memory.extraction_enabled
                     config_session_skill_extraction_enabled = (
                         ov_config.memory.session_skill_extraction_enabled
@@ -2383,28 +2532,12 @@ class Session:
                     )
                     self_memory_enabled = extraction_scope.allow_self_memory
                     allowed_peer_ids = extraction_scope.allowed_peer_ids
-                    session_skill_extraction_enabled = extraction_scope.include_session_skills
-                    memory_type_filter = extraction_scope.memory_types
-                    has_execution_memory = hasattr(
-                        self._session_compressor, "extract_execution_memories"
-                    )
-                    if has_execution_memory:
-                        long_term_memory_types, execution_memory_types = _split_policy_memory_types(
-                            memory_type_filter
-                        )
-                    else:
-                        long_term_memory_types = memory_type_filter
-                        execution_memory_types = set()
+                    long_term_memory_types = extraction_scope.memory_types
 
                     long_term_messages = [
                         message
                         for message in extraction_messages
                         if message.id not in completed_memory_steps.get("long_term", set())
-                    ]
-                    execution_messages = [
-                        message
-                        for message in extraction_messages
-                        if message.id not in completed_memory_steps.get("execution", set())
                     ]
 
                     long_term_has_work = (
@@ -2413,17 +2546,7 @@ class Session:
                         and (long_term_memory_types is None or bool(long_term_memory_types))
                         and bool(long_term_messages)
                     )
-                    execution_memory_has_work = (
-                        self_memory_enabled
-                        and memory_extraction_enabled
-                        and (execution_memory_types is None or bool(execution_memory_types))
-                        and bool(execution_messages)
-                    )
-                    session_skill_extraction_enabled = (
-                        session_skill_extraction_enabled and execution_memory_has_work
-                    )
-                    has_policy_work = bool(long_term_has_work or execution_memory_has_work)
-                    if self._session_compressor and has_policy_work:
+                    if working_memory_enabled or (self._session_compressor and long_term_has_work):
                         logger.info(
                             "Starting post-commit extraction from %s archived messages",
                             len(messages),
@@ -2437,7 +2560,7 @@ class Session:
                             )
                             extraction_labels.append("archive_summary")
 
-                        if long_term_has_work:
+                        if self._session_compressor and long_term_has_work:
 
                             async def _run_long_term_memory_extraction() -> Any:
                                 # strict_extract_errors=True lets transient failures
@@ -2456,6 +2579,7 @@ class Session:
                                     agent_evolution_enabled=agent_evolution_enabled,
                                     allow_self_memory=self_memory_enabled,
                                     allowed_peer_ids=allowed_peer_ids,
+                                    event_search_tags=event_search_tags,
                                 )
 
                             extraction_tasks.append(
@@ -2468,40 +2592,14 @@ class Session:
                             )
                             extraction_labels.append("long_term")
 
-                        if has_execution_memory and execution_memory_has_work:
-
-                            async def _run_execution_memory_extraction() -> Any:
-                                # See _run_long_term_memory_extraction: surface errors
-                                # so retries can engage and final failures are visible.
-                                return await self._session_compressor.extract_execution_memories(
-                                    messages=execution_messages,
-                                    ctx=self.ctx,
-                                    strict_extract_errors=True,
-                                    latest_archive_overview=latest_archive_overview,
-                                    archive_uri=archive_uri,
-                                    allowed_memory_types=execution_memory_types,
-                                    include_session_skills=session_skill_extraction_enabled,
-                                )
-
-                            extraction_tasks.append(
-                                _run_recorded_memory_step(
-                                    "execution_memory_extraction",
-                                    "execution",
-                                    execution_messages,
-                                    _run_execution_memory_extraction,
-                                )
-                            )
-                            extraction_labels.append("execution")
-
                         _results = await asyncio.gather(
                             *extraction_tasks,
                             return_exceptions=True,
                         )
-                        # The archive outcome is binary: if ANY Phase 2 step
-                        # still fails after retries, no .done coverage is
-                        # published. Successful memory steps keep a message-ID
-                        # progress marker solely to make later raw replay
-                        # idempotent.
+                        # The archive outcome is binary: if any Phase 2 step
+                        # still fails after retries, no .done marker is
+                        # published. Successful steps retain message IDs so the
+                        # same archive can resume without repeating them.
                         extraction_error: Optional[BaseException] = None
                         for label, result in zip(extraction_labels, _results, strict=True):
                             if isinstance(result, Exception):
@@ -2619,6 +2717,7 @@ class Session:
                 archive_index=archive_index,
                 memories_extracted=memories_extracted,
                 telemetry_snapshot=snapshot,
+                record_auto_commit_success=record_auto_commit_success,
             )
 
             # Write .done last so a recovered queue item can skip completed work.
@@ -2888,9 +2987,7 @@ class Session:
         ``failed`` archive no longer replays its raw messages. Cumulative v2
         checkpoints are restored from the terminal archive alone; only a
         terminal legacy v1 delta checkpoint invokes an older-history compatibility
-        scan. Phase 2 coverage bookkeeping is unaffected because it keeps using
-        the full ``_scan_archive_states()`` scan. Public
-        ``pre_archive_abstracts`` stay empty; abstracts are not read.
+        scan. Public ``pre_archive_abstracts`` stay empty; abstracts are not read.
         """
         archive_refs = await self._list_archive_refs()
         newer_pending: List[Dict[str, Any]] = []
@@ -3709,10 +3806,8 @@ class Session:
     ) -> List[Message]:
         """Return pending/failed raw messages not covered by a completed archive.
 
-        Kept as the RFC #3330 recovery helper. ``get_session_context`` no longer
-        calls it because that read path stops at the newest terminal archive
-        instead of walking the full history; Phase 2 roll-forward still replays
-        uncovered failed archives through ``_prepare_phase2_archive_messages``.
+        Kept as the RFC #3330 compatibility helper. Current context assembly
+        and Phase 2 both skip failed archive raw messages.
         """
         states = states if states is not None else await self._scan_archive_states()
         covered = self._covered_archive_ids(states)
@@ -3743,116 +3838,72 @@ class Session:
             raise ValueError(f"Invalid archive URI: {archive_uri}")
         return int(match.group(1))
 
-    async def _wait_for_previous_archive_done(self, archive_index: int) -> bool:
-        """Wait until every earlier archive reaches a terminal state."""
+    async def _can_run_archive(self, archive_index: int) -> bool:
+        """Resolve an orphaned direct predecessor before this Archive runs."""
         if archive_index <= 1 or not self._viking_fs:
             return True
 
-        while True:
-            earlier_states = [
-                state for state in await self._scan_archive_states() if state.index < archive_index
-            ]
-            pending_states = [state for state in earlier_states if state.state == "pending"]
-            if not pending_states:
-                non_completed = [state for state in earlier_states if state.state == "failed"]
-                if non_completed:
-                    logger.info(
-                        "Earlier archives reached terminal non-completed states; "
-                        "continuing with raw replay: %s",
-                        [state.archive_id for state in non_completed],
-                    )
-                return True
+        predecessor_uri = (
+            f"{self._session_uri}/history/archive_{archive_index - 1:03d}"
+        )
+        if not await self._viking_fs.exists(predecessor_uri, ctx=self.ctx):
+            return True
+        if await self._archive_terminal_state(predecessor_uri) != "pending":
+            return True
 
-            # A new-format intent without ready status may be left by a
-            # process interruption. Reconcile it under the session lock rather
-            # than waiting forever for a queue item that may never have existed.
-            reconciled = False
-            for state in pending_states:
-                phase1 = await self._read_phase1_meta(state.archive_uri)
-                if not phase1 or phase1.get("status") == "ready":
-                    continue
-                await self._ensure_phase1_ready(state.archive_uri)
-                reconciled = True
-            if reconciled:
-                continue
-            await asyncio.sleep(_ARCHIVE_WAIT_POLL_SECONDS)
+        phase1 = await self._read_phase1_meta(predecessor_uri)
+        if not phase1:
+            return False
+        if phase1.get("status") != "ready":
+            return not await self._ensure_phase1_ready(predecessor_uri)
+
+        queue_message = phase1.get("queue_message")
+        task_id = queue_message.get("task_id") if isinstance(queue_message, dict) else None
+        if not task_id:
+            return False
+
+        from openviking.service.task_tracker import get_task_tracker
+
+        tracker = get_task_tracker()
+        if tracker.has_work(str(task_id)):
+            return False
+
+        error = "Session commit queue work is missing"
+        await self._write_failed_marker(
+            predecessor_uri,
+            stage="queue_missing",
+            error=error,
+        )
+        await tracker.fail(
+            str(task_id),
+            error,
+            account_id=self.ctx.account_id,
+            user_id=self.ctx.user.user_id,
+        )
+        logger.warning(
+            "Skipped orphaned Session archive without QueueFS work: %s",
+            predecessor_uri,
+        )
+        return True
 
     async def _prepare_phase2_archive_messages(
         self,
         archive_uri: str,
         current_messages: List[Message],
     ) -> tuple[List[Message], str, str, List[str], Dict[str, set[str]]]:
-        """Roll earlier failed raw archives into current Phase 2 input.
-
-        Pending archives are never replayed: their own Phase 2 job still owns
-        them, and this method is called only after all earlier directories have
-        reached a terminal state.
-        """
-        current_index = self._archive_index_from_uri(archive_uri)
-        states = await self._scan_archive_states()
-        covered = self._covered_archive_ids(states)
-        replay_states = [
-            state
-            for state in states
-            if state.index < current_index
-            and state.archive_id not in covered
-            and state.state == "failed"
-        ]
-
-        combined: List[Message] = []
+        """Prepare only the current archive, preserving its retry progress."""
+        current_archive_id = archive_uri.rstrip("/").split("/")[-1]
         completed_memory_steps: Dict[str, set[str]] = {}
-        for state in replay_states:
-            # A terminally-failed earlier archive can have a missing or corrupt
-            # messages.jsonl (legacy "no messages" data, or #3417's own
-            # archive_read terminal path). Tolerate that exactly like
-            # _get_uncovered_archive_messages does, otherwise every subsequent
-            # commit's Phase 2 re-raises here and stays permanently poisoned.
-            # Real storage failures still propagate.
-            try:
-                replayed = await self._read_archive_messages(state.archive_uri)
-            except _ArchiveMessagesCorruptError:
-                logger.warning(
-                    "Skipping failed archive %s in Phase-2 replay: messages.jsonl is corrupt",
-                    state.archive_uri,
-                )
-                continue
-            except Exception as exc:
-                if not _is_storage_not_found(exc):
-                    raise
-                logger.warning(
-                    "Skipping failed archive %s in Phase-2 replay: messages.jsonl is missing",
-                    state.archive_uri,
-                )
-                continue
-            combined.extend(replayed)
-            marker = state.failed
-            self._merge_completed_memory_steps(
-                completed_memory_steps,
-                marker.get("completed_memory_steps") if marker else None,
-            )
-            state_meta = await self._read_archive_meta(state.archive_uri)
-            self._merge_completed_memory_steps(
-                completed_memory_steps,
-                state_meta.get("completed_memory_steps"),
-            )
-        combined.extend(current_messages)
-        combined = self._stable_deduplicate_messages(combined)
-
-        # A restarted queue item can resume the current archive after a process
-        # died between a successful memory step and the final .done write.
         current_meta = await self._read_archive_meta(archive_uri)
         self._merge_completed_memory_steps(
             completed_memory_steps,
             current_meta.get("completed_memory_steps"),
         )
-
-        coverage_start_index = min([current_index] + [state.index for state in replay_states])
-        covered_failed = [state.archive_id for state in replay_states if state.state == "failed"]
         return (
-            combined,
-            f"archive_{coverage_start_index:03d}",
-            f"archive_{current_index:03d}",
-            covered_failed,
+            current_messages,
+            current_archive_id,
+            current_archive_id,
+            [],
             completed_memory_steps,
         )
 
@@ -3861,6 +3912,8 @@ class Session:
         archive_index: int,
         memories_extracted: Dict[str, int],
         telemetry_snapshot: Any,
+        *,
+        record_auto_commit_success: bool = False,
     ) -> None:
         """Merge Phase 2 results without overwriting concurrent root updates."""
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
@@ -3900,6 +3953,10 @@ class Session:
                 )
             latest_meta.last_commit_at = get_current_timestamp()
             latest_meta.message_count = await self._read_live_message_count()
+            if record_auto_commit_success:
+                # Mirror the Phase 1 success stamp so the persisted meta reflects
+                # a clean auto-commit even after Phase 2 reloads the latest meta.
+                latest_meta.last_auto_commit_at = get_current_timestamp()
             self._meta = latest_meta
             await self._save_meta(lease_ref=lease)
         finally:
@@ -3927,7 +3984,13 @@ class Session:
             ctx=self.ctx,
         )
         messages: List[Message] = []
-        for line_number, line in enumerate(content.splitlines(), start=1):
+        # Split on "\n" only, not str.splitlines(): the latter also treats
+        # U+2028 / U+2029 / NEL (\x85) / \r / \v / \f as line boundaries, which
+        # would cut a JSONL record in half when those characters appear inside a
+        # JSON string value (e.g. assistant tool_output) and break json.loads()
+        # with "Unterminated string". Normalize CRLF first so a trailing "\r"
+        # does not leak into the record. See issue #3984.
+        for line_number, line in enumerate(content.replace("\r\n", "\n").split("\n"), start=1):
             if not line.strip():
                 continue
             try:

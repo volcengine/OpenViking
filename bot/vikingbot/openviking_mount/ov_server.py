@@ -581,9 +581,14 @@ class VikingClient:
             return await self.client.find(query, target_uri=target_uri, **kwargs)
         return await self.client.find(query, **kwargs)
 
-    async def add_resource(self, local_path: str, desc: str) -> Optional[Dict[str, Any]]:
+    async def add_resource(
+        self,
+        local_path: str,
+        desc: str,
+        to: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         """添加资源到 Viking"""
-        result = await self.client.add_resource(path=local_path, reason=desc)
+        result = await self.client.add_resource(path=local_path, to=to, reason=desc)
         return result
 
     async def list_resources(

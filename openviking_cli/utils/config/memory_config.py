@@ -9,6 +9,18 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+class SessionAutoCommitConfig(BaseModel):
+    """Server-wide controls for automatic session commits."""
+
+    default_enabled: bool = False
+    idle_enabled: bool = False
+    check_interval_seconds: float = Field(default=60.0, gt=0)
+    scan_batch_size: int = Field(default=16, gt=0)
+    scan_batch_pause_seconds: float = Field(default=0.0, ge=0)
+
+    model_config = {"extra": "forbid"}
+
+
 class MemoryConfig(BaseModel):
     """Memory configuration for OpenViking."""
 
@@ -19,22 +31,6 @@ class MemoryConfig(BaseModel):
     custom_templates_dir: str = Field(
         default="",
         description="Custom memory templates directory. If set, templates from this directory will be loaded in addition to built-in templates",
-    )
-    v2_lock_retry_interval_seconds: float = Field(
-        default=0.2,
-        ge=0.0,
-        description=(
-            "Retry interval (seconds) when SessionCompressorV2 fails to acquire memory subtree "
-            "locks. Set to 0 for immediate retries."
-        ),
-    )
-    v2_lock_max_retries: int = Field(
-        default=0,
-        ge=0,
-        description=(
-            "Maximum retries for SessionCompressorV2 memory lock acquisition. "
-            "0 means unlimited retries."
-        ),
     )
     experimental_memory_switch: bool = Field(
         default=False,
@@ -84,6 +80,10 @@ class MemoryConfig(BaseModel):
             "memory items (page_id, links field, and link resolution). When disabled (default), "
             "no page_id or link fields are generated, and link resolution is skipped."
         ),
+    )
+    session_auto_commit: SessionAutoCommitConfig = Field(
+        default_factory=SessionAutoCommitConfig,
+        description="Server-wide controls for automatic session commits.",
     )
 
     model_config = {"extra": "forbid"}

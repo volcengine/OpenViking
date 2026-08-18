@@ -18,24 +18,24 @@ class FakeUsageEvent:
         event_id: str = "ue_recall",
         event_type: str = "memory.recalled",
         session_id: str = "session-1",
-        resource_uri: str = "viking://user/user-1/memories/experiences/exchange.md",
+        resource_uri: str = ("viking://user/default/memories/experiences/生成请假邮件通用模版.md"),
     ) -> None:
         self._record = {
             "schema_version": "v1",
             "event_id": event_id,
             "event_type": event_type,
-            "account_id": "2101858484",
-            "user_id": "user-1",
+            "account_id": "default",
+            "user_id": "default",
             "session_id": session_id,
             "task_id": "task-1",
-            "occurred_at": "2026-07-27T04:00:00Z",
+            "occurred_at": "2026-08-05T19:30:00+08:00",
             "resource_uri": resource_uri,
             "resource_type": "experience",
             "evidence": {
                 "archive_uri": ("viking://user/user-1/sessions/session-1/history/archive_001"),
                 "message_id": "msg-1",
                 "tool_call_id": "call-1",
-                "tool_name": "search_experience",
+                "tool_name": "find",
             },
             "attributes": {"note": "contains spaces\tand tabs"},
         }
@@ -44,14 +44,17 @@ class FakeUsageEvent:
         return dict(self._record)
 
 
-def _parse_line(line: str) -> tuple[str, dict[str, object]]:
-    record = json.loads(line)
-    return record["key"], record["value"]
+def _parse_line(line: str) -> dict[str, object]:
+    return json.loads(line)
+
+
+@pytest.fixture(autouse=True)
+def _resource_id(monkeypatch):
+    monkeypatch.setenv("OV_RESOURCE_ID", "ov-test")
 
 
 @pytest.mark.asyncio
-async def test_file_log_sink_writes_original_kafka_key_and_value(tmp_path, monkeypatch):
-    monkeypatch.setenv("OV_RESOURCE_ID", "ov-test")
+async def test_file_log_sink_writes_usage_event_record(tmp_path):
     log_path = tmp_path / "dedicated" / "usage.log"
     sink = FileLogUsageSink(path=log_path)
 
@@ -62,51 +65,35 @@ async def test_file_log_sink_writes_original_kafka_key_and_value(tmp_path, monke
 
     lines = log_path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
-    key, value = _parse_line(lines[0])
-    assert key == "ov-test|2101858484|user-1|viking://user/user-1/memories/experiences/exchange.md"
-    assert value == {
-        "count_name": "experience.recall.count",
-        "op_type": "add",
-        "amount": 1.0,
-        "timestamp": 1785124800000,
-        "unique_id": "ue_recall",
-        "tags": {
-            "account_id": "2101858484",
-            "user_id": "user-1",
-            "resource_uri": "viking://user/user-1/memories/experiences/exchange.md",
-            "resource_type": "experience",
-        },
-        "extra": {
-            "archive_uri": "viking://user/user-1/sessions/session-1/history/archive_001",
-            "message_id": "msg-1",
-            "tool_call_id": "call-1",
-            "tool_name": "search_experience",
-            "session_id": "session-1",
-            "task_id": "task-1",
-            "attributes": {"note": "contains spaces\tand tabs"},
-        },
-        "prefix": "ov-test",
+    assert _parse_line(lines[0]) == {
+        "event_time": "2026-08-05 11:30:00",
+        "tenant_id": (
+            "resource_id:ov-test;account_id:default;user_id:default;resource_uri:"
+            "viking://user/default/memories/experiences/生成请假邮件通用模版.md"
+        ),
+        "event_name": "experience.recall.count",
+        "object_id": "ue_recall",
+        "count": 1,
+        "tags": {"resource_type": "experience"},
     }
 
 
 @pytest.mark.asyncio
-async def test_file_log_sink_message_key_falls_back_to_session_id(tmp_path, monkeypatch):
-    monkeypatch.setenv("OV_RESOURCE_ID", "ov-test")
+async def test_file_log_sink_maps_injection_event_name(tmp_path):
     log_path = tmp_path / "usage.log"
     sink = FileLogUsageSink(path=log_path)
 
     try:
-        await sink.write(events=[FakeUsageEvent(resource_uri="", session_id="session-fallback")])
+        await sink.write(events=[FakeUsageEvent(event_type="memory.injected")])
     finally:
         sink.close()
 
-    key, _value = _parse_line(log_path.read_text(encoding="utf-8").strip())
-    assert key == "ov-test|2101858484|user-1|session-fallback"
+    record = _parse_line(log_path.read_text(encoding="utf-8").strip())
+    assert record["event_name"] == "experience.inject.count"
 
 
 @pytest.mark.asyncio
-async def test_file_log_sink_preserves_equals_signs_in_key(tmp_path, monkeypatch):
-    monkeypatch.setenv("OV_RESOURCE_ID", "ov=test")
+async def test_file_log_sink_preserves_tenant_id_values(tmp_path):
     log_path = tmp_path / "usage.log"
     sink = FileLogUsageSink(path=log_path)
 
@@ -121,20 +108,41 @@ async def test_file_log_sink_preserves_equals_signs_in_key(tmp_path, monkeypatch
     finally:
         sink.close()
 
-    key, value = _parse_line(log_path.read_text(encoding="utf-8").strip())
-    assert key == (
-        "ov=test|2101858484|user-1|viking://user/user-1/memories/experiences/exchange=delivered.md"
-    )
-    assert value["prefix"] == "ov=test"
-    assert (
-        value["tags"]["resource_uri"]
-        == "viking://user/user-1/memories/experiences/exchange=delivered.md"
+    record = _parse_line(log_path.read_text(encoding="utf-8").strip())
+    assert record["tenant_id"] == (
+        "resource_id:ov-test;account_id:default;user_id:default;resource_uri:"
+        "viking://user/user-1/memories/experiences/exchange=delivered.md"
     )
 
 
 @pytest.mark.asyncio
-async def test_file_log_sink_preserves_records_when_workers_roll_over(tmp_path, monkeypatch):
-    monkeypatch.setenv("OV_RESOURCE_ID", "ov-test")
+async def test_file_log_sink_uses_tenant_and_object_as_deduplication_key(tmp_path, monkeypatch):
+    event = FakeUsageEvent(event_id="ue_same_event")
+
+    monkeypatch.setenv("OV_RESOURCE_ID", "ov-first")
+    first = FileLogUsageSink(path=tmp_path / "first.log")
+    monkeypatch.setenv("OV_RESOURCE_ID", "ov-second")
+    second = FileLogUsageSink(path=tmp_path / "second.log")
+    try:
+        await first.write(events=[event])
+        await second.write(events=[event])
+    finally:
+        first.close()
+        second.close()
+
+    first_record = _parse_line((tmp_path / "first.log").read_text(encoding="utf-8").strip())
+    second_record = _parse_line((tmp_path / "second.log").read_text(encoding="utf-8").strip())
+
+    assert first_record["object_id"] == second_record["object_id"] == "ue_same_event"
+    assert first_record["tenant_id"] != second_record["tenant_id"]
+    assert (first_record["tenant_id"], first_record["object_id"]) != (
+        second_record["tenant_id"],
+        second_record["object_id"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_file_log_sink_preserves_records_when_workers_roll_over(tmp_path):
     log_path = tmp_path / "usage.log"
     first = FileLogUsageSink(path=log_path)
     second = FileLogUsageSink(path=log_path)
@@ -151,12 +159,11 @@ async def test_file_log_sink_preserves_records_when_workers_roll_over(tmp_path, 
         first.close()
         second.close()
 
-    unique_ids = []
+    object_ids = []
     for path in tmp_path.glob("usage.log*"):
         for line in path.read_text(encoding="utf-8").splitlines():
-            _key, value = _parse_line(line)
-            unique_ids.append(value["unique_id"])
-    assert sorted(unique_ids) == [
+            object_ids.append(_parse_line(line)["object_id"])
+    assert sorted(object_ids) == [
         "ue_first_after",
         "ue_first_before",
         "ue_second_after",
@@ -165,8 +172,7 @@ async def test_file_log_sink_preserves_records_when_workers_roll_over(tmp_path, 
 
 
 @pytest.mark.asyncio
-async def test_closed_handle_preserves_overdue_rollover_deadline(tmp_path, monkeypatch):
-    monkeypatch.setenv("OV_RESOURCE_ID", "ov-test")
+async def test_closed_handle_preserves_overdue_rollover_deadline(tmp_path):
     log_path = tmp_path / "usage.log"
     sink = FileLogUsageSink(path=log_path)
 
@@ -182,16 +188,14 @@ async def test_closed_handle_preserves_overdue_rollover_deadline(tmp_path, monke
 
     log_files = list(tmp_path.glob("usage.log*"))
     assert len(log_files) == 2
-    unique_ids = []
+    object_ids = []
     for path in log_files:
         for line in path.read_text(encoding="utf-8").splitlines():
-            _key, value = _parse_line(line)
-            unique_ids.append(value["unique_id"])
-    assert sorted(unique_ids) == ["ue_after", "ue_before"]
+            object_ids.append(_parse_line(line)["object_id"])
+    assert sorted(object_ids) == ["ue_after", "ue_before"]
 
 
-def test_file_log_sink_uses_hourly_utc_rotation(tmp_path, monkeypatch):
-    monkeypatch.setenv("OV_RESOURCE_ID", "ov-test")
+def test_file_log_sink_uses_hourly_utc_rotation(tmp_path):
     sink = FileLogUsageSink(
         path=tmp_path / "usage.log",
         rotation_interval_hours=1,
@@ -209,39 +213,45 @@ def test_file_log_sink_uses_hourly_utc_rotation(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("environment", "kwargs", "message"),
+    ("kwargs", "message"),
     [
-        ({}, {"path": "usage.log"}, "OV_RESOURCE_ID is required"),
-        ({"OV_RESOURCE_ID": "ov-test"}, {"path": ""}, "path is required"),
+        ({"path": ""}, "path is required"),
         (
-            {"OV_RESOURCE_ID": "ov-test"},
             {"path": "usage.log", "rotation_interval_hours": 0},
             "rotation_interval_hours must be positive",
         ),
         (
-            {"OV_RESOURCE_ID": "ov-test"},
             {"path": "usage.log", "backup_count": -1},
             "backup_count must be non-negative",
         ),
     ],
 )
-def test_file_log_sink_validates_config(
-    monkeypatch,
-    environment,
-    kwargs,
-    message,
-):
-    monkeypatch.delenv("OV_RESOURCE_ID", raising=False)
-    for key, value in environment.items():
-        monkeypatch.setenv(key, value)
-
+def test_file_log_sink_validates_config(kwargs, message):
     with pytest.raises(ValueError, match=message):
         FileLogUsageSink(**kwargs)
 
 
+def test_file_log_sink_requires_resource_id(tmp_path, monkeypatch):
+    monkeypatch.delenv("OV_RESOURCE_ID")
+
+    with pytest.raises(ValueError, match="OV_RESOURCE_ID is required"):
+        FileLogUsageSink(path=tmp_path / "usage.log")
+
+
+def test_file_log_sink_reads_configured_resource_id_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("CUSTOM_RESOURCE_ID", "ov-custom")
+    sink = FileLogUsageSink(
+        path=tmp_path / "usage.log",
+        resource_id_env="CUSTOM_RESOURCE_ID",
+    )
+    try:
+        assert sink._resource_id == "ov-custom"
+    finally:
+        sink.close()
+
+
 @pytest.mark.asyncio
-async def test_file_log_sink_rejects_unsupported_event(tmp_path, monkeypatch):
-    monkeypatch.setenv("OV_RESOURCE_ID", "ov-test")
+async def test_file_log_sink_rejects_unsupported_event(tmp_path):
     sink = FileLogUsageSink(path=tmp_path / "usage.log")
 
     try:
@@ -252,8 +262,7 @@ async def test_file_log_sink_rejects_unsupported_event(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_file_log_sink_requires_event_id(tmp_path, monkeypatch):
-    monkeypatch.setenv("OV_RESOURCE_ID", "ov-test")
+async def test_file_log_sink_requires_event_id(tmp_path):
     sink = FileLogUsageSink(path=tmp_path / "usage.log")
 
     try:

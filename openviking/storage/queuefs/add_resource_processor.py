@@ -6,6 +6,7 @@ import asyncio
 import concurrent.futures
 import json
 from contextlib import suppress
+from copy import deepcopy
 from typing import Any, Dict, Optional
 
 from openviking.observability.context import bind_execution_context
@@ -108,21 +109,24 @@ class AddResourceProcessor(DequeueHandlerBase):
             self.report_success()
             return None
 
+        metadata = extract_task_metadata(data)
+        replay_result = getattr(task, "result", None)
         resource_lock = None
-        try:
-            resource_lock = await self._load_lock(msg, ctx)
-        except Exception as exc:
-            if await self._requeue_lock_handoff(msg, exc):
+        if replay_result is None:
+            try:
+                resource_lock = await self._load_lock(msg, ctx)
+            except Exception as exc:
+                if await self._requeue_lock_handoff(msg, exc):
+                    return None
+                await tracker.fail(
+                    msg.task_id,
+                    f"Invalid lock_handoff: {exc}",
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+                self.report_error(f"Invalid lock_handoff: {exc}", data)
+                unregister_telemetry(telemetry_id)
                 return None
-            await tracker.fail(
-                msg.task_id,
-                f"Invalid lock_handoff: {exc}",
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
-            )
-            self.report_error(f"Invalid lock_handoff: {exc}", data)
-            unregister_telemetry(telemetry_id)
-            return None
 
         telemetry = resolve_telemetry(telemetry_id) if telemetry_id else None
         if telemetry is None:
@@ -148,36 +152,57 @@ class AddResourceProcessor(DequeueHandlerBase):
             bind_task_context(msg.task_id, ctx.account_id, ctx.user.user_id),
         ):
             try:
-                metadata = extract_task_metadata(data)
-                await tracker.start(
-                    msg.task_id,
-                    account_id=ctx.account_id,
-                    user_id=ctx.user.user_id,
-                    stage="queued",
-                )
-                result = await self._resource_service.execute_add_resource_job(
-                    msg,
-                    ctx=ctx,
-                    resource_lock=resource_lock,
-                    stage_callback=_set_stage,
-                )
-                if result.get("status") == "error":
-                    errors = result.get("errors") or ["resource processing failed"]
-                    await tracker.fail(
+                if replay_result is None:
+                    await tracker.start(
                         msg.task_id,
-                        "; ".join(str(error) for error in errors),
                         account_id=ctx.account_id,
                         user_id=ctx.user.user_id,
+                        stage="queued",
                     )
-                    self.report_error("resource processing failed", data)
-                    return None
+                    result = await self._resource_service.execute_add_resource_job(
+                        msg,
+                        ctx=ctx,
+                        resource_lock=resource_lock,
+                        stage_callback=_set_stage,
+                    )
+                    if result.get("status") == "error":
+                        errors = result.get("errors") or ["resource processing failed"]
+                        await tracker.fail(
+                            msg.task_id,
+                            "; ".join(str(error) for error in errors),
+                            account_id=ctx.account_id,
+                            user_id=ctx.user.user_id,
+                        )
+                        self.report_error("resource processing failed", data)
+                        return None
+                    await tracker.complete(
+                        msg.task_id,
+                        deepcopy(result),
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                        resource_id=result.get("root_uri"),
+                    )
+                else:
+                    result = deepcopy(replay_result)
                 await tracker.wait_for_descendants(msg.task_id, metadata.work_id)
-                result["queue_status"] = request_wait_tracker.build_queue_status(telemetry_id)
+                result.setdefault(
+                    "queue_status",
+                    request_wait_tracker.build_queue_status(telemetry_id),
+                )
                 record_resource_queue_metrics(
                     telemetry=telemetry,
                     telemetry_id=telemetry_id,
                     root_uri=result.get("root_uri"),
                 )
+
+                # Extract token usage summary from telemetry and inject into result
+                _snapshot = telemetry.finish()
+                if _snapshot is not None:
+                    _tokens = _snapshot.summary.get("tokens", {})
+                    if _tokens:
+                        result.setdefault("usage", {})
+                        result["usage"]["tokens"] = _tokens
+
                 await self._resource_service._link_resource_reason_memory(
                     result=result,
                     ctx=ctx,

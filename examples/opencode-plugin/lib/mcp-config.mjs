@@ -11,8 +11,9 @@ export function createOpenVikingMcpConfig(pluginRoot) {
   }
 }
 
-export function injectOpenVikingMcpConfig(config, pluginRoot) {
+export function injectOpenVikingMcpConfig(config, pluginRoot, enabled = true) {
   if (!config || typeof config !== "object") return false
+  if (!enabled) return false
   config.mcp = config.mcp && typeof config.mcp === "object" ? config.mcp : {}
   const current = config.mcp[OPENCODE_MCP_NAME]
   if (current?.enabled === false) return false

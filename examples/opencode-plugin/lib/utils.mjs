@@ -68,6 +68,10 @@ export function effectivePeerId(config) {
   return String(config.effectivePeer?.peerId || config.peerId || "").trim() || null
 }
 
+function responseTraceId(payload) {
+  return payload?.result?.trace_id || payload?.error?.trace_id || payload?.trace_id || undefined
+}
+
 export async function fetchJSON(config, endpoint, init = {}, options = {}) {
   const url = `${normalizeEndpoint(config.endpoint)}${endpoint}`
   const headers = makeAuthHeaders(
@@ -85,14 +89,16 @@ export async function fetchJSON(config, endpoint, init = {}, options = {}) {
     })
     const text = await response.text()
     const payload = text ? parseJsonOrText(text) : {}
+    const traceId = responseTraceId(payload)
     if (!response.ok || payload?.status === "error") {
       return {
         ok: false,
         status: response.status,
         error: payload?.error || payload?.message || { message: `HTTP ${response.status}` },
+        traceId,
       }
     }
-    return { ok: true, status: response.status, result: payload?.result ?? payload }
+    return { ok: true, status: response.status, result: payload?.result ?? payload, traceId }
   } catch (error) {
     return { ok: false, status: 0, error: { message: error?.message ?? String(error) } }
   } finally {

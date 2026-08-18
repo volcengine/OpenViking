@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-06-05",
+  "updatedAt": "2026-08-12",
   "cdnBaseUrl": "https://docs.openviking.net/",
   "accessMethods": [
     {
@@ -95,6 +95,26 @@
       "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/OpenCode.png",
       "summary": "提供一个统一 OpenCode 插件，支持仓库上下文、记忆工具、session 同步与自动 recall",
       "detailPath": "https://docs.openviking.net/agents/zh/opencode.md"
+    },
+    {
+      "id": "deerflow",
+      "name": "DeerFlow",
+      "tags": ["MemoryManager", "MCP"],
+      "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/deer.png",
+      "summary": "DeerFlow 支持通过 MemoryManager 和 MCP 接入，实现记忆的自动写入、召回、注入及管理。建议同时启用两种方式，以获得完整的记忆体验。",
+      "detailPath": "https://docs.openviking.net/agents/zh/deerflow-memory-manager.md",
+      "tabs": [
+        {
+          "id": "memory-manager",
+          "label": "MemoryManager 接入",
+          "detailPath": "https://docs.openviking.net/agents/zh/deerflow-memory-manager.md"
+        },
+        {
+          "id": "mcp",
+          "label": "MCP 接入",
+          "detailPath": "https://docs.openviking.net/agents/zh/deerflow-mcp.md"
+        }
+      ]
     }
   ]
 }

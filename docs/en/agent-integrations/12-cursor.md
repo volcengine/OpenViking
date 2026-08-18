@@ -25,7 +25,7 @@ Quit Cursor completely and restart it after installation.
 ## What gets installed
 
 - Lifecycle Hooks for profile loading, prompt recall, conversation capture, session commit, and `viking://` URI protection.
-- The OpenViking MCP server with tools such as `search`, `recall`, `read`, and `remember`.
+- The OpenViking MCP server with tools such as `search`, `read`, and `remember`; `search` with `mode="context"` returns assembled context.
 - An always-on Rule and memory Skill that tell the Agent how to use injected context and memory tools.
 
 ## Verify

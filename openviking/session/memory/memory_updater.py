@@ -71,6 +71,32 @@ class ChunkMeta:
     chunk_count: int
 
 
+def _collect_search_tags_by_uri(
+    operations: "ResolvedOperations",
+    caller_map: Optional[Dict[str, List[str]]] = None,
+) -> Dict[str, List[str]]:
+    """Build the per-URI transient search-tag map for vectorization.
+
+    Combines an explicit caller-supplied map (e.g. trajectory outcome tags)
+    with per-operation ``search_tags`` (e.g. event-memory custom scalars).
+    The caller map wins on conflicts; per-op tags fill any remaining URIs.
+    Operations with ``search_tags`` of ``None`` or ``[]`` contribute nothing.
+    """
+    result: Dict[str, List[str]] = {}
+    for op in getattr(operations, "upsert_operations", []) or []:
+        tags = getattr(op, "search_tags", None)
+        if not tags:
+            continue
+        for uri in op.uris or []:
+            if uri and uri not in result:
+                result[uri] = list(tags)
+    if caller_map:
+        for uri, tags in caller_map.items():
+            if uri:
+                result[uri] = list(tags)
+    return result
+
+
 async def write_stored_links(
     links: List[StoredLink],
     ctx: RequestContext,
@@ -130,11 +156,25 @@ async def write_stored_links(
 
 def _remap_link_dict(link: Dict[str, Any], uri_remap: Dict[str, str]) -> Dict[str, Any]:
     remapped = dict(link or {})
-    if remapped.get("from_uri") in uri_remap:
-        remapped["from_uri"] = uri_remap[remapped["from_uri"]]
-    if remapped.get("to_uri") in uri_remap:
-        remapped["to_uri"] = uri_remap[remapped["to_uri"]]
+    remapped["from_uri"] = _resolve_replacement_uri(remapped.get("from_uri"), uri_remap)
+    remapped["to_uri"] = _resolve_replacement_uri(remapped.get("to_uri"), uri_remap)
     return remapped
+
+
+def _resolve_replacement_uri(uri: str | None, uri_remap: Dict[str, str]) -> str | None:
+    if not uri:
+        return uri
+    original_uri = uri
+    seen: set[str] = set()
+    while uri in uri_remap:
+        if uri in seen:
+            return original_uri
+        seen.add(uri)
+        replacement_uri = uri_remap[uri]
+        if not replacement_uri:
+            return uri
+        uri = replacement_uri
+    return uri
 
 
 def remap_stored_links(links: List[StoredLink], uri_remap: Dict[str, str]) -> List[StoredLink]:
@@ -142,8 +182,8 @@ def remap_stored_links(links: List[StoredLink], uri_remap: Dict[str, str]) -> Li
         return list(links or [])
     remapped_links: List[StoredLink] = []
     for link in links:
-        from_uri = uri_remap.get(link.from_uri, link.from_uri)
-        to_uri = uri_remap.get(link.to_uri, link.to_uri)
+        from_uri = _resolve_replacement_uri(link.from_uri, uri_remap)
+        to_uri = _resolve_replacement_uri(link.to_uri, uri_remap)
         if from_uri == to_uri:
             continue
         remapped_links.append(link.model_copy(update={"from_uri": from_uri, "to_uri": to_uri}))
@@ -806,6 +846,7 @@ class MemoryUpdater:
         ctx: RequestContext,
         extract_context: ExtractContext = None,
         isolation_handler: MemoryIsolationHandler = None,
+        search_tags_by_uri: Dict[str, List[str]] = None,
     ) -> MemoryUpdateResult:
         result = MemoryUpdateResult()
         viking_fs = self._get_viking_fs()
@@ -920,11 +961,17 @@ class MemoryUpdater:
         for op in operations.upsert_operations:
             for uri in op.uris:
                 uri_memory_type_map[uri] = op.memory_type
+        # Merge caller-supplied transient tags with per-operation search_tags
+        # (e.g. event-memory custom scalars) so both reach vectorization.
+        effective_search_tags_by_uri = _collect_search_tags_by_uri(
+            operations, search_tags_by_uri
+        )
         await self._vectorize_memories(
             result,
             ctx,
             extract_context=extract_context,
             uri_memory_type_map=uri_memory_type_map,
+            search_tags_by_uri=effective_search_tags_by_uri,
         )
 
         # Apply links to endpoint files not covered by upsert_operations
@@ -1049,7 +1096,7 @@ class MemoryUpdater:
                     # Use merge_op to process field value
                     merge_op = MergeOpFactory.from_field(field)
                     try:
-                        new_value = merge_op.apply(current_value, patch_value)
+                        new_value = await merge_op.apply(current_value, patch_value)
                     except Exception as e:
                         tracer.info(
                             f"[memory_updater] Skipping field update after merge_op failure: uri={uri}, field={field.name}, error={e}"
@@ -1240,6 +1287,7 @@ class MemoryUpdater:
                     ].append(remapped)
 
         written_or_edited = set(result.written_uris + result.edited_uris)
+        stale_uris = set(uri_remap)
         for uri, link_groups in inherited_by_uri.items():
             if uri in uri_remap:
                 continue
@@ -1250,6 +1298,20 @@ class MemoryUpdater:
                 if not content:
                     continue
                 mf = MemoryFileUtils.read(content, uri=uri)
+                # Remapped links have different dedup keys, so remove the old
+                # endpoints before merging to avoid retaining dangling aliases.
+                mf.links = [
+                    link
+                    for link in mf.links
+                    if link.get("from_uri") not in stale_uris
+                    and link.get("to_uri") not in stale_uris
+                ]
+                mf.backlinks = [
+                    link
+                    for link in mf.backlinks
+                    if link.get("from_uri") not in stale_uris
+                    and link.get("to_uri") not in stale_uris
+                ]
                 if link_groups["links"]:
                     mf.links = merge_links(mf.links, link_groups["links"])
                 if link_groups["backlinks"]:
@@ -1291,6 +1353,7 @@ class MemoryUpdater:
         ctx: RequestContext,
         extract_context: Any = None,
         uri_memory_type_map: Dict[str, str] = None,
+        search_tags_by_uri: Dict[str, List[str]] = None,
     ) -> int:
         """Vectorize written and edited memory files.
 
@@ -1299,12 +1362,14 @@ class MemoryUpdater:
             ctx: Request context
             extract_context: Extract context for embedding template rendering
             uri_memory_type_map: Mapping from URI to memory_type
+            search_tags_by_uri: Transient search tags to attach while indexing each URI
         """
         if not self._vikingdb:
             logger.debug("VikingDB not available, skipping vectorization")
             return 0
 
         uri_memory_type_map = uri_memory_type_map or {}
+        search_tags_by_uri = search_tags_by_uri or {}
         viking_fs = self._get_viking_fs()
         request_wait_tracker = get_request_wait_tracker()
         attempted_count = 0
@@ -1385,6 +1450,12 @@ class MemoryUpdater:
                 # Convert to embedding msg and enqueue
                 embedding_msg = EmbeddingMsgConverter.from_context(memory_context)
                 if embedding_msg:
+                    transient_tags = search_tags_by_uri.get(uri)
+                    if transient_tags:
+                        embedding_msg.context_data["search_tags"] = list(transient_tags)
+                        embedding_msg.context_data["_upsert_options"] = {
+                            "search_tag_mode": "append"
+                        }
                     if embedding_msg.telemetry_id:
                         request_wait_tracker.register_embedding_root(
                             embedding_msg.telemetry_id, embedding_msg.id

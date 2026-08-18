@@ -14,11 +14,12 @@ import json
 import mimetypes
 import os
 import re
+import shutil
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, NoReturn, Optional, Tuple, Union
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from openviking.parse.base import format_table_to_markdown
 from openviking.utils.exceptions import error_code_from_http_status
@@ -34,6 +35,18 @@ _FEISHU_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(feishu://image/([^)]+)\)")
 _FEISHU_DOCUMENT_FORBIDDEN = 1770032
 _FEISHU_BITABLE_PERMISSION_REQUIRED = 99991672
 _MAX_MEDIA_DOWNLOAD_CONTEXTS = 8
+_FEISHU_DOC_PATH_TYPES = {"docx", "wiki", "sheets", "base"}
+_FEISHU_DRIVE_DOC_TYPES = {
+    "doc": "docx",
+    "docx": "docx",
+    "sheet": "sheets",
+    "sheets": "sheets",
+    "bitable": "base",
+    "base": "base",
+    "wiki": "wiki",
+}
+_MAX_PATH_SEGMENT_CHARS = 120
+_MAX_PATH_SEGMENT_BYTES = 240
 
 _MediaDownloadExtras = Dict[str, List[Optional[str]]]
 
@@ -46,6 +59,90 @@ def _title_as_filename(title: str) -> str:
     field makes ``Path(...).name`` silently discard the title prefix.
     """
     return title.replace("/", "_").replace("\\", "_")
+
+
+def _truncate_text_for_path_segment(text: str, *, max_chars: int, max_bytes: int) -> str:
+    """Trim text so its UTF-8 representation fits a single path segment budget."""
+    if max_chars <= 0 or max_bytes <= 0:
+        return ""
+    result: list[str] = []
+    used_bytes = 0
+    for char in text[:max_chars]:
+        char_bytes = len(char.encode("utf-8"))
+        if used_bytes + char_bytes > max_bytes:
+            break
+        result.append(char)
+        used_bytes += char_bytes
+    return "".join(result)
+
+
+def _fit_path_segment(text: str, *, max_chars: int, max_bytes: int) -> str:
+    """Ensure a complete path segment fits the configured character and byte budgets."""
+    if len(text) <= max_chars and len(text.encode("utf-8")) <= max_bytes:
+        return text
+    return _truncate_text_for_path_segment(
+        text,
+        max_chars=max_chars,
+        max_bytes=max_bytes,
+    ).rstrip(" ._")
+
+
+def _safe_path_segment(
+    name: str,
+    *,
+    fallback: str = "untitled",
+    max_len: int = _MAX_PATH_SEGMENT_CHARS,
+    max_bytes: int = _MAX_PATH_SEGMENT_BYTES,
+) -> str:
+    """Return one portable path segment while preserving readable names."""
+    safe_name = re.sub(r"[\x00-\x1f/\\:*?\"<>|]+", "_", str(name or "")).strip(" ._")
+    safe_name = re.sub(r"\s+", " ", safe_name)
+    if not safe_name:
+        safe_name = fallback
+    if len(safe_name) <= max_len and len(safe_name.encode("utf-8")) <= max_bytes:
+        return safe_name
+
+    stem = Path(safe_name).stem
+    suffix = Path(safe_name).suffix
+    suffix_bytes = len(suffix.encode("utf-8"))
+    if suffix_bytes >= max_bytes:
+        suffix = ""
+        suffix_bytes = 0
+
+    stem = _truncate_text_for_path_segment(
+        stem,
+        max_chars=max_len - len(suffix),
+        max_bytes=max_bytes - suffix_bytes,
+    ).rstrip(" ._")
+    if not stem:
+        stem = _truncate_text_for_path_segment(
+            fallback,
+            max_chars=max_len - len(suffix),
+            max_bytes=max_bytes - suffix_bytes,
+        ).rstrip(" ._")
+    return _fit_path_segment(
+        f"{stem or 'untitled'}{suffix}",
+        max_chars=max_len,
+        max_bytes=max_bytes,
+    ) or "untitled"
+
+
+def _numbered_path_segment(stem: str, suffix: str, index: int) -> str:
+    marker = f" ({index})"
+    marker_bytes = len(marker.encode("utf-8"))
+    suffix_bytes = len(suffix.encode("utf-8"))
+    max_stem_bytes = _MAX_PATH_SEGMENT_BYTES - marker_bytes - suffix_bytes
+    max_stem_chars = _MAX_PATH_SEGMENT_CHARS - len(marker) - len(suffix)
+    safe_stem = _truncate_text_for_path_segment(
+        stem,
+        max_chars=max_stem_chars,
+        max_bytes=max_stem_bytes,
+    ).rstrip(" ._")
+    return _fit_path_segment(
+        f"{safe_stem or 'untitled'}{marker}{suffix}",
+        max_chars=_MAX_PATH_SEGMENT_CHARS,
+        max_bytes=_MAX_PATH_SEGMENT_BYTES,
+    ) or "untitled"
 
 
 def _getattr_safe(obj, key: str, default=None):
@@ -122,6 +219,8 @@ class FeishuAccessor(DataAccessor):
     - Wiki pages: https://*.feishu.cn/wiki/{token}
     - Spreadsheets: https://*.feishu.cn/sheets/{token}
     - Bitable: https://*.feishu.cn/base/{app_token}
+    - Drive files: https://*.feishu.cn/file/{file_token}
+    - Drive folders: https://*.feishu.cn/drive/folder/{folder_token}
 
     Requires:
     - lark-oapi package
@@ -260,6 +359,64 @@ class FeishuAccessor(DataAccessor):
         feishu_access_token = kwargs.get("feishu_access_token")
 
         try:
+            doc_type, token = self._parse_feishu_url(source_str)
+            if doc_type == "file":
+                content, content_type, filename = await asyncio.to_thread(
+                    self._download_drive_file,
+                    token,
+                    feishu_access_token=feishu_access_token,
+                )
+                local_path = self._write_temp_drive_file(
+                    token,
+                    content,
+                    content_type,
+                    filename_hint=filename,
+                )
+                return LocalResource(
+                    path=local_path,
+                    source_type=SourceType.FEISHU,
+                    original_source=source_str,
+                    meta={
+                        "feishu_doc_type": doc_type,
+                        "feishu_token": token,
+                        "original_filename": local_path.name,
+                        "_cleanup_path": str(local_path.parent),
+                    },
+                    is_temporary=True,
+                )
+
+            if doc_type == "folder":
+                temp_dir = Path(tempfile.mkdtemp(prefix="ov_feishu_folder_"))
+                skipped_items: list[dict[str, Any]] = []
+                folder_name = await asyncio.to_thread(
+                    self._drive_folder_display_name,
+                    token,
+                    feishu_access_token=feishu_access_token,
+                )
+                try:
+                    await self._materialize_drive_folder(
+                        token,
+                        temp_dir,
+                        feishu_access_token=feishu_access_token,
+                        skipped_items=skipped_items,
+                        strict=bool(kwargs.get("strict", False)),
+                    )
+                except Exception:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    raise
+                return LocalResource(
+                    path=temp_dir,
+                    source_type=SourceType.FEISHU,
+                    original_source=source_str,
+                    meta={
+                        "feishu_doc_type": doc_type,
+                        "feishu_token": token,
+                        "original_filename": _safe_path_segment(folder_name, fallback=token),
+                        "feishu_folder_skipped_items": skipped_items,
+                    },
+                    is_temporary=True,
+                )
+
             # Fetch the document and convert to Markdown
             doc = await self._fetch_document(
                 source_str,
@@ -400,15 +557,17 @@ class FeishuAccessor(DataAccessor):
         """Check if URL is a Feishu/Lark cloud document."""
         parsed = urlparse(url)
         host = (parsed.hostname or "").lower().rstrip(".")
-        path = parsed.path
+        path_parts = [p for p in parsed.path.split("/") if p]
         is_feishu_domain = any(
             host == allowed_host or host.endswith(f".{allowed_host}")
             for allowed_host in ("feishu.cn", "larksuite.com", "larkoffice.com")
         )
-        has_doc_path = any(
-            path == f"/{t}" or path.startswith(f"/{t}/") for t in ("docx", "wiki", "sheets", "base")
-        )
-        return is_feishu_domain and has_doc_path
+        if not is_feishu_domain or len(path_parts) < 2:
+            return False
+        has_doc_path = path_parts[0] in _FEISHU_DOC_PATH_TYPES
+        has_drive_folder_path = len(path_parts) >= 3 and path_parts[:2] == ["drive", "folder"]
+        has_file_path = path_parts[0] == "file"
+        return is_feishu_domain and (has_doc_path or has_drive_folder_path or has_file_path)
 
     @staticmethod
     def _parse_feishu_url(url: str) -> Tuple[str, str]:
@@ -422,9 +581,465 @@ class FeishuAccessor(DataAccessor):
         path_parts = [p for p in parsed.path.split("/") if p]
         if len(path_parts) < 2:
             raise ValueError(f"Cannot parse Feishu URL: {url}")
+        if len(path_parts) >= 3 and path_parts[:2] == ["drive", "folder"]:
+            return "folder", path_parts[2]
+        if path_parts[0] == "file":
+            return "file", path_parts[1]
         doc_type = path_parts[0]  # docx, wiki, sheets, base
         token = path_parts[1]
         return doc_type, token
+
+    async def _materialize_drive_folder(
+        self,
+        folder_token: str,
+        target_dir: Path,
+        *,
+        feishu_access_token: Optional[str] = None,
+        _seen: Optional[set[str]] = None,
+        skipped_items: Optional[list[dict[str, Any]]] = None,
+        strict: bool = False,
+    ) -> None:
+        """Expand a Feishu Drive folder into a local directory tree."""
+        target_dir.mkdir(parents=True, exist_ok=True)
+        seen = _seen or set()
+        if folder_token in seen:
+            logger.warning("[FeishuAccessor] Skipping recursive Drive folder %s", folder_token)
+            return
+        seen.add(folder_token)
+
+        try:
+            children = await asyncio.to_thread(
+                self._list_drive_folder_children,
+                folder_token,
+                feishu_access_token=feishu_access_token,
+            )
+            for item in children:
+                item_type, item_token, item_name, item_url = self._normalize_drive_item(item)
+                if not item_token:
+                    logger.warning("[FeishuAccessor] Skipping Drive item without token: %s", item)
+                    continue
+
+                if item_type == "folder":
+                    folder_name = _safe_path_segment(item_name or item_token, fallback=item_token)
+                    child_dir = self._unique_child_path(target_dir, folder_name)
+                    try:
+                        await self._materialize_drive_folder(
+                            item_token,
+                            child_dir,
+                            feishu_access_token=feishu_access_token,
+                            _seen=seen,
+                            skipped_items=skipped_items,
+                            strict=strict,
+                        )
+                    except Exception as exc:
+                        shutil.rmtree(child_dir, ignore_errors=True)
+                        self._record_skipped_drive_item(
+                            skipped_items,
+                            item_type=item_type,
+                            token=item_token,
+                            name=item_name,
+                            target_dir=target_dir,
+                            error=exc,
+                        )
+                        if strict:
+                            raise
+                    continue
+
+                doc_path_type = _FEISHU_DRIVE_DOC_TYPES.get(item_type)
+                if doc_path_type:
+                    try:
+                        url = item_url or self._build_feishu_doc_url(doc_path_type, item_token)
+                        doc = await self._fetch_document(
+                            url,
+                            feishu_access_token=feishu_access_token,
+                        )
+                        markdown_content, downloaded_images = await asyncio.to_thread(
+                            self._resolve_image_refs,
+                            doc.markdown_content,
+                            feishu_access_token=feishu_access_token,
+                            media_download_extras=doc.media_download_extras,
+                        )
+                        doc_name = _safe_path_segment(
+                            item_name or doc.title or item_token,
+                            fallback=item_token,
+                        )
+                        markdown_path = self._unique_child_path(
+                            target_dir,
+                            self._markdown_file_name(doc_name),
+                        )
+                        markdown_path.write_text(markdown_content, encoding="utf-8")
+                        for rel_path, image_bytes in downloaded_images.items():
+                            image_path = markdown_path.parent / rel_path
+                            image_path.parent.mkdir(parents=True, exist_ok=True)
+                            image_path.write_bytes(image_bytes)
+                    except Exception as exc:
+                        self._record_skipped_drive_item(
+                            skipped_items,
+                            item_type=item_type,
+                            token=item_token,
+                            name=item_name,
+                            target_dir=target_dir,
+                            error=exc,
+                        )
+                        if strict:
+                            raise
+                    continue
+
+                if item_type == "file":
+                    try:
+                        content, content_type, downloaded_name = await asyncio.to_thread(
+                            self._download_drive_file,
+                            item_token,
+                            feishu_access_token=feishu_access_token,
+                            filename_hint=item_name,
+                        )
+                        file_name = self._drive_file_name(
+                            item_token,
+                            content,
+                            content_type,
+                            filename_hint=downloaded_name or item_name,
+                        )
+                        file_path = self._unique_child_path(target_dir, file_name)
+                        file_path.write_bytes(content)
+                    except Exception as exc:
+                        self._record_skipped_drive_item(
+                            skipped_items,
+                            item_type=item_type,
+                            token=item_token,
+                            name=item_name,
+                            target_dir=target_dir,
+                            error=exc,
+                        )
+                        if strict:
+                            raise
+                    continue
+
+                error = ValueError(f"Unsupported Feishu Drive item type: {item_type}")
+                self._record_skipped_drive_item(
+                    skipped_items,
+                    item_type=item_type,
+                    token=item_token,
+                    name=item_name,
+                    target_dir=target_dir,
+                    error=error,
+                )
+                if strict:
+                    raise error
+
+        finally:
+            seen.discard(folder_token)
+
+    @staticmethod
+    def _record_skipped_drive_item(
+        skipped_items: Optional[list[dict[str, Any]]],
+        *,
+        item_type: str,
+        token: str,
+        name: str,
+        target_dir: Path,
+        error: Exception,
+    ) -> None:
+        message = str(error).replace("\n", " ")
+        logger.warning(
+            "[FeishuAccessor] Skipping Drive %s %s under %s: %s",
+            item_type,
+            token,
+            target_dir,
+            message,
+        )
+        if skipped_items is None:
+            return
+        skipped_items.append(
+            {
+                "path": str(target_dir / _safe_path_segment(name or token, fallback=token)),
+                "name": name or token,
+                "type": item_type,
+                "token": token,
+                "reason": message,
+            }
+        )
+
+    def _list_drive_folder_children(
+        self,
+        folder_token: str,
+        *,
+        feishu_access_token: Optional[str] = None,
+    ) -> List[Any]:
+        """List direct children under a Feishu Drive folder token."""
+        import lark_oapi as lark
+
+        client = self._get_client(use_user_token=bool(feishu_access_token))
+        token_type = (
+            lark.AccessTokenType.USER if feishu_access_token else lark.AccessTokenType.TENANT
+        )
+        all_children: List[Any] = []
+        page_token = None
+
+        while True:
+            raw_req = (
+                lark.BaseRequest.builder()
+                .http_method(lark.HttpMethod.GET)
+                .uri("/open-apis/drive/v1/files")
+                .token_types({token_type})
+                .build()
+            )
+            raw_req.add_query("folder_token", folder_token)
+            raw_req.add_query("page_size", 200)
+            if page_token:
+                raw_req.add_query("page_token", page_token)
+
+            response = self._call_api(client.request, raw_req, feishu_access_token)
+            if not response.success():
+                _raise_from_lark_response(
+                    response,
+                    operation=f"list Drive folder {folder_token}",
+                    resource=folder_token,
+                )
+
+            data = self._drive_response_data(response)
+            items = _getattr_safe(data, "files", None) or _getattr_safe(data, "items", None) or []
+            all_children.extend(items)
+
+            has_more = bool(_getattr_safe(data, "has_more", False))
+            if not has_more:
+                break
+            page_token = _getattr_safe(data, "next_page_token", None) or _getattr_safe(
+                data, "page_token", None
+            )
+            if not page_token:
+                raise RuntimeError(
+                    f"Feishu returned more Drive folder items for {folder_token} "
+                    "without a page token"
+                )
+
+        return all_children
+
+    def _drive_folder_display_name(
+        self,
+        folder_token: str,
+        *,
+        feishu_access_token: Optional[str] = None,
+    ) -> str:
+        """Best-effort readable folder name for resource roots."""
+        try:
+            name = self._get_drive_folder_name(
+                folder_token,
+                feishu_access_token=feishu_access_token,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[FeishuAccessor] Falling back to Drive folder token %s as name: %s",
+                folder_token,
+                exc,
+            )
+            return folder_token
+        return name or folder_token
+
+    def _get_drive_folder_name(
+        self,
+        folder_token: str,
+        *,
+        feishu_access_token: Optional[str] = None,
+    ) -> Optional[str]:
+        """Fetch a Feishu Drive folder display name by folder token."""
+        import lark_oapi as lark
+
+        client = self._get_client(use_user_token=bool(feishu_access_token))
+        token_type = (
+            lark.AccessTokenType.USER if feishu_access_token else lark.AccessTokenType.TENANT
+        )
+        raw_req = (
+            lark.BaseRequest.builder()
+            .http_method(lark.HttpMethod.GET)
+            .uri(f"/open-apis/drive/explorer/v2/folder/{folder_token}/meta")
+            .token_types({token_type})
+            .build()
+        )
+        response = self._call_api(client.request, raw_req, feishu_access_token)
+        if not response.success():
+            _raise_from_lark_response(
+                response,
+                operation=f"fetch Drive folder metadata {folder_token}",
+                resource=folder_token,
+            )
+
+        data = self._drive_response_data(response)
+        folder_meta = _getattr_safe(data, "folder", None) or _getattr_safe(data, "meta", None)
+        name = _getattr_safe(data, "name", None) or _getattr_safe(folder_meta, "name", None)
+        return str(name) if name else None
+
+    def _download_drive_file(
+        self,
+        file_token: str,
+        *,
+        feishu_access_token: Optional[str] = None,
+        filename_hint: Optional[str] = None,
+    ) -> Tuple[bytes, Optional[str], Optional[str]]:
+        """Download a Feishu Drive binary file by file token."""
+        import lark_oapi as lark
+
+        client = self._get_client(use_user_token=bool(feishu_access_token))
+        token_type = (
+            lark.AccessTokenType.USER if feishu_access_token else lark.AccessTokenType.TENANT
+        )
+        raw_req = (
+            lark.BaseRequest.builder()
+            .http_method(lark.HttpMethod.GET)
+            .uri(f"/open-apis/drive/v1/files/{file_token}/download")
+            .token_types({token_type})
+            .build()
+        )
+        response = self._call_api(client.request, raw_req, feishu_access_token)
+        if not response.success():
+            _raise_from_lark_response(
+                response,
+                operation=f"download Drive file {file_token}",
+                resource=file_token,
+            )
+
+        raw = getattr(response, "raw", None)
+        content = getattr(raw, "content", None)
+        if content is None:
+            raise OpenVikingError(
+                f"Feishu Drive file download returned empty content: {file_token}",
+                code="NOT_FOUND",
+                details={"operation": "download Drive file", "resource": file_token},
+            )
+        if isinstance(content, str):
+            content = content.encode("utf-8")
+
+        content_type = self._response_content_type(raw)
+        filename = self._filename_from_content_disposition(
+            self._response_header(raw, "content-disposition")
+        )
+        return content, content_type, filename or filename_hint
+
+    def _write_temp_drive_file(
+        self,
+        file_token: str,
+        content: bytes,
+        content_type: Optional[str],
+        *,
+        filename_hint: Optional[str] = None,
+    ) -> Path:
+        filename = self._drive_file_name(
+            file_token,
+            content,
+            content_type,
+            filename_hint=filename_hint,
+        )
+        temp_dir = Path(tempfile.mkdtemp(prefix="ov_feishu_file_"))
+        path = temp_dir / filename
+        path.write_bytes(content)
+        return path
+
+    @staticmethod
+    def _drive_response_data(response: Any) -> Any:
+        data = getattr(response, "data", None)
+        if data is not None:
+            return data
+        raw_content = getattr(getattr(response, "raw", None), "content", None)
+        if not raw_content:
+            return {}
+        if isinstance(raw_content, bytes):
+            raw_content = raw_content.decode("utf-8")
+        return json.loads(raw_content).get("data", {})
+
+    @classmethod
+    def _normalize_drive_item(cls, item: Any) -> Tuple[str, str, str, str]:
+        item_type = str(_getattr_safe(item, "type", "") or "").lower()
+        token = str(_getattr_safe(item, "token", "") or "")
+        name = str(_getattr_safe(item, "name", "") or "")
+        url = str(_getattr_safe(item, "url", "") or "")
+        shortcut_info = _getattr_safe(item, "shortcut_info", None)
+        if shortcut_info:
+            item_type = str(
+                _getattr_safe(shortcut_info, "target_type", item_type) or item_type
+            ).lower()
+            token = str(_getattr_safe(shortcut_info, "target_token", token) or token)
+        return item_type, token, name, url
+
+    @staticmethod
+    def _build_feishu_doc_url(doc_type: str, token: str) -> str:
+        return f"https://open.feishu.cn/{doc_type}/{token}"
+
+    @staticmethod
+    def _unique_child_path(parent: Path, name: str) -> Path:
+        path = parent / _safe_path_segment(name)
+        if not path.exists():
+            return path
+        suffix = path.suffix
+        stem = path.stem
+        for index in range(2, 10000):
+            candidate = parent / _numbered_path_segment(stem, suffix, index)
+            if not candidate.exists():
+                return candidate
+        raise RuntimeError(f"Unable to allocate unique path under {parent}")
+
+    @classmethod
+    def _drive_file_name(
+        cls,
+        file_token: str,
+        content: bytes,
+        content_type: Optional[str],
+        *,
+        filename_hint: Optional[str] = None,
+    ) -> str:
+        raw_name = filename_hint or file_token
+        if Path(raw_name).suffix:
+            return _safe_path_segment(raw_name, fallback=file_token)
+        ext = cls._guess_drive_file_ext(content, content_type)
+        return _safe_path_segment(f"{raw_name}{ext}", fallback=f"{file_token}{ext}")
+
+    @staticmethod
+    def _markdown_file_name(name: str) -> str:
+        if str(name).lower().endswith((".md", ".markdown")):
+            return _safe_path_segment(name)
+        return _safe_path_segment(f"{name}.md")
+
+    @staticmethod
+    def _guess_drive_file_ext(content: bytes, content_type: Optional[str]) -> str:
+        if content.startswith(b"%PDF-"):
+            return ".pdf"
+        if (
+            content.startswith(b"PK\x03\x04")
+            or content.startswith(b"PK\x05\x06")
+            or content.startswith(b"PK\x07\x08")
+        ):
+            return ".zip"
+        if content.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"):
+            return ".doc"
+        if content_type:
+            ext = get_preferred_extension(content_type)
+            if ext:
+                return ext
+        return ".bin"
+
+    @staticmethod
+    def _response_header(raw: Any, name: str) -> Optional[str]:
+        headers = getattr(raw, "headers", None)
+        if not headers:
+            return None
+        try:
+            get = headers.get
+        except AttributeError:
+            return None
+        return get(name) or get(name.title()) or get(name.lower())
+
+    @staticmethod
+    def _filename_from_content_disposition(content_disposition: Optional[str]) -> Optional[str]:
+        if not content_disposition:
+            return None
+        utf8_match = re.search(r"filename\*=UTF-8''([^;]+)", content_disposition, re.I)
+        if utf8_match:
+            return unquote(utf8_match.group(1))
+        quoted_match = re.search(r'filename="([^"]+)"', content_disposition, re.I)
+        if quoted_match:
+            return quoted_match.group(1)
+        simple_match = re.search(r"filename=([^;]+)", content_disposition, re.I)
+        if simple_match:
+            return simple_match.group(1).strip()
+        return None
 
     # ========== Configuration & Client ==========
 

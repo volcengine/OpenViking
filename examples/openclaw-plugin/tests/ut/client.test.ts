@@ -264,6 +264,38 @@ describe("OpenVikingClient resource and skill import", () => {
     );
   });
 
+  it("includes a response error trace_id in the thrown request error", async () => {
+    const transport = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        status: "error",
+        error: {
+          code: "INTERNAL",
+          message: "commit failed",
+          trace_id: "trace-client-error",
+        },
+      }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const client = new OpenVikingClient(
+      "http://127.0.0.1:1933",
+      "",
+      "agent",
+      5_000,
+      "",
+      "",
+      undefined,
+      false,
+      true,
+      { transport },
+    );
+
+    await expect(client.commitSession("trace-error")).rejects.toThrow(
+      "trace_id=trace-client-error",
+    );
+  });
+
   it("uses an extended request timeout for wait=true imports", async () => {
     vi.useFakeTimers();
     const transport = vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
@@ -344,6 +376,34 @@ describe("OpenVikingClient resource and skill import", () => {
       archived: true,
       task_id: "task-slow",
       memories_extracted: { core: 1 },
+    });
+  });
+
+  it("returns session commit trace_id from the response result", async () => {
+    const transport = vi.fn().mockResolvedValue(
+      okResponse({
+        session_id: "trace-session",
+        status: "accepted",
+        task_id: "task-trace",
+        archived: true,
+        trace_id: "trace-client-commit",
+      }),
+    );
+    const client = new OpenVikingClient(
+      "http://127.0.0.1:1933",
+      "",
+      "agent",
+      5_000,
+      "",
+      "",
+      undefined,
+      false,
+      true,
+      { transport },
+    );
+
+    await expect(client.commitSession("trace-session")).resolves.toMatchObject({
+      trace_id: "trace-client-commit",
     });
   });
 });

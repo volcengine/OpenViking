@@ -16,6 +16,7 @@ from openviking.server.identity import (
 from openviking.server.upload_token_store import UploadTokenError, upload_token_store
 from openviking.telemetry.span_models import update_root_span_identity
 from openviking_cli.exceptions import (
+    FailedPreconditionError,
     InvalidArgumentError,
     PermissionDeniedError,
     UnauthenticatedError,
@@ -116,6 +117,18 @@ def _build_request_context(
         from_oauth=identity.from_oauth,
         api_key=api_key,
     )
+    manager = getattr(request.app.state, "api_key_manager", None)
+    is_user_deleting = getattr(manager, "is_user_deleting", None)
+    if (
+        ctx.role != Role.ROOT
+        and callable(is_user_deleting)
+        and is_user_deleting(ctx.account_id, ctx.user.user_id)
+    ):
+        deletion = manager.get_user_deletion(ctx.account_id, ctx.user.user_id) or {}
+        raise FailedPreconditionError(
+            "User deletion is in progress",
+            details={"task_id": deletion.get("task_id")},
+        )
     update_root_span_identity(
         request_state=request.state,
         account_id=identity.account_id,
@@ -290,9 +303,8 @@ def require_auth_role(*allowed_roles: Role):
                     "Admin API authentication failed: unable to resolve request context."
                 )
 
-            plugin = _get_plugin(request)
             manager = getattr(request.app.state, "api_key_manager", None)
-            if manager is None and plugin.requires_api_key_manager():
+            if manager is None:
                 raise PermissionDeniedError(_DEV_MODE_ADMIN_API_MESSAGE)
 
             if ctx.role not in allowed_roles:
@@ -332,11 +344,9 @@ def get_api_key_manager_or_raise(request: Request):
     """Get APIKeyManager from app state or raise appropriate error.
 
     Raises:
-        PermissionDeniedError: When the current auth plugin requires an
-            APIKeyManager but none is available.
+        PermissionDeniedError: When no APIKeyManager is available.
     """
     manager = getattr(request.app.state, "api_key_manager", None)
-    plugin = _get_plugin(request)
-    if manager is None and plugin.requires_api_key_manager():
+    if manager is None:
         raise PermissionDeniedError(_DEV_MODE_ADMIN_API_MESSAGE)
     return manager

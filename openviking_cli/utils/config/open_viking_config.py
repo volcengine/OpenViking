@@ -43,6 +43,7 @@ from .parser_config import (
     WebFeedConfig,
 )
 from .prompts_config import PromptsConfig
+from .queue_worker_config import QueueWorkersConfig
 from .rerank_config import RerankConfig
 from .retrieval_config import RetrievalConfig
 from .storage_config import StorageConfig
@@ -99,7 +100,6 @@ class ParserApiConfig(BaseModel):
     http_timeout_seconds: float = 10.0
     response_timeout_seconds: int = 1800
     poll_interval_ms: int = 3000
-
     model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
@@ -185,7 +185,6 @@ class OpenVikingConfig(BaseModel):
         default_factory=GitConfig, description="Git version control configuration"
     )
 
-    # Parser configurations
     pdf: PDFConfig = Field(default_factory=PDFConfig, description="PDF parsing configuration")
 
     code: CodeConfig = Field(default_factory=CodeConfig, description="Code parsing configuration")
@@ -235,6 +234,11 @@ class OpenVikingConfig(BaseModel):
     semantic: SemanticConfig = Field(
         default_factory=SemanticConfig,
         description="Semantic processing configuration (overview/abstract limits)",
+    )
+
+    queue_workers: QueueWorkersConfig = Field(
+        default_factory=QueueWorkersConfig,
+        description="Queue worker runtime configuration",
     )
 
     parser_api: ParserApiConfig = Field(
@@ -674,7 +678,7 @@ def initialize_openviking_config(
 
     Args:
         user: UserIdentifier for session management
-        path: Local storage path (workspace) for embedded mode
+        path: Optional local workspace override for the service
 
     Returns:
         Configured OpenVikingConfig instance
@@ -692,7 +696,7 @@ def initialize_openviking_config(
 
     # Configure storage based on provided parameters
     if path:
-        # Embedded mode: local storage
+        # Explicit local workspace override
         config.storage.agfs.backend = config.storage.agfs.backend or "local"
         config.storage.vectordb.backend = config.storage.vectordb.backend or "local"
         # Resolve and update workspace + dependent paths (model_validator won't

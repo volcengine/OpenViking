@@ -21,7 +21,7 @@ from openviking.session.memory.dataclass import (
     StoredLink,
 )
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
-from openviking.session.memory.merge_op import MergeOp
+from openviking.session.memory.merge_op import FieldType, MergeOp, PatchOp
 from openviking.session.memory.schema_model_generator import SchemaModelGenerator
 from openviking.session.memory.tools import (
     MEMORY_TOOLS_REGISTRY,
@@ -293,7 +293,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
                         tracer.info(f"Extended max_iterations to {max_iterations} for refetch")
 
                     continue
-                patch_errors = self._validate_patch_operations(final_operations)
+                patch_errors = await self._validate_patch_operations(final_operations)
                 if patch_errors and patch_repair_count == 0:
                     patch_repair_count += 1
                     max_iterations += 1
@@ -779,16 +779,20 @@ The final output of the model must strictly follow the JSON Schema format shown 
             f"{skeleton}"
         )
 
-    def _validate_patch_operations(self, operations: ResolvedOperations) -> List[Dict[str, Any]]:
+    async def _validate_patch_operations(
+        self,
+        operations: ResolvedOperations,
+    ) -> List[Dict[str, Any]]:
         from openviking.session.memory.merge_op.base import SearchReplaceBlock, StrPatch
-        from openviking.session.memory.merge_op.patch_handler import apply_str_patch
+        from openviking.session.memory.merge_op.patch_handler import unescape_markers
 
         errors = []
+        patch_op = PatchOp(FieldType.STRING)
         read_files = self.context_provider.read_file_contents or {}
         for operation in operations.upsert_operations:
             if operation.old_memory_file_content is None:
                 continue
-            current_content = operation.old_memory_file_content.content or ""
+            current_content = operation.old_memory_file_content.plain_content() or ""
             target_uri = (
                 operation.uris[0] if operation.uris else operation.old_memory_file_content.uri
             )
@@ -804,28 +808,47 @@ The final output of the model must strictly follow the JSON Schema format shown 
                             blocks.append(SearchReplaceBlock(**raw_block))
                 if not blocks:
                     continue
-                patch = StrPatch(blocks=blocks)
-                try:
-                    applied_content = apply_str_patch(current_content, patch)
-                except Exception:
-                    applied_content = current_content
-                if applied_content != current_content:
-                    continue
-                for block in blocks:
+                working_content = current_content
+                for block_index, block in enumerate(blocks, start=1):
                     search = block.search or ""
-                    if not search:
+                    if not search or search == block.replace:
                         continue
+                    effective_search = unescape_markers(search)
+                    match_count = working_content.count(effective_search)
+                    apply_failed = False
+                    try:
+                        applied_content = await patch_op.apply(
+                            working_content,
+                            StrPatch(blocks=[block]),
+                        )
+                    except Exception:
+                        apply_failed = True
+                        applied_content = working_content
+                    if applied_content != working_content:
+                        working_content = applied_content
+                        continue
+                    if match_count > 1:
+                        reason = "non_unique"
+                    elif match_count == 0:
+                        reason = "not_found"
+                    elif apply_failed:
+                        reason = "apply_error"
+                    else:
+                        reason = "not_applied"
                     found_in = [
                         uri
                         for uri, memory_file in read_files.items()
-                        if uri != target_uri and search in (memory_file.content or "")
+                        if uri != target_uri and search in (memory_file.plain_content() or "")
                     ]
                     errors.append(
                         {
                             "uri": target_uri,
                             "page_id": operation.page_id,
                             "field": field_name,
+                            "block_index": block_index,
                             "search": search,
+                            "reason": reason,
+                            "match_count": match_count,
                             "found_in_other_uris": found_in,
                         }
                     )

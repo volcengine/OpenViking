@@ -35,6 +35,20 @@ fields:
       Use exactly one of: success, failure, partial, unfinished, unknown.
     merge_op: immutable
 
+  - name: task_query
+    type: string
+    description: |
+      Write a self-contained user task that can be copied and rerun to reproduce the intent represented by this trajectory.
+
+      Rules:
+      - Reconstruct the complete task from the relevant conversation context instead of copying unrelated turns or the whole session.
+      - Preserve the user's objective, target, constraints, requested output, and acceptance criteria that are necessary to execute the task independently.
+      - Preserve non-secret concrete inputs such as the requested topic, time range, and target object when they are required to rerun the task. Never include credentials, tokens, or authentication secrets.
+      - Remove conversational references such as "above", "continue", or "why did it stop" by resolving them into explicit task context.
+      - Do not include the assistant's solution, tool results, execution outcome, trajectory analysis, or any experience-memory content.
+      - Write in the user's voice and in {{ language }}. Use concise sentences, but include all information required to rerun the task.
+    merge_op: immutable
+
   - name: retrieval_anchor
     type: string
     description: |

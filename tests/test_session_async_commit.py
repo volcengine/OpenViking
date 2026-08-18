@@ -9,43 +9,28 @@ from typing import AsyncGenerator, Tuple
 import httpx
 import pytest_asyncio
 
-from openviking import AsyncOpenViking
-from openviking.message import TextPart
 from openviking.server.app import create_app
+from openviking.server.auth.plugins import DevAuthPlugin
 from openviking.server.config import ServerConfig
 from openviking.server.dependencies import set_service
 from openviking.service.core import OpenVikingService
-from openviking.service.task_tracker import TaskStatus, get_task_tracker, set_task_tracker
+from openviking.service.task_tracker import TaskStatus, get_task_tracker
 
 
 @pytest_asyncio.fixture
-async def api_client(temp_dir) -> AsyncGenerator[Tuple[httpx.AsyncClient, OpenVikingService], None]:
+async def api_client(
+    service: OpenVikingService,
+) -> AsyncGenerator[Tuple[httpx.AsyncClient, OpenVikingService], None]:
     """Create in-process HTTP client for API endpoint tests."""
-    set_task_tracker(None)
-    service = OpenVikingService(path=str(temp_dir / "api_data"))
-    await service.initialize()
     app = create_app(config=ServerConfig(), service=service)
     set_service(service)
+    app.state.auth_plugin = DevAuthPlugin()
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         yield client, service
 
-    await service.close()
-    await AsyncOpenViking.reset()
-    set_task_tracker(None)
-
-
-@pytest_asyncio.fixture
-async def ov_client(temp_dir) -> AsyncGenerator[AsyncOpenViking, None]:
-    """Create AsyncOpenViking client for unit tests."""
-    set_task_tracker(None)
-    client = AsyncOpenViking(path=str(temp_dir / "ov_data"))
-    await client.initialize()
-    yield client
-    await client.close()
-    await AsyncOpenViking.reset()
-    set_task_tracker(None)
+    set_service(None)
 
 
 async def _new_session_with_one_message(client: httpx.AsyncClient) -> str:
@@ -59,19 +44,6 @@ async def _new_session_with_one_message(client: httpx.AsyncClient) -> str:
     )
     assert add_resp.status_code == 200
     return session_id
-
-
-async def test_commit_async_returns_accepted_with_task_id(ov_client: AsyncOpenViking):
-    """commit_async should return status=accepted with a task_id."""
-    session = ov_client.session(session_id="async-shape-test")
-    session.add_message("user", [TextPart("first")])
-    result = await session.commit_async()
-
-    assert result["status"] == "accepted"
-    assert result["task_id"] is not None
-    assert result["archived"] is True
-    assert "session_id" in result
-    assert "archive_uri" in result
 
 
 async def test_commit_endpoint_returns_accepted_with_task_id(api_client):

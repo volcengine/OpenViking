@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Bootstrap script for OpenViking HTTP Server."""
 
+import asyncio
 import argparse
 import json
 import os
@@ -218,6 +219,18 @@ def main():
         print(e, file=sys.stderr)
         sys.exit(1)
 
+    # Configure logging early so that all subsequent steps have proper logging
+    configure_uvicorn_logging()
+
+    # 🔍 Authentication health check - CRITICAL: will exit if check fails
+    try:
+        from openviking.server.auth.health_check import run_startup_health_check_or_exit
+        asyncio.run(run_startup_health_check_or_exit(config))
+    except Exception as e:
+        # Don't fail startup if health check itself has issues
+        print(f"Warning: Authentication health check failed to run: {e}", file=sys.stderr)
+        print("Continuing startup anyway...", file=sys.stderr)
+
     # Ensure Ollama is running if configured
     try:
         from openviking_cli.utils.ollama import detect_ollama_in_config, ensure_ollama_for_server
@@ -248,9 +261,6 @@ def main():
         config.workers = args.workers
     if args.with_bot:
         config.with_bot = True
-
-    # Configure logging for Uvicorn
-    configure_uvicorn_logging()
 
     bot_process: Optional[BotProcess] = None
     if config.with_bot:
@@ -308,10 +318,17 @@ def main():
                 host=config.host,
                 port=config.port,
                 workers=workers,
+                timeout_keep_alive=config.timeout_keep_alive,
                 log_config=None,
             )
         else:
-            uvicorn.run(app, host=config.host, port=config.port, log_config=None)
+            uvicorn.run(
+                app,
+                host=config.host,
+                port=config.port,
+                timeout_keep_alive=config.timeout_keep_alive,
+                log_config=None,
+            )
     finally:
         # Cleanup vikingbot process on shutdown
         if bot_process is not None:

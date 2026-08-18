@@ -8,6 +8,8 @@ Run: pytest tests/integration/test_gemini_e2e.py -v -m integration
 
 import pytest
 
+pytest.importorskip("google.genai")
+
 from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
 from tests.integration.conftest import GOOGLE_API_KEY, l2_norm, requires_api_key
 

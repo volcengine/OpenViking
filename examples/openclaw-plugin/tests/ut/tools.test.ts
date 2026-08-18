@@ -498,6 +498,39 @@ describe("Tool: memory_store (behavioral)", () => {
     expect(body).not.toHaveProperty("role_id");
   });
 
+  it("shows commit trace_id in the memory_store success result", async () => {
+    const openVikingTransport = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "default" });
+      }
+      if (url.includes("/messages")) {
+        return okResponse({ session_id: "sess-trace" });
+      }
+      if (url.endsWith("/commit")) {
+        return okResponse({
+          status: "completed",
+          archived: true,
+          memories_extracted: { core: 1 },
+          trace_id: "trace-memory-store",
+        });
+      }
+      return okResponse({});
+    });
+
+    const { factoryTools, api } = setupPlugin();
+    (api as any).openVikingTransport = openVikingTransport;
+    contextEnginePlugin.register(api as any);
+    const tool = factoryTools.get("memory_store")!({
+      sessionId: "runtime-session",
+      sessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("tc-memory-store", { text: "remember this trace" });
+
+    expect(result.content[0].text).toContain("trace_id=trace-memory-store");
+    expect(result.details).toMatchObject({ traceId: "trace-memory-store" });
+  });
+
   it("uses a temporary session by default instead of the current tool session", async () => {
     const openVikingTransport = vi.fn(async (url: string) => {
       if (url.endsWith("/api/v1/system/status")) {

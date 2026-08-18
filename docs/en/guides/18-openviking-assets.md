@@ -69,7 +69,7 @@ protocol: openviking-assets/1
 defaults:
   git:
     auth_ref: team-git
-    watch_interval: 1440
+    watch_interval: 60
 
 catalog:
   - name: openviking
@@ -139,7 +139,7 @@ protocol: openviking-assets/1
 defaults:
   git:
     auth_ref: team-git
-    watch_interval: 1440
+    watch_interval: 60
 
 catalog:
   - name: openviking
@@ -292,9 +292,26 @@ export OPENVIKING_ASSETS_CREDENTIALS_FILE=/secure/path/assets-credentials.yaml
 Before submitting any resource, the CLI resolves every selected `auth_ref`, then the server runs
 `git ls-remote` in the execution environment to verify read access to every repository. A missing
 alias or unreadable repository fails the whole operation before the first submission; dry-run
-performs the same preflight. Resolved Git arguments are sent to the preflight and resource
-endpoints over the configured OpenViking service connection. Use TLS for remote deployments and
-restrict local access to the credentials file.
+performs the same preflight. `username` and `token` are the only supported fields under a native
+Git credentials alias; keep them flat as shown above. For the standard, native Git path, the CLI sends them to `add_resource` as
+`args.auth_config`, while `branch` or `commit` remains a top-level member of `args`. Resolved Git
+arguments are sent over the configured OpenViking service connection. Use TLS for remote
+deployments and restrict local access to the credentials file.
+
+When the effective `watch_interval` is positive, OpenViking stores an HTTPS Git token resolved
+from `auth_ref` in the Watch task's private, repository-bound authentication state. The token is
+not written to Manifest State, ordinary ingestion queues, or watch API/MCP/CLI responses. A zero
+interval keeps the token request-local. Git PATs have no generic refresh flow, so recreate the
+Watch when a token expires or is revoked.
+
+Private watch state is stored in `viking://resources/.watch_tasks.json`. It is encrypted at rest
+when VikingFS file encryption is enabled; otherwise the server-side control file and its backup
+contain plaintext token state. Restrict server storage access and enable encryption in production.
+
+Native credential imports wait for clone and parse before the server returns a task, even without
+`--wait`; the CLI therefore uses a 300-second request timeout by default for these assets. Use
+`--timeout <seconds>` for a larger repository. The token is carried in the HTTPS request body, so
+keep diagnostic request-body dumping disabled in production.
 
 Omit `auth_ref` when the target service already has the SSH keys or other authentication needed to
 access the repository.
@@ -355,8 +372,9 @@ Temporarily apply a 60-minute interval to every selected asset:
 ov add-resource --manifest manifest.yaml --watch-interval 60
 ```
 
-Subsequent content refreshes are performed by Watches. You do not need to apply the Manifest on a
-schedule. Reapply it to pick up Catalog or Manifest composition changes, retry failed assets, or
+Subsequent content refreshes are performed by Watches. For native HTTPS Git assets using
+`auth_ref`, the server restores the repository-bound token from private Watch state for each
+refresh. Reapply assets to pick up Catalog or Manifest composition changes, retry failures, or
 explicitly trigger synchronization.
 
 ## Failure Handling
@@ -396,7 +414,7 @@ Options used with `--manifest`:
 | `-m, --manifest <file>` | Manifest file. |
 | `--args <key:value,...>` | Manifest-run options, comma-separated; supported keys below. |
 | `--wait` | Wait for each resource to finish processing. |
-| `--timeout <seconds>` | Timeout used with `--wait`. |
+| `--timeout <seconds>` | HTTP request timeout. Native private Git imports honor it even without `--wait`; their default is 300 seconds. |
 | `--watch-interval <minutes>` | Override the refresh interval for all assets. |
 
 Run options supported by `--args`:

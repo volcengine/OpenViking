@@ -148,18 +148,16 @@ class PDFConfig(ParserConfig):
     Attributes:
         strategy: Parsing strategy ("local" | "mineru" | "auto")
         mineru_endpoint: MinerU API endpoint URL
-        mineru_api_key: MinerU API authentication key
         mineru_timeout: MinerU request timeout in seconds
-        mineru_params: Additional MinerU API parameters
+        mineru_bodys: Additional MinerU API multipart form fields
     """
 
     strategy: str = "auto"  # "local" | "mineru" | "auto"
 
     # MinerU API configuration
     mineru_endpoint: Optional[str] = None  # API endpoint URL
-    mineru_api_key: Optional[str] = None  # API authentication key
     mineru_timeout: float = 300.0  # Request timeout in seconds (5 minutes)
-    mineru_params: Optional[dict] = None  # Additional API parameters
+    mineru_bodys: Optional[dict] = None  # Additional API multipart form fields
 
     # Heading detection configuration
     heading_detection: str = "auto"  # "bookmarks" | "font" | "auto" | "none"
@@ -439,13 +437,16 @@ class MarkdownConfig(ParserConfig):
 
     Attributes:
         preserve_links: Whether to preserve hyperlinks in output
-        extract_frontmatter: Whether to extract YAML frontmatter
+        extract_frontmatter: Whether to REMOVE YAML frontmatter from the stored
+            document body. Frontmatter is parsed into the parse result metadata
+            regardless. Off by default: the parsed metadata is never persisted, so
+            removing the block would silently lose those fields.
         include_metadata: Whether to include file metadata
         max_heading_depth: Maximum heading depth to include in structure
     """
 
     preserve_links: bool = True
-    extract_frontmatter: bool = True
+    extract_frontmatter: bool = False
     include_metadata: bool = True
     max_heading_depth: int = 3
 

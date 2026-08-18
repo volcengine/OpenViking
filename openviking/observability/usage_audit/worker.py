@@ -106,6 +106,8 @@ class UsageAuditWorker:
                 )
                 raise
             else:
+                for _ in batch:
+                    self._queue.task_done()
                 self._current_batch = None
 
     async def _flush(self, batch: list[ObservabilityEvent]) -> None:
@@ -119,6 +121,12 @@ class UsageAuditWorker:
                 exc,
                 exc_info=logger.isEnabledFor(logging.DEBUG),
             )
+
+    async def flush(self) -> None:
+        """Wait until every event already accepted by this worker is handled."""
+        if self._queue is None or self._task is None or self._closed:
+            raise RuntimeError("Usage/Audit worker is not running")
+        await self._queue.join()
 
     async def close(self, *, timeout_seconds: float = 3.0) -> None:
         """Stop the worker and flush remaining queued events."""

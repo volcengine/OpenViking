@@ -11,8 +11,7 @@ import json
 import logging
 import threading
 from dataclasses import dataclass
-from importlib import import_module
-from typing import Any, Callable, Iterable, Literal
+from typing import Any, Iterable, Literal
 
 from langchain_openviking._async_client_cache import LoopScopedAsyncClientCache
 
@@ -74,7 +73,6 @@ class OpenVikingConnection:
     user: str | None = None
     user_id: str | None = None
     actor_peer_id: str | None = None
-    path: str | None = None
     timeout: float = 60.0
     extra_headers: dict[str, str] | None = None
     auto_initialize: bool = True
@@ -92,7 +90,6 @@ class OpenVikingConnection:
             user=self.user,
             user_id=self.user_id,
             actor_peer_id=self.actor_peer_id,
-            path=self.path,
             timeout=self.timeout,
             extra_headers=copy.deepcopy(self.extra_headers, memo),
             auto_initialize=self.auto_initialize,
@@ -121,7 +118,7 @@ class OpenVikingClientHandle:
     def supports_request_actor_peer(self) -> bool:
         """Return whether this handle supports request-scoped actor peers."""
 
-        return _uses_http_client(self._connection)
+        return True
 
     @property
     def _initialized(self) -> bool:
@@ -223,7 +220,7 @@ class OpenVikingAsyncClientHandle:
     def supports_request_actor_peer(self) -> bool:
         """Return whether this handle supports request-scoped actor peers."""
 
-        return _uses_http_client(self._connection)
+        return True
 
     @property
     def _initialized(self) -> bool:
@@ -368,12 +365,10 @@ def ensure_client(connection: OpenVikingConnection) -> Any:
 
     client = connection.client
     if client is None:
-        if connection.url or connection.path is None:
-            handle = OpenVikingClientHandle(connection)
-            if connection.auto_initialize:
-                handle.get()
-            return handle
-        return _create_client_from_connection(connection)
+        handle = OpenVikingClientHandle(connection)
+        if connection.auto_initialize:
+            handle.get()
+        return handle
     if connection.auto_initialize and hasattr(client, "initialize"):
         if not getattr(client, "_initialized", False):
             client.initialize()
@@ -384,40 +379,26 @@ async def ensure_async_client(
     connection: OpenVikingConnection,
     *,
     client_cache: LoopScopedAsyncClientCache | None = None,
-    embedded_client_factory: Callable[[], Any] | None = None,
 ) -> Any:
     """Return a client suitable for non-blocking OpenViking calls.
 
     An explicitly supplied async client is preferred. Existing synchronous
     clients remain supported and are dispatched through a worker thread by
     :func:`acall_openviking`. Internally created HTTP handles can be scoped to
-    the running loop with ``client_cache``. Embedded ``path=`` connections
-    intentionally use the synchronous client so their stateful async internals
-    remain on OpenViking's shared background loop.
+    the running loop with ``client_cache``.
     """
 
     client = connection.async_client
     if client is None and connection.client is not None:
         client = connection.client
     if client is None:
-        if _uses_http_client(connection):
-            if client_cache is None:
-                handle = OpenVikingAsyncClientHandle(connection)
-            else:
-                handle = client_cache.get(lambda: OpenVikingAsyncClientHandle(connection))
-            if connection.auto_initialize:
-                await handle.get()
-            return handle
-        if embedded_client_factory is not None:
-            if client_cache is not None:
-                # The thread hop is load-bearing: without a running event loop,
-                # the embedded singleton occupies the cache's shared fallback slot.
-                return await asyncio.to_thread(
-                    client_cache.get,
-                    embedded_client_factory,
-                )
-            return await asyncio.to_thread(embedded_client_factory)
-        return await asyncio.to_thread(_create_client_from_connection, connection)
+        if client_cache is None:
+            handle = OpenVikingAsyncClientHandle(connection)
+        else:
+            handle = client_cache.get(lambda: OpenVikingAsyncClientHandle(connection))
+        if connection.auto_initialize:
+            await handle.get()
+        return handle
     if connection.auto_initialize and hasattr(client, "initialize"):
         await _ainitialize_client(client)
     return client
@@ -545,7 +526,7 @@ async def aapply_commit_policy(
 
 
 def call_openviking(client: Any, method_name: str, /, **kwargs: Any) -> Any:
-    """Call a client method, filtering kwargs unsupported by local/HTTP variants."""
+    """Call a client method, filtering kwargs unsupported by client variants."""
 
     openviking_call = getattr(client, "_openviking_call", None)
     if callable(openviking_call):
@@ -563,32 +544,18 @@ async def acall_openviking(client: Any, method_name: str, /, **kwargs: Any) -> A
 
 
 def _create_client_from_connection(connection: OpenVikingConnection) -> Any:
-    client: Any
-    if connection.url or connection.path is None:
-        from openviking_sdk import SyncHTTPClient
+    from openviking_sdk import SyncHTTPClient
 
-        client = SyncHTTPClient(
-            url=connection.url,
-            api_key=connection.api_key,
-            account=connection.account,
-            user=connection.user,
-            user_id=connection.user_id,
-            actor_peer_id=connection.actor_peer_id,
-            timeout=connection.timeout,
-            extra_headers=connection.extra_headers,
-        )
-    else:
-        try:
-            openviking = import_module("openviking")
-            sync_openviking = openviking.SyncOpenViking
-        except ImportError as exc:
-            raise OptionalDependencyError(
-                "Embedded path= connections require the full openviking package. "
-                'Install it with `pip install "openviking"`, or configure an '
-                "OpenViking server URL for lightweight HTTP usage."
-            ) from exc
-
-        client = sync_openviking(path=connection.path, actor_peer_id=connection.actor_peer_id)
+    client: Any = SyncHTTPClient(
+        url=connection.url,
+        api_key=connection.api_key,
+        account=connection.account,
+        user=connection.user,
+        user_id=connection.user_id,
+        actor_peer_id=connection.actor_peer_id,
+        timeout=connection.timeout,
+        extra_headers=connection.extra_headers,
+    )
 
     if connection.auto_initialize and hasattr(client, "initialize"):
         if not getattr(client, "_initialized", False):
@@ -597,9 +564,6 @@ def _create_client_from_connection(connection: OpenVikingConnection) -> Any:
 
 
 async def _create_async_client_from_connection(connection: OpenVikingConnection) -> Any:
-    if not _uses_http_client(connection):
-        raise ValueError("Native async clients are created automatically only for HTTP connections")
-
     from openviking_sdk import AsyncHTTPClient
 
     client: Any = AsyncHTTPClient(
@@ -718,12 +682,6 @@ def _async_client_initialization_lock(client: Any) -> asyncio.Lock:
         except Exception:
             return asyncio.Lock()
     return locks.get(asyncio.Lock)
-
-
-def _uses_http_client(connection: OpenVikingConnection) -> bool:
-    """Return whether connection settings select the HTTP transport."""
-
-    return bool(connection.url) or connection.path is None
 
 
 def _async_client_is_initialized(client: Any) -> bool:

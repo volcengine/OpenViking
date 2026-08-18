@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import re
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -11,20 +11,12 @@ from openviking.storage.queuefs.semantic_dag import SemanticDagExecutor
 from openviking_cli.session.user_id import UserIdentifier
 
 
-class _FakeAgfs:
-    async def pathlock_acquire_exact_batch(self, _paths):
-        return {"lease_ref": "test"}
-
-    async def pathlock_release(self, _lease):
-        return None
-
-
 class _FakeVikingFS:
     def __init__(self, tree, file_contents):
         self._tree = {self._norm(k): v for k, v in tree.items()}
         self._file_contents = {self._norm(k): v for k, v in file_contents.items()}
         self.writes = []
-        self._async_agfs = _FakeAgfs()
+        self._async_agfs = self
 
     def _norm(self, path):
         if "://" not in path:
@@ -48,6 +40,12 @@ class _FakeVikingFS:
         self._file_contents[norm_path] = content
         self.writes.append((norm_path, content))
 
+    async def pathlock_acquire_exact_batch(self, paths):
+        return {"paths": paths}
+
+    async def pathlock_release(self, lease):
+        return None
+
     def _uri_to_path(self, uri, ctx=None):
         return uri.replace("viking://", "/local/acc1/")
 
@@ -57,6 +55,7 @@ class _FakeProcessor:
         self._fs = viking_fs
         self.summarized_files = []
         self.sync_calls = []
+        self.vectorized_files = []
 
     def _parse_overview_md(self, overview_content):
         results = {}
@@ -81,6 +80,29 @@ class _FakeProcessor:
 
     def _normalize_overview_generation(self, overview):
         return overview, "abstract"
+
+    async def _vectorize_single_file(
+        self,
+        parent_uri,
+        context_type,
+        file_path,
+        summary_dict,
+        ctx=None,
+        use_summary=False,
+        ingest_options=None,
+    ):
+        self.vectorized_files.append(file_path)
+
+    async def _vectorize_directory(
+        self,
+        uri,
+        context_type,
+        abstract,
+        overview,
+        ctx=None,
+        ingest_options=None,
+    ):
+        return None
 
     async def _sync_topdown_recursive(
         self, root_uri, target_uri, ctx=None, file_change_status=None, lock=None
@@ -134,11 +156,11 @@ async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypa
         target_uri=root_uri,
         changes={"modified": [f"{root_uri}/a.txt"]},
     )
-    monkeypatch.setattr(executor, "_add_vectorize_task", AsyncMock())
 
     await executor.run(root_uri)
 
     assert processor.summarized_files == [f"{root_uri}/a.txt"]
+    assert processor.vectorized_files == [f"{root_uri}/a.txt"]
     assert processor.sync_calls == []
     overview = fake_fs._file_contents[f"{root_uri}/.overview.md"]
     assert "- a.txt: summary" in overview

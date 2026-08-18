@@ -55,14 +55,14 @@ class RequestWaitTracker:
     def register_request(self, telemetry_id: str) -> None:
         self._create_state(telemetry_id)
 
-    def register_semantic_root(self, telemetry_id: str, semantic_msg_id: str) -> None:
-        if not telemetry_id or not semantic_msg_id:
+    def register_semantic_root(self, telemetry_id: str, root_id: str) -> None:
+        if not telemetry_id or not root_id:
             return
         with self._lock:
             state = self._states.get(telemetry_id)
             if state is None:
                 return
-            state.pending_semantic_roots.add(semantic_msg_id)
+            state.pending_semantic_roots.add(root_id)
 
     def register_embedding_root(self, telemetry_id: str, root_id: str) -> None:
         if not telemetry_id or not root_id:
@@ -73,15 +73,6 @@ class RequestWaitTracker:
                 return
             state.pending_embedding_roots.add(root_id)
 
-    def record_embedding_processed(self, telemetry_id: str, delta: int = 1) -> None:
-        if not telemetry_id:
-            return
-        with self._lock:
-            state = self._states.get(telemetry_id)
-            if state is None:
-                return
-            state.embedding_processed += max(delta, 0)
-
     def record_embedding_requeue(self, telemetry_id: str, delta: int = 1) -> None:
         if not telemetry_id:
             return
@@ -91,21 +82,10 @@ class RequestWaitTracker:
                 return
             state.embedding_requeue_count += max(delta, 0)
 
-    def record_embedding_error(self, telemetry_id: str, message: str) -> None:
-        if not telemetry_id:
-            return
-        with self._lock:
-            state = self._states.get(telemetry_id)
-            if state is None:
-                return
-            state.embedding_error_count += 1
-            if message:
-                state.embedding_errors.append(message)
-
     def mark_semantic_done(
         self,
         telemetry_id: str,
-        semantic_msg_id: str,
+        root_id: str,
         processed_delta: int = 1,
     ) -> None:
         if not telemetry_id:
@@ -114,7 +94,7 @@ class RequestWaitTracker:
             state = self._states.get(telemetry_id)
             if state is None:
                 return
-            state.pending_semantic_roots.discard(semantic_msg_id)
+            state.pending_semantic_roots.discard(root_id)
             state.semantic_processed += max(processed_delta, 0)
 
     def record_semantic_requeue(self, telemetry_id: str, delta: int = 1) -> None:
@@ -126,14 +106,14 @@ class RequestWaitTracker:
                 return
             state.semantic_requeue_count += max(delta, 0)
 
-    def mark_semantic_failed(self, telemetry_id: str, semantic_msg_id: str, message: str) -> None:
+    def mark_semantic_failed(self, telemetry_id: str, root_id: str, message: str) -> None:
         if not telemetry_id:
             return
         with self._lock:
             state = self._states.get(telemetry_id)
             if state is None:
                 return
-            state.pending_semantic_roots.discard(semantic_msg_id)
+            state.pending_semantic_roots.discard(root_id)
             state.semantic_error_count += 1
             if message:
                 state.semantic_errors.append(message)

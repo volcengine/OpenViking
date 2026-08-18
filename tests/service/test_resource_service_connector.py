@@ -3,6 +3,7 @@
 """Core routing and task-state tests for Connector imports."""
 
 import asyncio
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -10,6 +11,7 @@ import httpx
 import pytest
 
 from openviking.connector import delegate as connector_delegate_module
+from openviking.parse.mode import ParseMode
 from openviking.server.identity import RequestContext, Role
 from openviking.service import resource_service as resource_service_module
 from openviking.service.resource_service import ResourceService
@@ -489,6 +491,12 @@ def test_connector_only_route_rejects_disabled_or_unsupported_requests(
     with pytest.raises(InvalidArgumentError, match="args keys"):
         service._connector.should_delegate("tos://bucket/prefix", connector_args={"parser": "pdf"})
 
+    with pytest.raises(InvalidArgumentError, match="parse_mode=no_split"):
+        service._connector.should_delegate(
+            "tos://bucket/prefix",
+            parse_mode=ParseMode.NO_SPLIT,
+        )
+
     connector_config.enable = False
     with pytest.raises(InvalidArgumentError, match="Connector integration"):
         service._connector.should_delegate("tos://bucket/prefix")
@@ -532,6 +540,18 @@ def test_git_connector_detection_accepts_explicit_protocol_repo(monkeypatch, pat
     monkeypatch.setattr(code_hosting_utils, "get_openviking_config", lambda: config)
 
     assert detect_connector_add_type(path) == ("git", False)
+
+
+def test_shared_connector_source_falls_back_for_no_split(connector_config, service):
+    connector_config.allowed_add_types = ["https"]
+
+    assert (
+        service._connector.should_delegate(
+            "https://example.com/manual.pdf",
+            parse_mode=ParseMode.NO_SPLIT,
+        )
+        is False
+    )
 
 
 @pytest.mark.parametrize(
@@ -738,6 +758,202 @@ async def test_native_git_enqueue_rejects_credentials_before_durable_job(
 
     assert all(value not in str(exc_info.value) for value in credential_args.values())
     service._enqueue_add_resource_job.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_native_git_nested_auth_runs_request_local_before_durable_queue(
+    monkeypatch,
+    connector_config,
+    ctx,
+    service,
+):
+    monkeypatch.setattr(resource_service_module, "is_git_repo_url", lambda _path: True)
+    service._execute_resource_ingestion = AsyncMock(
+        return_value={
+            "status": "success",
+            "root_uri": "viking://resources/private",
+            "task_id": "task-private",
+        }
+    )
+    service.enqueue_git_add_resource = AsyncMock()
+
+    result = await service.add_resource(
+        path="https://git.example/org/private.git",
+        ctx=ctx,
+        to="viking://resources/private",
+        args={
+            "branch": "main",
+            "auth_config": {"username": "oauth2", "token": "secret-token"},
+        },
+    )
+
+    assert result["task_id"] == "task-private"
+    service.enqueue_git_add_resource.assert_not_awaited()
+    call = service._execute_resource_ingestion.await_args.kwargs
+    assert call["defer_post_processing"] is True
+    assert call["branch"] == "main"
+    assert call["auth_config"] == {"username": "oauth2", "token": "secret-token"}
+
+
+@pytest.mark.asyncio
+async def test_native_git_nested_auth_watch_uses_private_auth_state(
+    monkeypatch,
+    connector_config,
+    ctx,
+    service,
+):
+    monkeypatch.setattr(resource_service_module, "is_git_repo_url", lambda _path: True)
+    service._execute_resource_ingestion = AsyncMock(
+        return_value={
+            "status": "success",
+            "root_uri": "viking://resources/private",
+            "task_id": "task-private",
+        }
+    )
+    service.enqueue_git_add_resource = AsyncMock()
+
+    result = await service.add_resource(
+        path="https://git.example/org/private.git",
+        ctx=ctx,
+        to="viking://resources/private",
+        watch_interval=5,
+        args={"auth_config": {"token": "secret-token"}},
+    )
+
+    assert result["task_id"] == "task-private"
+    call = service._execute_resource_ingestion.await_args.kwargs
+    assert call["auth_config"] == {"username": "oauth2", "token": "secret-token"}
+    assert call["watch_auth_state"] == {
+        "provider": "git_http_basic",
+        "username": "oauth2",
+        "token": "secret-token",
+        "repo_url": "https://git.example/org/private.git",
+    }
+    service.enqueue_git_add_resource.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_native_git_watch_refresh_consumes_restored_auth_before_queue(
+    monkeypatch,
+    connector_config,
+    ctx,
+    service,
+):
+    monkeypatch.setattr(resource_service_module, "is_git_repo_url", lambda _path: True)
+    service._execute_resource_ingestion = AsyncMock(
+        return_value={
+            "status": "success",
+            "root_uri": "viking://resources/private",
+            "task_id": "task-refresh",
+        }
+    )
+    service.enqueue_git_add_resource = AsyncMock()
+
+    result = await service.refresh_resource(
+        path="https://git.example/org/private.git",
+        ctx=ctx,
+        to="viking://resources/private",
+        watch_interval=5,
+        auth_config={"username": "oauth2", "token": "secret-token"},
+    )
+
+    assert result["task_id"] == "task-refresh"
+    call = service._execute_resource_ingestion.await_args.kwargs
+    assert call["manage_watch"] is False
+    assert call["auth_config"] == {"username": "oauth2", "token": "secret-token"}
+    service.enqueue_git_add_resource.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_native_git_enqueue_rejects_nested_auth_without_secret_in_error(ctx, service):
+    service._enqueue_add_resource_job = AsyncMock()
+
+    with pytest.raises(InvalidArgumentError, match="auth_config") as exc_info:
+        await service.enqueue_git_add_resource(
+            path="https://git.example/org/private.git",
+            ctx=ctx,
+            to="viking://resources/private",
+            args={"auth_config": {"username": "oauth2", "token": "secret-token"}},
+        )
+
+    assert "secret-token" not in str(exc_info.value)
+    service._enqueue_add_resource_job.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_git_url_embedded_credentials_are_passed_to_native_queue_unchanged(
+    monkeypatch,
+    connector_config,
+    ctx,
+    service,
+):
+    monkeypatch.setattr(resource_service_module, "is_git_repo_url", lambda _path: True)
+    service.enqueue_git_add_resource = AsyncMock(
+        return_value={
+            "status": "success",
+            "root_uri": "viking://resources/private",
+            "task_id": "task-private",
+        }
+    )
+    source = "https://user:embedded-token@git.example/org/private.git"
+    result = await service.add_resource(
+        path=source,
+        ctx=ctx,
+        to="viking://resources/private",
+    )
+
+    assert result["task_id"] == "task-private"
+    assert service.enqueue_git_add_resource.await_args.kwargs["path"] == source
+
+
+def test_prepared_add_resource_payload_drops_nested_git_auth():
+    msg = AddResourceMsg(
+        task_id="task-private",
+        path="https://git.example/org/private.git",
+        root_uri="viking://resources/private",
+        account_id="acct",
+        user_id="alice",
+        role="user",
+        prepared={"root_uri": "viking://resources/private"},
+        args={"auth_config": {"username": "oauth2", "token": "secret-token"}},
+    )
+
+    payload = msg.to_dict()
+
+    assert payload["args"] == {}
+    assert "secret-token" not in json.dumps(payload)
+
+
+@pytest.mark.asyncio
+async def test_request_local_git_auth_is_absent_from_real_prepared_queue_message(ctx, service):
+    service._resource_processor = SimpleNamespace(
+        process_resource=AsyncMock(
+            return_value={
+                "status": "success",
+                "root_uri": "viking://resources/private",
+                "source_path": "https://git.example/org/private.git",
+                "_post_process": {"root_is_file": False},
+                "_resource_lock": None,
+            }
+        )
+    )
+    service._enqueue_add_resource_job = AsyncMock(
+        return_value=SimpleNamespace(task_id="task-private")
+    )
+
+    result = await service._execute_resource_ingestion(
+        path="https://git.example/org/private.git",
+        ctx=ctx,
+        to="viking://resources/private",
+        defer_post_processing=True,
+        auth_config={"username": "oauth2", "token": "secret-token"},
+    )
+
+    assert result["task_id"] == "task-private"
+    queued_msg = service._enqueue_add_resource_job.await_args.args[0]
+    payload = queued_msg.to_dict()
+    assert payload["args"] == {}
+    assert "secret-token" not in json.dumps(payload)
 
 
 @pytest.mark.parametrize("to", ["viking://resources/manuals", "resources/manuals"])

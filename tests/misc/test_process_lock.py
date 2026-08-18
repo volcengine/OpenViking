@@ -46,7 +46,7 @@ class TestProcessLock:
                 raise AssertionError("Should have raised DataDirectoryLocked")
             except DataDirectoryLocked as exc:
                 assert "PID 1" in str(exc)
-                assert "HTTP mode" in str(exc)
+                assert "connect clients over HTTP" in str(exc)
 
     def test_error_message_includes_remediation(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -57,5 +57,5 @@ class TestProcessLock:
                 acquire_data_dir_lock(tmpdir)
             except DataDirectoryLocked as exc:
                 msg = str(exc)
-                assert "openviking-server" in msg
+                assert "OpenViking server" in msg
                 assert "separate data directories" in msg

@@ -5,7 +5,7 @@ import CopyMarkdownButton from './CopyMarkdownButton.vue'
 import LlmsTxtLink from './LlmsTxtLink.vue'
 import OpenVikingSearch from './OpenVikingSearch.vue'
 import ApiExampleTabsEnhancer from './ApiExampleTabsEnhancer.vue'
-import VikingBotAssistant from './VikingBotAssistant.vue'
+import { initVikingBotWidget, syncVikingBotLocale } from './vikingbot-widget'
 import { trackPageView } from './track'
 import './custom.css'
 
@@ -309,18 +309,22 @@ export default {
         h(CopyMarkdownButton)
       ]),
       'doc-after': () => h(ApiExampleTabsEnhancer),
-      'nav-bar-content-before': () => [h(OpenVikingSearch), h(VikingBotAssistant)]
+      'nav-bar-content-before': () => h(OpenVikingSearch)
     })
   },
   enhanceApp({ router }: EnhanceAppContext) {
     if (import.meta.env.SSR || typeof window === 'undefined') return
 
     trackPageView(window.location.pathname)
+    initVikingBotWidget()
 
     const previousHook = router.onAfterRouteChanged
     router.onAfterRouteChanged = (to: string) => {
       previousHook?.(to)
       trackPageView(to.split('?')[0].split('#')[0])
+      // <html lang> is rewritten by the router before this fires, so a locale
+      // switch re-mounts the widget in the language the reader just chose.
+      syncVikingBotLocale()
     }
   }
 }

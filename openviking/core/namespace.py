@@ -8,6 +8,7 @@ from typing import Optional
 from openviking.core.identifiers import validate_user_id
 from openviking.core.peer_id import normalize_peer_id
 from openviking.server.identity import RequestContext
+from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.uri import VikingURI
 
 _CONTENT_TYPES_BY_SCOPE = {
@@ -357,6 +358,19 @@ def owner_fields_for_uri(
         "uri": resolved.uri,
         "owner_user_id": resolved.owner_user_id,
     }
+
+
+def content_owner_context_for_uri(uri: str, ctx: RequestContext) -> RequestContext:
+    """Use the URI owner for user-scoped content writes while retaining caller authority."""
+    owner = owner_fields_for_uri(uri, ctx=ctx).get("owner_user_id")
+    if not owner or owner == ctx.user.user_id:
+        return ctx
+    return RequestContext(
+        user=UserIdentifier(ctx.account_id, owner),
+        role=ctx.role,
+        actor_peer_id=ctx.actor_peer_id,
+        from_oauth=ctx.from_oauth,
+    )
 
 
 def owner_space_for_uri(uri: str, ctx: RequestContext) -> str:

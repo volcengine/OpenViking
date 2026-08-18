@@ -199,8 +199,8 @@ test("uses independent POST requests for concurrent calls", async () => {
 
 test("appends local tools to the upstream tools/list result", async () => {
   const localTools = [
-    { name: "search_experience", description: "Search experiences", inputSchema: { type: "object" } },
-    { name: "read_experience", description: "Read an experience", inputSchema: { type: "object" } },
+    { name: "local_probe", description: "Probe locally", inputSchema: { type: "object" } },
+    { name: "local_echo", description: "Echo locally", inputSchema: { type: "object" } },
   ];
   await withServer((_req, res, entry) => {
     assert.equal(entry.body.method, "tools/list");
@@ -222,8 +222,8 @@ test("appends local tools to the upstream tools/list result", async () => {
     const [response] = await messages();
     assert.deepEqual(response.result.tools.map((tool) => tool.name), [
       "find",
-      "search_experience",
-      "read_experience",
+      "local_probe",
+      "local_echo",
     ]);
     assert.equal(requests.length, 1);
   });
@@ -231,8 +231,8 @@ test("appends local tools to the upstream tools/list result", async () => {
 
 test("replaces an upstream tool definition when the local tool has the same name", async () => {
   const localTool = {
-    name: "search_experience",
-    description: "Local experience search",
+    name: "local_probe",
+    description: "Local probe",
     inputSchema: { type: "object", required: ["query"] },
   };
   await withServer((_req, res, entry) => {
@@ -242,8 +242,8 @@ test("replaces an upstream tool definition when the local tool has the same name
       tools: [
         { name: "find", description: "Find context", inputSchema: { type: "object" } },
         {
-          name: "search_experience",
-          description: "Upstream experience search",
+          name: "local_probe",
+          description: "Upstream probe",
           inputSchema: { type: "object", required: ["text"] },
         },
       ],
@@ -272,7 +272,7 @@ test("handles local tools without forwarding tools/call upstream", async () => {
   const { proxy, messages } = makeProxy({
     url: "http://127.0.0.1:1/mcp",
     localToolProvider: {
-      listTools: () => [{ name: "search_experience" }],
+      listTools: () => [{ name: "local_probe" }],
       async callTool(params, context) {
         calls.push({ params, context });
         return { content: [{ type: "text", text: '{"results":[]}' }] };
@@ -284,13 +284,13 @@ test("handles local tools without forwarding tools/call upstream", async () => {
     jsonrpc: "2.0",
     id: 21,
     method: "tools/call",
-    params: { name: "search_experience", arguments: { query: "换货" } },
+    params: { name: "local_probe", arguments: { query: "test" } },
   });
 
   assert.equal(calls.length, 1);
   assert.deepEqual(calls[0].params, {
-    name: "search_experience",
-    arguments: { query: "换货" },
+    name: "local_probe",
+    arguments: { query: "test" },
   });
   assert.equal(calls[0].context.config.user, "zeus");
   assert.deepEqual(await messages(), [
@@ -322,7 +322,7 @@ test("reloads changed credential files before calling a local tool", async (t) =
   const { proxy, messages } = makeProxy({
     readConfig,
     localToolProvider: {
-      listTools: () => [{ name: "search_experience" }],
+      listTools: () => [{ name: "local_probe" }],
       async callTool(_params, context) {
         receivedKeys.push(context.config.apiKey);
         return { content: [{ type: "text", text: '{"results":[]}' }] };
@@ -336,7 +336,7 @@ test("reloads changed credential files before calling a local tool", async (t) =
     jsonrpc: "2.0",
     id: 22,
     method: "tools/call",
-    params: { name: "search_experience", arguments: { query: "换货" } },
+    params: { name: "local_probe", arguments: { query: "test" } },
   });
 
   assert.deepEqual(receivedKeys, ["new-key"]);

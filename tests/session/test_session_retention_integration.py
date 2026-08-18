@@ -8,7 +8,6 @@ from uuid import uuid4
 
 import pytest
 
-from openviking import AsyncOpenViking
 from openviking.message import Message, TextPart, ToolPart
 from openviking.models.vlm.base import ToolCall, VLMResponse
 from openviking.service.task_tracker import get_task_tracker
@@ -80,9 +79,9 @@ def test_checkpoint_record_respects_remaining_retained_budget():
 
 
 async def test_two_pending_archives_are_visible_independent_of_commit_count(
-    client: AsyncOpenViking,
+    client,
 ):
-    session = client.session(session_id="two_pending_directory_state_test")
+    session = client(session_id="two_pending_directory_state_test")
     await session.ensure_exists()
     await _write_archive(session, 1, [_text_message("u1", "user", "one")])
     await _write_archive(session, 2, [_text_message("u2", "user", "two")])
@@ -96,9 +95,9 @@ async def test_two_pending_archives_are_visible_independent_of_commit_count(
 
 
 async def test_session_context_enforces_hard_budget_without_mutating_archive_raw(
-    client: AsyncOpenViking,
+    client,
 ):
-    session = client.session(session_id="session_context_hard_budget_test")
+    session = client(session_id="session_context_hard_budget_test")
     await session.ensure_exists()
     archived = _text_message("u1", "user", "A" * 4000)
     await _write_archive(session, 1, [archived])
@@ -116,14 +115,10 @@ async def test_session_context_enforces_hard_budget_without_mutating_archive_raw
 
 
 async def test_context_stops_at_newest_terminal_without_replaying_older_failed_raw(
-    client: AsyncOpenViking,
+    client,
 ):
-    """The read path stops at archive_002 and never replays archive_001 raw.
-
-    Phase 2 still treats the uncovered failed archive as replayable; only
-    ``get_session_context`` stops at the newest terminal.
-    """
-    session = client.session(session_id="failed_and_wm_disabled_archive_test")
+    """The read path stops at archive_002 and never replays archive_001 raw."""
+    session = client(session_id="failed_and_wm_disabled_archive_test")
     await session.ensure_exists()
     await _write_archive(
         session,
@@ -148,10 +143,10 @@ async def test_context_stops_at_newest_terminal_without_replaying_older_failed_r
 
 
 async def test_done_with_missing_required_overview_reports_failed_without_raw(
-    client: AsyncOpenViking,
+    client,
 ):
     """A required overview that is unreadable yields no overview and no raw."""
-    session = client.session(session_id="missing_required_overview_test")
+    session = client(session_id="missing_required_overview_test")
     await session.ensure_exists()
     await _write_archive(
         session,
@@ -172,9 +167,9 @@ async def test_done_with_missing_required_overview_reports_failed_without_raw(
 
 
 async def test_legacy_done_marker_covers_only_its_own_archive(
-    client: AsyncOpenViking,
+    client,
 ):
-    session = client.session(session_id="legacy_done_self_coverage_test")
+    session = client(session_id="legacy_done_self_coverage_test")
     await session.ensure_exists()
     await _write_archive(
         session,
@@ -198,9 +193,9 @@ async def test_legacy_done_marker_covers_only_its_own_archive(
 
 
 async def test_coverage_metadata_cannot_hide_a_pending_archive(
-    client: AsyncOpenViking,
+    client,
 ):
-    session = client.session(session_id="pending_not_explicitly_covered_test")
+    session = client(session_id="pending_not_explicitly_covered_test")
     await session.ensure_exists()
     await _write_archive(
         session,
@@ -233,9 +228,9 @@ async def test_coverage_metadata_cannot_hide_a_pending_archive(
 
 
 async def test_later_coverage_absorbs_failed_raw_and_stable_deduplicates_root(
-    client: AsyncOpenViking,
+    client,
 ):
-    session = client.session(session_id="failed_coverage_roll_forward_test")
+    session = client(session_id="failed_coverage_roll_forward_test")
     await session.ensure_exists()
     duplicate = _text_message("u1", "user", "failed raw")
     await _write_archive(session, 1, [duplicate], failed=True)
@@ -261,10 +256,10 @@ async def test_later_coverage_absorbs_failed_raw_and_stable_deduplicates_root(
     assert [message["id"] for message in context["messages"]] == ["u1"]
 
 
-async def test_phase2_replays_failed_but_not_completed_without_overview(
-    client: AsyncOpenViking,
+async def test_phase2_skips_failed_and_completed_archives_without_replay(
+    client,
 ):
-    session = client.session(session_id="phase2_failed_replay_test")
+    session = client(session_id="phase2_failed_replay_test")
     await session.ensure_exists()
     await _write_archive(
         session,
@@ -289,78 +284,60 @@ async def test_phase2_replays_failed_but_not_completed_without_overview(
         [_text_message("u3", "user", "current three")],
     )
 
-    assert [message.id for message in messages] == ["u1", "u3"]
-    assert start == "archive_001"
+    assert [message.id for message in messages] == ["u3"]
+    assert start == "archive_003"
     assert end == "archive_003"
-    assert failed == ["archive_001"]
+    assert failed == []
     assert completed_steps == {}
 
 
-async def test_phase2_never_replays_an_earlier_pending_archive(
-    client: AsyncOpenViking,
-):
-    session = client.session(session_id="phase2_pending_not_replayed_test")
-    await session.ensure_exists()
-    await _write_archive(session, 1, [_text_message("u1", "user", "pending one")])
-    await _write_archive(
-        session,
-        2,
-        [_text_message("u2", "user", "failed two")],
-        failed=True,
-    )
-    current_uri = await _write_archive(
-        session,
-        3,
-        [_text_message("u3", "user", "current three")],
-    )
-
-    messages, start, end, failed, _completed_steps = await session._prepare_phase2_archive_messages(
-        current_uri,
-        [_text_message("u3", "user", "current three")],
-    )
-
-    assert [message.id for message in messages] == ["u2", "u3"]
-    assert start == "archive_002"
-    assert end == "archive_003"
-    assert failed == ["archive_002"]
-
-
-async def test_phase2_waits_for_all_earlier_pending_archives(
-    client: AsyncOpenViking,
+async def test_phase2_defers_live_predecessor_and_skips_missing_queue_work(
+    client,
     monkeypatch,
 ):
-    session = client.session(session_id="phase2_wait_all_pending_test")
+    session = client(session_id="phase2_predecessor_queue_work_test")
     await session.ensure_exists()
-    first_uri = await _write_archive(
+    await _write_archive(
         session,
         1,
         [_text_message("u1", "user", "pending one")],
+        meta={
+            "phase1": {
+                "status": "ready",
+                "queue_message": {"task_id": "task-1"},
+            }
+        },
     )
-    await _write_archive(
+    second_uri = await _write_archive(
         session,
         2,
-        [_text_message("u2", "user", "completed two")],
-        overview="# Summary\n\ncomplete",
-        done={"starting_message_id": "u2", "ending_message_id": "u2"},
+        [_text_message("u2", "user", "pending two")],
+        meta={
+            "phase1": {
+                "status": "ready",
+                "queue_message": {"task_id": "task-2"},
+            }
+        },
     )
-    monkeypatch.setattr("openviking.session.session._ARCHIVE_WAIT_POLL_SECONDS", 0.01)
+    tracker = get_task_tracker()
+    live_work = {"task-1", "task-2"}
+    monkeypatch.setattr(tracker, "has_work", live_work.__contains__)
 
-    waiter = asyncio.create_task(session._wait_for_previous_archive_done(3))
-    await asyncio.sleep(0.03)
-    assert not waiter.done()
+    assert not await session._can_run_archive(3)
 
-    await session._viking_fs.write_file(
-        f"{first_uri}/.failed.json",
-        json.dumps({"error": "synthetic terminal failure"}),
-        ctx=session.ctx,
+    live_work.remove("task-2")
+    assert await session._can_run_archive(3)
+    failed = json.loads(
+        await session._viking_fs.read_file(f"{second_uri}/.failed.json", ctx=session.ctx)
     )
-    assert await asyncio.wait_for(waiter, timeout=0.5)
+    assert failed["stage"] == "queue_missing"
+    assert not await session._viking_fs.exists(f"{session.uri}/history/archive_001/.failed.json")
 
 
-async def test_missing_previous_archive_directory_does_not_block_phase2(
-    client: AsyncOpenViking,
+async def test_missing_previous_archive_directory_allows_phase2(
+    client,
 ):
-    session = client.session(session_id="missing_previous_archive_test")
+    session = client(session_id="missing_previous_archive_test")
     await session.ensure_exists()
     await _write_archive(
         session,
@@ -368,17 +345,14 @@ async def test_missing_previous_archive_directory_does_not_block_phase2(
         [_text_message("u2", "user", "archive two")],
     )
 
-    assert await asyncio.wait_for(
-        session._wait_for_previous_archive_done(2),
-        timeout=0.5,
-    )
+    assert await session._can_run_archive(2)
 
 
-async def test_phase2_roll_forward_writes_coverage_and_calls_existing_summary_once(
-    client: AsyncOpenViking,
+async def test_phase2_processes_only_current_archive(
+    client,
     monkeypatch,
 ):
-    session = client.session(session_id="phase2_roll_forward_end_to_end_test")
+    session = client(session_id="phase2_roll_forward_end_to_end_test")
     await session.ensure_exists()
     await _write_archive(
         session,
@@ -399,7 +373,7 @@ async def test_phase2_roll_forward_writes_coverage_and_calls_existing_summary_on
     async def fake_summary(messages, latest_archive_overview=""):
         assert latest_archive_overview == ""
         seen_message_ids.append([message.id for message in messages])
-        return "# Session Summary\n\n## Current State\nBoth rounds are covered."
+        return "# Session Summary\n\n## Current State\nCurrent archive is covered."
 
     config = SimpleNamespace(
         memory=SimpleNamespace(
@@ -432,81 +406,20 @@ async def test_phase2_roll_forward_writes_coverage_and_calls_existing_summary_on
     done = json.loads(await session._viking_fs.read_file(f"{current_uri}/.done", ctx=session.ctx))
     task = await get_task_tracker().get(task_id)
     context = await session.get_session_context()
-    assert seen_message_ids == [["u1", "u2"]]
+    assert seen_message_ids == [["u2"]]
     assert task.result["agent_evolution_enabled"] is True
-    assert done["coverage_start_archive"] == "archive_001"
+    assert done["coverage_start_archive"] == "archive_002"
     assert done["coverage_end_archive"] == "archive_002"
-    assert done["covered_failed_archives"] == ["archive_001"]
-    assert context["latest_archive_overview"].endswith("Both rounds are covered.")
+    assert done["covered_failed_archives"] == []
+    assert context["latest_archive_overview"].endswith("Current archive is covered.")
     assert context["messages"] == []
 
 
-async def test_phase2_rolls_forward_done_archive_with_missing_required_overview(
-    client: AsyncOpenViking,
+async def test_phase2_retry_does_not_repeat_completed_current_archive_steps(
+    client,
     monkeypatch,
 ):
-    session = client.session(session_id="invalid_done_roll_forward_test")
-    await session.ensure_exists()
-    await _write_archive(
-        session,
-        1,
-        [_text_message("u1", "user", "raw from invalid completed archive")],
-        done={
-            "starting_message_id": "u1",
-            "ending_message_id": "u1",
-            "working_memory_enabled": True,
-        },
-    )
-    current = _text_message("u2", "user", "current archive")
-    current_uri = await _write_archive(session, 2, [current])
-    seen_message_ids: list[list[str]] = []
-
-    async def fake_summary(messages, latest_archive_overview=""):
-        assert latest_archive_overview == ""
-        seen_message_ids.append([message.id for message in messages])
-        return "# Session Summary\n\n## Current State\nInvalid archive was recovered."
-
-    config = SimpleNamespace(
-        memory=SimpleNamespace(
-            extraction_enabled=False,
-            session_skill_extraction_enabled=False,
-        )
-    )
-    monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
-    monkeypatch.setattr(session, "_generate_archive_summary_async", fake_summary)
-
-    task_id = str(uuid4())
-    await get_task_tracker().create(
-        "session_commit",
-        resource_id=session.session_id,
-        account_id=session.ctx.account_id,
-        user_id=session.ctx.user.user_id,
-        task_id=task_id,
-    )
-    await session._run_memory_extraction(
-        task_id=task_id,
-        archive_uri=current_uri,
-        messages=[current],
-        usage_records=[],
-        first_message_id=current.id,
-        last_message_id=current.id,
-        memory_policy={"working_memory": {"enabled": True}},
-    )
-
-    done = json.loads(await session._viking_fs.read_file(f"{current_uri}/.done", ctx=session.ctx))
-    context = await session.get_session_context()
-    assert seen_message_ids == [["u1", "u2"]]
-    assert done["coverage_start_archive"] == "archive_001"
-    assert done["covered_failed_archives"] == ["archive_001"]
-    assert context["latest_archive_overview"].endswith("Invalid archive was recovered.")
-    assert context["messages"] == []
-
-
-async def test_roll_forward_does_not_repeat_completed_memory_step_messages(
-    client: AsyncOpenViking,
-    monkeypatch,
-):
-    session = client.session(session_id="phase2_memory_step_idempotency_test")
+    session = client(session_id="phase2_memory_step_idempotency_test")
     await session.ensure_exists()
     first = _text_message("u1", "user", "already extracted")
     await _write_archive(
@@ -517,14 +430,19 @@ async def test_roll_forward_does_not_repeat_completed_memory_step_messages(
         meta={"completed_memory_steps": {"long_term": ["u1"]}},
     )
     current = _text_message("u2", "user", "extract this once")
-    current_uri = await _write_archive(session, 2, [current])
+    current_uri = await _write_archive(
+        session,
+        2,
+        [current],
+        meta={"completed_memory_steps": {"long_term": ["u2"]}},
+    )
     summary_inputs: list[list[str]] = []
     long_term_inputs: list[list[str]] = []
 
     async def fake_summary(messages, latest_archive_overview=""):
         assert latest_archive_overview == ""
         summary_inputs.append([message.id for message in messages])
-        return "# Session Summary\n\n## Current State\nBoth messages are summarized."
+        return "# Session Summary\n\n## Current State\nCurrent message is summarized."
 
     async def fake_long_term(*, messages, **_kwargs):
         long_term_inputs.append([message.id for message in messages])
@@ -568,15 +486,15 @@ async def test_roll_forward_does_not_repeat_completed_memory_step_messages(
     )
 
     done = json.loads(await session._viking_fs.read_file(f"{current_uri}/.done", ctx=session.ctx))
-    assert summary_inputs == [["u1", "u2"]]
-    assert long_term_inputs == [["u2"]]
-    assert done["completed_memory_steps"]["long_term"] == ["u1", "u2"]
+    assert summary_inputs == [["u2"]]
+    assert long_term_inputs == []
+    assert done["completed_memory_steps"]["long_term"] == ["u2"]
 
 
 async def test_completed_partial_turn_inserts_checkpoint_after_user_anchor(
-    client: AsyncOpenViking,
+    client,
 ):
-    session = client.session(session_id="partial_turn_checkpoint_test")
+    session = client(session_id="partial_turn_checkpoint_test")
     await session.ensure_exists()
     anchor = _text_message("u1", "user", "investigate the outage")
     early = _text_message("a1", "assistant", "checking the first signal")
@@ -648,9 +566,9 @@ Connection pool exhaustion is confirmed.
 
 
 async def test_legacy_partial_turn_does_not_derive_checkpoint_from_overview(
-    client: AsyncOpenViking,
+    client,
 ):
-    session = client.session(session_id="legacy_partial_turn_without_checkpoint_test")
+    session = client(session_id="legacy_partial_turn_without_checkpoint_test")
     await session.ensure_exists()
     anchor = _text_message("u1", "user", "investigate the outage")
     early = _text_message("a1", "assistant", "checking the first signal")
@@ -680,10 +598,10 @@ async def test_legacy_partial_turn_does_not_derive_checkpoint_from_overview(
 
 
 async def test_phase2_persists_checkpoint_from_same_summary_call(
-    client: AsyncOpenViking,
+    client,
     monkeypatch,
 ):
-    session = client.session(session_id="phase2_checkpoint_product_test")
+    session = client(session_id="phase2_checkpoint_product_test")
     await session.ensure_exists()
     anchor = _text_message("u1", "user", "investigate the outage")
     early = _text_message("a1", "assistant", "checking the first signal")
@@ -773,10 +691,10 @@ async def test_phase2_persists_checkpoint_from_same_summary_call(
 
 
 async def test_wm_creation_returns_two_products_in_one_model_call(
-    client: AsyncOpenViking,
+    client,
     monkeypatch,
 ):
-    session = client.session(session_id="single_call_checkpoint_generation_test")
+    session = client(session_id="single_call_checkpoint_generation_test")
     calls: list[dict] = []
 
     class FakeVLM:
@@ -834,10 +752,10 @@ async def test_wm_creation_returns_two_products_in_one_model_call(
 
 
 async def test_wm_update_returns_two_products_in_one_model_call(
-    client: AsyncOpenViking,
+    client,
     monkeypatch,
 ):
-    session = client.session(session_id="single_call_checkpoint_update_test")
+    session = client(session_id="single_call_checkpoint_update_test")
     calls: list[dict] = []
 
     class FakeVLM:
@@ -930,9 +848,9 @@ Confirm the database state.
 
 
 async def test_roll_forward_collects_multiple_checkpoint_requests(
-    client: AsyncOpenViking,
+    client,
 ):
-    session = client.session(session_id="multiple_roll_forward_checkpoint_test")
+    session = client(session_id="multiple_roll_forward_checkpoint_test")
     await session.ensure_exists()
     first_anchor = _text_message("u1", "user", "first investigation")
     first_source = _text_message("a1", "assistant", "first archived step")
@@ -986,9 +904,9 @@ async def test_roll_forward_collects_multiple_checkpoint_requests(
 
 
 async def test_phase2_rolls_previous_cumulative_checkpoint_into_v2_record(
-    client: AsyncOpenViking,
+    client,
 ):
-    session = client.session(session_id="cumulative_checkpoint_roll_forward_test")
+    session = client(session_id="cumulative_checkpoint_roll_forward_test")
     await session.ensure_exists()
     anchor = _text_message("u1", "user", "investigate the outage")
     await _write_archive(
@@ -1051,9 +969,9 @@ async def test_phase2_rolls_previous_cumulative_checkpoint_into_v2_record(
 
 
 async def test_phase2_migrates_legacy_checkpoint_deltas_to_cumulative_v2(
-    client: AsyncOpenViking,
+    client,
 ):
-    session = client.session(session_id="legacy_checkpoint_migration_test")
+    session = client(session_id="legacy_checkpoint_migration_test")
     await session.ensure_exists()
     anchor = _text_message("u1", "user", "investigate the outage")
     for index, source_id, abstract in (
@@ -1115,9 +1033,9 @@ async def test_phase2_migrates_legacy_checkpoint_deltas_to_cumulative_v2(
 
 
 async def test_checkpoint_request_rejects_user_or_cross_turn_sources(
-    client: AsyncOpenViking,
+    client,
 ):
-    session = client.session(session_id="invalid_checkpoint_source_test")
+    session = client(session_id="invalid_checkpoint_source_test")
     await session.ensure_exists()
     anchor = _text_message("u1", "user", "first query")
     assistant = _text_message("a1", "assistant", "first response")
@@ -1145,10 +1063,10 @@ async def test_checkpoint_request_rejects_user_or_cross_turn_sources(
 
 
 async def test_missing_required_checkpoint_keeps_archive_raw_uncovered(
-    client: AsyncOpenViking,
+    client,
     monkeypatch,
 ):
-    session = client.session(session_id="missing_required_checkpoint_test")
+    session = client(session_id="missing_required_checkpoint_test")
     await session.ensure_exists()
     anchor = _text_message("u1", "user", "investigate the outage")
     early = _text_message("a1", "assistant", "checking the first signal")
@@ -1216,10 +1134,10 @@ async def test_missing_required_checkpoint_keeps_archive_raw_uncovered(
 
 
 async def test_working_memory_disabled_does_not_generate_or_restore_checkpoint(
-    client: AsyncOpenViking,
+    client,
     monkeypatch,
 ):
-    session = client.session(session_id="wm_disabled_partial_checkpoint_test")
+    session = client(session_id="wm_disabled_partial_checkpoint_test")
     await session.ensure_exists()
     anchor = _text_message("u1", "user", "investigate the outage")
     early = _text_message("a1", "assistant", "checking the first signal")
@@ -1282,9 +1200,9 @@ async def test_working_memory_disabled_does_not_generate_or_restore_checkpoint(
 
 
 async def test_covered_failed_partial_turn_checkpoint_points_to_covering_overview(
-    client: AsyncOpenViking,
+    client,
 ):
-    session = client.session(session_id="covered_failed_partial_checkpoint_test")
+    session = client(session_id="covered_failed_partial_checkpoint_test")
     await session.ensure_exists()
     anchor = _text_message("u1", "user", "investigate the outage")
     early = _text_message("a1", "assistant", "checking an early signal")
@@ -1340,9 +1258,9 @@ async def test_covered_failed_partial_turn_checkpoint_points_to_covering_overvie
 
 
 async def test_failed_terminal_checkpoint_metadata_is_never_restored(
-    client: AsyncOpenViking,
+    client,
 ):
-    session = client.session(session_id="failed_terminal_checkpoint_test")
+    session = client(session_id="failed_terminal_checkpoint_test")
     await session.ensure_exists()
     anchor = _text_message("u1", "user", "investigate the outage")
     tail = _text_message("a3", "assistant", "latest raw step")
@@ -1389,10 +1307,10 @@ async def test_failed_terminal_checkpoint_metadata_is_never_restored(
 
 
 async def test_repeated_legacy_partial_commits_merge_checkpoint_deltas(
-    client: AsyncOpenViking,
+    client,
 ):
     """Legacy records have no version marker, so older deltas remain readable."""
-    session = client.session(session_id="repeated_partial_checkpoint_merge_test")
+    session = client(session_id="repeated_partial_checkpoint_merge_test")
     await session.ensure_exists()
     anchor = _text_message("u1", "user", "investigate the outage")
     tail = _text_message("a3", "assistant", "latest raw step")
@@ -1449,11 +1367,11 @@ async def test_repeated_legacy_partial_commits_merge_checkpoint_deltas(
 
 
 async def test_repeated_v2_partial_commits_restore_newest_cumulative_checkpoint_only(
-    client: AsyncOpenViking,
+    client,
     monkeypatch,
 ):
     """The newest v2 record is complete, so context does not read older archives."""
-    session = client.session(session_id="repeated_cumulative_checkpoint_test")
+    session = client(session_id="repeated_cumulative_checkpoint_test")
     await session.ensure_exists()
     anchor = _text_message("u1", "user", "investigate the outage")
     tail = _text_message("a3", "assistant", "latest raw step")
@@ -1517,9 +1435,10 @@ async def test_repeated_v2_partial_commits_restore_newest_cumulative_checkpoint_
 
 
 async def test_commit_externalizes_tool_outputs_across_the_whole_turn(
-    client: AsyncOpenViking,
+    client,
 ):
-    session = client.session(session_id="turn_wide_externalization_test")
+    session = client(session_id="turn_wide_externalization_test")
+    await session.ensure_exists()
     session.add_message("user", [TextPart("inspect all files")])
     for index in range(10):
         session.add_message(
@@ -1551,9 +1470,10 @@ async def test_commit_externalizes_tool_outputs_across_the_whole_turn(
 
 
 async def test_turn_budget_commit_archives_complete_old_turn_and_keeps_latest_user(
-    client: AsyncOpenViking,
+    client,
 ):
-    session = client.session(session_id="turn_budget_phase1_boundary_test")
+    session = client(session_id="turn_budget_phase1_boundary_test")
+    await session.ensure_exists()
     session.add_message("user", [TextPart("first query")])
     session.add_message("assistant", [TextPart("first answer")])
     session.add_message("user", [TextPart("latest query")])
@@ -1578,11 +1498,12 @@ async def test_turn_budget_commit_archives_complete_old_turn_and_keeps_latest_us
 
 
 async def test_concurrent_stale_session_instances_use_one_authoritative_phase1_snapshot(
-    client: AsyncOpenViking,
+    client,
 ):
-    session_a = client.session(session_id="multi_worker_phase1_snapshot_test")
+    session_a = client(session_id="multi_worker_phase1_snapshot_test")
+    await session_a.ensure_exists()
     session_a.add_message("user", [TextPart("only once")])
-    session_b = client.session(session_id=session_a.session_id)
+    session_b = client(session_id=session_a.session_id)
     await session_b.load()
     disabled_policy = {
         "working_memory": {"enabled": False},
@@ -1601,11 +1522,11 @@ async def test_concurrent_stale_session_instances_use_one_authoritative_phase1_s
 
 
 async def test_concurrent_stale_workers_append_without_losing_messages(
-    client: AsyncOpenViking,
+    client,
 ):
-    session_a = client.session(session_id="multi_worker_append_lock_test")
+    session_a = client(session_id="multi_worker_append_lock_test")
     await session_a.ensure_exists()
-    session_b = client.session(session_id=session_a.session_id)
+    session_b = client(session_id=session_a.session_id)
     await session_b.load()
 
     await asyncio.gather(
@@ -1613,7 +1534,7 @@ async def test_concurrent_stale_workers_append_without_losing_messages(
         asyncio.to_thread(session_b.add_message, "user", [TextPart("from worker b")]),
     )
 
-    fresh = client.session(session_id=session_a.session_id)
+    fresh = client(session_id=session_a.session_id)
     await fresh.load()
     assert sorted(message.content for message in fresh.messages) == [
         "from worker a",
@@ -1622,14 +1543,15 @@ async def test_concurrent_stale_workers_append_without_losing_messages(
 
 
 async def test_phase2_meta_merge_serializes_with_concurrent_append(
-    client: AsyncOpenViking,
+    client,
     monkeypatch,
 ):
-    initial = client.session(session_id="phase2_meta_append_lock_test")
+    initial = client(session_id="phase2_meta_append_lock_test")
+    await initial.ensure_exists()
     await initial.add_message_async("user", [TextPart("first")])
 
-    phase2 = client.session(session_id=initial.session_id)
-    appending = client.session(session_id=initial.session_id)
+    phase2 = client(session_id=initial.session_id)
+    appending = client(session_id=initial.session_id)
     await phase2.load()
     await appending.load()
 
@@ -1637,10 +1559,10 @@ async def test_phase2_meta_merge_serializes_with_concurrent_append(
     allow_phase2_save = asyncio.Event()
     original_save_meta = phase2._save_meta
 
-    async def delayed_save_meta():
+    async def delayed_save_meta(*, lease_ref=None):
         phase2_inside_save.set()
         await allow_phase2_save.wait()
-        await original_save_meta()
+        await original_save_meta(lease_ref=lease_ref)
 
     monkeypatch.setattr(phase2, "_save_meta", delayed_save_meta)
     merge_task = asyncio.create_task(
@@ -1661,7 +1583,7 @@ async def test_phase2_meta_merge_serializes_with_concurrent_append(
     allow_phase2_save.set()
     await asyncio.gather(merge_task, append_task)
 
-    fresh = client.session(session_id=initial.session_id)
+    fresh = client(session_id=initial.session_id)
     await fresh.load()
     assert [message.content for message in fresh.messages] == ["first", "second"]
     assert fresh.meta.message_count == 2
@@ -1670,21 +1592,22 @@ async def test_phase2_meta_merge_serializes_with_concurrent_append(
 
 
 async def test_add_waits_for_commit_root_rewrite_and_remains_live(
-    client: AsyncOpenViking,
+    client,
     monkeypatch,
 ):
-    committing = client.session(session_id="add_during_commit_lock_test")
+    committing = client(session_id="add_during_commit_lock_test")
+    await committing.ensure_exists()
     committing.add_message("user", [TextPart("archive me")])
-    adding = client.session(session_id=committing.session_id)
+    adding = client(session_id=committing.session_id)
     await adding.load()
     commit_inside_rewrite = asyncio.Event()
     allow_commit_rewrite = asyncio.Event()
     original_write = committing._write_to_agfs_async
 
-    async def delayed_root_write(messages):
+    async def delayed_root_write(messages, *, lease_ref=None):
         commit_inside_rewrite.set()
         await allow_commit_rewrite.wait()
-        await original_write(messages)
+        await original_write(messages, lease_ref=lease_ref)
 
     class CapturingQueueManager:
         async def enqueue(self, *_args, **_kwargs):
@@ -1711,7 +1634,7 @@ async def test_add_waits_for_commit_root_rewrite_and_remains_live(
     allow_commit_rewrite.set()
     await asyncio.gather(commit_task, add_task)
 
-    fresh = client.session(session_id=committing.session_id)
+    fresh = client(session_id=committing.session_id)
     await fresh.load()
     context = await fresh.get_session_context()
     assert [message.content for message in fresh.messages] == ["keep me live"]
@@ -1722,7 +1645,7 @@ async def test_add_waits_for_commit_root_rewrite_and_remains_live(
 
 
 async def test_queue_enqueue_failure_marks_archive_failed_and_keeps_raw_durable(
-    client: AsyncOpenViking,
+    client,
     monkeypatch,
 ):
     """The failed marker is authoritative and the raw file stays durable.
@@ -1730,7 +1653,8 @@ async def test_queue_enqueue_failure_marks_archive_failed_and_keeps_raw_durable(
     Terminal-stop means ``get_session_context`` no longer replays that raw as
     logical live; recovery goes through Phase 2 roll-forward instead.
     """
-    session = client.session(session_id="queue_enqueue_failure_recovery_test")
+    session = client(session_id="queue_enqueue_failure_recovery_test")
+    await session.ensure_exists()
     session.add_message("user", [TextPart("do not lose me")])
 
     class FailingQueueManager:
@@ -1764,16 +1688,17 @@ async def test_queue_enqueue_failure_marks_archive_failed_and_keeps_raw_durable(
 
 
 async def test_phase1_root_rewrite_failure_marks_orphan_archive_failed(
-    client: AsyncOpenViking,
+    client,
     monkeypatch,
 ):
-    session = client.session(session_id="phase1_root_failure_recovery_test")
+    session = client(session_id="phase1_root_failure_recovery_test")
+    await session.ensure_exists()
     session.add_message("user", [TextPart("archive candidate")])
     session.add_message("assistant", [TextPart("retained tail")])
     original_write = session._write_to_agfs_async
 
-    async def write_then_fail(messages):
-        await original_write(messages)
+    async def write_then_fail(messages, *, lease_ref=None):
+        await original_write(messages, lease_ref=lease_ref)
         raise RuntimeError("synthetic root rewrite failure")
 
     monkeypatch.setattr(session, "_write_to_agfs_async", write_then_fail)
@@ -1788,7 +1713,7 @@ async def test_phase1_root_rewrite_failure_marks_orphan_archive_failed(
             ctx=session.ctx,
         )
     )
-    fresh = client.session(session_id=session.session_id)
+    fresh = client(session_id=session.session_id)
     await fresh.load()
     context = await fresh.get_session_context()
     assert states[0].state == "failed"
@@ -1802,10 +1727,11 @@ async def test_phase1_root_rewrite_failure_marks_orphan_archive_failed(
 
 
 async def test_phase1_enqueues_before_root_rewrite_and_publishes_ready_last(
-    client: AsyncOpenViking,
+    client,
     monkeypatch,
 ):
-    session = client.session(session_id="phase1_publish_order_test")
+    session = client(session_id="phase1_publish_order_test")
+    await session.ensure_exists()
     session.add_message("user", [TextPart("archive me")])
     observations: list[tuple[list[str], str]] = []
 
@@ -1826,16 +1752,23 @@ async def test_phase1_enqueues_before_root_rewrite_and_publishes_ready_last(
     )
 
     result = await session.commit_async()
-
-    assert observations == [(["archive me"], "preparing")]
+    session.add_message("user", [TextPart("wait for predecessor")])
+    second = await session.commit_async()
+    assert observations == [
+        (["archive me"], "preparing"),
+        (["wait for predecessor"], "preparing"),
+    ]
     assert (await session._read_phase1_meta(result["archive_uri"]))["status"] == "ready"
+    assert (await session._read_phase1_meta(second["archive_uri"]))["status"] == "ready"
     assert await session._read_live_messages_strict() == []
 
 
 async def test_interrupted_phase1_recovers_when_root_rewrite_is_durable(
-    client: AsyncOpenViking,
+    client,
+    monkeypatch,
 ):
-    session = client.session(session_id="phase1_reconcile_durable_root_test")
+    session = client(session_id="phase1_reconcile_durable_root_test")
+    await session.ensure_exists()
     original = [
         _text_message("u1", "user", "archive me"),
         _text_message("a1", "assistant", "retain me"),
@@ -1856,6 +1789,7 @@ async def test_interrupted_phase1_recovers_when_root_rewrite_is_durable(
         min_raw_tail_steps=1,
     )
     await session._write_to_agfs_async(messages=[original[1]])
+    monkeypatch.setattr(get_task_tracker(), "has_work", lambda task_id: task_id == "synthetic")
 
     assert await session._ensure_phase1_ready(archive_uri)
     assert (await session._read_phase1_meta(archive_uri))["status"] == "ready"
@@ -1863,9 +1797,10 @@ async def test_interrupted_phase1_recovers_when_root_rewrite_is_durable(
 
 
 async def test_interrupted_phase1_before_root_rewrite_becomes_failed(
-    client: AsyncOpenViking,
+    client,
 ):
-    session = client.session(session_id="phase1_reconcile_original_root_test")
+    session = client(session_id="phase1_reconcile_original_root_test")
+    await session.ensure_exists()
     original = [_text_message("u1", "user", "still live")]
     session._messages = original
     await session._write_to_agfs_async(messages=original)
@@ -1886,17 +1821,23 @@ async def test_interrupted_phase1_before_root_rewrite_becomes_failed(
     assert not await session._ensure_phase1_ready(archive_uri)
     states = await session._scan_archive_states()
     context = await session.get_session_context()
+    failed = json.loads(
+        await session._viking_fs.read_file(f"{archive_uri}/.failed.json", ctx=session.ctx)
+    )
     assert states[0].state == "failed"
+    assert failed["error"] == "Phase 1 has no QueueFS work to resume"
     assert [message["id"] for message in context["messages"]] == ["u1"]
 
 
 async def test_stale_worker_uses_lock_snapshot_memory_policy_for_queue_message(
-    client: AsyncOpenViking,
+    client,
     monkeypatch,
 ):
-    stale_session = client.session(session_id="stale_memory_policy_snapshot_test")
+    stale_session = client(session_id="stale_memory_policy_snapshot_test")
+    await stale_session.ensure_exists()
+    stale_session._agent_evolution_enabled_provider = lambda: False
     stale_session.add_message("user", [TextPart("archive with persisted policy")])
-    updater = client.session(session_id=stale_session.session_id)
+    updater = client(session_id=stale_session.session_id)
     await updater.load()
     updater.meta.memory_policy = {
         "working_memory": {"enabled": False},

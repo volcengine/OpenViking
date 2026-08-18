@@ -352,7 +352,7 @@ Each operation contains:
 
 **Notes**
 
-- A request supports at most 128 operations, 8 MiB per file, and 16 MiB total.
+- A request supports at most 256 operations, 8 MiB per file, and 16 MiB total.
 - All targets must be files below `root_uri`, use the same context type, and have unique canonical URIs.
 - Resource targets may use any safe file extension; Memory targets retain the text extension allowlist and do not accept binary content.
 - Every non-idempotent precondition is checked under the target tree lock before the first new write. A mismatch returns `409 Conflict`.
@@ -572,7 +572,6 @@ This API operates on existing `viking://...` content. It does not import new fil
 **Authentication**
 
 - HTTP endpoint: requires admin/root role when authentication is enabled. In `api_key` mode, use an admin key for tenant content; a raw root key cannot access tenant-scoped data.
-- Python embedded mode: uses the current service context
 - Python HTTP client / CLI: sends the current authenticated identity
 
 **Parameters**
@@ -583,6 +582,8 @@ This API operates on existing `viking://...` content. It does not import new fil
 | mode | str | No | `vectors_only` | Reindex mode: `vectors_only`, `semantic_and_vectors`, or `prune_orphans` |
 | wait | bool | No | `true` | Whether to wait for completion |
 | dry_run | bool | No | `false` | Only valid with `mode="prune_orphans"`; report orphan vector records without deleting them |
+| tags | list[str] | No | `null` | Write tags to every successfully rebuilt vector record. Omit to preserve existing tags; an empty list with `replace` clears them |
+| tag_mode | str | No | `replace` | Tag write mode: `replace` or `append` |
 
 The HTTP request body rejects unknown fields. `uri` may use OpenViking path variables accepted by other content APIs; it is resolved before validation.
 
@@ -613,6 +614,10 @@ For `semantic_and_vectors`, semantic generation and vector rebuilding are sequen
 
 For `prune_orphans`, source existence is checked against the filesystem. If an entire directory is missing, vector records for files and semantic sidecars below that directory, such as `.abstract.md` and `.overview.md`, are pruned together. `dry_run` is rejected for other modes.
 
+When `tags` is provided, tags are included in the same upsert as each vector record produced by reindex; reindex does not call `set_tags` afterwards. Directory and namespace reindex operations apply tags to successfully rebuilt directory L0/L1 and leaf L2 records. `replace` overwrites existing tags, while `append` merges by key. When `tags` is omitted, `tag_mode` is ignored and existing tags remain unchanged. `prune_orphans` produces no vectors and ignores both fields.
+
+Subtree reindex is not transactional. Records skipped because no semantic source is available, or records whose embedding fails, do not receive the new tags.
+
 **Python SDK**
 
 ```python
@@ -620,6 +625,8 @@ result = client.reindex(
     uri="viking://resources",
     mode="vectors_only",
     wait=True,
+    tags=["team=search", "env=prod"],
+    tag_mode="replace",
 )
 print(result)
 ```
@@ -645,15 +652,23 @@ print(result["would_delete_records"])
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.reindex("viking://resources/docs/"));
+console.log(await client.reindex("viking://resources/docs/", {
+  tags: ["team=search"],
+  tagMode: "append",
+}));
 ```
 
 **Go SDK**
+
+When passing a non-`nil` `ReindexOptions`, set `Wait` explicitly. Go's zero
+value is `false`; only `opts=nil` applies the SDK default `wait=true`.
 
 ```go
 result, err := client.Reindex(ctx, "viking://resources", &openviking.ReindexOptions{
     Mode: "vectors_only",
     Wait: true,
+    Tags: []string{"team=search"},
+    TagMode: "replace",
 })
 if err != nil {
     return err
@@ -688,17 +703,21 @@ curl -X POST http://localhost:1933/api/v1/content/reindex \
   -H "X-OpenViking-Account: default" \
   -d '{
     "uri": "viking://resources",
-    "mode": "prune_orphans",
+    "mode": "vectors_only",
     "wait": true,
-    "dry_run": true
+    "tags": ["team=search", "env=prod"],
+    "tag_mode": "replace"
   }'
 ```
 
 **CLI**
 
 ```bash
-openviking reindex viking://resources --mode vectors_only
+openviking reindex viking://resources --mode vectors_only \
+  --tag team=search --tag env=prod --tag-mode replace
 ```
+
+The CLI sends tag fields only when at least one `--tag` is provided. Use HTTP or an SDK to clear tags with `tags: []`.
 
 ```bash
 openviking reindex viking://user/default/skills --mode semantic_and_vectors --wait false

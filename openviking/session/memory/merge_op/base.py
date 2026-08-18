@@ -132,7 +132,7 @@ class MergeOpBase(ABC):
         pass
 
     @abstractmethod
-    def apply(self, current_value: Any, patch_value: Any) -> Any:
+    async def apply(self, current_value: Any, patch_value: Any) -> Any:
         """Apply this merge operation.
 
         Args:

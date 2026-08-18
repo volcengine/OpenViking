@@ -838,7 +838,19 @@ async def test_add_resource_processor_persists_final_resource_uri(monkeypatch):
         task_id="task-1",
         meta={"source_path": ""},
     )
-    task_tracker.complete.assert_awaited_once_with(
+    assert task_tracker.complete.await_count == 2
+    first_complete = task_tracker.complete.await_args_list[0]
+    assert first_complete.args == (
+        "task-1",
+        {"status": "success", "root_uri": final_uri},
+    )
+    assert first_complete.kwargs == {
+        "account_id": "account-1",
+        "user_id": "user-1",
+        "resource_id": final_uri,
+    }
+    final_complete = task_tracker.complete.await_args_list[-1]
+    assert final_complete.args == (
         "task-1",
         {
             "status": "success",
@@ -858,12 +870,73 @@ async def test_add_resource_processor_persists_final_resource_uri(monkeypatch):
                 },
             },
         },
-        account_id="account-1",
-        user_id="user-1",
-        resource_id=final_uri,
     )
+    assert final_complete.kwargs == {
+        "account_id": "account-1",
+        "user_id": "user-1",
+        "resource_id": final_uri,
+    }
     assert await processor._requeue_lock_handoff(msg, RuntimeError("stale lock"))
     assert queue_manager.enqueue.await_args.args[0] == QueueManager.ADD_RESOURCE
+
+
+@pytest.mark.asyncio
+async def test_add_resource_processor_replay_skips_lock_adopt_when_result_exists(monkeypatch):
+    final_uri = "viking://resources/replayed"
+    service = SimpleNamespace(
+        execute_add_resource_job=AsyncMock(
+            return_value={"status": "success", "root_uri": "viking://resources/duplicated"}
+        ),
+        _link_resource_reason_memory=AsyncMock(),
+    )
+    task_tracker = SimpleNamespace(
+        create=AsyncMock(
+            return_value=SimpleNamespace(
+                status=TaskStatus.RUNNING,
+                result={"status": "success", "root_uri": final_uri},
+            )
+        ),
+        start=AsyncMock(),
+        update_stage=AsyncMock(),
+        complete=AsyncMock(),
+        fail=AsyncMock(),
+        wait_for_descendants=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.add_resource_processor.get_task_tracker",
+        Mock(return_value=task_tracker),
+    )
+    async_agfs = SimpleNamespace(
+        pathlock_adopt=AsyncMock(return_value={"lease": "duplicate"}),
+        pathlock_release=AsyncMock(),
+    )
+    processor = AddResourceProcessor(
+        service,
+        asyncio.get_running_loop(),
+        QueueManager.ADD_RESOURCE,
+        SimpleNamespace(_async_agfs=async_agfs),
+    )
+    msg = AddResourceMsg(
+        task_id="task-1",
+        path="/tmp/demo.md",
+        root_uri=final_uri,
+        account_id="account-1",
+        user_id="user-1",
+        role="user",
+        lock_handoff={"owner_id": "owner-1", "lock_paths": ["/resource/.path.ovlock"]},
+    )
+    data = msg.to_dict()
+    data[TASK_WORK_ID_FIELD] = "work-1"
+
+    await processor._process(msg, data)
+
+    async_agfs.pathlock_adopt.assert_not_awaited()
+    service.execute_add_resource_job.assert_not_awaited()
+    task_tracker.start.assert_not_awaited()
+    task_tracker.wait_for_descendants.assert_awaited_once_with("task-1", "work-1")
+    task_tracker.complete.assert_awaited_once()
+    completed_result = task_tracker.complete.await_args.args[1]
+    assert completed_result["root_uri"] == final_uri
 
 
 def test_feishu_direct_submission_requires_configured_auth(monkeypatch):

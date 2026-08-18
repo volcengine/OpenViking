@@ -6,7 +6,7 @@
  *   - Server URL + /health probe
  *   - Resolved identity (account/user)
  *   - Last session-start injection (size, age, audit path)
- *   - Last auto-recall (item count, top score, token budget use)
+ *   - Last auto-recall (item count, token budget use)
  *   - Toggle state for the three injection paths
  *   - Auth source — which file/env actually drove url + api_key, mirroring
  *     config.mjs's priority chain (env → ovcli.conf → ov.conf → default)
@@ -94,12 +94,11 @@ async function main() {
   // 3. Last auto-recall
   const recall = readJsonState("last-recall.json");
   if (recall) {
-    const top = typeof recall.top_score === "number" ? recall.top_score.toFixed(2) : "?";
     const used = recall.tokens_used ?? 0;
     const budget = recall.tokens_budget ?? 0;
     console.log(
       `Last auto-recall: ${fmtAge(recall.ts)} — ${recall.count ?? 0} items, ` +
-      `top ${top}, ${used}/${budget} tokens (${recall.reason || "ok"})`,
+      `${used}/${budget} tokens (${recall.reason || "ok"})`,
     );
   } else {
     console.log("Last auto-recall: (none yet)");

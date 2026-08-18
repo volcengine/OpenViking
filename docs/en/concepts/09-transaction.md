@@ -358,7 +358,7 @@ for conflicts first:
 
 ### Lock Expiry Cleanup
 
-**Stale lock detection**: PathLockEngine checks the fencing token timestamp. Locks older than `lock_expire` (default 1800s / 30 minutes) are considered stale and are removed automatically during acquisition.
+**Stale lock detection**: PathLockEngine checks the fencing token timestamp. Locks older than `lock_expire` (default 30s) are considered stale and are removed automatically during acquisition.
 
 **In-process cleanup**: LockManager checks active LockHandles every 60 seconds. Handles that still own lock files but have been inactive for longer than `lock_expire` are force-released.
 
@@ -371,7 +371,7 @@ After startup, QueueManager resumes persisted `session_commit` jobs:
 | Scenario | Recovery action |
 |----------|----------------|
 | session_memory extraction crash | Recover Phase 2 from archive and continue the `session_commit` job |
-| Crash while holding lock | Lock file remains in AGFS; stale detection auto-cleans on next acquisition (default 1800s / 30-minute expiry) |
+| Crash while holding lock | Lock file remains in AGFS; stale detection auto-cleans on next acquisition (default 30s expiry) |
 | Crash after enqueue, before worker processes | QueueFS SQLite persistence; worker auto-pulls after restart |
 | Orphan index | Cleaned on L2 on-demand load |
 
@@ -387,7 +387,7 @@ After startup, QueueManager resumes persisted `session_commit` jobs:
 
 ## Configuration
 
-Path locks are enabled by default with no extra configuration needed. Prefer `storage.agfs.pathlock` for default wait and expiry settings. `storage.transaction` remains only as a legacy compatibility layer: `lock_timeout` and `lock_expire` are automatically mapped when the new fields are unset, while `redo_recovery_enabled` is deprecated and ignored.
+Path locks are enabled by default with no extra configuration needed. Prefer `storage.agfs.pathlock` for expiry settings. The runtime wait timeout is fixed at `0.0` seconds and no longer accepts external configuration. `storage.transaction` remains only as a legacy compatibility layer: `lock_timeout` is deprecated and ignored, `lock_expire` is automatically mapped when the new field is unset, and `redo_recovery_enabled` is deprecated and ignored.
 
 Recommended configuration:
 
@@ -396,8 +396,7 @@ Recommended configuration:
   "storage": {
     "agfs": {
       "pathlock": {
-        "lock_timeout_secs": 5.0,
-        "lock_expire_secs": 1800.0
+        "lock_expire_secs": 30.0
       }
     }
   }
@@ -410,8 +409,7 @@ Legacy compatibility form:
 {
   "storage": {
     "transaction": {
-      "lock_timeout": 5.0,
-      "lock_expire": 1800.0
+      "lock_expire": 30.0
     }
   }
 }
@@ -419,8 +417,8 @@ Legacy compatibility form:
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `lock_timeout` | float | Deprecated. Use `storage.agfs.pathlock.lock_timeout_secs`. | `0.0` |
-| `lock_expire` | float | Deprecated. Use `storage.agfs.pathlock.lock_expire_secs`. | `1800.0` |
+| `lock_timeout` | float | Deprecated and ignored. Runtime wait timeout is fixed at `0.0`. | `0.0` |
+| `lock_expire` | float | Deprecated. Use `storage.agfs.pathlock.lock_expire_secs`. | `30.0` |
 
 ### QueueFS Persistence
 

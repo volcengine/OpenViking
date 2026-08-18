@@ -48,7 +48,7 @@ class BenchmarkPipeline:
             doc_dir = os.path.join(self.output_dir, "docs")
 
         if skip_ingestion:
-            self.logger.info(f"Skipping ingestion. Reusing existing vector index at: {self.db.store_path}")
+            self.logger.info("Skipping ingestion. Reusing the configured OpenViking Server")
             self.metrics_summary["insertion"] = {"time": 0, "input_tokens": 0, "output_tokens": 0, "embedding_tokens": 0}
         else:
             try:
@@ -238,9 +238,14 @@ class BenchmarkPipeline:
             retrieved_uris = []
             context_blocks = []
             
-            for r in search_res.resources:
-                retrieved_uris.append(r.uri)
-                content = self.db.read_resource(r.uri) if getattr(r, 'level', 2) == 2 else f"{getattr(r, 'abstract', '')}\n{getattr(r, 'overview', '')}"
+            for result in search_res.get("resources", []):
+                uri = result["uri"]
+                retrieved_uris.append(uri)
+                content = (
+                    self.db.read_resource(uri)
+                    if result.get("level", 2) == 2
+                    else f"{result.get('abstract', '')}\n{result.get('overview', '')}"
+                )
                 retrieved_texts.append(content)
                 clean = content[:8000]
                 context_blocks.append(clean)

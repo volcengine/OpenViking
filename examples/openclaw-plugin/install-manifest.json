@@ -41,6 +41,7 @@
       ".gitignore",
       "skills/install-openviking-memory/SKILL.md",
       "skills/openviking-context-database/SKILL.md",
+      "skills/ov-experience-memory/SKILL.md",
       "INSTALL-AGENT.md"
     ]
   },

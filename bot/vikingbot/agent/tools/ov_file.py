@@ -515,6 +515,10 @@ class VikingAddResourceTool(OVFileTool):
             "properties": {
                 "path": {"type": "string", "description": "Url or local file path"},
                 "description": {"type": "string", "description": "Description of the resource"},
+                "to": {
+                    "type": "string",
+                    "description": "Optional exact target URI under viking://resources/. When omitted, OpenViking chooses the resource URI.",
+                },
             },
             "required": ["path", "description"],
         }
@@ -528,6 +532,7 @@ class VikingAddResourceTool(OVFileTool):
         tool_context: "ToolContext",
         path: str,
         description: str,
+        to: Optional[str] = None,
         **kwargs: Any,
     ) -> str:
         client = None
@@ -553,7 +558,7 @@ class VikingAddResourceTool(OVFileTool):
                     upload_path = str(local_path)
 
             client = await self._get_client(tool_context)
-            result = await client.add_resource(upload_path, description)
+            result = await client.add_resource(upload_path, description, to=to)
 
             if result:
                 root_uri = result.get("root_uri", "")
@@ -936,11 +941,6 @@ class VikingMultiReadTool(OVFileTool):
                 async with semaphore:
                     try:
                         content = await client.read_content(uri, level=level)
-                        skill_runtime = getattr(tool_context, "skill_runtime", None)
-                        if skill_runtime is not None:
-                            active_skill = await skill_runtime.activate_from_read(uri, content)
-                            if active_skill is not None:
-                                content = skill_runtime.render_skill_content(active_skill)
                         return {
                             "uri": uri,
                             "content": content,

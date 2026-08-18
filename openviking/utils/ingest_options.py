@@ -32,7 +32,10 @@ class IngestOptions:
     ) -> "IngestOptions":
         if tags is None:
             return cls()
-        return cls(search_tags=normalize_search_tags(tags), search_tag_mode=mode)
+        return cls(
+            search_tags=normalize_search_tags(tags, discard_invalid=True),
+            search_tag_mode=mode,
+        )
 
     @classmethod
     def from_value(cls, value: "IngestOptions | Mapping[str, Any] | None") -> "IngestOptions":

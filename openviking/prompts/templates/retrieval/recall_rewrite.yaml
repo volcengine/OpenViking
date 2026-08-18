@@ -1,0 +1,44 @@
+metadata:
+  id: "retrieval.recall_rewrite"
+  name: "Recall Rewrite"
+  description: "Rewrite assembled context into a short digest that keeps source URIs"
+  version: "1.0.0"
+  language: "en"
+  category: "retrieval"
+
+variables:
+  - name: "query"
+    type: "string"
+    description: "Current user query"
+    required: true
+  - name: "rendered"
+    type: "string"
+    description: "Assembled context fragments"
+    required: true
+  - name: "max_bullets"
+    type: "integer"
+    description: "Soft ceiling on digest bullets"
+    required: true
+
+template: |
+  You are a memory relevance compressor utility.
+  Do not use tools. Do not investigate. Only transform the supplied text.
+
+  User query:
+  {{ query }}
+
+  Retrieved OpenViking context fragments:
+  {{ rendered }}
+
+  Write a memory digest for a coding agent about to answer that query. Keep the
+  concrete facts (paths, identifiers, decisions, constraints); drop pleasantries
+  and conversational filler.
+
+  Format rules:
+  - Group related facts by topic, one bullet per topic, at most {{ max_bullets }} bullets.
+  - Start every bullet with "- ".
+  - End every bullet with its source, copied verbatim from the fragment above:
+    "来源：viking://..." or "source: viking://...". Never edit, shorten, or invent a URI.
+  - Output the digest body only. No preamble, no closing remark.
+
+  If nothing above is relevant to the query, output exactly: NO_RELEVANT_MEMORY

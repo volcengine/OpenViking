@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use rand::Rng;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
 use uuid::Uuid;
@@ -39,8 +40,50 @@ impl Default for PathLockConfig {
         Self {
             provider: "filesystem".to_string(),
             lock_timeout_secs: 0.0,
-            lock_expire_secs: 1800.0,
+            lock_expire_secs: 30.0,
         }
+    }
+}
+
+/// Lock-poll backoff constants used by conflict-retry loops.
+///
+/// Keep the first retry no faster than the previous fixed 50 ms poll, then
+/// spread waiters with bounded jitter while backing off to 500 ms.
+const INITIAL_POLL_INTERVAL_MS: u64 = 50;
+const MAX_POLL_INTERVAL_MS: u64 = 500;
+const POLL_BACKOFF_NUMERATOR: u64 = 3;
+const POLL_BACKOFF_DENOMINATOR: u64 = 2;
+const POLL_JITTER_PERCENT: u64 = 20;
+
+impl PathLockManager {
+    fn poll_interval_bounds(attempt: u32) -> (u64, u64) {
+        let mut base_ms = INITIAL_POLL_INTERVAL_MS;
+        for _ in 0..attempt {
+            if base_ms >= MAX_POLL_INTERVAL_MS {
+                break;
+            }
+            base_ms = base_ms
+                .saturating_mul(POLL_BACKOFF_NUMERATOR)
+                .saturating_add(POLL_BACKOFF_DENOMINATOR - 1)
+                / POLL_BACKOFF_DENOMINATOR;
+        }
+        base_ms = base_ms.min(MAX_POLL_INTERVAL_MS);
+
+        let jitter_ms = base_ms.saturating_mul(POLL_JITTER_PERCENT) / 100;
+        let lower_ms = base_ms
+            .saturating_sub(jitter_ms)
+            .max(INITIAL_POLL_INTERVAL_MS);
+        let upper_ms = base_ms.saturating_add(jitter_ms).min(MAX_POLL_INTERVAL_MS);
+        (lower_ms, upper_ms)
+    }
+
+    fn poll_interval_for_attempt(attempt: u32) -> Duration {
+        let (lower_ms, upper_ms) = Self::poll_interval_bounds(attempt);
+        Duration::from_millis(rand::thread_rng().gen_range(lower_ms..=upper_ms))
+    }
+
+    fn retry_delay(attempt: u32, remaining: Duration) -> Duration {
+        Self::poll_interval_for_attempt(attempt).min(remaining)
     }
 }
 
@@ -60,6 +103,10 @@ pub enum AutoPathLockAction {
 struct LeaseEntry {
     lease: PathLockLease,
     ownership_ref: String,
+    /// True once handoff() has parked this lease for a consumer to adopt.
+    /// The entry stays in the registry and keeps refreshing, but the original
+    /// ownership_ref can no longer operate it.
+    pending_handoff: bool,
     lock_kinds: HashMap<String, PathLockKind>,
     last_active_at: Instant,
 }
@@ -105,6 +152,7 @@ impl LeaseRegistry {
             LeaseEntry {
                 lease,
                 ownership_ref,
+                pending_handoff: false,
                 lock_kinds,
                 last_active_at: Instant::now(),
             },
@@ -138,6 +186,28 @@ impl LeaseRegistry {
             .map(|(path, _)| path.clone())
             .collect();
         Some((entry, release_paths, downgrade_paths))
+    }
+
+    /// True when the entry exists, is owned (not parked for handoff) and its
+    /// ownership_ref matches. Used to gate release/refresh against a stale
+    /// capability under the same write guard that performs the mutation.
+    fn capability_matches(&self, lease_ref: &str, ownership_ref: &str) -> bool {
+        self.entries
+            .get(lease_ref)
+            .is_some_and(|entry| !entry.pending_handoff && entry.ownership_ref == ownership_ref)
+    }
+
+    /// True when any live entry already holds every one of these lock paths for
+    /// this owner. Used by the adopt token fallback to reject a same-process
+    /// replay of an already-migrated handoff (which would otherwise insert a
+    /// duplicate entry and inflate lock_refs).
+    fn owner_already_holds(&self, owner_id: &str, lock_paths: &[String]) -> bool {
+        self.entries.values().any(|entry| {
+            entry.lease.owner_id == owner_id
+                && lock_paths
+                    .iter()
+                    .all(|lp| entry.lease.lock_paths.contains(lp))
+        })
     }
 
     /// Remove selected token references from one lease.
@@ -226,6 +296,58 @@ impl LeaseRegistry {
         }
     }
 
+    /// Park an owned lease for handoff: keep it (and its refresh) in the registry,
+    /// but reject the original ownership_ref. Requires a matching, not-yet-parked entry.
+    fn mark_pending_handoff(&mut self, lease_ref: &str, ownership_ref: &str) -> PathLockResult<()> {
+        match self.entries.get_mut(lease_ref) {
+            Some(entry) if entry.ownership_ref == ownership_ref && !entry.pending_handoff => {
+                entry.pending_handoff = true;
+                Ok(())
+            }
+            Some(entry) if entry.pending_handoff => Err(PathLockError::InvalidRequest(format!(
+                "pathlock lease '{lease_ref}' is already pending handoff"
+            ))),
+            Some(_) => Err(PathLockError::InvalidRequest(format!(
+                "owned lease capability does not match ref '{lease_ref}'"
+            ))),
+            None => Err(PathLockError::InvalidRequest(format!(
+                "unknown pathlock lease ref '{lease_ref}'"
+            ))),
+        }
+    }
+
+    /// Adopt a parked lease: migrate the entry to a fresh lease_ref key and rotate
+    /// ownership_ref, permanently invalidating the producer's stale refs (both the
+    /// lease_ref-only paths like borrow/auto-lock and the ownership_ref paths).
+    /// Returns the refreshed owned lease. Errors when the entry is missing or not
+    /// currently pending handoff.
+    ///
+    /// lock_refs is keyed by (owner_id, lock_path) and owner_id/lock_paths are
+    /// unchanged, so re-keying `entries` needs no lock_refs adjustment. Uses raw
+    /// entries.remove/insert (not LeaseRegistry::remove/insert) to avoid touching
+    /// refcounts or rebuilding lock_kinds.
+    fn take_pending_handoff(
+        &mut self,
+        lease_ref: &str,
+        new_lease_ref: String,
+        new_ownership_ref: String,
+    ) -> Option<OwnedPathLockLease> {
+        if !self.entries.get(lease_ref)?.pending_handoff {
+            return None;
+        }
+        let mut entry = self.entries.remove(lease_ref)?;
+        entry.pending_handoff = false;
+        entry.ownership_ref = new_ownership_ref.clone();
+        entry.lease.lease_ref = new_lease_ref.clone();
+        entry.last_active_at = Instant::now();
+        let owned = OwnedPathLockLease {
+            lease: entry.lease.clone(),
+            ownership_ref: new_ownership_ref,
+        };
+        self.entries.insert(new_lease_ref, entry);
+        Some(owned)
+    }
+
     /// Decrement local references and return paths no longer used by any local lease.
     fn decrement_refs(&mut self, owner_id: &str, lock_paths: &[String]) -> Vec<String> {
         let mut release_paths = Vec::new();
@@ -311,8 +433,17 @@ impl PathLockManager {
                     let mut all_ok = true;
                     for lp in &lock_paths {
                         match refresh_provider.refresh_token(lp, &owner_id, now_ns).await {
-                            Ok(true) => {}
-                            _ => all_ok = false,
+                            Ok(true) => {
+                                info!(lease_ref = %lease_ref, owner_id = %owner_id, lock_path = %lp, "pathlock lease automatically refreshed");
+                            }
+                            Ok(false) => {
+                                all_ok = false;
+                                info!(lease_ref = %lease_ref, owner_id = %owner_id, lock_path = %lp, "pathlock lease automatic refresh failed");
+                            }
+                            Err(error) => {
+                                all_ok = false;
+                                info!(lease_ref = %lease_ref, owner_id = %owner_id, lock_path = %lp, error = %error, "pathlock lease automatic refresh failed");
+                            }
                         }
                     }
                     drop(refresh_guard);
@@ -573,6 +704,7 @@ impl PathLockManager {
         let start = Instant::now();
         let mut acquired_lock_paths: Vec<(String, AcquisitionChange)> = Vec::new();
         let mut is_waiting = false;
+        let mut retry_attempt: u32 = 0;
 
         loop {
             let mut conflict: Option<PathLockError> = None;
@@ -726,7 +858,9 @@ impl PathLockManager {
                     }
                 }
 
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                let remaining = timeout.saturating_sub(start.elapsed());
+                tokio::time::sleep(Self::retry_delay(retry_attempt, remaining)).await;
+                retry_attempt = retry_attempt.saturating_add(1);
                 continue;
             }
 
@@ -828,7 +962,9 @@ impl PathLockManager {
                     });
                 }
 
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                let remaining = timeout.saturating_sub(start.elapsed());
+                tokio::time::sleep(Self::retry_delay(retry_attempt, remaining)).await;
+                retry_attempt = retry_attempt.saturating_add(1);
                 continue;
             }
 
@@ -1084,6 +1220,19 @@ impl PathLockManager {
 
     /// Refresh an owned lease. Returns "refreshed", "lost", or "failed".
     pub async fn refresh(&self, lease: &OwnedPathLockLease) -> PathLockResult<String> {
+        // Validate the capability before touching the provider: a stale or parked
+        // lease must not be able to refresh tokens it no longer controls.
+        if !self
+            .lease_registry
+            .read()
+            .await
+            .capability_matches(&lease.lease.lease_ref, &lease.ownership_ref)
+        {
+            return Err(PathLockError::InvalidRequest(format!(
+                "owned lease capability does not match ref '{}'",
+                lease.lease.lease_ref
+            )));
+        }
         let now_ns = Self::now_ns();
         let mut all_ok = true;
         let mut any_ok = false;
@@ -1108,17 +1257,25 @@ impl PathLockManager {
         }
 
         let result = if all_ok && any_ok { "refreshed" } else if any_ok { "lost" } else { "failed" };
-        debug!(lease_ref = %lease.lease.lease_ref, owner_id = %lease.lease.owner_id, lock_paths = ?lease.lease.lock_paths, result = %result, "pathlock refresh completed");
+        info!(lease_ref = %lease.lease.lease_ref, owner_id = %lease.lease.owner_id, lock_paths = ?lease.lease.lock_paths, result = %result, "pathlock refresh completed");
         Ok(result.to_string())
     }
 
     /// Release an owned lease.
     pub async fn release(&self, lease: &OwnedPathLockLease) -> PathLockResult<()> {
-        let removed = self
-            .lease_registry
-            .write()
-            .await
-            .remove(&lease.lease.lease_ref);
+        let removed = {
+            // Gate the capability check and removal under one write guard so a stale
+            // producer capability cannot race an adopt/handoff and delete the
+            // consumer's live entry. A mismatch is a hard error, not a silent success.
+            let mut registry = self.lease_registry.write().await;
+            if !registry.capability_matches(&lease.lease.lease_ref, &lease.ownership_ref) {
+                return Err(PathLockError::InvalidRequest(format!(
+                    "owned lease capability does not match ref '{}'",
+                    lease.lease.lease_ref
+                )));
+            }
+            registry.remove(&lease.lease.lease_ref)
+        };
         if let Some((mut entry, release_paths, downgrade_paths)) = removed {
             let mut failed_paths = Vec::new();
             let mut first_error = None;
@@ -1182,11 +1339,18 @@ impl PathLockManager {
         lease: &OwnedPathLockLease,
         lock_paths: &[String],
     ) -> PathLockResult<()> {
-        let removed = self
-            .lease_registry
-            .write()
-            .await
-            .remove_selected(&lease.lease.lease_ref, lock_paths);
+        let removed = {
+            // Same-guard capability gate as release(); prevents a stale capability
+            // from trimming a re-adopted lease. A mismatch is a hard error.
+            let mut registry = self.lease_registry.write().await;
+            if !registry.capability_matches(&lease.lease.lease_ref, &lease.ownership_ref) {
+                return Err(PathLockError::InvalidRequest(format!(
+                    "owned lease capability does not match ref '{}'",
+                    lease.lease.lease_ref
+                )));
+            }
+            registry.remove_selected(&lease.lease.lease_ref, lock_paths)
+        };
         if let Some((mut entry, owner_id, release_paths, downgrade_paths)) = removed {
             let mut failed_paths = Vec::new();
             let mut first_error = None;
@@ -1281,21 +1445,23 @@ impl PathLockManager {
     /// Export a handoff ref from an owned lease.
     pub fn to_handoff(&self, lease: &OwnedPathLockLease) -> PathLockHandoffRef {
         PathLockHandoffRef {
+            lease_ref: Some(lease.lease.lease_ref.clone()),
             owner_id: lease.lease.owner_id.clone(),
             lock_paths: lease.lease.lock_paths.clone(),
             covered_paths: lease.lease.covered_paths.clone(),
         }
     }
 
-    /// Mark an owned lease as handed off (local lifecycle ends).
+    /// Park an owned lease for handoff. The entry stays in the registry and keeps
+    /// refreshing, but the producer's ownership_ref can no longer operate it until
+    /// a consumer adopts it.
     pub async fn handoff(&self, lease: &OwnedPathLockLease) -> PathLockResult<()> {
         self.lease_registry
             .write()
             .await
-            .remove(&lease.lease.lease_ref);
+            .mark_pending_handoff(&lease.lease.lease_ref, &lease.ownership_ref)?;
         let active_count = self.lease_registry.read().await.entries.len();
-        self.metrics.write().await.active_lock_count = active_count;
-        info!(lease_ref = %lease.lease.lease_ref, owner_id = %lease.lease.owner_id, lock_paths = ?lease.lease.lock_paths, active_count = active_count, "handed off pathlock lease");
+        info!(lease_ref = %lease.lease.lease_ref, owner_id = %lease.lease.owner_id, lock_paths = ?lease.lease.lock_paths, active_count = active_count, "parked pathlock lease for handoff");
         Ok(())
     }
 
@@ -1309,6 +1475,60 @@ impl PathLockManager {
                 "handoff owner_id and lock_paths must not be empty".to_string(),
             ));
         }
+
+        // Local fast path: a handoff carrying lease_ref MUST be adopted from this
+        // process's registry — it is never legacy. Adopt in-place (migrate to a fresh
+        // lease_ref, rotate ownership_ref) so the background refresh never lapses.
+        if let Some(lease_ref) = handoff.lease_ref.as_deref() {
+            let mut registry = self.lease_registry.write().await;
+            let local = registry.get_by_ref(lease_ref).map(|entry| {
+                // A lease_ref-bearing handoff is non-legacy: require owner_id,
+                // lock_paths AND covered_paths to match the live entry so a forged
+                // or corrupted payload cannot be adopted.
+                (
+                    entry.lease.owner_id == handoff.owner_id
+                        && entry.lease.lock_paths == handoff.lock_paths
+                        && entry.lease.covered_paths == handoff.covered_paths,
+                    entry.pending_handoff,
+                )
+            });
+            match local {
+                Some((false, _)) => {
+                    return Err(PathLockError::HandoffFailed(format!(
+                        "handoff ref '{lease_ref}' does not match the local lease"
+                    )));
+                }
+                Some((true, false)) => {
+                    // Entry is Owned, not parked: producer has not called handoff()
+                    // yet (retry after handoff), or it was already adopted.
+                    return Err(PathLockError::HandoffFailed(format!(
+                        "pathlock lease '{lease_ref}' is not pending handoff (handoff() not called yet, or already adopted)"
+                    )));
+                }
+                Some((true, true)) => {
+                    let new_ownership_ref = Self::new_owner_id();
+                    let new_lease_ref = Self::new_owner_id();
+                    let owned = registry
+                        .take_pending_handoff(lease_ref, new_lease_ref, new_ownership_ref)
+                        .ok_or_else(|| {
+                            PathLockError::HandoffFailed(format!(
+                                "pathlock lease '{lease_ref}' vanished during adopt"
+                            ))
+                        })?;
+                    let active_count = registry.entries.len();
+                    drop(registry);
+                    info!(lease_ref = %owned.lease.lease_ref, owner_id = %owned.lease.owner_id, lock_paths = ?owned.lease.lock_paths, active_count = active_count, "adopted pathlock lease (local fast path)");
+                    return Ok(owned);
+                }
+                None => {
+                    // lease_ref not in this registry: either a genuine cross-process /
+                    // restart adopt, or a same-process replay of an already-migrated
+                    // lease. Both are handled by the token fallback below, whose insert
+                    // dedups same-owner/path entries to reject replays.
+                }
+            }
+        }
+
         let legacy_handoff = handoff.covered_paths.is_empty();
         if !legacy_handoff && handoff.covered_paths.len() != handoff.lock_paths.len() {
             return Err(PathLockError::InvalidRequest(
@@ -1386,12 +1606,21 @@ impl PathLockManager {
             covered_paths: handoff.covered_paths.clone(),
         };
         let ownership_ref = Self::new_owner_id();
-        self.lease_registry
-            .write()
-            .await
-            .insert(lease.clone(), ownership_ref.clone());
-
-        let active_count = self.lease_registry.read().await.entries.len();
+        let active_count = {
+            // Dedup + insert under one write guard: if this owner already holds these
+            // paths locally, this is a replay of an already-adopted handoff (the token
+            // is still valid because the live lease keeps refreshing it). Reject it so
+            // we never create two capabilities for the same lock.
+            let mut registry = self.lease_registry.write().await;
+            if registry.owner_already_holds(&handoff.owner_id, &handoff.lock_paths) {
+                return Err(PathLockError::HandoffFailed(format!(
+                    "pathlock handoff for owner '{}' was already adopted",
+                    handoff.owner_id
+                )));
+            }
+            registry.insert(lease.clone(), ownership_ref.clone());
+            registry.entries.len()
+        };
         self.metrics.write().await.active_lock_count = active_count;
         info!(lease_ref = %lease.lease_ref, owner_id = %lease.owner_id, lock_paths = ?lease.lock_paths, legacy_handoff = legacy_handoff, active_count = active_count, "adopted pathlock lease");
 
@@ -1464,19 +1693,25 @@ impl PathLockManager {
     /// Look up an owned lease by owner_id for cross-FFI lease operations.
     pub async fn get_owned_lease(&self, owner_id: &str) -> Option<OwnedPathLockLease> {
         let registry = self.lease_registry.read().await;
-        registry.get_by_owner(owner_id).map(|entry| OwnedPathLockLease {
-            lease: entry.lease.clone(),
-            ownership_ref: entry.ownership_ref.clone(),
-        })
+        registry
+            .get_by_owner(owner_id)
+            .filter(|entry| !entry.pending_handoff)
+            .map(|entry| OwnedPathLockLease {
+                lease: entry.lease.clone(),
+                ownership_ref: entry.ownership_ref.clone(),
+            })
     }
 
     /// Look up an owned lease by opaque lease_ref for cross-FFI lease operations.
     pub async fn get_owned_lease_by_ref(&self, lease_ref: &str) -> Option<OwnedPathLockLease> {
         let registry = self.lease_registry.read().await;
-        registry.get_by_ref(lease_ref).map(|entry| OwnedPathLockLease {
-            lease: entry.lease.clone(),
-            ownership_ref: entry.ownership_ref.clone(),
-        })
+        registry
+            .get_by_ref(lease_ref)
+            .filter(|entry| !entry.pending_handoff)
+            .map(|entry| OwnedPathLockLease {
+                lease: entry.lease.clone(),
+                ownership_ref: entry.ownership_ref.clone(),
+            })
     }
 
     /// Look up an owned lease only when its lifecycle capability matches.
@@ -1488,7 +1723,7 @@ impl PathLockManager {
         let registry = self.lease_registry.read().await;
         registry
             .get_by_ref(lease_ref)
-            .filter(|entry| entry.ownership_ref == ownership_ref)
+            .filter(|entry| !entry.pending_handoff && entry.ownership_ref == ownership_ref)
             .map(|entry| OwnedPathLockLease {
                 lease: entry.lease.clone(),
                 ownership_ref: entry.ownership_ref.clone(),
@@ -1502,9 +1737,12 @@ impl PathLockManager {
         requests: &[PathLockRequest],
     ) -> PathLockResult<()> {
         let registry = self.lease_registry.read().await;
-        let entry = registry.get_by_ref(lease_ref).ok_or_else(|| {
-            PathLockError::InvalidRequest(format!("unknown pathlock lease ref '{lease_ref}'"))
-        })?;
+        let entry = registry
+            .get_by_ref(lease_ref)
+            .filter(|entry| !entry.pending_handoff)
+            .ok_or_else(|| {
+                PathLockError::InvalidRequest(format!("unknown pathlock lease ref '{lease_ref}'"))
+            })?;
         if requests.iter().all(|request| entry.lease.covers(request)) {
             Ok(())
         } else {
@@ -1744,6 +1982,97 @@ mod tests {
         }
     }
 
+    /// Alternate conflicts before acquisition and during post-verification.
+    ///
+    /// Every call to `try_create_token` is one real acquire-loop probe. Odd
+    /// probes fail there with Busy; even probes create a token, then the next
+    /// read exposes a synthetic ancestor Tree token so post-verification fails.
+    struct RetryLoopCountingProvider {
+        inner: crate::lock::provider::MemoryPathLockProvider,
+        create_probes: AtomicUsize,
+        pre_acquire_conflicts: AtomicUsize,
+        post_verify_conflicts: AtomicUsize,
+        inject_post_verify_conflict: AtomicBool,
+    }
+
+    impl RetryLoopCountingProvider {
+        fn new() -> Self {
+            Self {
+                inner: crate::lock::provider::MemoryPathLockProvider::new(),
+                create_probes: AtomicUsize::new(0),
+                pre_acquire_conflicts: AtomicUsize::new(0),
+                post_verify_conflicts: AtomicUsize::new(0),
+                inject_post_verify_conflict: AtomicBool::new(false),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl PathLockProvider for RetryLoopCountingProvider {
+        fn name(&self) -> &'static str {
+            "retry-loop-counting"
+        }
+
+        async fn read_token(&self, lock_path: &str) -> PathLockResult<Option<LockToken>> {
+            if self
+                .inject_post_verify_conflict
+                .swap(false, Ordering::SeqCst)
+            {
+                self.post_verify_conflicts.fetch_add(1, Ordering::SeqCst);
+                return Ok(Some(LockToken {
+                    owner_id: "post-verify-blocker".to_string(),
+                    time_ns: PathLockManager::now_ns(),
+                    lock_type: PathLockKind::Tree,
+                }));
+            }
+            self.inner.read_token(lock_path).await
+        }
+
+        async fn try_create_token(&self, lock_path: &str, token: &LockToken) -> PathLockResult<()> {
+            let probe = self.create_probes.fetch_add(1, Ordering::SeqCst);
+            if probe.is_multiple_of(2) {
+                self.pre_acquire_conflicts.fetch_add(1, Ordering::SeqCst);
+                return Err(PathLockError::Busy {
+                    lock_path: lock_path.to_string(),
+                    operation: "injected pre-acquire conflict".to_string(),
+                });
+            }
+
+            self.inner.try_create_token(lock_path, token).await?;
+            self.inject_post_verify_conflict
+                .store(true, Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn compare_and_write_token(
+            &self,
+            lock_path: &str,
+            expected: &LockToken,
+            replacement: &LockToken,
+        ) -> PathLockResult<bool> {
+            self.inner
+                .compare_and_write_token(lock_path, expected, replacement)
+                .await
+        }
+
+        async fn refresh_token(
+            &self,
+            lock_path: &str,
+            owner_id: &str,
+            time_ns: u128,
+        ) -> PathLockResult<bool> {
+            self.inner.refresh_token(lock_path, owner_id, time_ns).await
+        }
+
+        async fn remove_token(&self, lock_path: &str, owner_id: &str) -> PathLockResult<bool> {
+            self.inner.remove_token(lock_path, owner_id).await
+        }
+
+        async fn scan_descendant_locks(&self, root: &str) -> PathLockResult<Vec<String>> {
+            self.inner.scan_descendant_locks(root).await
+        }
+    }
+
     /// Build a manager backed by the real in-memory filesystem.
     async fn make_manager() -> PathLockManager {
         make_manager_with_config(PathLockConfig::default()).await
@@ -1965,11 +2294,165 @@ mod tests {
             .await
             .unwrap();
         let handoff = mgr.to_handoff(&lease);
+        assert_eq!(handoff.lease_ref.as_deref(), Some(lease.lease.lease_ref.as_str()));
         mgr.handoff(&lease).await.unwrap();
 
         let adopted = mgr.adopt(&handoff).await.unwrap();
         assert_eq!(adopted.lease.owner_id, lease.lease.owner_id);
         assert_eq!(adopted.lease.lock_paths, handoff.lock_paths);
+        // adopt migrates to a fresh lease_ref and ownership_ref; the producer's
+        // stale refs no longer resolve.
+        assert_ne!(adopted.lease.lease_ref, lease.lease.lease_ref);
+        assert_ne!(adopted.ownership_ref, lease.ownership_ref);
+        assert!(mgr
+            .get_owned_lease_by_ref(&lease.lease.lease_ref)
+            .await
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn pending_handoff_rejects_stale_capability_but_keeps_refreshing() {
+        let mgr = make_manager_with_config(PathLockConfig {
+            lock_expire_secs: 0.03,
+            ..PathLockConfig::default()
+        })
+        .await;
+        let lease = mgr
+            .acquire_tree("/data/sub", Duration::from_secs(1), None)
+            .await
+            .unwrap();
+        let lock_path = lease.lease.lock_paths[0].clone();
+        mgr.handoff(&lease).await.unwrap();
+
+        // Producer's stale capability can no longer resolve the parked lease.
+        // (FFI lifecycle ops all go through capability resolution.)
+        assert!(mgr
+            .get_owned_lease_by_capability(&lease.lease.lease_ref, &lease.ownership_ref)
+            .await
+            .is_none());
+        assert!(mgr
+            .get_owned_lease_by_ref(&lease.lease.lease_ref)
+            .await
+            .is_none());
+
+        // But the entry stays in the registry and keeps refreshing.
+        let before = mgr
+            .provider
+            .read_token(&lock_path)
+            .await
+            .unwrap()
+            .unwrap()
+            .time_ns;
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let after = mgr
+            .provider
+            .read_token(&lock_path)
+            .await
+            .unwrap()
+            .unwrap()
+            .time_ns;
+        assert!(after > before, "parked lease token must keep refreshing");
+
+        let handoff = mgr.to_handoff(&lease);
+        let adopted = mgr.adopt(&handoff).await.unwrap();
+        assert_eq!(adopted.lease.owner_id, lease.lease.owner_id);
+        // After adopt the new owner can operate the lease again.
+        assert!(mgr.release(&adopted).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn adopt_before_handoff_is_retryable() {
+        let mgr = make_manager().await;
+        let lease = mgr
+            .acquire_tree("/data/sub", Duration::from_secs(1), None)
+            .await
+            .unwrap();
+        let handoff = mgr.to_handoff(&lease);
+
+        // Consumer races ahead of the producer's handoff(): entry is still Owned.
+        let err = mgr.adopt(&handoff).await.unwrap_err();
+        assert!(matches!(err, PathLockError::HandoffFailed(_)));
+
+        // Once the producer parks it, adopt succeeds with a fresh lease_ref.
+        mgr.handoff(&lease).await.unwrap();
+        let adopted = mgr.adopt(&handoff).await.unwrap();
+        assert_ne!(adopted.lease.lease_ref, lease.lease.lease_ref);
+    }
+
+    #[tokio::test]
+    async fn double_handoff_is_rejected() {
+        let mgr = make_manager().await;
+        let lease = mgr
+            .acquire_tree("/data/sub", Duration::from_secs(1), None)
+            .await
+            .unwrap();
+        mgr.handoff(&lease).await.unwrap();
+        assert!(mgr.handoff(&lease).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn adopt_fast_path_rejects_forged_covered_paths() {
+        let mgr = make_manager().await;
+        let lease = mgr
+            .acquire_tree("/data/sub", Duration::from_secs(1), None)
+            .await
+            .unwrap();
+        let mut handoff = mgr.to_handoff(&lease);
+        // Tamper the coverage while keeping owner_id/lock_paths intact.
+        handoff.covered_paths = vec![PathLockRequest {
+            path: "/data/other".to_string(),
+            kind: PathLockKind::Tree,
+        }];
+        mgr.handoff(&lease).await.unwrap();
+        assert!(matches!(
+            mgr.adopt(&handoff).await,
+            Err(PathLockError::HandoffFailed(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn legacy_handoff_without_lease_ref_uses_token_fallback() {
+        // A legacy payload (no lease_ref) only occurs across a restart: the token is
+        // still on disk but the original registry entry is gone. Model that with a
+        // second manager sharing the same fs + provider (an empty registry).
+        let fs = Arc::new(MemFileSystem::new());
+        fs.mkdir("/data", 0o755).await.unwrap();
+        fs.mkdir("/data/sub", 0o755).await.unwrap();
+        let provider = Arc::new(crate::lock::provider::MemoryPathLockProvider::new());
+        let producer = PathLockManager::new(fs.clone(), provider.clone(), PathLockConfig::default());
+        let lease = producer
+            .acquire_tree("/data/sub", Duration::from_secs(1), None)
+            .await
+            .unwrap();
+        // Historic payload: no lease_ref, no covered_paths.
+        let legacy = PathLockHandoffRef {
+            lease_ref: None,
+            owner_id: lease.lease.owner_id.clone(),
+            lock_paths: lease.lease.lock_paths.clone(),
+            covered_paths: Vec::new(),
+        };
+        // "Restarted" process: fresh manager, empty registry, token persisted on disk.
+        let consumer = PathLockManager::new(fs, provider, PathLockConfig::default());
+        let adopted = consumer.adopt(&legacy).await.unwrap();
+        assert_eq!(adopted.lease.owner_id, lease.lease.owner_id);
+    }
+
+    #[tokio::test]
+    async fn adopt_is_not_replayable() {
+        // Adopting the same handoff twice must not create two capabilities for the
+        // same lock. First adopt migrates the entry; the replay must be rejected.
+        let mgr = make_manager().await;
+        let lease = mgr
+            .acquire_tree("/data/sub", Duration::from_secs(1), None)
+            .await
+            .unwrap();
+        let handoff = mgr.to_handoff(&lease);
+        mgr.handoff(&lease).await.unwrap();
+        let _first = mgr.adopt(&handoff).await.unwrap();
+        assert!(matches!(
+            mgr.adopt(&handoff).await,
+            Err(PathLockError::HandoffFailed(_))
+        ));
     }
 
     #[tokio::test]
@@ -2011,47 +2494,6 @@ mod tests {
             )
             .await
             .is_err());
-    }
-
-    #[tokio::test]
-    async fn handoff_stops_source_refresh_until_adopted() {
-        let mgr = make_manager_with_config(PathLockConfig {
-            lock_expire_secs: 0.03,
-            ..PathLockConfig::default()
-        })
-        .await;
-        let lease = mgr
-            .acquire_tree("/data/sub", Duration::from_secs(1), None)
-            .await
-            .unwrap();
-        let lock_path = lease.lease.lock_paths[0].clone();
-        mgr.handoff(&lease).await.unwrap();
-
-        let before = mgr
-            .provider
-            .read_token(&lock_path)
-            .await
-            .unwrap()
-            .unwrap()
-            .time_ns;
-        tokio::time::sleep(Duration::from_millis(25)).await;
-
-        let after = mgr
-            .provider
-            .read_token(&lock_path)
-            .await
-            .unwrap()
-            .unwrap()
-            .time_ns;
-        assert_eq!(after, before);
-        assert!(mgr
-            .get_owned_lease_by_ref(&lease.lease.lease_ref)
-            .await
-            .is_none());
-
-        let handoff = mgr.to_handoff(&lease);
-        let adopted = mgr.adopt(&handoff).await.unwrap();
-        assert_eq!(adopted.lease.owner_id, lease.lease.owner_id);
     }
 
     #[tokio::test]
@@ -2112,5 +2554,127 @@ mod tests {
 
         assert_eq!(provider.busy_remove_count.load(Ordering::SeqCst), 1);
         mgr.release(&lease).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn contending_waiters_eventually_acquire_with_backoff() {
+        let mgr = Arc::new(make_manager().await);
+        let holder = mgr
+            .acquire_tree("/data/sub", Duration::ZERO, None)
+            .await
+            .unwrap();
+
+        let mut waiters = Vec::new();
+        for _ in 0..4 {
+            let waiter_mgr = mgr.clone();
+            waiters.push(tokio::spawn(async move {
+                let lease = waiter_mgr
+                    .acquire_tree("/data/sub", Duration::from_secs(5), None)
+                    .await?;
+                waiter_mgr.release(&lease).await
+            }));
+        }
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if mgr.metrics_snapshot().await.waiting_lock_count == 4 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("all waiters should enter the conflict/backoff path");
+        mgr.release(&holder).await.unwrap();
+
+        for waiter in waiters {
+            tokio::time::timeout(Duration::from_secs(5), waiter)
+                .await
+                .expect("waiter should complete after holder release")
+                .unwrap()
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn poll_interval_bounds_back_off_and_saturate() {
+        assert_eq!(PathLockManager::poll_interval_bounds(0), (50, 60));
+        assert_eq!(PathLockManager::poll_interval_bounds(1), (60, 90));
+        assert_eq!(PathLockManager::poll_interval_bounds(2), (91, 135));
+        assert_eq!(PathLockManager::poll_interval_bounds(3), (136, 204));
+        assert_eq!(PathLockManager::poll_interval_bounds(4), (204, 306));
+        assert_eq!(PathLockManager::poll_interval_bounds(5), (307, 459));
+        assert_eq!(PathLockManager::poll_interval_bounds(6), (400, 500));
+        assert_eq!(PathLockManager::poll_interval_bounds(u32::MAX), (400, 500));
+    }
+
+    #[test]
+    fn poll_interval_samples_stay_within_deterministic_bounds() {
+        for attempt in [0, 1, 2, 3, 4, 5, 6, 50, u32::MAX] {
+            let (lower_ms, upper_ms) = PathLockManager::poll_interval_bounds(attempt);
+            for _ in 0..100 {
+                let ms = PathLockManager::poll_interval_for_attempt(attempt).as_millis() as u64;
+                assert!(
+                    (lower_ms..=upper_ms).contains(&ms),
+                    "attempt {attempt} produced {ms}ms outside [{lower_ms}, {upper_ms}]"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn retry_delay_does_not_overshoot_remaining_timeout() {
+        let remaining = Duration::from_millis(7);
+        assert_eq!(PathLockManager::retry_delay(0, remaining), remaining);
+        assert_eq!(PathLockManager::retry_delay(u32::MAX, remaining), remaining);
+    }
+
+    #[tokio::test]
+    async fn real_retry_loop_stays_within_ten_second_probe_budget() {
+        let fs = Arc::new(MemFileSystem::new());
+        fs.mkdir("/data", 0o755).await.unwrap();
+        let provider = Arc::new(RetryLoopCountingProvider::new());
+        let mgr = PathLockManager::new(
+            fs,
+            provider.clone(),
+            PathLockConfig {
+                lock_expire_secs: 60.0,
+                ..PathLockConfig::default()
+            },
+        );
+        let requests = [PathLockRequest {
+            path: "/data/file.txt".to_string(),
+            kind: PathLockKind::Exact,
+        }];
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(12),
+            mgr.acquire_batch(&requests, Duration::from_secs(10), None),
+        )
+        .await
+        .expect("acquire loop should honor its ten-second timeout");
+
+        assert!(matches!(result, Err(PathLockError::Timeout { .. })));
+        let total_probes = provider.create_probes.load(Ordering::SeqCst);
+        let retry_probes = total_probes.saturating_sub(1);
+        let pre_acquire_conflicts = provider.pre_acquire_conflicts.load(Ordering::SeqCst);
+        let post_verify_conflicts = provider.post_verify_conflicts.load(Ordering::SeqCst);
+        assert!(
+            retry_probes <= 29,
+            "ten-second acquire exceeded retry probe budget: total={total_probes}, retries={retry_probes}"
+        );
+        assert!(
+            pre_acquire_conflicts > 0,
+            "test must exercise the acquisition conflict branch"
+        );
+        assert!(
+            post_verify_conflicts > 0,
+            "test must exercise the post-verification conflict branch"
+        );
+        assert_eq!(
+            pre_acquire_conflicts + post_verify_conflicts,
+            total_probes,
+            "every acquire-loop probe must terminate in one of the two conflict branches"
+        );
     }
 }

@@ -43,6 +43,122 @@ function runUninstall(home) {
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 }
 
+test("TRAE CLI install preserves unrelated config and is idempotent", () => {
+  const home = mkdtempSync(join(tmpdir(), "openviking-trae-cli-hooks-"));
+  try {
+    const hooksPath = join(home, ".trae", "cli", "hooks.json");
+    const configPath = join(home, ".trae", "traecli.toml");
+    writeJson(hooksPath, {
+      version: 1,
+      hooks: {
+        Stop: [
+          { hooks: [{ type: "command", command: "third-party stop" }] },
+          {
+            hooks: [{
+              type: "command",
+              command: "node /tmp/OpenViking/examples/trae-memory-hooks/scripts/auto-capture.mjs trae",
+            }],
+          },
+        ],
+      },
+    });
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, [
+      'model = "test-model"',
+      "",
+      "[mcp_servers.third_party]",
+      'url = "https://example.com/mcp"',
+      "",
+      "[mcp_servers.openviking]",
+      'command = "node"',
+      'args = ["/tmp/OpenViking/examples/trae-memory-hooks/servers/mcp-proxy.mjs"]',
+      "",
+      "[mcp_servers.openviking.tools.read]",
+      'approval_mode = "approve"',
+      "",
+    ].join("\n"));
+
+    runInstall(home, "trae-cli");
+    runInstall(home, "trae-cli");
+
+    const hooks = JSON.parse(readFileSync(hooksPath, "utf8"));
+    assert.ok(hooks.hooks.Stop.some((entry) => JSON.stringify(entry).includes("third-party stop")));
+    assert.equal(
+      hooks.hooks.Stop.filter((entry) => JSON.stringify(entry).includes("auto-capture.mjs")).length,
+      1,
+    );
+    assert.equal(
+      hooks.hooks.SessionStart.filter((entry) => JSON.stringify(entry).includes("session-start.mjs")).length,
+      1,
+    );
+    assert.equal(
+      hooks.hooks.UserPromptSubmit.filter((entry) => JSON.stringify(entry).includes("auto-recall.mjs")).length,
+      1,
+    );
+    assert.equal(
+      hooks.hooks.PreToolUse.filter((entry) => JSON.stringify(entry).includes("uri-guard.mjs")).length,
+      1,
+    );
+    assert.ok(JSON.stringify(hooks).includes("OPENVIKING_HOOK_SOURCE='trae-cli'"));
+
+    const config = readFileSync(configPath, "utf8");
+    assert.match(config, /model = "test-model"/);
+    assert.match(config, /\[mcp_servers\.third_party\]/);
+    assert.equal((config.match(/^\[mcp_servers\."openviking-memory"\]$/gmu) || []).length, 1);
+    assert.doesNotMatch(config, /^\[mcp_servers\.openviking\]$/mu);
+    assert.doesNotMatch(config, /^\[mcp_servers\.openviking\.tools\.read\]$/mu);
+    assert.match(config, /agent-integrations\/trae-cli\/servers\/mcp-proxy\.mjs/);
+
+    const integrationRoot = join(home, ".openviking", "agent-integrations", "trae-cli");
+    const manifest = JSON.parse(readFileSync(join(integrationRoot, "integration.json"), "utf8"));
+    assert.equal(manifest.id, "openviking-memory");
+    assert.equal(manifest.client, "trae-cli");
+    assert.equal(manifest.hooksConfig, hooksPath);
+    assert.equal(manifest.mcpConfig, configPath);
+
+    const smoke = spawnSync(process.execPath, [join(integrationRoot, "scripts", "session-start.mjs")], {
+      env: { ...process.env, HOME: home, OPENVIKING_MEMORY_ENABLED: "0" },
+      input: "{}",
+      encoding: "utf8",
+    });
+    assert.equal(smoke.status, 0, smoke.stderr);
+    assert.equal(smoke.stdout.trim(), "{}");
+
+    const guard = spawnSync(process.execPath, [join(integrationRoot, "scripts", "uri-guard.mjs")], {
+      env: { ...process.env, HOME: home },
+      input: JSON.stringify({
+        tool_name: "Read",
+        tool_input: { file_path: "viking://resources/project/file.md" },
+      }),
+      encoding: "utf8",
+    });
+    assert.equal(guard.status, 0, guard.stderr);
+    assert.match(guard.stdout, /"permissionDecision":"deny"/);
+
+    const uninstall = runInstaller(home, [
+      "--harness", "trae-cli",
+      "--uninstall",
+      "--yes",
+    ]);
+    assert.equal(uninstall.status, 0, `${uninstall.stdout}\n${uninstall.stderr}`);
+
+    const hooksAfter = JSON.parse(readFileSync(hooksPath, "utf8"));
+    assert.ok(hooksAfter.hooks.Stop.some((entry) => JSON.stringify(entry).includes("third-party stop")));
+    assert.equal(JSON.stringify(hooksAfter).includes("openviking-memory"), false);
+    const configAfter = readFileSync(configPath, "utf8");
+    assert.match(configAfter, /model = "test-model"/);
+    assert.match(configAfter, /\[mcp_servers\.third_party\]/);
+    assert.doesNotMatch(configAfter, /openviking-memory/);
+    assert.equal(existsSync(integrationRoot), false);
+    assert.equal(
+      existsSync(join(home, ".openviking", "agent-integrations", "memory-plugin-shared")),
+      false,
+    );
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("combined Cursor and TRAE install preserves unrelated hooks and is idempotent", () => {
   const home = mkdtempSync(join(tmpdir(), "openviking-agent-hooks-"));
   try {

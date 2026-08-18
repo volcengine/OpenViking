@@ -98,17 +98,8 @@ export OPENVIKING_CONFIG_FILE=~/.openviking/ov.conf
 
 ### 4. インストールの確認
 
-```python
-import asyncio
-import openviking as ov
-
-async def main():
-    client = ov.AsyncOpenViking(path="./test_data")
-    await client.initialize()
-    print("OpenViking initialized successfully!")
-    await client.close()
-
-asyncio.run(main())
+```bash
+python -c "import openviking; print(openviking.__version__)"
 ```
 
 ### 5. Rust CLIのビルド（オプション）
@@ -140,10 +131,8 @@ openviking/
 ├── third_party/          # サードパーティ依存関係
 │   └── agfs/             # AGFSファイルシステム
 │
-├── openviking/           # Python SDK
-│   ├── async_client.py   # AsyncOpenVikingクライアント
-│   ├── sync_client.py    # SyncOpenVikingクライアント
-│   ├── client/           # ローカル / HTTP クライアント実装
+├── openviking/           # Pythonサーバーとコア実装
+│   ├── client/           # HTTPクライアント互換エクスポート
 │   ├── console/          # スタンドアロン console UI とプロキシサービス
 │   ├── core/             # コアデータモデルとディレクトリ抽象
 │   ├── message/          # セッションメッセージと part モデル
@@ -235,10 +224,10 @@ pytest tests/server/ -v
 pytest tests/parse/ -v
 
 # 特定のテストファイルの実行
-pytest tests/client/test_lifecycle.py
+pytest tests/client/test_http_client_config.py
 
 # 特定のテストの実行
-pytest tests/client/test_lifecycle.py::TestClientInitialization::test_initialize_success
+pytest tests/client/test_http_client_config.py
 
 # キーワードで実行
 pytest -k "search" -v
@@ -252,26 +241,19 @@ pytest --cov=openviking --cov-report=term-missing
 テストは`tests/`配下のサブディレクトリに整理されています。プロジェクトは`asyncio_mode = "auto"`を使用しているため、非同期テストに`@pytest.mark.asyncio`デコレーターは**不要**です：
 
 ```python
-# tests/client/test_example.py
-from openviking import AsyncOpenViking
-
-
-class TestAsyncOpenViking:
-    async def test_initialize(self, uninitialized_client: AsyncOpenViking):
-        await uninitialized_client.initialize()
-        assert uninitialized_client._service is not None
-        await uninitialized_client.close()
-
-    async def test_add_resource(self, client: AsyncOpenViking, sample_markdown_file):
-        result = await client.add_resource(
+# tests/service/test_example.py
+class TestResourceService:
+    async def test_add_resource(self, service, request_context, sample_markdown_file):
+        result = await service.resources.add_resource(
             path=str(sample_markdown_file),
-            reason="test document"
+            ctx=request_context,
+            reason="test document",
         )
         assert "root_uri" in result
         assert result["root_uri"].startswith("viking://")
 ```
 
-共通フィクスチャは`tests/conftest.py`に定義されており、`client`（初期化済み`AsyncOpenViking`）、`uninitialized_client`、`temp_dir`、`sample_markdown_file` などが含まれます。
+共通フィクスチャは`tests/conftest.py`に定義されており、初期化済みの`service`、`request_context`、`temp_dir`、サンプルファイルなどが含まれます。
 
 ---
 

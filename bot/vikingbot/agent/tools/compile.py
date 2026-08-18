@@ -62,6 +62,18 @@ def _uri_in_roots(uri: str, roots: tuple[str, ...]) -> bool:
     )
 
 
+def _skill_workspace_read_hint(uri: str) -> str | None:
+    value = str(uri or "").strip()
+    if value.startswith("viking://skills/"):
+        value = value[len("viking://") :]
+    if not value.startswith("skills/"):
+        return None
+    try:
+        return _normalize_workspace_path(value)
+    except ValueError:
+        return None
+
+
 class CompileScopedTool(Tool):
     """Guard an existing OpenViking read tool without changing its implementation."""
 
@@ -121,6 +133,12 @@ class CompileScopedTool(Tool):
             return "Error: Compile tool URI limit exceeded."
         for uri in uris:
             if not _uri_in_roots(uri, self._roots):
+                workspace_path = _skill_workspace_read_hint(uri)
+                if workspace_path:
+                    return (
+                        "Error: Skill workspace files must be read with read_file using path "
+                        f'"{workspace_path}", not with an openviking_* tool.'
+                    )
                 return f"Error: URI is outside the Compile task scope: {uri}"
 
         result = await self._tool.execute(tool_context, **kwargs)
@@ -261,8 +279,9 @@ class SubmitWikiBundleTool(Tool):
         match_schema = link_def.get("properties", {}).get("match_text")
         if isinstance(match_schema, dict):
             match_schema["description"] = (
-                "Exact anchor text that must appear in the source page draft body outside "
-                "frontmatter, code, existing Markdown links, and Citations."
+                "Exact anchor text that must either appear in the source page draft body "
+                "outside frontmatter, code, existing Markdown links, and Citations, or "
+                "already be part of a Markdown link to the target page."
             )
         schema.pop("title", None)
         return schema
@@ -463,6 +482,8 @@ class SubmitWikiBundleTool(Tool):
             raise ValueError("page limit exceeded")
         if len(bundle.files) > self.limits.output_files:
             raise ValueError("file limit exceeded")
+        if len(bundle.pages) + len(bundle.files) > self.limits.output_operations:
+            raise ValueError("combined output operation limit exceeded")
         if not bundle.pages and bundle.links:
             raise ValueError("empty bundle must not contain links")
         if target_type == "skill" and (bundle.pages or bundle.links):
@@ -479,6 +500,7 @@ class SubmitWikiBundleTool(Tool):
                 "using workspace_path instead of inline content"
             )
         page_ids: set[int] = set()
+        page_uris: dict[int, str] = {}
         final_uris: set[str] = set()
         total_bytes = 0
         for page in bundle.pages:
@@ -521,6 +543,7 @@ class SubmitWikiBundleTool(Tool):
             if final_uri in final_uris:
                 raise ValueError(f"duplicate final Wiki path: {final_uri}")
             final_uris.add(final_uri)
+            page_uris[page.page_id] = final_uri
             total_bytes += len(page.body_markdown.encode("utf-8"))
 
         file_payloads: list[bytes | None] = []
@@ -589,18 +612,16 @@ class SubmitWikiBundleTool(Tool):
                 link_errors.append(f"{prefix} match_text is required")
                 continue
             source_page = page_by_id[link.f]
-            if (
-                LinkRenderer._find_match_span(
-                    source_page.body_markdown,
-                    link.match_text,
-                    LinkRenderer.protected_markdown_spans(source_page.body_markdown),
-                )
-                is None
+            if not LinkRenderer.can_render_link(
+                source_page.body_markdown,
+                link.match_text,
+                page_uris[link.f],
+                page_uris[link.t],
             ):
                 link_errors.append(
-                    f"{prefix} from page {link.f} has non-linkable anchor "
-                    f"{link.match_text!r}; remove the link or use exact unprotected "
-                    "text from that page body"
+                    f"{prefix} from page {link.f} has unsatisfied anchor "
+                    f"{link.match_text!r}; use exact unprotected text or an existing "
+                    f"Markdown link to page {link.t}"
                 )
         if link_errors:
             raise ValueError(f"{len(link_errors)} invalid link(s): " + "; ".join(link_errors))

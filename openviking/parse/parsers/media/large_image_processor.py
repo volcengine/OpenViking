@@ -18,6 +18,12 @@ from typing import List, Optional, Tuple
 
 from PIL import Image, ImageDraw, ImageFont
 
+from openviking.utils.media_limits import (
+    DEFAULT_IMAGE_MAX_TILE_DIMENSION_PX,
+    DEFAULT_IMAGE_PREVIEW_MAX_DIMENSION,
+    DEFAULT_IMAGE_TILE_OVERLAP_PX,
+    is_large_image_by_size,
+)
 from openviking_cli.utils.config.parser_config import ImageConfig
 from openviking_cli.utils.logger import get_logger
 
@@ -28,20 +34,9 @@ logger = get_logger(__name__)
 # Configuration
 # =============================================================================
 
-# Thresholds for triggering large image processing (fallback defaults when no config)
-MAX_FILE_SIZE_MB = 10.0  # 10 MB
-LARGE_IMAGE_THRESHOLD_DIMENSION = 4096  # 4096 pixels
-
-# Target limits for individual tiles
-MAX_TILE_DIMENSION_PX = 2048  # 2048 pixels
-TILE_OVERLAP_PX = 2  # 2 pixels of overlap on each side
-
 # Quality settings for JPEG compression
 PREVIEW_QUALITY_START = 85
 TILE_QUALITY = 90
-
-# Preview dimension fallback (when no config provides preview_max_dimension)
-PREVIEW_MAX_DIMENSION = 2048
 
 
 @dataclass
@@ -108,11 +103,12 @@ def needs_large_image_processing(
     Returns:
         True if large image processing is needed
     """
-    max_file_size_mb = config.max_file_size_mb if config else MAX_FILE_SIZE_MB
-    max_dimension_px = config.large_image_threshold_dimension if config else LARGE_IMAGE_THRESHOLD_DIMENSION
-
-    file_size_mb = get_image_size_mb(file_path)
-    return file_size_mb > max_file_size_mb or width > max_dimension_px or height > max_dimension_px
+    return is_large_image_by_size(
+        file_size_bytes=file_path.stat().st_size,
+        width=width,
+        height=height,
+        config=config,
+    )
 
 
 def create_low_res_preview(
@@ -131,7 +127,7 @@ def create_low_res_preview(
     Returns:
         Preview image bytes in JPEG format
     """
-    max_dimension_px = config.preview_max_dimension if config else PREVIEW_MAX_DIMENSION
+    max_dimension_px = config.preview_max_dimension if config else DEFAULT_IMAGE_PREVIEW_MAX_DIMENSION
 
     # Work on a copy
     img = img.copy()
@@ -171,8 +167,10 @@ def calculate_grid_dimensions(
     Returns:
         Tuple of (num_rows, num_cols)
     """
-    max_tile_dimension_px = config.max_tile_dimension_px if config else MAX_TILE_DIMENSION_PX
-    tile_overlap_px = config.tile_overlap_px if config else TILE_OVERLAP_PX
+    max_tile_dimension_px = (
+        config.max_tile_dimension_px if config else DEFAULT_IMAGE_MAX_TILE_DIMENSION_PX
+    )
+    tile_overlap_px = config.tile_overlap_px if config else DEFAULT_IMAGE_TILE_OVERLAP_PX
 
     effective_tile = max_tile_dimension_px - tile_overlap_px * 2
     if effective_tile <= 0:
@@ -204,7 +202,7 @@ def calculate_tile_positions(
     Returns:
         List of (x1, y1, x2, y2) tuples
     """
-    tile_overlap_px = config.tile_overlap_px if config else TILE_OVERLAP_PX
+    tile_overlap_px = config.tile_overlap_px if config else DEFAULT_IMAGE_TILE_OVERLAP_PX
 
     # Calculate base tile size without overlap
     base_tile_width = ceil(width / cols)
@@ -353,8 +351,9 @@ def create_grid_overlay(
     Returns:
         Grid overlay image bytes
     """
-    tile_overlap_px = config.tile_overlap_px if config else TILE_OVERLAP_PX
-    preview_max_dimension = config.preview_max_dimension if config else PREVIEW_MAX_DIMENSION
+    preview_max_dimension = (
+        config.preview_max_dimension if config else DEFAULT_IMAGE_PREVIEW_MAX_DIMENSION
+    )
 
     # Resize to a reasonable size for overlay drawing
     ow, oh = img.size
@@ -442,9 +441,6 @@ def process_large_image(
     Returns:
         LargeImageResult with processing results
     """
-    # Use config values or defaults
-    max_file_size_mb = config.max_file_size_mb if config else MAX_FILE_SIZE_MB
-
     # Load image if not provided
     own_img = False
     if img is None:

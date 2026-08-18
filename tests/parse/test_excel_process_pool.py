@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from openviking.parse.parsers import excel as excel_module
 from openviking.parse.parsers.excel import (
     ExcelParser,
     _EXCEL_PROCESS_POOL_MIN_BYTES,
@@ -76,6 +77,36 @@ class TestShouldUseProcessPool:
             self._parser(enable_process_pool=True)._should_use_process_pool(path, {})
             is True
         )
+
+
+@pytest.mark.asyncio
+async def test_process_pool_forwards_no_split_layout_flag(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    path = tmp_path / "sheet.xlsx"
+    path.write_bytes(b"xlsx")
+    parser = ExcelParser(config=ExcelConfig(enable_process_pool=True))
+    monkeypatch.setattr(
+        parser._md_parser,
+        "_create_temp_uri",
+        lambda: "viking://temp/test/excel",
+    )
+    captured = {}
+
+    class _CapturingLoop:
+        def run_in_executor(self, _executor, callback):
+            captured["callback"] = callback
+            raise RuntimeError("layout callback captured")
+
+    monkeypatch.setattr(excel_module.asyncio, "get_running_loop", lambda: _CapturingLoop())
+    monkeypatch.setattr(excel_module, "_get_excel_layout_executor", lambda _workers: object())
+
+    with pytest.raises(RuntimeError, match="layout callback captured"):
+        await parser._parse_existing_path_process_pool(path, split_content=False)
+
+    callback = captured["callback"]
+    assert callback.keywords["layout_kwargs"]["split_content"] is False
 
 
 class TestExcelConfig:

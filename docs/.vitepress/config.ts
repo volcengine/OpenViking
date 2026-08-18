@@ -146,6 +146,7 @@ const agentIntegrationSidebar = {
         text: 'General Integration',
         items: [
           ['14-openviking-helper.md', 'OpenViking Helper'],
+          ['15-agent-plugins.md', 'Agent Plugins 1.0'],
           ['06-mcp-clients.md', 'MCP Clients'],
           ['09-log-ingestion.md', 'Local Log Import'],
           ['08-community-plugins.md', 'Community Integrations']
@@ -179,6 +180,7 @@ const agentIntegrationSidebar = {
         text: '通用接入',
         items: [
           ['14-openviking-helper.md', 'OpenViking Helper'],
+          ['15-agent-plugins.md', 'Agent Plugins 1.0'],
           ['06-mcp-clients.md', 'MCP 客户端'],
           ['09-log-ingestion.md', '本地日志导入'],
           ['08-community-plugins.md', '社区集成']
@@ -200,7 +202,8 @@ const apiReferenceSidebar = {
           ['03-filesystem.md', 'File System'],
           ['04-skills.md', 'Skills'],
           ['05-sessions.md', 'Sessions'],
-          ['16-memory.md', 'Memory']
+          ['16-memory.md', 'Memory'],
+          ['19-agent-evolution.md', 'Agent Evolution']
         ]
       },
       {
@@ -259,7 +262,8 @@ const apiReferenceSidebar = {
           ['03-filesystem.md', '文件系统'],
           ['04-skills.md', '技能'],
           ['05-sessions.md', '会话'],
-          ['16-memory.md', '记忆']
+          ['16-memory.md', '记忆'],
+          ['19-agent-evolution.md', 'Agent 进化']
         ]
       },
       {

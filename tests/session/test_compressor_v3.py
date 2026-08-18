@@ -13,9 +13,11 @@ from openviking.server.identity import RequestContext, Role
 from openviking.session import create_session_compressor
 from openviking.session.compressor_v3 import (
     SessionCompressorV3,
+    _commit_experience_snapshot,
     _experience_root_uri,
     _experience_snapshot_provenance,
     _experience_trajectory_map,
+    _visible_experience_snapshot_uris,
 )
 from openviking.session.memory.dataclass import (
     MemoryFile,
@@ -1403,6 +1405,75 @@ def test_v3_snapshot_provenance_uses_complete_shared_batch_result():
     }
 
 
+def test_visible_experience_snapshot_uris_only_returns_applied_body_changes():
+    root = "viking://user/u/memories/experiences"
+    changed_uri = f"{root}/changed.md"
+    metadata_only_uri = f"{root}/metadata_only.md"
+    failed_uri = f"{root}/failed.md"
+    deleted_uri = f"{root}/deleted.md"
+    content_write_uri = f"{root}/content_write.md"
+    plan = PolicyUpdatePlan(
+        items=[
+            PolicyPlanItem(
+                kind="upsert",
+                memory_type="experiences",
+                target_name="changed",
+                target_uri=changed_uri,
+                before_content="before",
+                after_content="after",
+            ),
+            PolicyPlanItem(
+                kind="upsert",
+                memory_type="experiences",
+                target_name="metadata_only",
+                target_uri=metadata_only_uri,
+                before_content="unchanged",
+                after_content="unchanged",
+            ),
+            PolicyPlanItem(
+                kind="upsert",
+                memory_type="experiences",
+                target_name="failed",
+                target_uri=failed_uri,
+                before_content="before",
+                after_content="after",
+            ),
+            PolicyPlanItem(
+                kind="delete",
+                memory_type="experiences",
+                target_name="deleted",
+                target_uri=deleted_uri,
+                before_content="old content",
+                after_content=None,
+            ),
+        ]
+    )
+    apply_result = PolicyApplyResult(
+        updated_policy_set=ExperienceSet(root_uri=root, policies=[]),
+        written_uris=[changed_uri, metadata_only_uri, content_write_uri],
+        deleted_uris=[deleted_uri],
+    )
+
+    assert _visible_experience_snapshot_uris(
+        plan=plan,
+        apply_result=apply_result,
+    ) == [changed_uri, deleted_uri]
+
+
+@pytest.mark.asyncio
+async def test_commit_experience_snapshot_skips_when_no_visible_content_changed():
+    viking_fs = SimpleNamespace(commit=AsyncMock())
+
+    await _commit_experience_snapshot(
+        viking_fs,
+        ctx=_ctx(),
+        experience_uris=[],
+        archive_uri="viking://user/u/sessions/session-1/history/archive_001",
+    )
+
+    viking_fs.commit.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_v3_training_links_case_to_trajectory_and_experience_via_trajectory(monkeypatch):
     case_uri = "viking://user/u/memories/cases/duplicate_booking.md"
@@ -1512,7 +1583,15 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
                                 description="",
                             )
                         ],
-                    )
+                    ),
+                    PolicyPlanItem(
+                        kind="delete",
+                        memory_type="experiences",
+                        target_name="legacy_booking_handling",
+                        target_uri=deleted_exp_uri,
+                        before_content="legacy exp content",
+                        after_content=None,
+                    ),
                 ]
             )
             result = RolloutTrainingResult(
@@ -1631,7 +1710,7 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
                 '{"viking://user/u/memories/experiences/booking_duplicate_handling.md":'
                 '["viking://user/u/memories/trajectories/duplicate_booking.md"]}'
             ),
-            "paths": ["viking://user/u/memories/experiences"],
+            "paths": [exp_uri, deleted_exp_uri],
             "ctx": _ctx(),
         }
     ]

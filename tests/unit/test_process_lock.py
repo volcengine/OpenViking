@@ -188,16 +188,16 @@ class TestAcquireDataDirLock:
 
         assert not (workspace / LOCK_FILENAME).exists()
 
-    def test_error_message_suggests_http_mode(self, tmp_path: Path):
-        """Test error message suggests HTTP mode."""
+    def test_error_message_suggests_http_server(self, tmp_path: Path):
+        """Test error message suggests using one HTTP server."""
         (tmp_path / LOCK_FILENAME).write_text("1")
 
         with pytest.raises(DataDirectoryLocked) as exc_info:
             acquire_data_dir_lock(str(tmp_path))
 
         error_msg = str(exc_info.value)
-        assert "HTTP mode" in error_msg
-        assert "openviking-server" in error_msg
+        assert "OpenViking server" in error_msg
+        assert "connect clients over HTTP" in error_msg
 
     def test_error_message_shows_pid(self, tmp_path: Path):
         """Test error message shows conflicting PID."""

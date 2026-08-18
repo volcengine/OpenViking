@@ -34,14 +34,17 @@ class CompileLimits(BaseModel):
     tool_uri_count: int = 32
     tool_result_bytes: int = 1024 * 1024
     tool_total_result_bytes: int = 8 * 1024 * 1024
-    output_pages: int = 64
-    output_files: int = 64
+    output_pages: int = 128
+    output_files: int = 128
+    output_operations: int = 256
     output_total_bytes: int = 4 * 1024 * 1024
-    concurrent_tasks: int = 2
-    accepted_tasks: int = 16
-    accepted_tasks_per_principal: int = 4
-    queue_wait_seconds: float = 5 * 60
-    task_runtime_seconds: float = 30 * 60
+    concurrent_tasks: int = 10
+    accepted_tasks: int = 40
+    accepted_tasks_per_principal: int = 10
+    queue_wait_seconds: float = 60 * 60
+    task_runtime_seconds: float = 40 * 60
+    salvage_grace_seconds: float = 120
+    cleanup_grace_seconds: float = 40
     terminal_task_retention_seconds: float = 24 * 60 * 60
     terminal_task_records: int = 1000
 
@@ -53,6 +56,11 @@ class CompileRequest(BaseModel):
     to: str = Field(min_length=1)
     reason: str | None = None
     skill: str = Field(min_length=1)
+    runtime_timeout_seconds: float | None = Field(
+        default=None,
+        gt=0,
+        allow_inf_nan=False,
+    )
     openviking_connection: OpenVikingConnection | None = None
     _principal_scope: str = PrivateAttr(default="local")
 
@@ -64,6 +72,11 @@ class SanitizedCompileRequest(BaseModel):
     to: str
     reason: str
     skill: str
+    runtime_timeout_seconds: float | None = Field(
+        default=None,
+        gt=0,
+        allow_inf_nan=False,
+    )
 
 
 class WikiPageDraft(BaseModel):

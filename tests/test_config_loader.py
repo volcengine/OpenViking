@@ -18,7 +18,9 @@ from openviking_cli.utils.config.config_loader import (
     require_config,
     resolve_config_path,
 )
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfig, ParserApiConfig
 from openviking_cli.utils.config.parser_config import CodeHostingConfig
+from openviking_cli.utils.config.queue_worker_config import QueueWorkersConfig
 
 
 class TestResolveConfigPath:
@@ -117,6 +119,45 @@ class TestRequireConfig:
         monkeypatch.delenv("TEST_MISSING_ENV", raising=False)
         with pytest.raises(FileNotFoundError, match="configuration file not found"):
             require_config(None, "TEST_MISSING_ENV", "nonexistent_file.conf", "test")
+
+
+def test_queue_worker_concurrency_uses_queue_specific_defaults():
+    config = OpenVikingConfig.from_dict({})
+
+    assert config.queue_workers.external_parse.max_concurrent == 4
+    assert config.queue_workers.add_resource.max_concurrent == 4
+    assert config.queue_workers.session_commit.max_concurrent == 8
+
+
+def test_queue_worker_concurrency_accepts_separate_values():
+    config = OpenVikingConfig.from_dict(
+        {
+            "queue_workers": {
+                "external_parse": {"max_concurrent": 9},
+                "add_resource": {"max_concurrent": 7},
+                "session_commit": {"max_concurrent": 50},
+            }
+        }
+    )
+
+    assert config.queue_workers.external_parse.max_concurrent == 9
+    assert config.queue_workers.add_resource.max_concurrent == 7
+    assert config.queue_workers.session_commit.max_concurrent == 50
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_queue_worker_concurrency_rejects_non_positive_value(value):
+    with pytest.raises(ValueError) as exc_info:
+        QueueWorkersConfig(add_resource={"max_concurrent": value})
+
+    assert exc_info.value.errors()[0]["type"] == "greater_than"
+
+
+def test_parser_api_rejects_worker_max_concurrent():
+    with pytest.raises(ValueError) as exc_info:
+        ParserApiConfig(max_concurrent=9)
+
+    assert exc_info.value.errors()[0]["type"] == "extra_forbidden"
 
 
 def test_generic_code_hosting_domains_include_supported_platforms():

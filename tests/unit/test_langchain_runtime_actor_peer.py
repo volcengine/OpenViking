@@ -60,17 +60,6 @@ def test_langchain_star_import_remains_usable_with_older_sdk(
         assert not namespace["has_request_actor_peer_support"]()
 
 
-def test_middleware_rejects_actor_peer_resolver_for_embedded_client(tmp_path):
-    with pytest.raises(
-        ValueError,
-        match="actor_peer_resolver requires an OpenViking HTTP connection",
-    ):
-        OpenVikingContextMiddleware(
-            path=str(tmp_path),
-            actor_peer_resolver=lambda _state, _runtime: "runtime-agent",
-        )
-
-
 def test_middleware_remains_usable_with_older_sdk_when_actor_peer_is_unused(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -102,21 +91,6 @@ def test_middleware_rejects_custom_client_without_actor_peer_support():
     ):
         OpenVikingContextMiddleware(
             client=InMemoryOpenVikingClient(),
-            actor_peer_resolver=lambda _state, _runtime: "runtime-agent",
-        )
-
-
-def test_middleware_rejects_embedded_client_handle_with_actor_peer_resolver(
-    tmp_path,
-):
-    client = OpenVikingClientHandle(OpenVikingConnection(path=str(tmp_path)))
-
-    with pytest.raises(
-        ValueError,
-        match="clients that support request-scoped actor peers",
-    ):
-        OpenVikingContextMiddleware(
-            client=client,
             actor_peer_resolver=lambda _state, _runtime: "runtime-agent",
         )
 
