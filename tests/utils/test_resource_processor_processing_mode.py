@@ -416,6 +416,78 @@ async def test_vectors_only_parallel_vectorization_propagates_file_failure(monke
 
 
 @pytest.mark.asyncio
+async def test_vectors_only_waits_for_sibling_cancellation_before_releasing_lock(
+    monkeypatch,
+    ctx,
+):
+    healthy_started = asyncio.Event()
+    healthy_cancelled = asyncio.Event()
+    lock = {"lease_ref": "lock-1"}
+
+    async def release_lock(released_lock):
+        assert released_lock == lock
+        assert healthy_cancelled.is_set()
+
+    viking_fs = SimpleNamespace(
+        _async_agfs=SimpleNamespace(pathlock_release=AsyncMock(side_effect=release_lock)),
+        tree=AsyncMock(
+            return_value=[
+                {
+                    "uri": "viking://resources/demo/failing.md",
+                    "isDir": False,
+                    "name": "failing.md",
+                },
+                {
+                    "uri": "viking://resources/demo/healthy.md",
+                    "isDir": False,
+                    "name": "healthy.md",
+                },
+            ]
+        ),
+    )
+
+    async def vectorize_file(*, file_path, **kwargs):
+        if file_path.endswith("failing.md"):
+            await healthy_started.wait()
+            raise RuntimeError("vector enqueue failed")
+        healthy_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            healthy_cancelled.set()
+            raise
+
+    monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: viking_fs)
+    monkeypatch.setattr("openviking.utils.resource_processor.vectorize_file", vectorize_file)
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.get_openviking_config",
+        lambda: SimpleNamespace(
+            queue_workers=SimpleNamespace(
+                add_resource=SimpleNamespace(
+                    vector_enqueue_concurrency=8,
+                    max_vector_enqueue_concurrency=64,
+                )
+            )
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="vector enqueue failed"):
+        await ResourceProcessor(_FakeVikingDB()).finish_prepared_resource(
+            {
+                "root_uri": "viking://resources/demo",
+                "source_committed": True,
+            },
+            ctx=ctx,
+            resource_lock=lock,
+            build_index=True,
+            processing_mode="vectors_only",
+        )
+
+    assert healthy_cancelled.is_set()
+    viking_fs._async_agfs.pathlock_release.assert_awaited_once_with(lock)
+
+
+@pytest.mark.asyncio
 async def test_vectors_only_skips_vectorization_when_build_index_false(monkeypatch, ctx):
     viking_fs = SimpleNamespace(
         _async_agfs=SimpleNamespace(pathlock_release=AsyncMock()),

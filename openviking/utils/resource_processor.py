@@ -687,12 +687,17 @@ class ResourceProcessor:
             )
 
         for start in range(0, len(files), concurrency):
-            await asyncio.gather(
-                *(
-                    vectorize(entry_uri, name, parent_uri)
-                    for entry_uri, name, parent_uri in files[start : start + concurrency]
-                )
-            )
+            tasks = [
+                asyncio.create_task(vectorize(entry_uri, name, parent_uri))
+                for entry_uri, name, parent_uri in files[start : start + concurrency]
+            ]
+            try:
+                await asyncio.gather(*tasks)
+            except BaseException:
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                raise
 
     async def _vectorize_resource_file(
         self,
