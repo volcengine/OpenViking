@@ -198,11 +198,11 @@ def test_scope_roots_encoding_is_token_safe():
     assert "\n/a/c\n" not in encoded
 
 
-def test_score_from_cosine_distance_is_higher_is_better():
+def test_score_from_cosine_similarity_is_higher_is_better():
     from openviking.storage.vectordb_adapters.milvus_adapter import _score_from_hit
 
-    assert _score_from_hit({"distance": 0.0}, "cosine") == pytest.approx(1.0)
-    assert _score_from_hit({"distance": 1.0}, "cosine") == pytest.approx(0.0)
+    assert _score_from_hit({"distance": 1.0}, "cosine") == pytest.approx(1.0)
+    assert _score_from_hit({"distance": 0.0}, "cosine") == pytest.approx(0.0)
 
 
 class _FakeSchema:
@@ -248,6 +248,45 @@ class _FakeMilvusClient:
 
     def load_collection(self, collection_name, timeout=None):
         self.loaded = True
+
+
+class _FakeMetaMilvusClient(_FakeMilvusClient):
+    def has_collection(self, collection_name, timeout=None):
+        return False
+
+    def list_indexes(self, collection_name, timeout=None):
+        return []
+
+
+def test_metadata_collection_uses_server_compatible_vector_dimension():
+    client = _FakeMetaMilvusClient()
+    collection = MilvusCollection(
+        client=client,
+        logical_collection_name="context",
+        physical_collection_name="ov_default_context",
+        project_name="default",
+        dense_vector_name="vector",
+        sparse_vector_name="sparse_vector",
+        distance_metric="cosine",
+        timeout_seconds=7,
+        meta=_schema(),
+    )
+
+    collection._ensure_meta_collection()
+
+    vector_field = next(
+        field for field in client.schema.fields if field["field_name"] == "meta_vector"
+    )
+    assert vector_field["dim"] == 2
+    assert client.index_params.indexes == [
+        {
+            "field_name": "meta_vector",
+            "index_name": "meta_vector_index",
+            "index_type": "AUTOINDEX",
+            "metric_type": "COSINE",
+        }
+    ]
+    assert client.loaded is True
 
 
 def test_collection_creation_uses_explicit_schema_and_autoindex():

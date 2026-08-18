@@ -56,6 +56,9 @@ _META_PROPERTY_KEY = "openviking_meta"
 _INDEX_META_PROPERTY_PREFIX = "openviking_index_"
 _META_COLLECTION_NAME = "ov_openviking_milvus_meta"
 _META_VECTOR_FIELD = "meta_vector"
+_META_VECTOR_INDEX = "meta_vector_index"
+_META_VECTOR_DIM = 2
+_META_VECTOR_VALUE = [0.0] * _META_VECTOR_DIM
 
 
 def _import_pymilvus():
@@ -205,8 +208,6 @@ def _score_from_hit(hit: Dict[str, Any], distance_metric: str) -> float:
         return 0.0
     if not math.isfinite(score):
         return 0.0
-    if distance_metric == "cosine":
-        return 1.0 - score
     if distance_metric == "l2":
         return 1.0 / (1.0 + max(score, 0.0))
     return score
@@ -357,30 +358,59 @@ class MilvusCollection(ICollection):
 
     def _ensure_meta_collection(self) -> None:
         try:
-            if self._client.has_collection(
+            collection_exists = self._client.has_collection(
                 collection_name=_META_COLLECTION_NAME,
                 timeout=self._timeout_seconds,
-            ):
-                return
-            pymilvus = _import_pymilvus()
-            DataType = pymilvus.DataType
-            schema = self._client.create_schema(auto_id=False, enable_dynamic_field=False)
-            schema.add_field(
-                field_name="id",
-                datatype=DataType.VARCHAR,
-                is_primary=True,
-                max_length=_MILVUS_MAX_COLLECTION_NAME_LENGTH,
             )
-            schema.add_field(
-                field_name="meta_json",
-                datatype=DataType.VARCHAR,
-                max_length=_MILVUS_VARCHAR_MAX_LENGTH,
+            if not collection_exists:
+                pymilvus = _import_pymilvus()
+                DataType = pymilvus.DataType
+                schema = self._client.create_schema(auto_id=False, enable_dynamic_field=False)
+                schema.add_field(
+                    field_name="id",
+                    datatype=DataType.VARCHAR,
+                    is_primary=True,
+                    max_length=_MILVUS_MAX_COLLECTION_NAME_LENGTH,
+                )
+                schema.add_field(
+                    field_name="meta_json",
+                    datatype=DataType.VARCHAR,
+                    max_length=_MILVUS_VARCHAR_MAX_LENGTH,
+                )
+                schema.add_field(field_name="indexes_json", datatype=DataType.JSON, nullable=True)
+                schema.add_field(
+                    field_name=_META_VECTOR_FIELD,
+                    datatype=DataType.FLOAT_VECTOR,
+                    dim=_META_VECTOR_DIM,
+                )
+                self._client.create_collection(
+                    collection_name=_META_COLLECTION_NAME,
+                    schema=schema,
+                    timeout=self._timeout_seconds,
+                )
+
+            indexes = list(
+                self._client.list_indexes(
+                    collection_name=_META_COLLECTION_NAME,
+                    timeout=self._timeout_seconds,
+                )
+                or []
             )
-            schema.add_field(field_name="indexes_json", datatype=DataType.JSON, nullable=True)
-            schema.add_field(field_name=_META_VECTOR_FIELD, datatype=DataType.FLOAT_VECTOR, dim=1)
-            self._client.create_collection(
+            if _META_VECTOR_INDEX not in indexes:
+                index_params = self._client.prepare_index_params()
+                index_params.add_index(
+                    field_name=_META_VECTOR_FIELD,
+                    index_name=_META_VECTOR_INDEX,
+                    index_type="AUTOINDEX",
+                    metric_type="COSINE",
+                )
+                self._client.create_index(
+                    collection_name=_META_COLLECTION_NAME,
+                    index_params=index_params,
+                    timeout=self._timeout_seconds,
+                )
+            self._client.load_collection(
                 collection_name=_META_COLLECTION_NAME,
-                schema=schema,
                 timeout=self._timeout_seconds,
             )
         except Exception as exc:
@@ -412,7 +442,7 @@ class MilvusCollection(ICollection):
                         "id": self._physical_collection_name,
                         "meta_json": meta_json,
                         "indexes_json": indexes_json if isinstance(indexes_json, dict) else {},
-                        _META_VECTOR_FIELD: [0.0],
+                        _META_VECTOR_FIELD: _META_VECTOR_VALUE,
                     }
                 ],
                 timeout=self._timeout_seconds,
@@ -640,7 +670,7 @@ class MilvusCollection(ICollection):
                         "id": self._physical_collection_name,
                         "meta_json": record.get("meta_json") or _json_dumps(self._meta),
                         "indexes_json": indexes,
-                        _META_VECTOR_FIELD: [0.0],
+                        _META_VECTOR_FIELD: _META_VECTOR_VALUE,
                     }
                 ],
                 timeout=self._timeout_seconds,
@@ -747,7 +777,7 @@ class MilvusCollection(ICollection):
                             "id": self._physical_collection_name,
                             "meta_json": record.get("meta_json") or _json_dumps(self._meta),
                             "indexes_json": indexes,
-                            _META_VECTOR_FIELD: [0.0],
+                            _META_VECTOR_FIELD: _META_VECTOR_VALUE,
                         }
                     ],
                     timeout=self._timeout_seconds,
