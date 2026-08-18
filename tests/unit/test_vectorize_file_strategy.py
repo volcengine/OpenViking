@@ -531,6 +531,35 @@ async def test_vectorize_directory_meta_writes_search_tags_into_embedding_contex
         assert msg.context_data["search_tags"] == ["team=search", "env=test"]
 
 
+@pytest.mark.parametrize(
+    ("include_abstract", "include_overview", "expected_level", "expected_body"),
+    [
+        (True, False, 0, "demo abstract"),
+        (False, True, 1, "demo overview"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_vectorize_directory_meta_only_enqueues_included_level(
+    monkeypatch, include_abstract, include_overview, expected_level, expected_body
+):
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("ignored"))
+
+    await embedding_utils.vectorize_directory_meta(
+        uri="viking://user/default/resources/demo",
+        abstract="demo abstract",
+        overview="demo overview",
+        ctx=DummyReq(),
+        include_abstract=include_abstract,
+        include_overview=include_overview,
+    )
+
+    assert len(queue.items) == 1
+    assert queue.items[0].context_data["level"] == expected_level
+    assert queue.items[0].context_data["abstract"] == expected_body
+
+
 @pytest.mark.asyncio
 async def test_vectorize_directory_meta_appends_search_tags_by_level(monkeypatch):
     queue = DummyQueue()

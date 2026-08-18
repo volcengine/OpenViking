@@ -14,7 +14,7 @@ from openviking.storage.semantic_sidecar import (
     parse_semantic_sidecar,
     render_semantic_sidecar,
 )
-from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -119,6 +119,62 @@ async def test_public_sidecar_write_preserves_metadata_and_skips_regeneration(mo
     vectorize_directory.assert_awaited_once()
     assert result["semantic_status"] == "skipped"
     assert result["vector_status"] == "queued"
+
+
+@pytest.mark.parametrize(
+    ("existing_name", "level", "body"),
+    [
+        (".abstract.md", ContextLevel.ABSTRACT, "Only abstract."),
+        (".overview.md", ContextLevel.OVERVIEW, "Only overview."),
+    ],
+)
+@pytest.mark.asyncio
+async def test_vectorize_semantic_directory_only_indexes_existing_level(
+    monkeypatch, ctx, existing_name, level, body
+):
+    directory_uri = "viking://resources/demo"
+    existing_uri = f"{directory_uri}/{existing_name}"
+    existing = _sidecar(level, body)
+    fake_fs = _FakeVikingFS()
+
+    async def read_file(uri, ctx=None):
+        del ctx
+        if uri == existing_uri:
+            return existing
+        raise NotFoundError(uri, "file")
+
+    fake_fs.read_file.side_effect = read_file
+    vectorize_directory = AsyncMock()
+    monkeypatch.setattr(content_write_module, "vectorize_directory_meta", vectorize_directory)
+    coordinator = ContentWriteCoordinator(viking_fs=fake_fs)
+
+    await coordinator._vectorize_semantic_directory(directory_uri=directory_uri, ctx=ctx)
+
+    vectorize_directory.assert_awaited_once_with(
+        uri=directory_uri,
+        abstract=existing if level == ContextLevel.ABSTRACT else "",
+        overview=existing if level == ContextLevel.OVERVIEW else "",
+        context_type="resource",
+        ctx=ctx,
+        include_abstract=level == ContextLevel.ABSTRACT,
+        include_overview=level == ContextLevel.OVERVIEW,
+    )
+
+
+@pytest.mark.asyncio
+async def test_vectorize_semantic_directory_propagates_non_not_found_read_errors(monkeypatch, ctx):
+    fake_fs = _FakeVikingFS()
+    fake_fs.read_file.side_effect = RuntimeError("storage unavailable")
+    vectorize_directory = AsyncMock()
+    monkeypatch.setattr(content_write_module, "vectorize_directory_meta", vectorize_directory)
+    coordinator = ContentWriteCoordinator(viking_fs=fake_fs)
+
+    with pytest.raises(RuntimeError, match="storage unavailable"):
+        await coordinator._vectorize_semantic_directory(
+            directory_uri="viking://resources/demo", ctx=ctx
+        )
+
+    vectorize_directory.assert_not_awaited()
 
 
 @pytest.mark.asyncio

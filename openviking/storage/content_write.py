@@ -919,16 +919,28 @@ class ContentWriteCoordinator:
     async def _vectorize_semantic_directory(
         self, *, directory_uri: str, ctx: RequestContext
     ) -> None:
-        """Re-index both semantic levels for one sidecar directory."""
+        """Re-index the semantic levels that exist for one directory."""
 
-        abstract = await self._viking_fs.read_file(f"{directory_uri}/.abstract.md", ctx=ctx)
-        overview = await self._viking_fs.read_file(f"{directory_uri}/.overview.md", ctx=ctx)
+        async def read_if_exists(uri: str) -> Optional[str]:
+            try:
+                return await self._viking_fs.read_file(uri, ctx=ctx)
+            except Exception as exc:
+                if self._is_not_found(exc):
+                    return None
+                raise
+
+        abstract = await read_if_exists(f"{directory_uri}/.abstract.md")
+        overview = await read_if_exists(f"{directory_uri}/.overview.md")
+        if abstract is None and overview is None:
+            return
         await vectorize_directory_meta(
             uri=directory_uri,
-            abstract=abstract,
-            overview=overview,
+            abstract=abstract or "",
+            overview=overview or "",
             context_type=context_type_for_uri(directory_uri),
             ctx=ctx,
+            include_abstract=abstract is not None,
+            include_overview=overview is not None,
         )
 
     def _validate_mode(self, mode: str) -> None:
