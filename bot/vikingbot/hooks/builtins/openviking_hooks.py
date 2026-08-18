@@ -278,10 +278,13 @@ class OpenVikingCompactHook(Hook):
 
 class OpenVikingPostCallHook(Hook):
     name = "openviking_post_call"
-    # Hook execute() is genuinely async (it awaits ov_client search/read). Mark it
-    # async so the hook manager routes it through asyncio.gather with other async
-    # hooks instead of the sequential sync_hooks path.
-    is_sync = False
+    # is_sync=True routes through the HookManager sync path, where each hook's
+    # return value is threaded back into kwargs:
+    #     `kwargs = await hook.execute(context, **kwargs)`
+    # The default is_sync=False routes through asyncio.gather, which discards
+    # return values — the enriched {tool_name, params, result} dict would be
+    # silently dropped.
+    is_sync = True
 
     async def _get_client(self, workspace_id: str, config: Any = None) -> VikingClient:
         return await get_global_client(workspace_id, config=config)
@@ -404,7 +407,11 @@ class OpenVikingPostCallHook(Hook):
 
     async def execute(self, context: HookContext, tool_name, params, result) -> Any:
         if tool_name == "read_file":
-            if result and not isinstance(result, Exception):
+            # Only inspect non-empty string results. Tool failures reach this hook
+            # as Exception instances (the registry stores the raised exception as
+            # the result), and re.search would raise TypeError on non-str values —
+            # which, on the sync hook path, would escalate into a tool-call failure.
+            if isinstance(result, str) and result:
                 match = re.search(r"^---\s*\nname:\s*(.+?)\s*\n", result, re.MULTILINE)
                 if match:
                     skill_name = match.group(1).strip()
