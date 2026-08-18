@@ -66,6 +66,7 @@ test("a pre-existing TRAE home directory keeps TRAE Desktop as the default", (t)
 PATH=/usr/bin:/bin
 HOME=${JSON.stringify(home)}
 refresh_available_harnesses
+HAVE_CURSOR=0
 INTERACTIVE=0
 REQUESTED_HARNESSES=""
 select_harnesses
@@ -86,6 +87,7 @@ test("TRAE CLI configuration does not auto-select the TRAE CLI harness", (t) => 
 PATH=/usr/bin:/bin
 HOME=${JSON.stringify(home)}
 refresh_available_harnesses
+HAVE_CURSOR=0
 INTERACTIVE=0
 REQUESTED_HARNESSES=""
 select_harnesses
@@ -96,7 +98,7 @@ printf '%s\\n' "$SELECTED_HARNESSES"
   assert.equal(result.stdout.trim(), "trae");
 });
 
-test("TRAE CLI command aliases are detected and auto-selected", (t) => {
+test("TraeCode CLI 2.0 command aliases use the Codex-format selection", (t) => {
   const home = makeTempHome(t);
   const cliHome = join(home, ".trae", "cli");
   mkdirSync(cliHome, { recursive: true });
@@ -111,16 +113,42 @@ test("TRAE CLI command aliases are detected and auto-selected", (t) => {
 PATH=${JSON.stringify(`${bin}:/usr/bin:/bin`)}
 HOME=${JSON.stringify(home)}
 refresh_available_harnesses
+TUI_CODEX_BINS="$CODEX_BINS"
+add_detected_traecode_cli_alias
+refresh_available_harnesses
+HAVE_CURSOR=0
 tui_reset_bin_selection
-selected_in_tui="$SEL_TRAE_CLI"
 INTERACTIVE=0
 REQUESTED_HARNESSES=""
 select_harnesses
-if tui_bin_detected trae-cli traecli; then detected=yes; else detected=no; fi
-printf '%s:%s:%s\\n' "$selected_in_tui" "$SELECTED_HARNESSES" "$detected"
+if tui_bin_detected codex ${command}; then detected=yes; else detected=no; fi
+label="$(tui_bin_label codex ${command})"
+printf '%s:%s:%s\\n' "$SELECTED_HARNESSES" "$detected" "$label"
 `);
 
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.stdout.trim(), "1:trae,trae-cli:yes", command);
+    assert.equal(result.stdout.trim(), "codex,trae:yes:TraeCode CLI 2.0", command);
   }
+});
+
+test("trae-cli is the public harness and resolves to the Codex plugin internally", (t) => {
+  const home = makeTempHome(t);
+  const bin = join(home, "bin");
+  mkdirSync(bin);
+  writeFileSync(join(bin, "trae-cli"), "#!/bin/sh\nexit 0\n");
+  chmodSync(join(bin, "trae-cli"), 0o755);
+
+  const result = runInstallerPrelude(`
+PATH=${JSON.stringify(`${bin}:/usr/bin:/bin`)}
+HOME=${JSON.stringify(home)}
+refresh_available_harnesses
+TUI_CODEX_BINS="$CODEX_BINS"
+INTERACTIVE=0
+REQUESTED_HARNESSES="trae-cli"
+select_harnesses
+printf '%s:%s:%s\\n' "$SELECTED_HARNESSES" "$(list_words "$CODEX_BINS")" "$(tui_bin_label codex trae-cli)"
+`);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), "codex:trae-cli:TraeCode CLI 2.0");
 });

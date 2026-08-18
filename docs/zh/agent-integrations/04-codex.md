@@ -12,6 +12,13 @@ Claude Code 和 Codex 共用同一个安装脚本。它会依次询问界面语�
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh)
 ```
 
+TraeCode CLI 2.0 可以直接安装这一 Codex 格式插件，默认安装入口是 `--harness trae-cli`：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) \
+  --harness trae-cli
+```
+
 GitHub 访问受限的地区，从火山引擎 TOS 镜像运行同一个安装脚本（或在下载源提问时选择「TOS 镜像」）。Codex 走 TOS 时安装自 TOS 托管的 git 仓库，保留远程更新能力：
 
 ```bash
@@ -45,6 +52,7 @@ codex              # 首次启动需进入 /hooks 完成一次审批
 ## 验证
 
 启动 `codex` 后，当前会话首次提交 prompt 时触发的 `SessionStart` 会加载 profile，之后插件将在每次用户输入前自动召回相关记忆。若设置环境变量 `OPENVIKING_DEBUG=1`，则会将相关事件日志写入 `~/.openviking/logs/codex-hooks.log`。
+TraeCode CLI 2.0 用户启动 `trae-cli`，并可用 `trae-cli plugin list` 确认插件已启用。
 
 ## 工作原理
 

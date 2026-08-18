@@ -1,5 +1,8 @@
 """Tests for reindex admin endpoint and executor behavior."""
 
+import asyncio
+from types import SimpleNamespace
+
 import httpx
 import pytest
 
@@ -1839,7 +1842,7 @@ async def test_reindex_upsert_context_omits_search_tags_without_ingest_options(m
 
 
 @pytest.mark.asyncio
-async def test_reindex_resource_vectors_only_continues_after_single_record_failure(monkeypatch):
+async def test_reindex_resource_vectors_parallelize_files_and_isolate_failures(monkeypatch):
     from openviking.service.reindex_executor import ReindexExecutor, _ReindexCounters
     from openviking_cli.exceptions import OpenVikingError
 
@@ -1879,12 +1882,21 @@ async def test_reindex_resource_vectors_only_continues_after_single_record_failu
         return summary
 
     seen = []
+    both_entered = asyncio.Event()
+    release = asyncio.Event()
 
     async def fake_upsert_context(self, **kwargs):
         seen.append(kwargs["uri"])
+        if len(seen) == 2:
+            both_entered.set()
+        await release.wait()
         if kwargs["uri"].endswith("bad.txt"):
             raise OpenVikingError("boom", code="PROCESSING_ERROR")
 
+    monkeypatch.setattr(
+        "openviking.service.reindex_executor.get_openviking_config",
+        lambda: SimpleNamespace(reindex=SimpleNamespace(file_vectorization_concurrency=8)),
+    )
     monkeypatch.setattr("openviking.service.reindex_executor.get_viking_fs", lambda: FakeVikingFS())
     monkeypatch.setattr(ReindexExecutor, "_read_directory_abstract", fake_read_directory_abstract)
     monkeypatch.setattr(ReindexExecutor, "_read_directory_overview", fake_read_directory_overview)
@@ -1903,16 +1915,23 @@ async def test_reindex_resource_vectors_only_continues_after_single_record_failu
         role=Role.ROOT,
     )
 
-    await service._reindex_resource_vectors(
-        uri="viking://resources/demo",
-        counters=counters,
-        ctx=ctx,
+    task = asyncio.create_task(
+        service._reindex_resource_vectors(
+            uri="viking://resources/demo",
+            counters=counters,
+            ctx=ctx,
+        )
     )
+    try:
+        await asyncio.wait_for(both_entered.wait(), timeout=1)
+    finally:
+        release.set()
+        await task
 
-    assert seen == [
+    assert set(seen) == {
         "viking://resources/demo/bad.txt",
         "viking://resources/demo/good.txt",
-    ]
+    }
     assert counters.failed_records == 1
     assert counters.rebuilt_records == 1
 

@@ -28,10 +28,14 @@ def _make_viking_fs() -> VikingFS:
     return fs
 
 
-def _user_ctx(account_id: str = "acct1", user_id: str = "alice") -> RequestContext:
+def _user_ctx(
+    account_id: str = "acct1",
+    user_id: str = "alice",
+    role: Role = Role.USER,
+) -> RequestContext:
     return RequestContext(
         user=UserIdentifier(account_id=account_id, user_id=user_id),
-        role=Role.USER,
+        role=role,
     )
 
 
@@ -132,14 +136,60 @@ class TestVikingFSURITraversalGuard:
         fs.agfs.stat.assert_not_called()
         fs.agfs.rm.assert_not_called()
 
-    @pytest.mark.parametrize("uri", ["viking://resources", "viking://session"])
+    @pytest.mark.parametrize(
+        "uri",
+        [
+            "viking://user/alice",
+            "viking://user/alice/",
+            "viking://resources",
+            "viking://resources/",
+        ],
+    )
+    @pytest.mark.parametrize("role", [Role.USER, Role.ADMIN])
     @pytest.mark.asyncio
-    async def test_rm_allows_public_scope_roots_to_reach_agfs(self, uri: str) -> None:
+    async def test_rm_rejects_non_root_namespace_roots_before_side_effects(
+        self, uri: str, role: Role
+    ) -> None:
+        fs = _make_viking_fs()
+        fs._collect_uris = AsyncMock(return_value=[])
+        fs._delete_from_vector_store = AsyncMock()
+
+        with pytest.raises(PermissionDeniedError, match="namespace root"):
+            await fs.rm(uri, recursive=True, ctx=_user_ctx(role=role))
+
+        fs._collect_uris.assert_not_called()
+        fs._delete_from_vector_store.assert_not_called()
+        fs.agfs.stat.assert_not_called()
+        fs.agfs.rm.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "uri", ["viking://user/alice", "viking://resources", "viking://session"]
+    )
+    @pytest.mark.asyncio
+    async def test_rm_allows_maintenance_scope_roots_for_root(self, uri: str) -> None:
         fs = _make_viking_fs()
         fs.agfs.stat = AsyncMock(side_effect=RuntimeError("sentinel"))
 
         with pytest.raises(RuntimeError, match="sentinel"):
             await fs.rm(uri, recursive=True)
+
+        fs.agfs.stat.assert_called_once()
+
+    @pytest.mark.parametrize(
+        "uri",
+        [
+            "viking://user/alice/memories",
+            "viking://user/memories",
+            "viking://resources/project",
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_rm_allows_non_root_namespace_descendants(self, uri: str) -> None:
+        fs = _make_viking_fs()
+        fs.agfs.stat = AsyncMock(side_effect=RuntimeError("sentinel"))
+
+        with pytest.raises(RuntimeError, match="sentinel"):
+            await fs.rm(uri, recursive=True, ctx=_user_ctx())
 
         fs.agfs.stat.assert_called_once()
 
@@ -217,6 +267,33 @@ class TestVikingFSURITraversalGuard:
 
         with pytest.raises(PermissionDeniedError, match=match):
             await fs.mv(source_uri, "viking://temp/dst")
+
+        fs._collect_uris.assert_not_called()
+        fs._update_vector_store_uris.assert_not_called()
+        fs._delete_from_vector_store.assert_not_called()
+        fs.agfs.stat.assert_not_called()
+        fs.agfs.rm.assert_not_called()
+        fs.agfs.mv.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "source_uri",
+        ["viking://user/alice", "viking://resources"],
+    )
+    async def test_mv_rejects_non_root_namespace_roots_in_source_before_side_effects(
+        self, source_uri: str
+    ) -> None:
+        fs = _make_viking_fs()
+        fs._collect_uris = AsyncMock(return_value=[])
+        fs._update_vector_store_uris = AsyncMock()
+        fs._delete_from_vector_store = AsyncMock()
+
+        with pytest.raises(PermissionDeniedError, match="namespace root"):
+            await fs.mv(
+                source_uri,
+                "viking://resources/dst",
+                ctx=_user_ctx(),
+            )
 
         fs._collect_uris.assert_not_called()
         fs._update_vector_store_uris.assert_not_called()

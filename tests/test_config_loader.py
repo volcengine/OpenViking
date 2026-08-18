@@ -121,28 +121,36 @@ class TestRequireConfig:
             require_config(None, "TEST_MISSING_ENV", "nonexistent_file.conf", "test")
 
 
-def test_queue_worker_concurrency_uses_queue_specific_defaults():
+def test_runtime_concurrency_uses_scope_specific_defaults():
     config = OpenVikingConfig.from_dict({})
 
     assert config.queue_workers.external_parse.max_concurrent == 4
     assert config.queue_workers.add_resource.max_concurrent == 4
+    assert config.queue_workers.add_resource.file_vectorization_concurrency == 8
     assert config.queue_workers.session_commit.max_concurrent == 8
+    assert config.reindex.file_vectorization_concurrency == 8
 
 
-def test_queue_worker_concurrency_accepts_separate_values():
+def test_runtime_concurrency_accepts_separate_values():
     config = OpenVikingConfig.from_dict(
         {
             "queue_workers": {
                 "external_parse": {"max_concurrent": 9},
-                "add_resource": {"max_concurrent": 7},
+                "add_resource": {
+                    "max_concurrent": 7,
+                    "file_vectorization_concurrency": 12,
+                },
                 "session_commit": {"max_concurrent": 50},
-            }
+            },
+            "reindex": {"file_vectorization_concurrency": 16},
         }
     )
 
     assert config.queue_workers.external_parse.max_concurrent == 9
     assert config.queue_workers.add_resource.max_concurrent == 7
+    assert config.queue_workers.add_resource.file_vectorization_concurrency == 12
     assert config.queue_workers.session_commit.max_concurrent == 50
+    assert config.reindex.file_vectorization_concurrency == 16
 
 
 @pytest.mark.parametrize("value", [0, -1])

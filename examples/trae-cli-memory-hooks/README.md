@@ -1,25 +1,34 @@
 # OpenViking Memory Hooks for TRAE CLI
 
+> **Deprecated.** TraeCode CLI 2.0 supports Codex-format plugins directly. New
+> installations use [`examples/codex-memory-plugin`](../codex-memory-plugin)
+> through the `trae-cli` command alias, so this adapter is retained only for
+> compatibility tests and removal of existing managed installations.
+
 This directory provides the TRAE CLI lifecycle adapter for OpenViking memory:
 three lifecycle hooks, a `PreToolUse` URI guard, and the `openviking-memory`
 MCP server.
 
 ## Installation
 
-Use the shared installer:
+Install the supported TraeCode CLI 2.0 plugin through the shared installer:
 
 ```bash
 bash examples/memory-plugin-shared/install.sh --harness trae-cli
 ```
 
-The installer:
+The installer keeps `trae-cli` as the user-facing harness name and resolves it
+internally to the Codex-format plugin installation. The deprecated component is
+this standalone Hooks adapter, not the `trae-cli` harness.
 
-- assembles the shared runtime under
+It no longer installs this adapter. The previous installer behavior was to:
+
+- assemble the shared runtime under
   `$OPENVIKING_HOME/agent-integrations/memory-plugin-shared/lib`;
-- installs this adapter under
+- install this adapter under
   `$OPENVIKING_HOME/agent-integrations/trae-cli`;
-- merges hooks into `${TRAECLI_HOME:-${TRAE_HOME:-~/.trae}/cli}/hooks.json`;
-- registers `openviking-memory` in `${TRAE_HOME:-~/.trae}/traecli.toml`.
+- merge hooks into `${TRAECLI_HOME:-${TRAE_HOME:-~/.trae}/cli}/hooks.json`;
+- register `openviking-memory` in `${TRAE_HOME:-~/.trae}/traecli.toml`.
 
 Uninstall with:
 

@@ -64,20 +64,3 @@ export interface Message {
   parts: MessagePart[]
   created_at: string
 }
-
-/** Helpers */
-
-export function getTextContent(message: Message): string {
-  for (const part of message.parts) {
-    if (part.type === 'text') return part.text
-  }
-  return ''
-}
-
-export function getToolParts(message: Message): ToolPart[] {
-  return message.parts.filter((p): p is ToolPart => p.type === 'tool')
-}
-
-export function getContextParts(message: Message): ContextPart[] {
-  return message.parts.filter((p): p is ContextPart => p.type === 'context')
-}

@@ -84,8 +84,14 @@
     },
     "queue_workers": {
         "external_parse": {"max_concurrent": 4},
-        "add_resource": {"max_concurrent": 4},
+        "add_resource": {
+            "max_concurrent": 4,
+            "file_vectorization_concurrency": 8
+        },
         "session_commit": {"max_concurrent": 8},
+    },
+    "reindex": {
+        "file_vectorization_concurrency": 8
     },
     "embedding": {
         "dense": {

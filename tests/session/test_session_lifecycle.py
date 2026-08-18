@@ -4,6 +4,7 @@
 """Session lifecycle tests"""
 
 import re
+from functools import partial
 
 from openviking.server.identity import RequestContext
 from openviking.service.core import OpenVikingService
@@ -90,8 +91,8 @@ class TestSessionLoad:
         # Nonexistent session should be empty after loading
         assert len(session.messages) == 0
 
-    async def test_load_ignores_non_archive_history_entries(self, client: AsyncOpenViking):
-        session = client.session(session_id="archive_name_validation_test")
+    async def test_load_ignores_non_archive_history_entries(self, client: partial):
+        session = client(session_id="archive_name_validation_test")
         for name in ("archive_001", "archive_002", "archive_001.bak.20260628"):
             await session._viking_fs.mkdir(
                 f"{session.uri}/history/{name}",
@@ -99,7 +100,7 @@ class TestSessionLoad:
                 ctx=session.ctx,
             )
 
-        loaded = client.session(session_id=session.session_id)
+        loaded = client(session_id=session.session_id)
         await loaded.load()
 
         assert loaded.compression.compression_index == 2

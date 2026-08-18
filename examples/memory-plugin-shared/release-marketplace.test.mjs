@@ -70,7 +70,7 @@ test("release marketplace archive supports a ZCode TOS install", () => {
   }
 });
 
-test("release marketplace archive supports a TRAE CLI TOS install", () => {
+test("release marketplace archive retains the deprecated TRAE CLI integration for cleanup compatibility", () => {
   const tmp = mkdtempSync(join(tmpdir(), "openviking-trae-cli-release-"));
   try {
     const stage = join(tmp, "memory-plugin-marketplace");
@@ -82,28 +82,10 @@ test("release marketplace archive supports a TRAE CLI TOS install", () => {
     });
     assert.equal(zipped.status, 0, `${zipped.stdout}\n${zipped.stderr}`);
 
-    const home = join(tmp, "home");
-    mkdirSync(home, { recursive: true });
-    const installed = run("bash", [
-      installer,
-      "--harness", "trae-cli",
-      "--dist", "tos",
-      "--source", "archive",
-      "--lang", "en",
-      "--url", "http://127.0.0.1:1933",
-      "--api-key", "",
-      "--yes",
-    ], {
-      env: {
-        ...process.env,
-        HOME: home,
-        OPENVIKING_HOME: join(home, ".openviking"),
-        OPENVIKING_MARKETPLACE_ARCHIVE_URL: `file://${join(tmp, "memory-plugin-marketplace.zip")}`,
-      },
-    });
-    assert.equal(installed.status, 0, `${installed.stdout}\n${installed.stderr}`);
-
-    const integrationRoot = join(home, ".openviking", "agent-integrations", "trae-cli");
+    const integrationRoot = join(stage, "trae-cli-memory-hooks");
+    const manifest = JSON.parse(readFileSync(join(integrationRoot, "openviking.integration.json"), "utf8"));
+    assert.equal(manifest.deprecated, true);
+    assert.match(manifest.replacement, /codex-memory-plugin/u);
     assert.ok(existsSync(join(integrationRoot, "scripts", "trae-cli-hook.mjs")));
     assert.ok(existsSync(join(integrationRoot, "scripts", "uri-guard.mjs")));
     assert.ok(existsSync(join(integrationRoot, "servers", "mcp-proxy.mjs")));

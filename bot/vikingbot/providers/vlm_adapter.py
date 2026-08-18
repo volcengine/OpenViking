@@ -6,12 +6,16 @@ configuration semantics are consistent with openviking server's vlm section.
 """
 
 import asyncio
+import json
+import re
 import time
-from collections.abc import AsyncIterator
+import traceback
+from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
 from loguru import logger
 
+from openviking.models.vlm.backends.volcengine_vlm import build_volcengine_request_headers
 from openviking.utils.model_retry import is_retryable_rate_limit_error, rate_limit_retry_delay
 from openviking.utils.multimodal import redact_image_data_urls
 from vikingbot.integrations.langfuse import LangfuseClient
@@ -25,6 +29,203 @@ from vikingbot.providers.base import (
     stream_delta_value,
 )
 from vikingbot.utils.tracing import get_current_response_id
+
+_MAX_ERROR_LOG_VALUE_CHARS = 4096
+_MAX_ERROR_LOG_ITEMS = 50
+_SENSITIVE_ERROR_KEYS = frozenset(
+    {
+        "access_token",
+        "api_key",
+        "apikey",
+        "authorization",
+        "client_secret",
+        "credential",
+        "credentials",
+        "id_token",
+        "password",
+        "refresh_token",
+        "secret",
+        "session_token",
+        "token",
+    }
+)
+_SENSITIVE_ERROR_KEY_SUFFIXES = (
+    "api_key",
+    "password",
+    "secret",
+    "token",
+)
+_SENSITIVE_ERROR_KV_RE = re.compile(
+    r"(?i)((?:api[_-]?key|authorization|credential|password|secret|token)"
+    r"[\"']?\s*[:=]\s*[\"']?)[^\s,;\]\}\"']+"
+)
+_BEARER_TOKEN_RE = re.compile(r"(?i)(bearer\s+)[^\s,;\]\}\"']+")
+_API_KEY_TOKEN_RE = re.compile(r"\bsk-[a-zA-Z0-9._-]{8,}")
+_SERVER_REQUEST_ID_HEADERS = ("x-request-id",)
+_SERVER_TRACE_ID_HEADERS = (
+    "x-trace-id",
+    "trace-id",
+    "x-tt-logid",
+    "x-log-id",
+)
+
+
+def _safe_exception_attribute(error: BaseException, name: str) -> Any:
+    try:
+        return getattr(error, name, None)
+    except BaseException:
+        return None
+
+
+def _exception_chain(error: BaseException) -> list[BaseException]:
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        chain.append(current)
+        current = _safe_exception_attribute(current, "__cause__") or _safe_exception_attribute(
+            current, "__context__"
+        )
+    return chain
+
+
+def _redact_error_text(value: str) -> str:
+    value = redact_image_data_urls(value)
+    value = _SENSITIVE_ERROR_KV_RE.sub(lambda match: f"{match.group(1)}<redacted>", value)
+    value = _BEARER_TOKEN_RE.sub(lambda match: f"{match.group(1)}<redacted>", value)
+    value = _API_KEY_TOKEN_RE.sub("<redacted>", value)
+    if len(value) > _MAX_ERROR_LOG_VALUE_CHARS:
+        return value[:_MAX_ERROR_LOG_VALUE_CHARS] + "...[truncated]"
+    return value
+
+
+def _sanitize_error_value(value: Any, *, depth: int = 0) -> Any:
+    """Prepare an upstream error body for logs without exposing credentials or huge values."""
+    if depth >= 5:
+        return "<max-depth>"
+    if isinstance(value, Mapping):
+        sanitized: dict[str, Any] = {}
+        for index, (key, item) in enumerate(value.items()):
+            if index >= _MAX_ERROR_LOG_ITEMS:
+                sanitized["<truncated>"] = f"{len(value) - _MAX_ERROR_LOG_ITEMS} more items"
+                break
+            key_text = str(key)
+            normalized_key = key_text.lower().replace("-", "_")
+            if normalized_key in _SENSITIVE_ERROR_KEYS or any(
+                normalized_key.endswith(f"_{suffix}") for suffix in _SENSITIVE_ERROR_KEY_SUFFIXES
+            ):
+                sanitized[key_text] = "<redacted>"
+            else:
+                sanitized[key_text] = _sanitize_error_value(item, depth=depth + 1)
+        return sanitized
+    if isinstance(value, (list, tuple, set, frozenset)):
+        items = list(value)
+        sanitized_items = [
+            _sanitize_error_value(item, depth=depth + 1) for item in items[:_MAX_ERROR_LOG_ITEMS]
+        ]
+        if len(items) > _MAX_ERROR_LOG_ITEMS:
+            sanitized_items.append(f"<{len(items) - _MAX_ERROR_LOG_ITEMS} more items>")
+        return sanitized_items
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    if isinstance(value, str):
+        return _redact_error_text(value)
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    try:
+        return _redact_error_text(str(value))
+    except BaseException:
+        return f"<{type(value).__name__}>"
+
+
+def _render_error_log_value(value: Any) -> str:
+    if value is None:
+        return "-"
+    sanitized = _sanitize_error_value(value)
+    try:
+        rendered = json.dumps(sanitized, ensure_ascii=False, default=str, separators=(",", ":"))
+    except BaseException:
+        rendered = _redact_error_text(str(sanitized))
+    if len(rendered) > _MAX_ERROR_LOG_VALUE_CHARS:
+        return rendered[:_MAX_ERROR_LOG_VALUE_CHARS] + "...[truncated]"
+    return rendered
+
+
+def _first_exception_attribute(chain: list[BaseException], name: str) -> Any:
+    for item in chain:
+        value = _safe_exception_attribute(item, name)
+        if value is not None:
+            return value
+    return None
+
+
+def _first_header_value(headers: Any, names: tuple[str, ...]) -> str | None:
+    if headers is None:
+        return None
+    for name in names:
+        try:
+            value = headers.get(name)
+        except BaseException:
+            value = None
+        if value:
+            return _redact_error_text(str(value))
+    return None
+
+
+def _exception_log_details(error: BaseException) -> dict[str, str]:
+    """Extract Ark/OpenAI-compatible exception details for one structured log line."""
+    chain = _exception_chain(error)
+    response = _first_exception_attribute(chain, "response")
+    request = _first_exception_attribute(chain, "request")
+    if request is None and response is not None:
+        request = _safe_exception_attribute(response, "request")
+
+    status = _first_exception_attribute(chain, "status_code")
+    if status is None and response is not None:
+        status = _safe_exception_attribute(response, "status_code")
+
+    body = _first_exception_attribute(chain, "body")
+    if body is None and response is not None:
+        body = _safe_exception_attribute(response, "text")
+
+    response_headers = (
+        _safe_exception_attribute(response, "headers") if response is not None else None
+    )
+    request_headers = _safe_exception_attribute(request, "headers") if request is not None else None
+    client_request_id = _first_exception_attribute(chain, "request_id")
+    if client_request_id is None:
+        client_request_id = _first_header_value(request_headers, ("x-client-request-id",))
+
+    method = _safe_exception_attribute(request, "method") if request is not None else None
+    url = _safe_exception_attribute(request, "url") if request is not None else None
+    # Query strings can contain credentials. The Ark API endpoint path is sufficient for diagnosis.
+    safe_url = str(url).split("?", 1)[0] if url is not None else "-"
+
+    causes = [f"{type(item).__name__}: {_redact_error_text(str(item))}" for item in chain[1:]]
+    stack_frames: list[str] = []
+    for item in chain:
+        item_traceback = _safe_exception_attribute(item, "__traceback__")
+        if item_traceback is None:
+            continue
+        for frame in traceback.extract_tb(item_traceback)[-12:]:
+            stack_frames.append(
+                f"{type(item).__name__}@{frame.filename}:{frame.lineno} in {frame.name}"
+            )
+    return {
+        "error_type": type(error).__name__,
+        "status": str(status) if status is not None else "-",
+        "code": _render_error_log_value(_first_exception_attribute(chain, "code")),
+        "client_request_id": _render_error_log_value(client_request_id),
+        "server_request_id": _first_header_value(response_headers, _SERVER_REQUEST_ID_HEADERS)
+        or "-",
+        "server_trace_id": _first_header_value(response_headers, _SERVER_TRACE_ID_HEADERS) or "-",
+        "method": str(method) if method is not None else "-",
+        "url": safe_url,
+        "response_body": _render_error_log_value(body),
+        "cause_chain": " <- ".join(causes) if causes else "-",
+        "traceback": " <- ".join(stack_frames) if stack_frames else "-",
+    }
 
 
 class VLMProviderAdapter(LLMProvider):
@@ -119,6 +320,7 @@ class VLMProviderAdapter(LLMProvider):
         except Exception as e:
             if langfuse_observation:
                 self._end_langfuse_observation_error(langfuse_observation, e)
+            self._log_request_exception("chat", e, model=effective_model)
             return LLMResponse(
                 content=f"Error calling LLM in VLM Adapter: {str(e)}",
                 finish_reason="error",
@@ -169,6 +371,7 @@ class VLMProviderAdapter(LLMProvider):
             ):
                 yield event
         except Exception as exc:
+            self._log_request_exception("chat_stream", exc, model=model or self._default_model)
             yield LLMStreamEvent(
                 type="response",
                 response=LLMResponse(
@@ -176,6 +379,36 @@ class VLMProviderAdapter(LLMProvider):
                     finish_reason="error",
                 ),
             )
+
+    def _log_request_exception(
+        self,
+        operation: str,
+        error: BaseException,
+        *,
+        model: str,
+    ) -> None:
+        details = _exception_log_details(error)
+        logger.error(
+            "VLM Adapter request failed: operation={} provider={} model={} timeout={}s "
+            "error_type={} status={} code={} client_request_id={} "
+            "server_request_id={} server_trace_id={} method={} url={} "
+            "response_body={} cause_chain={} traceback={}",
+            operation,
+            getattr(self._vlm, "provider", None) or "unknown",
+            model,
+            getattr(self._vlm, "timeout", None) or "-",
+            details["error_type"],
+            details["status"],
+            details["code"],
+            details["client_request_id"],
+            details["server_request_id"],
+            details["server_trace_id"],
+            details["method"],
+            details["url"],
+            details["response_body"],
+            details["cause_chain"],
+            details["traceback"],
+        )
 
     @classmethod
     def _supports_native_stream(cls, vlm: Any) -> bool:
@@ -379,9 +612,9 @@ class VLMProviderAdapter(LLMProvider):
             }
             if effective_max_tokens is not None:
                 kwargs["max_tokens"] = effective_max_tokens
-            extra_headers = getattr(vlm, "extra_headers", None)
-            if extra_headers:
-                kwargs["extra_headers"] = extra_headers
+            kwargs["extra_headers"] = build_volcengine_request_headers(
+                getattr(vlm, "extra_headers", None)
+            )
             if tools:
                 kwargs["tools"] = tools
                 kwargs["tool_choice"] = "auto"

@@ -1,6 +1,7 @@
-# OpenViking Memory Plugin for Codex
+# OpenViking Memory Plugin for Codex and TraeCode CLI 2.0
 
 Long-term semantic memory for [Codex](https://developers.openai.com/codex), powered by [OpenViking](https://github.com/volcengine/OpenViking).
+TraeCode CLI 2.0 supports the same plugin format; use the shared installer's dedicated `--harness trae-cli` entry.
 
 This is the Codex counterpart to [`claude-code-memory-plugin`](../claude-code-memory-plugin). It hooks Codex's lifecycle to:
 
@@ -20,6 +21,12 @@ There are two install paths. **Pick one — don't mix them** (both surface the s
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) --harness codex
+```
+
+For TraeCode CLI 2.0:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) --harness trae-cli
 ```
 
 Claude Code and Codex share this installer (drop `--harness codex` to pick interactively). It asks for your language (English/中文), the download source (GitHub, or a TOS mirror for GitHub-blocked regions — pass `--dist tos`; Codex on TOS installs from a TOS-hosted git repo and keeps remote updates), and your OpenViking credentials. It:

@@ -12,6 +12,14 @@ Claude Code and Codex share one installer. It asks for your language (English/ä¸
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh)
 ```
 
+TraeCode CLI 2.0 accepts this Codex-format plugin directly. Its default
+installer entry is `--harness trae-cli`:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) \
+  --harness trae-cli
+```
+
 In regions where GitHub is hard to reach, run the same installer from the Volcengine TOS mirror (or pick "TOS mirror" at the download-source prompt). Codex installs from a TOS-hosted git repo and keeps remote update support:
 
 ```bash
@@ -45,6 +53,7 @@ Prerequisites: Node.js >= 22, Codex >= 0.130.0, and the `plugin_hooks` feature e
 ## Verify
 
 Launch `codex`; on the first prompt of a session, the `SessionStart` hook should load your profile, and the plugin should then recall relevant memories for every prompt. Set `OPENVIKING_DEBUG=1` to write events to `~/.openviking/logs/codex-hooks.log`.
+For TraeCode CLI 2.0, launch `trae-cli` and use `trae-cli plugin list` to confirm the plugin is enabled.
 
 ## How it works
 
