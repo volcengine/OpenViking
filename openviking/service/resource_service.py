@@ -18,7 +18,6 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
 
 from openviking.core.content_targets import ContentTargetSpec
-from openviking.core.namespace import canonicalize_uri
 from openviking.core.uri_validation import validate_optional_content_target_uri
 from openviking.parse.mode import ParseMode, normalize_parse_mode
 from openviking.parse.parsers.constants import MPEG_TS_EXTENSION_ALIAS
@@ -43,7 +42,6 @@ from openviking.server.user_config import (
     effective_resource_add_target,
     effective_skill_add_target,
 )
-from openviking.storage.expr import PathScope
 from openviking.storage.queuefs import QueueManager, get_queue_manager
 from openviking.storage.viking_fs import VikingFS
 from openviking.storage.vikingdb_manager import VikingDBManager
@@ -192,20 +190,6 @@ class ResourceService:
         if not self._watch_scheduler:
             return None
         return self._watch_scheduler.watch_manager
-
-    async def _count_resource_vectors(
-        self,
-        root_uri: str,
-        *,
-        ctx: RequestContext,
-    ) -> Optional[int]:
-        """Count vectors currently stored under one resource tree."""
-        if self._vikingdb is None:
-            return None
-        return await self._vikingdb.count(
-            filter=PathScope("uri", canonicalize_uri(root_uri, ctx), depth=-1),
-            ctx=ctx,
-        )
 
     def _sanitize_watch_processor_kwargs(self, processor_kwargs: Dict[str, Any]) -> Dict[str, Any]:
         sanitized: Dict[str, Any] = {}

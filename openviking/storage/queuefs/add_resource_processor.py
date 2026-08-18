@@ -185,26 +185,13 @@ class AddResourceProcessor(DequeueHandlerBase):
                 else:
                     result = deepcopy(replay_result)
                 await tracker.wait_for_descendants(msg.task_id, metadata.work_id)
-                root_uri = result.get("root_uri")
-                if isinstance(root_uri, str) and root_uri:
-                    try:
-                        vector_count = await self._resource_service._count_resource_vectors(
-                            root_uri,
-                            ctx=ctx,
-                        )
-                    except Exception as exc:
-                        logger.warning(
-                            "[AddResource] Failed to count vectors for %s: %s",
-                            root_uri,
-                            exc,
-                        )
-                    else:
-                        if vector_count is not None:
-                            result["vector_count"] = vector_count
                 result.setdefault(
-                    "queue_status",
-                    request_wait_tracker.build_queue_status(telemetry_id),
+                    "queue_status", request_wait_tracker.build_queue_status(telemetry_id)
                 )
+                if replay_result is None:
+                    result["vector_count"] = request_wait_tracker.get_embedding_vector_count(
+                        telemetry_id
+                    )
                 record_resource_queue_metrics(
                     telemetry=telemetry,
                     telemetry_id=telemetry_id,
