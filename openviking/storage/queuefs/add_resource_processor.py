@@ -189,7 +189,7 @@ class AddResourceProcessor(DequeueHandlerBase):
                     "queue_status", request_wait_tracker.build_queue_status(telemetry_id)
                 )
                 if replay_result is None:
-                    result["vector_count"] = request_wait_tracker.get_embedding_vector_count(
+                    result["context_count"] = request_wait_tracker.get_embedding_context_count(
                         telemetry_id
                     )
                 record_resource_queue_metrics(

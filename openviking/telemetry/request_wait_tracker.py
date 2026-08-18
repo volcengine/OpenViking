@@ -20,7 +20,7 @@ class _RequestWaitState:
     semantic_error_count: int = 0
     semantic_errors: List[str] = field(default_factory=list)
     embedding_processed: int = 0
-    embedding_vector_count: int = 0
+    embedding_context_count: int = 0
     embedding_requeue_count: int = 0
     embedding_error_count: int = 0
     embedding_errors: List[str] = field(default_factory=list)
@@ -83,13 +83,13 @@ class RequestWaitTracker:
                 return
             state.embedding_requeue_count += max(delta, 0)
 
-    def get_embedding_vector_count(self, telemetry_id: str) -> int:
-        """Return vectors successfully written for one request."""
+    def get_embedding_context_count(self, telemetry_id: str) -> int:
+        """Return contexts successfully indexed for one request."""
         if not telemetry_id:
             return 0
         with self._lock:
             state = self._states.get(telemetry_id)
-            return state.embedding_vector_count if state is not None else 0
+            return state.embedding_context_count if state is not None else 0
 
     def mark_semantic_done(
         self,
@@ -145,7 +145,7 @@ class RequestWaitTracker:
             state.pending_embedding_roots.discard(root_id)
             state.embedding_processed += max(processed_delta, 0)
             if vector_written and was_pending:
-                state.embedding_vector_count += 1
+                state.embedding_context_count += 1
 
     def mark_embedding_failed(self, telemetry_id: str, root_id: str, message: str) -> None:
         if not telemetry_id:

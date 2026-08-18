@@ -577,7 +577,7 @@ task_id      uuid-xxx
 
 **Completed add-resource task result**
 
-For Git repository sources with `wait=false`, the background task has `task_type="add_resource"` and `resource_id` equal to the returned `root_uri`. Running task records may include `stage`. Poll `/api/v1/tasks/{task_id}` until the task completes. Its nested `result` then contains the final queue summary and `vector_count`:
+For Git repository sources with `wait=false`, the background task has `task_type="add_resource"` and `resource_id` equal to the returned `root_uri`. Running task records may include `stage`. Poll `/api/v1/tasks/{task_id}` until the task completes. Its nested `result` then contains the final queue summary and `context_count`:
 
 ```json
 {
@@ -598,13 +598,13 @@ For Git repository sources with `wait=false`, the background task has `task_type
           "errors": []
         }
       },
-      "vector_count": 11
+      "context_count": 11
     }
   }
 }
 ```
 
-`vector_count` is the number of vectors successfully produced and written by this upload task. It is not the total number of vectors already stored under `root_uri`. If the server restarts before the task persists its final metrics, the field is omitted instead of reporting a partial count.
+`context_count` is the number of contexts successfully produced and indexed by this upload task. A context is counted after its embedding record is written successfully. It is not the total number of contexts already stored under `root_uri`. If the server restarts before the task persists its final metrics, the field is omitted instead of reporting a partial count.
 
 ---
 

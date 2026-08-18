@@ -54,7 +54,7 @@ def test_request_wait_tracker_records_requeues():
     }
 
 
-def test_request_wait_tracker_counts_vectors_written_by_request():
+def test_request_wait_tracker_counts_contexts_indexed_by_request():
     tracker = RequestWaitTracker()
     telemetry_id = "tm_vectors"
 
@@ -64,11 +64,11 @@ def test_request_wait_tracker_counts_vectors_written_by_request():
         tracker.mark_embedding_done(telemetry_id, root_id, vector_written=True)
     tracker.mark_embedding_done(telemetry_id, "embedding-3", vector_written=True)
 
-    assert tracker.get_embedding_vector_count(telemetry_id) == 3
+    assert tracker.get_embedding_context_count(telemetry_id) == 3
 
     tracker.cleanup(telemetry_id)
 
-    assert tracker.get_embedding_vector_count(telemetry_id) == 0
+    assert tracker.get_embedding_context_count(telemetry_id) == 0
 
 
 async def test_wait_for_request_timeout_keeps_existing_error():

@@ -583,7 +583,7 @@ task_id      uuid-xxx
 
 **完成后的资源添加任务结果**
 
-对于 `wait=false` 的 Git 仓库来源，后台任务的 `task_type="add_resource"`，`resource_id` 等于返回的 `root_uri`。运行中的任务记录可能包含 `stage`。轮询 `/api/v1/tasks/{task_id}` 直到任务完成。完成后，任务内层的 `result` 会包含最终队列汇总和 `vector_count`：
+对于 `wait=false` 的 Git 仓库来源，后台任务的 `task_type="add_resource"`，`resource_id` 等于返回的 `root_uri`。运行中的任务记录可能包含 `stage`。轮询 `/api/v1/tasks/{task_id}` 直到任务完成。完成后，任务内层的 `result` 会包含最终队列汇总和 `context_count`：
 
 ```json
 {
@@ -604,13 +604,13 @@ task_id      uuid-xxx
           "errors": []
         }
       },
-      "vector_count": 11
+      "context_count": 11
     }
   }
 }
 ```
 
-`vector_count` 是本次上传任务成功生成并写入的向量数量，不是 `root_uri` 下已有向量的总数。如果服务器在任务持久化最终指标前重启，该字段会被省略，以避免返回不完整的计数。
+`context_count` 是本次上传任务成功生成并完成索引的上下文数量。每条上下文对应的嵌入记录成功写入后，计数增加一次。该值不是 `root_uri` 下已有上下文的总数。如果服务器在任务持久化最终指标前重启，该字段会被省略，以避免返回不完整的计数。
 
 ---
 

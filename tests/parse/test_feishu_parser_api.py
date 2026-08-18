@@ -865,7 +865,7 @@ async def test_add_resource_processor_persists_final_resource_uri(monkeypatch):
         {
             "status": "success",
             "root_uri": final_uri,
-            "vector_count": 9,
+            "context_count": 9,
             "queue_status": {
                 "Semantic": {
                     "processed": 0,
@@ -905,7 +905,7 @@ async def test_add_resource_processor_replay_skips_lock_adopt_when_result_exists
         create=AsyncMock(
             return_value=SimpleNamespace(
                 status=TaskStatus.RUNNING,
-                result={"status": "success", "root_uri": final_uri, "vector_count": 4},
+                result={"status": "success", "root_uri": final_uri, "context_count": 4},
             )
         ),
         start=AsyncMock(),
@@ -950,7 +950,7 @@ async def test_add_resource_processor_replay_skips_lock_adopt_when_result_exists
     task_tracker.complete.assert_awaited_once()
     completed_result = task_tracker.complete.await_args.args[1]
     assert completed_result["root_uri"] == final_uri
-    assert completed_result["vector_count"] == 4
+    assert completed_result["context_count"] == 4
 
 
 @pytest.mark.asyncio
@@ -996,7 +996,7 @@ async def test_add_resource_processor_reports_zero_vectors(monkeypatch):
     task_tracker.fail.assert_not_awaited()
     final_result = task_tracker.complete.await_args.args[1]
     assert final_result["root_uri"] == final_uri
-    assert final_result["vector_count"] == 0
+    assert final_result["context_count"] == 0
 
 
 def test_feishu_direct_submission_requires_configured_auth(monkeypatch):
