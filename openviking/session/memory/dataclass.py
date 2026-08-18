@@ -208,6 +208,10 @@ class MemoryTypeSchema(BaseModel):
         True,
         description="Whether this memory type is stored separately under peer directories.",
     )
+    case_insensitive_filenames: bool = Field(
+        False,
+        description="Whether filename identity is matched case-insensitively before writes.",
+    )
     overview_template: Optional[str] = Field(
         None, description="Overview template for auto-generating .overview.md files"
     )

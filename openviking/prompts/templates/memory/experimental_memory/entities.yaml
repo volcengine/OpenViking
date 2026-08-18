@@ -5,6 +5,8 @@ description: |
   Entity should be rich and distributed - avoid putting all info in one entity.
 directory: "viking://user/{{ user_space }}/memories/entities"
 filename_template: "{{ category|lower }}/{{ name|lower }}.md"
+# Reuse legacy case variants instead of creating a second entity file.
+case_insensitive_filenames: true
 enabled: true
 
 overview_template: |-
