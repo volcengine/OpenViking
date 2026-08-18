@@ -11,6 +11,7 @@ from openviking.storage.queuefs.named_queue import NamedQueue
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.queuefs.semantic_queue import SemanticQueue, is_semantic_msg_stale
+from openviking.storage.semantic_sidecar import parse_semantic_sidecar
 
 
 @pytest.mark.asyncio
@@ -186,9 +187,13 @@ async def test_stale_memory_semantic_write_is_skipped(monkeypatch):
             "/fake/viking/user/default/memories/preferences/.abstract.md",
         ]
     ]
-    assert viking_fs.writes == [
-        ("viking://user/default/memories/preferences/.overview.md", "latest overview"),
-        ("viking://user/default/memories/preferences/.abstract.md", "latest abstract"),
+    assert [uri for uri, _ in viking_fs.writes] == [
+        "viking://user/default/memories/preferences/.overview.md",
+        "viking://user/default/memories/preferences/.abstract.md",
+    ]
+    assert [parse_semantic_sidecar(raw).body.strip() for _, raw in viking_fs.writes] == [
+        "latest overview",
+        "latest abstract",
     ]
 
 

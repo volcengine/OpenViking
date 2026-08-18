@@ -3,8 +3,10 @@
 
 from types import SimpleNamespace
 
+from openviking.core.context import ContextLevel
 from openviking.storage.queuefs import semantic_processor as semantic_processor_module
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
+from openviking.storage.semantic_sidecar import render_semantic_sidecar
 
 
 def _patch_semantic_limits(monkeypatch, *, abstract_max_chars=256, overview_max_chars=4000):
@@ -48,6 +50,33 @@ def test_markdown_overview_extracts_multiline_brief_description(monkeypatch):
 
     assert overview == generated
     assert abstract == "This is the first abstract line.\nThis is the second abstract line."
+
+
+def test_okf_overview_frontmatter_is_not_part_of_l0_or_size_limit(monkeypatch):
+    _patch_semantic_limits(monkeypatch, overview_max_chars=80)
+    processor = SemanticProcessor()
+    body = "# README\n\nVisible brief.\n\n## Navigation\n\n- README.md"
+    raw = render_semantic_sidecar(
+        ContextLevel.OVERVIEW,
+        "viking://resources/demo",
+        body,
+        {
+            "source": {"kind": "http", "uri": "https://example.com/very-long-source"},
+            "generated_by": {"component": "SemanticProcessor", "trigger": "test"},
+            "freshness": {
+                "total_entries": 1,
+                "sampled_entries": 1,
+                "unsampled_entries": 0,
+                "pending_child_changes": 0,
+            },
+        },
+    )
+
+    overview, abstract = processor._normalize_overview_generation(raw)
+
+    assert overview == body
+    assert abstract == "Visible brief."
+    assert "generated_by" not in overview
 
 
 def test_index_references_are_replaced_inside_markdown_overview(monkeypatch):

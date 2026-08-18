@@ -161,6 +161,40 @@ async def test_explicit_subpath_not_split():
 
 
 @pytest.mark.asyncio
+async def test_summarize_propagates_source_and_generation_trigger():
+    queue = _DummyQueue()
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    with (
+        patch(
+            "openviking.utils.summarizer.get_queue_manager",
+            return_value=_DummyQueueManager(queue),
+        ),
+        patch(
+            "openviking.utils.summarizer.get_current_telemetry",
+            return_value=SimpleNamespace(telemetry_id="tid"),
+        ),
+        patch(
+            "openviking.utils.summarizer.get_request_wait_tracker",
+            return_value=_DummyWaitTracker(),
+        ),
+    ):
+        result = await Summarizer(vlm_processor=None).summarize(
+            resource_uris=["viking://resources/demo"],
+            temp_uris=["viking://temp/demo"],
+            ctx=ctx,
+            semantic_source={"kind": "http", "uri": "https://example.com/demo.pdf"},
+            generation_trigger="resource_ingest",
+        )
+
+    assert result["status"] == "success"
+    assert queue.msgs[0].source == {
+        "kind": "http",
+        "uri": "https://example.com/demo.pdf",
+    }
+    assert queue.msgs[0].generation_trigger == "resource_ingest"
+
+
+@pytest.mark.asyncio
 async def test_resources_root_empty_import_is_error():
     queue = _DummyQueue()
     qm = _DummyQueueManager(queue)

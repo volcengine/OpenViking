@@ -19,6 +19,7 @@ from openviking.storage.queuefs.semantic_dag import (
     SemanticDagExecutor,
     SemanticNodeScheduler,
 )
+from openviking.storage.semantic_sidecar import parse_semantic_sidecar
 from openviking.telemetry import (
     OperationTelemetry,
     bind_telemetry,
@@ -345,12 +346,23 @@ async def test_semantic_dag_skip_vectorization_does_not_schedule_tasks(monkeypat
     await executor.run(root_uri)
     await asyncio.sleep(0)
 
-    assert fake_fs.writes == [
-        (f"{root_uri}/child/.overview.md", "overview"),
-        (f"{root_uri}/child/.abstract.md", "abstract"),
-        (f"{root_uri}/.overview.md", "overview"),
-        (f"{root_uri}/.abstract.md", "abstract"),
+    assert [uri for uri, _ in fake_fs.writes] == [
+        f"{root_uri}/child/.overview.md",
+        f"{root_uri}/child/.abstract.md",
+        f"{root_uri}/.overview.md",
+        f"{root_uri}/.abstract.md",
     ]
+    assert [parse_semantic_sidecar(raw).body.strip() for _, raw in fake_fs.writes] == [
+        "overview",
+        "abstract",
+        "overview",
+        "abstract",
+    ]
+    assert all(
+        parse_semantic_sidecar(raw).metadata["generated_by"]["component"]
+        == "SemanticProcessor"
+        for _, raw in fake_fs.writes
+    )
     assert processor.vectorized_dirs == []
     assert processor.vectorized_files == []
 if __name__ == "__main__":

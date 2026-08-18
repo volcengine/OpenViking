@@ -2,11 +2,14 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 from datetime import datetime, timezone
+from unittest.mock import AsyncMock
 
 import pytest
 
+from openviking.core.context import ContextLevel
 from openviking.server.identity import RequestContext, Role
 from openviking.storage import viking_fs as viking_fs_module
+from openviking.storage.semantic_sidecar import render_semantic_sidecar
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -128,6 +131,85 @@ async def default_batch_fetch(entries, abs_limit, **_kwargs):
         if len(abstract) > abs_limit:
             abstract = abstract[: abs_limit - 3] + "..."
         entry["abstract"] = abstract
+
+
+@pytest.mark.asyncio
+async def test_semantic_accessors_and_agent_tree_hide_sidecar_metadata(monkeypatch, fs):
+    directory = "viking://resources/demo"
+    path = "/local/test_account/resources/demo"
+    abstract_raw = render_semantic_sidecar(
+        ContextLevel.ABSTRACT,
+        directory,
+        "Visible abstract.",
+        {"source": {"kind": "http", "uri": "https://example.com/private.pdf"}},
+    )
+    overview_raw = render_semantic_sidecar(
+        ContextLevel.OVERVIEW,
+        directory,
+        "# Visible overview",
+        {"source": {"kind": "http", "uri": "https://example.com/private.pdf"}},
+    )
+    raw_by_path = {
+        f"{path}/.abstract.md": abstract_raw.encode(),
+        f"{path}/.overview.md": overview_raw.encode(),
+    }
+
+    async def fake_read(read_path):
+        return raw_by_path[read_path]
+
+    async def fake_stat(stat_path):
+        if stat_path == path:
+            return {"isDir": True}
+        return {"isDir": False}
+
+    def uri_to_path(uri, **_kwargs):
+        if uri.endswith("/.abstract.md"):
+            return f"{path}/.abstract.md"
+        if uri.endswith("/.overview.md"):
+            return f"{path}/.overview.md"
+        return path
+
+    monkeypatch.setattr(fs, "_uri_to_path", uri_to_path)
+    monkeypatch.setattr(fs, "_read_paths", lambda uri, **_kwargs: [uri_to_path(uri)])
+    monkeypatch.setattr(fs, "_read_path_visible", AsyncMock(return_value=True))
+    monkeypatch.setattr(fs, "_agfs_path_exists", AsyncMock(return_value=True))
+    monkeypatch.setattr(fs._async_agfs, "read", fake_read)
+    monkeypatch.setattr(fs._async_agfs, "stat", fake_stat)
+
+    assert await fs.abstract(directory, ctx=_default_ctx()) == "Visible abstract."
+    assert await fs.overview(directory, ctx=_default_ctx()) == "# Visible overview"
+    assert (
+        await fs.read_file(f"{directory}/.abstract.md", ctx=_default_ctx())
+        == abstract_raw
+    )
+    entries = [{"uri": directory, "isDir": True}]
+    await fs._batch_fetch_abstracts(entries, 256, ctx=_default_ctx())
+    assert entries[0]["abstract"] == "Visible abstract."
+    assert "source:" not in entries[0]["abstract"]
+
+
+@pytest.mark.asyncio
+async def test_ls_hides_semantic_sidecars_unless_hidden_entries_are_requested(
+    monkeypatch, fs
+):
+    directory = "viking://resources/demo"
+    items = [
+        ({"name": "note.md", "isDir": False}, f"{directory}/note.md"),
+        ({"name": ".abstract.md", "isDir": False}, f"{directory}/.abstract.md"),
+        ({"name": ".overview.md", "isDir": False}, f"{directory}/.overview.md"),
+    ]
+    monkeypatch.setattr(fs, "_list_read_path_items", AsyncMock(return_value=items))
+    monkeypatch.setattr(fs, "_is_accessible", lambda _uri, _ctx: True)
+
+    visible = await fs._ls_original(directory, show_all_hidden=False, ctx=_default_ctx())
+    with_hidden = await fs._ls_original(directory, show_all_hidden=True, ctx=_default_ctx())
+
+    assert [entry["name"] for entry in visible] == ["note.md"]
+    assert [entry["name"] for entry in with_hidden] == [
+        "note.md",
+        ".abstract.md",
+        ".overview.md",
+    ]
 
 
 # ── _is_name_visible_at_path / _ancestor_is_filtered tests ──

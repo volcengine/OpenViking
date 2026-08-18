@@ -2113,6 +2113,43 @@ async def test_reindex_file_summary_reads_existing_record_as_uri_owner(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_reindex_file_summary_parses_okf_overview_body_only(monkeypatch):
+    from openviking.service.reindex_executor import ReindexExecutor
+    from openviking.storage.semantic_sidecar import render_semantic_sidecar
+
+    raw = render_semantic_sidecar(
+        ContextLevel.OVERVIEW,
+        "viking://resources/demo",
+        "# Demo\n\n## image.png\nVisible file summary.",
+        {
+            "source": {
+                "kind": "http",
+                "uri": "https://example.com/private.pdf",
+            }
+        },
+    )
+
+    async def fake_safe_read_text(self, uri, *, ctx):
+        del self, uri, ctx
+        return raw
+
+    monkeypatch.setattr(ReindexExecutor, "_safe_read_text", fake_safe_read_text)
+    service = ReindexExecutor()
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="admin"),
+        role=Role.ROOT,
+    )
+
+    summary = await service._best_file_summary(
+        "viking://resources/demo/image.png",
+        ctx=ctx,
+    )
+
+    assert summary == "Visible file summary."
+    assert "source:" not in summary
+
+
+@pytest.mark.asyncio
 async def test_reindex_memory_fallback_reads_existing_record_as_uri_owner(monkeypatch):
     from openviking.service.reindex_executor import (
         ReindexExecutor,

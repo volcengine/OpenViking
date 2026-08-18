@@ -9,6 +9,7 @@ import pytest
 from openviking.server.identity import RequestContext, Role
 from openviking.storage import content_write as content_write_module
 from openviking.storage.content_write import ContentWriteCoordinator
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -40,6 +41,38 @@ class _FakeVikingFS:
 @pytest.fixture
 def ctx():
     return RequestContext(user=UserIdentifier("account-1", "user-1"), role=Role.USER)
+
+
+@pytest.mark.parametrize("name", [".abstract.md", ".overview.md"])
+@pytest.mark.asyncio
+async def test_public_write_rejects_generated_semantic_sidecars(ctx, name):
+    coordinator = ContentWriteCoordinator(viking_fs=_FakeVikingFS())
+
+    with pytest.raises(InvalidArgumentError, match="cannot write derived semantic file"):
+        await coordinator.write(
+            uri=f"viking://resources/demo/{name}",
+            content="attempted metadata mutation",
+            ctx=ctx,
+            mode="create",
+        )
+
+
+@pytest.mark.parametrize("name", [".abstract.md", ".overview.md"])
+def test_batch_write_rejects_generated_semantic_sidecars(ctx, name):
+    coordinator = ContentWriteCoordinator(viking_fs=_FakeVikingFS())
+
+    with pytest.raises(InvalidArgumentError, match="cannot write derived semantic file"):
+        coordinator._normalize_batch_operations(
+            "viking://resources/demo",
+            [
+                {
+                    "uri": f"viking://resources/demo/{name}",
+                    "content": "attempted metadata mutation",
+                    "precondition": {"kind": "create_if_absent"},
+                }
+            ],
+            ctx=ctx,
+        )
 
 
 @pytest.mark.asyncio

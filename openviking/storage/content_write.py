@@ -36,6 +36,7 @@ from openviking.session.memory.utils.resource_refs import (
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
+from openviking.storage.semantic_sidecar import mark_semantic_sidecars_pending
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -526,6 +527,19 @@ class ContentWriteCoordinator:
         target_uri: str = "",
         recursive: bool = False,
     ) -> None:
+        changed_entries = len(
+            {
+                uri
+                for values in changes.values()
+                for uri in values
+            }
+        )
+        await mark_semantic_sidecars_pending(
+            viking_fs=self._viking_fs,
+            dir_uri=root_uri,
+            changed_entries=changed_entries,
+            ctx=ctx,
+        )
         queue_manager = get_queue_manager()
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
         telemetry = get_current_telemetry()
@@ -554,6 +568,7 @@ class ContentWriteCoordinator:
                 for change_type in ("added", "modified")
                 if changes.get(change_type)
             },
+            generation_trigger="content_write",
         )
         if msg.telemetry_id:
             get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)

@@ -441,6 +441,11 @@ class ResourceProcessor:
                 "target_preexisting": target_preexisting,
                 "is_code_repo": parse_result.source_format == "repository",
                 "root_is_file": root_is_file,
+                "semantic_source": self._semantic_source_metadata(
+                    path=path,
+                    prepared_resource=prepared_resource,
+                    source_format=parse_result.source_format,
+                ),
             }
             if defer_post_processing:
                 result["_post_process"] = prepared
@@ -486,6 +491,7 @@ class ResourceProcessor:
         vectors_only = processing_mode == VECTORS_ONLY
         root_is_file = bool(prepared.get("root_is_file"))
         ingest_options = IngestOptions.from_value(kwargs.pop("ingest_options", None))
+        semantic_source = prepared.get("semantic_source")
         should_summarize = not root_is_file and not vectors_only and (summarize or build_index)
         should_refresh_file_parent = (
             root_is_file and not vectors_only and (summarize or build_index)
@@ -506,6 +512,8 @@ class ResourceProcessor:
                         is_code_repo=bool(prepared.get("is_code_repo")),
                         target_preexisting=target_preexisting,
                         ingest_options=ingest_options,
+                        semantic_source=semantic_source,
+                        generation_trigger="resource_ingest",
                         **kwargs,
                     )
                     if (
@@ -604,6 +612,30 @@ class ResourceProcessor:
                     root_uri, ctx=ctx, ingest_options=ingest_options
                 )
         return result
+
+    @staticmethod
+    def _semantic_source_metadata(
+        *,
+        path: str,
+        prepared_resource: Optional["LocalResource"],
+        source_format: Optional[str],
+    ) -> Dict[str, str]:
+        """Return the stable origin metadata carried only by the import root."""
+
+        if prepared_resource is not None:
+            return {
+                "kind": str(prepared_resource.source_type),
+                "uri": str(prepared_resource.original_source),
+            }
+        if source_format == "repository":
+            kind = "git"
+        elif path.startswith(("http://", "https://")):
+            kind = "http"
+        elif path.startswith(("git@", "ssh://", "git://")):
+            kind = "git"
+        else:
+            kind = "local"
+        return {"kind": kind, "uri": str(path)}
 
     async def _delete_removed_resource_vectors(
         self,

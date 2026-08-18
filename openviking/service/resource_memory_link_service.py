@@ -33,6 +33,7 @@ from openviking.session.memory.utils.resource_refs import (
     resource_ref_matches,
     unlink_resource_references_from_memory,
 )
+from openviking.storage.semantic_sidecar import body_for_preview
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
 from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking_cli.exceptions import NotFoundError
@@ -638,7 +639,7 @@ class ResourceMemoryLinkService:
 
     @staticmethod
     def _clean_resource_abstract(abstract: Any) -> str:
-        text = " ".join(str(abstract or "").split())
+        text = " ".join(body_for_preview(str(abstract or "")).split())
         if not text:
             return ""
         if any(text == marker or text.endswith(marker) for marker in _ABSTRACT_NOT_READY_MARKERS):

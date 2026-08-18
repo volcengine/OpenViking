@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Literal, Optional
 from uuid import uuid4
 
+from openviking.core.context import ContextLevel
 from openviking.core.namespace import canonical_session_uri
 from openviking.core.peer_id import normalize_peer_id, safe_peer_id
 from openviking.message import Message, Part
@@ -43,6 +44,7 @@ from openviking.session.tool_result_synopsis import (
     ToolResultSynopsis,
     generate_tool_result_synopsis,
 )
+from openviking.storage.semantic_sidecar import body_for_preview, render_semantic_sidecar
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.model_retry import is_retryable_api_error, retry_async
@@ -2458,12 +2460,32 @@ class Session:
                             abstract = self._extract_abstract_from_summary(summary)
                             await self._viking_fs.write_file(
                                 uri=f"{archive_uri}/.abstract.md",
-                                content=abstract,
+                                content=render_semantic_sidecar(
+                                    ContextLevel.ABSTRACT,
+                                    archive_uri,
+                                    abstract,
+                                    {
+                                        "generated_by": {
+                                            "component": "Session",
+                                            "trigger": "archive_summary",
+                                        }
+                                    },
+                                ),
                                 ctx=self.ctx,
                             )
                             await self._viking_fs.write_file(
                                 uri=f"{archive_uri}/.overview.md",
-                                content=summary,
+                                content=render_semantic_sidecar(
+                                    ContextLevel.OVERVIEW,
+                                    archive_uri,
+                                    summary,
+                                    {
+                                        "generated_by": {
+                                            "component": "Session",
+                                            "trigger": "archive_summary",
+                                        }
+                                    },
+                                ),
                                 ctx=self.ctx,
                             )
                             await self._merge_archive_meta(
@@ -3299,7 +3321,7 @@ class Session:
             overview = await self._viking_fs.read_file(f"{archive_uri}/.overview.md", ctx=self.ctx)
         except Exception:
             return ""
-        return overview or ""
+        return body_for_preview(overview or "")
 
     async def _read_archive_abstract(self, archive_uri: str, overview: str = "") -> str:
         """Read archive abstract text, falling back to summary extraction."""
@@ -3309,7 +3331,7 @@ class Session:
             abstract = ""
 
         if abstract:
-            return abstract
+            return body_for_preview(abstract)
 
         if not overview:
             overview = await self._read_archive_overview(archive_uri)
@@ -5193,13 +5215,33 @@ class Session:
         )
         await viking_fs.write_file(
             uri=f"{self._session_uri}/.abstract.md",
-            content=abstract,
+            content=render_semantic_sidecar(
+                ContextLevel.ABSTRACT,
+                self._session_uri,
+                abstract,
+                {
+                    "generated_by": {
+                        "component": "Session",
+                        "trigger": "session_update",
+                    }
+                },
+            ),
             ctx=self.ctx,
             lease_ref=lease_ref,
         )
         await viking_fs.write_file(
             uri=f"{self._session_uri}/.overview.md",
-            content=overview,
+            content=render_semantic_sidecar(
+                ContextLevel.OVERVIEW,
+                self._session_uri,
+                overview,
+                {
+                    "generated_by": {
+                        "component": "Session",
+                        "trigger": "session_update",
+                    }
+                },
+            ),
             ctx=self.ctx,
             lease_ref=lease_ref,
         )
