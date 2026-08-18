@@ -19,26 +19,15 @@ service.
 hermes memory setup openviking
 ```
 
-Passing `openviking` skips the provider picker. Bare `hermes memory setup` still works, then choose **openviking**.
-
-If Hermes finds an existing `~/.openviking/ovcli.conf`, reuse that profile. Otherwise the wizard asks:
-
-- **OpenViking connection** — **OpenViking Service (VolcEngine Cloud)** (default) or **Custom** (local / VPS / self-hosted)
-- **Cloud** — the managed endpoint is filled in; paste your API key
-- **Custom** — server URL (default `http://127.0.0.1:1933`), then a user API key, a root API key, or no key for local dev
-- **Hermes peer ID** — default `hermes`
-
-Account / user IDs are only needed with a root API key. A user API key is enough for Volcengine Cloud. Legacy `agent_id` settings map to the request actor peer during migration.
-
-Configuration is saved to Hermes `config.yaml` and `.env`. The wizard can also mirror it into `~/.openviking/ovcli.conf.<name>`.
+- Cloud: keep **OpenViking Service (VolcEngine Cloud)**, paste the API key
+- Custom: URL (default `http://127.0.0.1:1933`) and API key; leave the key empty for local dev
+- Reuse an existing `ovcli.conf` profile if the wizard offers one
 
 ## Verify
 
 ```bash
 hermes memory status
 ```
-
-Once configured, Hermes uses the OpenViking memory provider to inject context, prefetch relevant memories, and sync and extract memories after sessions. Available tools include `viking_search`, `viking_read`, `viking_browse`, `viking_remember`, `viking_forget`, and `viking_add_resource`.
 
 ## See also
 
