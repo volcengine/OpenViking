@@ -1063,8 +1063,8 @@ enum Commands {
         /// Target Wiki directory or skills namespace
         #[arg(long, value_name = "uri")]
         to: String,
-        /// Skill directory or SKILL.md Viking URI
-        #[arg(long, value_name = "uri")]
+        /// Installed Skill name, directory URI, or SKILL.md URI
+        #[arg(long, value_name = "name-or-uri")]
         skill: String,
         /// Description of this organization task
         #[arg(long, value_name = "text")]
@@ -3854,7 +3854,7 @@ mod tests {
             "--to",
             "viking://resources/wiki",
             "--skill",
-            "viking://agent/skills/wiki",
+            "memory_consolidation",
             "--wait",
             "--timeout",
             "10",
@@ -3873,7 +3873,7 @@ mod tests {
                 ..
             } => {
                 assert_eq!(from_uris.len(), 3);
-                assert_eq!(skill, "viking://agent/skills/wiki");
+                assert_eq!(skill, "memory_consolidation");
                 assert!(reason.is_none());
                 assert!(wait);
                 assert_eq!(timeout, Some(10.0));
