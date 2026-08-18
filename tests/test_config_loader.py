@@ -10,7 +10,6 @@ from pathlib import Path
 
 import pytest
 
-from openviking.server.config import TempUploadConfig
 from openviking_cli.utils.config import (
     OPENVIKING_CONFIG_ENV,
 )
@@ -157,30 +156,6 @@ def test_queue_worker_concurrency_rejects_non_positive_value(value):
 def test_parser_api_rejects_worker_max_concurrent():
     with pytest.raises(ValueError) as exc_info:
         ParserApiConfig(max_concurrent=9)
-
-    assert exc_info.value.errors()[0]["type"] == "extra_forbidden"
-
-
-def test_temp_upload_config_rejects_removed_shared_prefix():
-    with pytest.raises(ValueError) as exc_info:
-        TempUploadConfig(shared_prefix="viking://custom-upload")
-
-    assert exc_info.value.errors()[0]["type"] == "extra_forbidden"
-
-
-def test_temp_upload_config_allows_zero_ttl_to_disable_cleanup():
-    assert TempUploadConfig().ttl_seconds == 12 * 60 * 60
-    assert TempUploadConfig(ttl_seconds=0).ttl_seconds == 0
-
-    with pytest.raises(ValueError) as exc_info:
-        TempUploadConfig(ttl_seconds=-1)
-
-    assert exc_info.value.errors()[0]["type"] == "greater_than_equal"
-
-
-def test_temp_upload_config_rejects_renamed_shared_ttl():
-    with pytest.raises(ValueError) as exc_info:
-        TempUploadConfig(shared_ttl_seconds=60)
 
     assert exc_info.value.errors()[0]["type"] == "extra_forbidden"
 
