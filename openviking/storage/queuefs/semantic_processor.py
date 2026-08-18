@@ -44,6 +44,7 @@ from openviking.storage.semantic_sidecar import (
     body_for_preview,
     deterministic_sample,
     freshness_metadata,
+    mark_semantic_sidecars_pending,
     write_semantic_sidecars,
 )
 from openviking.storage.viking_fs import LS_ALL_NODES, SyncDiff, get_viking_fs
@@ -252,6 +253,12 @@ class SemanticProcessor(DequeueHandlerBase):
             or parent_uri == uri.rstrip("/")
         ):
             return
+        await mark_semantic_sidecars_pending(
+            viking_fs=get_viking_fs(),
+            dir_uri=parent_uri,
+            changed_entries=1,
+            ctx=self._ctx_from_semantic_msg(msg),
+        )
 
         from openviking.storage.queuefs import get_queue_manager
 

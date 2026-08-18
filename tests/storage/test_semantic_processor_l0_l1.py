@@ -3,8 +3,11 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from openviking.core.context import ContextLevel
 from openviking.storage.queuefs import semantic_processor as semantic_processor_module
+from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.semantic_sidecar import (
     parse_semantic_sidecar,
@@ -20,6 +23,125 @@ def _patch_semantic_limits(monkeypatch, *, abstract_max_chars=256, overview_max_
         )
     )
     monkeypatch.setattr(semantic_processor_module, "get_openviking_config", lambda: config)
+
+
+class _ParentRefreshFS:
+    def __init__(self, files, events):
+        self.files = dict(files)
+        self.events = events
+        self._async_agfs = self
+
+    def _uri_to_path(self, uri, ctx=None):
+        return uri
+
+    async def pathlock_acquire_exact_batch(self, paths):
+        return {"paths": paths}
+
+    async def pathlock_release(self, lease):
+        return None
+
+    async def read_file(self, uri, ctx=None):
+        return self.files[uri]
+
+    async def write_file(self, uri, content, ctx=None, lease_ref=None):
+        self.files[uri] = content
+        self.events.append(("write", uri))
+
+
+class _ParentRefreshQueue:
+    def __init__(self, events, error=None):
+        self.events = events
+        self.error = error
+        self.messages = []
+
+    async def enqueue(self, msg):
+        self.events.append(("enqueue", msg.uri))
+        if self.error is not None:
+            raise self.error
+        self.messages.append(msg)
+        return "msg-1"
+
+
+class _ParentRefreshQueueManager:
+    SEMANTIC = "semantic"
+
+    def __init__(self, queue):
+        self.queue = queue
+
+    def get_queue(self, name, allow_create=False):
+        assert name == self.SEMANTIC
+        assert allow_create is True
+        return self.queue
+
+
+def _parent_sidecars(parent_uri):
+    metadata = {
+        "freshness": {
+            "total_entries": 1,
+            "sampled_entries": 1,
+            "unsampled_entries": 0,
+            "pending_child_changes": 0,
+        }
+    }
+    return {
+        f"{parent_uri}/.abstract.md": render_semantic_sidecar(
+            ContextLevel.ABSTRACT, parent_uri, "Parent abstract.", metadata
+        ),
+        f"{parent_uri}/.overview.md": render_semantic_sidecar(
+            ContextLevel.OVERVIEW, parent_uri, "# Parent overview", metadata
+        ),
+    }
+
+
+@pytest.mark.asyncio
+async def test_parent_refresh_marks_sidecars_pending_before_enqueue(monkeypatch):
+    parent_uri = "viking://resources/project"
+    child_uri = f"{parent_uri}/child"
+    events = []
+    fs = _ParentRefreshFS(_parent_sidecars(parent_uri), events)
+    before = {uri: parse_semantic_sidecar(raw) for uri, raw in fs.files.items()}
+    queue = _ParentRefreshQueue(events)
+    monkeypatch.setattr(semantic_processor_module, "get_viking_fs", lambda: fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        lambda: _ParentRefreshQueueManager(queue),
+    )
+
+    await SemanticProcessor()._enqueue_parent_refresh(
+        SemanticMsg(uri=child_uri, context_type="resource"), child_uri
+    )
+
+    assert events[-1] == ("enqueue", parent_uri)
+    assert [event[0] for event in events[:-1]] == ["write", "write"]
+    for uri, raw in fs.files.items():
+        after = parse_semantic_sidecar(raw)
+        assert after.body == before[uri].body
+        assert after.metadata["freshness"]["pending_child_changes"] == 1
+    parent_msg = queue.messages[0]
+    assert parent_msg.changes == {"modified": [child_uri]}
+    assert parent_msg.generation_trigger == "parent_refresh"
+
+
+@pytest.mark.asyncio
+async def test_parent_refresh_keeps_pending_when_enqueue_fails(monkeypatch):
+    parent_uri = "viking://resources/project"
+    child_uri = f"{parent_uri}/child"
+    events = []
+    fs = _ParentRefreshFS(_parent_sidecars(parent_uri), events)
+    queue = _ParentRefreshQueue(events, error=RuntimeError("queue unavailable"))
+    monkeypatch.setattr(semantic_processor_module, "get_viking_fs", lambda: fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        lambda: _ParentRefreshQueueManager(queue),
+    )
+
+    with pytest.raises(RuntimeError, match="queue unavailable"):
+        await SemanticProcessor()._enqueue_parent_refresh(
+            SemanticMsg(uri=child_uri, context_type="resource"), child_uri
+        )
+
+    for raw in fs.files.values():
+        assert parse_semantic_sidecar(raw).metadata["freshness"]["pending_child_changes"] == 1
 
 
 def test_markdown_overview_uses_brief_description_as_abstract(monkeypatch):
