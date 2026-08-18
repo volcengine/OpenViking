@@ -52,6 +52,7 @@ from openviking.utils.search_filters import SearchContextTypeInput, merge_search
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
+    OpenVikingError,
     PermissionDeniedError,
     UnauthenticatedError,
 )
@@ -423,8 +424,12 @@ async def read(uris: str | list[str]) -> str:
 
     async def _read_one(uri: str) -> str:
         async with semaphore:
-            resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
-            return await service.fs.read_for_tool(resolved_uri, ctx=ctx, display_uri=uri)
+            try:
+                resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
+                content = await service.fs.read_visible(resolved_uri, ctx=ctx)
+                return content
+            except OpenVikingError as exc:
+                return str(exc)
 
     if len(uri_list) == 1:
         return await _read_one(uri_list[0])

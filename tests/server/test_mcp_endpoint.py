@@ -540,8 +540,8 @@ async def test_read_directory_uri_returns_recoverable_hint(service):
     result = await read(uri)
 
     assert "Directory URI is not readable as a file" in result
-    assert "Use the list tool" in result
-    assert "then use read on a file URI" in result
+    assert "List it first, then read a file URI." in result
+    assert uri in result
     assert "nothing found" not in result.lower()
 
 
@@ -556,20 +556,19 @@ async def test_read_batch(service):
     assert "not found" in result.lower()
 
 
-async def test_read_delegates_to_tool_read(monkeypatch):
-    read_for_tool = AsyncMock(return_value="visible memory")
+async def test_read_delegates_to_visible_read(monkeypatch):
+    read_visible = AsyncMock(return_value="visible memory")
     monkeypatch.setattr(
         mcp_endpoint,
         "get_service",
-        lambda: SimpleNamespace(fs=SimpleNamespace(read_for_tool=read_for_tool)),
+        lambda: SimpleNamespace(fs=SimpleNamespace(read_visible=read_visible)),
     )
     uri = "viking://user/project/private.md"
 
     assert await read(uri) == "visible memory"
-    read_for_tool.assert_awaited_once_with(
+    read_visible.assert_awaited_once_with(
         "viking://user/test_user/project/private.md",
         ctx=DEFAULT_CTX,
-        display_uri=uri,
     )
 
 
