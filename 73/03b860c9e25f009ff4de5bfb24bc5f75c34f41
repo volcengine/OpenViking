@@ -1,0 +1,43 @@
+examples/compile/graph-show/knowledge-graph/knowledge_graph.py
+  s_ef1ec7b3a9b3fb::t_7fec8b4bf55cbe 1-1278
+examples/compile/graph-show/llm-wiki/wiki_graph.py
+  s_ef1ec7b3a9b3fb::t_acadf4c21bec7a 1-1176
+examples/compile/ov-compile-skills/knowledge-graph/SKILL.md
+  s_d799f95e19aec7::t_8514f541adb4ac 1-224
+examples/compile/ov-compile-skills/llm-wiki/SKILL.md
+  s_a249c14ec7f94c::t_f483976cfde5a0 18-20,120-130,152-168,222-232,271-274
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "7303b860c9e25f009ff4de5bfb24bc5f75c34f41",
+  "prompts": {},
+  "sessions": {
+    "s_a249c14ec7f94c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0182e-2d34-7fe1-b77f-15e7e06d5a16",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    },
+    "s_d799f95e19aec7": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a01a06-0757-7452-9396-a308643c429c",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    },
+    "s_ef1ec7b3a9b3fb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a01a08-a255-7313-bb73-4aa5941e27ae",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
