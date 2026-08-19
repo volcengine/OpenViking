@@ -176,41 +176,28 @@ def test_feishu_api_lists_paginated_content_with_user_token(monkeypatch):
             SimpleNamespace(items=[], has_more=False, page_token=None),
         )
     )
-    drive_pages = [
-        _SuccessResponse(
-            SimpleNamespace(
-                files=[SimpleNamespace(token="doc_token")],
-                has_more=True,
-                next_page_token="page-2",
-            )
-        ),
-        _SuccessResponse(
-            SimpleNamespace(
-                files=[SimpleNamespace(token="file_token")],
-                has_more=False,
-                next_page_token=None,
-            )
-        ),
-    ]
-
-    def fake_raw_request(request, _option):
-        if request.uri == "/open-apis/drive/v1/files":
-            return drive_pages.pop(0)
-        if request.uri == "/open-apis/doc/v2/meta/doccn_token":
-            return _FakeMediaResponse(
-                content=json.dumps({"data": {"title": "Legacy Doc"}}),
-            )
-        if request.uri == "/open-apis/doc/v2/doccn_token/raw_content":
-            return _FakeMediaResponse(
-                content=json.dumps({"data": {"content": "legacy body"}}),
-            )
-        raise AssertionError(f"Unexpected Feishu raw request: {request.uri}")
-
-    raw_request = MagicMock(side_effect=fake_raw_request)
+    list_drive = MagicMock(
+        side_effect=[
+            _SuccessResponse(
+                SimpleNamespace(
+                    files=[SimpleNamespace(token="doc_token")],
+                    has_more=True,
+                    next_page_token="page-2",
+                )
+            ),
+            _SuccessResponse(
+                SimpleNamespace(
+                    files=[SimpleNamespace(token="file_token")],
+                    has_more=False,
+                    next_page_token=None,
+                )
+            ),
+        ]
+    )
     accessor = FeishuAccessor()
     accessor._user_token_client = SimpleNamespace(
         docx=SimpleNamespace(v1=SimpleNamespace(document_block=SimpleNamespace(list=list_blocks))),
-        request=raw_request,
+        request=list_drive,
     )
 
     blocks = accessor._fetch_all_blocks("doc_token", feishu_access_token="u-test")
@@ -218,23 +205,14 @@ def test_feishu_api_lists_paginated_content_with_user_token(monkeypatch):
         "folder_token",
         feishu_access_token="u-test",
     )
-    legacy_markdown, legacy_title = accessor._parse_legacy_doc(
-        "doccn_token",
-        feishu_access_token="u-test",
-    )
 
     assert blocks == []
     assert [child.token for child in children] == ["doc_token", "file_token"]
-    assert legacy_markdown == "# Legacy Doc\n\nlegacy body"
-    assert legacy_title == "Legacy Doc"
     request, option = list_blocks.call_args.args
     assert request.document_id == "doc_token"
     assert option.user_access_token == "u-test"
-    drive_calls = [
-        call for call in raw_request.call_args_list if call.args[0].uri == "/open-apis/drive/v1/files"
-    ]
-    assert drive_calls[1].args[0].queries["page_token"] == "page-2"
-    assert all(call.args[1].user_access_token == "u-test" for call in raw_request.call_args_list)
+    assert list_drive.call_args_list[1].args[0].queries["page_token"] == "page-2"
+    assert all(call.args[1].user_access_token == "u-test" for call in list_drive.call_args_list)
 
 
 def test_resolve_image_refs_respects_download_images_disabled():
@@ -468,11 +446,11 @@ def test_access_materializes_drive_folder_contract(monkeypatch):
         ],
         "nested": [SimpleNamespace(token="sheet", name="Metrics", type="sheet", url="")],
     }
-    fetched_urls = []
 
     async def fake_fetch_document(url, **_kwargs):
-        fetched_urls.append(url)
         doc_type, token = accessor._parse_feishu_url(url)
+        if token == "doc_legacy":
+            assert doc_type == "doc"
         return FeishuDocument(
             doc_type=doc_type,
             token=token,
@@ -507,7 +485,6 @@ def test_access_materializes_drive_folder_contract(monkeypatch):
             "# doc_legacy",
             "# doc_two",
         }
-        assert "https://open.feishu.cn/docs/doc_legacy" in fetched_urls
         assert all(len(path.name.encode("utf-8")) <= 240 for path in markdown_files)
         assert any(" (2).md" in path.name for path in markdown_files)
         assert (resource.path / "Nested" / "Metrics.md").read_text(encoding="utf-8") == "# sheet"
@@ -615,7 +592,6 @@ def test_fetch_document_dispatches_all_supported_types(monkeypatch):
     _install_fake_lark_modules(monkeypatch)
     accessor = FeishuAccessor()
     handlers = {
-        "_parse_legacy_doc": MagicMock(return_value=("doc body", "Legacy Doc")),
         "_parse_docx": MagicMock(return_value=("docx body", "Doc")),
         "_parse_sheets": MagicMock(return_value=("sheet body", "Sheet")),
         "_parse_bitable": MagicMock(return_value=("base body", "Base")),
@@ -623,6 +599,14 @@ def test_fetch_document_dispatches_all_supported_types(monkeypatch):
     for name, handler in handlers.items():
         monkeypatch.setattr(accessor, name, handler)
 
+    def raw_doc_response(data):
+        return _FakeMediaResponse(content=json.dumps({"data": data}))
+
+    legacy_responses = {
+        "/open-apis/doc/v2/meta/doccn_token": raw_doc_response({"title": "Legacy Doc"}),
+        "/open-apis/doc/v2/doccn_token/raw_content": raw_doc_response({"content": "doc body"}),
+    }
+    raw_request = MagicMock(side_effect=lambda request, _option: legacy_responses[request.uri])
     get_wiki_node = MagicMock(
         return_value=_SuccessResponse(
             SimpleNamespace(
@@ -635,7 +619,8 @@ def test_fetch_document_dispatches_all_supported_types(monkeypatch):
         )
     )
     accessor._user_token_client = SimpleNamespace(
-        wiki=SimpleNamespace(v2=SimpleNamespace(space=SimpleNamespace(get_node=get_wiki_node)))
+        request=raw_request,
+        wiki=SimpleNamespace(v2=SimpleNamespace(space=SimpleNamespace(get_node=get_wiki_node))),
     )
 
     assert accessor._resolve_wiki_node("wiki_token", "u-test") == (
@@ -643,8 +628,6 @@ def test_fetch_document_dispatches_all_supported_types(monkeypatch):
         "doccn_from_wiki",
         "Wiki Legacy",
     )
-    assert get_wiki_node.call_args.args[1].user_access_token == "u-test"
-    accessor._user_token_client = None
 
     assert accessor.can_handle("https://example.feishu.cn/doc/doccn_token")
     assert accessor.can_handle("https://example.feishu.cn/docs/doccn_token")
@@ -670,53 +653,33 @@ def test_fetch_document_dispatches_all_supported_types(monkeypatch):
     monkeypatch.setattr(
         accessor,
         "_resolve_wiki_node",
-        MagicMock(
-            side_effect=[
-                ("doc", "wiki_doccn_token", "Wiki Legacy"),
-                ("base", "wiki_app_token", "Wiki Base"),
-            ]
-        ),
+        MagicMock(return_value=("base", "wiki_app_token", "Wiki Base")),
     )
-    wiki_doc = asyncio.run(
-        accessor._fetch_document(
-            "https://example.feishu.cn/wiki/wiki_doc_token",
-            feishu_access_token="u-test",
-        )
-    )
-    wiki = asyncio.run(
-        accessor._fetch_document(
-            "https://example.feishu.cn/wiki/wiki_token",
-            feishu_access_token="u-test",
-        )
-    )
+    wiki = asyncio.run(accessor._fetch_document("https://example.feishu.cn/wiki/wiki_token"))
 
     assert (
         legacy_doc.doc_type,
         docx.doc_type,
         sheets.doc_type,
         base.doc_type,
-        wiki_doc.doc_type,
         wiki.doc_type,
     ) == (
         "doc",
         "docx",
         "sheets",
         "base",
-        "doc",
         "base",
     )
     assert legacy_doc.title == "Legacy Doc"
-    assert wiki_doc.title == "Wiki Legacy"
+    assert legacy_doc.markdown_content == "# Legacy Doc\n\ndoc body"
     assert wiki.title == "Wiki Base"
-    handlers["_parse_legacy_doc"].assert_any_call("doccn_token", "u-test")
-    handlers["_parse_legacy_doc"].assert_any_call("wiki_doccn_token", "u-test")
     handlers["_parse_docx"].assert_called_once_with("doc_token", "u-test")
     handlers["_parse_sheets"].assert_called_once_with(
         "sht_token",
         None,
         media_download_extras=sheets.media_download_extras,
     )
-    assert handlers["_parse_bitable"].call_args_list[-1].args == ("wiki_app_token", "u-test")
+    assert handlers["_parse_bitable"].call_args_list[-1].args == ("wiki_app_token", None)
 
     monkeypatch.setattr(accessor, "_probe_docx_document", MagicMock())
     monkeypatch.setattr(

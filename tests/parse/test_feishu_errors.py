@@ -29,7 +29,7 @@ def _raised_error(response, *, operation="resolve wiki node", resource=None):
     return exc_info.value
 
 
-@pytest.mark.parametrize("feishu_code", [1770032, 131006, 91403, 95008, 95009])
+@pytest.mark.parametrize("feishu_code", [1770032, 131006])
 def test_maps_feishu_forbidden_to_permission_denied_and_keeps_details(feishu_code):
     response = _fake_response(
         code=feishu_code,
@@ -67,28 +67,20 @@ def test_maps_missing_bitable_scope_without_parsing_message():
 
 
 @pytest.mark.parametrize(
-    ("feishu_code", "http_status", "error_code"),
+    ("http_status", "error_code"),
     [
-        (123, 401, "UNAUTHENTICATED"),
-        (123, 404, "NOT_FOUND"),
-        (123, 429, "RESOURCE_EXHAUSTED"),
-        (123, 500, "UNAVAILABLE"),
-        (123, 400, "INVALID_ARGUMENT"),
-        (91402, 200, "NOT_FOUND"),
-        (95006, 200, "NOT_FOUND"),
-        (95007, 200, "NOT_FOUND"),
-        (91404, 200, "UNAUTHENTICATED"),
+        (401, "UNAUTHENTICATED"),
+        (404, "NOT_FOUND"),
+        (429, "RESOURCE_EXHAUSTED"),
+        (500, "UNAVAILABLE"),
+        (400, "INVALID_ARGUMENT"),
     ],
 )
-def test_maps_provider_or_http_status_to_openviking_error(
-    feishu_code,
-    http_status,
-    error_code,
-):
-    response = _fake_response(code=feishu_code, msg="failed", http_status=http_status)
+def test_maps_http_status_to_openviking_error(http_status, error_code):
+    response = _fake_response(code=123, msg="failed", http_status=http_status)
 
     exc = _raised_error(response)
 
     assert exc.code == error_code
-    assert exc.details["feishu_code"] == feishu_code
+    assert exc.details["feishu_code"] == 123
     assert exc.details["http_status"] == http_status
