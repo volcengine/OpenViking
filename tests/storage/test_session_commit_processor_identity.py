@@ -71,8 +71,8 @@ def _make_msg() -> SessionCommitMsg:
     return SessionCommitMsg(
         task_id="task-1",
         session_id="sess-1",
-        session_uri="viking://sessions/sess-1",
-        archive_uri="viking://sessions/sess-1/history/archive_001",
+        session_uri="viking://user/alice/sessions/sess-1",
+        archive_uri="viking://user/alice/sessions/sess-1/history/archive_001",
         user={"account_id": "acme", "user_id": "alice"},
     )
 

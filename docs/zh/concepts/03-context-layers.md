@@ -68,10 +68,9 @@ content = client.read("viking://resources/docs/auth/oauth.md")
 viking://resources/docs/auth/
 ├── .abstract.md          # L0，隐藏的目录级 sidecar
 ├── .overview.md          # L1，隐藏的目录级 sidecar
-├── .relations.json       # 关系数据
-├── oauth.md              # L2
-├── jwt.md                # L2
-└── api-keys.md           # L2
+├── oauth.md              # L2，完整内容
+├── jwt.md                # L2，完整内容
+└── api-keys.md           # L2，完整内容
 ```
 
 普通 `ls` 默认隐藏 `.abstract.md` 和 `.overview.md`。它们不一定同时存在；不要依赖“每个目录始终具有两个 sidecar”的假设。

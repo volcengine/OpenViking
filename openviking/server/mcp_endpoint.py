@@ -30,7 +30,11 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from openviking.core.namespace import canonical_user_root, canonicalize_uri, uri_parts
+from openviking.core.path_variables import resolve_path_variables
+from openviking.core.uri_validation import (
+    validate_content_target_uri,
+    validate_request_viking_uri,
+)
 from openviking.parse.mode import ParseMode, normalize_parse_mode
 from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.retrieve.context_assembler import (
@@ -87,22 +91,8 @@ def _get_ctx() -> RequestContext:
 
 
 def _resolve_mcp_workspace_uri(uri: str, ctx: RequestContext) -> str:
-    """Resolve ``viking://user/...`` as the current user's MCP workspace.
-
-    Generic namespace parsing must preserve canonical cross-user URIs, so it
-    cannot infer whether the first segment after ``user`` is a user id or a
-    file/directory name. MCP has a narrower contract: its filesystem tools act
-    on the authenticated user's workspace. An exact current-user id is already
-    canonical; every other suffix is relative to that user's root.
-    """
-    parts = uri_parts(uri)
-    if parts[:1] != ["user"]:
-        return uri
-    suffix = parts[1:]
-    if suffix[:1] == [ctx.user.user_id]:
-        return canonicalize_uri(uri, ctx)
-    root = canonical_user_root(ctx)
-    return root if not suffix else f"{root}/{'/'.join(suffix)}"
+    """Resolve MCP's current-user workspace dialect at its request boundary."""
+    return validate_request_viking_uri(resolve_path_variables(uri), ctx)
 
 
 def _scope_to_origin(scope: Scope) -> Optional[str]:
@@ -566,7 +556,7 @@ async def write(
     - Any new file (whether created by "replace" or "create") must end in one of: .md .txt .json .yaml .yml .toml .py .js .ts
     - mode="append": append to the end of an existing file; fails if the file does not exist.
 
-    Writable scopes: viking://resources/, viking://user/ (all paths are relative to the authenticated user's root unless the URI already contains that exact user id), viking://agent/. The managed user subtrees skills/, peers/, privacy/ and sessions/ are read-only. After a write, semantic search indexes refresh in the background; pass wait=true to block until search reflects the change."""
+    Writable scopes: viking://resources/, viking://user/{user_id}/, viking://agent/. Documented current-user roots such as viking://user/resources are expanded at this MCP boundary. The managed user subtrees skills/, peers/, privacy/ and sessions/ are read-only. After a write, semantic search indexes refresh in the background; pass wait=true to block until search reflects the change."""
     service = get_service()
     ctx = _get_ctx()
     uri = _resolve_mcp_workspace_uri(uri, ctx)
@@ -802,6 +792,21 @@ async def add_resource(
     ctx = _get_ctx()
 
     try:
+        to = resolve_path_variables(to).strip() if to else ""
+        if to:
+            to = validate_content_target_uri(to, ctx, kind="resource", field_name="to")
+        parent = resolve_path_variables(parent).strip() if parent else ""
+        if parent:
+            parent = validate_content_target_uri(
+                parent,
+                ctx,
+                kind="resource",
+                field_name="parent",
+            )
+    except (InvalidArgumentError, PermissionDeniedError) as exc:
+        return f"Error: {exc}"
+
+    try:
         mode = normalize_parse_mode((args or {}).get("parse_mode", ParseMode.DEFAULT))
     except InvalidArgumentError as exc:
         return f"Error: {exc}"
@@ -1019,6 +1024,7 @@ async def cancel_watch(to_uri: str) -> str:
 
     service = get_service()
     ctx = _get_ctx()
+    to_uri = _resolve_mcp_workspace_uri(to_uri, ctx)
     scheduler = getattr(service, "watch_scheduler", None)
     if scheduler is None or not scheduler.is_running:
         return "Error: Watch scheduler not running"

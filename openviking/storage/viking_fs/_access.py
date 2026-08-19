@@ -1,26 +1,23 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Access control, URI normalization, path conversion, and visibility mixin for VikingFS."""
+"""Access control, URI/path conversion, and visibility mixin for VikingFS."""
 
-import contextvars
 import hashlib
 import json
 import re
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
-    canonicalize_uri,
-    is_hidden_by_actor_peer_view,
-    may_include_hidden_actor_peers,
-    uri_parts,
-)
-from openviking.core.namespace import (
     is_accessible as namespace_is_accessible,
 )
+from openviking.core.namespace import (
+    is_hidden_by_actor_peer_view,
+    may_include_hidden_actor_peers,
+)
 from openviking.resource.watch_storage import is_watch_task_control_uri
-from openviking.server.error_mapping import is_not_found_error, map_exception
+from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.internal_names import STORAGE_INTERNAL_ENTRY_NAMES
 from openviking_cli.exceptions import (
@@ -30,10 +27,6 @@ from openviking_cli.exceptions import (
 )
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.uri import VikingURI
-
-if TYPE_CHECKING:
-    from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
-    from openviking_cli.utils.config import GrepConfig, RerankConfig, RetrievalConfig
 
 
 class _AccessMixin:
@@ -103,36 +96,30 @@ class _AccessMixin:
             self._bound_ctx.reset(token)
 
     @staticmethod
-    def _normalize_uri(uri: str) -> str:
-        """Normalize short-format URIs to the canonical viking:// form."""
-        if uri.startswith("viking://"):
-            return uri
-        return VikingURI.normalize(uri)
-
-    @classmethod
-    def _normalized_uri_parts(cls, uri: str) -> tuple[str, List[str]]:
-        """Normalize a URI and reject ambiguous or platform-specific path traversal forms."""
-        normalized = cls._normalize_uri(uri)
-        parts = [p for p in normalized[len("viking://") :].strip("/").split("/") if p]
+    def _safe_uri_parts(uri: str) -> List[str]:
+        """Split a canonical URI and reject unsafe path traversal forms."""
+        if not uri.startswith("viking://"):
+            raise ValueError("URI must start with 'viking://'")
+        parts = [p for p in uri[len("viking://") :].strip("/").split("/") if p]
 
         for part in parts:
             if part in {".", ".."}:
                 raise PermissionDeniedError(
-                    f"Unsafe URI traversal segment '{part}' in {normalized}",
-                    resource=normalized,
+                    f"Unsafe URI traversal segment '{part}' in {uri}",
+                    resource=uri,
                 )
             if "\\" in part:
                 raise PermissionDeniedError(
-                    f"Unsafe URI path separator '\\\\' in component '{part}' of {normalized}",
-                    resource=normalized,
+                    f"Unsafe URI path separator '\\\\' in component '{part}' of {uri}",
+                    resource=uri,
                 )
             if len(part) >= 2 and part[1] == ":" and part[0].isalpha():
                 raise PermissionDeniedError(
-                    f"Unsafe URI drive-prefixed component '{part}' in {normalized}",
-                    resource=normalized,
+                    f"Unsafe URI drive-prefixed component '{part}' in {uri}",
+                    resource=uri,
                 )
 
-        return normalized, parts
+        return parts
 
     # TODO: Once pathlock moves down into ragfs, stop reconstructing the
     # encrypted mount-relative path in Python and derive the lock target from
@@ -160,38 +147,30 @@ class _AccessMixin:
 
     def _ensure_access(self, uri: str, ctx: Optional[RequestContext]) -> None:
         real_ctx = self._ctx_or_default(ctx)
-        normalized_uri, _ = self._normalized_uri_parts(uri)
-        if not self._is_accessible(normalized_uri, real_ctx):
-            raise PermissionDeniedError(f"Access denied for {uri}", resource=normalized_uri)
+        if not self._is_accessible(uri, real_ctx):
+            raise PermissionDeniedError(f"Access denied for {uri}", resource=uri)
 
     def _ensure_mutable_access(self, uri: str, ctx: Optional[RequestContext]) -> None:
         self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
         self._ensure_user_not_deleting(real_ctx)
-        normalized_uri, _ = self._normalized_uri_parts(uri)
-        if is_hidden_by_actor_peer_view(normalized_uri, real_ctx) or may_include_hidden_actor_peers(
-            normalized_uri, real_ctx
-        ):
-            raise PermissionDeniedError(f"Access denied for {uri}", resource=normalized_uri)
-        self._ensure_supported_write_namespace(normalized_uri)
-        if real_ctx.role != Role.ROOT and normalized_uri.rstrip("/") == "viking://temp":
+        if is_hidden_by_actor_peer_view(uri, real_ctx) or may_include_hidden_actor_peers(uri, real_ctx):
+            raise PermissionDeniedError(f"Access denied for {uri}", resource=uri)
+        self._ensure_supported_write_namespace(uri)
+        if real_ctx.role != Role.ROOT and uri.rstrip("/") == "viking://temp":
             raise PermissionDeniedError(
                 "Temp root is read-only for non-root users",
-                resource=normalized_uri,
+                resource=uri,
             )
 
     def _ensure_delete_access(self, uri: str, ctx: Optional[RequestContext]) -> None:
         self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
         self._ensure_user_not_deleting(real_ctx)
-        normalized_uri, _ = self._normalized_uri_parts(uri)
-        if is_hidden_by_actor_peer_view(normalized_uri, real_ctx) or may_include_hidden_actor_peers(
-            normalized_uri, real_ctx
-        ):
-            raise PermissionDeniedError(f"Access denied for {uri}", resource=normalized_uri)
-        canonical_uri = canonicalize_uri(normalized_uri, real_ctx)
-        self._ensure_supported_delete_namespace(canonical_uri)
-        canonical_parts = uri_parts(canonical_uri)
+        if is_hidden_by_actor_peer_view(uri, real_ctx) or may_include_hidden_actor_peers(uri, real_ctx):
+            raise PermissionDeniedError(f"Access denied for {uri}", resource=uri)
+        self._ensure_supported_delete_namespace(uri)
+        canonical_parts = self._safe_uri_parts(uri)
         if real_ctx.role != Role.ROOT and (
             canonical_parts == ["resources"]
             or (canonical_parts[:1] == ["user"] and len(canonical_parts) == 2)
@@ -199,12 +178,12 @@ class _AccessMixin:
             raise PermissionDeniedError(
                 "Deleting a namespace root requires root access; use a concrete content "
                 "path instead.",
-                resource=canonical_uri,
+                resource=uri,
             )
-        if real_ctx.role != Role.ROOT and normalized_uri.rstrip("/") == "viking://temp":
+        if real_ctx.role != Role.ROOT and uri.rstrip("/") == "viking://temp":
             raise PermissionDeniedError(
                 "Temp root is read-only for non-root users",
-                resource=normalized_uri,
+                resource=uri,
             )
 
     def _ensure_user_not_deleting(self, ctx: RequestContext) -> None:
@@ -383,7 +362,7 @@ class _AccessMixin:
                 path = candidate_path
                 break
         if path is None:
-            if self._is_legacy_session_root_uri(uri):
+            if self._is_session_root_uri(uri):
                 return
             raise NotFoundError(uri, "directory")
 
@@ -456,15 +435,15 @@ class _AccessMixin:
         """
         real_ctx = self._ctx_or_default(ctx)
         account_id = real_ctx.account_id
-        normalized_uri, legacy_parts = self._normalized_uri_parts(uri)
-        if legacy_parts and legacy_parts[0] == "agent" and self._is_legacy_agent_id_uri(uri):
+        parts = self._safe_uri_parts(uri)
+        if parts[:1] == ["session"]:
+            raise ValueError(f"Legacy session URI is not accepted internally: {uri}")
+        if parts and parts[0] == "agent" and self._is_legacy_agent_id_uri(uri):
             # Old format: viking://agent/{agent_id}/... — direct mapping for read-only compat
             safe_parts = [
-                self._shorten_component(p, self._MAX_FILENAME_BYTES) for p in legacy_parts
+                self._shorten_component(p, self._MAX_FILENAME_BYTES) for p in parts
             ]
             return f"/local/{account_id}/{'/'.join(safe_parts)}"
-        canonical_uri = canonicalize_uri(uri, real_ctx)
-        _, parts = self._normalized_uri_parts(canonical_uri)
         if not parts:
             return f"/local/{account_id}"
 
@@ -474,32 +453,35 @@ class _AccessMixin:
     def _legacy_session_path(self, uri: str, ctx: Optional[RequestContext] = None) -> str:
         """Map a legacy viking://session URI to its pre-user-namespace path."""
         real_ctx = self._ctx_or_default(ctx)
-        _, parts = self._normalized_uri_parts(uri)
+        parts = self._safe_uri_parts(uri)
         safe_parts = [self._shorten_component(p, self._MAX_FILENAME_BYTES) for p in parts]
         return f"/local/{real_ctx.account_id}/{'/'.join(safe_parts)}"
 
-    def _legacy_current_user_session_path(
+    def _legacy_user_session_path(
         self, uri: str, ctx: Optional[RequestContext] = None
     ) -> Optional[str]:
         """Return the legacy nested /session/{user_id}/{session_id} candidate."""
         real_ctx = self._ctx_or_default(ctx)
-        _, parts = self._normalized_uri_parts(uri)
-        if len(parts) <= 1 or parts[0] != "session":
+        parts = self._safe_uri_parts(uri)
+        if len(parts) <= 3 or parts[0] != "user" or parts[2] != "sessions":
             return None
-        nested_parts = ["session", real_ctx.user.user_id, *parts[1:]]
+        nested_parts = ["session", parts[1], *parts[3:]]
         safe_parts = [self._shorten_component(p, self._MAX_FILENAME_BYTES) for p in nested_parts]
         return f"/local/{real_ctx.account_id}/{'/'.join(safe_parts)}"
 
-    def _is_legacy_session_uri(self, uri: str) -> bool:
-        _, parts = self._normalized_uri_parts(uri)
-        return bool(parts and parts[0] == "session")
+    def _legacy_session_alias(self, uri: str) -> Optional[str]:
+        """Return the old storage alias for a canonical user session URI."""
+        parts = self._safe_uri_parts(uri)
+        if len(parts) < 3 or parts[0] != "user" or parts[2] != "sessions":
+            return None
+        suffix = parts[3:]
+        return "viking://session" + (f"/{'/'.join(suffix)}" if suffix else "")
 
-    def _is_legacy_session_root_uri(self, uri: str) -> bool:
-        _, parts = self._normalized_uri_parts(uri)
-        return parts == ["session"]
+    def _is_session_root_uri(self, uri: str) -> bool:
+        return self._legacy_session_alias(uri) == "viking://session"
 
     def _is_legacy_agent_id_uri(self, uri: str) -> bool:
-        _, parts = self._normalized_uri_parts(uri)
+        parts = self._safe_uri_parts(uri)
         return bool(
             parts
             and parts[0] == "agent"
@@ -511,10 +493,11 @@ class _AccessMixin:
         """Return read candidates for a URI, including legacy alias fallbacks."""
         paths = [self._uri_to_path(uri, ctx=ctx)]
 
-        if self._is_legacy_session_uri(uri):
+        legacy_uri = self._legacy_session_alias(uri)
+        if legacy_uri:
             for candidate in (
-                self._legacy_session_path(uri, ctx=ctx),
-                self._legacy_current_user_session_path(uri, ctx=ctx),
+                self._legacy_session_path(legacy_uri, ctx=ctx),
+                self._legacy_user_session_path(uri, ctx=ctx),
             ):
                 if candidate and candidate not in paths:
                     paths.append(candidate)
@@ -529,8 +512,11 @@ class _AccessMixin:
     ) -> bool:
         if path == primary_path:
             return True
-        if self._is_legacy_session_uri(request_uri):
-            return await self._legacy_session_path_visible(path, ctx)
+        if self._legacy_session_alias(request_uri):
+            owner_user_id = self._safe_uri_parts(request_uri)[1]
+            return await self._legacy_session_path_visible(
+                path, owner_user_id=owner_user_id
+            )
         return True
 
     def _alias_uri_for_path(
@@ -542,23 +528,21 @@ class _AccessMixin:
         ctx: Optional[RequestContext],
     ) -> str:
         base = base_path.rstrip("/")
-        normalized_request, request_parts = self._normalized_uri_parts(request_uri)
+        request_parts = self._safe_uri_parts(request_uri)
         request_root = (
-            normalized_request
-            if normalized_request == "viking://"
-            else normalized_request.rstrip("/")
+            request_uri if request_uri == "viking://" else request_uri.rstrip("/")
         )
-        preserve_request_alias = normalized_request in {"viking://", "viking://user"} or bool(
+        preserve_request_alias = request_uri in {"viking://", "viking://user"} or bool(
             request_parts
-            and (
-                request_parts[0] == "session"
-                or (request_parts[0] == "agent" and self._is_legacy_agent_id_uri(request_uri))
-            )
+            and request_parts[0] == "agent"
+            and self._is_legacy_agent_id_uri(request_uri)
         )
         rel_path = entry_path[len(base) :].strip("/") if entry_path.startswith(base) else ""
         if entry_path.startswith(base):
             separator = "" if request_root.endswith("://") else "/"
             candidate_uri = request_root if not rel_path else f"{request_root}{separator}{rel_path}"
+            if self._legacy_session_alias(request_uri):
+                return candidate_uri
             if preserve_request_alias:
                 return candidate_uri
             try:
@@ -620,7 +604,12 @@ class _AccessMixin:
             return owner_hint == ctx.user.user_id
         return True
 
-    async def _legacy_session_path_visible(self, path: str, ctx: RequestContext) -> bool:
+    async def _legacy_session_path_visible(
+        self,
+        path: str,
+        *,
+        owner_user_id: str,
+    ) -> bool:
         parts = [p for p in path.strip("/").split("/") if p]
         try:
             session_index = parts.index("session")
@@ -633,22 +622,24 @@ class _AccessMixin:
         root_prefix = "/" + "/".join(parts[: session_index + 1])
         direct_root = f"{root_prefix}/{suffix[0]}"
         if await self._looks_like_legacy_session_dir(direct_root):
-            return await self._legacy_session_visible(direct_root, ctx)
+            owner = await self._legacy_session_owner(direct_root)
+            return bool(owner) and owner == owner_user_id
 
         if len(suffix) >= 2:
+            if suffix[0] != owner_user_id:
+                return False
             nested_root = f"{root_prefix}/{suffix[0]}/{suffix[1]}"
             if await self._looks_like_legacy_session_dir(nested_root):
-                return await self._legacy_session_visible(
-                    nested_root,
-                    ctx,
-                    owner_hint=suffix[0],
-                )
+                owner = await self._legacy_session_owner(nested_root)
+                return not owner or owner == owner_user_id
         return True
 
     async def _legacy_session_root_items(
         self,
         path: str,
         ctx: RequestContext,
+        output_root_uri: str,
+        owner_user_id: str,
     ) -> List[tuple[Dict[str, Any], str]]:
         try:
             entries = await self._ls_entries(path)
@@ -664,11 +655,12 @@ class _AccessMixin:
                 continue
             child_path = f"{path.rstrip('/')}/{name}"
             if await self._looks_like_legacy_session_dir(child_path):
-                if await self._legacy_session_visible(child_path, ctx):
-                    items.append((entry, f"viking://session/{name}"))
+                legacy_owner = await self._legacy_session_owner(child_path)
+                if legacy_owner == owner_user_id:
+                    items.append((entry, f"{output_root_uri}/{name}"))
                 continue
 
-            if ctx.role != Role.ROOT and name != ctx.user.user_id:
+            if name != owner_user_id:
                 continue
             try:
                 nested_entries = await self._ls_entries(child_path)
@@ -684,7 +676,7 @@ class _AccessMixin:
                 if not await self._looks_like_legacy_session_dir(nested_path):
                     continue
                 if await self._legacy_session_visible(nested_path, ctx, owner_hint=name):
-                    items.append((nested, f"viking://session/{nested_name}"))
+                    items.append((nested, f"{output_root_uri}/{nested_name}"))
         return items
 
     async def _session_root_items(
@@ -693,19 +685,23 @@ class _AccessMixin:
         ctx: RequestContext,
     ) -> List[tuple[Dict[str, Any], str]]:
         primary_path = self._uri_to_path(uri, ctx=ctx)
+        output_root_uri = uri.rstrip("/")
+        owner_user_id = self._safe_uri_parts(uri)[1]
         by_name: Dict[str, tuple[Dict[str, Any], str]] = {}
         try:
             for entry in await self._ls_entries(primary_path, ctx=ctx):
                 name = entry.get("name", "")
                 if not name or name in {".", ".."}:
                     continue
-                by_name[name] = (entry, f"viking://session/{name}")
+                by_name[name] = (entry, f"{output_root_uri}/{name}")
         except Exception as exc:
             if not is_not_found_error(exc):
                 raise
 
-        legacy_path = self._legacy_session_path(uri, ctx=ctx)
-        for entry, entry_uri in await self._legacy_session_root_items(legacy_path, ctx):
+        legacy_path = self._legacy_session_path("viking://session", ctx=ctx)
+        for entry, entry_uri in await self._legacy_session_root_items(
+            legacy_path, ctx, output_root_uri, owner_user_id
+        ):
             name = entry.get("name", "")
             if name and name not in by_name:
                 by_name[name] = (entry, entry_uri)
@@ -717,11 +713,11 @@ class _AccessMixin:
         ctx: Optional[RequestContext] = None,
     ) -> List[tuple[Dict[str, Any], str]]:
         real_ctx = self._ctx_or_default(ctx)
-        if self._is_legacy_session_root_uri(uri):
+        if self._is_session_root_uri(uri):
             return await self._session_root_items(uri, real_ctx)
 
         primary_path = self._uri_to_path(uri, ctx=ctx)
-        merge_paths = self._is_legacy_session_uri(uri)
+        merge_paths = self._legacy_session_alias(uri) is not None
         found_path = False
         last_not_found: Optional[Exception] = None
         by_uri: Dict[str, tuple[Dict[str, Any], str]] = {}
@@ -759,9 +755,7 @@ class _AccessMixin:
         Pure prefix replacement: strips /local/{account_id}/ and prepends viking://.
         No implicit space stripping.
         """
-        if path.startswith("viking://"):
-            return path
-        elif path.startswith("/local/"):
+        if path.startswith("/local/"):
             inner = path[7:].strip("/")
             if not inner:
                 return "viking://"
@@ -772,10 +766,7 @@ class _AccessMixin:
             if not parts:
                 return "viking://"
             return f"viking://{'/'.join(parts)}"
-        elif path.startswith("/"):
-            return f"viking:/{path}"
-        else:
-            return f"viking://{path}"
+        raise ValueError(f"AGFS path must start with '/local/': {path!r}")
 
     def _looks_like_legacy_temp_leaf(self, value: str) -> bool:
         return bool(re.match(r"^\d{8}_[0-9a-f]{6}$", value or ""))
@@ -789,14 +780,14 @@ class _AccessMixin:
 
     def _is_accessible(self, uri: str, ctx: RequestContext) -> bool:
         """Check whether a URI is visible/accessible under current request context."""
-        normalized_uri, parts = self._normalized_uri_parts(uri)
+        parts = self._safe_uri_parts(uri)
         if ctx.role == Role.ROOT:
             return True
-        if is_hidden_by_actor_peer_view(normalized_uri, ctx):
+        if is_hidden_by_actor_peer_view(uri, ctx):
             return False
         if not parts:
             return True
-        if is_watch_task_control_uri(normalized_uri):
+        if is_watch_task_control_uri(uri):
             return False
 
         scope = parts[0]
@@ -820,7 +811,7 @@ class _AccessMixin:
             if not ctx.actor_peer_id or len(parts) < 2:
                 return True
             return parts[1] == ctx.actor_peer_id
-        return namespace_is_accessible(normalized_uri, ctx)
+        return namespace_is_accessible(uri, ctx)
 
     def _handle_agfs_read(self, result: Union[bytes, Any, None]) -> bytes:
         """Handle AGFSClient read return types consistently."""
@@ -876,12 +867,12 @@ class _AccessMixin:
         — passing them through silently would result in a no-op commit and
         confuse callers.
         """
-        real_ctx = self._ctx_or_default(ctx)
-        canonical = canonicalize_uri(uri, real_ctx)
-        _, parts = self._normalized_uri_parts(canonical)
+        parts = self._safe_uri_parts(uri)
         if not parts:
             raise ValueError(f"git tree path cannot be the account root: {uri!r}")
         first = parts[0]
+        if first == "session":
+            raise ValueError(f"Legacy session URI is not accepted internally: {uri}")
         if first in self._GIT_INTERNAL_FIRST_SEGMENTS:
             raise ValueError(f"git tree path rejects internal scope/segment {first!r}: {uri!r}")
         return "/".join(parts)
@@ -889,7 +880,7 @@ class _AccessMixin:
     def _tree_path_to_uri(self, tree_path: str) -> str:
         """Convert an account-relative git tree path to a viking:// URI.
 
-        Inverse of :py:meth:`_uri_to_tree_path` (without context canonicalization).
+        Inverse of :py:meth:`_uri_to_tree_path`.
         """
         cleaned = tree_path.strip("/")
         if not cleaned:

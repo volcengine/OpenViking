@@ -193,8 +193,14 @@ class TestExtractLoopFinalJsonRetry:
         vlm = MagicMock()
         vlm.model = "test-model"
         vlm.get_completion_async = AsyncMock(
-            return_value=('{"delete_ids": [{"delete_page_id": 7, "replacement_page_id": 11}]}')
+            return_value='{"delete_ids": [{"delete_page_id": 7, "replacement_page_id": 11}]}'
         )
+        # decision_reasoning response retained for when the schema field is re-enabled:
+        # return_value=(
+        #     '{"delete_ids": [{"delete_page_id": 7, "replacement_page_id": 11}], '
+        #     '"decision_reasoning": [{"page_id": 7, "remove": [], '
+        #     '"has_unaffected_facts": false, "action": "DELETE"}]}'
+        # )
         extract_loop = ExtractLoop(
             vlm=vlm,
             viking_fs=MagicMock(),
@@ -217,6 +223,8 @@ class TestExtractLoopFinalJsonRetry:
         assert len(parsed_operations.delete_ids) == 1
         assert parsed_operations.delete_ids[0].delete_page_id == 7
         assert parsed_operations.delete_ids[0].replacement_page_id == 11
+        # assert parsed_operations.decision_reasoning[0].action == "DELETE"
+        # assert parsed_operations.decision_reasoning[0].remove == []
 
     def test_add_only_contract_does_not_allow_delete_ids(self):
         schema = MemoryTypeSchema(
@@ -229,11 +237,53 @@ class TestExtractLoopFinalJsonRetry:
         )
         generator = SchemaModelGenerator([schema], template_context={"language": "en"})
 
-        assert "delete_ids" not in generator.create_structured_operations_model().model_fields
+        operations_model = generator.create_structured_operations_model()
+        fields = operations_model.model_fields
+        assert "decision_reasoning" not in fields
+        assert "delete_ids" not in fields
+
+        # decision_reasoning schema tests retained for when the field is re-enabled:
+        # assert next(iter(fields)) == "decision_reasoning"
+        # description = fields["decision_reasoning"].description
+        # assert "one decision for every related read page" in description
+        # decisions = operations_model.model_validate(
+        #     {
+        #         "decision_reasoning": [
+        #             {
+        #                 "page_id": 7,
+        #                 "remove": ["- affected fact"],
+        #                 "has_unaffected_facts": True,
+        #                 "action": "UPDATE",
+        #             }
+        #         ]
+        #     }
+        # ).decision_reasoning
+        # assert decisions[0].has_unaffected_facts is True
+        # assert operations_model.model_validate({}).decision_reasoning == []
+        # with pytest.raises(ValueError):
+        #     operations_model.model_validate(
+        #         {
+        #             "decision_reasoning": [
+        #                 {
+        #                     "page_id": 7,
+        #                     "remove": [],
+        #                     "has_unaffected_facts": True,
+        #                     "action": "REMOVE",
+        #                 }
+        #             ]
+        #         }
+        #     )
+        # merge_fields = (
+        #     SchemaModelGenerator([schema], include_decision_reasoning=False)
+        #     .create_structured_operations_model()
+        #     .model_fields
+        # )
+        # assert "decision_reasoning" not in merge_fields
 
     def test_final_instruction_includes_schema_aware_empty_json(self):
         extract_loop = object.__new__(ExtractLoop)
         extract_loop._expected_fields = ["preferences", "tools"]
+        # extract_loop._expected_fields = ["preferences", "tools", "decision_reasoning"]
 
         instruction = extract_loop._build_final_operations_instruction()
 
@@ -241,6 +291,8 @@ class TestExtractLoopFinalJsonRetry:
         assert '"delete_ids": []' in instruction
         assert '"preferences": []' in instruction
         assert '"tools": []' in instruction
+        assert '"decision_reasoning": []' not in instruction
+        # assert '"decision_reasoning": []' in instruction
 
     @pytest.mark.asyncio
     async def test_patch_validation_uses_plain_and_sequential_content(self):
@@ -353,3 +405,16 @@ class TestExtractLoopFinalJsonRetry:
         assert final_prompts
         assert '"delete_ids": []' in final_prompts[-1]
         assert '"preferences": []' in final_prompts[-1]
+
+        system_prompts = [
+            message["content"]
+            for messages in vlm.seen_messages
+            for message in messages
+            if message.get("role") == "system"
+        ]
+        assert system_prompts
+        initial_system_prompt = system_prompts[0]
+        assert "`delete_ids` deletes the whole item" in initial_system_prompt
+        assert "only if every substantive fact is in scope" in initial_system_prompt
+        assert "otherwise MUST use DELETE blocks" in initial_system_prompt
+        assert "not inferring scope from the file name/topic" in initial_system_prompt

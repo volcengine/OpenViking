@@ -11,7 +11,6 @@ import os
 from typing import TYPE_CHECKING, Any, Optional
 
 from openviking.core.directories import DirectoryInitializer
-from openviking.core.namespace import canonicalize_uri
 from openviking.privacy import UserPrivacyConfigService
 from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
 from openviking.resource.watch_scheduler import WatchScheduler
@@ -21,7 +20,6 @@ from openviking.service.debug_service import DebugService
 from openviking.service.fs_service import FSService
 from openviking.service.mineru_preflight import wait_for_mineru_ready
 from openviking.service.pack_service import PackService
-from openviking.service.relation_service import RelationService
 from openviking.service.resource_memory_link_service import ResourceMemoryLinkService
 from openviking.service.resource_service import ResourceService
 from openviking.service.search_service import SearchService
@@ -105,7 +103,6 @@ class OpenVikingService:
         self._fs_service = FSService(
             uri_mutation_coordinator=self._uri_mutation_coordinator,
         )
-        self._relation_service = RelationService()
         self._pack_service = PackService()
         self._search_service = SearchService()
         self._resource_memory_link_service = ResourceMemoryLinkService()
@@ -256,11 +253,6 @@ class OpenVikingService:
         return self._fs_service
 
     @property
-    def relations(self) -> RelationService:
-        """Get RelationService instance."""
-        return self._relation_service
-
-    @property
     def pack(self) -> PackService:
         """Get PackService instance."""
         return self._pack_service
@@ -408,7 +400,6 @@ class OpenVikingService:
             watch_scheduler=self._watch_scheduler,
             uri_mutation_coordinator=self._uri_mutation_coordinator,
         )
-        self._relation_service.set_viking_fs(self._viking_fs)
         self._pack_service.set_dependencies(
             viking_fs=self._viking_fs,
             vector_store=self._vikingdb_manager,
@@ -584,11 +575,10 @@ class OpenVikingService:
             await self.initialize()
 
         effective_ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)
-        canonical_uri = canonicalize_uri(uri, effective_ctx)
         from openviking.service.reindex_executor import get_reindex_executor
 
         execute_kwargs = {
-            "uri": canonical_uri,
+            "uri": uri,
             "mode": mode,
             "wait": wait,
             "dry_run": dry_run,

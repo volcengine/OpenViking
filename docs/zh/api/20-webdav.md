@@ -17,7 +17,7 @@ Phase 1 有意把范围控制得比较小：
 - 仅开放 `resources` 命名空间，不暴露 memories、skills、sessions 等其他空间。
 - 以文本写入为主，当前 `PUT` 只接受 UTF-8 文本内容。
 - 只实现一小部分 WebDAV 方法：`OPTIONS`、`PROPFIND`、`GET`、`HEAD`、`PUT`、`DELETE`、`MKCOL`、`MOVE`。
-- 语义侧边文件和系统内部文件保持内部可见。`.abstract.md`、`.overview.md`、`.relations.json`、`.path.ovlock`、`.redirect.json`、`.sync_log.json` 这些派生或内部文件不会出现在 WebDAV 列表中，也不能被直接访问。
+- 语义侧边文件和系统内部文件保持内部可见。`.abstract.md`、`.overview.md`、`.path.ovlock`、`.redirect.json`、`.sync_log.json` 这些派生或内部文件不会出现在 WebDAV 列表中，也不能被直接访问。
 
 行为说明：
 

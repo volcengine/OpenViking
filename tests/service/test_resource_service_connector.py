@@ -996,15 +996,14 @@ async def test_postprocess_queue_message_drops_git_auth(ctx, service):
     assert "secret-token" not in json.dumps(payload)
 
 
-@pytest.mark.parametrize("to", ["viking://resources/manuals", "resources/manuals"])
-def test_connector_route_accepts_public_exact_to(connector_config, ctx, service, to):
+def test_connector_route_accepts_public_exact_to(connector_config, ctx, service):
     connector_config.allowed_add_types = ["tos", "git"]
 
     assert (
         service._connector.should_delegate(
             "https://git.example/org/repo.git",
             ctx=ctx,
-            to=to,
+            to="viking://resources/manuals",
         )
         is True
     )

@@ -353,8 +353,8 @@ async def test_batch_refresh_groups_resource_and_memory_work(monkeypatch):
         refresh_kinds={
             "viking://resources/wiki/a.md": "added",
             "viking://resources/wiki/b.md": "modified",
-            "viking://user/memories/preferences/wiki/a.md": "added",
-            "viking://user/memories/preferences/wiki/b.md": "modified",
+            "viking://user/default/memories/preferences/wiki/a.md": "added",
+            "viking://user/default/memories/preferences/wiki/b.md": "modified",
         },
         ctx=ctx,
         wait=False,

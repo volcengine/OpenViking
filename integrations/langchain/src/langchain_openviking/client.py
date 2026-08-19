@@ -32,7 +32,6 @@ _RETRYABLE_READ_METHODS = {
     "ls",
     "overview",
     "read",
-    "relations",
     "search",
     "session_exists",
     "stat",

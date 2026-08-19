@@ -211,11 +211,8 @@ ov session commit s1 --no-event-tags
 - `snapshot log` - Walk snapshot history.
 - `snapshot ignore-get` / `snapshot ignore-set` / `snapshot ignore-delete` - Manage account `.ovgitignore`.
 
-### Relations And Privacy
+### Privacy
 
-- `relations` - List resource relations. Experimental.
-- `link` - Create relation links. Experimental.
-- `unlink` - Remove a relation link. Experimental.
 - `privacy` - Manage privacy configuration categories, targets, versions, and active config.
 
 ### Admin

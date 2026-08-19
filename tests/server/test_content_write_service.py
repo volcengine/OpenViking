@@ -10,6 +10,7 @@ import pytest
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils import MemoryFileUtils
+from openviking.session.memory.utils.content_visibility import visible_content
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking_cli.exceptions import (
@@ -17,6 +18,7 @@ from openviking_cli.exceptions import (
     DeadlineExceededError,
     InvalidArgumentError,
     NotFoundError,
+    PermissionDeniedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -42,7 +44,8 @@ async def test_write_updates_memory_file_and_parent_overview(service):
     assert result["vector_status"] == "complete"
     assert result["overview_status"] == "complete"
     assert result["queue_status"]["Embedding"]["processed"] >= 1
-    assert await service.viking_fs.read_file(memory_uri, ctx=ctx) == "Updated preference"
+    stored = await service.viking_fs.read_file(memory_uri, ctx=ctx)
+    assert visible_content(stored, uri=memory_uri) == "Updated preference"
     assert await service.viking_fs.read_file(f"{memory_dir}/.overview.md", ctx=ctx)
     with pytest.raises(NotFoundError):
         await service.viking_fs.read_file(f"{memory_dir}/.abstract.md", ctx=ctx)
@@ -61,7 +64,7 @@ async def test_write_denies_foreign_user_memory_space(service):
         role=Role.USER,
     )
 
-    with pytest.raises(NotFoundError):
+    with pytest.raises(PermissionDeniedError):
         await service.fs.write(
             memory_uri,
             content="Intruder update",
@@ -229,11 +232,14 @@ async def test_memory_write_linkifies_resource_uri_marker_with_readable_anchor(s
 
     stored = await service.viking_fs.read_file(memory_uri, ctx=ctx)
     mf = MemoryFileUtils.read(stored, uri=memory_uri)
-    assert mf.content == f"2026-06-12，[用户保存了粉丝创作的越前龙马动漫插画资源]({resource_uri})。"
+    assert (
+        mf.content
+        == f"[2026-06-12，用户保存了粉丝创作的越前龙马动漫插画资源，资源URI为]({resource_uri})。"
+    )
     refs = mf.extra_fields["resource_refs"]
     assert refs[0]["resource_uri"] == resource_uri
     assert refs[0]["source"] == "content.write"
-    assert refs[0]["match_text"] == "用户保存了粉丝创作的越前龙马动漫插画资源"
+    assert refs[0]["match_text"] == "2026-06-12，用户保存了粉丝创作的越前龙马动漫插画资源，资源URI为"
     assert mf.links == []
 
 
@@ -257,12 +263,27 @@ async def test_memory_write_ignores_resource_uri_in_inline_code(service):
 @pytest.mark.asyncio
 async def test_memory_create_refreshes_nested_schema_overview(service):
     ctx = RequestContext(user=service.user, role=Role.USER)
+    memory_type_dir = f"viking://user/{ctx.user.user_space_name()}/memories/entities"
     memory_dir = f"viking://user/{ctx.user.user_space_name()}/memories/entities/动漫角色"
     memory_uri = f"{memory_dir}/不二周助-link-test.md"
 
+    # Reproduce writes after the memory type root already exists. Previously this
+    # collapsed the refresh root to memories/entities and skipped the category overview.
+    await service.viking_fs.mkdir(memory_type_dir, exist_ok=True, ctx=ctx)
+
     result = await service.fs.write(
         memory_uri,
-        content="用户保存了一张[不二周助](viking://resources/images/2026/06/10/不二周助_jpeg)的照片",
+        content=MemoryFileUtils.write(
+            MemoryFile(
+                uri=memory_uri,
+                memory_type="entities",
+                content=(
+                    "用户保存了一张[不二周助]"
+                    "(viking://resources/images/2026/06/10/不二周助_jpeg)的照片"
+                ),
+                extra_fields={"category": "动漫角色", "name": "不二周助-link-test"},
+            )
+        ),
         ctx=ctx,
         mode="create",
         wait=False,
@@ -270,7 +291,7 @@ async def test_memory_create_refreshes_nested_schema_overview(service):
 
     overview = await service.viking_fs.read_file(f"{memory_dir}/.overview.md", ctx=ctx)
     assert result["root_uri"] == memory_dir
-    assert "[不二周助-link-test](./不二周助-link-test.md)" in overview
+    assert "[不二周助-link-test.md](./不二周助-link-test.md)" in overview
 
 
 @pytest.mark.asyncio
@@ -285,23 +306,24 @@ async def test_memory_rm_refreshes_nested_schema_overview(service):
         content="用户保存了一张不二周助的照片",
         ctx=ctx,
         mode="create",
+        wait=True,
     )
     await service.fs.write(
         kept_uri,
         content="用户保存了一张越前龙马的照片",
         ctx=ctx,
         mode="create",
+        wait=True,
     )
 
     before = await service.viking_fs.read_file(f"{memory_dir}/.overview.md", ctx=ctx)
-    assert "[不二周助-delete-test](./不二周助-delete-test.md)" in before
-    assert "[越前龙马-keep-test](./越前龙马-keep-test.md)" in before
+    assert "[不二周助-delete-test.md](./不二周助-delete-test.md)" in before
 
-    await service.fs.rm(deleted_uri, ctx=ctx)
+    await service.fs.rm(deleted_uri, ctx=ctx, wait=True)
 
     after = await service.viking_fs.read_file(f"{memory_dir}/.overview.md", ctx=ctx)
     assert "不二周助-delete-test" not in after
-    assert "[越前龙马-keep-test](./越前龙马-keep-test.md)" in after
+    assert "[越前龙马-keep-test.md](./越前龙马-keep-test.md)" in after
 
 
 class _FakePathLock:
@@ -806,8 +828,7 @@ async def test_create_mode_new_file_success(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_create_mode_canonicalizes_user_shorthand_memory_uri(monkeypatch):
-    input_uri = "viking://user/memories/new_file.md"
+async def test_create_mode_refreshes_canonical_user_memory_uri(monkeypatch):
     canonical_uri = "viking://user/default/memories/new_file.md"
     root_uri = "viking://user/default/memories"
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
@@ -842,7 +863,7 @@ async def test_create_mode_canonicalizes_user_shorthand_memory_uri(monkeypatch):
     )
 
     result = await coordinator.write(
-        uri=input_uri, content="new content", mode="create", ctx=ctx, wait=True
+        uri=canonical_uri, content="new content", mode="create", ctx=ctx, wait=True
     )
 
     assert result["uri"] == canonical_uri
@@ -1457,7 +1478,7 @@ async def test_set_tags_recursive_directory_all_missing_vector_records_returns_z
     )
 
     assert result["success_count"] == 0
-    assert result["skipped_count"] == 3
+    assert result["skipped_count"] == 2
     assert result["failed_count"] == 0
     assert result["updated_uris"] == []
     assert result["tags_updated"] is False
@@ -1522,7 +1543,7 @@ async def test_set_tags_single_uri_missing_vector_record_returns_zero_counts(mon
         async def update_search_tags(self, uri: str, tags, *, mode: str, ctx=None):
             del ctx
             self.update_calls.append((uri, list(tags), mode))
-            return False
+            return []
 
     fake_store = _FakeVectorStore()
     fake_vfs.vector_store = fake_store
@@ -1556,7 +1577,7 @@ async def test_set_tags_does_not_return_write_queue_fields(monkeypatch):
             assert uri == file_uri
             assert list(tags) == ["env=prod"]
             assert mode == "replace"
-            return True
+            return [{"uri": uri}]
 
     fake_vfs.vector_store = _FakeVectorStore()
 

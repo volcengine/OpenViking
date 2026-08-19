@@ -16,7 +16,7 @@ from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 
 
-def _make_msg(uri="viking://user/memories", context_type="memory", **kwargs):
+def _make_msg(uri="viking://user/usr1/memories", context_type="memory", **kwargs):
     """Build a minimal SemanticMsg for testing."""
     defaults = {
         "id": "test-msg-1",

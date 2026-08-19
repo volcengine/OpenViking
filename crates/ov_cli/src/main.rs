@@ -912,38 +912,6 @@ enum Commands {
         #[command(subcommand)]
         action: PrivacyCommands,
     },
-    /// [Experimental][Data] List relations of a resource
-    Relations {
-        /// Viking URI
-        #[arg(value_name = "uri")]
-        uri: String,
-    },
-    /// [Experimental][Data] Create relation links from one URI to one or more targets
-    Link {
-        /// Source URI
-        #[arg(value_name = "from-uri")]
-        from_uri: String,
-        /// One or more target URIs
-        #[arg(value_name = "to-uri")]
-        to_uris: Vec<String>,
-        /// Reason for linking
-        #[arg(
-            long,
-            default_value = "",
-            value_name = "text",
-            help_heading = "Common options"
-        )]
-        reason: String,
-    },
-    /// [Experimental][Data] Remove a relation link
-    Unlink {
-        /// Source URI
-        #[arg(value_name = "from-uri")]
-        from_uri: String,
-        /// Target URI to unlink
-        #[arg(value_name = "to-uri")]
-        to_uri: String,
-    },
     /// [Data] Export context as .ovpack
     Export {
         /// Source URI
@@ -2481,9 +2449,6 @@ fn is_top_level_server_command(command: &str) -> bool {
             | "grep"
             | "glob"
             | "add-memory"
-            | "relations"
-            | "link"
-            | "unlink"
             | "export"
             | "backup"
             | "import"
@@ -3263,15 +3228,6 @@ async fn main() {
                     .await
             }
         },
-        Commands::Relations { uri } => handlers::handle_relations(uri, ctx).await,
-        Commands::Link {
-            from_uri,
-            to_uris,
-            reason,
-        } => handlers::handle_link(from_uri, to_uris, reason, ctx).await,
-        Commands::Unlink { from_uri, to_uri } => {
-            handlers::handle_unlink(from_uri, to_uri, ctx).await
-        }
         Commands::Export {
             uri,
             to,
@@ -4106,9 +4062,6 @@ mod tests {
             "grep",
             "glob",
             "add-memory",
-            "relations",
-            "link",
-            "unlink",
             "export",
             "backup",
             "import",

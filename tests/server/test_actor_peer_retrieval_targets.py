@@ -66,7 +66,7 @@ def test_actor_search_keeps_explicit_resource_target():
 
 
 def test_actor_search_user_root_keeps_user_content_and_filters_peer_collection():
-    targets = _target_dirs("viking://user", actor_peer_id="web-visitor-alice")
+    targets = _target_dirs("viking://user/support_bot", actor_peer_id="web-visitor-alice")
 
     assert targets == [
         "viking://user/support_bot/memories",
@@ -120,7 +120,7 @@ def test_actor_default_resource_targets_global_and_actor_peer_resources():
 
 
 def test_explicit_user_memory_target_stays_self_memory_only():
-    targets = _target_dirs("viking://user/memories")
+    targets = _target_dirs("viking://user/support_bot/memories")
 
     assert targets == ["viking://user/support_bot/memories"]
 

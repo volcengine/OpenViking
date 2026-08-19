@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from openviking.core.namespace import canonical_user_root
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.skill_loader import validate_skill_format
+from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.privacy.service import UserPrivacyConfigVersion
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
@@ -88,7 +89,9 @@ def _agent_skills_root(ctx: RequestContext, target_uri: Optional[str] = None) ->
     user_root = f"{canonical_user_root(ctx)}/skills"
     if not target_uri:
         return user_root
-    resolved_uri = resolve_path_variables(target_uri).rstrip("/")
+    resolved_uri = validate_request_viking_uri(
+        resolve_path_variables(target_uri), ctx, field_name="target_uri"
+    ).rstrip("/")
     if resolved_uri == "viking://agent/skills" or resolved_uri.startswith("viking://agent/skills/"):
         return "viking://agent/skills"
     if resolved_uri == user_root or resolved_uri.startswith(f"{user_root}/"):
@@ -261,8 +264,7 @@ async def _require_skill(
     service, ctx: RequestContext, skill_name: str, target_uri: Optional[str] = None
 ) -> str:
     if target_uri:
-        resolved_uri = resolve_path_variables(target_uri)
-        root_uri = _skill_root_uri(ctx, skill_name, resolved_uri)
+        root_uri = _skill_root_uri(ctx, skill_name, target_uri)
         try:
             stat = await service.fs.stat(root_uri, ctx=ctx)
             if stat and stat.get("isDir", False):
@@ -534,7 +536,9 @@ async def list_skills(
     """List installed agent skills."""
     service = get_service()
     if target_uri:
-        resolved_uri = resolve_path_variables(target_uri)
+        resolved_uri = validate_request_viking_uri(
+            resolve_path_variables(target_uri), _ctx, field_name="target_uri"
+        )
         skills = await _list_skills_from_root(service, _ctx, resolved_uri)
         return Response(
             status="ok", result={"root_uri": resolved_uri, "skills": skills, "total": len(skills)}
@@ -568,7 +572,9 @@ async def find_skills(
     service = get_service()
     target_uri = request.target_uri
     if target_uri:
-        resolved_uri = resolve_path_variables(target_uri)
+        resolved_uri = validate_request_viking_uri(
+            resolve_path_variables(target_uri), _ctx, field_name="target_uri"
+        )
         execution = await run_operation(
             operation="skills.find",
             telemetry=request.telemetry,

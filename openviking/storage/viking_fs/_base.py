@@ -1,12 +1,10 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Shared constants, helpers, dataclasses, and singleton management for VikingFS."""
+"""Shared constants, helpers, and singleton management for VikingFS."""
 
 import os
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Optional, TypeVar
 
-from openviking.utils.time_utils import get_current_timestamp
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     ResourceExhaustedError,
@@ -136,31 +134,6 @@ def _get_abstract_worker_count() -> int:
 
 _ABSTRACT_WORKER_COUNT = _get_abstract_worker_count()
 _DEFAULT_GREP_FILE_CONCURRENCY = 32
-
-
-# ========== Dataclass ==========
-
-
-@dataclass
-class RelationEntry:
-    """Relation table entry."""
-
-    id: str
-    uris: List[str]
-    reason: str = ""
-    created_at: str = field(default_factory=get_current_timestamp)
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "id": self.id,
-            "uris": self.uris,
-            "reason": self.reason,
-            "created_at": self.created_at,
-        }
-
-    @staticmethod
-    def from_dict(data: Dict[str, Any]) -> "RelationEntry":
-        return RelationEntry(**data)
 
 
 # ========== Singleton Pattern ==========

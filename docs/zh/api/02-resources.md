@@ -42,7 +42,7 @@ OpenViking 支持多种资源类型，按照功能分类如下：
 云文档类
 | 类型 | 说明 |
 |------|------|
-| 飞书/Lark | URL 方式，支持 docx, wiki, sheets, bitable。默认使用 FEISHU_APP_ID 和 FEISHU_APP_SECRET 应用凭证；用户 token 导入可传 `args.feishu_access_token`，用户 token watch 还需传 `args.feishu_refresh_token` |
+| 飞书/Lark | URL 方式，支持 doc/docx, wiki, sheets, bitable。默认使用 FEISHU_APP_ID 和 FEISHU_APP_SECRET 应用凭证；用户 token 导入可传 `args.feishu_access_token`，用户 token watch 还需传 `args.feishu_refresh_token` |
 
 网页类（递归网页爬虫）
 | 类型 | 资源名 | 说明 |

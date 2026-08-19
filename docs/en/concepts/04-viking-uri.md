@@ -333,7 +333,7 @@ Each directory may contain special files:
 |------|---------|
 | `.abstract.md` | L0 abstract (~100 tokens) |
 | `.overview.md` | L1 overview (~2k tokens) |
-| `.relations.json` | Related resources |
+| `` | Related resources |
 | `.meta.json` | Metadata |
 
 ## Best Practices

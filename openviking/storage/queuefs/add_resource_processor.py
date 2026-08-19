@@ -15,7 +15,13 @@ from openviking.service.task_tracker import TaskStatus, get_task_tracker
 from openviking.service.task_work_index import bind_task_context, extract_task_metadata
 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
-from openviking.telemetry import bind_telemetry, resolve_telemetry, unregister_telemetry
+from openviking.telemetry import (
+    OperationTelemetry,
+    bind_telemetry,
+    register_telemetry,
+    resolve_telemetry,
+    unregister_telemetry,
+)
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import record_resource_queue_metrics
 from openviking_cli.session.user_id import UserIdentifier
@@ -148,11 +154,12 @@ class AddResourceProcessor(DequeueHandlerBase):
 
         telemetry = resolve_telemetry(telemetry_id) if telemetry_id else None
         if telemetry is None:
-            from openviking.telemetry.operation import OperationTelemetry
-
-            telemetry = OperationTelemetry(operation="add_resource_job", enabled=False)
+            telemetry = OperationTelemetry(operation="add_resource_job", enabled=True)
             if telemetry_id:
                 telemetry.telemetry_id = telemetry_id
+            else:
+                telemetry_id = telemetry.telemetry_id
+            register_telemetry(telemetry)
         request_wait_tracker = get_request_wait_tracker()
         request_wait_tracker.register_request(telemetry_id)
 

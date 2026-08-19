@@ -1339,10 +1339,10 @@ Redis Sentinel 分别配置数据节点和 Sentinel 的 ACL：
 
 | 字段 | 类型 | 默认值 | 上限 | 说明 |
 |------|------|--------|------|------|
-| `pending_token_threshold` | int | 10000 | 50000 | 当未提交的 pending token 超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
-| `message_count_threshold` | int | 50 | 500 | 当未提交的 live message 数量超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
+| `pending_token_threshold` | int | 150000 | 1000000 | 当未提交的 pending token 超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
+| `message_count_threshold` | int | 100 | 1000 | 当未提交的 live message 数量超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
 | `idle_timeout_seconds` | int | 86400 | 604800 | 有未提交内容的 session 在空闲这么多秒后，进入服务端 idle scheduler 的处理范围。idle 触发的 commit 会归档全部积压消息，并忽略 `keep_recent_count`。 |
-| `keep_recent_count` | int | 2 | 500 | 阈值触发的自动 commit 后保留（不归档）的最近 live message 数量。idle 超时触发的 commit 会忽略该值并归档所有消息。 |
+| `keep_recent_count` | int | 0 | 500 | 阈值触发的自动 commit 后保留（不归档）的最近 live message 数量。idle 超时触发的 commit 会忽略该值并归档所有消息。 |
 | `min_commit_interval_seconds` | int | 0 | 604800 | 两次自动 commit 之间的最小间隔秒数（节流）。 |
 
 代码入口：`openviking/session/auto_commit_policy.py:AutoCommitPolicy`。

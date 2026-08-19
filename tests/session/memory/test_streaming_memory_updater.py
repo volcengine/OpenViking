@@ -31,6 +31,7 @@ from openviking.session.memory.streaming_memory_updater import (
     classify_memory_merge_mode,
     enforce_merge_group_peer_id,
     get_streaming_memory_updater,
+    merge_memory_operations,
     merge_one_memory_type_operations,
     operation_to_patch,
     render_operation_after_file_content,
@@ -209,6 +210,41 @@ def _note_op_with_source(name: str, extraction_id: str) -> ResolvedOperation:
     op = _note_op(name)
     op.memory_fields["source_extraction_id"] = extraction_id
     return op
+
+
+def _note_update_op(name: str) -> ResolvedOperation:
+    uri = f"viking://user/u/memories/notes/{name}.md"
+    old_file = MemoryFile(
+        uri=uri,
+        content=f"old {name}",
+        memory_type="notes",
+        extra_fields={"note_name": name},
+    )
+    return ResolvedOperation(
+        old_memory_file_content=old_file,
+        memory_type="notes",
+        uris=[uri],
+        memory_fields={
+            "note_name": name,
+            "content": StrPatch(
+                blocks=[
+                    SearchReplaceBlock(
+                        search=f"old {name}",
+                        replace=f"new {name}",
+                    )
+                ]
+            ),
+        },
+    )
+
+
+def _note_delete_file(name: str) -> MemoryFile:
+    return MemoryFile(
+        uri=f"viking://user/u/memories/notes/{name}.md",
+        content=f"delete {name}",
+        memory_type="notes",
+        extra_fields={"note_name": name},
+    )
 
 
 def _peer_note_op(name: str, peer_id: str) -> ResolvedOperation:
@@ -622,6 +658,131 @@ async def test_streaming_memory_updater_batches_non_append_only_submits(monkeypa
     assert result1.apply_result.written_uris == [op1.uris[0]]
     assert result2.apply_result.written_uris == [op2.uris[0]]
     assert sorted(result1.metadata["unscoped_written_uris"]) == sorted([op1.uris[0], op2.uris[0]])
+
+
+@pytest.mark.asyncio
+async def test_merge_requests_skips_patch_merge_for_same_session(monkeypatch):
+    merge_mock = AsyncMock()
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.merge_memory_operations",
+        merge_mock,
+    )
+    updater = StreamingMemoryUpdater(registry=_registry())
+
+    def make_request(suffix: str, extraction_id: str) -> MemoryUpdateRequest:
+        return MemoryUpdateRequest(
+            operations=ResolvedOperations(
+                upsert_operations=[
+                    _note_op(f"add_{suffix}"),
+                    _note_update_op(f"update_{suffix}"),
+                ],
+                delete_file_contents=[_note_delete_file(f"delete_{suffix}")],
+                errors=[],
+            ),
+            messages=[],
+            ctx=_ctx(),
+            metadata={
+                "session_id": "same-session",
+                "source_extraction_id": extraction_id,
+            },
+        )
+
+    merged = await updater._merge_requests(
+        [
+            make_request("a", "extract-a"),
+            make_request("b", "extract-b"),
+        ]
+    )
+
+    merge_mock.assert_not_awaited()
+    assert len(merged.upsert_operations) == 4
+    assert len(merged.delete_file_contents) == 2
+
+
+@pytest.mark.asyncio
+async def test_merge_requests_merges_cross_session_operation_kinds_in_parallel(monkeypatch):
+    entered: set[str] = set()
+    all_entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fake_merge_memory_operations(**kwargs):
+        operations = kwargs["operations"]
+        if operations.delete_file_contents:
+            kind = "delete"
+            assert not operations.upsert_operations
+        elif all(op.old_memory_file_content is None for op in operations.upsert_operations):
+            kind = "add"
+        else:
+            kind = "update"
+            assert all(
+                op.old_memory_file_content is not None
+                for op in operations.upsert_operations
+            )
+        assert kwargs["force_merge"] is True
+        entered.add(kind)
+        if len(entered) == 3:
+            all_entered.set()
+        await release.wait()
+        return operations
+
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.merge_memory_operations",
+        fake_merge_memory_operations,
+    )
+    updater = StreamingMemoryUpdater(registry=_registry())
+
+    def make_request(suffix: str, session_id: str) -> MemoryUpdateRequest:
+        return MemoryUpdateRequest(
+            operations=ResolvedOperations(
+                upsert_operations=[
+                    _note_op(f"add_{suffix}"),
+                    _note_update_op(f"update_{suffix}"),
+                ],
+                delete_file_contents=[_note_delete_file(f"delete_{suffix}")],
+                errors=[],
+            ),
+            messages=[],
+            ctx=_ctx(),
+            metadata={"session_id": session_id},
+        )
+
+    merge_task = asyncio.create_task(
+        updater._merge_requests(
+            [
+                make_request("a", "session-a"),
+                make_request("b", "session-b"),
+            ]
+        )
+    )
+    await asyncio.wait_for(all_entered.wait(), timeout=5)
+    assert not merge_task.done()
+    release.set()
+    merged = await asyncio.wait_for(merge_task, timeout=5)
+
+    assert entered == {"add", "update", "delete"}
+    assert len(merged.upsert_operations) == 4
+    assert len(merged.delete_file_contents) == 2
+
+
+@pytest.mark.asyncio
+async def test_merge_requests_rejects_uri_conflicts_between_operation_kinds():
+    updater = StreamingMemoryUpdater(registry=_registry())
+    request = MemoryUpdateRequest(
+        operations=ResolvedOperations(
+            upsert_operations=[_note_op("conflict")],
+            delete_file_contents=[_note_delete_file("conflict")],
+            errors=[],
+        ),
+        messages=[],
+        ctx=_ctx(),
+        metadata={"session_id": "session-a"},
+    )
+
+    merged = await updater._merge_requests([request])
+
+    assert merged.upsert_operations == []
+    assert merged.delete_file_contents == []
+    assert "Conflicting add/update/delete results" in merged.errors[0]
 
 
 def test_scope_memory_update_result_to_submitter_filters_shared_batch_by_source():
@@ -1184,6 +1345,75 @@ async def test_cross_extraction_merge_preserves_existing_uri_without_explicit_de
 
     assert [op.uris for op in merged.upsert_operations] == [[winner_uri]]
     assert merged.delete_file_contents == []
+
+
+@pytest.mark.asyncio
+async def test_force_merge_sends_delete_only_group_through_patch_merge(monkeypatch):
+    delete_file = _note_delete_file("obsolete")
+    replacement_uri = "viking://user/u/memories/notes/replacement.md"
+    merge_called = False
+
+    async def fake_run(self):
+        nonlocal merge_called
+        merge_called = True
+        return (
+            ResolvedOperations(
+                upsert_operations=[],
+                delete_file_contents=[delete_file],
+                errors=[],
+            ),
+            [],
+        )
+
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.ExtractLoop.run",
+        fake_run,
+    )
+    fs = InMemoryVikingFS({delete_file.uri: delete_file.content})
+    fs.search = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.get_viking_fs",
+        lambda: fs,
+    )
+
+    merged = await merge_memory_operations(
+        operations=ResolvedOperations(
+            upsert_operations=[],
+            delete_file_contents=[delete_file],
+            errors=[],
+            delete_replacements={delete_file.uri: replacement_uri},
+        ),
+        messages=[],
+        ctx=_ctx(),
+        registry=_registry(),
+        force_merge=True,
+    )
+
+    assert merge_called is True
+    assert merged.delete_file_contents == [delete_file]
+    assert merged.delete_replacements == {delete_file.uri: replacement_uri}
+
+
+@pytest.mark.asyncio
+async def test_force_merge_does_not_drop_add_only_delete():
+    delete_file = MemoryFile(
+        uri="viking://user/u/memories/cases/obsolete.md",
+        content="obsolete",
+        memory_type="cases",
+        extra_fields={"case_name": "obsolete"},
+    )
+
+    merged = await merge_one_memory_type_operations(
+        memory_type="cases",
+        operations=[],
+        delete_files=[delete_file],
+        messages=[],
+        ctx=_ctx(),
+        registry=_registry(),
+        force_merge=True,
+    )
+
+    assert merged.delete_file_contents == [delete_file]
 
 
 @pytest.mark.asyncio

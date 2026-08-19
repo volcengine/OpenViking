@@ -779,16 +779,16 @@ class MemoryUpdater:
         directory_uri: str,
         ctx: RequestContext,
         strict: bool = False,
-    ) -> None:
+    ) -> bool:
         memory_type = cls.memory_type_from_uri(directory_uri)
         if not memory_type:
-            return
+            return False
         try:
             from openviking.session.memory.memory_type_registry import create_default_registry
 
             updater = cls(registry=create_default_registry())
             updater._viking_fs = viking_fs
-            await updater.generate_overview(memory_type, directory_uri, ctx)
+            return await updater.generate_overview(memory_type, directory_uri, ctx)
         except Exception:
             logger.warning(
                 "Failed to refresh memory overview for %s",
@@ -797,6 +797,7 @@ class MemoryUpdater:
             )
             if strict:
                 raise
+            return False
 
     @classmethod
     async def refresh_file_embedding(
@@ -1498,7 +1499,7 @@ class MemoryUpdater:
         ctx: RequestContext,
         extract_context: Any = None,
         lease_ref: Any = None,
-    ) -> None:
+    ) -> bool:
         """
         Generate .overview.md file for a directory based on overview_template.
 
@@ -1515,7 +1516,7 @@ class MemoryUpdater:
 
         if not schema or not schema.overview_template:
             logger.debug(f"No overview_template for memory type: {memory_type}")
-            return
+            return False
 
         viking_fs = self._get_viking_fs()
 
@@ -1538,10 +1539,10 @@ class MemoryUpdater:
 
         except (NotFoundError, FileNotFoundError):
             logger.debug("Skip overview generation for deleted directory: %s", directory)
-            return
+            return False
         except Exception as e:
             tracer.error(f"Failed to list files in {directory}: {e}")
-            return
+            return False
 
         # If no memory files, delete the .overview.md and the directory if empty
         if not md_files:
@@ -1569,7 +1570,7 @@ class MemoryUpdater:
                     )
                 except Exception:
                     pass
-            return
+            return True
 
         # Parse each file and collect items
         items = []
@@ -1594,7 +1595,7 @@ class MemoryUpdater:
 
         if not items:
             logger.debug(f"No valid memory files parsed in {directory}")
-            return
+            return False
 
         overview_context = {
             "memory_type": memory_type,
@@ -1611,7 +1612,7 @@ class MemoryUpdater:
             )
         except Exception as e:
             tracer.error(f"Failed to render overview template for {memory_type}: {e}")
-            return
+            return False
 
         # Write .overview.md to the directory
         overview_path = f"{directory.rstrip('/')}/.overview.md"
@@ -1633,5 +1634,7 @@ class MemoryUpdater:
                 ctx=ctx,
                 lease_ref=lease_ref,
             )
+            return True
         except Exception as e:
             tracer.error(f"Failed to write overview {overview_path}: {e}")
+            return False

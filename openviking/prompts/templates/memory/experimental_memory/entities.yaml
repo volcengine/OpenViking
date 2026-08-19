@@ -4,7 +4,7 @@ description: |
   Each page represents an article with relative path links to events.
   Entity should be rich and distributed - avoid putting all info in one entity.
 directory: "viking://user/{{ user_space }}/memories/entities"
-filename_template: "{{ category }}/{{ name }}.md"
+filename_template: "{{ category|lower }}/{{ name|lower }}.md"
 enabled: true
 
 overview_template: |-

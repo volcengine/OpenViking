@@ -9,14 +9,16 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.peer_id import normalize_peer_id
+from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.message.part import Part, TextPart, part_from_dict
 from openviking.server.auth import get_session_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
-from openviking.server.models import ErrorInfo, Response
+from openviking.server.models import Response
 from openviking.server.responses import error_response
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
+from openviking.utils.image_search import is_viking_uri
 from openviking_cli.utils import get_logger
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
@@ -213,10 +215,10 @@ def _commit_event_tags(
     return metadata.event.tags
 
 
-def _resolve_message_parts(msg_request: AddMessageRequest) -> List[Part]:
+def _resolve_message_parts(msg_request: AddMessageRequest, ctx: RequestContext) -> List[Part]:
     """Resolve parts from an AddMessageRequest, handling path variables."""
     if msg_request.parts is not None:
-        return [_part_request_to_part(p) for p in msg_request.parts]
+        return [_part_request_to_part(p, ctx) for p in msg_request.parts]
     return [TextPart(text=msg_request.content or "")]
 
 
@@ -233,27 +235,49 @@ def _session_pending_tokens(session: Any) -> int:
         return 0
 
 
-def _part_request_to_part(raw_part: Dict[str, Any]) -> Part:
+def _part_request_to_part(raw_part: Dict[str, Any], ctx: RequestContext) -> Part:
     """Convert request part payload into an internal Part."""
     if not isinstance(raw_part, dict):
         return TextPart(text=str(raw_part))
 
     part_copy = dict(raw_part)
-    if part_copy.get("type") == "context" and "uri" in part_copy:
-        part_copy["uri"] = resolve_path_variables(part_copy["uri"])
+    if part_copy.get("type") == "context" and part_copy.get("uri"):
+        part_copy["uri"] = validate_request_viking_uri(
+            resolve_path_variables(part_copy["uri"]), ctx
+        )
     if part_copy.get("type") == "tool":
-        if "tool_uri" in part_copy:
-            part_copy["tool_uri"] = resolve_path_variables(part_copy["tool_uri"])
-        if "skill_uri" in part_copy:
-            part_copy["skill_uri"] = resolve_path_variables(part_copy["skill_uri"])
+        if part_copy.get("tool_uri"):
+            part_copy["tool_uri"] = validate_request_viking_uri(
+                resolve_path_variables(part_copy["tool_uri"]), ctx, field_name="tool_uri"
+            )
+        if part_copy.get("skill_uri"):
+            part_copy["skill_uri"] = validate_request_viking_uri(
+                resolve_path_variables(part_copy["skill_uri"]), ctx, field_name="skill_uri"
+            )
+        if part_copy.get("tool_output_storage_uri"):
+            part_copy["tool_output_storage_uri"] = validate_request_viking_uri(
+                resolve_path_variables(part_copy["tool_output_storage_uri"]),
+                ctx,
+                field_name="tool_output_storage_uri",
+            )
     if part_copy.get("type") == "image_url":
         image_url = part_copy.get("image_url")
         if isinstance(image_url, dict) and "url" in image_url:
             image_url = dict(image_url)
-            image_url["url"] = resolve_path_variables(image_url["url"])
+            resolved_url = resolve_path_variables(image_url["url"])
+            if is_viking_uri(resolved_url):
+                resolved_url = validate_request_viking_uri(
+                    resolved_url, ctx, field_name="image_url"
+                )
+            image_url["url"] = resolved_url
             part_copy["image_url"] = image_url
         elif isinstance(image_url, str):
-            part_copy["image_url"] = resolve_path_variables(image_url)
+            resolved_url = resolve_path_variables(image_url)
+            part_copy["image_url"] = (
+                validate_request_viking_uri(resolved_url, ctx, field_name="image_url")
+                if is_viking_uri(resolved_url)
+                else resolved_url
+            )
     try:
         return part_from_dict(part_copy)
     except ValueError as exc:
@@ -711,7 +735,7 @@ async def add_message(
 
     async def _add() -> dict[str, Any]:
         session = await service.sessions.get(session_id, _ctx, auto_create=True)
-        parts = _resolve_message_parts(request)
+        parts = _resolve_message_parts(request, _ctx)
 
         specs = [
             {
@@ -768,7 +792,7 @@ async def batch_add_messages(
         session = await service.sessions.get(session_id, _ctx, auto_create=True)
         specs = []
         for msg_request in request.messages:
-            parts = _resolve_message_parts(msg_request)
+            parts = _resolve_message_parts(msg_request, _ctx)
             specs.append(
                 {
                     "role": msg_request.role,
@@ -821,13 +845,18 @@ async def record_used(
     # Resolve path variables in contexts
     resolved_contexts = None
     if request.contexts is not None:
-        resolved_contexts = [resolve_path_variables(uri) for uri in request.contexts]
+        resolved_contexts = [
+            validate_request_viking_uri(resolve_path_variables(uri), _ctx)
+            for uri in request.contexts
+        ]
 
     # Resolve path variables in skill URI if present
     resolved_skill = request.skill
     if resolved_skill is not None and "uri" in resolved_skill:
         resolved_skill = dict(resolved_skill)
-        resolved_skill["uri"] = resolve_path_variables(resolved_skill["uri"])
+        resolved_skill["uri"] = validate_request_viking_uri(
+            resolve_path_variables(resolved_skill["uri"]), _ctx
+        )
 
     session.used(contexts=resolved_contexts, skill=resolved_skill)
     return Response(

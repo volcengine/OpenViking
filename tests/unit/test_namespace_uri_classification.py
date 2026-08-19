@@ -6,12 +6,13 @@ import pytest
 
 from openviking.core.namespace import (
     canonical_session_uri,
-    canonicalize_uri,
     classify_uri,
     context_type_for_uri,
     is_content_root_uri,
     is_session_uri,
     owner_space_for_uri,
+    resolve_request_uri,
+    resolve_uri,
     visible_roots,
 )
 from openviking.core.uri_validation import validate_content_target_uri
@@ -22,9 +23,9 @@ from openviking_cli.session.user_id import UserIdentifier
 
 def test_context_type_for_uri_uses_path_segments():
     assert context_type_for_uri("viking://user/alice/memories/entities/m1.md") == "memory"
-    assert context_type_for_uri("viking://user/memories/entities/m1.md") == "memory"
+    assert context_type_for_uri("viking://user/memories/entities/m1.md") == "resource"
     assert context_type_for_uri("viking://user/alice/skills/demo") == "skill"
-    assert context_type_for_uri("viking://user/skills/demo") == "skill"
+    assert context_type_for_uri("viking://user/skills/demo") == "resource"
     assert (
         context_type_for_uri(
             "viking://user/support_bot/peers/web-visitor-alice/memories/profile.md"
@@ -75,12 +76,12 @@ def test_user_content_target_uri_rejects_invalid_user_id():
 def test_exact_memory_and_skill_root_detection():
     assert classify_uri("viking://user/alice/memories/preferences/prefs.md").is_memory
     assert classify_uri("viking://user/alice/memories").is_memory_root
-    assert classify_uri("viking://user/memories").is_memory_root
+    assert not classify_uri("viking://user/memories").is_memory_root
     assert not classify_uri("viking://user/alice/memories/preferences").is_memory_root
 
     assert classify_uri("viking://user/alice/skills/demo/SKILL.md").is_skill
     assert classify_uri("viking://user/alice/skills/demo").is_skill_root
-    assert classify_uri("viking://user/skills/demo").is_skill_root
+    assert not classify_uri("viking://user/skills/demo").is_skill_root
     assert classify_uri("viking://agent/skills").is_skill_namespace
     assert classify_uri("viking://agent/skills/demo").is_skill_root
     assert not classify_uri("viking://user/alice/skills").is_skill_root
@@ -88,14 +89,9 @@ def test_exact_memory_and_skill_root_detection():
 
 
 def test_owner_space_for_uri_uses_user_only():
-    ctx = RequestContext(
-        user=UserIdentifier(account_id="acct", user_id="alice"),
-        role=Role.ROOT,
-    )
-
-    assert owner_space_for_uri("viking://user/alice/memories", ctx) == "alice"
-    assert owner_space_for_uri("viking://user/alice/skills/demo", ctx) == "alice"
-    assert owner_space_for_uri("viking://resources/readme.md", ctx) == ""
+    assert owner_space_for_uri("viking://user/alice/memories") == "alice"
+    assert owner_space_for_uri("viking://user/alice/skills/demo") == "alice"
+    assert owner_space_for_uri("viking://resources/readme.md") == ""
 
 
 def test_session_uri_helpers_use_user_namespace():
@@ -106,15 +102,23 @@ def test_session_uri_helpers_use_user_namespace():
 
     assert canonical_session_uri(ctx) == "viking://user/alice/sessions"
     assert canonical_session_uri(ctx, "s1") == "viking://user/alice/sessions/s1"
-    assert canonicalize_uri("viking://user/sessions/s1", ctx) == ("viking://user/alice/sessions/s1")
-    assert canonicalize_uri("user/sessions/s1", ctx) == "viking://user/alice/sessions/s1"
-    assert canonicalize_uri("viking://session/s1", ctx) == "viking://user/alice/sessions/s1"
+    assert resolve_uri("viking://user/sessions/s1").uri == "viking://user/sessions/s1"
     assert (
-        canonicalize_uri("viking://session/s1/history/archive_001/messages.jsonl", ctx)
+        resolve_request_uri("viking://user/sessions/s1", ctx)
+        == "viking://user/alice/sessions/s1"
+    )
+    assert (
+        resolve_request_uri("viking://session/s1", ctx)
+        == "viking://user/alice/sessions/s1"
+    )
+    assert (
+        resolve_request_uri(
+            "viking://session/s1/history/archive_001/messages.jsonl", ctx
+        )
         == "viking://user/alice/sessions/s1/history/archive_001/messages.jsonl"
     )
     assert is_session_uri("viking://user/alice/sessions/s1")
-    assert is_session_uri("viking://user/sessions/s1")
+    assert not is_session_uri("viking://user/sessions/s1")
     assert is_session_uri("viking://session/s1")
     roots = visible_roots(ctx)
     assert "viking://session" not in roots
@@ -122,15 +126,18 @@ def test_session_uri_helpers_use_user_namespace():
     assert "viking://agent/skills" in roots
 
 
-def test_current_user_short_content_roots_are_canonicalized_from_content_segments():
+def test_request_boundary_expands_current_user_content_roots():
     ctx = RequestContext(
         user=UserIdentifier(account_id="acct", user_id="alice"),
         role=Role.USER,
     )
 
-    assert canonicalize_uri("viking://user/resources", ctx) == "viking://user/alice/resources"
     assert (
-        canonicalize_uri("viking://user/resources/docs", ctx)
+        resolve_request_uri("viking://user/resources", ctx)
+        == "viking://user/alice/resources"
+    )
+    assert (
+        resolve_request_uri("viking://user/resources/docs", ctx)
         == "viking://user/alice/resources/docs"
     )
     assert (
@@ -142,41 +149,59 @@ def test_current_user_short_content_roots_are_canonicalized_from_content_segment
         )
         == "viking://user/alice/resources"
     )
-    assert canonicalize_uri("viking://user/alice/resources", ctx) == (
-        "viking://user/alice/resources"
+    assert (
+        validate_content_target_uri(
+            "viking://resources/docs/",
+            ctx,
+            kind="resource",
+            field_name="parent",
+        )
+        == "viking://resources/docs"
     )
-    assert is_content_root_uri("viking://resources", ctx, kind="resource")
+    assert resolve_uri("viking://user/alice/resources").uri == "viking://user/alice/resources"
+    collision_ctx = RequestContext(
+        user=UserIdentifier(account_id="acct", user_id="resources"),
+        role=Role.USER,
+    )
+    assert (
+        resolve_request_uri("viking://user/resources", collision_ctx)
+        == "viking://user/resources"
+    )
+    admin_ctx = RequestContext(
+        user=UserIdentifier(account_id="acct", user_id="admin"),
+        role=Role.ADMIN,
+    )
+    assert (
+        resolve_request_uri("viking://user/resources", admin_ctx)
+        == "viking://user/resources"
+    )
+    assert is_content_root_uri("viking://resources", kind="resource")
 
 
 def test_unreserved_user_root_segment_keeps_canonical_meaning():
-    ctx = RequestContext(
-        user=UserIdentifier(account_id="acct", user_id="alice"),
-        role=Role.USER,
-    )
-
     # The generic namespace parser stays canonical-first. Callers that expose
     # a current-user workspace dialect (such as MCP) must opt into that policy
     # at their boundary instead of guessing from file extensions or server state.
-    assert canonicalize_uri("viking://user/notes/todo.md", ctx) == "viking://user/notes/todo.md"
+    assert resolve_uri("viking://user/notes/todo.md").uri == "viking://user/notes/todo.md"
     assert (
-        canonicalize_uri("viking://user/bob/zeus-persona.md", ctx)
+        resolve_uri("viking://user/bob/zeus-persona.md").uri
         == "viking://user/bob/zeus-persona.md"
     )
     # A valid canonical user id may itself end in a common file extension.
     assert (
-        canonicalize_uri("viking://user/writer.md/memories/profile.md", ctx)
+        resolve_uri("viking://user/writer.md/memories/profile.md").uri
         == "viking://user/writer.md/memories/profile.md"
     )
     assert (
-        canonicalize_uri("viking://user/alice.smith/memories/preferences/p.md", ctx)
+        resolve_uri("viking://user/alice.smith/memories/preferences/p.md").uri
         == "viking://user/alice.smith/memories/preferences/p.md"
     )
     assert (
-        canonicalize_uri("viking://user/bob@corp.com/resources/r.md", ctx)
+        resolve_uri("viking://user/bob@corp.com/resources/r.md").uri
         == "viking://user/bob@corp.com/resources/r.md"
     )
     # The current user's own canonical form remains unchanged.
     assert (
-        canonicalize_uri("viking://user/alice/notes/todo.md", ctx)
+        resolve_uri("viking://user/alice/notes/todo.md").uri
         == "viking://user/alice/notes/todo.md"
     )

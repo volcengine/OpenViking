@@ -6,7 +6,7 @@ Merge operation base classes and registry.
 
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional, Type, Union
 
 from pydantic import BaseModel, Field
 
@@ -59,24 +59,49 @@ class SearchReplaceBlock(BaseModel):
     )
     replace: str = Field(
         ...,
-        description="The text to replace it with (must be different from search). Use empty string to delete the matched content. Never include `line_number<TAB>` prefixes in REPLACE text.",
+        description="Replacement text (must differ from search). Use a DELETE block for complete-line deletion. Never include `line_number<TAB>` prefixes.",
     )
 
 
+class DeleteBlock(BaseModel):
+    """Delete one or more complete, contiguous lines from a string field."""
+
+    delete: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Exact, unique text of complete, contiguous lines from the target page. Use this "
+            "when other content must remain; delete_ids deletes the whole item. Omit "
+            "`line_number<TAB>` prefixes and surrounding newlines; use separate blocks for "
+            "non-contiguous lines."
+        ),
+    )
+
+    @property
+    def search(self) -> str:
+        """Expose the text through the common patch-block interface."""
+        return self.delete
+
+    @property
+    def replace(self) -> str:
+        """A delete is a replacement with an empty string."""
+        return ""
+
+
 class StrPatch(BaseModel):
-    """String patch containing multiple SEARCH/REPLACE blocks.
+    """String patch containing SEARCH/REPLACE and DELETE blocks.
 
     All string fields with merge_op=patch use this structure.
 
     IMPORTANT format rules for blocks:
-    - Each block MUST have both "search" and "replace" fields
-    - ✅ Correct: {"blocks": [{"search": "old text", "replace": "new text"}]}
-    - ❌ Wrong: {"blocks": ["just a string"]} or {"blocks": [{"search": "old"}]} (missing replace)
+    - SEARCH/REPLACE: {"search": "old text", "replace": "new text"}
+    - DELETE: {"delete": "one or more complete contiguous lines"}
+    - Each matched text must occur exactly once in the file
     """
 
-    blocks: List[SearchReplaceBlock] = Field(
+    blocks: List[Union[SearchReplaceBlock, DeleteBlock]] = Field(
         default_factory=list,
-        description="List of SEARCH/REPLACE blocks. Each search block must be unique in the file.",
+        description="SEARCH/REPLACE or DELETE blocks; use DELETE for partial line removal.",
     )
 
     def get_first_replace(self) -> Optional[str]:

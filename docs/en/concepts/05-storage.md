@@ -8,7 +8,6 @@ OpenViking uses a dual-layer storage architecture that separates content storage
 ┌─────────────────────────────────────────┐
 │          VikingFS (URI Abstraction)      │
 │    URI Mapping · Hierarchical Access     │
-│           · Relation Management          │
 └────────────────┬────────────────────────┘
         ┌────────┴────────┐
         │                 │
@@ -23,7 +22,7 @@ OpenViking uses a dual-layer storage architecture that separates content storage
 
 | Layer | Responsibility | Content |
 |-------|----------------|---------|
-| **AGFS** | Content storage | L0/L1/L2 full content, multimedia files, relations |
+| **AGFS** | Content storage | L0/L1/L2 full content, multimedia files |
 | **Vector Index** | Index storage | URIs, vectors, metadata (no file content) |
 
 ### Design Benefits
@@ -57,24 +56,7 @@ viking://user/skills          →  /local/{account_id}/user/{user_id}/skills
 | `mv(old, new)` | Move/rename (syncs vector URI update) |
 | `abstract(uri)` | Read L0 abstract |
 | `overview(uri)` | Read L1 overview |
-| `relations(uri)` | Get relation list |
 | `find(query, uri)` | Semantic search |
-
-### Relation Management
-
-VikingFS manages resource relations through `.relations.json`:
-
-```python
-# Create relation
-viking_fs.link(
-    from_uri="viking://resources/docs/auth",
-    uris=["viking://resources/docs/security"],
-    reason="Related security docs"
-)
-
-# Get relations
-relations = viking_fs.relations("viking://resources/docs/auth")
-```
 
 ## AGFS Backend Storage
 
@@ -107,7 +89,6 @@ Each context directory follows a unified structure:
 viking://resources/docs/auth/
 ├── .abstract.md          # L0 abstract
 ├── .overview.md          # L1 overview
-├── .relations.json       # Relations table
 └── *.md                  # L2 detailed content
 ```
 

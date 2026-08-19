@@ -282,7 +282,6 @@ This group appears on memory-extraction flows such as `session.commit`.
 | `summary.memory.extract.stages.create_memory_ms` | Time spent creating new memories |
 | `summary.memory.extract.stages.merge_existing_ms` | Time spent merging into existing memories |
 | `summary.memory.extract.stages.delete_existing_ms` | Time spent deleting older memories |
-| `summary.memory.extract.stages.create_relations_ms` | Time spent creating used-URI relations |
 | `summary.memory.extract.stages.flush_semantic_ms` | Time spent flushing semantic queue work |
 
 ### `summary.search`

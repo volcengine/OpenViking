@@ -4,16 +4,15 @@
 
 import asyncio
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from openviking.core.namespace import (
-    canonicalize_uri,
     may_include_hidden_actor_peers,
 )
 from openviking.pyagfs.exceptions import (
+    AGFSClientError,
     AGFSDirectoryNotEmptyError,
     AGFSHTTPError,
-    AGFSClientError,
 )
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext
@@ -21,22 +20,18 @@ from openviking.storage.expr import PathScope
 from openviking.storage.internal_names import STORAGE_INTERNAL_ENTRY_NAMES
 from openviking.storage.viking_fs._base import (
     _ABSTRACT_WORKER_COUNT,
+    LS_ALL_NODES,
     _ensure_non_empty_search_query,
     _is_directory_not_empty_error,
     logger,
-    LS_ALL_NODES,
 )
+from openviking.utils.time_utils import format_iso8601, parse_iso_datetime
 from openviking_cli.exceptions import (
     FailedPreconditionError,
     InvalidArgumentError,
     NotFoundError,
 )
 from openviking_cli.utils.uri import VikingURI
-from openviking.utils.time_utils import format_iso8601, parse_iso_datetime
-
-if TYPE_CHECKING:
-    from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
-    from openviking_cli.utils.config import GrepConfig, RerankConfig, RetrievalConfig
 
 
 class _OpsMixin:
@@ -151,9 +146,7 @@ class _OpsMixin:
             if not vector_store:
                 return 0
             try:
-                target_canonical_uri = canonicalize_uri(
-                    self._path_to_uri(target_path, ctx=real_ctx), real_ctx
-                )
+                target_canonical_uri = self._path_to_uri(target_path, ctx=real_ctx)
                 filter_expr = PathScope("uri", target_canonical_uri, depth=-1)
                 return await vector_store.count(filter=filter_expr, ctx=real_ctx)
             except Exception as e:
@@ -286,10 +279,6 @@ class _OpsMixin:
                         f"mv destination for a file must include the target file name: {new_uri}",
                         details={"from_uri": old_uri, "to_uri": new_uri},
                     )
-
-        real_ctx = self._ctx_or_default(ctx)
-        old_uri = canonicalize_uri(old_uri, real_ctx)
-        new_uri = canonicalize_uri(new_uri, real_ctx)
 
         if is_dir:
             lease = await self._async_agfs.pathlock_acquire_batch(
@@ -561,7 +550,7 @@ class _OpsMixin:
                     continue
                 raise
         else:
-            if self._is_legacy_session_root_uri(uri):
+            if self._is_session_root_uri(uri):
                 now = datetime.now(timezone.utc).isoformat()
                 return {
                     "name": "session",
@@ -579,11 +568,8 @@ class _OpsMixin:
                 try:
                     vector_store = self._get_vector_store()
                     if vector_store:
-                        target_canonical_uri = canonicalize_uri(
-                            self._path_to_uri(path, ctx=real_ctx), real_ctx
-                        )
-                        if not may_include_hidden_actor_peers(target_canonical_uri, real_ctx):
-                            filter_expr = PathScope("uri", target_canonical_uri, depth=-1)
+                        if not may_include_hidden_actor_peers(uri, real_ctx):
+                            filter_expr = PathScope("uri", uri, depth=-1)
                             result["count"] = await vector_store.count(
                                 filter=filter_expr,
                                 ctx=real_ctx,
@@ -628,7 +614,7 @@ class _OpsMixin:
                 path = candidate_path
                 break
         if path is None:
-            if self._is_legacy_session_root_uri(uri):
+            if self._is_session_root_uri(uri):
                 return {"matches": [], "count": 0}
             raise NotFoundError(uri, "directory")
 

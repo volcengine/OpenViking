@@ -335,24 +335,14 @@ async def delete_account(
     """Delete an account and cascade-clean its storage (AGFS + VectorDB)."""
     manager = _get_api_key_manager(request)
 
-    # Build a ROOT-level context scoped to the target account for cleanup
-    cleanup_ctx = RequestContext(
-        user=UserIdentifier(account_id, "system"),
-        role=Role.ROOT,
-    )
-
-    # Cascade: remove AGFS data for the account
+    # Cascade: remove AGFS data for the account.
+    # Use the raw AGFS path to bypass the VikingFS namespace guard
+    # (viking://user is a protected namespace root, not a real directory).
     viking_fs = get_viking_fs()
-    account_prefixes = [
-        "viking://user/",
-        "viking://resources/",
-        "viking://upload/",
-    ]
-    for prefix in account_prefixes:
-        try:
-            await viking_fs.rm(prefix, recursive=True, ctx=cleanup_ctx)
-        except Exception as e:
-            logger.warning(f"AGFS cleanup for {prefix} in account {account_id}: {e}")
+    try:
+        await viking_fs._async_agfs.rm(f"/local/{account_id}", recursive=True)
+    except Exception as e:
+        logger.warning(f"AGFS cleanup for account {account_id}: {e}")
 
     # Cascade: remove VectorDB records for the account
     try:

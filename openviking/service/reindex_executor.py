@@ -922,7 +922,7 @@ class ReindexExecutor:
         uri = str(record.get("uri") or "")
         owner = record.get("owner_user_id")
         if not owner:
-            owner = owner_fields_for_uri(uri, ctx=ctx).get("owner_user_id")
+            owner = owner_fields_for_uri(uri).get("owner_user_id")
         if not owner or owner == ctx.user.user_id:
             return ctx
         return RequestContext(
@@ -1830,7 +1830,7 @@ class ReindexExecutor:
             level=level,
             user=owner_ctx.user,
             account_id=owner_ctx.account_id,
-            owner_space=owner_space_for_uri(uri, owner_ctx),
+            owner_space=owner_space_for_uri(uri),
             meta=merged_meta,
         )
         context.set_vectorize(Vectorize(text=vector_text))

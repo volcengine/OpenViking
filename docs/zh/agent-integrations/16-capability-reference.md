@@ -94,7 +94,7 @@ per-harness 章节（档案卡）只写差异；所有共享事实均在本章�
 | 4 | `list` | 列目录（函数名 `ls`，注册名显式改写为 `list`） | `recursive=False`（`:423`） |
 | 5 | `tree` | 递归目录树 | `level_limit=3, node_limit=1000, include_abstract=False`（`:449`） |
 | 6 | `remember` | 写长期记忆 | 内部建一次性会话 `mcp-store-<uuid12>` 并立即 `commit_async`（`:504-523`）——这是 MCP 面唯一的 commit 入口；MCP 没有显式 commit 工具 |
-| 7 | `write` | 写 `viking://` 文件 | `mode=replace\|append\|create`，replace 遇 NotFound 自动降级 create；新建文件扩展名白名单 `.md .txt .json .yaml .yml .toml .py .js .ts`；可写域 `resources/user/agent`；用户根下 `skills/ peers/ privacy/ sessions/` 只读；派生文件 `.abstract.md/.overview.md/.relations.json` 不可直写（`:529`；`content_write.py:60-81`） |
+| 7 | `write` | 写 `viking://` 文件 | `mode=replace\|append\|create`，replace 遇 NotFound 自动降级 create；新建文件扩展名白名单 `.md .txt .json .yaml .yml .toml .py .js .ts`；可写域 `resources/user/agent`；用户根下 `skills/ peers/ privacy/ sessions/` 只读；已存在的 `.abstract.md/.overview.md` sidecar 可改正文，但公共 API 不能创建（`:529`；`content_write.py:60-81`） |
 | 8 | `edit` | 精确字符串替换 | `old_string` 空/0 命中/多命中且非 replace_all 均报错，且文件内容不变（`:569`） |
 | 9 | `add_resource` | 资源摄取（远程 URL / 本地文件签名上传 / Connector） | `watch_interval` 单位为分钟（0=不 watch）；本地路径分支返回签名上传 URL（TTL 默认 600s），上传后自动入库，无需二次调用（`:723-947`） |
 | 10 | `list_watches` | 列 watch 订阅，商业版尚未支持 | scheduler 未运行时返回错误串（`:958`） |
@@ -145,7 +145,7 @@ per-harness 章节（档案卡）只写差异；所有共享事实均在本章�
   - `memory.session_auto_commit.default_enabled = false`、`idle_enabled = false`（`memory_config.py:15-16`）；无存储 policy 的会话自动 commit 关闭（`session_service.py:637-638`）；idle 扫描器在 `idle_enabled=false` 时根本不创建（`core.py:440-448`），构成双重门控。
   - `POST /messages` 的 auto_create 不接受 policy 参数；只有 `POST /sessions`（create）与 `PATCH /sessions/{id}/config` 能设 `auto_commit_policy`。
   - 当前没有插件下发 `auto_commit_policy`；第一方客户端中会下发该字段的是 **ov CLI**（`ov session new --auto-commit-policy-json` / `--no-auto-commit`、`ov session config set`）。
-  - policy 显式启用时，服务端默认阈值是 `pending_token_threshold=10000（严格大于）/ message_count_threshold=50 / idle_timeout_seconds=86400 / keep_recent_count=2 / min_commit_interval_seconds=0`。注意这组服务端默认值与各插件客户端的 20000/10 是相互独立的两层配置。
+  - policy 显式启用时，服务端默认阈值是 `pending_token_threshold=150000（严格大于）/ message_count_threshold=100 / idle_timeout_seconds=86400 / keep_recent_count=0 / min_commit_interval_seconds=0`。注意这组服务端默认值与各插件客户端的 20000/10 是相互独立的两层配置。
 - **由此**：现状下所有自动 commit 都是客户端各自实现的阈值逻辑（[§3.3](#_3-3-会话与-commit-生命周期)），服务端不做兜底；进程异常终止后遗留的 pending 消息，需在同一会话后续再触发 commit 才会归档与抽取。
 - **tool output 外置**：服务端 `tool_output_externalization.enabled=True`、`threshold_chars=20000`（`server/config.py:257-258`）——客户端普遍把 `captureToolMaxChars` 设到 1000000 仅作兜底，真正的截断/外置在服务端做，externalized 结果通过 `tool_output_ref` 引用（openclaw 有三个专门工具读它）。
 - **服务端召回相关熔断**：`retrieval.recall_intent_timeout_s=5.0`（query expansion）、`recall_rewrite_timeout_s=30.0`（digest，[§3.2.5](#_3-2-5-召回再摘要)）、`enable_intent=true`。客户端超时预算按这两条推导（[§3.2.4](#_3-2-4-超时与预算链)）。
@@ -408,7 +408,7 @@ JS 系 harness 的召回逻辑均由 `recall-core.mjs` 中的三级降级链处�
 
 ### 3.5.1 写入边界
 
-MCP `write` / REST `content/write` 的三道 guard（`content_write.py`）：可写域限 `viking://resources|user|agent`；新建文件扩展名需符合白名单 `.md .txt .json .yaml .yml .toml .py .js .ts`；用户根下 `skills/ peers/ privacy/ sessions/` 四个托管子树只读（`_USER_MANAGED_SUBTREES`）；派生文件 `.abstract.md/.overview.md/.relations.json` 不可直写。
+MCP `write` / REST `content/write` 的三道 guard（`content_write.py`）：可写域限 `viking://resources|user|agent`；新建文件扩展名需符合白名单 `.md .txt .json .yaml .yml .toml .py .js .ts`；用户根下 `skills/ peers/ privacy/ sessions/` 四个托管子树只读（`_USER_MANAGED_SUBTREES`）。已存在的 `.abstract.md/.overview.md` sidecar 可以改正文，但公共写入 API 不能创建它们。
 
 ### 3.5.2 删除边界
 
@@ -593,7 +593,7 @@ MCP `write` / REST `content/write` 的三道 guard（`content_write.py`）：可
 
 **导入导出/快照**：`export`／`backup`／`import`／`restore`（.ovpack）｜`snapshot commit/restore/show/log/diff/ignore-*`（工作区快照，前向 commit 回滚）
 
-**隐私/关系**：`privacy categories/list/get/versions/version/activate/upsert`（`--key-<name>` 语法糖）｜`relations`/`link`/`unlink`（实验性）
+**隐私**：`privacy categories/list/get/versions/version/activate/upsert`（`--key-<name>` 语法糖）
 
 **状态/可观测**：`health`（healthy=false 时仍退 0）｜`status`（表格模式始终退 0）｜`observer {queue,vikingdb,models,retrieval,filesystem,system}`｜`wait`｜`task status/cancel/list`｜`task watch {ls,show,rm,pause,resume,update,trigger}`｜`version`（独立 3s 超时探服务端）
 

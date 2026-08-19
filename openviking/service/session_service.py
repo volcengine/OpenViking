@@ -319,25 +319,6 @@ class SessionService:
         except Exception:
             logger.debug("Failed to list sessions", exc_info=True)
 
-        try:
-            entries = await self._viking_fs.ls(
-                "viking://session",
-                sort_by="mtime",
-                sort_order="desc",
-                ctx=ctx,
-            )
-            for entry in entries:
-                name = entry.get("name", "")
-                if name in [".", ".."] or name in sessions_by_id:
-                    continue
-                sessions_by_id[name] = {
-                    "session_id": name,
-                    "uri": entry.get("uri", f"viking://session/{name}"),
-                    "is_dir": entry.get("isDir", False),
-                    "mod_time": entry.get("modTime", ""),
-                }
-        except Exception:
-            logger.debug("Failed to list legacy sessions", exc_info=True)
         return list(sessions_by_id.values())
 
     async def delete(self, session_id: str, ctx: RequestContext) -> bool:

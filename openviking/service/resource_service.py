@@ -18,9 +18,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from urllib.parse import urlparse
 from uuid import uuid4
 
-from openviking.core.content_targets import ContentTargetSpec
 from openviking.core.namespace import is_content_root_uri
-from openviking.core.uri_validation import validate_optional_content_target_uri
 from openviking.parse.backend import ParserBackend, normalize_parser_backend
 from openviking.parse.mode import ParseMode, normalize_parse_mode
 from openviking.parse.parsers.constants import MPEG_TS_EXTENSION_ALIAS
@@ -271,13 +269,23 @@ class ResourceService:
             return {}
         return {"ingest_options": IngestOptions.from_search_tags(tags, mode=tag_mode)}
 
+    @staticmethod
+    def _ensure_single_resource_target(
+        *,
+        to: Optional[str],
+        parent: Optional[str],
+    ) -> None:
+        if (to or "").strip() and (parent or "").strip():
+            raise InvalidArgumentError("Cannot specify both 'to' and 'parent' at the same time.")
+
     async def _manage_watch_if_needed(
         self,
         *,
         watch_manager: Optional["WatchManager"],
         manage_watch: bool,
         watch_interval: float,
-        target: ContentTargetSpec,
+        to: str,
+        parent: str,
         to_is_directory: bool,
         root_uri: str,
         path: str,
@@ -295,15 +303,10 @@ class ResourceService:
         telemetry = get_current_telemetry()
         with telemetry.measure("resource.watch"):
             if watch_interval > 0:
-                watch_to = target.to
-                parent_uri = target.parent
+                watch_to = to
+                parent_uri = parent
                 if not watch_to:
-                    watch_to = validate_optional_content_target_uri(
-                        root_uri,
-                        ctx,
-                        kind="resource",
-                        field_name="root_uri",
-                    )
+                    watch_to = root_uri
                     parent_uri = None
                 if not watch_to:
                     raise InvalidArgumentError(
@@ -343,12 +346,12 @@ class ResourceService:
                     logger.warning(
                         f"[ResourceService] Failed to create watch task for {watch_to}: {e}"
                     )
-            elif target.to:
+            elif to:
                 try:
-                    await self._handle_watch_task_cancellation(to_uri=target.to, ctx=ctx)
+                    await self._handle_watch_task_cancellation(to_uri=to, ctx=ctx)
                 except Exception as e:
                     logger.warning(
-                        f"[ResourceService] Failed to cancel watch task for {target.to}: {e}"
+                        f"[ResourceService] Failed to cancel watch task for {to}: {e}"
                     )
 
     def _normalize_add_resource_args(
@@ -870,7 +873,9 @@ class ResourceService:
         plan: _SourcePlan,
         *,
         ctx: RequestContext,
-        target: ContentTargetSpec,
+        to: str,
+        parent: str,
+        create_parent: bool,
         reason: str,
         instruction: str,
         timeout: Optional[float],
@@ -890,16 +895,14 @@ class ResourceService:
         from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 
         planned_to_is_directory = (
-            to_is_directory if to_is_directory is not None else bool(target.to)
+            to_is_directory if to_is_directory is not None else bool(to)
         )
-        target_to_is_exact = bool(
-            target.to and not is_content_root_uri(target.to, ctx, kind="resource")
-        )
+        target_to_is_exact = bool(to and not is_content_root_uri(to, kind="resource"))
         defer_candidate_resolution = bool(
             (
                 plan.defer_unnamed_target
                 and plan.source_identity.source_name is None
-                and not target.to
+                and not to
             )
             or (mode is ParseMode.NO_SPLIT and not target_to_is_exact)
         )
@@ -911,7 +914,9 @@ class ResourceService:
             root_uri, resource_lock, defer_target_resolution = await self._plan_source_job_target(
                 path=plan.path,
                 ctx=ctx,
-                target=target,
+                to=to,
+                parent=parent,
+                create_parent=create_parent,
                 source_info=plan.source_identity,
                 defer_candidate_resolution=defer_candidate_resolution,
             )
@@ -956,7 +961,7 @@ class ResourceService:
                 exclude=processor_kwargs.get("exclude"),
                 directly_upload_media=bool(processor_kwargs.get("directly_upload_media", True)),
                 preserve_structure=processor_kwargs.get("preserve_structure"),
-                create_parent=bool(processor_kwargs.get("create_parent", False)),
+                create_parent=create_parent,
                 source_name=plan.source_identity.source_name,
                 to_is_directory=planned_to_is_directory,
                 args=plan.processor_args,
@@ -999,7 +1004,9 @@ class ResourceService:
         *,
         path: str,
         ctx: RequestContext,
-        target: ContentTargetSpec,
+        to: str,
+        parent: str,
+        create_parent: bool,
         source_info: _ResourceSourceInfo,
         defer_candidate_resolution: bool,
     ) -> tuple[str, Optional[Dict[str, Any]], bool]:
@@ -1012,11 +1019,11 @@ class ResourceService:
             ctx=ctx,
             doc_name=doc_name,
             scope="resources",
-            to_uri=target.to,
-            parent_uri=target.parent,
+            to_uri=to,
+            parent_uri=parent,
             source_path=source_path,
             source_format=source_info.source_format,
-            create_parent=target.create_parent,
+            create_parent=create_parent,
         )
         if candidate_uri and defer_candidate_resolution:
             return root_uri, None, True
@@ -1283,6 +1290,11 @@ class ResourceService:
                 parent = default_parent
                 kwargs["create_parent"] = True
 
+        self._ensure_single_resource_target(to=to, parent=parent)
+        target_to = to or ""
+        target_parent = parent or ""
+        target_create_parent = bool(kwargs.get("create_parent", False))
+
         if self._connector.should_delegate(
             path,
             ctx=ctx,
@@ -1315,13 +1327,6 @@ class ResourceService:
             path = require_remote_resource_source(path)
             kwargs.setdefault("request_validator", ensure_public_remote_target)
 
-        target = ContentTargetSpec.from_fields(
-            ctx=ctx,
-            kind="resource",
-            to=to,
-            parent=parent,
-            create_parent=bool(kwargs.get("create_parent", False)),
-        )
         source_plan = await self._prepare_standard_source_plan(
             path=path,
             ctx=ctx,
@@ -1334,7 +1339,9 @@ class ResourceService:
             result = await self._enqueue_source_plan(
                 source_plan,
                 ctx=ctx,
-                target=target,
+                to=target_to,
+                parent=target_parent,
+                create_parent=target_create_parent,
                 reason=reason,
                 instruction=instruction,
                 timeout=timeout,
@@ -1355,9 +1362,9 @@ class ResourceService:
             result = await self._execute_resource_ingestion(
                 path=path,
                 ctx=ctx,
-                to=to,
+                to=target_to,
                 to_is_directory=to_is_directory,
-                parent=parent,
+                parent=target_parent,
                 reason=reason,
                 instruction=instruction,
                 defer_post_processing=True,
@@ -1454,15 +1461,11 @@ class ResourceService:
         telemetry.set("resource.flags.watch_enabled", watch_enabled)
 
         try:
-            target = ContentTargetSpec.from_fields(
-                ctx=ctx,
-                kind="resource",
-                to=to,
-                parent=parent,
-                create_parent=bool(kwargs.get("create_parent", False)),
-            )
+            self._ensure_single_resource_target(to=to, parent=parent)
+            target_to = to or ""
+            target_parent = parent or ""
             if to_is_directory is None:
-                to_is_directory = bool(target.to)
+                to_is_directory = bool(target_to)
             watch_to_is_directory = to_is_directory
             if enforce_public_remote_targets and is_remote_resource_source(path):
                 path = require_remote_resource_source(path)
@@ -1476,8 +1479,8 @@ class ResourceService:
                 reason=reason,
                 instruction=instruction,
                 scope="resources",
-                to=target.to,
-                parent=target.parent,
+                to=target_to,
+                parent=target_parent,
                 to_is_directory=to_is_directory,
                 build_index=build_index,
                 summarize=summarize,
@@ -1507,7 +1510,8 @@ class ResourceService:
                 watch_manager=watch_manager,
                 manage_watch=manage_watch,
                 watch_interval=watch_interval,
-                target=target,
+                to=target_to,
+                parent=target_parent,
                 to_is_directory=watch_to_is_directory,
                 root_uri=str(result.get("root_uri") or ""),
                 path=path,

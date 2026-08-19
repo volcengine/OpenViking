@@ -923,7 +923,7 @@ async def test_glob_normalizes_scope_uri():
 
 
 @pytest.mark.asyncio
-async def test_ls_passes_full_query_params():
+async def test_ls_and_tree_pass_query_params():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(get=AsyncMock(return_value=object()))
     client._http = fake_http
@@ -940,10 +940,14 @@ async def test_ls_passes_full_query_params():
         sort_by="mtime",
         sort_order="desc",
     )
+    await client.tree("viking://resources/", level_limit=2)
+    await client.tree("viking://resources/", level_limit=0)
+    await client.tree("viking://resources/")
 
-    fake_http.get.assert_awaited_once_with(
-        "/api/v1/fs/ls",
-        params={
+    ls_call = fake_http.get.await_args_list[0]
+    assert ls_call.args == ("/api/v1/fs/ls",)
+    assert ls_call.kwargs == {
+        "params": {
             "uri": "viking://resources/",
             "simple": True,
             "recursive": True,
@@ -954,7 +958,11 @@ async def test_ls_passes_full_query_params():
             "sort_by": "mtime",
             "sort_order": "desc",
         },
-    )
+    }
+    assert [
+        tree_call.kwargs["params"]["level_limit"]
+        for tree_call in fake_http.get.await_args_list[1:]
+    ] == [2, 0, 3]
 
 
 @pytest.mark.asyncio
@@ -994,25 +1002,6 @@ async def test_batch_write_http_timeout_outlives_server_wait_timeout():
     request_timeout = client._request.await_args.kwargs["timeout"]
     assert request_timeout.read == 330.0
     assert request_timeout.connect == 180.0
-
-
-@pytest.mark.asyncio
-async def test_link_normalizes_single_and_multiple_target_uris():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response = lambda _response: None
-
-    await client.link("/resources/from", ["/resources/a", "viking://resources/b"], reason="demo")
-
-    fake_http.post.assert_awaited_once_with(
-        "/api/v1/relations/link",
-        json={
-            "from_uri": "viking://resources/from",
-            "to_uris": ["viking://resources/a", "viking://resources/b"],
-            "reason": "demo",
-        },
-    )
 
 
 @pytest.mark.asyncio

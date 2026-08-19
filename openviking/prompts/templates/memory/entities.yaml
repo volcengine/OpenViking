@@ -4,7 +4,7 @@ description: |
   works, media, products, animals/pets, programs, activities, and concepts the
   user mentions. Store what the entity is and its durable relations.
 directory: "viking://user/{{ user_space }}/memories/entities"
-filename_template: "{{ category }}/{{ name }}.md"
+filename_template: "{{ category|lower }}/{{ name|lower }}.md"
 enabled: true
 embedding_template: |-
   {{ category }}

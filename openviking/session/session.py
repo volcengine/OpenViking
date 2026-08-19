@@ -2356,7 +2356,7 @@ class Session:
         record_auto_commit_success: bool = False,
         event_search_tags: Optional[List[str]] = None,
     ) -> None:
-        """Phase 2: Extract memories, write relations, enqueue — runs in background."""
+        """Phase 2: Extract memories and enqueue semantic work in the background."""
         from openviking.service.task_tracker import get_task_tracker
         from openviking.telemetry import OperationTelemetry, bind_telemetry
         from openviking.telemetry.registry import register_telemetry, unregister_telemetry
@@ -2685,16 +2685,6 @@ class Session:
                             )
                         else:
                             await _run_archive_summary()
-
-                    # Write relations (using snapshot, not self._usage_records)
-                    if self._viking_fs:
-                        for usage in usage_records:
-                            try:
-                                await self._viking_fs.link(
-                                    self._session_uri, usage.uri, ctx=self.ctx
-                                )
-                            except Exception as e:
-                                logger.warning(f"Failed to create relation to {usage.uri}: {e}")
 
                     # Update active_count (using snapshot, not self._usage_records)
                     if self._vikingdb_manager:

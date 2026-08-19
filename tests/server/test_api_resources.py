@@ -528,9 +528,16 @@ async def test_add_resource_with_resources_root_to_uses_child_uri(
 
 
 async def test_add_resource_with_user_resources_short_parent_initializes_root(
+    app,
     client: httpx.AsyncClient,
     upload_temp_dir,
 ):
+    from openviking.server.auth import get_request_context
+
+    app.dependency_overrides[get_request_context] = lambda: RequestContext(
+        user=UserIdentifier("default", "default"),
+        role=Role.USER,
+    )
     archive_path = upload_temp_dir / "user_short_docs.zip"
     with zipfile.ZipFile(archive_path, "w") as zf:
         zf.writestr("user_short_docs/readme.md", "# hello\n")

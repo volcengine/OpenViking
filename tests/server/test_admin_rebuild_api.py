@@ -2922,7 +2922,7 @@ async def test_openviking_service_reindex_uses_default_root_context(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_openviking_service_reindex_canonicalizes_user_shorthand(monkeypatch):
+async def test_openviking_service_reindex_keeps_canonical_user_id(monkeypatch):
     from openviking.service.core import OpenVikingService
 
     seen = {}
@@ -2951,13 +2951,13 @@ async def test_openviking_service_reindex_canonicalizes_user_shorthand(monkeypat
 
     result = await OpenVikingService.reindex(
         service,
-        uri="viking://user/memories",
+        uri="viking://user/resources/memories",
         mode="prune_orphans",
         wait=True,
         dry_run=True,
         ctx=ctx,
     )
 
-    assert result == {"status": "completed", "uri": "viking://user/alice/memories"}
-    assert seen["uri"] == "viking://user/alice/memories"
+    assert result == {"status": "completed", "uri": "viking://user/resources/memories"}
+    assert seen["uri"] == "viking://user/resources/memories"
     assert seen["ctx"] is ctx

@@ -93,7 +93,7 @@ These tools are defined on the server side, and future updates will be centrally
 | 4 | `list` | List a directory (function name `ls`, explicitly registered as `list`) | `recursive=False` (`:423`) |
 | 5 | `tree` | Recursive directory tree | `level_limit=3, node_limit=1000, include_abstract=False` (`:449`) |
 | 6 | `remember` | Write long-term memory | Internally creates a one-shot session (`mcp-store-<uuid12>`) and immediately calls `commit_async` (`:504-523`). This is the only commit entry point on the MCP surface, as there is no explicit commit tool. |
-| 7 | `write` | Write a `viking://` file | `mode=replace\|append\|create`; `replace` falls back to `create` if not found. New files must use an extension from the allowlist: `.md .txt .json .yaml .yml .toml .py .js .ts`. Writable domains are limited to `resources/user/agent`; directories like `skills/`, `peers/`, `privacy/`, and `sessions/` under the user root are read-only. Derived files (`.abstract.md` / `.overview.md` / `.relations.json`) cannot be written directly (`:529`; `content_write.py:60-81`) |
+| 7 | `write` | Write a `viking://` file | `mode=replace\|append\|create`; `replace` falls back to `create` if not found. New files must use an extension from the allowlist: `.md .txt .json .yaml .yml .toml .py .js .ts`. Writable domains are limited to `resources/user/agent`; directories like `skills/`, `peers/`, `privacy/`, and `sessions/` under the user root are read-only. Existing `.abstract.md` / `.overview.md` sidecars may be body-updated, but public APIs cannot create them (`:529`; `content_write.py:60-81`) |
 | 8 | `edit` | Exact string replacement | Supplying an empty `old_string`, finding zero matches, or finding multiple matches without `replace_all` will raise an error and leave the file content unchanged (`:569`) |
 | 9 | `add_resource` | Resource ingestion (remote URL / signed upload of a local file / Connector) | `watch_interval` is defined in minutes (0 disables watching). The local-path branch generates a signed upload URL (default TTL of 600s), and ingestion triggers automatically post-upload without requiring a subsequent API call (`:723-947`) |
 | 10 | `list_watches` | List watch subscriptions; not yet supported on the commercial edition | Returns an error string if the scheduler is not running (`:958`) |
@@ -144,7 +144,7 @@ Core modules at a glance (detailed further in the per-dimension sections):
   - `memory.session_auto_commit.default_enabled = false` and `idle_enabled = false` (`memory_config.py:15-16`). Auto-commit is disabled for sessions lacking a storage policy (`session_service.py:637-638`). Furthermore, the idle scanner isn't even instantiated when `idle_enabled=false` (`core.py:440-448`), effectively acting as a double gate.
   - The `auto_create` path triggered by `POST /messages` accepts no policy arguments; only `POST /sessions` (creation) and `PATCH /sessions/{id}/config` can set the `auto_commit_policy`.
   - Currently, no plugin sends an `auto_commit_policy`. Among first-party clients, only the **ov CLI** does this (`ov session new --auto-commit-policy-json` / `--no-auto-commit`, `ov session config set`).
-  - When a policy is explicitly enabled, the server defaults are: `pending_token_threshold=10000` (strictly greater than), `message_count_threshold=50`, `idle_timeout_seconds=86400`, `keep_recent_count=2`, and `min_commit_interval_seconds=0`. Note that this set of server defaults operates independently of the plugin clients' configuration (which is typically 20000/10).
+  - When a policy is explicitly enabled, the server defaults are: `pending_token_threshold=150000` (strictly greater than), `message_count_threshold=100`, `idle_timeout_seconds=86400`, `keep_recent_count=0`, and `min_commit_interval_seconds=0`. Note that this set of server defaults operates independently of the plugin clients' configuration (which is typically 20000/10).
 - **Consequence**: As it stands, every auto-commit relies on threshold logic implemented individually by each client ([§3.3](#_3-3-session-and-commit-lifecycle)), with no server-side fallback. If a process dies abnormally, any lingering pending messages are only archived and extracted when a subsequent commit is manually triggered in that same session.
 - **Externalized tool output**: The server sets `tool_output_externalization.enabled=True` with `threshold_chars=20000` (`server/config.py:257-258`). Clients commonly raise `captureToolMaxChars` to 1000000 purely as a fallback mechanism, since the actual truncation and externalization occur on the server. Externalized results are then referenced via `tool_output_ref` (for context, openclaw provides three dedicated tools specifically for reading these references).
 - **Server-side recall timeout fuses**: Configured via `retrieval.recall_intent_timeout_s=5.0` (for query expansion), `recall_rewrite_timeout_s=30.0` (for digests, [§3.2.5](#_3-2-5-recall-digest)), and `enable_intent=true`. Client timeout budgets are derived directly from these two timeout values ([§3.2.4](#_3-2-4-timeout-and-budget-chain)).
@@ -300,7 +300,7 @@ On the server side, `session_id` handling diverges into two distinct execution p
 
 ### 3.2.6 Injection backflow protection
 
-To prevent injected content from being captured a second time, the injection process wraps the content in deterministic tags (like `<openviking-context>`), which the capture mechanism then mechanically strips. Specifically, `capture-utils`' `sanitizeCapturedText` function removes injection blocks, digest blocks, metadata fences, and timestamp prefixes. 
+To prevent injected content from being captured a second time, the injection process wraps the content in deterministic tags (like `<openviking-context>`), which the capture mechanism then mechanically strips. Specifically, `capture-utils`' `sanitizeCapturedText` function removes injection blocks, digest blocks, metadata fences, and timestamp prefixes.
 
 **Per-harness specifics:**
 - **trae / zcode**: Utilize their own cleaning functions (zcode's strips three distinct types of injection blocks).
@@ -428,7 +428,7 @@ Legend: **C** = commits; **C\*** = commits, with a precondition (see notes); **�
 
 ### 3.5.1 Write boundary
 
-There are three primary guards on MCP `write` and REST `content/write` (`content_write.py`). First, the writable domain is strictly limited to `viking://resources`, `viking://user`, and `viking://agent`. Second, file extensions for new files must match the whitelist (`.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.toml`, `.py`, `.js`, `.ts`). Third, the four managed subtrees (`skills/`, `peers/`, `privacy/`, `sessions/`) under the user root are designated as read-only (`_USER_MANAGED_SUBTREES`). Additionally, derived files (such as `.abstract.md`, `.overview.md`, and `.relations.json`) cannot be written to directly.
+There are three primary guards on MCP `write` and REST `content/write` (`content_write.py`). First, the writable domain is strictly limited to `viking://resources`, `viking://user`, and `viking://agent`. Second, file extensions for new files must match the whitelist (`.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.toml`, `.py`, `.js`, `.ts`). Third, the four managed subtrees (`skills/`, `peers/`, `privacy/`, `sessions/`) under the user root are designated as read-only (`_USER_MANAGED_SUBTREES`). Existing `.abstract.md` and `.overview.md` sidecars can be body-updated, but public write APIs cannot create them.
 
 ### 3.5.2 Delete boundary
 
@@ -610,7 +610,7 @@ Doc-comment prefixes like `[Data]`, `[Interactive]`, `[Admin]`, or `[Experimenta
 
 **Import/export & snapshots**: `export` / `backup` / `import` / `restore` (.ovpack formats) | `snapshot commit/restore/show/log/diff/ignore-*` (workspace snapshots; rollbacks are achieved by committing forward)
 
-**Privacy/relations**: `privacy categories/list/get/versions/version/activate/upsert` (offers `--key-<name>` syntactic sugar) | `relations`/`link`/`unlink` (experimental)
+**Privacy**: `privacy categories/list/get/versions/version/activate/upsert` (offers `--key-<name>` syntactic sugar)
 
 **Status/observability**: `health` (exits with 0 even when healthy=false) | `status` (table mode always exits with 0) | `observer {queue,vikingdb,models,retrieval,filesystem,system}` | `wait` | `task status/cancel/list` | `task watch {ls,show,rm,pause,resume,update,trigger}` | `version` (probes the server utilizing its own 3-second timeout)
 

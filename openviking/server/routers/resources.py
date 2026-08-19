@@ -7,6 +7,8 @@ from typing import Any, Dict, Literal, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from openviking.core.path_variables import resolve_path_variables
+from openviking.core.uri_validation import validate_content_target_uri
 from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.server.auth import get_request_context, get_upload_request_context
 from openviking.server.dependencies import get_service
@@ -214,6 +216,17 @@ async def add_resource(
 ):
     """Add resource to OpenViking."""
     service = get_service()
+    to_uri = resolve_path_variables(request.to).strip() if request.to else ""
+    if to_uri:
+        to_uri = validate_content_target_uri(to_uri, _ctx, kind="resource", field_name="to")
+    parent_uri = resolve_path_variables(request.parent).strip() if request.parent else ""
+    if parent_uri:
+        parent_uri = validate_content_target_uri(
+            parent_uri,
+            _ctx,
+            kind="resource",
+            field_name="parent",
+        )
 
     path = request.path
     allow_local_path_resolution = False
@@ -270,8 +283,8 @@ async def add_resource(
                 path=path,
                 ctx=_ctx,
                 add_type=request.add_type,
-                to=request.to,
-                parent=request.parent,
+                to=to_uri,
+                parent=parent_uri,
                 reason=request.reason,
                 instruction=request.instruction,
                 wait=request.wait,
@@ -307,6 +320,14 @@ async def add_skill(
 ):
     """Add skill to OpenViking."""
     service = get_service()
+    target_uri = resolve_path_variables(request.target_uri).strip() if request.target_uri else ""
+    if target_uri:
+        target_uri = validate_content_target_uri(
+            target_uri,
+            _ctx,
+            kind="skill",
+            field_name="target_uri",
+        )
     data = request.data
     allow_local_path_resolution = False
     resolved = None
@@ -340,7 +361,7 @@ async def add_skill(
                 timeout=request.timeout,
                 allow_local_path_resolution=allow_local_path_resolution,
                 source_path_hint=source_path_hint,
-                target_uri=request.target_uri,
+                target_uri=target_uri,
             )
             await persist_skill_source_metadata(service, _ctx, result, source_metadata)
         except Exception:

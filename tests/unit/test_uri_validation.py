@@ -5,7 +5,7 @@
 
 import pytest
 
-from openviking.core.uri_validation import validate_optional_viking_uri, validate_viking_uri
+from openviking.core.uri_validation import validate_viking_uri
 from openviking_cli.exceptions import InvalidURIError
 
 
@@ -13,8 +13,6 @@ from openviking_cli.exceptions import InvalidURIError
     "uri",
     [
         "viking://resources/docs",
-        "resources/docs",
-        "/resources/docs",
         "viking://session/s1",
         "viking://agent/code-agent/memories/facts/project.md",
         "viking://",
@@ -30,6 +28,8 @@ def test_validate_viking_uri_accepts_supported_forms(uri: str):
         "",
         "   ",
         "viking:/resources/docs",
+        "resources/docs",
+        "/resources/docs",
         "s3://bucket/key",
         "https://example.com/doc.md",
         "viking://unsupported/doc.md",
@@ -42,12 +42,12 @@ def test_validate_viking_uri_rejects_invalid_or_unsupported_forms(uri: str):
         validate_viking_uri(uri)
 
 
-def test_validate_viking_uri_hides_internal_scopes_in_public_error():
+def test_validate_viking_uri_reports_explicit_scheme_requirement():
     with pytest.raises(InvalidURIError) as exc_info:
         validate_viking_uri("ssd")
 
     message = str(exc_info.value)
-    assert "resources" in message
+    assert "viking://" in message
     assert "temp" not in message
     assert "queue" not in message
     assert "frozenset" not in message
@@ -65,7 +65,8 @@ def test_validate_viking_uri_supports_internal_and_operation_scopes():
     assert "temp" not in message
     assert "queue" not in message
 
-
-def test_validate_optional_viking_uri_preserves_unspecified():
-    assert validate_optional_viking_uri(None) == ""
-    assert validate_optional_viking_uri(" ") == ""
+    with pytest.raises(InvalidURIError, match="Invalid scope"):
+        validate_viking_uri(
+            "viking://invalid_scope/doc",
+            allowed_scopes={"invalid_scope"},
+        )

@@ -2,11 +2,6 @@ import type { JsonObject } from '../../common'
 
 export type FindContextType = 'memory' | 'resource' | 'skill'
 
-export type SearchRelation = {
-  abstract: string
-  uri: string
-}
-
 export type SearchHit = {
   abstract?: string
   category?: string
@@ -14,7 +9,6 @@ export type SearchHit = {
   level?: number
   match_reason?: string
   overview?: string | null
-  relations?: SearchRelation[]
   score?: number
   uri?: string
 }
