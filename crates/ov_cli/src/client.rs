@@ -1234,35 +1234,6 @@ impl HttpClient {
         self.get("/api/v1/tasks", &params).await
     }
 
-    // ============ Relation Methods ============
-
-    pub async fn relations(&self, uri: &str) -> Result<serde_json::Value> {
-        let params = vec![("uri".to_string(), uri.to_string())];
-        self.get("/api/v1/relations", &params).await
-    }
-
-    pub async fn link(
-        &self,
-        from_uri: &str,
-        to_uris: &[String],
-        reason: &str,
-    ) -> Result<serde_json::Value> {
-        let body = serde_json::json!({
-            "from_uri": from_uri,
-            "to_uris": to_uris,
-            "reason": reason,
-        });
-        self.post("/api/v1/relations/link", &body).await
-    }
-
-    pub async fn unlink(&self, from_uri: &str, to_uri: &str) -> Result<serde_json::Value> {
-        let body = serde_json::json!({
-            "from_uri": from_uri,
-            "to_uri": to_uri,
-        });
-        self.delete_with_body("/api/v1/relations/link", &body).await
-    }
-
     // ============ Pack Methods ============
 
     async fn download_pack(

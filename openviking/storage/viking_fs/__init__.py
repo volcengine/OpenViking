@@ -7,7 +7,6 @@ Encapsulates the AGFS binding client, providing file operation interface based o
 Responsibilities:
 - URI conversion (viking:// <-> /local/)
 - L0/L1 reading (.abstract.md, .overview.md)
-- Relation management (.relations.json)
 - Semantic search (vector retrieval + rerank)
 - Vector sync (sync vector store on rm/mv)
 
@@ -67,7 +66,6 @@ from openviking.storage.viking_fs._base import (
     SNAPSHOT_DIFF_MAX_LINES,
     SNAPSHOT_DIFF_MAX_OUTPUT_BYTES,
     SNAPSHOT_DIFF_TIMEOUT_MS,
-    RelationEntry,
     _ensure_non_empty_search_query,
     _get_abstract_worker_count,
     _get_cpu_count,
@@ -121,7 +119,7 @@ class VikingFS(
 
     APIs are divided into two categories:
     - RAGFS basic commands (direct forwarding): read, ls, write, mkdir, rm, mv, grep, stat
-    - VikingFS specific capabilities: abstract, overview, find, search, relations, link, unlink
+    - VikingFS specific capabilities: abstract, overview, find, search
 
     Uses Rust binding mode: Use RAGFSBindingClient to directly use RAGFS implementation
     """
@@ -195,7 +193,6 @@ __all__ = [
     "SNAPSHOT_DIFF_MAX_LINES",
     "SNAPSHOT_DIFF_MAX_OUTPUT_BYTES",
     "SNAPSHOT_DIFF_TIMEOUT_MS",
-    "RelationEntry",
     "SyncDiff",
     "VikingFS",
     "enable_viking_fs_recorder",

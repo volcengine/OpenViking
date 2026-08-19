@@ -7,6 +7,7 @@ All context objects in OpenViking are identified by URIs in the format:
 viking://<scope>/<path>
 """
 
+import re
 from typing import Dict, Optional
 
 

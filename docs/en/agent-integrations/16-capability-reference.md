@@ -93,7 +93,7 @@ These tools are defined on the server side, and future updates will be centrally
 | 4 | `list` | List a directory (function name `ls`, explicitly registered as `list`) | `recursive=False` (`:423`) |
 | 5 | `tree` | Recursive directory tree | `level_limit=3, node_limit=1000, include_abstract=False` (`:449`) |
 | 6 | `remember` | Write long-term memory | Internally creates a one-shot session (`mcp-store-<uuid12>`) and immediately calls `commit_async` (`:504-523`). This is the only commit entry point on the MCP surface, as there is no explicit commit tool. |
-| 7 | `write` | Write a `viking://` file | `mode=replace\|append\|create`; `replace` falls back to `create` if not found. New files must use an extension from the allowlist: `.md .txt .json .yaml .yml .toml .py .js .ts`. Writable domains are limited to `resources/user/agent`; directories like `skills/`, `peers/`, `privacy/`, and `sessions/` under the user root are read-only. Derived files (`.abstract.md` / `.overview.md` / `.relations.json`) cannot be written directly (`:529`; `content_write.py:60-81`) |
+| 7 | `write` | Write a `viking://` file | `mode=replace\|append\|create`; `replace` falls back to `create` if not found. New files must use an extension from the allowlist: `.md .txt .json .yaml .yml .toml .py .js .ts`. Writable domains are limited to `resources/user/agent`; directories like `skills/`, `peers/`, `privacy/`, and `sessions/` under the user root are read-only. Existing `.abstract.md` / `.overview.md` sidecars may be body-updated, but public APIs cannot create them (`:529`; `content_write.py:60-81`) |
 | 8 | `edit` | Exact string replacement | Supplying an empty `old_string`, finding zero matches, or finding multiple matches without `replace_all` will raise an error and leave the file content unchanged (`:569`) |
 | 9 | `add_resource` | Resource ingestion (remote URL / signed upload of a local file / Connector) | `watch_interval` is defined in minutes (0 disables watching). The local-path branch generates a signed upload URL (default TTL of 600s), and ingestion triggers automatically post-upload without requiring a subsequent API call (`:723-947`) |
 | 10 | `list_watches` | List watch subscriptions; not yet supported on the commercial edition | Returns an error string if the scheduler is not running (`:958`) |
@@ -300,7 +300,7 @@ On the server side, `session_id` handling diverges into two distinct execution p
 
 ### 3.2.6 Injection backflow protection
 
-To prevent injected content from being captured a second time, the injection process wraps the content in deterministic tags (like `<openviking-context>`), which the capture mechanism then mechanically strips. Specifically, `capture-utils`' `sanitizeCapturedText` function removes injection blocks, digest blocks, metadata fences, and timestamp prefixes. 
+To prevent injected content from being captured a second time, the injection process wraps the content in deterministic tags (like `<openviking-context>`), which the capture mechanism then mechanically strips. Specifically, `capture-utils`' `sanitizeCapturedText` function removes injection blocks, digest blocks, metadata fences, and timestamp prefixes.
 
 **Per-harness specifics:**
 - **trae / zcode**: Utilize their own cleaning functions (zcode's strips three distinct types of injection blocks).
@@ -428,7 +428,7 @@ Legend: **C** = commits; **C\*** = commits, with a precondition (see notes); **â
 
 ### 3.5.1 Write boundary
 
-There are three primary guards on MCP `write` and REST `content/write` (`content_write.py`). First, the writable domain is strictly limited to `viking://resources`, `viking://user`, and `viking://agent`. Second, file extensions for new files must match the whitelist (`.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.toml`, `.py`, `.js`, `.ts`). Third, the four managed subtrees (`skills/`, `peers/`, `privacy/`, `sessions/`) under the user root are designated as read-only (`_USER_MANAGED_SUBTREES`). Additionally, derived files (such as `.abstract.md`, `.overview.md`, and `.relations.json`) cannot be written to directly.
+There are three primary guards on MCP `write` and REST `content/write` (`content_write.py`). First, the writable domain is strictly limited to `viking://resources`, `viking://user`, and `viking://agent`. Second, file extensions for new files must match the whitelist (`.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.toml`, `.py`, `.js`, `.ts`). Third, the four managed subtrees (`skills/`, `peers/`, `privacy/`, `sessions/`) under the user root are designated as read-only (`_USER_MANAGED_SUBTREES`). Existing `.abstract.md` and `.overview.md` sidecars can be body-updated, but public write APIs cannot create them.
 
 ### 3.5.2 Delete boundary
 
@@ -610,7 +610,7 @@ Doc-comment prefixes like `[Data]`, `[Interactive]`, `[Admin]`, or `[Experimenta
 
 **Import/export & snapshots**: `export` / `backup` / `import` / `restore` (.ovpack formats) | `snapshot commit/restore/show/log/diff/ignore-*` (workspace snapshots; rollbacks are achieved by committing forward)
 
-**Privacy/relations**: `privacy categories/list/get/versions/version/activate/upsert` (offers `--key-<name>` syntactic sugar) | `relations`/`link`/`unlink` (experimental)
+**Privacy**: `privacy categories/list/get/versions/version/activate/upsert` (offers `--key-<name>` syntactic sugar)
 
 **Status/observability**: `health` (exits with 0 even when healthy=false) | `status` (table mode always exits with 0) | `observer {queue,vikingdb,models,retrieval,filesystem,system}` | `wait` | `task status/cancel/list` | `task watch {ls,show,rm,pause,resume,update,trigger}` | `version` (probes the server utilizing its own 3-second timeout)
 

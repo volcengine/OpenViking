@@ -1536,7 +1536,6 @@ viking://user/{user_id}/sessions/{session_id}/
 ├── .abstract.md              # L0：会话概览
 ├── .overview.md              # L1：关键决策
 ├── .meta.json                # 元数据
-├── .relations.json           # 关联上下文
 ├── messages.jsonl            # 当前消息
 ├── tools/                    # 工具执行记录
 │   └── {tool_id}/

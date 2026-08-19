@@ -1063,6 +1063,7 @@ class AsyncHTTPClient:
         abs_limit: int = 128,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
+        level_limit: int = 3,
     ) -> List[Dict[str, Any]]:
         response = await self._request(
             "GET",
@@ -1073,6 +1074,7 @@ class AsyncHTTPClient:
                 "abs_limit": abs_limit,
                 "show_all_hidden": show_all_hidden,
                 "node_limit": node_limit,
+                "level_limit": level_limit,
             },
         )
         return self._handle_response(response)
@@ -1335,39 +1337,6 @@ class AsyncHTTPClient:
             },
         )
         return self._handle_response(response)
-
-    async def relations(self, uri: str) -> List[Any]:
-        response = await self._request(
-            "GET", "/api/v1/relations", params={"uri": VikingURI.normalize(uri)}
-        )
-        return self._handle_response(response)
-
-    async def link(self, from_uri: str, to_uris: Union[str, List[str]], reason: str = "") -> None:
-        if isinstance(to_uris, str):
-            to_uris = VikingURI.normalize(to_uris)
-        else:
-            to_uris = [VikingURI.normalize(u) for u in to_uris]
-        response = await self._request(
-            "POST",
-            "/api/v1/relations/link",
-            json={
-                "from_uri": VikingURI.normalize(from_uri),
-                "to_uris": to_uris,
-                "reason": reason,
-            },
-        )
-        self._handle_response(response)
-
-    async def unlink(self, from_uri: str, to_uri: str) -> None:
-        response = await self._request(
-            "DELETE",
-            "/api/v1/relations/link",
-            json={
-                "from_uri": VikingURI.normalize(from_uri),
-                "to_uri": VikingURI.normalize(to_uri),
-            },
-        )
-        self._handle_response(response)
 
     async def create_session(
         self,
@@ -2198,6 +2167,7 @@ class SyncHTTPClient:
         abs_limit: int = 128,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
+        level_limit: int = 3,
     ) -> List[Dict[str, Any]]:
         return run_async(
             self._async_client.tree(
@@ -2206,6 +2176,7 @@ class SyncHTTPClient:
                 abs_limit=abs_limit,
                 show_all_hidden=show_all_hidden,
                 node_limit=node_limit,
+                level_limit=level_limit,
             )
         )
 
@@ -2390,15 +2361,6 @@ class SyncHTTPClient:
         node_limit: int = 256,
     ) -> Dict[str, Any]:
         return run_async(self._async_client.glob(pattern, uri=uri, node_limit=node_limit))
-
-    def relations(self, uri: str) -> List[Any]:
-        return run_async(self._async_client.relations(uri))
-
-    def link(self, from_uri: str, to_uris: Union[str, List[str]], reason: str = "") -> None:
-        run_async(self._async_client.link(from_uri, to_uris, reason=reason))
-
-    def unlink(self, from_uri: str, to_uri: str) -> None:
-        run_async(self._async_client.unlink(from_uri, to_uri))
 
     def create_session(
         self,

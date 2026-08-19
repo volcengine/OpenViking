@@ -272,14 +272,6 @@ class QueryPlan:
 
 
 @dataclass
-class RelatedContext:
-    """Related context with summary."""
-
-    uri: str
-    abstract: str
-
-
-@dataclass
 class MatchedContext:
     """Matched context from retrieval."""
 
@@ -292,7 +284,6 @@ class MatchedContext:
     score: float = 0.0
     match_reason: str = ""
 
-    relations: List[RelatedContext] = field(default_factory=list)
     search_tags: List[str] = field(default_factory=list)
 
 
@@ -430,10 +421,6 @@ class FindResult:
                 category=d.get("category", ""),
                 score=d.get("score", 0.0),
                 match_reason=d.get("match_reason", ""),
-                relations=[
-                    RelatedContext(uri=r.get("uri", ""), abstract=r.get("abstract", ""))
-                    for r in d.get("relations", [])
-                ],
                 search_tags=list(d.get("tags") or d.get("search_tags") or []),
             )
 

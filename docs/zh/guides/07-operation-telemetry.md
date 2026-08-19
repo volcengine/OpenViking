@@ -276,7 +276,6 @@ admission，所以其 `gpu_gate_queue` 为零；worker 侧等待仍计入 `batch
 | `summary.memory.extract.stages.create_memory_ms` | 创建新 memory 的耗时 |
 | `summary.memory.extract.stages.merge_existing_ms` | 合并到已有 memory 的耗时 |
 | `summary.memory.extract.stages.delete_existing_ms` | 删除旧 memory 的耗时 |
-| `summary.memory.extract.stages.create_relations_ms` | 创建 used-uri relations 的耗时 |
 | `summary.memory.extract.stages.flush_semantic_ms` | flush semantic queue 的耗时 |
 
 ### `summary.search`

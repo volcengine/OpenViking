@@ -240,7 +240,6 @@ class VikingClient:
     def _matched_context_to_dict(self, matched_context: Any) -> Dict[str, Any]:
         """将 MatchedContext 对象或 dict 结果转换为字典。"""
         if isinstance(matched_context, dict):
-            relations = matched_context.get("relations", [])
             return {
                 "uri": str(matched_context.get("uri", "") or ""),
                 "context_type": str(
@@ -252,9 +251,6 @@ class VikingClient:
                 "category": str(matched_context.get("category", "") or ""),
                 "score": matched_context.get("score", 0.0),
                 "match_reason": str(matched_context.get("match_reason", "") or ""),
-                "relations": [self._relation_to_dict(r) for r in relations if r is not None]
-                if isinstance(relations, list)
-                else [],
             }
         return {
             "uri": getattr(matched_context, "uri", ""),
@@ -265,18 +261,6 @@ class VikingClient:
             "category": getattr(matched_context, "category", ""),
             "score": getattr(matched_context, "score", 0.0),
             "match_reason": getattr(matched_context, "match_reason", ""),
-            "relations": [
-                self._relation_to_dict(r) for r in getattr(matched_context, "relations", [])
-            ],
-        }
-
-    def _relation_to_dict(self, relation: Any) -> Dict[str, Any]:
-        """将 Relation 对象转换为字典"""
-        return {
-            "from_uri": getattr(relation, "from_uri", ""),
-            "to_uri": getattr(relation, "to_uri", ""),
-            "relation_type": getattr(relation, "relation_type", ""),
-            "reason": getattr(relation, "reason", ""),
         }
 
     def _matched_context_group_to_dicts(self, result: Any, group_name: str) -> List[Dict[str, Any]]:

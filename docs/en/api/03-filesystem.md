@@ -663,8 +663,6 @@ openviking mv viking://resources/old-name/ viking://resources/new-name/
 
 <a id="grep"></a><a id="glob"></a>
 
-<a id="link"></a><a id="relations"></a><a id="unlink"></a>
-
 <a id="export_ovpack"></a><a id="import_ovpack"></a><a id="backup_ovpack"></a><a id="restore_ovpack"></a>
 
 ## Related Documentation

@@ -15,7 +15,6 @@ if TYPE_CHECKING:
     from openviking.service.debug_service import ComponentStatus, DebugService, SystemStatus
     from openviking.service.fs_service import FSService
     from openviking.service.pack_service import PackService
-    from openviking.service.relation_service import RelationService
     from openviking.service.resource_service import ResourceService
     from openviking.service.search_service import SearchService
     from openviking.service.session_service import SessionService
@@ -27,7 +26,6 @@ _EXPORTS = {
     "SystemStatus": ("openviking.service.debug_service", "SystemStatus"),
     "FSService": ("openviking.service.fs_service", "FSService"),
     "PackService": ("openviking.service.pack_service", "PackService"),
-    "RelationService": ("openviking.service.relation_service", "RelationService"),
     "ResourceService": ("openviking.service.resource_service", "ResourceService"),
     "SearchService": ("openviking.service.search_service", "SearchService"),
     "SessionService": ("openviking.service.session_service", "SessionService"),
@@ -55,7 +53,6 @@ __all__ = [
     "DebugService",
     "SystemStatus",
     "FSService",
-    "RelationService",
     "PackService",
     "SearchService",
     "ResourceService",

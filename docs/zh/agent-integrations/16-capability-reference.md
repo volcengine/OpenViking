@@ -94,7 +94,7 @@ per-harness 章节（档案卡）只写差异；所有共享事实均在本章�
 | 4 | `list` | 列目录（函数名 `ls`，注册名显式改写为 `list`） | `recursive=False`（`:423`） |
 | 5 | `tree` | 递归目录树 | `level_limit=3, node_limit=1000, include_abstract=False`（`:449`） |
 | 6 | `remember` | 写长期记忆 | 内部建一次性会话 `mcp-store-<uuid12>` 并立即 `commit_async`（`:504-523`）——这是 MCP 面唯一的 commit 入口；MCP 没有显式 commit 工具 |
-| 7 | `write` | 写 `viking://` 文件 | `mode=replace\|append\|create`，replace 遇 NotFound 自动降级 create；新建文件扩展名白名单 `.md .txt .json .yaml .yml .toml .py .js .ts`；可写域 `resources/user/agent`；用户根下 `skills/ peers/ privacy/ sessions/` 只读；派生文件 `.abstract.md/.overview.md/.relations.json` 不可直写（`:529`；`content_write.py:60-81`） |
+| 7 | `write` | 写 `viking://` 文件 | `mode=replace\|append\|create`，replace 遇 NotFound 自动降级 create；新建文件扩展名白名单 `.md .txt .json .yaml .yml .toml .py .js .ts`；可写域 `resources/user/agent`；用户根下 `skills/ peers/ privacy/ sessions/` 只读；已存在的 `.abstract.md/.overview.md` sidecar 可改正文，但公共 API 不能创建（`:529`；`content_write.py:60-81`） |
 | 8 | `edit` | 精确字符串替换 | `old_string` 空/0 命中/多命中且非 replace_all 均报错，且文件内容不变（`:569`） |
 | 9 | `add_resource` | 资源摄取（远程 URL / 本地文件签名上传 / Connector） | `watch_interval` 单位为分钟（0=不 watch）；本地路径分支返回签名上传 URL（TTL 默认 600s），上传后自动入库，无需二次调用（`:723-947`） |
 | 10 | `list_watches` | 列 watch 订阅，商业版尚未支持 | scheduler 未运行时返回错误串（`:958`） |
@@ -408,7 +408,7 @@ JS 系 harness 的召回逻辑均由 `recall-core.mjs` 中的三级降级链处�
 
 ### 3.5.1 写入边界
 
-MCP `write` / REST `content/write` 的三道 guard（`content_write.py`）：可写域限 `viking://resources|user|agent`；新建文件扩展名需符合白名单 `.md .txt .json .yaml .yml .toml .py .js .ts`；用户根下 `skills/ peers/ privacy/ sessions/` 四个托管子树只读（`_USER_MANAGED_SUBTREES`）；派生文件 `.abstract.md/.overview.md/.relations.json` 不可直写。
+MCP `write` / REST `content/write` 的三道 guard（`content_write.py`）：可写域限 `viking://resources|user|agent`；新建文件扩展名需符合白名单 `.md .txt .json .yaml .yml .toml .py .js .ts`；用户根下 `skills/ peers/ privacy/ sessions/` 四个托管子树只读（`_USER_MANAGED_SUBTREES`）。已存在的 `.abstract.md/.overview.md` sidecar 可以改正文，但公共写入 API 不能创建它们。
 
 ### 3.5.2 删除边界
 
@@ -593,7 +593,7 @@ MCP `write` / REST `content/write` 的三道 guard（`content_write.py`）：可
 
 **导入导出/快照**：`export`／`backup`／`import`／`restore`（.ovpack）｜`snapshot commit/restore/show/log/diff/ignore-*`（工作区快照，前向 commit 回滚）
 
-**隐私/关系**：`privacy categories/list/get/versions/version/activate/upsert`（`--key-<name>` 语法糖）｜`relations`/`link`/`unlink`（实验性）
+**隐私**：`privacy categories/list/get/versions/version/activate/upsert`（`--key-<name>` 语法糖）
 
 **状态/可观测**：`health`（healthy=false 时仍退 0）｜`status`（表格模式始终退 0）｜`observer {queue,vikingdb,models,retrieval,filesystem,system}`｜`wait`｜`task status/cancel/list`｜`task watch {ls,show,rm,pause,resume,update,trigger}`｜`version`（独立 3s 超时探服务端）
 

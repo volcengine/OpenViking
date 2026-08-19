@@ -16,6 +16,7 @@ from openviking.service.task_work_index import TASK_WORK_ID_FIELD
 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg, AddResourcePhase
 from openviking.storage.queuefs.add_resource_processor import AddResourceProcessor
 from openviking.storage.queuefs.queue_manager import QueueManager
+from openviking.telemetry import get_current_telemetry, resolve_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.media_processor import UnifiedResourceProcessor
 from openviking_cli.exceptions import InvalidArgumentError
@@ -987,6 +988,84 @@ async def test_add_resource_processor_persists_final_uri_and_cleans_staged_sourc
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("telemetry_id", [None, "telemetry-unregistered-resource"])
+async def test_add_resource_processor_collects_stats_without_registered_telemetry(
+    monkeypatch,
+    telemetry_id: str | None,
+):
+    final_uri = "viking://resources/unregistered"
+    observed_telemetry_ids = []
+    task_tracker = SimpleNamespace(
+        create=AsyncMock(return_value=SimpleNamespace(status=TaskStatus.PENDING)),
+        start=AsyncMock(),
+        update_stage=AsyncMock(),
+        complete=AsyncMock(),
+        fail=AsyncMock(),
+        get_task_auth=AsyncMock(return_value={}),
+        wait_for_descendants=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.add_resource_processor.get_task_tracker",
+        Mock(return_value=task_tracker),
+    )
+
+    async def execute_add_resource_job(*_args, **_kwargs):
+        telemetry = get_current_telemetry()
+        effective_telemetry_id = telemetry.telemetry_id
+        observed_telemetry_ids.append(effective_telemetry_id)
+        if telemetry_id is not None:
+            assert effective_telemetry_id == telemetry_id
+        assert resolve_telemetry(effective_telemetry_id) is telemetry
+        assert telemetry.enabled
+        telemetry.record_token_usage("embedding", 21)
+        telemetry.add_token_usage(13, 5)
+
+        wait_tracker = get_request_wait_tracker()
+        wait_tracker.register_embedding_root(effective_telemetry_id, "embedding-1")
+        wait_tracker.mark_embedding_done(
+            effective_telemetry_id,
+            "embedding-1",
+            vector_written=True,
+        )
+        return {"status": "success", "root_uri": final_uri}
+
+    processor = AddResourceProcessor(
+        SimpleNamespace(
+            execute_add_resource_job=AsyncMock(side_effect=execute_add_resource_job),
+            _link_resource_reason_memory=AsyncMock(),
+        ),
+        asyncio.get_running_loop(),
+        QueueManager.ADD_RESOURCE,
+        SimpleNamespace(_async_agfs=SimpleNamespace(pathlock_release=AsyncMock())),
+    )
+    msg = AddResourceMsg(
+        task_id="task-unregistered",
+        path="https://example.com/document.pdf",
+        root_uri=final_uri,
+        account_id="account-1",
+        user_id="user-1",
+        role="user",
+        telemetry_id=telemetry_id,
+    )
+    data = msg.to_dict()
+    data[TASK_WORK_ID_FIELD] = "work-1"
+
+    await processor._process(msg, data)
+
+    task_tracker.fail.assert_not_awaited()
+    final_result = task_tracker.complete.await_args_list[-1].args[1]
+    assert final_result["context_count"] == 1
+    assert final_result["usage"]["tokens"]["embedding"]["total"] == 21
+    assert final_result["usage"]["tokens"]["llm"] == {
+        "input": 13,
+        "output": 5,
+        "total": 18,
+    }
+    assert len(observed_telemetry_ids) == 1
+    assert resolve_telemetry(observed_telemetry_ids[0]) is None
+
+
+@pytest.mark.asyncio
 async def test_add_resource_processor_replay_skips_lock_adopt_when_result_exists(monkeypatch):
     final_uri = "viking://resources/replayed"
     telemetry_id = "telemetry-replayed-resource"
@@ -1063,6 +1142,7 @@ async def test_add_resource_processor_reports_zero_vectors(monkeypatch):
         update_stage=AsyncMock(),
         complete=AsyncMock(),
         fail=AsyncMock(),
+        get_task_auth=AsyncMock(return_value={}),
         wait_for_descendants=AsyncMock(),
     )
     monkeypatch.setattr(

@@ -136,6 +136,7 @@ export interface TreeOptions {
   absLimit?: number;
   showAllHidden?: boolean;
   nodeLimit?: number;
+  levelLimit?: number;
 }
 /** Session message payload. */
 export interface Message {

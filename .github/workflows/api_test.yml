@@ -554,7 +554,6 @@ jobs:
             test_cli_resources.py \
             test_cli_search.py \
             test_cli_sessions.py \
-            test_cli_relations.py \
             test_cli_system.py \
             test_cli_skills.py \
             test_cli_observer.py \

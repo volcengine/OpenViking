@@ -53,7 +53,6 @@ class HierarchicalRetriever:
     """Hierarchical retriever with dense and sparse vector support."""
 
     MAX_CONVERGENCE_ROUNDS = 3  # Stop after multiple rounds with unchanged topk
-    MAX_RELATIONS = 5  # Maximum relations per resource
     DIRECTORY_DOMINANCE_RATIO = 1.2  # Directory score must exceed max child score
     GLOBAL_SEARCH_TOPK = 10  # Global retrieval count (more candidates = better rerank precision)
     MAX_PARALLEL_CHILD_SEARCHES = 4  # Limit per-request fan-out against remote vector stores
@@ -576,8 +575,6 @@ class HierarchicalRetriever:
         """
         results = []
         for c in candidates:
-            relations = []
-
             # Fix: clamp inf/nan scores from vector search (#inf-score)
             semantic_score = self._finite_score(c.get("_final_score", c.get("_score", 0.0)))
 
@@ -624,7 +621,6 @@ class HierarchicalRetriever:
                     abstract=abstract,
                     category=c.get("category", ""),
                     score=final_score,
-                    relations=relations,
                     search_tags=list(c.get("search_tags") or []),
                 )
             )

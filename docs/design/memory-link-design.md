@@ -15,8 +15,8 @@ Memory Link 是在现有记忆体系（profile/preferences/entities/events 等�
 **设计原则：**
 - 记忆类型扩展链接能力 — 扩展现有 MemoryTypeSchema，所有记忆文件自带链接能力
 - 存储载体：VikingFS 文件，与现有记忆体系一致
-- 链接存储在 `.relations.json` 目录级 sidecar 文件中，content 保持纯净，检索时按需渲染
-- 不拘泥于现有 MemoryField 体系，以实现好功能为主
+- 链接存储在记忆文件的 `MEMORY_FIELDS` 元数据中，content 保持纯净，检索时按需渲染
+- Memory Link 是 memory 内部 links/backlinks 机制，不依赖已废弃的 resource relation 边
 
 ## 2. 竞品实现分析
 
@@ -1352,74 +1352,73 @@ class PageIdMap:
 
 #### 3.2.3 存储方式
 
-content 保持纯净，不插入 Markdown 链接。链接存储在 `.relations.json` 目录级 sidecar 文件中，复用并扩展现有 VikingFS relation 基础设施。
+content 保持纯净，不插入 Markdown 链接。链接存储在每个记忆文件尾部的 `MEMORY_FIELDS` 元数据中，复用现有 memory file serialize/deserialize 流程。
 
-#### 为什么选择 .relations.json 而非 MEMORY_FIELDS
+#### Memory Link 与 resource relation 的边界
 
-| 维度 | .relations.json | MEMORY_FIELDS |
-|------|----------------|---------------|
-| 向下兼容 | 兼容老格式（读取时自动适配），无需数据迁移 | 不兼容，需迁移老 `.relations.json` |
-| PPR 遍历 | 按目录读一个文件拿到全量 links，I/O 小 | 逐文件读 MEMORY_FIELDS 解析 links，I/O 大 |
-| 写入独立性 | 写 link 不修改记忆文件，不触发内容重写和重新向量化 | 写 link 需改两端文件的 MEMORY_FIELDS |
-| 现有基础设施 | 复用 link/unlink/加密/ovpack 导入导出/HTTP API | 需新建或大幅改造 serialize/deserialize |
-| 改动范围 | 中（viking_fs 扩展字段 + 上层适配） | 大（content.py + memory_updater + viking_fs + 迁移） |
+Memory Link 只属于 memory 子系统，用于在记忆文件之间维护 `links` / `backlinks`：
+
+- 写入入口：`ExtractLoop` 解析 LLM 输出的 links，`MemoryUpdater` 将其分发到 from/to 两端记忆文件
+- 存储位置：记忆文件自身的 `MEMORY_FIELDS.links` 和 `MEMORY_FIELDS.backlinks`
+- 读取用途：memory 检索、PPR 图增强、graph view、整理任务上下文
+- 不依赖已废弃的 resource relation API，也不通过独立 relation sidecar 存取
+
+因此，本次删除 resource relation 边，不应删除 memory 内部 links/backlinks。两者只是都表达“关系”，但数据入口、存储位置和消费链路不同。
 
 #### 存储结构
 
-链接存储在 `from_uri` 所在目录的 `.relations.json` 中。现有 `RelationEntry` 扩展为 `StoredLink`，新增 `from_uri`/`to_uri`/`direction`/`link_type`/`weight`/`t_field`/`t_line_ranges`/`match_text`/`description` 字段：
+链接存储在 endpoint 记忆文件的 `MEMORY_FIELDS` 中。`StoredLink` 包含 `from_uri`/`to_uri`/`link_type`/`weight`/`t_field`/`t_line_ranges`/`match_text`/`description` 字段：
 
 ```json
-[
-  {
-    "id": "link_1",
-    "from_uri": "viking://user/caroline/memories/preferences/Python_code_style.md",
-    "to_uri": "viking://user/caroline/memories/profile.md",
-    "direction": "links",
-    "link_type": "belongs_to",
-    "weight": 0.9,
-    "t_field": "content",
-    "t_line_ranges": "3-5",
-    "match_text": "User",
-    "description": "该偏好属于 Caroline",
-    "created_at": "2026-04-27T10:00:00.000Z"
-  },
-  {
-    "id": "link_2",
-    "from_uri": "viking://user/caroline/memories/events/2026/04/27/code_review.md",
-    "to_uri": "viking://user/caroline/memories/preferences/Python_code_style.md",
-    "direction": "backlinks",
-    "link_type": "related_to",
-    "weight": 0.7,
-    "t_field": "content",
-    "t_line_ranges": "1-2",
-    "match_text": "Python code style",
-    "description": "事件中讨论的代码风格与该偏好相关",
-    "created_at": "2026-04-27T10:00:00.000Z"
-  }
-]
+{
+  "version": 3,
+  "links": [
+    {
+      "id": "link_1",
+      "from_uri": "viking://user/caroline/memories/preferences/Python_code_style.md",
+      "to_uri": "viking://user/caroline/memories/profile.md",
+      "link_type": "belongs_to",
+      "weight": 0.9,
+      "t_field": "content",
+      "t_line_ranges": "3-5",
+      "match_text": "User",
+      "description": "该偏好属于 Caroline",
+      "created_at": "2026-04-27T10:00:00.000Z"
+    }
+  ],
+  "backlinks": [
+    {
+      "id": "link_2",
+      "from_uri": "viking://user/caroline/memories/events/2026/04/27/code_review.md",
+      "to_uri": "viking://user/caroline/memories/preferences/Python_code_style.md",
+      "link_type": "related_to",
+      "weight": 0.7,
+      "t_field": "content",
+      "t_line_ranges": "1-2",
+      "match_text": "Python code style",
+      "description": "事件中讨论的代码风格与该偏好相关",
+      "created_at": "2026-04-27T10:00:00.000Z"
+    }
+  ]
+}
 ```
 
-- `direction`: `"links"` = 当前文件引用别人（正链，渲染时替换 `match_text`）；`"backlinks"` = 别人引用当前文件（反链，不渲染，只用于 PPR 遍历和整理主题发现）
-- 同一条链接写入两端文件各自所在目录的 `.relations.json`：from 端写 `direction="links"`，to 端写 `direction="backlinks"`
+- from 端记忆文件写入 `MEMORY_FIELDS.links`，表示当前文件引用别人，渲染时可替换 `match_text`
+- to 端记忆文件写入 `MEMORY_FIELDS.backlinks`，表示别人引用当前文件，不渲染，只用于 PPR 遍历和整理主题发现
 - 两侧 `StoredLink` 记录内容完全相同（`link_type` 不翻转）
 
 #### 向下兼容
 
-同一个 `.relations.json` 文件内新老格式共存，读取时按字段判断：
-
-- entry 有 `uris` 字段 → 老格式 `RelationEntry`，每个 uri 展开为一条 `StoredLink`，新字段走默认值（`direction="links"`, `link_type="related_to"`, `weight=1.0`），`reason` → `description`
-- entry 有 `to_uri` 字段 → 新格式 `StoredLink`，完整解析
-
-写入只产新格式，老 entry 随文件自然更新逐步迁移。
+`MEMORY_FIELDS` 是当前 memory file 的正式元数据载体。memory link 写入只产生 `links` / `backlinks` 字段，不兼容或迁移已废弃的 resource relation 产物。
 
 #### 与 StoredWikiLink 的关系
 
-3.1 节的 `StoredWikiLink` 是 LLM 输出后 page_id→URI 转换后的逻辑模型，字段与 `StoredLink` 一致。写入 `.relations.json` 时额外携带 `id`/`from_uri`/`direction`/`created_at`。
+3.1 节的 `StoredWikiLink` 是 LLM 输出后 page_id→URI 转换后的逻辑模型，字段与 `StoredLink` 一致。写入 `MEMORY_FIELDS` 时额外携带 `id`/`from_uri`/`created_at`。
 
 #### 查询接口
 
-- `get_file_links(uri, direction)` — 获取某文件的所有 links/backlinks，在文件所在目录的 `.relations.json` 中按 `from_uri` + `direction` 过滤
-- `relations(uri)` — 返回目录级关联列表（向后兼容，返回值扩展 `link_type`/`weight` 等字段）
+- `MemoryFileUtils.parse()` / memory 读取工具 — 从记忆文件尾部 `MEMORY_FIELDS` 解析 links/backlinks
+- graph / PPR / context provider — 按 memory URI 读取 endpoint 文件的 links/backlinks 后参与图增强或上下文构建
 
 #### 3.2.4 检索时按需渲染
 
@@ -1449,11 +1448,11 @@ content 原文不修改，链接渲染延迟到检索阶段，根据 `match_text
 - 写入幂等——content 是 LLM 原始输出不被修改
 - 链接可更新——target_uri 变化只改 links 元数据，content 不用动（GBrain 的 stale-link reconciliation 修复内容修改引起的链接失效，但 slug rename 场景未完全解决）
 - match_text 可修正——外部 Bot T+1 整理发现 match_text 不准确，直接改 links
-- 链接更新无需重算 embedding——links 存在 `.relations.json` 中，不参与向量化，更新链接不触发重新 embedding
+- 链接更新无需重算 embedding——links 存在 `MEMORY_FIELDS` 中，不参与可见 content 向量化，更新链接不触发重新 embedding
 
 #### 3.2.5 Links Merge 策略
 
-`links` 和 `backlinks` 的合并逻辑在 `utils/links_merge.py` 中独立实现，供 `link()` 调用。两个方向使用相同的合并规则。
+`links` 和 `backlinks` 的合并逻辑在 `memory/merge_op/link_merge.py` 中独立实现。两个方向使用相同的合并规则。
 
 **合并规则：**
 - 按 `from_uri` + `to_uri` + `t_field` + `t_line_ranges` 组合去重（同一对文件同一字段不同行号范围视为不同链接）
@@ -1475,15 +1474,15 @@ content 原文不修改，链接渲染延迟到检索阶段，根据 `match_text
   3. 在新文件内容中定位该段落的新行号
      - 先用字符串精确查找（str.find()）
      - 找不到 → 调 LLM 语义匹配重新定位
-     - 还是找不到 → 删除该链接（从两端 .relations.json 同时清除）
-  4. 双向一致性：修正/删除操作同时作用于两端 .relations.json（从 links 删除 = 从对端 backlinks 删除）
+     - 还是找不到 → 删除该链接（从两端 `MEMORY_FIELDS` 同时清除）
+  4. 双向一致性：修正/删除操作同时作用于两端 `MEMORY_FIELDS`（从 links 删除 = 从对端 backlinks 删除）
 ```
 
 **查找规则：**
 - 对 `t_line_ranges` 中的每个连续段落（如 "3-5,8-10" 有两个段落），独立查找
 - 段落文本 trim 后在新文件中 `str.find()`，匹配第一次出现
 - 多个段落都找到则合并为新 ranges（如 "4-6,9-11"），任一找不到则走 LLM 语义匹配
-- LLM 语义匹配仍找不到 → 从两端 `.relations.json` 删除该链接
+- LLM 语义匹配仍找不到 → 从两端 `MEMORY_FIELDS` 删除该链接
 
 #### 3.2.7 链接类型与使用
 
@@ -1599,14 +1598,14 @@ resolve_operations():
   f page_id → PageIdMap.get_uri() 或 ResolvedOperations[idx].uri → f_uri
   t page_id → 同上 → t_uri
   t_field + t_line_ranges → 从目标文件计算实际行号范围和字符数
-  将链接分发到 .relations.json（写入 from 端和 to 端各自目录）：
-    - from 文件所在目录 → link(direction="links")
-    - to 文件所在目录 → link(direction="backlinks")
+  将链接分发到 endpoint 记忆文件的 MEMORY_FIELDS：
+    - from 文件 → MEMORY_FIELDS.links
+    - to 文件 → MEMORY_FIELDS.backlinks
                 ↓
 MemoryUpdater.apply_operations():
-  ├─ _apply_upsert(): 写入记忆文件（content 纯净，links/backlinks 在 .relations.json 中）
-  │   - from 文件所在目录的 .relations.json 包含以该文件为 from 的链接
-  │   - to 文件所在目录的 .relations.json 包含以该文件为 to 的反向链接
+  ├─ _apply_upsert(): 写入记忆文件（content 纯净，links/backlinks 在 MEMORY_FIELDS 中）
+  │   - from 文件的 MEMORY_FIELDS.links 包含以该文件为 from 的链接
+  │   - to 文件的 MEMORY_FIELDS.backlinks 包含以该文件为 to 的反向链接
   ├─ t_line_ranges 行号修正（3.6 节，精确匹配 + LLM 语义匹配）
   └─ 链接双向一致性保证
 ```
@@ -1624,8 +1623,8 @@ MemoryUpdater.apply_operations():
 **死链不可能存在**：page_id 只在 ExtractLoop 上下文中产生，对应文件一定存在（已有文件已读入，新建文件即将写入）。
 
 **一趟写入策略：**
-- `resolve_operations()` 阶段将链接分发：from 端链接写入 from 文件所在目录的 `.relations.json`（`direction="links"`），to 端反向链接写入 to 文件所在目录的 `.relations.json`（`direction="backlinks"`）
-- `viking_fs.link()` 内部通过 `utils/links_merge.py` 与已有链接合并
+- `resolve_operations()` 阶段将链接分发：from 端链接写入 from 文件的 `MEMORY_FIELDS.links`，to 端反向链接写入 to 文件的 `MEMORY_FIELDS.backlinks`
+- `MemoryUpdater` 内部通过 `memory/merge_op/link_merge.py` 与已有链接合并
 - 无需写入后额外 read → merge → write，一趟完成
 
 #### 3.4.2 外部 Bot T+1 触发整理
@@ -1698,7 +1697,7 @@ fields:
    - conflict：检测有 CONTRADICTS 链接的文件对
 
 2. 读取每组文件的内容
-   - VikingFS.read_file() 读每个 URI 的内容 + get_file_links() 读 links
+   - VikingFS.read_file() 读每个 URI 的内容，并从 `MEMORY_FIELDS` 解析 links/backlinks
    - 从 links 过滤组内链接
 
 3. 读已有同类 report
@@ -1812,7 +1811,7 @@ Phase 4: 返回
 | min_link_weight | 0.3 | 传播时跳过低权重边 |
 | min_ppr_score | 0.05 | 补充文件的最低分数阈值 |
 
-**计算成本：** 纯数值计算，不需要 LLM 或 embed。假设 top-K=10，每文件平均 5 条 links，一跳扩展最多 50 个文件。瓶颈仅在文件 I/O（读 `.relations.json` 中的 links），计算本身毫秒级。
+**计算成本：** 纯数值计算，不需要 LLM 或 embed。假设 top-K=10，每文件平均 5 条 links，一跳扩展最多 50 个文件。瓶颈仅在文件 I/O（读取 endpoint 记忆文件的 `MEMORY_FIELDS` links/backlinks），计算本身毫秒级。
 
 ##### 3.5.1.1 在线检索增强
 
@@ -1884,15 +1883,13 @@ PPR 传播（多种子叠加，按 3.2.7.4 配置表）:
 | 模块 | 改动 |
 |------|------|
 | `dataclass.py` | `MemoryTypeSchema` 新增 `link_enabled`；新增 `WikiLink`, `StoredWikiLink`, `LinkType` 模型 |
-| `viking_fs.py` | `RelationEntry` → `StoredLink`（扩展字段）；`link()` 新签名；`unlink()` 扩展；新增 `get_file_links()`；`_read_relation_table()` 兼容老格式 |
 | `schema_model_generator.py` | `create_flat_data_model()` 中 link_enabled 时自动注入 `page_id` 字段 |
-| `memory_updater.py` | `apply_operations()` 中链接分发（from→links, to→backlinks 写入 `.relations.json`）+ 行号修正 |
+| `memory_updater.py` | `apply_operations()` 中链接分发（from→links, to→backlinks 写入 `MEMORY_FIELDS`）+ 行号修正 |
 | `memory_type_registry.py` | `_parse_memory_type()` 解析 `link_enabled` 字段；支持 `dream_tasks` 配置 |
+| `resource_memory_link_service.py` | 基于资源引用维护 memory links/backlinks |
 | `tools.py` | 搜索 API 新增 PPR 后处理层（6.1.1）；prefetch 扩展 PPR（6.1.2） |
 | `session/compressor_v3.py` | 通过共享 `MemoryUpdater` 应用并持久化 memory links |
 | `session/session.py` | `_run_memory_extraction()` 使用新 `link()` 签名 |
-| `server/routers/relations.py` | `LinkRequest` 扩展 `direction`/`link_type`/`weight` 等字段 |
-| `sdk/python/openviking_sdk/client.py` | `link()` 方法签名扩展 |
 | YAML templates | 新增 `report` + `report_candidate` memory_type 定义 + `dream_tasks` 配置；现有模板默认 link_enabled=true |
 | 新增模块 | `memory/dream_context_provider.py` — 整理上下文提供者；`utils/links_merge.py` — links/backlinks 合并逻辑；`retrieve/ppr.py` — PPR 算法 |
 

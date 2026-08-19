@@ -14,7 +14,6 @@ from openviking.server.routers.observer import router as observer_router
 from openviking.server.routers.openviking_assets import router as openviking_assets_router
 from openviking.server.routers.pack import router as pack_router
 from openviking.server.routers.privacy_configs import router as privacy_configs_router
-from openviking.server.routers.relations import router as relations_router
 from openviking.server.routers.resources import router as resources_router
 from openviking.server.routers.search import router as search_router
 from openviking.server.routers.sessions import router as sessions_router
@@ -37,7 +36,6 @@ __all__ = [
     "content_router",
     "console_router",
     "search_router",
-    "relations_router",
     "sessions_router",
     "skills_router",
     "snapshot_router",

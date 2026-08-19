@@ -68,10 +68,9 @@ A semantically processed directory commonly looks like this:
 viking://resources/docs/auth/
 ├── .abstract.md          # L0, hidden directory sidecar
 ├── .overview.md          # L1, hidden directory sidecar
-├── .relations.json       # Relation data
-├── oauth.md              # L2
-├── jwt.md                # L2
-└── api-keys.md           # L2
+├── oauth.md              # L2, full content
+├── jwt.md                # L2, full content
+└── api-keys.md           # L2, full content
 ```
 
 Normal `ls` hides `.abstract.md` and `.overview.md`. The two files are not guaranteed to coexist, so callers should not assume every directory always has both sidecars.

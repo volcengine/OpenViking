@@ -1143,6 +1143,8 @@ async def test_write_create_rejects_disallowed_extension(service):
 async def test_write_rejects_derived_semantic_file(service):
     with pytest.raises(InvalidArgumentError):
         await write(uri="viking://resources/test_write_derived/.abstract.md", content="x")
+    with pytest.raises(InvalidArgumentError):
+        await write(uri="viking://resources/test_write_derived/.relations.json", content="x")
 
 
 async def test_write_read_tool_roundtrip(service):

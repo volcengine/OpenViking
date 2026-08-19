@@ -213,8 +213,7 @@ Phase 2 — 记忆提取 + 写入（持久化 `session_commit` 队列）：
   1. 持久化 archive 元数据并 enqueue `SessionCommitMsg`
   2. 从归档消息提取 memories（LLM）
   3. 写当前消息状态
-  4. 写 relations
-  5. 直接 enqueue SemanticQueue
+  4. 直接 enqueue SemanticQueue
 ```
 
 **崩溃恢复分析**：

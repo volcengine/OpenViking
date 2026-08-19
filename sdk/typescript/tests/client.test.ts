@@ -201,8 +201,10 @@ describe("OpenVikingClient", () => {
     );
   });
 
-  it("passes directory list ordering to the server", async () => {
-    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(ok([]));
+  it("passes directory list ordering and tree depth to the server", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => ok([]));
     const client = new OpenVikingClient({
       baseUrl: "https://example.com",
       fetch: fetcher,
@@ -213,11 +215,18 @@ describe("OpenVikingClient", () => {
       sortBy: "mtime",
       sortOrder: "desc",
     });
+    await client.tree("viking://resources/docs", { levelLimit: 2 });
+    await client.tree("viking://resources/docs", { levelLimit: 0 });
+    await client.tree("viking://resources/docs");
 
-    const url = new URL(String(fetcher.mock.calls[0]![0]));
-    expect(url.searchParams.get("node_limit")).toBe("200");
-    expect(url.searchParams.get("sort_by")).toBe("mtime");
-    expect(url.searchParams.get("sort_order")).toBe("desc");
+    const listUrl = new URL(String(fetcher.mock.calls[0]![0]));
+    expect(listUrl.searchParams.get("node_limit")).toBe("200");
+    expect(listUrl.searchParams.get("sort_by")).toBe("mtime");
+    expect(listUrl.searchParams.get("sort_order")).toBe("desc");
+    const treeLimits = fetcher.mock.calls
+      .slice(1)
+      .map((call) => new URL(String(call[0])).searchParams.get("level_limit"));
+    expect(treeLimits).toEqual(["2", "0", "3"]);
   });
 
   it("sends addResource tags and tagMode to the server", async () => {
@@ -725,12 +734,9 @@ describe("OpenVikingClient", () => {
     }
   });
 
-  it("maps relation and snapshot APIs to the Python contracts", async () => {
+  it("maps snapshot and health APIs to the Python contracts", async () => {
     const fetcher = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(ok([]))
-      .mockResolvedValueOnce(ok({}))
-      .mockResolvedValueOnce(ok({}))
       .mockResolvedValueOnce(ok({ oid: "commit" }))
       .mockResolvedValueOnce(ok({ is_healthy: true }));
     const client = new OpenVikingClient({
@@ -738,20 +744,10 @@ describe("OpenVikingClient", () => {
       fetch: fetcher,
     });
 
-    await client.relations("resources/a");
-    await client.link("resources/a", ["resources/b"]);
-    await client.unlink("resources/a", "resources/b");
     await client.gitCommit({ message: "snapshot" });
     await expect(client.isHealthy()).resolves.toBe(true);
 
-    expect(String(fetcher.mock.calls[0]![0])).toContain(
-      "uri=viking%3A%2F%2Fresources%2Fa",
-    );
-    expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toMatchObject({
-      from_uri: "viking://resources/a",
-      to_uris: ["viking://resources/b"],
-    });
-    expect(JSON.parse(String(fetcher.mock.calls[3]![1]?.body))).toEqual({
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
       message: "snapshot",
       branch: "main",
     });

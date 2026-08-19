@@ -1381,7 +1381,7 @@ Commit a session. Message archiving (Phase 1) completes immediately. Summary gen
 
 **Two-Phase Commit Flow:**
 - **Phase 1 (Synchronous)**: Snapshot current messages, clear live session, create archive directory, write original messages
-- **Phase 2 (Asynchronous)**: Generate summaries (L0/L1), extract long-term memories, update relations and active_count
+- **Phase 2 (Asynchronous)**: Generate summaries (L0/L1), extract long-term memories, and update active_count
 
 **Notes:**
 - Rapid consecutive commits on the same session are accepted; each request gets its own `task_id`.
@@ -1568,7 +1568,6 @@ viking://user/{user_id}/sessions/{session_id}/
 |   +-- {tool_id}/
 |       +-- tool.json
 +-- .meta.json                # Metadata
-+-- .relations.json           # Related contexts
 +-- history/                  # Archived history
     +-- archive_001/
     |   +-- messages.jsonl    # Written in Phase 1

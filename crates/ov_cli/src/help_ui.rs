@@ -93,9 +93,6 @@ const INTERACTIVE_ADMIN: &[HelpCommand] = help_commands![
     "admin",
     "system",
     "reindex",
-    "relations",
-    "link",
-    "unlink"
 ];
 
 const HELP_SECTIONS: &[HelpSection] = &[
@@ -321,10 +318,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "ov read <uri>",
                 description: "Read the resource content.",
-            },
-            HelpItem {
-                label: "ov relations <uri>",
-                description: "Inspect related resources.",
             },
         ],
     },
@@ -734,48 +727,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         next_steps: &[HelpItem {
             label: "ov privacy <subcommand> --help",
             description: "Show exact arguments for a privacy operation.",
-        }],
-    },
-    CommandHelpSpec {
-        path: &["relations"],
-        purpose: "List relation links for one resource. Experimental.",
-        examples: &[HelpItem {
-            label: "ov relations viking://projects/acme/spec.md",
-            description: "Inspect linked resources.",
-        }],
-        next_steps: &[
-            HelpItem {
-                label: "ov link <from-uri> <to-uri>",
-                description: "Create a relation.",
-            },
-            HelpItem {
-                label: "ov unlink <from-uri> <to-uri>",
-                description: "Remove a relation.",
-            },
-        ],
-    },
-    CommandHelpSpec {
-        path: &["link"],
-        purpose: "Create one or more relation links between resources. Experimental.",
-        examples: &[HelpItem {
-            label: "ov link viking://a.md viking://b.md --reason \"related design\"",
-            description: "Link two resources with a reason.",
-        }],
-        next_steps: &[HelpItem {
-            label: "ov relations <from-uri>",
-            description: "Confirm the relation.",
-        }],
-    },
-    CommandHelpSpec {
-        path: &["unlink"],
-        purpose: "Remove one relation link between resources. Experimental.",
-        examples: &[HelpItem {
-            label: "ov unlink viking://a.md viking://b.md",
-            description: "Remove a relation.",
-        }],
-        next_steps: &[HelpItem {
-            label: "ov relations <from-uri>",
-            description: "Confirm the relation is gone.",
         }],
     },
     CommandHelpSpec {
@@ -2362,9 +2313,6 @@ fn localized_command_description<'a>(
         "glob" => "Glob 路径搜索",
         "overview" => "生成资源概览",
         "abstract" => "生成资源摘要",
-        "relations" => "列出资源关系",
-        "link" => "创建关系链接",
-        "unlink" => "删除关系链接",
         "config" => "添加、编辑、删除或切换配置",
         "config show" => "显示当前配置",
         "config validate" => "验证当前配置",

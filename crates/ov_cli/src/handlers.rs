@@ -341,34 +341,6 @@ pub async fn handle_add_skill(
     .await
 }
 
-pub async fn handle_relations(uri: String, ctx: CliContext) -> Result<()> {
-    let client = ctx.get_client();
-    commands::relations::list_relations(&client, &uri, ctx.output_format, ctx.compact).await
-}
-
-pub async fn handle_link(
-    from_uri: String,
-    to_uris: Vec<String>,
-    reason: String,
-    ctx: CliContext,
-) -> Result<()> {
-    let client = ctx.get_client();
-    commands::relations::link(
-        &client,
-        &from_uri,
-        &to_uris,
-        &reason,
-        ctx.output_format,
-        ctx.compact,
-    )
-    .await
-}
-
-pub async fn handle_unlink(from_uri: String, to_uri: String, ctx: CliContext) -> Result<()> {
-    let client = ctx.get_client();
-    commands::relations::unlink(&client, &from_uri, &to_uri, ctx.output_format, ctx.compact).await
-}
-
 pub async fn handle_export(
     uri: String,
     to: String,
