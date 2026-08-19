@@ -32,10 +32,10 @@ _FRONTMATTER_RE = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)",
 _FRONTMATTER_START_RE = re.compile(rb"\A---[ \t]*\r?\n")
 _FRONTMATTER_END_RE = re.compile(rb"\r?\n---[ \t]*(?:\r?\n|\Z)")
 _OKF_TYPE_DECLARATION_RE = re.compile(rb"""(?m)^(?:type|["']type["'])[ \t]*:""")
-_CITATION_LINE_RE = re.compile(r"^\[\d+\]\s+\[([^\]\n]+)\]\(([^)\n]+)\)\s*$")
 _BARE_VIKING_URI_RE = re.compile(
     r"""viking://[^\s<>\[\](){}"'«»，。；：！？]+"""
 )
+_CJK_RE = re.compile(r"[㐀-䶿一-鿿豈-﫿]")
 _RELATED_PAGES_RE = re.compile(r"(?mi)^#{1,6}[ \t]+Related pages[ \t]*$")
 _RESERVED_FILENAMES = frozenset(
     {".abstract.md", ".overview.md"}
@@ -162,27 +162,6 @@ def _frontmatter(
     return "---\n" + dumped + "---\n\n"
 
 
-def _split_citations(body: str) -> tuple[str, list[tuple[str, str]]]:
-    protected = [
-        (start, end)
-        for start, end in LinkRenderer.protected_markdown_spans(body)
-        if not body[start:end].startswith("# Citations")
-    ]
-    heading = None
-    for match in re.finditer(r"(?m)^# Citations[ \t]*$", body):
-        if not any(start <= match.start() < end for start, end in protected):
-            heading = match
-            break
-    if heading is None:
-        return body.rstrip(), []
-    citations: list[tuple[str, str]] = []
-    for line in body[heading.end() :].strip().splitlines():
-        match = _CITATION_LINE_RE.match(line.strip())
-        if match:
-            citations.append((match.group(1).strip(), match.group(2).strip()))
-    return body[: heading.start()].rstrip(), citations
-
-
 def _citation_target_allowed(target: str, source_roots: Mapping[str, str]) -> bool:
     if not target.startswith("viking://"):
         return False
@@ -198,11 +177,9 @@ def _citation_target_allowed(target: str, source_roots: Mapping[str, str]) -> bo
 
 def _linkify_source_uris(
     body: str, source_roots: Mapping[str, str]
-) -> tuple[str, list[tuple[str, str]]]:
+) -> str:
     protected = LinkRenderer.protected_markdown_spans(body)
     replacements: list[tuple[int, int, str]] = []
-    citations: list[tuple[str, str]] = []
-    seen: set[str] = set()
     for match in _BARE_VIKING_URI_RE.finditer(body):
         start = match.start()
         target = match.group(0).rstrip(".,;:!?")
@@ -216,14 +193,11 @@ def _linkify_source_uris(
         label = unquote(target.rstrip("/").rsplit("/", 1)[-1]).removesuffix(".md")
         label = label.replace("[", r"\[").replace("]", r"\]") or "Source"
         replacements.append((start, end, f"[{label}]({target})"))
-        if target not in seen:
-            seen.add(target)
-            citations.append((label, target))
 
     rendered = list(body)
     for start, end, replacement in reversed(replacements):
         rendered[start:end] = replacement
-    return "".join(rendered), citations
+    return "".join(rendered)
 
 
 def _render_related_pages(
@@ -254,36 +228,34 @@ def _render_related_pages(
     return body.rstrip() + "\n\n## Related pages\n\n" + "\n".join(lines)
 
 
-def _render_citations(
+def _render_source_fallback(
     body: str,
     *,
-    old_body: str,
     source_ids: list[str],
     source_roots: Mapping[str, str],
-    inline_citations: list[tuple[str, str]] | None = None,
 ) -> str:
-    body, draft_citations = _split_citations(body)
-    _old_without_citations, old_citations = _split_citations(old_body)
-    merged: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    for label, target in [
-        *old_citations,
-        *draft_citations,
-        *(inline_citations or []),
-    ]:
-        if not _citation_target_allowed(target, source_roots) or target in seen:
-            continue
-        seen.add(target)
-        merged.append((label, target))
+    linked_targets = {
+        LinkRenderer.normalize_markdown_target(link.target)
+        for link in LinkRenderer.iter_markdown_links(body)
+        if _citation_target_allowed(
+            LinkRenderer.normalize_markdown_target(link.target), source_roots
+        )
+    }
+    missing: list[tuple[str, str]] = []
     for source_id in source_ids:
         target = source_roots[source_id]
-        if target in seen:
+        if any(
+            linked.rstrip("/") == target.rstrip("/") or relative_uri_path(target, linked)
+            for linked in linked_targets
+        ):
             continue
-        seen.add(target)
-        label = target.rstrip("/").rsplit("/", 1)[-1] or f"Source {source_id}"
-        merged.append((label, target))
-    lines = [f"[{index}] [{label}]({target})" for index, (label, target) in enumerate(merged, 1)]
-    return body.rstrip() + "\n\n# Citations\n\n" + "  \n".join(lines) + "\n"
+        label = unquote(target.rstrip("/").rsplit("/", 1)[-1]) or f"Source {source_id}"
+        missing.append((label, target))
+    if not missing:
+        return body.rstrip()
+    heading = "参考来源" if _CJK_RE.search(body) else "Sources"
+    lines = [f"- [{label}]({target})" for label, target in missing]
+    return body.rstrip() + f"\n\n## {heading}\n\n" + "\n".join(lines) + "\n"
 
 
 def validate_relative_page_path(path: str) -> str:
@@ -482,7 +454,7 @@ class WikiRenderer:
             else:
                 old_memory = None
                 old_visible = old_raw
-            old_frontmatter, old_body = _split_frontmatter(old_visible)
+            old_frontmatter, _ = _split_frontmatter(old_visible)
 
             outgoing = [link for link in resolved_links if link.from_uri == uri]
             incoming = [link for link in resolved_links if link.to_uri == uri]
@@ -492,9 +464,7 @@ class WikiRenderer:
                 [link.model_dump() for link in outgoing],
             )
             result.link_count += rendered_count
-            rendered_body, inline_citations = _linkify_source_uris(
-                rendered_body, source_roots
-            )
+            rendered_body = _linkify_source_uris(rendered_body, source_roots)
             if not memory_target:
                 rendered_body = _render_related_pages(
                     rendered_body,
@@ -503,12 +473,10 @@ class WikiRenderer:
                     page_titles=page_titles,
                 )
             source_ids = list(dict.fromkeys(value.strip() for value in page.source_ids if value.strip()))
-            rendered_body = _render_citations(
+            rendered_body = _render_source_fallback(
                 rendered_body,
-                old_body=old_body,
                 source_ids=source_ids,
                 source_roots=source_roots,
-                inline_citations=inline_citations,
             )
             visible = _frontmatter(
                 old=old_frontmatter,

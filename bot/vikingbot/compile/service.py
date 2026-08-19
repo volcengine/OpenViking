@@ -2188,7 +2188,7 @@ Output files are usually short: generate ALL output files in a single response w
 {source_reading_workflow}
 Follow the Skill's required output contract. Preserve every required output type, path, and format.
 Treat only actual Wiki content as Wiki pages; preserve Skill-prescribed artifact file trees as exact files. Never reinterpret an artifact file tree as Wiki pages.
-Do not include YAML frontmatter in Wiki page bodies; trusted code adds their OKF metadata, paths, citations, and write preconditions.
+Do not include YAML frontmatter in Wiki page bodies; trusted code adds their OKF metadata, paths, and write preconditions.
 When referencing a supplied source catalog entry in a Wiki page, use its URI as an ordinary Markdown link.
 Artifact files are preserved exactly and may contain their own format-specific frontmatter. {file_notice}
 Finish only by calling the designated final submission tool.

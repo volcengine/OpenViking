@@ -348,7 +348,7 @@ async def test_submit_tool_accepts_only_one_complete_skill_package():
     assert "description must not exceed 1024 characters" in long_description
 
 
-def test_renderer_creates_okf_pages_links_and_citations():
+def test_renderer_creates_okf_pages_links_and_source_fallbacks():
     summary = "Residual building block designs, network variants, shortcut connection types, and design principles aligned with VGG architecture."
     bundle = WikiBundleDraft.model_validate(
         {
@@ -380,7 +380,8 @@ def test_renderer_creates_okf_pages_links_and_citations():
     assert "type: concept" in first["content"]
     assert f"description: {summary}\n" in first["content"]
     assert "Read [Beta](./beta.md) next." in first["content"]
-    assert "[1] [source](viking://resources/source)" in first["content"]
+    assert "## Sources" in first["content"]
+    assert "- [source](viking://resources/source)" in first["content"]
 
 
 def test_renderer_preserves_existing_link_and_keeps_relationship():
@@ -423,7 +424,7 @@ def test_wiki_page_title_path_normalizes_spaced_dashes_only():
     assert wiki_page_path_from_title("One-Page Overview") == "One-Page_Overview"
 
 
-def test_renderer_linkifies_source_uris_and_adds_resource_backlinks():
+def test_renderer_linkifies_source_uris_without_repeating_them():
     source_detail = "viking://resources/source/chapter_1.md"
     outside = "viking://resources/outside/chapter.md"
     bundle = WikiBundleDraft.model_validate(
@@ -460,11 +461,12 @@ def test_renderer_linkifies_source_uris_and_adds_resource_backlinks():
     assert f"[chapter_1]({source_detail})" in overview
     assert f"`{source_detail}`" in overview
     assert outside in overview and f"]({outside})" not in overview
-    assert f"[1] [chapter_1]({source_detail})" in overview
-    assert "[2] [source](viking://resources/source)" in overview
-    assert f"[1] [chapter_1]({source_detail})  \n[2] [source]" in overview
+    assert overview.count(f"]({source_detail})") == 1
+    assert "[source](viking://resources/source)" not in overview
+    assert "# Citations" not in overview
     assert "## Related pages" in details
     assert "- [Overview](./overview.md)" in details
+    assert "## Sources" in details
     assert rendered.link_count == 1
 
 
@@ -750,7 +752,7 @@ def test_renderer_empty_existing_update_uses_hash_precondition_and_preserves_uri
     }
 
 
-def test_renderer_preserves_unknown_frontmatter_and_merges_scoped_citations():
+def test_renderer_preserves_unknown_frontmatter_and_skill_owned_citations():
     uri = "viking://resources/wiki/topic.md"
     old = """---
 type: legacy
@@ -795,7 +797,51 @@ Old body
     assert "tags: [stable, new]" in content
     assert content.count("viking://resources/source/detail.md") == 1
     assert "viking://resources/other/no.md" not in content
-    assert "[2] [source](viking://resources/source)" in content
+    assert "[source](viking://resources/source)" not in content
+
+
+def test_renderer_does_not_repeat_inline_source_links():
+    bundle = WikiBundleDraft.model_validate(
+        {
+            "pages": [
+                _page(
+                    1,
+                    "主题",
+                    body_markdown=(
+                        "事实来自[原始资料]"
+                        "(viking://resources/source/detail.md)。"
+                    ),
+                )
+            ]
+        }
+    )
+    rendered = WikiRenderer().render(
+        bundle=bundle,
+        target_uri="viking://resources/wiki",
+        source_roots={"src_1": "viking://resources/source"},
+        catalog_uris=set(),
+        existing_raw={},
+    )
+    content = rendered.operations[0]["content"]
+    assert content.count("viking://resources/source/detail.md") == 1
+    assert "## 参考来源" not in content
+    assert "# Citations" not in content
+
+
+def test_renderer_localizes_missing_source_fallback_for_chinese_body():
+    bundle = WikiBundleDraft.model_validate(
+        {"pages": [_page(1, "主题", body_markdown="这是没有显式来源链接的正文。")]}
+    )
+    rendered = WikiRenderer().render(
+        bundle=bundle,
+        target_uri="viking://resources/wiki",
+        source_roots={"src_1": "viking://resources/source"},
+        catalog_uris=set(),
+        existing_raw={},
+    )
+    content = rendered.operations[0]["content"]
+    assert "## 参考来源" in content
+    assert "# Citations" not in content
 
 
 def test_memory_renderer_round_trips_fields_and_only_bumps_changed_version():
