@@ -624,7 +624,7 @@ class VikingClient:
         self,
         skill_name: str,
         *,
-        target_uri: str,
+        target_uri: Optional[str] = None,
         include_content: bool = True,
         include_files: bool = True,
         include_integrity: bool = False,
