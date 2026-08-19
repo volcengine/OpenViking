@@ -47,7 +47,7 @@ OpenViking supports various resource types, categorized by functionality:
 
 | Type | Description |
 |------|-------------|
-| Feishu/Lark | URL-based, supports docx, wiki, sheets, bitable. By default uses app credentials from FEISHU_APP_ID and FEISHU_APP_SECRET; user-token imports can pass `args.feishu_access_token`, and user-token watches also pass `args.feishu_refresh_token` |
+| Feishu/Lark | URL-based, supports doc/docx, wiki, sheets, bitable. By default uses app credentials from FEISHU_APP_ID and FEISHU_APP_SECRET; user-token imports can pass `args.feishu_access_token`, and user-token watches also pass `args.feishu_refresh_token` |
 
 **Web Pages (recursive web crawler)**
 
