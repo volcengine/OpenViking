@@ -575,7 +575,36 @@ task_id      uuid-xxx
 | `warnings` | array | (Optional) List of warnings (only when `strict=False`) |
 | `queue_status` | object | (Optional, only when `wait=true`) Queue processing status with `pending`, `processing`, `completed` counts |
 
-For Git repository sources with `wait=false`, the background task has `task_type="add_resource"` and `resource_id` equal to the returned `root_uri`. Running task records may include `stage`; completed task results include `queue_status` with the final semantic and embedding queue summary.
+**Completed add-resource task result**
+
+For Git repository sources with `wait=false`, the background task has `task_type="add_resource"` and `resource_id` equal to the returned `root_uri`. Running task records may include `stage`. Poll `/api/v1/tasks/{task_id}` until the task completes. Its nested `result` then contains the final queue summary and `context_count`:
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "task_id": "uuid-xxx",
+    "task_type": "add_resource",
+    "status": "completed",
+    "resource_id": "viking://resources/guide",
+    "result": {
+      "status": "success",
+      "root_uri": "viking://resources/guide",
+      "queue_status": {
+        "Embedding": {
+          "processed": 11,
+          "requeue_count": 0,
+          "error_count": 0,
+          "errors": []
+        }
+      },
+      "context_count": 11
+    }
+  }
+}
+```
+
+`context_count` is the number of contexts successfully produced and indexed by this upload task. A context is counted after its embedding record is written successfully. It is not the total number of contexts already stored under `root_uri`. If the server restarts before the task persists its final metrics, the field is omitted instead of reporting a partial count.
 
 ---
 

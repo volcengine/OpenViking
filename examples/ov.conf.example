@@ -116,6 +116,17 @@
             "input": "text",
         },
     },
+    "embedding_volcengine_plan_example": {
+        "_comment": "For VolcEngine subscription plans instead of pay-as-you-go: Agent Plan uses api_base https://ark.cn-beijing.volces.com/api/plan/v3, Coding Plan uses https://ark.cn-beijing.volces.com/api/coding/v3. On BytePlus, the ModelArk Coding Plan uses https://ark.ap-southeast.bytepluses.com/api/coding/v3 with model skylark-embedding-vision.",
+        "dense": {
+            "model": "doubao-embedding-vision",
+            "api_key": "{your-api-key}",
+            "api_base": "https://ark.cn-beijing.volces.com/api/plan/v3",
+            "dimension": 1024,
+            "provider": "volcengine",
+            "input": "multimodal",
+        },
+    },
     "vlm": {
         "model": "doubao-seed-2-0-lite-260428",
         "api_key": "{your-api-key}",
@@ -131,6 +142,15 @@
             "max_concurrent": 2,
             "video_fps": 1.0,
         },
+    },
+    "vlm_volcengine_plan_example": {
+        "_comment": "For VolcEngine subscription plans instead of pay-as-you-go: Agent Plan uses api_base https://ark.cn-beijing.volces.com/api/plan/v3, Coding Plan uses https://ark.cn-beijing.volces.com/api/coding/v3. On BytePlus, the ModelArk Coding Plan uses https://ark.ap-southeast.bytepluses.com/api/coding/v3 with model dola-seed-2.0-lite.",
+        "provider": "volcengine",
+        "model": "doubao-seed-2.0-lite",
+        "api_key": "{your-api-key}",
+        "api_base": "https://ark.cn-beijing.volces.com/api/plan/v3",
+        "temperature": 0.0,
+        "max_retries": 2,
     },
     "vlm_codex_example": {
         "_comment": "For Codex OAuth via subscription. Complete sign-in from `openviking-server init`. OV stores tokens in ~/.openviking/codex_auth.json and can bootstrap from an existing Codex CLI auth file if needed.",

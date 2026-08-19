@@ -28,6 +28,7 @@ from openviking.server.identity import RequestContext
 from openviking.service.task_work_index import TaskWorkRejected
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
+from openviking.storage.semantic_sidecar import body_for_preview, embedding_text_for_body
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.embedding_input import truncate_embedding_input
@@ -361,12 +362,18 @@ async def vectorize_directory_meta(
     include_overview: bool = True,
     scalar_overrides: Optional[Dict[int, Dict[str, Any]]] = None,
     ingest_options: IngestOptions | None = None,
+    include_abstract: bool = True,
 ) -> None:
     """
     Vectorize directory metadata (.abstract.md and .overview.md).
 
     Creates Context objects for abstract and overview and enqueues them.
     """
+    # Callers may provide either freshly generated bodies or raw sidecar bytes
+    # read during reindex/import. Normalize at this shared boundary so protected
+    # operational metadata never leaks into vector text or rerank scalars.
+    abstract = body_for_preview(abstract)
+    overview = body_for_preview(overview)
     first_enqueue_error: Optional[Exception] = None
     try:
         if not ctx:
@@ -386,45 +393,48 @@ async def vectorize_directory_meta(
         # .abstract.md / overview > 65535 UTF-8 bytes still fails embedding enqueue.
         abstract = _truncate_abstract_bytes(abstract)
 
-        # Vectorize L0: .abstract.md (abstract)
-        context_abstract = Context(
-            uri=uri,
-            parent_uri=parent_uri,
-            is_leaf=False,
-            abstract=abstract,
-            context_type=context_type,
-            level=ContextLevel.ABSTRACT,
-            created_at=created_at,
-            updated_at=updated_at,
-            user=ctx.user,
-            account_id=ctx.account_id,
-            owner_space=owner_space,
-        )
-        context_abstract.set_vectorize(Vectorize(text=abstract))
-        msg_abstract = EmbeddingMsgConverter.from_context(context_abstract)
-        _apply_scalar_overrides(
-            msg_abstract,
-            (scalar_overrides or {}).get(int(ContextLevel.ABSTRACT.value)),
-        )
-        _apply_ingest_options(msg_abstract, ingest_options)
-        if msg_abstract:
-            try:
-                enqueued = await _enqueue_embedding_message(
-                    embedding_queue,
-                    msg_abstract,
-                    failure_message=f"Failed to enqueue directory L0 vector for {uri}",
-                )
-                if enqueued:
-                    logger.debug(f"Enqueued directory L0 (abstract) for vectorization: {uri}")
-            except TaskWorkRejected:
-                logger.debug("Skipped directory vectorization for cancelling task: %s", uri)
-                return
-            except Exception as e:
-                logger.error(
-                    f"Failed to enqueue directory L0 (abstract) for vectorization: {uri}: {e}",
-                    exc_info=True,
-                )
-                first_enqueue_error = e
+        if include_abstract:
+            # Vectorize L0: .abstract.md (abstract)
+            context_abstract = Context(
+                uri=uri,
+                parent_uri=parent_uri,
+                is_leaf=False,
+                abstract=abstract,
+                context_type=context_type,
+                level=ContextLevel.ABSTRACT,
+                created_at=created_at,
+                updated_at=updated_at,
+                user=ctx.user,
+                account_id=ctx.account_id,
+                owner_space=owner_space,
+            )
+            context_abstract.set_vectorize(
+                Vectorize(text=embedding_text_for_body(ContextLevel.ABSTRACT, uri, abstract))
+            )
+            msg_abstract = EmbeddingMsgConverter.from_context(context_abstract)
+            _apply_scalar_overrides(
+                msg_abstract,
+                (scalar_overrides or {}).get(int(ContextLevel.ABSTRACT.value)),
+            )
+            _apply_ingest_options(msg_abstract, ingest_options)
+            if msg_abstract:
+                try:
+                    enqueued = await _enqueue_embedding_message(
+                        embedding_queue,
+                        msg_abstract,
+                        failure_message=f"Failed to enqueue directory L0 vector for {uri}",
+                    )
+                    if enqueued:
+                        logger.debug(f"Enqueued directory L0 (abstract) for vectorization: {uri}")
+                except TaskWorkRejected:
+                    logger.debug("Skipped directory vectorization for cancelling task: %s", uri)
+                    return
+                except Exception as e:
+                    logger.error(
+                        f"Failed to enqueue directory L0 (abstract) for vectorization: {uri}: {e}",
+                        exc_info=True,
+                    )
+                    first_enqueue_error = e
 
         if include_overview:
             # Vectorize L1: .overview.md (overview)
@@ -443,7 +453,9 @@ async def vectorize_directory_meta(
                 account_id=ctx.account_id,
                 owner_space=owner_space,
             )
-            context_overview.set_vectorize(Vectorize(text=overview))
+            context_overview.set_vectorize(
+                Vectorize(text=embedding_text_for_body(ContextLevel.OVERVIEW, uri, overview))
+            )
             msg_overview = EmbeddingMsgConverter.from_context(context_overview)
             _apply_scalar_overrides(
                 msg_overview,

@@ -31,6 +31,12 @@ class _ResourceProcessor:
             "_post_process": {"root_is_file": self.root_is_file},
         }
 
+    async def prepare_durable_source(self, *_args, **_kwargs):
+        return None
+
+    async def finish_prepared_resource(self, *_args, **_kwargs):
+        return {"status": "success"}
+
 
 class _DiscardedBackgroundTask:
     def add_done_callback(self, callback):
@@ -75,6 +81,11 @@ def service(monkeypatch: pytest.MonkeyPatch) -> ResourceService:
         "_enqueue_add_resource_job",
         AsyncMock(return_value=SimpleNamespace(task_id="task-1")),
     )
+    monkeypatch.setattr(
+        instance,
+        "_plan_source_job_target",
+        AsyncMock(return_value=("viking://resources/test", None, False)),
+    )
     return instance
 
 
@@ -115,12 +126,29 @@ async def test_no_split_watch_replay_preserves_auto_bound_file_target(
     scheduler = WatchScheduler(resource_service=service, check_interval=1)
     scheduler._watch_manager = watch_manager
     service._watch_scheduler = scheduler
+    service._plan_source_job_target = AsyncMock(
+        side_effect=lambda **kwargs: (
+            "viking://resources/test",
+            None,
+            kwargs["defer_candidate_resolution"],
+        )
+    )
 
-    await service.add_resource(
+    result = await service.add_resource(
         path="https://example.com/guide.md",
         ctx=ctx,
         watch_interval=30.0,
         args={"parse_mode": "no_split"},
+    )
+    assert "root_uri" not in result
+    message = service._enqueue_add_resource_job.await_args.args[0]
+    assert message.defer_target_resolution is True
+    await service.execute_add_resource_job(
+        message,
+        ctx=ctx,
+        resource_lock=None,
+        stage_callback=AsyncMock(),
+        task_auth={},
     )
 
     tasks = await watch_manager.get_all_tasks(
@@ -136,9 +164,35 @@ async def test_no_split_watch_replay_preserves_auto_bound_file_target(
 
     await scheduler._execute_task(task)
 
-    processor = service._resource_processor
-    assert processor.calls[-1]["to"] == "viking://resources/test"
-    assert processor.calls[-1]["to_is_directory"] is False
+    replay_message = service._enqueue_add_resource_job.await_args.args[0]
+    assert replay_message.root_uri == "viking://resources/test"
+    assert replay_message.to_is_directory is False
+
+
+@pytest.mark.asyncio
+async def test_no_split_defers_initial_root_when_parent_targeted(
+    service: ResourceService,
+    ctx: RequestContext,
+):
+    service._plan_source_job_target = AsyncMock(
+        side_effect=lambda **kwargs: (
+            "viking://resources/test",
+            None,
+            kwargs["defer_candidate_resolution"],
+        )
+    )
+
+    result = await service.add_resource(
+        path="https://example.com/guide.md",
+        ctx=ctx,
+        parent="viking://resources/docs",
+        args={"parse_mode": "no_split"},
+    )
+
+    assert "root_uri" not in result
+    assert service._plan_source_job_target.await_args.kwargs["defer_candidate_resolution"] is True
+    message = service._enqueue_add_resource_job.await_args.args[0]
+    assert message.defer_target_resolution is True
 
 
 @pytest.mark.asyncio
@@ -156,6 +210,14 @@ async def test_no_split_watch_persists_auto_bound_multi_artifact_directory(
         ctx=ctx,
         watch_interval=30.0,
         args={"parse_mode": "no_split"},
+    )
+    message = service._enqueue_add_resource_job.await_args.args[0]
+    await service.execute_add_resource_job(
+        message,
+        ctx=ctx,
+        resource_lock=None,
+        stage_callback=AsyncMock(),
+        task_auth={},
     )
 
     tasks = await watch_manager.get_all_tasks(
@@ -266,7 +328,7 @@ async def test_no_split_bypasses_understanding_shortcut(
         raising=False,
     )
 
-    await service.add_resource(
+    result = await service.add_resource(
         path="https://example.com/manual.pdf",
         ctx=ctx,
         to="viking://resources/manual",
@@ -274,33 +336,39 @@ async def test_no_split_bypasses_understanding_shortcut(
         allow_local_path_resolution=False,
     )
 
+    assert result["root_uri"] == "viking://resources/test"
     direct_probe.assert_not_called()
     api_probe.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_native_git_enqueue_persists_internal_no_split_mode(
+    monkeypatch: pytest.MonkeyPatch,
     service: ResourceService,
     ctx: RequestContext,
 ):
+    monkeypatch.setattr(resource_service_module, "is_git_repo_url", lambda _path: True)
     service._preflight_git_source = AsyncMock(
-        return_value=SimpleNamespace(source_name="repo", source_path=None)
+        return_value=SimpleNamespace(
+            source_name="repo",
+            source_path="https://github.com/volcengine/OpenViking.git",
+            source_format="repository",
+        )
     )
-    service._plan_resource_target = AsyncMock(
-        return_value=("viking://resources/repo", None)
+    service._plan_source_job_target = AsyncMock(
+        return_value=("viking://resources/repo", None, False)
     )
-    service._enqueue_add_resource_job = AsyncMock(
-        return_value=SimpleNamespace(task_id="task-git")
-    )
+    service._enqueue_add_resource_job = AsyncMock(return_value=SimpleNamespace(task_id="task-git"))
 
-    result = await service.enqueue_git_add_resource(
+    result = await service.add_resource(
         path="https://github.com/volcengine/OpenViking.git",
         ctx=ctx,
         to="viking://resources/repo",
-        parse_mode="no_split",
+        args={"parse_mode": "no_split"},
     )
 
     assert result["task_id"] == "task-git"
     message = service._enqueue_add_resource_job.await_args.args[0]
     assert isinstance(message, AddResourceMsg)
     assert message.parse_mode == "no_split"
+    assert "parser_backend" not in message.args

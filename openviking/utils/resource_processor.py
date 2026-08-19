@@ -103,17 +103,24 @@ class ResourceProcessor:
             )
         return self._media_processor
 
-    async def prepare_resource(
+    async def prepare_durable_source(
         self,
         path: str,
         ctx: RequestContext,
         *,
+        snapshot_required: bool = False,
         allow_local_path_resolution: bool = True,
         **kwargs,
-    ) -> "LocalResource":
-        """Resolve a source once before selecting an async parser route."""
+    ) -> Optional["LocalResource"]:
+        """Freeze a source when durable routing cannot safely defer access."""
+        media_processor = self._get_media_processor()
+        if (
+            not snapshot_required
+            and not media_processor.durable_route_requires_preparation(path, **kwargs)
+        ):
+            return None
         with get_viking_fs().bind_request_context(ctx):
-            return await self._get_media_processor().prepare(
+            return await media_processor.prepare(
                 path,
                 allow_local_path_resolution=allow_local_path_resolution,
                 **kwargs,
@@ -293,9 +300,7 @@ class ResourceProcessor:
                         source_format=parse_result.source_format,
                         create_parent=kwargs.get("create_parent", False),
                         flatten_single_file=(
-                            normalize_parse_mode(
-                                kwargs.get("parse_mode", ParseMode.DEFAULT)
-                            )
+                            normalize_parse_mode(kwargs.get("parse_mode", ParseMode.DEFAULT))
                             is ParseMode.NO_SPLIT
                             and parse_result.source_format not in {"directory", "repository"}
                             and not to_is_directory
@@ -304,9 +309,7 @@ class ResourceProcessor:
                     if context_tree and context_tree.root:
                         result["root_uri"] = context_tree.root.uri
                         result["temp_uri"] = context_tree.root.temp_uri
-                    root_is_file = bool(
-                        getattr(context_tree, "_root_is_file", False)
-                    )
+                    root_is_file = bool(getattr(context_tree, "_root_is_file", False))
                 telemetry.set(
                     "resource.finalize.duration_ms",
                     round((time.perf_counter() - finalize_start) * 1000, 3),
@@ -444,6 +447,11 @@ class ResourceProcessor:
                 "target_preexisting": target_preexisting,
                 "is_code_repo": parse_result.source_format == "repository",
                 "root_is_file": root_is_file,
+                "semantic_source": self._semantic_source_metadata(
+                    path=path,
+                    prepared_resource=prepared_resource,
+                    source_format=parse_result.source_format,
+                ),
             }
             if defer_post_processing:
                 result["_post_process"] = prepared
@@ -489,6 +497,7 @@ class ResourceProcessor:
         vectors_only = processing_mode == VECTORS_ONLY
         root_is_file = bool(prepared.get("root_is_file"))
         ingest_options = IngestOptions.from_value(kwargs.pop("ingest_options", None))
+        semantic_source = prepared.get("semantic_source")
         should_summarize = not root_is_file and not vectors_only and (summarize or build_index)
         should_refresh_file_parent = (
             root_is_file and not vectors_only and (summarize or build_index)
@@ -509,6 +518,8 @@ class ResourceProcessor:
                         is_code_repo=bool(prepared.get("is_code_repo")),
                         target_preexisting=target_preexisting,
                         ingest_options=ingest_options,
+                        semantic_source=semantic_source,
+                        generation_trigger="resource_ingest",
                         **kwargs,
                     )
                     if (
@@ -608,6 +619,30 @@ class ResourceProcessor:
                 )
         return result
 
+    @staticmethod
+    def _semantic_source_metadata(
+        *,
+        path: str,
+        prepared_resource: Optional["LocalResource"],
+        source_format: Optional[str],
+    ) -> Dict[str, str]:
+        """Return the stable origin metadata carried only by the import root."""
+
+        if prepared_resource is not None:
+            return {
+                "kind": str(prepared_resource.source_type),
+                "uri": str(prepared_resource.original_source),
+            }
+        if source_format == "repository":
+            kind = "git"
+        elif path.startswith(("http://", "https://")):
+            kind = "http"
+        elif path.startswith(("git@", "ssh://", "git://")):
+            kind = "git"
+        else:
+            kind = "local"
+        return {"kind": kind, "uri": str(path)}
+
     async def _delete_removed_resource_vectors(
         self,
         *,
@@ -627,11 +662,13 @@ class ResourceProcessor:
                 await self.vikingdb.delete(ids, ctx=ctx)
         for uri in dict.fromkeys(dirs):
             records = await self.vikingdb.filter(
-                filter=And([
-                    PathScope("uri", uri, depth=-1),
-                    Eq("level", int(ContextLevel.DETAIL)),
-                    Eq("account_id", ctx.account_id),
-                ]),
+                filter=And(
+                    [
+                        PathScope("uri", uri, depth=-1),
+                        Eq("level", int(ContextLevel.DETAIL)),
+                        Eq("account_id", ctx.account_id),
+                    ]
+                ),
                 limit=VECTORDB_MAX_QUERY_LIMIT,
                 output_fields=["id"],
                 ctx=ctx,
@@ -779,9 +816,7 @@ class ResourceProcessor:
         try:
             pathlock = get_viking_fs()._async_agfs
             acquire = (
-                pathlock.pathlock_acquire_exact
-                if root_is_file
-                else pathlock.pathlock_acquire_tree
+                pathlock.pathlock_acquire_exact if root_is_file else pathlock.pathlock_acquire_tree
             )
             return await acquire(path, timeout_secs=timeout)
         except LockAcquisitionError as exc:

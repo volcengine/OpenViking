@@ -33,6 +33,7 @@ from openviking.storage.expr import And, Eq, Or, PathScope
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
+from openviking.storage.semantic_sidecar import body_for_preview, embedding_text_for_body
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -1126,7 +1127,9 @@ class ReindexExecutor:
                         uri=directory_uri,
                         parent_uri=VikingURI(directory_uri).parent.uri,
                         abstract=abstract,
-                        vector_text=abstract,
+                        vector_text=embedding_text_for_body(
+                            ContextLevel.ABSTRACT, directory_uri, abstract
+                        ),
                         is_leaf=False,
                         context_type=context_type_for_uri(directory_uri),
                         level=ContextLevel.ABSTRACT,
@@ -1144,7 +1147,9 @@ class ReindexExecutor:
                         parent_uri=VikingURI(directory_uri).parent.uri,
                         # L1 abstract scalar carries the overview for Rerank.
                         abstract=_truncate_abstract_bytes(overview),
-                        vector_text=overview,
+                        vector_text=embedding_text_for_body(
+                            ContextLevel.OVERVIEW, directory_uri, overview
+                        ),
                         is_leaf=False,
                         context_type=context_type_for_uri(directory_uri),
                         level=ContextLevel.OVERVIEW,
@@ -1480,7 +1485,7 @@ class ReindexExecutor:
                     uri=uri,
                     parent_uri=parent_uri,
                     abstract=abstract,
-                    vector_text=abstract,
+                    vector_text=embedding_text_for_body(ContextLevel.ABSTRACT, uri, abstract),
                     is_leaf=False,
                     context_type=ContextType.SKILL.value,
                     level=ContextLevel.ABSTRACT,
@@ -1499,7 +1504,7 @@ class ReindexExecutor:
                     parent_uri=parent_uri,
                     # L1 abstract scalar carries the overview for Rerank.
                     abstract=_truncate_abstract_bytes(overview),
-                    vector_text=overview,
+                    vector_text=embedding_text_for_body(ContextLevel.OVERVIEW, uri, overview),
                     is_leaf=False,
                     context_type=ContextType.SKILL.value,
                     level=ContextLevel.OVERVIEW,
@@ -1673,7 +1678,9 @@ class ReindexExecutor:
                         uri=directory_uri,
                         parent_uri=parent_uri,
                         abstract=abstract,
-                        vector_text=abstract,
+                        vector_text=embedding_text_for_body(
+                            ContextLevel.ABSTRACT, directory_uri, abstract
+                        ),
                         is_leaf=False,
                         context_type=ContextType.MEMORY.value,
                         level=ContextLevel.ABSTRACT,
@@ -1691,7 +1698,9 @@ class ReindexExecutor:
                         parent_uri=parent_uri,
                         # L1 abstract scalar carries the overview for Rerank.
                         abstract=_truncate_abstract_bytes(overview),
-                        vector_text=overview,
+                        vector_text=embedding_text_for_body(
+                            ContextLevel.OVERVIEW, directory_uri, overview
+                        ),
                         is_leaf=False,
                         context_type=ContextType.MEMORY.value,
                         level=ContextLevel.OVERVIEW,
@@ -1755,7 +1764,7 @@ class ReindexExecutor:
         file_name = uri.rsplit("/", 1)[-1]
         overviews = await self._safe_read_text(f"{parent_uri}/.overview.md", ctx=ctx)
         if overviews:
-            parsed = self._parse_overview_md(overviews)
+            parsed = self._parse_overview_md(body_for_preview(overviews))
             if file_name in parsed:
                 return parsed[file_name]
         existing = await self._fetch_existing_record(

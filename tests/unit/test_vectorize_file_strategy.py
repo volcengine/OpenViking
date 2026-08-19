@@ -561,25 +561,44 @@ async def test_vectorize_directory_meta_appends_search_tags_by_level(monkeypatch
 async def test_vectorize_directory_meta_l1_abstract_is_overview(monkeypatch):
     """L1 records must carry the overview in the abstract scalar so Rerank
     sees L1 text instead of the L0 abstract."""
+    from openviking.core.context import ContextLevel
+    from openviking.storage.semantic_sidecar import render_semantic_sidecar
+
     queue = DummyQueue()
     monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
     monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("ignored"))
 
+    uri = "viking://user/default/resources/demo"
     overview = "# Overview\n\n" + ("section detail. " * 50)
+    metadata = {
+        "source": {"kind": "http", "uri": "https://example.com/private.pdf"},
+        "generated_by": {"component": "SemanticProcessor", "trigger": "ingest"},
+        "freshness": {
+            "total_entries": 4,
+            "sampled_entries": 2,
+            "unsampled_entries": 2,
+            "pending_child_changes": 0,
+        },
+    }
     await embedding_utils.vectorize_directory_meta(
-        uri="viking://user/default/resources/demo",
-        abstract="demo abstract",
-        overview=overview,
+        uri=uri,
+        abstract=render_semantic_sidecar(ContextLevel.ABSTRACT, uri, "Visible abstract.", metadata),
+        overview=render_semantic_sidecar(ContextLevel.OVERVIEW, uri, overview, metadata),
         ctx=DummyReq(),
     )
 
     assert len(queue.items) == 2
     l0, l1 = queue.items
     assert l0.context_data["level"] == 0
-    assert l0.context_data["abstract"] == "demo abstract"
+    assert l0.context_data["abstract"] == "Visible abstract."
     assert l1.context_data["level"] == 1
-    assert l1.context_data["abstract"] == overview
-    assert l1.message == overview
+    assert l1.context_data["abstract"] == overview.rstrip()
+    assert l1.message == (f"---\ndirectory: {uri}/\n---\n\n{overview.rstrip()}")
+    for item in (l0, l1):
+        assert f"directory: {uri}/" in item.message
+        assert "source:" not in item.message
+        assert "generated_by:" not in item.message
+        assert "freshness:" not in item.message
 
 
 @pytest.mark.asyncio

@@ -679,8 +679,8 @@ async def test_embedding_handler_settles_request_wait_by_message_id(monkeypatch)
     monkeypatch.setattr(
         "openviking.storage.collection_schemas.get_request_wait_tracker",
         lambda: SimpleNamespace(
-            mark_embedding_done=lambda telemetry_id, root_id: completed.append(
-                (telemetry_id, root_id)
+            mark_embedding_done=lambda telemetry_id, root_id, **kwargs: completed.append(
+                (telemetry_id, root_id, kwargs)
             )
         ),
     )
@@ -693,7 +693,7 @@ async def test_embedding_handler_settles_request_wait_by_message_id(monkeypatch)
 
     await handler.on_dequeue(payload)
 
-    assert completed == [("request-1", queue_data["id"])]
+    assert completed == [("request-1", queue_data["id"], {"vector_written": True})]
 
 
 def test_context_collection_excludes_parent_uri():
@@ -1942,9 +1942,7 @@ async def test_viking_vector_index_backend_upsert_partial_update_delegates_to_ac
     )
 
     assert result == "rec-1"
-    assert calls == [
-        ({"id": "rec-1", "abstract": "patched"}, UpsertOptions(True, "append"))
-    ]
+    assert calls == [({"id": "rec-1", "abstract": "patched"}, UpsertOptions(True, "append"))]
 
 
 @pytest.mark.asyncio

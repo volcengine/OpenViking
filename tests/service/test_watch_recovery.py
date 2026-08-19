@@ -317,7 +317,6 @@ class TestResourceExistenceCheck:
             skill_processor=MockSkillProcessor(),
             watch_scheduler=None,
         )
-
         scheduler = WatchScheduler(
             resource_service=resource_service,
             viking_fs=None,
@@ -358,6 +357,9 @@ class TestResourceExistenceCheck:
             skill_processor=MockSkillProcessor(),
             watch_scheduler=None,
         )
+        resource_service.refresh_resource = AsyncMock(
+            return_value={"root_uri": "viking://resources/existing"}
+        )
 
         scheduler = WatchScheduler(
             resource_service=resource_service,
@@ -395,6 +397,9 @@ class TestResourceExistenceCheck:
             skill_processor=MockSkillProcessor(),
             watch_scheduler=None,
         )
+        resource_service.refresh_resource = AsyncMock(
+            return_value={"root_uri": "viking://resources/url"}
+        )
 
         scheduler = WatchScheduler(
             resource_service=resource_service,
@@ -416,7 +421,7 @@ class TestResourceExistenceCheck:
         updated_task = await watch_manager.get_task(task.task_id)
         assert updated_task is not None
         assert updated_task.is_active is True
-        assert resource_processor.call_count == 1
+        resource_service.refresh_resource.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_feishu_user_token_watch_refreshes_before_execution(
@@ -429,6 +434,9 @@ class TestResourceExistenceCheck:
             resource_processor=resource_processor,
             skill_processor=MockSkillProcessor(),
             watch_scheduler=None,
+        )
+        resource_service.refresh_resource = AsyncMock(
+            return_value={"root_uri": "viking://resources/feishu-user-watch"}
         )
         scheduler = WatchScheduler(resource_service=resource_service, viking_fs=None)
         await scheduler.start()
@@ -450,8 +458,7 @@ class TestResourceExistenceCheck:
         await scheduler._execute_task(task)
 
         assert scheduler._feishu_oauth_client.calls == ["r-old"]
-        assert resource_processor.call_count == 1
-        assert resource_processor.calls[-1]["feishu_access_token"] == "u-new"
+        assert resource_service.refresh_resource.await_args.kwargs["feishu_access_token"] == "u-new"
 
         updated_task = await watch_manager.get_task(task.task_id)
         assert updated_task is not None
@@ -460,7 +467,7 @@ class TestResourceExistenceCheck:
         assert updated_task.auth_state["expires_at"] is not None
 
     @pytest.mark.asyncio
-    async def test_git_token_watch_restores_request_local_auth_for_execution(
+    async def test_git_token_watch_restores_task_auth_for_refresh(
         self, temp_storage: Path, request_context: RequestContext
     ):
         resource_service = ResourceService(
@@ -519,6 +526,9 @@ class TestSchedulerIntegration:
             skill_processor=MockSkillProcessor(),
             watch_scheduler=None,
         )
+        resource_service.refresh_resource = AsyncMock(
+            return_value={"root_uri": "viking://resources/test"}
+        )
 
         scheduler = WatchScheduler(
             resource_service=resource_service,
@@ -540,7 +550,7 @@ class TestSchedulerIntegration:
 
         await scheduler.stop()
 
-        assert resource_processor.call_count >= 1
+        assert resource_service.refresh_resource.await_count >= 1
 
     @pytest.mark.asyncio
     async def test_scheduler_handles_multiple_tasks_after_restart(
@@ -560,6 +570,9 @@ class TestSchedulerIntegration:
             resource_processor=resource_processor,
             skill_processor=MockSkillProcessor(),
             watch_scheduler=None,
+        )
+        resource_service.refresh_resource = AsyncMock(
+            return_value={"root_uri": "viking://resources/test"}
         )
 
         scheduler = WatchScheduler(
@@ -588,7 +601,7 @@ class TestSchedulerIntegration:
 
         await scheduler.stop()
 
-        assert resource_processor.call_count >= 2
+        assert resource_service.refresh_resource.await_count >= 2
 
     @pytest.mark.asyncio
     async def test_scheduler_skips_inactive_tasks_after_restart(

@@ -39,7 +39,14 @@ from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecuto
 from openviking.storage.queuefs.semantic_lock import SemanticLockScope
 from openviking.storage.queuefs.semantic_msg import SemanticMsg, build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_queue import is_semantic_msg_stale
-from openviking.storage.queuefs.semantic_sidecar import write_semantic_sidecars
+from openviking.storage.semantic_sidecar import (
+    SemanticSidecarFormatError,
+    body_for_preview,
+    deterministic_sample,
+    freshness_metadata,
+    mark_semantic_sidecars_pending,
+    write_semantic_sidecars,
+)
 from openviking.storage.viking_fs import LS_ALL_NODES, SyncDiff, get_viking_fs
 from openviking.telemetry import bind_telemetry, bind_telemetry_stage, resolve_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -246,6 +253,12 @@ class SemanticProcessor(DequeueHandlerBase):
             or parent_uri == uri.rstrip("/")
         ):
             return
+        await mark_semantic_sidecars_pending(
+            viking_fs=get_viking_fs(),
+            dir_uri=parent_uri,
+            changed_entries=1,
+            ctx=self._ctx_from_semantic_msg(msg),
+        )
 
         from openviking.storage.queuefs import get_queue_manager
 
@@ -263,6 +276,7 @@ class SemanticProcessor(DequeueHandlerBase):
             role=msg.role,
             skip_vectorization=msg.skip_vectorization,
             changes={"modified": [uri]},
+            generation_trigger="parent_refresh",
             coalesce_key=build_semantic_coalesce_key(
                 context_type=msg.context_type,
                 uri=parent_uri,
@@ -417,6 +431,8 @@ class SemanticProcessor(DequeueHandlerBase):
                                 ingest_options=msg.ingest_options,
                                 coalesce_key=msg.coalesce_key,
                                 coalesce_version=msg.coalesce_version,
+                                source=msg.source,
+                                generation_trigger=msg.generation_trigger,
                             )
                             await executor.run(run_uri)
                             self._cache_dag_stats(
@@ -551,6 +567,7 @@ class SemanticProcessor(DequeueHandlerBase):
             if not entry.get("isDir", False):
                 item_uri = VikingURI(dir_uri).join(name).uri
                 file_paths.append(item_uri)
+        file_paths.sort()
 
         if not file_paths:
             logger.info(f"No memory files found in {dir_uri}")
@@ -561,10 +578,12 @@ class SemanticProcessor(DequeueHandlerBase):
             try:
                 old_overview = await viking_fs.read_file(f"{dir_uri}/.overview.md", ctx=ctx)
                 if old_overview:
-                    existing_summaries = self._parse_overview_md(old_overview)
+                    existing_summaries = self._parse_overview_md(body_for_preview(old_overview))
                     logger.info(
                         f"Parsed {len(existing_summaries)} existing summaries from overview.md"
                     )
+            except SemanticSidecarFormatError:
+                raise
             except Exception as e:
                 logger.debug(f"No existing overview.md found for {dir_uri}: {e}")
 
@@ -653,8 +672,14 @@ class SemanticProcessor(DequeueHandlerBase):
                 await asyncio.gather(*[_gen(i, fp) for i, fp in batch])
 
         completed_summaries = [s for s in file_summaries if s is not None]
+        sample_limit = getattr(
+            get_openviking_config().semantic,
+            "sidecar_sample_size",
+            32,
+        )
+        sampled_summaries = deterministic_sample(completed_summaries, sample_limit)
         generated_content = await self._generate_overview(
-            dir_uri, completed_summaries, [], llm_sem=llm_sem
+            dir_uri, sampled_summaries, [], llm_sem=llm_sem
         )
         overview, abstract = self._normalize_overview_generation(generated_content)
 
@@ -667,6 +692,8 @@ class SemanticProcessor(DequeueHandlerBase):
                 abstract=abstract,
                 ctx=ctx,
                 lock=lock,
+                total_entries=len(file_paths),
+                sampled_entries=len(sampled_summaries),
             )
         except Exception as e:
             raise RuntimeError(f"Failed to write abstract/overview for {dir_uri}: {e}") from e
@@ -696,6 +723,8 @@ class SemanticProcessor(DequeueHandlerBase):
         abstract: str,
         ctx: Optional[RequestContext],
         lock: Optional[Dict[str, Any]] = None,
+        total_entries: int = 0,
+        sampled_entries: int = 0,
     ) -> bool:
         return await write_semantic_sidecars(
             viking_fs=viking_fs,
@@ -704,6 +733,14 @@ class SemanticProcessor(DequeueHandlerBase):
             abstract=abstract,
             ctx=ctx,
             is_stale=lambda: is_semantic_msg_stale(msg),
+            metadata={
+                **({"source": msg.source} if msg.source else {}),
+                "generated_by": {
+                    "component": "SemanticProcessor",
+                    "trigger": msg.generation_trigger,
+                },
+                "freshness": freshness_metadata(total_entries, sampled_entries),
+            },
             lock=lock,
             log_prefix="[MemorySemantic]",
         )
@@ -993,6 +1030,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
     def _extract_abstract_from_overview(self, overview_content: str) -> str:
         """Extract an abstract from the Markdown overview brief description."""
+        overview_content = body_for_preview(overview_content)
         lines = overview_content.split("\n")
 
         # Skip header lines (starting with #)
@@ -1016,8 +1054,8 @@ class SemanticProcessor(DequeueHandlerBase):
 
     def _normalize_overview_generation(self, generated_content: str) -> Tuple[str, str]:
         """Convert raw Markdown overview output into final L1 overview and L0 abstract."""
-        overview = generated_content
-        abstract = self._extract_abstract_from_overview(generated_content)
+        overview = body_for_preview(generated_content)
+        abstract = self._extract_abstract_from_overview(overview)
         return self._enforce_size_limits(overview, abstract)
 
     def _enforce_size_limits(self, overview: str, abstract: str) -> Tuple[str, str]:
@@ -1042,6 +1080,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
         summaries: Dict[str, str] = {}
 
+        overview_content = body_for_preview(overview_content)
         if not overview_content or not overview_content.strip():
             return summaries
 

@@ -16,6 +16,7 @@ from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
 from openviking.storage.queuefs import QueueManager, SessionCommitMsg, get_queue_manager
+from openviking.storage.semantic_sidecar import body_for_preview
 from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
@@ -171,7 +172,7 @@ class TestGetContextForSearch:
         context = await session.get_context_for_search(query="test")
 
         assert isinstance(context, dict)
-        assert context["latest_archive_overview"] == latest_overview
+        assert context["latest_archive_overview"] == body_for_preview(latest_overview)
         assert len(context["current_messages"]) == 1
 
     async def test_get_context_skips_incomplete_latest_archive(self, client: partial):
@@ -196,7 +197,7 @@ class TestGetContextForSearch:
 
         context = await session.get_context_for_search(query="test")
 
-        assert context["latest_archive_overview"] == completed_overview
+        assert context["latest_archive_overview"] == body_for_preview(completed_overview)
 
     async def test_get_context_includes_incomplete_archive_messages(self, client: partial):
         """Pending archive messages should be merged with current live messages."""
@@ -333,7 +334,7 @@ class TestGetContextForSearch:
             ctx=session.ctx,
         )
         context = await session.get_context_for_search(query="test")
-        assert context["latest_archive_overview"] == first_overview
+        assert context["latest_archive_overview"] == body_for_preview(first_overview)
         assert [m.content for m in context["current_messages"]] == [
             "Second round user",
             "Second round assistant",
@@ -348,7 +349,7 @@ class TestGetContextForSearch:
             ctx=session.ctx,
         )
         context = await session.get_context_for_search(query="test")
-        assert context["latest_archive_overview"] == second_overview
+        assert context["latest_archive_overview"] == body_for_preview(second_overview)
         assert context["current_messages"] == []
 
 

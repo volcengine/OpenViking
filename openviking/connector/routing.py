@@ -33,8 +33,10 @@ CONNECTOR_SUPPORTED_ARGS: Dict[str, FrozenSet[str]] = {
 # request field -- never ``param_config`` -- so Connector and plugin logs
 # redact them while logging param_config verbatim. The incoming OpenViking
 # HTTP body may still be captured when the explicitly unsafe observability
-# body dump is enabled. One-shot use: credentials are never persisted, and
-# requests carrying them must not fall back to a durable native import job.
+# body dump is enabled. These flat fields belong only to Connector requests:
+# they are never persisted and cannot fall back to the standard Git pipeline.
+# The standard pipeline accepts its separate nested ``args.auth_config``
+# contract and stores that state only in the private task-auth field.
 CONNECTOR_CREDENTIAL_ARGS: Dict[str, FrozenSet[str]] = {
     "tos": frozenset(),
     "git": frozenset({"token", "username"}),

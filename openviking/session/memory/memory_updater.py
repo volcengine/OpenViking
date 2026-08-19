@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 if TYPE_CHECKING:
     from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 
+from openviking.core.context import ContextLevel
 from openviking.message import Message
 from openviking.message.part import TextPart
 from openviking.server.identity import RequestContext
@@ -39,6 +40,7 @@ from openviking.session.memory.utils.resource_refs import (
 )
 from openviking.session.memory.utils.template_utils import TemplateUtils
 from openviking.session.memory.utils.uri import render_template
+from openviking.storage.semantic_sidecar import freshness_metadata, render_semantic_sidecar
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -963,9 +965,7 @@ class MemoryUpdater:
                 uri_memory_type_map[uri] = op.memory_type
         # Merge caller-supplied transient tags with per-operation search_tags
         # (e.g. event-memory custom scalars) so both reach vectorization.
-        effective_search_tags_by_uri = _collect_search_tags_by_uri(
-            operations, search_tags_by_uri
-        )
+        effective_search_tags_by_uri = _collect_search_tags_by_uri(operations, search_tags_by_uri)
         await self._vectorize_memories(
             result,
             ctx,
@@ -1618,7 +1618,18 @@ class MemoryUpdater:
         try:
             await viking_fs.write_file(
                 overview_path,
-                rendered,
+                render_semantic_sidecar(
+                    ContextLevel.OVERVIEW,
+                    directory,
+                    rendered,
+                    {
+                        "generated_by": {
+                            "component": "MemoryUpdater",
+                            "trigger": "memory_update",
+                        },
+                        "freshness": freshness_metadata(len(md_files), len(items)),
+                    },
+                ),
                 ctx=ctx,
                 lease_ref=lease_ref,
             )

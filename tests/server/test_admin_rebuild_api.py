@@ -2082,7 +2082,9 @@ async def test_reindex_resource_vector_text_summary_first_skips_content_read(mon
     monkeypatch.setattr(ReindexExecutor, "_fetch_existing_record", fake_fetch_existing_record)
     monkeypatch.setattr(
         "openviking.service.reindex_executor.get_openviking_config",
-        lambda: type("Config", (), {"embedding": type("Embedding", (), {"text_source": "summary_first"})()})(),
+        lambda: type(
+            "Config", (), {"embedding": type("Embedding", (), {"text_source": "summary_first"})()}
+        )(),
     )
 
     service = ReindexExecutor()
@@ -2103,6 +2105,7 @@ async def test_reindex_resource_vector_text_summary_first_skips_content_read(mon
 @pytest.mark.asyncio
 async def test_reindex_file_summary_reads_existing_record_as_uri_owner(monkeypatch):
     from openviking.service.reindex_executor import ReindexExecutor
+    from openviking.storage.semantic_sidecar import render_semantic_sidecar
 
     captured = {}
 
@@ -2129,6 +2132,36 @@ async def test_reindex_file_summary_reads_existing_record_as_uri_owner(monkeypat
 
     assert summary == "owner summary"
     assert captured["ctx"].user.user_id == "bob"
+
+    raw = render_semantic_sidecar(
+        ContextLevel.OVERVIEW,
+        "viking://resources/demo",
+        "# Demo\n\n## image.png\nVisible file summary.",
+        {
+            "source": {
+                "kind": "http",
+                "uri": "https://example.com/private.pdf",
+            }
+        },
+    )
+
+    async def fake_safe_read_text(self, uri, *, ctx):
+        del self, uri, ctx
+        return raw
+
+    async def fail_if_existing_record_read(self, *, uri, level, ctx):
+        raise AssertionError("body-only overview summary should be used before fallback")
+
+    monkeypatch.setattr(ReindexExecutor, "_safe_read_text", fake_safe_read_text)
+    monkeypatch.setattr(ReindexExecutor, "_fetch_existing_record", fail_if_existing_record_read)
+
+    summary = await service._best_file_summary(
+        "viking://resources/demo/image.png",
+        ctx=ctx,
+    )
+
+    assert summary == "Visible file summary."
+    assert "source:" not in summary
 
 
 @pytest.mark.asyncio

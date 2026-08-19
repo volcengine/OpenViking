@@ -49,6 +49,12 @@ class MockResourceProcessor:
             ),
         }
 
+    def should_use_understanding_directly(self, *_args, **_kwargs):
+        return False
+
+    async def finish_prepared_resource(self, *_args, **_kwargs):
+        return {"status": "success"}
+
 
 class MockSkillProcessor:
     """Mock SkillProcessor for testing."""
@@ -455,6 +461,16 @@ class TestAddResourceArgs:
         )
         disable_task_tracker(monkeypatch)
         to_uri = "viking://resources/feishu_user_watch"
+        resource_service._plan_source_job_target = AsyncMock(return_value=(to_uri, None, False))
+
+        async def preflight(_self, _source, *, feishu_access_token=None):
+            assert feishu_access_token == "u-test"
+            return SimpleNamespace(source_name=None, source_format="file")
+
+        monkeypatch.setattr(
+            "openviking.parse.accessors.feishu_accessor.FeishuAccessor.preflight_source",
+            preflight,
+        )
 
         await resource_service.add_resource(
             path="https://example.feishu.cn/docx/doc_token",
@@ -465,6 +481,24 @@ class TestAddResourceArgs:
                 "feishu_access_token": " u-test ",
                 "feishu_refresh_token": " r-test ",
             },
+        )
+
+        enqueue_call = resource_service._enqueue_add_resource_job.await_args
+        message = enqueue_call.args[0]
+        task_auth = enqueue_call.kwargs["task_auth"]
+        assert "u-test" not in str(message.to_dict())
+        assert task_auth == {
+            "provider": "feishu",
+            "access_token": "u-test",
+            "refresh_token": "r-test",
+            "expires_at": None,
+        }
+        await resource_service.execute_add_resource_job(
+            message,
+            ctx=request_context,
+            resource_lock=None,
+            stage_callback=AsyncMock(),
+            task_auth=task_auth,
         )
 
         processor = resource_service._resource_processor
@@ -493,6 +527,14 @@ class TestAddResourceArgs:
         disable_task_tracker(monkeypatch)
         repo_url = "https://git.example/org/private.git"
         to_uri = "viking://resources/git_private_watch"
+        resource_service._preflight_git_source = AsyncMock(
+            return_value=SimpleNamespace(
+                source_name="private",
+                source_path=repo_url,
+                source_format="repository",
+            )
+        )
+        resource_service._plan_source_job_target = AsyncMock(return_value=(to_uri, None, False))
 
         await resource_service.add_resource(
             path=repo_url,
@@ -508,6 +550,24 @@ class TestAddResourceArgs:
             },
         )
 
+        enqueue_call = resource_service._enqueue_add_resource_job.await_args
+        message = enqueue_call.args[0]
+        task_auth = enqueue_call.kwargs["task_auth"]
+        assert "git-secret" not in str(message.to_dict())
+        assert task_auth == {
+            "provider": "git_http_basic",
+            "username": "git-user",
+            "token": "git-secret",
+            "repo_url": repo_url,
+        }
+        await resource_service.execute_add_resource_job(
+            message,
+            ctx=request_context,
+            resource_lock=None,
+            stage_callback=AsyncMock(),
+            task_auth=task_auth,
+        )
+
         processor = resource_service._resource_processor
         assert processor.calls[-1]["auth_config"] == {
             "username": "git-user",
@@ -516,7 +576,10 @@ class TestAddResourceArgs:
 
         task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert task is not None
-        assert task.processor_kwargs == {"branch": "main"}
+        assert task.processor_kwargs == {
+            "branch": "main",
+            "source_name": "private",
+        }
         assert task.auth_state == {
             "provider": "git_http_basic",
             "username": "git-user",

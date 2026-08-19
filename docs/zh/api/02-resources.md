@@ -581,7 +581,36 @@ task_id      uuid-xxx
 | `queue_status` | object | （可选，仅当 `wait=true` 时）队列处理状态，包含 `pending`、`processing`、`completed` 计数 |
 | `memory_linking` | object | （可选，仅当 `reason` 触发记忆生成时）本次资源 URI 与用户记忆的关联结果 |
 
-对于 `wait=false` 的 Git 仓库来源，后台任务的 `task_type="add_resource"`，`resource_id` 等于返回的 `root_uri`。运行中的任务记录可能包含 `stage`；完成后的任务 `result` 会包含带有 semantic 和 embedding 汇总的 `queue_status`。
+**完成后的资源添加任务结果**
+
+对于 `wait=false` 的 Git 仓库来源，后台任务的 `task_type="add_resource"`，`resource_id` 等于返回的 `root_uri`。运行中的任务记录可能包含 `stage`。轮询 `/api/v1/tasks/{task_id}` 直到任务完成。完成后，任务内层的 `result` 会包含最终队列汇总和 `context_count`：
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "task_id": "uuid-xxx",
+    "task_type": "add_resource",
+    "status": "completed",
+    "resource_id": "viking://resources/guide",
+    "result": {
+      "status": "success",
+      "root_uri": "viking://resources/guide",
+      "queue_status": {
+        "Embedding": {
+          "processed": 11,
+          "requeue_count": 0,
+          "error_count": 0,
+          "errors": []
+        }
+      },
+      "context_count": 11
+    }
+  }
+}
+```
+
+`context_count` 是本次上传任务成功生成并完成索引的上下文数量。每条上下文对应的嵌入记录成功写入后，计数增加一次。该值不是 `root_uri` 下已有上下文的总数。如果服务器在任务持久化最终指标前重启，该字段会被省略，以避免返回不完整的计数。
 
 ---
 
