@@ -145,7 +145,7 @@ per-harness 章节（档案卡）只写差异；所有共享事实均在本章�
   - `memory.session_auto_commit.default_enabled = false`、`idle_enabled = false`（`memory_config.py:15-16`）；无存储 policy 的会话自动 commit 关闭（`session_service.py:637-638`）；idle 扫描器在 `idle_enabled=false` 时根本不创建（`core.py:440-448`），构成双重门控。
   - `POST /messages` 的 auto_create 不接受 policy 参数；只有 `POST /sessions`（create）与 `PATCH /sessions/{id}/config` 能设 `auto_commit_policy`。
   - 当前没有插件下发 `auto_commit_policy`；第一方客户端中会下发该字段的是 **ov CLI**（`ov session new --auto-commit-policy-json` / `--no-auto-commit`、`ov session config set`）。
-  - policy 显式启用时，服务端默认阈值是 `pending_token_threshold=10000（严格大于）/ message_count_threshold=50 / idle_timeout_seconds=86400 / keep_recent_count=2 / min_commit_interval_seconds=0`。注意这组服务端默认值与各插件客户端的 20000/10 是相互独立的两层配置。
+  - policy 显式启用时，服务端默认阈值是 `pending_token_threshold=150000（严格大于）/ message_count_threshold=100 / idle_timeout_seconds=86400 / keep_recent_count=0 / min_commit_interval_seconds=0`。注意这组服务端默认值与各插件客户端的 20000/10 是相互独立的两层配置。
 - **由此**：现状下所有自动 commit 都是客户端各自实现的阈值逻辑（[§3.3](#_3-3-会话与-commit-生命周期)），服务端不做兜底；进程异常终止后遗留的 pending 消息，需在同一会话后续再触发 commit 才会归档与抽取。
 - **tool output 外置**：服务端 `tool_output_externalization.enabled=True`、`threshold_chars=20000`（`server/config.py:257-258`）——客户端普遍把 `captureToolMaxChars` 设到 1000000 仅作兜底，真正的截断/外置在服务端做，externalized 结果通过 `tool_output_ref` 引用（openclaw 有三个专门工具读它）。
 - **服务端召回相关熔断**：`retrieval.recall_intent_timeout_s=5.0`（query expansion）、`recall_rewrite_timeout_s=30.0`（digest，[§3.2.5](#_3-2-5-召回再摘要)）、`enable_intent=true`。客户端超时预算按这两条推导（[§3.2.4](#_3-2-4-超时与预算链)）。

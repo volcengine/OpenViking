@@ -50,10 +50,10 @@ Session API 按认证用户作用域访问会话，并返回 canonical user sess
 
 | 字段 | 类型 | 默认值 | 上限 | 说明 |
 |------|------|--------|------|------|
-| `pending_token_threshold` | int | 10000 | 50000 | 当未提交的 pending token 超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
-| `message_count_threshold` | int | 50 | 500 | 当未提交的 live message 数量超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
+| `pending_token_threshold` | int | 150000 | 1000000 | 当未提交的 pending token 超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
+| `message_count_threshold` | int | 100 | 1000 | 当未提交的 live message 数量超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
 | `idle_timeout_seconds` | int | 86400 | 604800 | 有未提交内容的 session 在空闲这么多秒后，进入服务端 idle scheduler 的处理范围。idle 触发的 commit 会归档全部积压消息，并忽略 `keep_recent_count`。 |
-| `keep_recent_count` | int | 2 | 500 | 阈值触发的自动 commit 后保留（不归档）的最近 live message 数量。idle 超时触发的 commit 会忽略该值并归档所有消息。 |
+| `keep_recent_count` | int | 0 | 500 | 阈值触发的自动 commit 后保留（不归档）的最近 live message 数量。idle 超时触发的 commit 会忽略该值并归档所有消息。 |
 | `min_commit_interval_seconds` | int | 0 | 604800 | 两次自动 commit 之间的最小间隔秒数（节流）。 |
 
 所有字段最小值为 `0`，会被 clamp 到 `[0, 上限]`。未知字段会以 `InvalidArgumentError` 拒绝。
@@ -387,10 +387,10 @@ ov session get a1b2c3d4
     },
     "pending_tokens": 450,
     "auto_commit_policy": {
-      "pending_token_threshold": 10000,
-      "message_count_threshold": 50,
+      "pending_token_threshold": 150000,
+      "message_count_threshold": 100,
       "idle_timeout_seconds": 86400,
-      "keep_recent_count": 2,
+      "keep_recent_count": 0,
       "min_commit_interval_seconds": 0
     }
   }
@@ -510,10 +510,10 @@ ov session config set a1b2c3d4 --no-auto-commit
   "result": {
     "session_id": "a1b2c3d4",
     "auto_commit_policy": {
-      "pending_token_threshold": 10000,
+      "pending_token_threshold": 150000,
       "message_count_threshold": 25,
       "idle_timeout_seconds": 86400,
-      "keep_recent_count": 2,
+      "keep_recent_count": 0,
       "min_commit_interval_seconds": 0
     },
     "memory_extraction_config": {
