@@ -509,6 +509,7 @@ JSON 输出 - 错误：
 | POST | `/bot/v1/feedback` | 提交 VikingBot 回答反馈 |
 | POST | `/bot/v1/compile` | 启动 Skill 驱动的 Compile 任务 |
 | GET | `/bot/v1/compile/{task_id}` | 获取 Compile 任务状态 |
+| POST | `/bot/v1/compile/{task_id}/cancel` | 取消 Compile 任务 |
 
 ---
 

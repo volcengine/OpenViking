@@ -207,6 +207,12 @@ curl http://localhost:1933/bot/v1/compile/cmp_01abc \
   -H "X-API-Key: your-key"
 ```
 
+CLI 可直接使用 Compile 返回的 `cmp_...` task ID：
+
+```bash
+ov task status cmp_01abc
+```
+
 **响应示例**
 
 ```json
@@ -234,6 +240,27 @@ curl http://localhost:1933/bot/v1/compile/cmp_01abc \
 }
 ```
 
+### compile_cancel()
+
+按 task ID 请求协作式停止 Compile 任务。任务会先进入 `cancelling`，待当前进程内工作和清理完成后进入 `cancelled`；已经完成的写入不会回滚。重复取消已经 `cancelled` 的任务是幂等的，任务不存在或属于其他 principal 时返回 `404`。
+
+**CLI**
+
+```bash
+ov task cancel cmp_01abc
+```
+
+**HTTP API**
+
+```http
+POST /bot/v1/compile/{task_id}/cancel
+```
+
+```bash
+curl -X POST http://localhost:1933/bot/v1/compile/cmp_01abc/cancel \
+  -H "X-API-Key: your-key"
+```
+
 任务生命周期如下：
 
 | Status | 常见 Stage |
@@ -241,8 +268,10 @@ curl http://localhost:1933/bot/v1/compile/cmp_01abc \
 | `accepted` | `queued` |
 | `running` | `loading_skill`、`collecting_context`、`agent`、`rendering` |
 | `committing` | `writing`、`refreshing`、`salvaging` |
+| `cancelling` | 收敛当前进程内工作和清理资源 |
 | `completed` | `completed`、`salvaged` |
 | `failed` | 失败发生时的 Stage；响应包含 `error.code` 和 `error.message` |
+| `cancelled` | `cancelled` |
 
 ### feedback()
 

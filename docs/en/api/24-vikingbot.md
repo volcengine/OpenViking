@@ -210,6 +210,12 @@ curl http://localhost:1933/bot/v1/compile/cmp_01abc \
   -H "X-API-Key: your-key"
 ```
 
+The CLI accepts the `cmp_...` task ID returned by Compile directly:
+
+```bash
+ov task status cmp_01abc
+```
+
 **Response Example**
 
 ```json
@@ -237,6 +243,27 @@ curl http://localhost:1933/bot/v1/compile/cmp_01abc \
 }
 ```
 
+### compile_cancel()
+
+Request cooperative cancellation of a Compile task by task ID. The task first enters `cancelling`, then becomes `cancelled` after its in-process work and cleanup settle. Writes that already completed are not rolled back. Repeated cancellation of a `cancelled` task is idempotent; a missing task or a task owned by another principal returns `404`.
+
+**CLI**
+
+```bash
+ov task cancel cmp_01abc
+```
+
+**HTTP API**
+
+```http
+POST /bot/v1/compile/{task_id}/cancel
+```
+
+```bash
+curl -X POST http://localhost:1933/bot/v1/compile/cmp_01abc/cancel \
+  -H "X-API-Key: your-key"
+```
+
 Task lifecycle values are:
 
 | Status | Typical stages |
@@ -244,8 +271,10 @@ Task lifecycle values are:
 | `accepted` | `queued` |
 | `running` | `loading_skill`, `collecting_context`, `agent`, `rendering` |
 | `committing` | `writing`, `refreshing`, `salvaging` |
+| `cancelling` | Settling in-process work and resource cleanup |
 | `completed` | `completed`, `salvaged` |
 | `failed` | Stage where the failure occurred; the response contains `error.code` and `error.message` |
+| `cancelled` | `cancelled` |
 
 ### feedback()
 

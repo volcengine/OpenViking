@@ -514,6 +514,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/bot/v1/feedback` | Submit feedback for a VikingBot answer |
 | POST | `/bot/v1/compile` | Start a Skill-driven Compile task |
 | GET | `/bot/v1/compile/{task_id}` | Get Compile task status |
+| POST | `/bot/v1/compile/{task_id}/cancel` | Cancel a Compile task |
 
 ---
 

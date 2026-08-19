@@ -146,7 +146,7 @@ Compile 只增加任务编排和领域规则，基础能力使用现有实现：
 | Agent | `AgentLoop._run_agent_loop()`、`ToolRegistry`、`register_default_tools()` | structured wrapper、scope guard 和 `submit_wiki_bundle` |
 | 内容读取 | `openviking_list/search/grep/glob/multi_read` | 限定允许的 URI roots；不增加同义读取工具 |
 | Link 与 metadata | `WikiLink`、`StoredLink`、`LinkRenderer`；Memory 目标额外复用 `MemoryFileUtils`、`next_memory_version()` 和 resource refs helper | OKF path、citation 和严格校验 |
-| 写入与刷新 | `ContentWriteCoordinator` 的校验/refresh helper、`LockManager`、`VikingFS.write_file(..., lock_handle=...)`、`RequestWaitTracker` | batch precondition 和多文件编排 |
+| 写入与刷新 | `ContentWriteCoordinator` 的校验/refresh helper、`LockManager`、`VikingFS.write_file(..., lock_handle=...)`、`RequestWaitTracker` | batch mode 和多文件编排 |
 
 新增能力保持在以下边界内：
 
@@ -310,13 +310,13 @@ Compile 不注册另一组 source tools。它在现有工具执行前增加 requ
 
 ### 6.3 目标上下文
 
-运行 Agent 前，VikingBot 使用现有 list/tree/read API 建立目标 Wiki catalog：
+运行 Agent 前，VikingBot 使用现有 list/tree/read API 将 Resource 目标完整物化到任务工作区：
 
 ```text
-page_id, uri, title, type, summary
+__compile_staging__/target_checkout/<target-relative-path>
 ```
 
-catalog 只保存目录项和 L0/L1 可得的轻量信息，不为了计算 hash 或 outgoing links 预读全部目标正文。Agent 可以按需读取已有页面，用于判断创建、更新或复用；只有最终草稿选中的 `update_uri` 会在渲染前读取 raw content 并计算 precondition hash。未被本次结果引用的已有页面保持不变。
+Agent 直接在该目录内新增、修改和重构最终文件，不需要声明 create/update，也不维护 target manifest 或 baseline hash。提交时 Compile 扫描完整 checkout、执行确定性 Wiki 内链处理，再将全部文件以 `upsert` 写回；checkout 中没有出现的目标文件不会被删除。
 
 ### 6.4 工具集合
 
@@ -406,7 +406,7 @@ class WikiBundleDraft(BaseModel):
 - `page_id` 在 bundle 内唯一；
 - `update_uri` 必须来自目标 catalog；
 - update 保持原 URI，不能通过 `path_hint` rename 或 move；create 的 `path_hint` 只能是 `to` 下的相对 Markdown 路径；
-- create 的最终 canonical path 不能与 catalog 中的已有文件或本 bundle 的其他页面冲突；并发创建同一路径仍由 batch precondition 拦截；
+- create 的最终 canonical path 不能与 catalog 中的已有文件或本 bundle 的其他页面冲突；
 - link 的 `f/t` 必须非空、非 self-link，并引用 bundle 中的页面；
 - `pages` 非空时，每个页面至少引用一个 `source_id`，且必须来自本次请求的来源描述；
 - Agent 不提供最终文件 URI，也不能直接写入 OpenViking。
@@ -424,7 +424,7 @@ VikingBot renderer 将 `WikiBundleDraft` 转成最终写入计划。Compile 新�
 3. 使用 `LinkRenderer` 已有的 anchor 查找、竞争处理和 escaping 生成相对 WikiLink，并补充 canonical target-root 相对路径与 Markdown protected span 两个纯 helper。
 4. 确定性生成 OKF v0.1 concept frontmatter、目标路径和 citation section，Agent 不直接生成 YAML。
 5. Memory 目标把 resolved `StoredLink` 合并到 `links/backlinks`、复用 resource refs helper，并用 `MemoryFileUtils` round-trip metadata；Resource 目标只存储 OKF Markdown。
-6. 对比最终 raw bytes，区分 created、updated 和 unchanged，并为更新绑定渲染前读取的 `content_hash`。
+6. Resource checkout 直接形成最终写入集合；服务端以 `upsert` 写回，不在 Compile 层计算 hash 或区分 create/update。
 
 ### 8.1 OKF 与 metadata
 
@@ -453,8 +453,6 @@ bundle link 的两端必须是本次提交的页面。`match_text` 必须实际�
 
 renderer 把每页 `source_ids` 映射为用户传入的 canonical source directory URI，并在可见正文末尾合并成唯一的顶层 `# Citations`。已有 citation 先保留，再按 canonical target 去重追加本次来源；最终统一渲染为连续的 `[n] [label](target)` 列表，来源目录使用 canonical URI 的末级目录名作为 label，无法取得时回退为 `Source src_n`。代码块中的同名标题不视为 citation section。Agent 也可以在正文中引用来源范围内的具体文件 URI，这些 Markdown citation 的 label 和 target 会被保留并参与去重。`viking://` 是 OpenViking 对 citation target 的内部扩展，其他 OKF consumer 未必能够解析该 scheme。
 
-渲染完成后，以最终 UTF-8 bytes 的 SHA-256 作为 hash。candidate 与当前 raw bytes 完全一致时归入 `unchanged` 且不提交 write operation。
-
 写入使用通用内容接口。它是现有内容写入能力的批量入口，不实现新的存储或索引协议：
 
 ```http
@@ -470,35 +468,29 @@ POST /api/v1/content/batch-write
     {
       "uri": "viking://resources/团队知识库/成本优化月度进展.md",
       "content": "...",
-      "precondition": {"kind": "create_if_absent"}
+      "mode": "upsert"
     },
     {
       "uri": "viking://resources/团队知识库/既有页面.md",
       "content": "...",
-      "precondition": {
-        "kind": "replace_if_hash",
-        "base_hash": "sha256:..."
-      }
+      "mode": "upsert"
     }
   ]
 }
 ```
 
-`content` 是 renderer 生成的最终 UTF-8 存储内容，不是对已有正文执行 append/replace 的编辑指令。接口只接受 create/replace，不支持 delete；请求限制 operation 数量、单文件字节数和总字节数。
+`content` 是 checkout 中的最终 UTF-8 存储内容。接口支持 `replace`、`append`、`create` 和 `upsert`，不支持 delete；请求限制 operation 数量、单文件字节数和总字节数。
 
 Batch write 负责：
 
 - 要求 `root_uri` 是已存在的可写目录；canonicalize 所有 URI，拒绝空 operations、重复 URI、跨 context type 以及 root 之外的目标，并按 canonical URI 稳定排序；
 - 校验用户对每个目标 URI 的写权限；
 - 保证目标 URI 位于 `root_uri` 下；
-- 在目标 tree lock 内读取当前 raw bytes 并检查所有 precondition；
-- 若当前 hash 已等于本 operation 的最终 content hash，记为 unchanged 并加入 `refresh_uris`，再检查其余 operation；因此同一请求在响应丢失或前次写入后 refresh 失败时可以安全重试，不需要单独的 idempotency-key store；
-- 完成全部底层写入后，以 `refresh_uris = desired-content matches + changed_uris` 刷新语义和向量索引；Bot 正常的全量 unchanged 重跑不会调用 batch-write，因此不会产生多余 refresh；
+- 在目标 tree lock 内按每个 operation 的 mode 调用与单文件 `write()` 相同的底层写入逻辑；`upsert` 对已有文件执行 replace，对缺失文件执行 create；
+- 完成全部底层写入后，以整批 `changed_uris` 刷新语义和向量索引；
 - resource/skill 按 refresh root 合并变更，每个 root 只提交一个包含全部变更的 `SemanticMsg`，由现有 semantic pipeline 自底向上更新 `.abstract.md` 和 `.overview.md`；
 - memory 为变更文件分别更新 embedding，但每个受影响目录只调用一次 `refresh_schema_overview()`；
 - 将本批次产生的 refresh 工作绑定到同一个 `RequestWaitTracker`，当 `wait=true` 时统一等待一次。
-
-hash 定义为最终 raw UTF-8 bytes 的小写 SHA-256，API 表示为 `sha256:<hex>`。`create_if_absent` 要求文件不存在；`replace_if_hash` 要求当前 hash 等于 `base_hash`。任一非 unchanged operation 的 precondition 不满足时，在本次调用发生任何新写入前返回标准 `CONFLICT`；若同一重试请求中已有 desired-content match，释放 tree lock 后仍为这些 URI 补做 refresh。VikingBot 将该冲突映射为 task error `WRITE_CONFLICT`。
 
 实现调用链：
 
@@ -506,9 +498,9 @@ hash 定义为最终 raw UTF-8 bytes 的小写 SHA-256，API 表示为 `sha256:<
 content.batch-write router
   -> validate_viking_uri / canonicalize_uri / existing target-shape check
   -> LockManager target tree lease
-  -> read current raw bytes; classify unchanged; validate all remaining preconditions
-  -> for each changed operation: VikingFS.write_file(..., lock_handle=lease.handle)
-  -> collect changed_uris / refresh_uris and group them by refresh scope
+  -> resolve each operation mode (`upsert` -> `replace` or `create`)
+  -> for each operation: shared write-in-place helper
+  -> collect changed_uris and group them by refresh scope
   -> release target tree lease
   -> register one request in RequestWaitTracker
   -> existing ContentWriteCoordinator / MemoryUpdater refresh helpers
@@ -519,7 +511,7 @@ Batch coordinator 放在现有 `openviking/storage/content_write.py` 附近，�
 
 Memory 现有 `refresh_schema_overview()` / `refresh_file_embedding()` 会记录 warning 后吞掉部分异常。Batch 路径需要为共享 helper 增加保持旧调用行为的 `strict=False` 默认值，并以 `strict=True` 调用；overview、semantic 或 embedding 任一登记工作失败，或 `wait=true` 得到 failed queue status 时，batch 返回失败，Compile task 不能标记 completed。
 
-该接口不是跨文件原子存储事务：precondition conflict 不会产生本次调用的部分写入，但底层 I/O 在中途失败时可能已有少量文件可见。错误路径必须释放 tree lock，并为已成功写入的 `changed_uris` 触发一次 refresh。相同请求可依据 content hash 跳过完整落盘的文件并继续；若底层留下了不等于最终 content 的残缺文件，重试必须返回冲突，不能静默覆盖。
+该接口不是跨文件原子存储事务：底层 I/O 在中途失败时可能已有少量文件可见。错误路径必须释放 tree lock，并为已成功写入的 `changed_uris` 触发一次 refresh；调用方可重试同一组 `upsert` operation。
 
 成功响应使用 OpenViking 标准 envelope：
 

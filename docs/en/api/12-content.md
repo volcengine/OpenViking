@@ -328,7 +328,7 @@ openviking write viking://resources/docs/api.md \
 
 ### batch_write()
 
-Apply a preconditioned set of file writes below one Resource or Memory directory, then refresh the affected semantic and vector indexes as one request.
+Write multiple files below one Resource or Memory directory, then refresh the affected semantic and vector indexes once after all writes finish.
 
 **Parameters**
 
@@ -347,18 +347,17 @@ Each operation contains:
 | `uri` | string | Yes | Target file URI below `root_uri` |
 | `content` | string | Conditional | UTF-8 text; exactly one of `content` and `content_base64` is required |
 | `content_base64` | string | Conditional | Base64-encoded bytes; not supported for Memory targets |
-| `precondition.kind` | string | Yes | `create_if_absent` or `replace_if_hash` |
-| `precondition.base_hash` | string | Conditional | Required for `replace_if_hash`, formatted as `sha256:<lowercase-hex>` |
+| `mode` | string | No | `replace` (default), `append`, `create`, or `upsert` |
 
 **Notes**
 
 - A request supports at most 256 operations, 8 MiB per file, and 16 MiB total.
 - All targets must be files below `root_uri`, use the same context type, and have unique canonical URIs.
 - Resource targets may use any safe file extension; Memory targets retain the text extension allowlist and do not accept binary content.
-- Every non-idempotent precondition is checked under the target tree lock before the first new write. A mismatch returns `409 Conflict`.
-- If a target already contains the requested bytes, it is reported as `unchanged`; retrying the same request can therefore repeat a failed refresh without rewriting matching content.
-- The API prevents precondition conflicts from causing new writes, but an underlying I/O failure can still leave writes completed earlier in the batch visible.
-- Existing `.abstract.md` and `.overview.md` bodies may be updated with `replace_if_hash`. OpenViking preserves and validates protected OKF metadata, rejects `create_if_absent` for sidecars, and rebuilds only the directory's existing L0/L1 vectors for these operations.
+- `replace`, `append`, and `create` match `write()` semantics. `upsert` replaces an existing file or creates a missing file.
+- The batch holds one target tree lock while writing. Semantic processing starts only after every file is written and the lock is released, so `.overview.md` and `.abstract.md` are refreshed once for the batch.
+- An underlying I/O failure can still leave writes completed earlier in the batch visible.
+- Existing `.abstract.md` and `.overview.md` bodies may be replaced or appended. OpenViking preserves and validates protected OKF metadata and rebuilds only the directory's existing L0/L1 vectors for these operations.
 
 **Python SDK**
 
@@ -369,15 +368,12 @@ result = client.batch_write(
         {
             "uri": "viking://resources/wiki/new.md",
             "content": "# New page\n",
-            "precondition": {"kind": "create_if_absent"},
+            "mode": "upsert",
         },
         {
             "uri": "viking://resources/wiki/existing.md",
             "content": "# Updated page\n",
-            "precondition": {
-                "kind": "replace_if_hash",
-                "base_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-            },
+            "mode": "upsert",
         },
     ],
     wait=True,
@@ -400,7 +396,7 @@ curl -X POST http://localhost:1933/api/v1/content/batch-write \
       {
         "uri": "viking://resources/wiki/new.md",
         "content": "# New page\n",
-        "precondition": {"kind": "create_if_absent"}
+        "mode": "upsert"
       }
     ],
     "wait": true
