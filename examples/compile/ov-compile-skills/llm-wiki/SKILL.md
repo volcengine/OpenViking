@@ -15,8 +15,9 @@ supports.
 Follow the core LLM Wiki pattern: keep raw sources immutable, compile their knowledge
 into persistent Markdown pages, integrate new evidence into existing knowledge, maintain
 cross-references and contradictions, and keep `index.md` as the navigation entry point.
-OpenViking Compile owns the schema instructions, rendered frontmatter, writes, and task
-history, so do not generate `AGENTS.md`, `CLAUDE.md`, or a duplicate operation log.
+OpenViking Compile owns writes, derived semantic sidecars, and task history, so do not
+generate `.overview.md`, `.abstract.md`, `AGENTS.md`, `CLAUDE.md`, or a duplicate
+operation log.
 
 Keep sources read-only. Follow explicit instructions in the task reason for scope,
 audience, language, and depth. Otherwise use the dominant language of the sources and
@@ -116,6 +117,17 @@ For every candidate page, decide:
 Match existing pages by identity and meaning before title or path. Update the canonical
 page instead of creating a renamed or synonymous duplicate.
 
+Write every new knowledge page under its stable type directory:
+
+| Page type | New page path |
+| --- | --- |
+| `entity` | `entity/<title>.md` |
+| `concept` | `concept/<title>.md` |
+| `method` | `method/<title>.md` |
+| `comparison` | `comparison/<title>.md` |
+| `analysis` | `analysis/<title>.md` |
+| `summary` | `summary/<title>.md` |
+
 ### Maintain the navigation index
 
 Always include the root `index.md` in the final Wiki update. Create it with path
@@ -136,6 +148,23 @@ Do not create a separate overview merely to provide navigation; that is the inde
 job. File a durable cross-source synthesis as `analysis`, not as a second catalog.
 
 ### Write atomic, evidence-grounded pages
+
+Write every Wiki page as a complete UTF-8 OKF Markdown file. Preserve valid frontmatter
+when updating an existing page. For a new page, begin with YAML frontmatter in this
+shape, using the page's actual values:
+
+```yaml
+---
+type: concept
+title: Canonical page title
+description: One factual sentence describing the page's retrieval purpose.
+tags: [small, useful, tag-set]
+---
+```
+
+Use `type: index` for the root `index.md`; otherwise use the selected knowledge-page
+type. Keep `description` on one line. Tags are optional. Follow the frontmatter with one
+H1 matching the title. Do not write OpenViking-generated semantic sidecars.
 
 Open with one or two sentences that identify or define the subject, set its scope, and
 say why it matters in this knowledge base. Put canonical terminology first and record
@@ -190,6 +219,17 @@ the sources.
 
 - Place an exact source URI, repository-relative path, or supplied link near the claim
   it supports. Add supplied line or section anchors when available; never invent them.
+- Put standalone page-level sources under exactly one level-2 heading in the output
+  language, such as `## 来源` or `## Sources`, and list the source links below it as
+  Markdown bullets. When updating a page, merge sources into that existing section and
+  deduplicate links by normalized target; never append a second source heading.
+- Give every source link concise, human-readable link text while preserving the exact
+  URI, URL, or path as its target. Prefer the supplied source title or name; otherwise
+  derive a readable label from the decoded final path segment. For example, write
+  `[Readable source title](viking://resources/collection/source-file)`.
+  Do not expose a full URI or URL as visible link text when a readable title is known.
+  Never use an unheaded `来源：...` or `Source: ...` line. Keep claim-specific evidence
+  links inline, and do not repeat the same link in both places.
 - Never invent a URI, URL, path, identifier, symbol, date, number, quotation, command,
   causal explanation, or relationship.
 - Mark an interpretation as an inference and name its evidence. State unknowns plainly.
@@ -207,18 +247,6 @@ and leave unrelated pages untouched.
 For time-sensitive knowledge, state which period or version a claim describes. When a
 subject evolves substantially, explain the transition or create distinct, clearly
 qualified subjects rather than flattening incompatible states.
-
-### Link related pages
-
-Link pages only when the connection improves retrieval or understanding. Ensure the
-source page names the target with clear, verbatim anchor text so Compile can render the
-link. Use only supported links between substantive pages, and do not add links merely to
-increase graph density.
-
-Keep `index.md` as the global entry point and use page-to-page links for semantic
-navigation. Express the meaning of a connection in the surrounding prose. Leave the
-structured link type as `related_to` unless the sources establish a more specific
-relationship and the target uses typed links.
 
 ## Quality gate
 
@@ -240,4 +268,7 @@ Before finishing, verify that:
 - links improve navigation, important pages are connected when evidence permits, and no
   unsupported relationship was added;
 - the result is a Wiki, not a source-by-source digest or a generated documentation site;
-- page bodies contain no YAML frontmatter because Compile supplies it.
+- every Wiki file has valid OKF YAML frontmatter with non-empty `type`, `title`, and
+  one-line `description`, and the root index uses `type: index`.
+- each frontmatter key, H1, singleton section such as Sources, and identical list item
+  appears only once; merge duplicates instead of preserving or appending them.
