@@ -881,10 +881,20 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Generate or update one shared Skill package.",
             },
         ],
-        next_steps: &[HelpItem {
-            label: "ov tree <target-uri>",
-            description: "Inspect the generated output.",
-        }],
+        next_steps: &[
+            HelpItem {
+                label: "ov task status <cmp-task-id>",
+                description: "Inspect the Compile task.",
+            },
+            HelpItem {
+                label: "ov task cancel <cmp-task-id>",
+                description: "Cancel the Compile task.",
+            },
+            HelpItem {
+                label: "ov tree <target-uri>",
+                description: "Inspect the generated output.",
+            },
+        ],
     },
     CommandHelpSpec {
         path: &["wait"],
@@ -918,7 +928,7 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             },
             HelpItem {
                 label: "ov task cancel <task-id>",
-                description: "Cancel one task.",
+                description: "Cancel one task, including a cmp_ Compile task.",
             },
         ],
         next_steps: &[HelpItem {

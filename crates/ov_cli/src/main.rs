@@ -1225,13 +1225,13 @@ fn legacy_upload_option_error(
 enum TaskCommands {
     /// Show status of a specific task
     Status {
-        /// Task ID returned by add-resource/add-skill
+        /// Task ID returned by an asynchronous command, including compile
         #[arg(value_name = "task-id")]
         task_id: String,
     },
     /// Cancel a task
     Cancel {
-        /// Task ID returned by add-resource/add-skill
+        /// Task ID returned by an asynchronous command, including compile
         #[arg(value_name = "task-id")]
         task_id: String,
     },

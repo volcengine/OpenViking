@@ -63,6 +63,14 @@ pub async fn run(
                     500,
                 ));
             }
+            "cancelled" => {
+                return Err(Error::api_response(
+                    Some("CANCELLED".into()),
+                    format!("Compile task {} was cancelled", accepted.task_id),
+                    None,
+                    409,
+                ));
+            }
             _ => {}
         }
 
