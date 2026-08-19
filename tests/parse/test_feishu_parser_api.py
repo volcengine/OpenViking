@@ -1142,6 +1142,7 @@ async def test_add_resource_processor_reports_zero_vectors(monkeypatch):
         update_stage=AsyncMock(),
         complete=AsyncMock(),
         fail=AsyncMock(),
+        get_task_auth=AsyncMock(return_value={}),
         wait_for_descendants=AsyncMock(),
     )
     monkeypatch.setattr(
