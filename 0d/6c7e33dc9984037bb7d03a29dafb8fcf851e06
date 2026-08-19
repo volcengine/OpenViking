@@ -1,0 +1,59 @@
+bot/tests/test_compile.py
+  s_a249c14ec7f94c::t_7c9848833b3ebb 17,42-46,128,131-132,150,234-248,400,408,415-417,437-438,442-551,600-601,778,810,813,831,889,907,917,920,924-1030,1378,1438-1447,1798,1815-1816,1843,1850,1950-1994,2022-2049,2245-2403,2429,2804-2806,2926,3235-3236,3248-3249,3411,3582-3612,3771-3780,3959-3961,4004-4006,4286-4335,4511-4516,4695,4921,4987,4989-4997,5015-5018,5080,5104,5106,5116-5117
+bot/tests/test_openapi_auth.py
+  s_23ec8715b0ffe7::t_4340474dd7c269 55,75-81,102-105
+bot/vikingbot/agent/loop.py
+  s_a249c14ec7f94c::t_6a6739ead7f22a 1817
+bot/vikingbot/agent/tools/compile.py
+  s_a249c14ec7f94c::t_0fd09a471316a7 6,27,32-33,118-123,183-303,538,540,544-545,548,552-553,680,682-684,789,860
+bot/vikingbot/compile/models.py
+  s_a249c14ec7f94c::t_a8d31f3a2bfa0a 18,22-23,33,82,105,110-111,134,178,224-232,279
+bot/vikingbot/compile/renderer.py
+  s_a249c14ec7f94c::t_2ece2377776582 28,34-38,40,54-58,76-80,83,180,203-213,215-333,341,362,440,479-481,550-554,570-571,573-584,587-589,594-604,606-613,643-670,705-707,712,715,717
+bot/vikingbot/compile/router.py
+  s_23ec8715b0ffe7::t_0270d476de1e3c 75-89
+bot/vikingbot/compile/service.py
+  s_a249c14ec7f94c::t_b38b4d01ff7ca9 35,44,56,93,96,99-101,171,175-200,315-369,440-475,535-538,540-558,644,649-650,874,939-941,944-948,953-959,963-969,979-980,996-997,999,1023,1026,1088-1089,1098-1137,1140,1142-1151,1168,1178,1185-1186,1307,1352-1395,1398,1405-1407,1409-1413,1424,1430,1435-1465,1511-1517,1522,1928-1930,1977,1987-1989,2000-2011,2013,2042,2056-2057,2076-2145,2265-2297,2310-2311,2353-2372,2387-2388,2390,2403-2414,2432,2440-2445,2448-2449,2451,2489-2502,2516-2517,2524-2533,2536,2540-2541,2549,2558
+bot/vikingbot/compile/store.py
+  s_23ec8715b0ffe7::t_001bbd074a4593 95-101
+openviking/server/routers/bot.py
+  s_23ec8715b0ffe7::t_9125b12a362486 245-276
+openviking/server/routers/content.py
+  s_a249c14ec7f94c::t_5c660198429aed 58,264
+openviking/service/fs_service.py
+  s_a249c14ec7f94c::t_bcaaf07a95e90b 710
+openviking/storage/content_write.py
+  s_a249c14ec7f94c::t_b606be67fa132d 170,172-175,197,208-212,218-222,224-227,235-255,289,302,428-437,442,894-897
+sdk/python/openviking_sdk/client.py
+  s_a249c14ec7f94c::t_e8ee699fd85dbb 1200
+tests/server/test_bot_proxy_auth.py
+  s_23ec8715b0ffe7::t_9d9524e48c295f 251-260,307-310,315,325-329
+tests/server/test_content_batch_write.py
+  s_a249c14ec7f94c::t_04d2a100c56841 9,94,117,131,138,143,174-175,187,203,214,229,245,270-271,274,281,283,287,305,310,321-323,376,388,393,409,432,445,462,467,473,492
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "0d6c7e33dc9984037bb7d03a29dafb8fcf851e06",
+  "prompts": {},
+  "sessions": {
+    "s_23ec8715b0ffe7": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a01958-2d58-7483-8ec5-7756001b2299",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    },
+    "s_a249c14ec7f94c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0182e-2d34-7fe1-b77f-15e7e06d5a16",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
