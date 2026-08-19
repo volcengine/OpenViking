@@ -64,3 +64,9 @@ def test_validate_viking_uri_supports_internal_and_operation_scopes():
     assert "user" in message
     assert "temp" not in message
     assert "queue" not in message
+
+    with pytest.raises(InvalidURIError, match="Invalid scope"):
+        validate_viking_uri(
+            "viking://invalid_scope/doc",
+            allowed_scopes={"invalid_scope"},
+        )

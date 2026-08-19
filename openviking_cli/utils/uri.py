@@ -7,7 +7,6 @@ All context objects in OpenViking are identified by URIs in the format:
 viking://<scope>/<path>
 """
 
-import re
 from typing import Dict, Optional
 
 
@@ -81,7 +80,8 @@ class VikingURI:
         # Parse scope
         scope = path.split("/")[0]
         if scope not in self.VISITABLE_SCOPES:
-            raise ValueError(f"Invalid scope '{scope}'")
+            scope_names = ", ".join(sorted(self.VISITABLE_SCOPES))
+            raise ValueError(f"Invalid scope '{scope}'. Must be one of: {scope_names}")
 
         return {
             "scheme": self.SCHEME,
