@@ -105,12 +105,13 @@ class ContentWriteCoordinator:
     ) -> Dict[str, Any]:
         self._validate_mode(mode)
         processing_mode = normalize_processing_mode(processing_mode)
-        self._validate_target_uri(uri)
-        self._viking_fs._ensure_mutable_access(uri, ctx)
+        normalized_uri = self._validate_uri_path(uri, field_name="uri")
+        self._validate_target_uri(normalized_uri)
+        self._viking_fs._ensure_mutable_access(normalized_uri, ctx)
 
         if mode == "create":
             return await self._create_and_write(
-                uri=uri,
+                uri=normalized_uri,
                 content=content,
                 ctx=ctx,
                 wait=wait,
@@ -118,18 +119,22 @@ class ContentWriteCoordinator:
                 processing_mode=processing_mode,
             )
 
-        stat = await self._safe_stat(uri, ctx=ctx)
+        stat = await self._safe_stat(normalized_uri, ctx=ctx)
         if stat.get("isDir"):
-            raise InvalidArgumentError(f"write only supports existing files, got directory: {uri}")
+            raise InvalidArgumentError(
+                f"write only supports existing files, got directory: {normalized_uri}"
+            )
 
-        context_type = context_type_for_uri(uri)
-        root_uri = await self._resolve_root_uri(uri, ctx=ctx, anchor_to_parent=True)
+        context_type = context_type_for_uri(normalized_uri)
+        root_uri = await self._resolve_root_uri(
+            normalized_uri, ctx=ctx, anchor_to_parent=True
+        )
         written_bytes = len(content.encode("utf-8"))
         telemetry_id = get_current_telemetry().telemetry_id
 
         if context_type == "memory" and not is_semantic_sidecar_uri(normalized_uri):
             return await self._write_memory_with_refresh(
-                uri=uri,
+                uri=normalized_uri,
                 root_uri=root_uri,
                 content=content,
                 mode=mode,
@@ -142,7 +147,7 @@ class ContentWriteCoordinator:
             )
 
         return await self._write_direct_with_refresh(
-            uri=uri,
+            uri=normalized_uri,
             root_uri=root_uri,
             content=content,
             mode=mode,
