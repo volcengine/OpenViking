@@ -149,6 +149,15 @@ def test_request_boundary_expands_current_user_content_roots():
         )
         == "viking://user/alice/resources"
     )
+    assert (
+        validate_content_target_uri(
+            "viking://resources/docs/",
+            ctx,
+            kind="resource",
+            field_name="parent",
+        )
+        == "viking://resources/docs"
+    )
     assert resolve_uri("viking://user/alice/resources").uri == "viking://user/alice/resources"
     collision_ctx = RequestContext(
         user=UserIdentifier(account_id="acct", user_id="resources"),

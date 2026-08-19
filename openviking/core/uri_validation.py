@@ -129,26 +129,6 @@ def validate_content_target_uri(
     raise InvalidURIError(raw_uri, f"{field_name} must target {kind} content")
 
 
-def validate_optional_content_target_uri(
-    uri: str | None,
-    ctx,
-    *,
-    kind: str,
-    field_name: str = "uri",
-) -> str:
-    if uri is None:
-        return ""
-    raw_uri = uri.strip() if isinstance(uri, str) else ""
-    if not raw_uri:
-        return ""
-    return validate_content_target_uri(
-        raw_uri,
-        ctx,
-        kind=kind,
-        field_name=field_name,
-    )
-
-
 def _matches_content_kind(uri: str, kind: str) -> bool:
     if kind not in {"resource", "skill"}:
         raise ValueError(f"Unsupported content target kind: {kind}")

@@ -32,7 +32,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import (
-    validate_optional_content_target_uri,
+    validate_content_target_uri,
     validate_request_viking_uri,
 )
 from openviking.parse.mode import ParseMode, normalize_parse_mode
@@ -792,18 +792,17 @@ async def add_resource(
     ctx = _get_ctx()
 
     try:
-        to = validate_optional_content_target_uri(
-            resolve_path_variables(to) if to else None,
-            ctx,
-            kind="resource",
-            field_name="to",
-        )
-        parent = validate_optional_content_target_uri(
-            resolve_path_variables(parent) if parent else None,
-            ctx,
-            kind="resource",
-            field_name="parent",
-        )
+        to = resolve_path_variables(to).strip() if to else ""
+        if to:
+            to = validate_content_target_uri(to, ctx, kind="resource", field_name="to")
+        parent = resolve_path_variables(parent).strip() if parent else ""
+        if parent:
+            parent = validate_content_target_uri(
+                parent,
+                ctx,
+                kind="resource",
+                field_name="parent",
+            )
     except (InvalidArgumentError, PermissionDeniedError) as exc:
         return f"Error: {exc}"
 
