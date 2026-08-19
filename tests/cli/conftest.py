@@ -630,20 +630,6 @@ def ensure_resources_dir():
 
 
 @pytest.fixture(scope="session")
-def ensure_user_skills_dir():
-    uri = "viking://user/skills"
-    r = ov_mkdir(uri)
-    if r["exit_code"] == 0 or "already exists" in (r.get("stderr") or "").lower():
-        return
-    skip_if_auth_error(r)
-    stat_r = ov(["stat", uri, "-o", "json"], timeout=120)
-    if stat_r["exit_code"] == 0:
-        return
-    skip_if_auth_error(stat_r)
-    pytest.fail(f"mkdir {uri} failed after retries: {r['stderr'][:300]}")
-
-
-@pytest.fixture(scope="session")
 def test_dir_uri(ensure_resources_dir):
     uri = f"viking://resources/cli_test_{uuid.uuid4().hex[:8]}"
     r = ov_mkdir(uri)
