@@ -19,8 +19,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import re
 import time
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -46,6 +48,44 @@ from openviking_cli.exceptions import InternalError, InvalidArgumentError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+_TOS_BUCKET_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])$")
+
+
+def _validate_tos_uri(value: Any, field: str) -> None:
+    """Validate a Connector TOS URI without exposing it in client errors."""
+    error = InvalidArgumentError(f"{field} must be a valid TOS URI.")
+    if (
+        not isinstance(value, str)
+        or value != value.strip()
+        or not value.startswith("tos://")
+        or any(
+            char in "?#%" or ord(char) < 0x20 or ord(char) == 0x7F
+            for char in value
+        )
+    ):
+        raise error
+
+    try:
+        parsed = urlsplit(value)
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError:
+        raise error from None
+    if (
+        parsed.scheme != "tos"
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is not None
+        or not hostname
+        or hostname != parsed.netloc
+        or not _TOS_BUCKET_PATTERN.fullmatch(hostname)
+        or not parsed.path.startswith("/")
+        or parsed.path.startswith("//")
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise error
 
 
 class ConnectorDelegate:
@@ -411,6 +451,8 @@ class ConnectorDelegate:
         if resolved is None:
             raise InvalidArgumentError(f"'{path}' does not match any Connector source type.")
         add_type, _ = resolved
+        if add_type == "tos":
+            _validate_tos_uri(path, "path")
 
         task_resource_id = to or ""
         if not task_resource_id:
@@ -477,27 +519,19 @@ class ConnectorDelegate:
                 tos_path = source_path
             else:
                 tos_prefix = tos_args["tos_prefix"]
-                if (
-                    not isinstance(tos_prefix, list)
-                    or not tos_prefix
-                    or any(
-                        detect_connector_add_type(source) != ("tos", True)
-                        or not source[len("tos://") :].strip()
-                        for source in tos_prefix
-                    )
-                ):
+                if not isinstance(tos_prefix, list) or not tos_prefix:
                     raise InvalidArgumentError(
                         "args.tos_prefix must be a non-empty list of TOS URIs."
                     )
+                for index, source in enumerate(tos_prefix):
+                    _validate_tos_uri(source, f"args.tos_prefix[{index}]")
                 if tos_prefix[0] != path:
                     raise InvalidArgumentError("path must equal the first item in args.tos_prefix.")
                 exclude = tos_args.get("exclude", [])
-                if not isinstance(exclude, list) or any(
-                    detect_connector_add_type(source) != ("tos", True)
-                    or not source[len("tos://") :].strip()
-                    for source in exclude
-                ):
+                if not isinstance(exclude, list):
                     raise InvalidArgumentError("args.exclude must be a list of TOS URIs.")
+                for index, source in enumerate(exclude):
+                    _validate_tos_uri(source, f"args.exclude[{index}]")
                 param_config = {"tos_prefix": tos_prefix}
                 if exclude:
                     param_config["exclude"] = exclude

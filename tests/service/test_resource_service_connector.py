@@ -576,6 +576,62 @@ async def test_add_resource_rejects_invalid_multiple_tos_sources(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "args", "message"),
+    [
+        ("tos://bucket-a", {}, "path"),
+        ("tos://bucket-a/docs?version=1", {}, "path"),
+        ("tos://Bucket-a/docs", {}, "path"),
+        ("tos://bucket-a:443/docs", {}, "path"),
+        ("tos://user@bucket-a/docs", {}, "path"),
+        ("tos://bucket-a/docs%2Fv1", {}, "path"),
+        ("tos://bucket-a//docs", {}, "path"),
+        ("tos://bucket-a/a\x00b", {}, "path"),
+        ("tos://bucket-a/a\x7fb", {}, "path"),
+        (
+            "tos://bucket-a/docs/",
+            {
+                "tos_prefix": [
+                    "tos://bucket-a/docs/",
+                    "tos://bucket-b/manual?version=1",
+                ]
+            },
+            r"args\.tos_prefix\[1\]",
+        ),
+        (
+            "tos://bucket-a/docs/",
+            {
+                "tos_prefix": ["tos://bucket-a/docs/"],
+                "exclude": ["tos://bucket-a/private#latest"],
+            },
+            r"args\.exclude\[0\]",
+        ),
+    ],
+)
+async def test_add_resource_rejects_invalid_tos_uri_before_connector_call(
+    monkeypatch,
+    connector_config,
+    ctx,
+    service,
+    path,
+    args,
+    message,
+):
+    connector_client_factory = Mock(side_effect=AssertionError("Connector must not be called"))
+    monkeypatch.setattr(connector_delegate_module, "ConnectorClient", connector_client_factory)
+
+    with pytest.raises(InvalidArgumentError, match=message):
+        await service.add_resource(
+            path=path,
+            ctx=ctx,
+            to="viking://resources/x/y",
+            args=args,
+        )
+
+    connector_client_factory.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_add_resource_rejects_top_level_and_tos_args_exclude(
     connector_config,
     ctx,
