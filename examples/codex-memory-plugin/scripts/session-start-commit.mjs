@@ -23,10 +23,9 @@
  *   "Recently-active" means lastUpdatedAt within ACTIVE_WINDOW_MS (default 2 min).
  *
  *   At the tail (regardless of which branch above ran), run an idle-TTL sweep:
- *   any state file (including the new session_id, but in practice it's just
- *   been created and is fresh) older than IDLE_TTL_MS (default 30 min) gets
- *   committed and cleared. This catches SIGTERM/Ctrl+C/`/exit` exits and
- *   crashes that left state files orphaned.
+ *   any live OV session state older than IDLE_TTL_MS (default 30 min) gets
+ *   committed while retaining its transcript cursor. This catches
+ *   SIGTERM/Ctrl+C/`/exit` exits and crashes that left sessions orphaned.
  *
  * Commit failure handling:
  *   On any /commit failure (OV unreachable, non-2xx, timeout) we DO NOT call
@@ -232,8 +231,8 @@ async function buildResumeArchiveContext(newSessionId) {
 }
 
 /**
- * Commit and clear a single state file. On commit failure, preserve state
- * (don't call clearState) so the next sweep retries.
+ * Commit a live OV session and preserve its transcript cursor. On commit
+ * failure, keep the live session id so the next sweep retries.
  *
  * Returns { committed: bool, ovSessionId: string|null }.
  */
@@ -263,7 +262,8 @@ async function commitAndClear(state, reason) {
       status: commit.result?.status,
       trace_id: traceId || undefined,
     });
-    await clearState(state.codexSessionId);
+    state.ovSessionId = null;
+    await saveState(state);
     return { committed: true, ovSessionId, traceId };
   }
   // No OV session attached — nothing to commit on the server, but the local
@@ -364,7 +364,7 @@ async function main() {
   // Active-window heuristic (DESIGN.md §3)
   // -------------------------------------------------------------------------
   const otherStates = states.filter(
-    (s) => s?.codexSessionId && s.codexSessionId !== newSessionId,
+    (s) => s?.codexSessionId && s.codexSessionId !== newSessionId && s.ovSessionId,
   );
 
   const recentlyActive = otherStates.filter(
@@ -412,6 +412,7 @@ async function main() {
 
   for (const s of postHeuristic) {
     if (!s?.codexSessionId) continue;
+    if (!s.ovSessionId) continue;
     if (typeof s.lastUpdatedAt !== "number") continue;
     if ((now - s.lastUpdatedAt) <= IDLE_TTL_MS) continue;
     log("idle_sweep", {

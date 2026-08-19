@@ -120,11 +120,12 @@ transcript.
 
 ### 5. Idle TTL sweep — fallback
 
-State files whose `lastUpdatedAt` is older than `IDLE_TTL_MS` (default 30
-min) get committed and cleared. Mental model: a session not touched for
-30 min is "temporarily concluded"; if the user resumes later, subsequent
-turns append under the same deterministic OV session id, and the next
-commit creates another archive there.
+State files with a live `ovSessionId` whose `lastUpdatedAt` is older than
+`IDLE_TTL_MS` (default 30 min) get committed. Their transcript cursor is
+preserved while `ovSessionId` is cleared. Mental model: a session not touched
+for 30 min is "temporarily concluded"; if the user resumes later, subsequent
+turns append under the same deterministic OV session id, and the next commit
+creates another archive there.
 
 This covers:
 - SIGTERM / Ctrl+C / `/exit` (no hook fires; state file rots)
@@ -194,9 +195,9 @@ compatibility fallbacks.
 
 Codex's `/compact` may rewrite or truncate `transcript_path`. After
 compaction, if `allTurns.length < state.capturedTurnCount`, our slice
-math underflows and we silently drop new turns. Defensive fix: when this
-inequality is detected on `Stop`, reset `capturedTurnCount = 0` so the
-next slice captures everything in the new transcript.
+math underflows and we silently drop new turns. When this inequality is
+detected on `Stop`, move `capturedTurnCount` to the latest human user turn
+so the current interaction is captured without replaying compacted history.
 
 ### Commit failure
 

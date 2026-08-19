@@ -191,11 +191,11 @@ On all three sources, the hook uses the same shared `buildProfileBlock()` implem
 
 On `startup` or `clear`, the script:
 
-1. Counts state files (excluding the new session_id) whose `lastUpdatedAt` is within `OPENVIKING_CODEX_ACTIVE_WINDOW_MS` (default 2 min) of "now":
+1. Counts state files with a live `ovSessionId` (excluding the new session_id) whose `lastUpdatedAt` is within `OPENVIKING_CODEX_ACTIVE_WINDOW_MS` (default 2 min) of "now":
    - **0 active** → no-op (no orphan to commit)
    - **1 active** → commit it (the just-ended session)
    - **≥2 active** → skip; rely on idle TTL (we can't tell which one ended)
-2. **Idle-TTL sweep at the tail**: any state file (regardless of session_id) older than `OPENVIKING_CODEX_IDLE_TTL_MS` (default 30 min) gets committed and cleared.
+2. **Idle-TTL sweep at the tail**: any live session state older than `OPENVIKING_CODEX_IDLE_TTL_MS` (default 30 min) gets committed while preserving its transcript cursor for resume.
 
 On any /commit failure (OV unreachable, non-2xx, timeout) we **preserve state** (don't `clearState`) so the next sweep can retry.
 
