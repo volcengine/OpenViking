@@ -144,7 +144,6 @@ async def _initialize_runtime_state(
     app.state.user_deletion_service = await setup_user_deletion(
         service=service,
         manager=app.state.api_key_manager,
-        shared_upload_prefix=config.temp_upload.shared_prefix,
         oauth_store=getattr(app.state, "oauth_store", None),
         usage_audit_runtime=getattr(app.state, "usage_audit_runtime", None),
     )
@@ -779,7 +778,7 @@ def create_app(
     else:
         logger.info("Web Studio bundle not found at %s; skipping /studio mount", _studio_dir)
 
-    # MCP endpoint — serves 16 tools (find, search, recall, read, write, edit,
+    # MCP endpoint — serves 15 tools (find, search, read, write, edit,
     # list, tree, remember, add_resource, list_watches, cancel_watch, grep,
     # glob, forget, health) via streamable HTTP for MCP clients.
     from starlette.routing import Match, Route

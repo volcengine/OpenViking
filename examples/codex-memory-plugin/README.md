@@ -1,6 +1,7 @@
-# OpenViking Memory Plugin for Codex
+# OpenViking Memory Plugin for Codex and TraeCode CLI 2.0
 
 Long-term semantic memory for [Codex](https://developers.openai.com/codex), powered by [OpenViking](https://github.com/volcengine/OpenViking).
+TraeCode CLI 2.0 supports the same plugin format; use the shared installer's dedicated `--harness trae-cli` entry.
 
 This is the Codex counterpart to [`claude-code-memory-plugin`](../claude-code-memory-plugin). It hooks Codex's lifecycle to:
 
@@ -20,6 +21,12 @@ There are two install paths. **Pick one — don't mix them** (both surface the s
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) --harness codex
+```
+
+For TraeCode CLI 2.0:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) --harness trae-cli
 ```
 
 Claude Code and Codex share this installer (drop `--harness codex` to pick interactively). It asks for your language (English/中文), the download source (GitHub, or a TOS mirror for GitHub-blocked regions — pass `--dist tos`; Codex on TOS installs from a TOS-hosted git repo and keeps remote updates), and your OpenViking credentials. It:
@@ -96,13 +103,13 @@ If you don't want the installer touching your rc, do these things yourself:
 
 Connection / identity source (applies to hooks, MCP, and `ov` commands run inside Codex):
 
-1. **Default**: active `ovcli.conf` wins when present: `OPENVIKING_CLI_CONFIG_FILE` or `~/.openviking/ovcli.conf`. Use `ov config switch <name>` to change the active credentials for the CLI, hooks, MCP, and child `ov` commands together.
-2. **Env-forced**: set `OPENVIKING_CREDENTIAL_SOURCE=env` to force `OPENVIKING_URL` / `OPENVIKING_BASE_URL`, `OPENVIKING_API_KEY` / `OPENVIKING_BEARER_TOKEN`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, and `OPENVIKING_PEER_ID`.
-3. **Fallback**: without an ovcli config, env vars are used; then `ov.conf` (`server.url` / `server.root_api_key` plus legacy `codex.*` tuning); then `http://127.0.0.1:1933` unauthenticated.
+1. **Default (auto)**: env-var credentials (`OPENVIKING_URL` / `OPENVIKING_BASE_URL`, `OPENVIKING_API_KEY` / `OPENVIKING_BEARER_TOKEN`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, `OPENVIKING_PEER_ID`) win when any is set; otherwise the active `ovcli.conf` is used: `OPENVIKING_CLI_CONFIG_FILE` or `~/.openviking/ovcli.conf`. With no credential env vars set, `ov config switch <name>` changes the active credentials for the CLI, hooks, MCP, and child `ov` commands together.
+2. **Forced**: set `OPENVIKING_CREDENTIAL_SOURCE=cli` to force `ovcli.conf`, or `OPENVIKING_CREDENTIAL_SOURCE=env` to force env-var credentials.
+3. **Fallback**: without credential env vars or an ovcli config, `ov.conf` is used (`server.url` / `server.root_api_key` plus legacy `codex.*` tuning); then `http://127.0.0.1:1933` unauthenticated.
 
 Hooks and the MCP proxy call the same resolver directly, so the model tools and lifecycle hooks follow the same target.
 
-Auth is sent as `Authorization: Bearer <api_key>` to both the REST API (used by hooks) and the `/mcp` endpoint (used by the model).
+Auth is sent as `Authorization: Bearer <api_key>` to both the REST API (used by hooks) and the `/mcp` endpoint (used by the model); the hooks also send the same key as `X-API-Key` for compatibility with older servers.
 
 By default the plugin derives a peer from the current workspace path using Claude's project-directory naming rule: every non-letter-or-digit character becomes `-`, with no path normalization. For example, `/Users/x/Dev/OpenViking` becomes `-Users-x-Dev-OpenViking`. Hooks pass the effective peer as `peer_id` for captured session messages and as `X-OpenViking-Actor-Peer` for retrieval/filesystem calls; MCP gets the same header mapping.
 
@@ -161,7 +168,7 @@ Earlier plugin versions configured tuning fields under a `codex` block in `~/.op
                     │ /api/v1/content/read                      │
                     └─────────────────┬─────────────────────────┘
                                       │
-   Codex ◄── stdio MCP proxy ──► /mcp (find, search, recall,
+   Codex ◄── stdio MCP proxy ──► /mcp (find, search, read,
               (env/ovcli.conf)      remember, resources, watches,
                                   filesystem)
 ```

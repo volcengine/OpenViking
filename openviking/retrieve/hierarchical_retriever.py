@@ -15,14 +15,16 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+from openviking.core.context import ContextLevel
 from openviking.core.retrieval_targets import default_target_directories
 from openviking.models.embedder.base import EmbedResult, embed_compat
 from openviking.models.rerank import RerankClient
 from openviking.retrieve.memory_lifecycle import hotness_score
 from openviking.retrieve.retrieval_stats import get_stats_collector
 from openviking.server.identity import RequestContext
-from openviking.storage.vikingdb_manager import VikingDBManager, VikingDBManagerProxy
 from openviking.storage.expr import FilterExpr
+from openviking.storage.semantic_sidecar import body_for_preview
+from openviking.storage.vikingdb_manager import VikingDBManager, VikingDBManagerProxy
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking.utils.token_estimation import (
@@ -149,9 +151,7 @@ class HierarchicalRetriever:
         sparse_query_vector = None
         if self.embedder:
             if image_query and not getattr(self.embedder, "supports_multimodal", False):
-                raise InvalidArgumentError(
-                    "Image search requires a multimodal embedding model."
-                )
+                raise InvalidArgumentError("Image search requires a multimodal embedding model.")
             with telemetry.measure("search.embed_query"):
                 embedding_input = getattr(query, "embedding_input", None) or query.query
                 result: EmbedResult = await embed_compat(
@@ -173,7 +173,9 @@ class HierarchicalRetriever:
             context_type = ContextType.RESOURCE.value
 
         if mode == RetrieverMode.QUICK:
-            search_limit = max(limit * 5, 50) if image_query else max(limit, self.GLOBAL_SEARCH_TOPK)
+            search_limit = (
+                max(limit * 5, 50) if image_query else max(limit, self.GLOBAL_SEARCH_TOPK)
+            )
             with telemetry.measure("search.vector_retrieval"):
                 quick_results = await vector_proxy.search_in_tenant(
                     query_vector=query_vector,
@@ -603,6 +605,14 @@ class HierarchicalRetriever:
                 final_score = 0.0
             level = c.get("level", 2)
             display_uri = self._append_level_suffix(c.get("uri", ""), level)
+            abstract = c.get("abstract", "")
+            if level in {ContextLevel.ABSTRACT, ContextLevel.OVERVIEW}:
+                # New records persist body-only rerank scalars, but imported or
+                # legacy indexes may still contain the full OKF document. Keep
+                # the public find/search preview contract body-only at its final
+                # conversion boundary. L2 user Markdown is intentionally left
+                # untouched, including ordinary YAML frontmatter.
+                abstract = body_for_preview(abstract)
 
             results.append(
                 MatchedContext(
@@ -611,7 +621,7 @@ class HierarchicalRetriever:
                     if c.get("context_type")
                     else ContextType.RESOURCE,
                     level=level,
-                    abstract=c.get("abstract", ""),
+                    abstract=abstract,
                     category=c.get("category", ""),
                     score=final_score,
                     relations=relations,

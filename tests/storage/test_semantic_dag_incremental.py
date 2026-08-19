@@ -2,12 +2,18 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import re
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
+from openviking.core.context import ContextLevel
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.queuefs.semantic_dag import SemanticDagExecutor
+from openviking.storage.semantic_sidecar import (
+    parse_semantic_sidecar,
+    render_semantic_sidecar,
+)
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -139,11 +145,25 @@ async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypa
         file_contents={
             f"{root_uri}/a.txt": "new content",
             f"{root_uri}/b.txt": "unchanged",
-            f"{root_uri}/.overview.md": "FILES:\n- a.txt: old-a\n- b.txt: old-b",
+            f"{root_uri}/.overview.md": render_semantic_sidecar(
+                ContextLevel.OVERVIEW,
+                root_uri,
+                "FILES:\n- a.txt: old-a\n- b.txt: old-b",
+                {
+                    "generated_by": {
+                        "component": "SemanticProcessor",
+                        "trigger": "previous_refresh",
+                    }
+                },
+            ),
             f"{root_uri}/.abstract.md": "old-abstract",
         },
     )
     monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(sidecar_sample_size=32)),
+    )
 
     processor = _FakeProcessor(fake_fs)
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
@@ -162,7 +182,7 @@ async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypa
     assert processor.summarized_files == [f"{root_uri}/a.txt"]
     assert processor.vectorized_files == [f"{root_uri}/a.txt"]
     assert processor.sync_calls == []
-    overview = fake_fs._file_contents[f"{root_uri}/.overview.md"]
+    overview = parse_semantic_sidecar(fake_fs._file_contents[f"{root_uri}/.overview.md"]).body
     assert "- a.txt: summary" in overview
     assert "- b.txt: old-b" in overview
 

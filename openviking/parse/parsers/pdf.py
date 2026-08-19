@@ -13,6 +13,7 @@ to the MarkdownParser after conversion.
 """
 
 import asyncio
+import base64
 import hashlib
 import io
 import re
@@ -29,6 +30,7 @@ from openviking.parse.base import (
     lazy_import,
 )
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.parser_config import PDFConfig
 
@@ -57,8 +59,7 @@ class PDFParser(BaseParser):
         >>> # Remote API parsing
         >>> config = PDFConfig(
         ...     strategy="mineru",
-        ...     mineru_endpoint="https://api.example.com/convert",
-        ...     mineru_api_key="key"
+        ...     mineru_endpoint="http://127.0.0.1:8000"
         ... )
         >>> parser = PDFParser(config)
         >>> result = await parser.parse("document.pdf")
@@ -682,26 +683,37 @@ class PDFParser(BaseParser):
     async def _convert_mineru(
         self,
         pdf_path: Path,
+        storage=None,
         resource_name: Optional[str] = None,
     ) -> tuple[str, Dict[str, Any]]:
         """
-        Convert PDF to Markdown using MinerU API.
+        Convert PDF to Markdown using the MinerU /file_parse API.
 
         Args:
             pdf_path: Path to PDF file
-            resource_name: Optional resource name (unused in MinerU conversion)
+            storage: Media storage used to persist extracted images; defaults to
+                the configured storage if None
+            resource_name: Resource name under which extracted images are saved;
+                defaults to the PDF stem
 
         Returns:
-            Tuple of (markdown_content, metadata)
+            Tuple of (markdown_content, metadata) where metadata includes
+            strategy, endpoint, api_version, backend, task_id, processing_time
+            (seconds) and images_saved
 
         Raises:
-            ImportError: If httpx not installed
-            Exception: If API call fails
+            ValueError: If MinerU endpoint is not configured, or the task does
+                not complete
+            Exception: If the API call fails
         """
         httpx = lazy_import("httpx")
 
         if not self.config.mineru_endpoint:
             raise ValueError("MinerU endpoint not configured")
+
+        # mineru_endpoint is a base URL; append /file_parse unless it already ends with it
+        base = self.config.mineru_endpoint.rstrip("/")
+        url = base if base.endswith("/file_parse") else f"{base}/file_parse"
 
         meta = {
             "strategy": "mineru",
@@ -713,44 +725,86 @@ class PDFParser(BaseParser):
             async with httpx.AsyncClient(timeout=self.config.mineru_timeout) as client:
                 # Prepare file upload
                 with open(pdf_path, "rb") as f:
-                    files = {"file": (pdf_path.name, f, "application/pdf")}
+                    files = {"files": (pdf_path.name, f, "application/pdf")}
 
-                    # Prepare headers
-                    headers = {}
-                    if self.config.mineru_api_key:
-                        headers["Authorization"] = f"Bearer {self.config.mineru_api_key}"
+                    # Prepare Form fields
+                    data: Dict[str, Any] = dict(self.config.mineru_bodys or {})
 
-                    # Prepare request params
-                    params = self.config.mineru_params or {}
+                    # MinerU must return extracted images for the markdown refs.
+                    data["return_images"] = True
 
                     # Make API request
-                    logger.info(f"Calling MinerU API: {self.config.mineru_endpoint}")
+                    logger.info(f"Calling MinerU API: {url}")
                     response = await client.post(
-                        self.config.mineru_endpoint,
+                        url,
                         files=files,
-                        headers=headers,
-                        params=params,
+                        data=data,
                     )
                     response.raise_for_status()
 
-                # Parse response
-                result = response.json()
-                markdown_content = result.get("markdown", "")
+            # Parse response
+            result = response.json()
+            if result.get("status") != "completed":
+                raise ValueError(f"MinerU task not completed: {result.get('status')}")
 
-                # Extract metadata from response
-                meta["api_version"] = result.get("version")
-                meta["processing_time"] = result.get("processing_time")
-                meta["total_pages"] = result.get("total_pages")
+            results = result.get("results") or {}
+            file_result = results.get(pdf_path.name) or next(iter(results.values()), {})
+            markdown_content = file_result.get("md_content") or ""
 
-                if not markdown_content:
-                    logger.warning(f"MinerU returned empty content for {pdf_path}")
+            # Extract metadata from response
+            meta["api_version"] = result.get("version")
+            meta["backend"] = result.get("backend")
+            meta["task_id"] = result.get("task_id")
+            started_at, completed_at = result.get("started_at"), result.get("completed_at")
+            if started_at and completed_at:
+                meta["processing_time"] = (
+                    parse_iso_datetime(completed_at) - parse_iso_datetime(started_at)
+                ).total_seconds()
 
-                logger.info(
-                    f"MinerU conversion: {meta.get('total_pages', '?')} pages → "
-                    f"{len(markdown_content)} chars"
-                )
-
+            if not markdown_content:
+                logger.warning(f"MinerU returned empty content for {pdf_path}")
                 return markdown_content, meta
+
+            if storage is None:
+                from openviking_cli.utils.storage import get_storage
+
+                storage = get_storage()
+
+            if resource_name is None:
+                resource_name = pdf_path.stem
+
+            # MinerU embeds images as base64 data-URLs, referenced from markdown
+            # as `images/<filename>`; save them into the media store and rewrite
+            # the references to the stored relative paths.
+            repl: Dict[str, str] = {}
+            media_dir = storage.media_dir
+            for img_name, data_url in (file_result.get("images") or {}).items():
+                try:
+                    # data URL form: "data:image/jpeg;base64,<b64>"
+                    image_bytes = base64.b64decode(data_url.split(",", 1)[-1])
+                    img_path = Path(img_name)
+                    image_path = storage.save_image(
+                        resource_name,
+                        image_bytes,
+                        filename=img_path.stem,
+                        extension=img_path.suffix or ".png",
+                    )
+                    repl[f"images/{img_name}"] = image_path.relative_to(media_dir).as_posix()
+                except Exception as img_err:
+                    logger.warning(f"Failed to save MinerU image {img_name}: {img_err}")
+
+            if repl:
+                # Single pass over the markdown replaces every known reference;
+                # unknown ``images/...`` text is left untouched.
+                ref_pattern = re.compile(
+                    "|".join(re.escape(ref) for ref in sorted(repl, key=len, reverse=True))
+                )
+                markdown_content = ref_pattern.sub(lambda m: repl[m.group(0)], markdown_content)
+                meta["images_saved"] = len(repl)
+
+            logger.info(f"MinerU conversion: {len(markdown_content)} chars")
+
+            return markdown_content, meta
 
         except Exception as e:
             logger.error(f"MinerU API call failed: {e}")

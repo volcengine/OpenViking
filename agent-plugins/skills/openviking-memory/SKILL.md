@@ -10,7 +10,7 @@ This client has no lifecycle hooks, so nothing is recalled or captured
 automatically — you drive both halves of the loop with the `openviking` MCP
 tools:
 
-- Recall: `find`, `search`, `recall`, `read`, `list`, `tree`, `grep`, `glob`
+- Recall: `find`, `search`, `read`, `list`, `tree`, `grep`, `glob`
 - Persist: `remember`, `write`, `edit`, `add_resource`
 - Maintain: `forget`, `health`
 
@@ -28,9 +28,9 @@ memory. Do not fabricate tool calls or fall back to raw HTTP.
    operation, and constraints. After a failure, include the failed operation
    and the stable part of the error message.
 3. Call `find` (fast, ranked results with URI + abstract + score) with
-   `limit` around 5-10. Use `search` when deeper intent analysis helps, or
-   `recall` for a server-assembled, token-budgeted context block. Scope with
-   `target_uri` when you know where to look, e.g.
+   `limit` around 5-10. Use `search` when deeper intent analysis helps, or use
+   `search` with `mode="context"` for a server-assembled, token-budgeted
+   context block. In list mode, scope with `target_uri` when you know where to look, e.g.
    `viking://user/memories/experiences` for prior task experience.
 4. Judge results by task and environment fit, not title similarity. `read` the
    one to three exact file URIs likely to change how you execute. Ignore

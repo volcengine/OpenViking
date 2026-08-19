@@ -27,7 +27,7 @@ const packagedExperienceSkillPath = join(pluginDir, "skills", "ov-experience-mem
 
 const PLUGIN_NAME = "openviking-memory";
 const REAL_MCP_TOOLS = [
-  "find", "search", "recall", "read", "list", "tree", "remember", "write", "edit",
+  "find", "search", "read", "list", "tree", "remember", "write", "edit",
   "add_resource", "list_watches", "cancel_watch", "grep", "glob", "forget", "health",
 ];
 const LEGACY_TOOL_NAMES = ["openviking_recall", "openviking_store", "openviking_forget", "openviking_health"];

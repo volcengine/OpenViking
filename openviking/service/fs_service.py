@@ -9,6 +9,7 @@ Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, 
 import asyncio
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from openviking.core.context import ContextLevel
 from openviking.core.namespace import classify_uri, context_type_for_uri
 from openviking.core.uri_validation import validate_optional_viking_uri, validate_viking_uri
 from openviking.privacy import (
@@ -24,6 +25,10 @@ from openviking.session.memory.utils.content_visibility import visible_content
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
+from openviking.storage.semantic_sidecar import (
+    mark_semantic_sidecars_pending,
+    render_semantic_sidecar,
+)
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -195,7 +200,27 @@ class FSService:
             return
 
         directory_uri, abstract_uri = self._resolve_directory_uris(uri)
-        await viking_fs.write_file(abstract_uri, abstract, ctx=ctx)
+        await viking_fs.write_file(
+            abstract_uri,
+            render_semantic_sidecar(
+                ContextLevel.ABSTRACT,
+                directory_uri,
+                abstract,
+                {
+                    "generated_by": {
+                        "component": "FSService",
+                        "trigger": "mkdir",
+                    },
+                    "freshness": {
+                        "total_entries": 0,
+                        "sampled_entries": 0,
+                        "unsampled_entries": 0,
+                        "pending_child_changes": 0,
+                    },
+                },
+            ),
+            ctx=ctx,
+        )
         await vectorize_directory_meta(
             uri=directory_uri,
             abstract=abstract,
@@ -362,6 +387,12 @@ class FSService:
         context_type: str,
         ctx: RequestContext,
     ) -> None:
+        await mark_semantic_sidecars_pending(
+            viking_fs=self._viking_fs,
+            dir_uri=root_uri,
+            changed_entries=1,
+            ctx=ctx,
+        )
         try:
             queue_manager = get_queue_manager()
         except RuntimeError as exc:
@@ -387,6 +418,7 @@ class FSService:
                 peer_id=ctx.user.user_id,
             ),
             changes={"deleted": [deleted_uri]},
+            generation_trigger="content_delete",
         )
         if telemetry_id:
             get_request_wait_tracker().register_semantic_root(telemetry_id, msg.id)

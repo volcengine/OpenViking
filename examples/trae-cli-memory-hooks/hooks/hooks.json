@@ -1,0 +1,52 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "clear|startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node __OPENVIKING_TRAE_CLI_ROOT__/scripts/session-start.mjs",
+            "timeout": 70
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node __OPENVIKING_TRAE_CLI_ROOT__/scripts/auto-recall.mjs",
+            "timeout": 130
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node __OPENVIKING_TRAE_CLI_ROOT__/scripts/auto-capture.mjs",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Read|Glob|Grep|Bash|RunCommand|Shell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node __OPENVIKING_TRAE_CLI_ROOT__/scripts/uri-guard.mjs",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -3,6 +3,7 @@
 import asyncio
 import itertools
 import json
+import tempfile
 import time
 from abc import ABC
 from pathlib import Path
@@ -522,6 +523,10 @@ class VikingAddResourceTool(OVFileTool):
             "required": ["path", "description"],
         }
 
+    @property
+    def resource_inputs(self) -> dict[str, str]:
+        return {"path": "local_file"}
+
     async def execute(
         self,
         tool_context: "ToolContext",
@@ -531,16 +536,32 @@ class VikingAddResourceTool(OVFileTool):
         **kwargs: Any,
     ) -> str:
         client = None
+        temp_dir: tempfile.TemporaryDirectory[str] | None = None
         try:
+            upload_path = path
             if path and not path.startswith("http"):
-                local_path = Path(path).expanduser().resolve()
-                if not local_path.exists():
-                    return f"Error: File not found: {path}"
-                if not local_path.is_file():
-                    return f"Error: Not a file: {path}"
+                if tool_context.sandbox_manager is not None:
+                    sandbox = await tool_context.sandbox_manager.get_sandbox(
+                        tool_context.session_key
+                    )
+                    local_path = sandbox.local_file_path(path)
+                    if local_path is not None:
+                        upload_path = str(local_path)
+                    else:
+                        temp_dir = tempfile.TemporaryDirectory(prefix="vikingbot-add-resource-")
+                        local_path = Path(temp_dir.name) / (Path(path).name or "resource")
+                        await sandbox.export_file(path, local_path)
+                        upload_path = str(local_path)
+                else:
+                    local_path = Path(path).expanduser().resolve()
+                    if not local_path.exists():
+                        return f"Error: File not found: {path}"
+                    if not local_path.is_file():
+                        return f"Error: Not a file: {path}"
+                    upload_path = str(local_path)
 
             client = await self._get_client(tool_context)
-            result = await client.add_resource(path, description, to=to)
+            result = await client.add_resource(upload_path, description, to=to)
 
             if result:
                 root_uri = result.get("root_uri", "")
@@ -554,6 +575,8 @@ class VikingAddResourceTool(OVFileTool):
             return f"Error adding resource to Viking: {str(e)}"
         finally:
             await self._release_client(tool_context, client)
+            if temp_dir is not None:
+                temp_dir.cleanup()
 
 
 class VikingGrepTool(OVFileTool):
@@ -921,6 +944,11 @@ class VikingMultiReadTool(OVFileTool):
                 async with semaphore:
                     try:
                         content = await client.read_content(uri, level=level)
+                        skill_runtime = getattr(tool_context, "skill_runtime", None)
+                        if skill_runtime is not None:
+                            active_skill = await skill_runtime.activate_from_read(uri, content)
+                            if active_skill is not None:
+                                content = skill_runtime.render_skill_content(active_skill)
                         return {
                             "uri": uri,
                             "content": content,

@@ -286,6 +286,13 @@ class SubmitWikiBundleTool(Tool):
         schema.pop("title", None)
         return schema
 
+    @property
+    def resource_inputs(self) -> dict[str, str]:
+        return {
+            "/files/*/workspace_path": "local_file",
+            "/pages/*/body_workspace_path": "local_file",
+        }
+
     async def execute(
         self,
         tool_context: ToolContext,

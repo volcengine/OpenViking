@@ -621,16 +621,35 @@ class VikingClient:
     async def download_bytes(self, uri: str) -> bytes:
         return await self.client.download_bytes(uri)
 
+    async def find_skills(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+        score_threshold: float | None = None,
+        target_uri: str | None = None,
+    ) -> Dict[str, Any]:
+        return await self.client.find_skills(
+            query=query,
+            limit=limit,
+            score_threshold=score_threshold,
+            target_uri=target_uri,
+        )
+
     async def get_skill(
         self,
         skill_name: str,
         *,
         target_uri: str,
+        include_content: bool = True,
+        include_files: bool = True,
+        include_integrity: bool = False,
     ) -> Dict[str, Any]:
         return await self.client.get_skill(
             skill_name,
-            include_content=True,
-            include_files=True,
+            include_content=include_content,
+            include_files=include_files,
+            include_integrity=include_integrity,
             include_source=False,
             target_uri=target_uri,
         )
@@ -1012,8 +1031,12 @@ class VikingClient:
                         tool_input = {"raw_args": str(raw_args)}
 
                 result_str = str(tool_info.get("result", tool_info.get("tool_output", "")))
-                skill_uri = ""
-                if tool_name == "read_file" and result_str:
+                skill_uri = str(tool_info.get("skill_uri") or "").strip()
+                if not skill_uri:
+                    explicit_skill_uris = tool_info.get("skill_uris") or []
+                    if isinstance(explicit_skill_uris, list) and explicit_skill_uris:
+                        skill_uri = str(explicit_skill_uris[0] or "").strip()
+                if not skill_uri and tool_name == "read_file" and result_str:
                     match = re.search(
                         r"^---\s*\nname:\s*(.+?)\s*\n",
                         result_str,
@@ -1041,11 +1064,7 @@ class VikingClient:
                         "tool_input": tool_input,
                         "tool_output": result_str,
                         "tool_status": explicit_status
-                        or (
-                            "completed"
-                            if tool_info.get("execute_success", True)
-                            else "error"
-                        ),
+                        or ("completed" if tool_info.get("execute_success", True) else "error"),
                         "skill_uri": skill_uri,
                         "duration_ms": float(tool_info.get("duration", 0.0) or 0.0),
                         "prompt_tokens": tool_info.get("input_token"),

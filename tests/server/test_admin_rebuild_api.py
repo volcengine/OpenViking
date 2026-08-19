@@ -1,5 +1,8 @@
 """Tests for reindex admin endpoint and executor behavior."""
 
+import asyncio
+from types import SimpleNamespace
+
 import httpx
 import pytest
 
@@ -1839,7 +1842,7 @@ async def test_reindex_upsert_context_omits_search_tags_without_ingest_options(m
 
 
 @pytest.mark.asyncio
-async def test_reindex_resource_vectors_only_continues_after_single_record_failure(monkeypatch):
+async def test_reindex_resource_vectors_parallelize_files_and_isolate_failures(monkeypatch):
     from openviking.service.reindex_executor import ReindexExecutor, _ReindexCounters
     from openviking_cli.exceptions import OpenVikingError
 
@@ -1879,12 +1882,21 @@ async def test_reindex_resource_vectors_only_continues_after_single_record_failu
         return summary
 
     seen = []
+    both_entered = asyncio.Event()
+    release = asyncio.Event()
 
     async def fake_upsert_context(self, **kwargs):
         seen.append(kwargs["uri"])
+        if len(seen) == 2:
+            both_entered.set()
+        await release.wait()
         if kwargs["uri"].endswith("bad.txt"):
             raise OpenVikingError("boom", code="PROCESSING_ERROR")
 
+    monkeypatch.setattr(
+        "openviking.service.reindex_executor.get_openviking_config",
+        lambda: SimpleNamespace(reindex=SimpleNamespace(file_vectorization_concurrency=8)),
+    )
     monkeypatch.setattr("openviking.service.reindex_executor.get_viking_fs", lambda: FakeVikingFS())
     monkeypatch.setattr(ReindexExecutor, "_read_directory_abstract", fake_read_directory_abstract)
     monkeypatch.setattr(ReindexExecutor, "_read_directory_overview", fake_read_directory_overview)
@@ -1903,16 +1915,23 @@ async def test_reindex_resource_vectors_only_continues_after_single_record_failu
         role=Role.ROOT,
     )
 
-    await service._reindex_resource_vectors(
-        uri="viking://resources/demo",
-        counters=counters,
-        ctx=ctx,
+    task = asyncio.create_task(
+        service._reindex_resource_vectors(
+            uri="viking://resources/demo",
+            counters=counters,
+            ctx=ctx,
+        )
     )
+    try:
+        await asyncio.wait_for(both_entered.wait(), timeout=1)
+    finally:
+        release.set()
+        await task
 
-    assert seen == [
+    assert set(seen) == {
         "viking://resources/demo/bad.txt",
         "viking://resources/demo/good.txt",
-    ]
+    }
     assert counters.failed_records == 1
     assert counters.rebuilt_records == 1
 
@@ -2063,7 +2082,9 @@ async def test_reindex_resource_vector_text_summary_first_skips_content_read(mon
     monkeypatch.setattr(ReindexExecutor, "_fetch_existing_record", fake_fetch_existing_record)
     monkeypatch.setattr(
         "openviking.service.reindex_executor.get_openviking_config",
-        lambda: type("Config", (), {"embedding": type("Embedding", (), {"text_source": "summary_first"})()})(),
+        lambda: type(
+            "Config", (), {"embedding": type("Embedding", (), {"text_source": "summary_first"})()}
+        )(),
     )
 
     service = ReindexExecutor()
@@ -2084,6 +2105,7 @@ async def test_reindex_resource_vector_text_summary_first_skips_content_read(mon
 @pytest.mark.asyncio
 async def test_reindex_file_summary_reads_existing_record_as_uri_owner(monkeypatch):
     from openviking.service.reindex_executor import ReindexExecutor
+    from openviking.storage.semantic_sidecar import render_semantic_sidecar
 
     captured = {}
 
@@ -2110,6 +2132,36 @@ async def test_reindex_file_summary_reads_existing_record_as_uri_owner(monkeypat
 
     assert summary == "owner summary"
     assert captured["ctx"].user.user_id == "bob"
+
+    raw = render_semantic_sidecar(
+        ContextLevel.OVERVIEW,
+        "viking://resources/demo",
+        "# Demo\n\n## image.png\nVisible file summary.",
+        {
+            "source": {
+                "kind": "http",
+                "uri": "https://example.com/private.pdf",
+            }
+        },
+    )
+
+    async def fake_safe_read_text(self, uri, *, ctx):
+        del self, uri, ctx
+        return raw
+
+    async def fail_if_existing_record_read(self, *, uri, level, ctx):
+        raise AssertionError("body-only overview summary should be used before fallback")
+
+    monkeypatch.setattr(ReindexExecutor, "_safe_read_text", fake_safe_read_text)
+    monkeypatch.setattr(ReindexExecutor, "_fetch_existing_record", fail_if_existing_record_read)
+
+    summary = await service._best_file_summary(
+        "viking://resources/demo/image.png",
+        ctx=ctx,
+    )
+
+    assert summary == "Visible file summary."
+    assert "source:" not in summary
 
 
 @pytest.mark.asyncio

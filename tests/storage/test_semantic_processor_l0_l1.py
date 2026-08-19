@@ -3,8 +3,10 @@
 
 from types import SimpleNamespace
 
+from openviking.core.context import ContextLevel
 from openviking.storage.queuefs import semantic_processor as semantic_processor_module
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
+from openviking.storage.semantic_sidecar import render_semantic_sidecar
 
 
 def _patch_semantic_limits(monkeypatch, *, abstract_max_chars=256, overview_max_chars=4000):
@@ -31,6 +33,19 @@ def test_markdown_overview_uses_brief_description_as_abstract(monkeypatch):
 
     assert overview == generated
     assert abstract == "This brief description is the retrieval abstract."
+
+    raw = render_semantic_sidecar(
+        ContextLevel.OVERVIEW,
+        "viking://resources/demo",
+        generated,
+        {"source": {"kind": "http", "uri": "https://example.com/private.pdf"}},
+    )
+
+    overview, abstract = processor._normalize_overview_generation(raw)
+
+    assert overview == generated
+    assert abstract == "This brief description is the retrieval abstract."
+    assert "source:" not in overview
 
 
 def test_markdown_overview_extracts_multiline_brief_description(monkeypatch):
@@ -92,9 +107,7 @@ def test_overview_truncation_prefers_complete_sentence(monkeypatch):
     _patch_semantic_limits(monkeypatch, overview_max_chars=45)
     processor = SemanticProcessor()
     overview = (
-        "# README\n\n"
-        "This is a complete sentence. "
-        "This second sentence would be cut in the middle."
+        "# README\n\nThis is a complete sentence. This second sentence would be cut in the middle."
     )
 
     overview, abstract = processor._enforce_size_limits(overview, "abstract")
@@ -106,12 +119,7 @@ def test_overview_truncation_prefers_complete_sentence(monkeypatch):
 def test_overview_truncation_keeps_last_complete_sentence_within_limit(monkeypatch):
     _patch_semantic_limits(monkeypatch, overview_max_chars=57)
     processor = SemanticProcessor()
-    overview = (
-        "# README\n\n"
-        "First sentence. "
-        "Second sentence. "
-        "Third sentence should be omitted."
-    )
+    overview = "# README\n\nFirst sentence. Second sentence. Third sentence should be omitted."
 
     overview, abstract = processor._enforce_size_limits(overview, "abstract")
 

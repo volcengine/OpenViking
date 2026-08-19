@@ -319,5 +319,6 @@ For a real OpenViking server and OpenAI-compatible model flow, see the [live Lan
 
 ## See also
 
+- [Capability Reference](./16-capability-reference.md)
 - [examples/langchain-langgraph/](https://github.com/volcengine/OpenViking/tree/main/examples/langchain-langgraph) — full source for all examples above
 - [MCP Clients](./06-mcp-clients.md) — for non-SDK MCP integration

@@ -86,6 +86,7 @@ Once connected, OpenViking exposes retrieval, memory, resource, watch, filesyste
 
 ## See also
 
+- [Capability Reference](./16-capability-reference.md)
 - [MCP Integration Guide](../guides/06-mcp-integration.md) — tool parameters, progressive upload, `OPENVIKING_PUBLIC_BASE_URL`
 - [OAuth 2.1 Guide](../guides/11-oauth.md) — for Claude Desktop, Claude.ai, Cursor
 - [MCP Specification](https://modelcontextprotocol.io/)

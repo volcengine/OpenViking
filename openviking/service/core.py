@@ -19,6 +19,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.service.agent_evolution_service import AgentEvolutionService
 from openviking.service.debug_service import DebugService
 from openviking.service.fs_service import FSService
+from openviking.service.mineru_preflight import wait_for_mineru_ready
 from openviking.service.pack_service import PackService
 from openviking.service.relation_service import RelationService
 from openviking.service.resource_memory_link_service import ResourceMemoryLinkService
@@ -496,6 +497,25 @@ class OpenVikingService:
         if self._queue_manager:
             self._queue_manager.start()
             logger.info("QueueManager workers started")
+
+        # Preflight the MinerU endpoint when it will be used, so endpoint
+        # misconfiguration or a stopped service surfaces now instead of on the
+        # first PDF import. Required for strategy="mineru"; advisory for "auto".
+        pdf_config = self._config.pdf
+        should_preflight_mineru = pdf_config.strategy == "mineru" or (
+            pdf_config.strategy == "auto" and pdf_config.mineru_endpoint is not None
+        )
+
+        if should_preflight_mineru and pdf_config.mineru_endpoint:
+            try:
+                await wait_for_mineru_ready(pdf_config.mineru_endpoint)
+                logger.info("MinerU preflight passed: %s", pdf_config.mineru_endpoint)
+            except RuntimeError as exc:
+                if pdf_config.strategy == "mineru":
+                    raise
+                logger.warning(
+                    "MinerU preflight failed (fallback will retry on first parse): %s", exc
+                )
 
         self._initialized = True
         logger.info("OpenVikingService initialized")

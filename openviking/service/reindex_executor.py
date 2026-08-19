@@ -51,6 +51,7 @@ from openviking.storage.index_source import is_not_ready_sentinel as _is_not_rea
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
+from openviking.storage.semantic_sidecar import body_for_preview, embedding_text_for_body
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -77,6 +78,7 @@ REINDEX_TASK_TYPE = "admin_reindex"
 INDEX_REPAIR_TASK_TYPE = "index_repair"
 PRUNE_ORPHAN_CANDIDATE_LIMIT = 100000
 PRUNE_OUTPUT_FIELDS = ["id", "uri", "level", "context_type", "account_id", "owner_user_id"]
+_MAX_FILE_VECTORIZATION_CONCURRENCY = 64
 
 
 _reindex_executor: "ReindexExecutor | None" = None
@@ -98,6 +100,15 @@ class _ReindexCounters:
     unsupported_records: int = 0
     failed_records: int = 0
     warnings: list[str] = field(default_factory=list)
+
+    def merge_from(self, other: "_ReindexCounters") -> None:
+        self.scanned_records += other.scanned_records
+        self.rebuilt_records += other.rebuilt_records
+        self.deleted_records += other.deleted_records
+        self.would_delete_records += other.would_delete_records
+        self.unsupported_records += other.unsupported_records
+        self.failed_records += other.failed_records
+        self.warnings.extend(other.warnings)
 
 
 @dataclass
@@ -126,6 +137,30 @@ class ReindexExecutor:
         "skill": {"vectors_only", "semantic_and_vectors", "prune_orphans"},
         "memory": {"vectors_only", "semantic_and_vectors", "prune_orphans"},
     }
+
+    @staticmethod
+    def _effective_file_vectorization_concurrency() -> int:
+        config = get_openviking_config().reindex
+        return max(
+            1,
+            min(
+                int(config.file_vectorization_concurrency),
+                _MAX_FILE_VECTORIZATION_CONCURRENCY,
+            ),
+        )
+
+    async def _run_ordered_counter_batches(
+        self,
+        items: list[str],
+        *,
+        concurrency: int,
+        processor: Any,
+        counters: _ReindexCounters,
+    ) -> None:
+        for start in range(0, len(items), concurrency):
+            batch = items[start : start + concurrency]
+            for item_counters in await asyncio.gather(*(processor(item) for item in batch)):
+                counters.merge_from(item_counters)
 
     @staticmethod
     def _content_owner_ctx(uri: str, ctx: RequestContext) -> RequestContext:
@@ -1424,7 +1459,9 @@ class ReindexExecutor:
                         uri=directory_uri,
                         parent_uri=VikingURI(directory_uri).parent.uri,
                         abstract=abstract,
-                        vector_text=abstract,
+                        vector_text=embedding_text_for_body(
+                            ContextLevel.ABSTRACT, directory_uri, abstract
+                        ),
                         is_leaf=False,
                         context_type=context_type_for_uri(directory_uri),
                         level=ContextLevel.ABSTRACT,
@@ -1442,7 +1479,9 @@ class ReindexExecutor:
                         parent_uri=VikingURI(directory_uri).parent.uri,
                         # L1 abstract scalar carries the overview for Rerank.
                         abstract=_truncate_abstract_bytes(overview),
-                        vector_text=overview,
+                        vector_text=embedding_text_for_body(
+                            ContextLevel.OVERVIEW, directory_uri, overview
+                        ),
                         is_leaf=False,
                         context_type=context_type_for_uri(directory_uri),
                         level=ContextLevel.OVERVIEW,
@@ -1454,15 +1493,15 @@ class ReindexExecutor:
                     counters.failed_records += 1
                     counters.warnings.append(f"Failed to reindex {directory_uri} L1 vector: {exc}")
 
-        for file_uri in deduped_files:
-            counters.scanned_records += 1
+        async def process_file(file_uri: str) -> _ReindexCounters:
+            file_counters = _ReindexCounters(scanned_records=1)
             parent_uri = VikingURI(file_uri).parent.uri
             summary = await self._best_file_summary(file_uri, ctx=ctx)
             vector_text = await self._best_resource_file_vector_text(file_uri, summary, ctx=ctx)
             if not vector_text:
-                counters.unsupported_records += 1
-                counters.warnings.append(f"No vector source found for {file_uri}")
-                continue
+                file_counters.unsupported_records += 1
+                file_counters.warnings.append(f"No vector source found for {file_uri}")
+                return file_counters
             abstract = self._prefer_non_empty(summary, vector_text)
             try:
                 await self._upsert_context(
@@ -1476,10 +1515,26 @@ class ReindexExecutor:
                     ctx=ctx,
                     ingest_options=ingest_options,
                 )
-                counters.rebuilt_records += 1
+                file_counters.rebuilt_records += 1
             except Exception as exc:
-                counters.failed_records += 1
-                counters.warnings.append(f"Failed to reindex {file_uri} vector: {exc}")
+                file_counters.failed_records += 1
+                file_counters.warnings.append(f"Failed to reindex {file_uri} vector: {exc}")
+            return file_counters
+
+        concurrency = self._effective_file_vectorization_concurrency()
+        if deduped_files:
+            logger.info(
+                "Reindex resource file vectorization: root=%s files=%d concurrency=%d",
+                root_uri,
+                len(deduped_files),
+                concurrency,
+            )
+        await self._run_ordered_counter_batches(
+            deduped_files,
+            concurrency=concurrency,
+            processor=process_file,
+            counters=counters,
+        )
 
     async def reindex_directory_marker(
         self, *, dir_uri: str, level: ContextLevel, ctx: RequestContext
@@ -1764,7 +1819,7 @@ class ReindexExecutor:
                     uri=uri,
                     parent_uri=parent_uri,
                     abstract=abstract,
-                    vector_text=abstract,
+                    vector_text=embedding_text_for_body(ContextLevel.ABSTRACT, uri, abstract),
                     is_leaf=False,
                     context_type=ContextType.SKILL.value,
                     level=ContextLevel.ABSTRACT,
@@ -1783,7 +1838,7 @@ class ReindexExecutor:
                     parent_uri=parent_uri,
                     # L1 abstract scalar carries the overview for Rerank.
                     abstract=_truncate_abstract_bytes(overview),
-                    vector_text=overview,
+                    vector_text=embedding_text_for_body(ContextLevel.OVERVIEW, uri, overview),
                     is_leaf=False,
                     context_type=ContextType.SKILL.value,
                     level=ContextLevel.OVERVIEW,
@@ -1853,15 +1908,15 @@ class ReindexExecutor:
         else:
             raise NotFoundError(uri, "memory")
 
-        for file_uri in file_uris:
-            counters.scanned_records += 1
+        async def process_file(file_uri: str) -> _ReindexCounters:
+            file_counters = _ReindexCounters(scanned_records=1)
             body_source = await self._read_memory_body(file_uri, ctx=ctx)
             if body_source.error:
-                counters.failed_records += 1
-                counters.warnings.append(
+                file_counters.failed_records += 1
+                file_counters.warnings.append(
                     f"Skipped {file_uri}: failed to read memory body: {body_source.error}"
                 )
-                continue
+                return file_counters
             body = body_source.text if body_source.exists else ""
             memory_content = MemoryFileUtils.read(body).content if body else ""
             existing = await self._fetch_existing_record(
@@ -1874,9 +1929,9 @@ class ReindexExecutor:
                 await self._best_file_summary(file_uri, ctx=ctx),
             )
             if not body and existing is None:
-                counters.unsupported_records += 1
-                counters.warnings.append(f"No memory source found for {file_uri}")
-                continue
+                file_counters.unsupported_records += 1
+                file_counters.warnings.append(f"No memory source found for {file_uri}")
+                return file_counters
 
             parent_uri = VikingURI(file_uri.split("#", 1)[0]).parent.uri
             if body:
@@ -1893,12 +1948,11 @@ class ReindexExecutor:
                         ctx=ctx,
                         ingest_options=ingest_options,
                     )
-                    counters.rebuilt_records += 1
+                    file_counters.rebuilt_records += 1
                 except Exception as exc:
-                    counters.failed_records += 1
-                    counters.warnings.append(f"Failed to reindex {file_uri} vector: {exc}")
-                    continue
-                continue
+                    file_counters.failed_records += 1
+                    file_counters.warnings.append(f"Failed to reindex {file_uri} vector: {exc}")
+                return file_counters
 
             try:
                 await self._upsert_context(
@@ -1912,13 +1966,29 @@ class ReindexExecutor:
                     ctx=ctx,
                     ingest_options=ingest_options,
                 )
-                counters.rebuilt_records += 1
-                counters.warnings.append(
+                file_counters.rebuilt_records += 1
+                file_counters.warnings.append(
                     f"Reindexed {file_uri} from abstract fallback because original memory body is unavailable"
                 )
             except Exception as exc:
-                counters.failed_records += 1
-                counters.warnings.append(f"Failed to reindex {file_uri} vector: {exc}")
+                file_counters.failed_records += 1
+                file_counters.warnings.append(f"Failed to reindex {file_uri} vector: {exc}")
+            return file_counters
+
+        concurrency = self._effective_file_vectorization_concurrency()
+        if file_uris:
+            logger.info(
+                "Reindex memory file vectorization: root=%s files=%d concurrency=%d",
+                uri,
+                len(file_uris),
+                concurrency,
+            )
+        await self._run_ordered_counter_batches(
+            file_uris,
+            concurrency=concurrency,
+            processor=process_file,
+            counters=counters,
+        )
 
     async def _reindex_memory_directory_chain(
         self,
@@ -1942,7 +2012,9 @@ class ReindexExecutor:
                         uri=directory_uri,
                         parent_uri=parent_uri,
                         abstract=abstract,
-                        vector_text=abstract,
+                        vector_text=embedding_text_for_body(
+                            ContextLevel.ABSTRACT, directory_uri, abstract
+                        ),
                         is_leaf=False,
                         context_type=ContextType.MEMORY.value,
                         level=ContextLevel.ABSTRACT,
@@ -1960,7 +2032,9 @@ class ReindexExecutor:
                         parent_uri=parent_uri,
                         # L1 abstract scalar carries the overview for Rerank.
                         abstract=_truncate_abstract_bytes(overview),
-                        vector_text=overview,
+                        vector_text=embedding_text_for_body(
+                            ContextLevel.OVERVIEW, directory_uri, overview
+                        ),
                         is_leaf=False,
                         context_type=ContextType.MEMORY.value,
                         level=ContextLevel.OVERVIEW,

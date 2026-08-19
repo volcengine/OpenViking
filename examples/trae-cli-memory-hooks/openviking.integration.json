@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "id": "openviking-memory",
+  "version": "0.1.0",
+  "deprecated": true,
+  "replacement": "examples/codex-memory-plugin (install through the trae-cli Codex-format alias)",
+  "clients": ["trae-cli"],
+  "capabilities": ["hooks", "mcp"]
+}

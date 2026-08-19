@@ -13,7 +13,6 @@ import pytest
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import resources as resources_router
 from openviking.server.routers.resources import AddResourceRequest
-from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -836,7 +835,7 @@ async def test_add_resource_accepts_temp_uploaded_file(
     assert body["result"]["root_uri"].startswith("viking://")
 
 
-async def test_shared_temp_upload_and_add_resource_deletes_upload_dir(
+async def test_shared_temp_upload_can_be_added_repeatedly(
     client: httpx.AsyncClient,
     service,
 ):
@@ -849,21 +848,15 @@ async def test_shared_temp_upload_and_add_resource_deletes_upload_dir(
     temp_file_id = upload_resp.json()["result"]["temp_file_id"]
     assert temp_file_id.startswith("shared_")
 
-    upload_id = temp_file_id[len("shared_") :]
-    upload_root = f"viking://upload/{upload_id}"
-    vfs = get_viking_fs()
-    assert await vfs.exists(f"{upload_root}/meta.json")
-    assert await vfs.exists(f"{upload_root}/content")
-
-    resp = await client.post(
-        "/api/v1/resources",
-        json={"temp_file_id": temp_file_id, "reason": "shared upload", "wait": True},
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    assert body["result"]["root_uri"].startswith("viking://")
-    assert not await vfs.exists(upload_root)
+    for reason in ("first shared upload", "second shared upload"):
+        resp = await client.post(
+            "/api/v1/resources",
+            json={"temp_file_id": temp_file_id, "reason": reason, "wait": True},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert body["result"]["root_uri"].startswith("viking://")
 
 
 @pytest.mark.parametrize("upload_mode", ["local", "shared"])
@@ -924,6 +917,7 @@ async def test_shared_temp_upload_failed_consume_is_retryable(
     async def fake_add_resource(**kwargs):
         raise RuntimeError("boom")
 
+    original_add_resource = service.resources.add_resource
     monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as http_client:
@@ -933,10 +927,13 @@ async def test_shared_temp_upload_failed_consume_is_retryable(
         )
     assert resp.status_code == 500
 
-    upload_id = temp_file_id[len("shared_") :]
-    meta_uri = f"viking://upload/{upload_id}/meta.json"
-    meta_raw = await get_viking_fs().read_file(meta_uri)
-    assert '"state": "uploaded"' in meta_raw
+    monkeypatch.setattr(service.resources, "add_resource", original_add_resource)
+    retry = await client.post(
+        "/api/v1/resources",
+        json={"temp_file_id": temp_file_id, "reason": "retry shared upload", "wait": True},
+    )
+    assert retry.status_code == 200
+    assert retry.json()["status"] == "ok"
 
 
 async def test_shared_upload_content_read_rejects_internal_scope(
@@ -953,7 +950,7 @@ async def test_shared_upload_content_read_rejects_internal_scope(
 
     resp = await client.get(
         "/api/v1/content/read",
-        params={"uri": f"viking://upload/{upload_id}/meta.json"},
+        params={"uri": f"viking://upload/{upload_id}/meta"},
     )
     assert resp.status_code == 400
     body = resp.json()

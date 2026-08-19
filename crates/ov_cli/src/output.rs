@@ -6,6 +6,7 @@ use crate::theme;
 use colored::Colorize;
 
 const MAX_COL_WIDTH: usize = 256;
+const MAX_SINGLE_LINE_VALUE_WIDTH: usize = 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum OutputFormat {
@@ -277,7 +278,7 @@ fn print_table<T: Serialize>(result: T, compact: bool) {
                     }
                     let is_uri = k == "uri";
                     let formatted_value = format_value(v);
-                    let (content, _) = truncate_string(&formatted_value, is_uri, MAX_COL_WIDTH);
+                    let (content, _) = truncate_string(&formatted_value, is_uri, MAX_SINGLE_LINE_VALUE_WIDTH);
                     let padded_key = pad_cell(k, max_key_width, false);
                     output.push_str(&format!(
                         "{}  {}\n",
@@ -322,7 +323,13 @@ fn value_to_table_with_profile(value: &serde_json::Value, compact: bool) -> Opti
             }
             let is_uri = k == "uri";
             let formatted_value = format_value(v);
-            let (content, _) = truncate_string(&formatted_value, is_uri, MAX_COL_WIDTH);
+            // For single-line key-value pairs, use wider limit for complex values
+            let max_width = if matches!(v, serde_json::Value::Object(_) | serde_json::Value::Array(_)) {
+                MAX_SINGLE_LINE_VALUE_WIDTH
+            } else {
+                MAX_COL_WIDTH
+            };
+            let (content, _) = truncate_string(&formatted_value, is_uri, max_width);
             let padded_key = pad_cell(k, max_key_width, false);
             output.push_str(&format!("{}  {}\n", padded_key, content));
         }
@@ -974,12 +981,12 @@ fn truncate_string(s: &str, is_unbounded: bool, max_width: usize) -> (String, bo
     }
 
     // Normal truncation - truncate by display width
-    if display_width > MAX_COL_WIDTH {
+    if display_width > max_width {
         let mut current_width = 0;
         let mut truncated = String::new();
         for ch in s.chars() {
             let ch_width = ch.width().unwrap_or(0);
-            if current_width + ch_width > MAX_COL_WIDTH - 3 {
+            if current_width + ch_width > max_width.saturating_sub(3) {
                 break;
             }
             current_width += ch_width;

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for memory-context semantic enqueue deduplication (#769)."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -11,6 +12,7 @@ from openviking.storage.queuefs.named_queue import NamedQueue
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.queuefs.semantic_queue import SemanticQueue, is_semantic_msg_stale
+from openviking.storage.semantic_sidecar import parse_semantic_sidecar
 
 
 @pytest.mark.asyncio
@@ -139,6 +141,13 @@ class _FakeMemoryDirFS:
         ]
 
 
+def _patch_semantic_config(monkeypatch, *, sidecar_sample_size=32):
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(sidecar_sample_size=sidecar_sample_size)),
+    )
+
+
 @pytest.mark.asyncio
 async def test_stale_memory_semantic_write_is_skipped(monkeypatch):
     pathlock = _FakePathLock()
@@ -186,9 +195,13 @@ async def test_stale_memory_semantic_write_is_skipped(monkeypatch):
             "/fake/viking/user/default/memories/preferences/.abstract.md",
         ]
     ]
-    assert viking_fs.writes == [
-        ("viking://user/default/memories/preferences/.overview.md", "latest overview"),
-        ("viking://user/default/memories/preferences/.abstract.md", "latest abstract"),
+    assert [uri for uri, _ in viking_fs.writes] == [
+        "viking://user/default/memories/preferences/.overview.md",
+        "viking://user/default/memories/preferences/.abstract.md",
+    ]
+    assert [parse_semantic_sidecar(raw).body.strip() for _, raw in viking_fs.writes] == [
+        "latest overview",
+        "latest abstract",
     ]
 
 
@@ -215,6 +228,7 @@ async def test_memory_directory_summarizes_all_uncached_files(monkeypatch):
         "openviking.storage.queuefs.semantic_processor.get_viking_fs",
         lambda: _FakeMemoryDirFS(),
     )
+    _patch_semantic_config(monkeypatch)
     monkeypatch.setattr(processor, "_generate_single_file_summary", generate_file_summary)
     monkeypatch.setattr(processor, "_generate_overview", generate_overview)
     monkeypatch.setattr(
@@ -268,6 +282,7 @@ async def test_memory_directory_vectorizes_changed_files_with_generated_summary(
         "openviking.storage.queuefs.semantic_processor.get_viking_fs",
         lambda: _FakeMemoryDirFS(),
     )
+    _patch_semantic_config(monkeypatch)
     monkeypatch.setattr(processor, "_generate_single_file_summary", generate_file_summary)
     monkeypatch.setattr(processor, "_generate_overview", generate_overview)
     monkeypatch.setattr(

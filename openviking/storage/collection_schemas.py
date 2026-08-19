@@ -848,7 +848,10 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     return None
 
                 self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
-                self._record_request_success(embedding_msg)
+                self._record_request_success(
+                    embedding_msg,
+                    vector_written=bool(record_id),
+                )
                 report_success = True
                 self._circuit_breaker.record_success()
                 return inserted_data
@@ -894,10 +897,16 @@ class TextEmbeddingHandler(DequeueHandlerBase):
         return None
 
     @staticmethod
-    def _record_request_success(embedding_msg: EmbeddingMsg) -> None:
-        get_request_wait_tracker().mark_embedding_done(
+    def _record_request_success(
+        embedding_msg: EmbeddingMsg,
+        *,
+        vector_written: bool = False,
+    ) -> None:
+        tracker = get_request_wait_tracker()
+        tracker.mark_embedding_done(
             embedding_msg.telemetry_id,
             embedding_msg.id,
+            vector_written=vector_written,
         )
 
     @staticmethod

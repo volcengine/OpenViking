@@ -857,9 +857,11 @@ class AsyncHTTPClient:
         include_source: bool = False,
         level: Optional[int] = None,
         target_uri: Optional[str] = None,
+        include_integrity: bool = False,
     ) -> Dict[str, Any]:
         params: Dict[str, Any] = {
             "include_files": include_files,
+            "include_integrity": include_integrity,
             "include_source": include_source,
         }
         if include_content is not None:
@@ -2102,12 +2104,14 @@ class SyncHTTPClient:
         include_source: bool = False,
         level: Optional[int] = None,
         target_uri: Optional[str] = None,
+        include_integrity: bool = False,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.get_skill(
                 skill_name,
                 include_content=include_content,
                 include_files=include_files,
+                include_integrity=include_integrity,
                 include_source=include_source,
                 level=level,
                 target_uri=target_uri,

@@ -69,3 +69,27 @@ test("release marketplace archive supports a ZCode TOS install", () => {
     rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test("release marketplace archive retains the deprecated TRAE CLI integration for cleanup compatibility", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "openviking-trae-cli-release-"));
+  try {
+    const stage = join(tmp, "memory-plugin-marketplace");
+    const staged = run("bash", [stageScript, stage]);
+    assert.equal(staged.status, 0, `${staged.stdout}\n${staged.stderr}`);
+
+    const zipped = run("zip", ["-rq", join(tmp, "memory-plugin-marketplace.zip"), "memory-plugin-marketplace"], {
+      cwd: tmp,
+    });
+    assert.equal(zipped.status, 0, `${zipped.stdout}\n${zipped.stderr}`);
+
+    const integrationRoot = join(stage, "trae-cli-memory-hooks");
+    const manifest = JSON.parse(readFileSync(join(integrationRoot, "openviking.integration.json"), "utf8"));
+    assert.equal(manifest.deprecated, true);
+    assert.match(manifest.replacement, /codex-memory-plugin/u);
+    assert.ok(existsSync(join(integrationRoot, "scripts", "trae-cli-hook.mjs")));
+    assert.ok(existsSync(join(integrationRoot, "scripts", "uri-guard.mjs")));
+    assert.ok(existsSync(join(integrationRoot, "servers", "mcp-proxy.mjs")));
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});

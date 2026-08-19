@@ -37,6 +37,7 @@ from openviking.session.memory.utils import (
     MemoryFileUtils,
     parse_memory_file_with_fields,
 )
+from openviking.storage.semantic_sidecar import parse_semantic_sidecar
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -316,10 +317,21 @@ class TestMemoryUpdater:
 
         await updater.generate_overview("events", directory, ctx, extract_context=None)
 
-        assert "**Date:**" not in viking_fs.store[overview_uri]
-        assert "- [kept event](./kept_event.md)" in viking_fs.store[overview_uri]
-        assert "- [plain_event.md](./plain_event.md)" in viking_fs.store[overview_uri]
-        assert "deleted_event.md" not in viking_fs.store[overview_uri]
+        document = parse_semantic_sidecar(viking_fs.store[overview_uri])
+        assert document.metadata["generated_by"] == {
+            "component": "MemoryUpdater",
+            "trigger": "memory_update",
+        }
+        assert document.metadata["freshness"] == {
+            "total_entries": 2,
+            "sampled_entries": 2,
+            "unsampled_entries": 0,
+            "pending_child_changes": 0,
+        }
+        assert "**Date:**" not in document.body
+        assert "- [kept event](./kept_event.md)" in document.body
+        assert "- [plain_event.md](./plain_event.md)" in document.body
+        assert "deleted_event.md" not in document.body
 
     @pytest.mark.asyncio
     async def test_generate_overview_template_fallbacks_for_preferences_and_entities(self):

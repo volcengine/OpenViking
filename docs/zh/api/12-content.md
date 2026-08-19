@@ -226,7 +226,7 @@ openviking read viking://resources/docs/api.md
 
 - `replace` 和 `append` 要求文件已存在；`create` 仅用于创建新文件，目标路径已存在时返回 `409 Conflict`。目录始终会被拒绝。
 - `create` 只允许以下文本类扩展名：`.md`、`.txt`、`.json`、`.yaml`、`.yml`、`.toml`、`.py`、`.js`、`.ts`。父目录会自动创建。
-- 不允许直接写入派生语义文件：`.abstract.md`、`.overview.md`、`.relations.json`。
+- `.relations.json` 不允许直接写入。已存在的 `.abstract.md` / `.overview.md` 可以修改正文，但不能通过公共 API 创建；只提交正文时会保留现有 OKF metadata，提交完整 OKF 时 metadata 必须与存量值一致。未知 metadata 字段会静默丢弃。sidecar 正文写入只重建该目录实际存在的 L0/L1 向量，不触发语义重新生成。
 - 文件内容会在 API 返回前完成更新；`wait` 只控制是否等待语义/向量刷新完成。
 - 公共 API 已不再接受 `regenerate_semantics` 或 `revectorize`；写入后一定会自动刷新相关语义与向量。
 
@@ -358,6 +358,7 @@ openviking write viking://resources/docs/api.md \
 - 系统会在目标 tree lock 内、首次产生新写入之前检查所有非幂等前置条件；不满足时返回 `409 Conflict`。
 - 如果目标已经包含期望字节，则归入 `unchanged`；因此刷新失败后可以安全重试，而不会重复写入相同内容。
 - API 能保证前置条件冲突不会产生新写入，但底层 I/O 中途失败时，本批次较早完成的写入仍可能已经可见。
+- 已存在的 `.abstract.md` / `.overview.md` 可以通过 `replace_if_hash` 修改正文。系统保留并校验受保护的 OKF metadata，拒绝 `create_if_absent` 创建 sidecar；这类操作只重建对应目录实际存在的 L0/L1 向量。
 
 **Python SDK**
 

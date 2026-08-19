@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -19,6 +20,7 @@ from openviking.storage.queuefs.semantic_dag import (
     SemanticDagExecutor,
     SemanticNodeScheduler,
 )
+from openviking.storage.semantic_sidecar import parse_semantic_sidecar
 from openviking.telemetry import (
     OperationTelemetry,
     bind_telemetry,
@@ -143,6 +145,13 @@ class _ScheduledExecutor:
         self.failure = exc
 
 
+def _patch_semantic_config(monkeypatch, *, sidecar_sample_size=32):
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(sidecar_sample_size=sidecar_sample_size)),
+    )
+
+
 @pytest.mark.asyncio
 async def test_semantic_dag_stats_collects_nodes(monkeypatch):
     root_uri = "viking://resources/root"
@@ -158,6 +167,7 @@ async def test_semantic_dag_stats_collects_nodes(monkeypatch):
     }
     fake_fs = _FakeVikingFS(tree)
     monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    _patch_semantic_config(monkeypatch)
 
     processor = _FakeProcessor(verify_streaming=True)
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
@@ -194,6 +204,7 @@ async def test_semantic_dag_bounds_active_node_work(monkeypatch):
     }
     fake_fs = _FakeVikingFS(tree)
     monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    _patch_semantic_config(monkeypatch)
 
     processor = _TrackingProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
@@ -231,6 +242,7 @@ async def test_semantic_dag_shares_node_scheduler_across_roots(monkeypatch):
     }
     fake_fs = _FakeVikingFS(tree)
     monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    _patch_semantic_config(monkeypatch)
 
     processor = _TrackingProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
@@ -262,12 +274,12 @@ async def test_semantic_dag_shares_node_scheduler_across_roots(monkeypatch):
     assert processor.max_active_summaries == 1
     assert executor_a.get_stats().done_nodes == 21
     assert executor_b.get_stats().done_nodes == 21
-    assert {
-        processor.vectorized_contexts[f"{root_a}/a-{idx}.txt"] for idx in range(20)
-    } == {("task-a", telemetry_a.telemetry_id)}
-    assert {
-        processor.vectorized_contexts[f"{root_b}/b-{idx}.txt"] for idx in range(20)
-    } == {("task-b", telemetry_b.telemetry_id)}
+    assert {processor.vectorized_contexts[f"{root_a}/a-{idx}.txt"] for idx in range(20)} == {
+        ("task-a", telemetry_a.telemetry_id)
+    }
+    assert {processor.vectorized_contexts[f"{root_b}/b-{idx}.txt"] for idx in range(20)} == {
+        ("task-b", telemetry_b.telemetry_id)
+    }
 
 
 @pytest.mark.asyncio
@@ -332,6 +344,7 @@ async def test_semantic_dag_skip_vectorization_does_not_schedule_tasks(monkeypat
     }
     fake_fs = _FakeVikingFS(tree)
     monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    _patch_semantic_config(monkeypatch)
 
     processor = _FakeProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
@@ -345,13 +358,25 @@ async def test_semantic_dag_skip_vectorization_does_not_schedule_tasks(monkeypat
     await executor.run(root_uri)
     await asyncio.sleep(0)
 
-    assert fake_fs.writes == [
-        (f"{root_uri}/child/.overview.md", "overview"),
-        (f"{root_uri}/child/.abstract.md", "abstract"),
-        (f"{root_uri}/.overview.md", "overview"),
-        (f"{root_uri}/.abstract.md", "abstract"),
+    assert [uri for uri, _ in fake_fs.writes] == [
+        f"{root_uri}/child/.overview.md",
+        f"{root_uri}/child/.abstract.md",
+        f"{root_uri}/.overview.md",
+        f"{root_uri}/.abstract.md",
     ]
+    assert [parse_semantic_sidecar(raw).body.strip() for _, raw in fake_fs.writes] == [
+        "overview",
+        "abstract",
+        "overview",
+        "abstract",
+    ]
+    assert all(
+        parse_semantic_sidecar(raw).metadata["generated_by"]["component"] == "SemanticProcessor"
+        for _, raw in fake_fs.writes
+    )
     assert processor.vectorized_dirs == []
     assert processor.vectorized_files == []
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

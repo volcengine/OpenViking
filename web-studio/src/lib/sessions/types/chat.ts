@@ -1,5 +1,3 @@
-import type { Message } from './message'
-
 export type {
   BotChatRequest,
   BotChatResponse,
@@ -17,21 +15,4 @@ export interface StreamToolCall {
   arguments: string
   iteration?: number
   result?: string
-}
-
-/** Full chat state exposed by useChat. */
-export interface ChatState {
-  messages: Message[]
-  status: ChatStatus
-  error?: string
-  /** Accumulated text content during streaming (before final response). */
-  streamingContent: string
-  /** Tool calls observed during the current streaming round. */
-  streamingToolCalls: StreamToolCall[]
-  /** Reasoning content from the current streaming round. */
-  streamingReasoning: string
-  /** Ordered event parts observed during the current streaming round. */
-  streamingParts: Message['parts']
-  /** Current iteration index. */
-  iteration: number
 }

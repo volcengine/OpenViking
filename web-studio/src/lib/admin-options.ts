@@ -1,5 +1,3 @@
-import type { AdminAccount } from '#/lib/admin'
-
 export const DEFAULT_ACCOUNT_ID = 'default'
 export const DEFAULT_USER_ID = 'default'
 
@@ -39,12 +37,4 @@ export function sortedAccountIds(
   fallback: string,
 ): string[] {
   return uniqueOptions([...values, fallback], '').sort(compareAccountId)
-}
-
-export function sortedAccounts(
-  accounts: readonly AdminAccount[],
-): AdminAccount[] {
-  return [...accounts].sort((left, right) =>
-    compareAccountId(left.accountId, right.accountId),
-  )
 }

@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0
 """MCP (Model Context Protocol) endpoint for OpenViking server.
 
-Exposes tools to Claude Code (or any MCP client) via streamable HTTP:
-  find, search, read, write, edit, list, tree, remember, add_resource, grep, glob, forget, health
+Exposes OpenViking tools (filesystem, retrieval, memory, watch management,
+health) to Claude Code (or any MCP client) via streamable HTTP; the
+`@mcp.tool` registrations below are the authoritative list.
 
 Mounted on the FastAPI app at /mcp. The MCP session manager lifecycle is
 tied to the FastAPI app lifespan (not a sub-app lifespan) so the task group
@@ -32,8 +33,11 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from openviking.core.namespace import canonical_user_root, canonicalize_uri, uri_parts
 from openviking.parse.mode import ParseMode, normalize_parse_mode
 from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
-from openviking.retrieve.context_assembler import assemble_context
-from openviking.retrieve.context_assembler.recall_preset import fold_recall_request
+from openviking.retrieve.context_assembler import (
+    DEFAULT_MAX_TOKENS,
+    AssembleParams,
+    assemble_context,
+)
 from openviking.server.auth import _extract_api_key, normalize_actor_peer_header, resolve_identity
 from openviking.server.dependencies import get_server_config, get_service
 from openviking.server.identity import RequestContext
@@ -49,6 +53,7 @@ from openviking.utils.search_filters import SearchContextTypeInput, merge_search
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
+    OpenVikingError,
     PermissionDeniedError,
     UnauthenticatedError,
 )
@@ -288,13 +293,75 @@ async def search(
     target_uri: str = "",
     session_id: Optional[str] = None,
     limit: int = 10,
-    min_score: float = 0.35,
+    min_score: Optional[float] = None,
     level: Optional[List[int]] = None,
     context_type: Optional[Union[str, List[str]]] = None,
+    mode: Literal["list", "context"] = "list",
+    query_expansion: Literal["off", "auto"] = "auto",
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    quotas: Optional[Dict[str, int]] = None,
+    purpose: Optional[Literal["chat", "coding"]] = None,
+    detail: Literal["auto", "abstract", "overview", "full"] = "auto",
+    detail_by_category: Optional[Dict[str, str]] = None,
+    dedup_turns: int = 0,
+    exclude_uris: Optional[List[str]] = None,
+    peer_scope: Literal["actor", "all"] = "all",
+    other_peer_penalty: Optional[float] = None,
+    other_peer_penalties: Optional[Dict[str, float]] = None,
+    rewrite: Literal["off", "auto"] = "off",
+    rewrite_max_bullets: int = 6,
 ) -> str:
-    """Deep semantic retrieval with optional session context and intent analysis. Returns ranked memories, resources, and skills with URI, abstract, and score."""
+    """Deep semantic retrieval with optional session context and intent analysis.
+
+    ``mode="list"`` returns ranked memories, resources, and skills with URI,
+    abstract, and score. ``mode="context"`` returns an injection-ready,
+    token-budgeted context block and supports category quotas, purpose presets,
+    detail tiers, cross-turn deduplication, peer scoping, and optional rewriting.
+    ``target_uri`` is only supported in list mode.
+    """
     service = get_service()
     ctx = _get_ctx()
+    context_filter = _resolve_context_type_filter(context_type)
+    if mode == "context":
+        if target_uri:
+            raise InvalidArgumentError("target_uri is not supported in mode='context'")
+        if detail != "auto" and detail_by_category:
+            raise InvalidArgumentError(
+                "detail cannot be combined with detail_by_category in mode='context'"
+            )
+        if other_peer_penalty is not None and other_peer_penalties:
+            raise InvalidArgumentError(
+                "other_peer_penalty cannot be combined with other_peer_penalties "
+                "in mode='context'"
+            )
+        result = await assemble_context(
+            service=service,
+            ctx=ctx,
+            params=AssembleParams(
+                query=query,
+                limit=limit,
+                score_threshold=min_score,
+                filter=context_filter,
+                session_id=session_id,
+                query_expansion=query_expansion,
+                max_tokens=max_tokens,
+                quotas=quotas,
+                purpose=purpose,
+                detail=detail_by_category or (None if detail == "auto" else detail),
+                dedup_turns=dedup_turns,
+                exclude_uris=exclude_uris or (),
+                peer_scope=peer_scope,
+                other_peer_penalty=other_peer_penalties or other_peer_penalty,
+                rewrite=rewrite == "auto",
+                rewrite_max_bullets=rewrite_max_bullets,
+            ),
+        )
+        if result.digest.strip():
+            return result.digest
+        if result.rendered.strip():
+            return result.rendered
+        return "No matching context found."
+
     if target_uri:
         target_uri = _resolve_mcp_workspace_uri(target_uri, ctx)
     session = None
@@ -308,8 +375,8 @@ async def search(
         target_uri=target_uri,
         session=session,
         limit=limit,
-        score_threshold=min_score,
-        filter=_resolve_context_type_filter(context_type),
+        score_threshold=0.35 if min_score is None else min_score,
+        filter=context_filter,
         level=level,
     )
     return _format_search_result(result)
@@ -343,46 +410,6 @@ def _format_search_result(result) -> str:
     )
 
 
-@mcp.tool()
-async def recall(
-    query: str,
-    quotas: Optional[dict[str, int]] = None,
-    max_chars: Optional[int] = None,
-    min_score: Optional[float] = None,
-    peer_scope: str = "all",
-    other_peer_penalty: Optional[Union[float, Dict[str, float]]] = None,
-    session_id: Optional[str] = None,
-    detail: Optional[str] = None,
-    max_tokens: Optional[int] = None,
-    rewrite: Union[bool, str] = False,
-) -> str:
-    """Memory recall assembled server-side. Searches each memory type separately, then returns a token-budgeted block where every entry carries its viking:// URI. detail pins the tier for every entry: "abstract", "overview" or "full"."""
-    service = get_service()
-    # Omitted arguments must stay absent: this is the same preset as POST
-    # /recall, and a signature default sent through as a value would read as an
-    # explicit v1 alias and shift the whole profile.
-    values: Dict[str, Any] = {
-        "query": query,
-        "quotas": quotas,
-        "max_chars": None if max_chars is None else max(1, int(max_chars)),
-        "min_score": min_score,
-        "peer_scope": "actor" if peer_scope == "actor" else "all",
-        "other_peer_penalty": other_peer_penalty,
-        "session_id": session_id,
-        "detail": detail,
-        "max_tokens": max_tokens,
-        "rewrite": rewrite,
-    }
-    provided = {key for key, value in values.items() if value is not None}
-    params, _aliases = fold_recall_request(values, provided)
-    result = await assemble_context(service=service, ctx=_get_ctx(), params=params)
-    if result.digest.strip():
-        return result.digest
-    if result.rendered.strip():
-        return result.rendered
-    return "No relevant memories found."
-
-
 # -- read ------------------------------------------------------------------
 
 
@@ -400,12 +427,10 @@ async def read(uris: str | list[str]) -> str:
         async with semaphore:
             try:
                 resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
-                body = await service.fs.read_visible(resolved_uri, ctx=ctx)
-                if isinstance(body, str) and body.strip():
-                    return body
-            except Exception:
-                pass
-            return f"(nothing found at {uri})"
+                content = await service.fs.read_visible(resolved_uri, ctx=ctx)
+                return content
+            except OpenVikingError as exc:
+                return str(exc)
 
     if len(uri_list) == 1:
         return await _read_one(uri_list[0])
@@ -1228,7 +1253,7 @@ async def mcp_lifespan():
     """Run the MCP session manager. Call this inside the FastAPI lifespan."""
     async with mcp.session_manager.run():
         logger.info(
-            "MCP endpoint ready (16 tools: find, search, recall, read, write, edit, list, "
+            "MCP endpoint ready (15 tools: find, search, read, write, edit, list, "
             "tree, remember, add_resource, list_watches, cancel_watch, grep, glob, forget, health)"
         )
         yield
