@@ -209,11 +209,8 @@ const apiReferenceSidebar = {
         ]
       },
       {
-        text: 'Retrieval & Relations',
-        items: [
-          ['06-retrieval.md', 'Retrieval'],
-          ['13-relations.md', 'Relations']
-        ]
+        text: 'Retrieval',
+        items: [['06-retrieval.md', 'Retrieval']]
       },
       {
         text: 'Data Lifecycle',
@@ -269,11 +266,8 @@ const apiReferenceSidebar = {
         ]
       },
       {
-        text: '检索与关系',
-        items: [
-          ['06-retrieval.md', '检索'],
-          ['13-relations.md', '关系']
-        ]
+        text: '检索',
+        items: [['06-retrieval.md', '检索']]
       },
       {
         text: '数据生命周期',

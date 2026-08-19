@@ -593,7 +593,7 @@ MCP `write` / REST `content/write` 的三道 guard（`content_write.py`）：可
 
 **导入导出/快照**：`export`／`backup`／`import`／`restore`（.ovpack）｜`snapshot commit/restore/show/log/diff/ignore-*`（工作区快照，前向 commit 回滚）
 
-**隐私/关系**：`privacy categories/list/get/versions/version/activate/upsert`（`--key-<name>` 语法糖）｜`relations`/`link`/`unlink`（实验性）
+**隐私**：`privacy categories/list/get/versions/version/activate/upsert`（`--key-<name>` 语法糖）
 
 **状态/可观测**：`health`（healthy=false 时仍退 0）｜`status`（表格模式始终退 0）｜`observer {queue,vikingdb,models,retrieval,filesystem,system}`｜`wait`｜`task status/cancel/list`｜`task watch {ls,show,rm,pause,resume,update,trigger}`｜`version`（独立 3s 超时探服务端）
 

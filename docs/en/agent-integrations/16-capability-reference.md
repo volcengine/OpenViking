@@ -610,7 +610,7 @@ Doc-comment prefixes like `[Data]`, `[Interactive]`, `[Admin]`, or `[Experimenta
 
 **Import/export & snapshots**: `export` / `backup` / `import` / `restore` (.ovpack formats) | `snapshot commit/restore/show/log/diff/ignore-*` (workspace snapshots; rollbacks are achieved by committing forward)
 
-**Privacy/relations**: `privacy categories/list/get/versions/version/activate/upsert` (offers `--key-<name>` syntactic sugar) | `relations`/`link`/`unlink` (experimental)
+**Privacy**: `privacy categories/list/get/versions/version/activate/upsert` (offers `--key-<name>` syntactic sugar)
 
 **Status/observability**: `health` (exits with 0 even when healthy=false) | `status` (table mode always exits with 0) | `observer {queue,vikingdb,models,retrieval,filesystem,system}` | `wait` | `task status/cancel/list` | `task watch {ls,show,rm,pause,resume,update,trigger}` | `version` (probes the server utilizing its own 3-second timeout)
 
