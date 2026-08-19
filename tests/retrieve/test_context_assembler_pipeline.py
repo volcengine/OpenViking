@@ -246,6 +246,47 @@ async def test_resource_bucket_uses_actor_scope_without_other_peer_scan():
     assert [(entry.uri, entry.origin) for entry in result.entries] == [(actor_uri, "actor_peer")]
 
 
+async def test_gather_passes_bucket_context_type_to_find():
+    from openviking_cli.retrieve.types import ContextType
+
+    async def make_calls(quotas):
+        calls = []
+
+        async def fake_find(**kwargs):
+            calls.append(kwargs)
+            return _FakeFindResult()
+
+        service = SimpleNamespace(
+            search=SimpleNamespace(find=fake_find),
+            fs=SimpleNamespace(read=None),
+            sessions=SimpleNamespace(),
+            viking_fs=None,
+        )
+        await assemble_context(
+            service=service,
+            ctx=_ctx(),
+            params=AssembleParams(
+                query="faq",
+                quotas=quotas,
+                peer_scope="actor",
+                max_tokens=1600,
+            ),
+        )
+        return calls
+
+    resource_calls = await make_calls({"resources": 1})
+    assert resource_calls
+    assert all(call["context_type"] is ContextType.RESOURCE for call in resource_calls)
+
+    skill_calls = await make_calls({"skills": 1})
+    assert skill_calls
+    assert all(call["context_type"] is ContextType.SKILL for call in skill_calls)
+
+    memory_calls = await make_calls({"events": 1})
+    assert memory_calls
+    assert all(call["context_type"] is ContextType.MEMORY for call in memory_calls)
+
+
 async def test_purpose_quotas_are_not_truncated_by_global_limit():
     async def fake_find(**kwargs):
         target_uri = kwargs["target_uri"]

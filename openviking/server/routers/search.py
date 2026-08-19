@@ -38,6 +38,7 @@ from openviking.utils.search_filters import (
     SearchContextTypeInput,
     _resolve_levels,
     merge_search_filter,
+    resolve_single_context_type,
 )
 from openviking.utils.tags import build_search_tags_filter
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
@@ -88,6 +89,19 @@ def _resolve_search_filter(
                 return {"op": "and", "conds": [merged, *tag_filter["conds"]]}
             return {"op": "and", "conds": [merged, tag_filter]}
         return tag_filter
+    except ValueError as exc:
+        raise InvalidArgumentError(str(exc)) from exc
+
+
+def _typed_context_type(context_type: Optional[SearchContextTypeInput]):
+    """Resolve a request's context_type into the single ContextType TypedQuery expects.
+
+    Returns None for multi-type requests; those keep result scoping via the
+    filter built by ``_resolve_search_filter`` and stay unclassified in
+    observer stats.
+    """
+    try:
+        return resolve_single_context_type(context_type)
     except ValueError as exc:
         raise InvalidArgumentError(str(exc)) from exc
 
@@ -296,6 +310,7 @@ async def find(
             filter=effective_filter,
             level=_resolve_levels(request.level) or None,
             image_url=request.image_url,
+            context_type=_typed_context_type(request.context_type),
         ),
     )
     result = execution.result
@@ -407,6 +422,7 @@ async def search(
             filter=effective_filter,
             level=_resolve_levels(request.level) or None,
             image_url=request.image_url,
+            context_type=_typed_context_type(request.context_type),
         )
 
     execution = await run_operation(
