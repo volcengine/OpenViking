@@ -37,6 +37,7 @@ import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
 import { readJsonState, writeJsonState } from "./lib/state.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
 import { sendSessionMessages } from "./shared/batch-send.mjs";
+import { capTextParts } from "./lib/text-part-cap.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -422,6 +423,11 @@ function formatTurnsAsText(turns) {
 // Strip plugin-injected blocks from text parts (tool parts pass through), and
 // drop parts that become empty. Mirrors the old content-path stripInjectedBlocks
 // + trim, but per text part so tool I/O is never collapsed.
+// Text parts are additionally byte-capped and made well-formed (capTextParts)
+// so an oversized or surrogate-broken part -- e.g. a slash-command/skill
+// prompt expanded into the transcript as a user turn -- can never poison the
+// server's vectordb write queue. See lib/text-part-cap.mjs for the failure
+// mode.
 function sanitizePartsForSend(parts) {
   const out = [];
   for (const p of parts || []) {
@@ -432,7 +438,7 @@ function sanitizePartsForSend(parts) {
       out.push(p);
     }
   }
-  return out;
+  return capTextParts(out);
 }
 
 async function pushTurnsToOv(ovSessionId, turns, peerId = "") {
