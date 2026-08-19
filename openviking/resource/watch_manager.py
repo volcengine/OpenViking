@@ -872,6 +872,36 @@ class WatchManager:
 
                 return task
 
+    async def get_upsertable_task_by_uri(
+        self,
+        *,
+        path: str,
+        to_uri: str,
+        account_id: str,
+        user_id: str,
+        role: str,
+    ) -> Optional[WatchTask]:
+        """Return an existing task when this source may create or update its watch."""
+        async with self._uri_mutation_coordinator.access(account_id, [to_uri]):
+            async with self._lock:
+                task_id = self._uri_to_task.get((account_id, to_uri))
+                if not task_id:
+                    return None
+
+                task = self._tasks.get(task_id)
+                if not task or not self._check_permission(task, account_id, user_id, role):
+                    raise ConflictError(
+                        f"Target URI '{to_uri}' is already used by another task",
+                        resource=to_uri,
+                    )
+                if task.is_active and task.path != path:
+                    raise ConflictError(
+                        f"Target URI '{to_uri}' is already being monitored by task "
+                        f"{task.task_id}. Please cancel the existing task first.",
+                        resource=to_uri,
+                    )
+                return task
+
     async def update_execution_time(self, task_id: str) -> None:
         """Update task execution time after execution.
 

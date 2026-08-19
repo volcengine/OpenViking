@@ -11,7 +11,7 @@ import contextlib
 import inspect
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -359,6 +359,7 @@ class ResourceService:
         args: Optional[Dict[str, Any]],
         *,
         watch_interval: float,
+        allow_tos_exclude: bool = False,
     ) -> _NormalizedAddResourceArgs:
         if args is None:
             return _NormalizedAddResourceArgs({})
@@ -367,7 +368,10 @@ class ResourceService:
         if not args:
             return _NormalizedAddResourceArgs({})
 
-        reserved = sorted(set(args).intersection(_ADD_RESOURCE_ARGS_RESERVED_FIELDS))
+        reserved_fields = _ADD_RESOURCE_ARGS_RESERVED_FIELDS
+        if allow_tos_exclude:
+            reserved_fields = reserved_fields - {"exclude"}
+        reserved = sorted(set(args).intersection(reserved_fields))
         if reserved:
             raise InvalidArgumentError(
                 "args cannot contain core add_resource fields: " + ", ".join(reserved)
@@ -1163,6 +1167,8 @@ class ResourceService:
         watch_interval: float = 0,
         allow_local_path_resolution: bool = True,
         enforce_public_remote_targets: bool = False,
+        add_type: Optional[str] = None,
+        args: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Submit a scheduled refresh without changing its watch task."""
@@ -1183,7 +1189,8 @@ class ResourceService:
             manage_watch=False,
             allow_local_path_resolution=allow_local_path_resolution,
             enforce_public_remote_targets=enforce_public_remote_targets,
-            args=None,
+            add_type=add_type,
+            args=args,
             **kwargs,
         )
 
@@ -1258,12 +1265,20 @@ class ResourceService:
         self._ensure_initialized()
         processing_mode = normalize_processing_mode(processing_mode)
         self._validate_add_resource_tag_policy(tags=tags, tag_mode=tag_mode)
-        normalized_args = self._normalize_add_resource_args(args, watch_interval=watch_interval)
+        normalized_args = self._normalize_add_resource_args(
+            args,
+            watch_interval=watch_interval,
+            allow_tos_exclude=isinstance(path, str) and path.startswith("tos://"),
+        )
         mode = (
             normalize_parse_mode(parse_mode)
             if parse_mode is not None
             else normalized_args.parse_mode
         )
+        if "exclude" in normalized_args.processor_kwargs and kwargs.get("exclude") is not None:
+            raise InvalidArgumentError(
+                "exclude cannot be provided both as a top-level field and args.exclude."
+            )
         kwargs.update(normalized_args.processor_kwargs)
         git_repo_source = is_git_repo_url(path)
         if git_repo_source:
@@ -1295,7 +1310,8 @@ class ResourceService:
         target_parent = parent or ""
         target_create_parent = bool(kwargs.get("create_parent", False))
 
-        if self._connector.should_delegate(
+        connector = self._connector
+        if connector.should_delegate(
             path,
             ctx=ctx,
             declared_add_type=add_type,
@@ -1311,17 +1327,93 @@ class ResourceService:
             connector_args=normalized_args.processor_kwargs,
             kwargs=kwargs,
         ):
-            return await self._connector.submit(
+            resolved = connector.resolve_add_type(path, add_type)
+            if resolved is None:  # pragma: no cover - should_delegate already resolved it
+                raise InvalidArgumentError(f"'{path}' does not match any Connector source type.")
+            watch_manager = self._get_watch_manager()
+            watch_auth_state = None
+            defer_watch_creation = bool(watch_manager and manage_watch and watch_interval > 0)
+            if defer_watch_creation and watch_manager:
+                await watch_manager.get_upsertable_task_by_uri(
+                    path=path,
+                    to_uri=target_to,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                    role=str(ctx.role),
+                )
+                watch_auth_state = await connector.create_watch_auth_state(
+                    api_key=ctx.api_key or "",
+                    account_id=ctx.account_id,
+                    add_type=resolved[0],
+                    path=path,
+                    connector_args=normalized_args.processor_kwargs,
+                )
+            connector_watch_processor_kwargs = self._watch_processor_kwargs(
+                {
+                    key: value
+                    for key, value in kwargs.items()
+                    if key not in normalized_args.processor_kwargs
+                },
+                tags,
+                tag_mode,
+            )
+            on_success: Optional[Callable[[], Awaitable[None]]] = None
+            if defer_watch_creation:
+
+                async def create_watch_after_success() -> None:
+                    await self._manage_watch_if_needed(
+                        watch_manager=watch_manager,
+                        manage_watch=True,
+                        watch_interval=watch_interval,
+                        to=target_to,
+                        parent=target_parent,
+                        to_is_directory=to_is_directory,
+                        root_uri=target_to,
+                        path=path,
+                        reason=reason,
+                        instruction=instruction,
+                        build_index=build_index,
+                        summarize=summarize,
+                        processing_mode=processing_mode,
+                        processor_kwargs=connector_watch_processor_kwargs,
+                        watch_auth_state=watch_auth_state,
+                        ctx=ctx,
+                    )
+
+                on_success = create_watch_after_success
+            result = await connector.submit(
                 path=path,
                 ctx=ctx,
                 declared_add_type=add_type,
-                to=to,
+                to=target_to,
                 reason=reason,
                 connector_args=normalized_args.processor_kwargs,
                 tags=tags,
                 tag_mode=tag_mode,
+                wait_for_completion=not manage_watch and watch_interval > 0,
+                on_success=on_success,
                 **kwargs,
             )
+            if not defer_watch_creation:
+                await self._manage_watch_if_needed(
+                    watch_manager=watch_manager,
+                    manage_watch=manage_watch,
+                    watch_interval=watch_interval,
+                    to=target_to,
+                    parent=target_parent,
+                    to_is_directory=to_is_directory,
+                    root_uri=target_to,
+                    path=path,
+                    reason=reason,
+                    instruction=instruction,
+                    build_index=build_index,
+                    summarize=summarize,
+                    processing_mode=processing_mode,
+                    processor_kwargs=connector_watch_processor_kwargs,
+                    watch_auth_state=watch_auth_state,
+                    ctx=ctx,
+                )
+            return result
 
         if enforce_public_remote_targets and is_remote_resource_source(path):
             path = require_remote_resource_source(path)
@@ -1734,19 +1826,14 @@ class ResourceService:
         if not watch_manager:
             return
 
-        existing_task = await watch_manager.get_task_by_uri(
+        existing_task = await watch_manager.get_upsertable_task_by_uri(
+            path=path,
             to_uri=to_uri,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
             role=str(ctx.role),
         )
         if existing_task:
-            if existing_task.is_active and existing_task.path != path:
-                raise ConflictError(
-                    f"Target URI '{to_uri}' is already being monitored by task {existing_task.task_id}. "
-                    f"Please cancel the existing task first.",
-                    resource=to_uri,
-                )
             was_active = existing_task.is_active
             await watch_manager.update_task(
                 task_id=existing_task.task_id,
