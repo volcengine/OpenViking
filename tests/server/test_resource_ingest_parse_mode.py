@@ -22,8 +22,6 @@ async def test_ingest_temp_upload_forwards_no_split(monkeypatch: pytest.MonkeyPa
     )
     store = SimpleNamespace(
         resolve_for_consume=AsyncMock(return_value=resolved),
-        mark_consumed=AsyncMock(),
-        mark_failed=AsyncMock(),
     )
     add_resource = AsyncMock(
         return_value={"status": "success", "root_uri": "viking://resources/upload"}

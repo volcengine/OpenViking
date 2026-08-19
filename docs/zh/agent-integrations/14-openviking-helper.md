@@ -58,6 +58,7 @@ Helper 会按 Agent 和项目展示本地 memory、rule 文件及 `SKILL.md` 技
 
 ## 参见
 
+- [集成能力参考](./16-capability-reference.md)
 - [Agent 集成概览](./01-overview.md)
 - [Claude Code 记忆插件](./02-claude-code.md)
 - [Codex 记忆插件](./04-codex.md)

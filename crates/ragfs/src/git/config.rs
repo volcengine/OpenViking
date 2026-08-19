@@ -51,14 +51,6 @@ pub struct GitS3ConfigPy {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct GitTuningConfig {
-    #[serde(default = "default_upload_concurrency")]
-    pub upload_concurrency: usize,
-    #[serde(default = "default_restore_concurrency")]
-    pub restore_concurrency: usize,
-    #[serde(default = "default_ref_cas_max_retry")]
-    pub ref_cas_max_retry: u32,
-    #[serde(default = "default_ref_cas_backoff_ms")]
-    pub ref_cas_backoff_ms: u64,
     /// Enable Fast Path 1: skip read+SHA-1 for files whose `(size, mtime_ns)`
     /// match the previous commit's persisted index. Defaults to `true`; set
     /// to `false` to force the slow path on every commit (useful for tests
@@ -76,10 +68,6 @@ pub struct GitTuningConfig {
 impl Default for GitTuningConfig {
     fn default() -> Self {
         Self {
-            upload_concurrency: default_upload_concurrency(),
-            restore_concurrency: default_restore_concurrency(),
-            ref_cas_max_retry: default_ref_cas_max_retry(),
-            ref_cas_backoff_ms: default_ref_cas_backoff_ms(),
             commit_index_enabled: default_true(),
             blob_exists_precheck_enabled: default_true(),
         }
@@ -103,18 +91,6 @@ fn default_s3_prefix() -> String {
 }
 fn default_cas_mode() -> String {
     "native".to_string()
-}
-fn default_upload_concurrency() -> usize {
-    64
-}
-fn default_restore_concurrency() -> usize {
-    32
-}
-fn default_ref_cas_max_retry() -> u32 {
-    3
-}
-fn default_ref_cas_backoff_ms() -> u64 {
-    50
 }
 fn default_true() -> bool {
     true
@@ -141,10 +117,6 @@ mod tests {
         assert_eq!(cfg.author_email, "bot@openviking.local");
         assert_eq!(cfg.local.as_ref().unwrap().base_dir, "/tmp/ov-git");
         assert!(cfg.s3.is_none());
-        assert_eq!(cfg.tuning.upload_concurrency, 64);
-        assert_eq!(cfg.tuning.restore_concurrency, 32);
-        assert_eq!(cfg.tuning.ref_cas_max_retry, 3);
-        assert_eq!(cfg.tuning.ref_cas_backoff_ms, 50);
         assert!(cfg.tuning.commit_index_enabled);
         assert!(cfg.tuning.blob_exists_precheck_enabled);
     }
@@ -165,8 +137,6 @@ mod tests {
             access_key = "AKxxx"
             secret_key = "SKxxx"
 
-            [tuning]
-            upload_concurrency = 128
         "#;
         let cfg: GitConfig = toml::from_str(toml_src).unwrap();
         assert_eq!(cfg.backend, "s3");
@@ -176,8 +146,7 @@ mod tests {
         assert_eq!(s3.prefix, ".ovgit");
         assert_eq!(s3.region, "us-west-2");
         assert_eq!(s3.cas_mode, "native");
-        assert_eq!(cfg.tuning.upload_concurrency, 128);
-        assert_eq!(cfg.tuning.restore_concurrency, 32);
+        assert!(cfg.tuning.commit_index_enabled);
     }
 
     #[test]

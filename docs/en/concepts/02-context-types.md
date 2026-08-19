@@ -101,13 +101,15 @@ Skills are capabilities that Agents can invoke, belonging to the **AgentDefinedC
 ```
 viking://user/skills/{skill-name}/     # Default storage path
 ├── .abstract.md          # L0: Short description
-├── SKILL.md              # L1: Detailed overview
-└── scripts               # L2: Full definition
+├── .overview.md          # L1: Directory overview (after generation)
+├── SKILL.md              # L2: Skill definition
+└── scripts               # L2: Supporting implementation
 
 viking://agent/skills/{skill-name}/    # Override via --uri, public/shared (account global)
 ├── .abstract.md          # L0: Short description
-├── SKILL.md              # L1: Detailed overview
-└── scripts               # L2: Full definition
+├── .overview.md          # L1: Directory overview (after generation)
+├── SKILL.md              # L2: Skill definition
+└── scripts               # L2: Supporting implementation
 ```
 
 ### AgentDefinedContextType Subtypes

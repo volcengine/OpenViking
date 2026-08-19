@@ -26,7 +26,7 @@ agent-plugins/
 2. 让你的 Agent Plugins 客户端指向 `agent-plugins/` 目录。各客户端的安装命令或插件目录不同，请查阅其文档。加载时客户端会：
    - 按 `mcp.json` 注册名为 `openviking` 的 MCP server，以 stdio 方式运行 `node <plugin>/servers/mcp-proxy.mjs`；
    - 从 `skills/` 发现 `openviking-memory` 技能。
-3. 配置凭据（见下节）后开始会话。模型即可使用 `find` / `search` / `recall` / `read` / `list` / `grep` / `glob` / `remember` / `add_resource` / `forget` / `health`，较新的服务端还提供 `tree` / `write` / `edit`。
+3. 配置凭据（见下节）后开始会话。模型即可使用 `find` / `search` / `read` / `list` / `grep` / `glob` / `remember` / `add_resource` / `forget` / `health`，较新的服务端还提供 `tree` / `write` / `edit`。
 
 ## 为什么用 stdio 代理，而不是 `streamable-http`
 
@@ -57,7 +57,7 @@ OpenViking 服务端本身在 `/mcp` 上就是 streamable HTTP，但 `mcp.json` 
 
 Agent Plugins 1.0 只覆盖 skills 和 MCP servers；hooks、commands、agents 被有意排除在本版本之外，因为它们在各客户端之间语义差异太大。因此这个包提供的是**可移植的召回 + 写入能力面**，由模型驱动而非生命周期事件驱动：**自动会话捕获和 prompt 前自动召回不在此范围内**。
 
-作为补偿，内置的 `openviking-memory` 技能直接把这套闭环教给模型 —— 任务开始时用 `find` / `search` / `recall` + `read` 召回，过程中和结束后用 `remember` / `write` / `edit` 沉淀，并给出使用召回内容时的优先级与安全规则。
+作为补偿，内置的 `openviking-memory` 技能直接把这套闭环教给模型 —— 任务开始时用 `find` / `search` + `read` 召回（需要组装上下文时使用 `search` 的 `mode="context"`），过程中和结束后用 `remember` / `write` / `edit` 沉淀，并给出使用召回内容时的优先级与安全规则。
 
 **如果你的 harness 支持 hooks 机制，推荐使用专属插件。** hook 驱动的召回与捕获不需要模型花费工具调用、也不依赖模型「想起来要记」，比技能驱动的闭环更省 token、也更可靠。本 Agent Plugins 包适用于没有 hooks 的 harness，或你希望用同一个包覆盖多个客户端的场景。
 
@@ -95,3 +95,7 @@ node --test agent-plugins/plugin.test.mjs
 `plugin.test.mjs` 会校验：清单的 schema URL 及两个清单的规范版本一致、插件 name 规则、清单根字段闭集、semver、每个 `skills/*` 子目录都有带 `name` + `description` frontmatter 且 `name` 与目录同名的 `SKILL.md`、`mcp.json` 引用的文件存在且不逃逸插件根目录，以及包内所有 `.mjs` 都能通过 `node --check`。
 
 `servers/shared/*.mjs` 是 `examples/memory-plugin-shared/lib` 的生成副本 —— 请改共享库后重新执行 `node examples/memory-plugin-shared/sync.mjs`；一旦漂移，`examples/memory-plugin-shared/sync.test.mjs` 会失败。两个测试文件都已接入 CI。
+
+## 参见
+
+- [集成能力参考](./16-capability-reference.md)

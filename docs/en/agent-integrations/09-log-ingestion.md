@@ -120,5 +120,6 @@ Cursor state persists in `~/.openviking/ingest/state.db`, so both backfill and w
 
 ## See also
 
+- [Capability Reference](./16-capability-reference.md)
 - [Overview](./01-overview.md) — the per-harness memory plugins (real-time capture)
 - [Deployment guide → CLI](../guides/03-deployment.md#cli) — `ov.conf` / credential configuration

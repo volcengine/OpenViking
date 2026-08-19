@@ -39,6 +39,8 @@ for required in \
   cursor-memory-plugin/servers/mcp-proxy.mjs \
   cursor-memory-plugin/rules/openviking-memory.mdc \
   cursor-memory-plugin/skills/openviking-memory/SKILL.md \
+  claude-code-memory-plugin/skills/openviking-memory/SKILL.md \
+  codex-memory-plugin/skills/openviking-memory/SKILL.md \
   trae-memory-hooks/hooks/hooks.json \
   trae-memory-hooks/.mcp.json \
   trae-memory-hooks/openviking.integration.json \

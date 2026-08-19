@@ -118,5 +118,6 @@ openviking-server ingest status
 
 ## 参见
 
+- [集成能力参考](./16-capability-reference.md)
 - [概览](./01-overview.md) — 各 harness 的记忆插件（实时捕获方案）
 - [部署指南 → CLI](../guides/03-deployment.md#cli) — `ov.conf` / 凭据配置

@@ -152,12 +152,19 @@ async def test_explicit_subpath_not_split():
             resource_uris=["viking://resources/foo"],
             ctx=ctx,
             temp_uris=["viking://temp/import_root"],
+            semantic_source={"kind": "http", "uri": "https://example.com/demo.pdf"},
+            generation_trigger="resource_ingest",
         )
 
     assert res["status"] == "success"
     assert res["enqueued_count"] == 1
     assert queue.msgs[0].target_uri == "viking://resources/foo"
     assert queue.msgs[0].uri == "viking://temp/import_root"
+    assert queue.msgs[0].source == {
+        "kind": "http",
+        "uri": "https://example.com/demo.pdf",
+    }
+    assert queue.msgs[0].generation_trigger == "resource_ingest"
 
 
 @pytest.mark.asyncio

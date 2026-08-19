@@ -20,13 +20,6 @@ export function formatNumber(value: unknown): string {
   return asNumber(value).toLocaleString()
 }
 
-export function formatDateKey(date: Date): string {
-  const year = date.getFullYear()
-  const month = `${date.getMonth() + 1}`.padStart(2, '0')
-  const day = `${date.getDate()}`.padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
 export function parseDateKey(value: string | undefined): Date {
   const fallback = new Date()
   if (!value) return fallback
@@ -82,18 +75,6 @@ export function formatShortDate(value: string): string {
   if (Number.isNaN(date.getTime())) return value
   return date.toLocaleDateString(undefined, {
     day: '2-digit',
-    month: '2-digit',
-  })
-}
-
-export function formatTimestamp(value: string): string {
-  if (!value) return '--'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString(undefined, {
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
     month: '2-digit',
   })
 }

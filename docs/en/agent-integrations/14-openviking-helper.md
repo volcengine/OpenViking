@@ -58,6 +58,7 @@ Helper reads the relevant local agent configuration and data to display integrat
 
 ## See also
 
+- [Capability Reference](./16-capability-reference.md)
 - [Agent integrations overview](./01-overview.md)
 - [Claude Code Memory Plugin](./02-claude-code.md)
 - [Codex Memory Plugin](./04-codex.md)

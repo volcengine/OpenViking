@@ -42,7 +42,7 @@ The default composition runs left to right, joined by ` │ `. Segments are cond
 |               | `OV ✗ offline`         | red    | probe errored (refused, DNS fail, network down)                                                                       |
 |               | `OV ⚡ bypass`         | yellow | session matched `OPENVIKING_BYPASS_SESSION` or `*_PATTERNS`                                                           |
 | Model · ctx   | `Fable 5 · ctx 42%`    | dim / by usage | always, when CC's statusline payload carries `model` / `context_window`. Registering a custom statusLine replaces CC's native context indicator, so this reproduces it: `<70%` dim, `70–89%` yellow, `≥90%` red (native thresholds). Hide with `OPENVIKING_STATUSLINE_CTX=off`. Shows in bypass mode too — it describes the CC conversation, not OV |
-| Recall        | `↩ 6 mem (0.92) · 50ms` | dim    | last user prompt actually injected memories. `(0.92)` is the top similarity score among picked items; latency is the recall round-trip |
+| Recall        | `↩ 6 mem · 50ms`        | dim    | last user prompt actually injected memories; latency is the recall round-trip                                                    |
 | Capture       | `✎ 573/20k · 2 arch`   | dim    | tokens pending toward the next archive (sawtooth — resets on commit), `2 arch` = archives produced this session       |
 |               | `✎ committed · 2 arch` | dim    | the turn that just finished produced an archive                                                                       |
 |               | `✎ 2 arch`             | dim    | nothing pending, but archives already exist this session                                                              |
@@ -127,7 +127,6 @@ For an assistant adding a segment that consumes existing state. All files live u
 {
   "reason": "ok" | "bypass" | "offline" | "no_results" | "filtered_out" | "short_query" | ...,
   "count": 6,                        // memories actually injected
-  "top_score": 0.92,                 // max score among picked items
   "latency_ms": 180,
   "cc_session_id": "ff875009-...",
   "ts": 1778139288759

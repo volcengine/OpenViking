@@ -121,19 +121,6 @@ function pickFirstNonEmpty(values: Array<unknown>): unknown {
   return ''
 }
 
-export function sameUri(left: string, right: string): boolean {
-  const leftNormalized =
-    left.endsWith('/') || left === 'viking://'
-      ? normalizeDirUri(left)
-      : normalizeFileUri(left)
-  const rightNormalized =
-    right.endsWith('/') || right === 'viking://'
-      ? normalizeDirUri(right)
-      : normalizeFileUri(right)
-
-  return leftNormalized === rightNormalized
-}
-
 export function parseSizeToBytes(value: unknown): number | null {
   if (typeof value === 'number') {
     return Number.isFinite(value) ? value : null
@@ -467,10 +454,6 @@ export function formatSize(
   }
 
   return `${scaled.toFixed(maximumFractionDigits)} ${units[unitIndex]}`
-}
-
-export function normalizeUriForDisplay(uri: string, isDir: boolean): string {
-  return isDir ? normalizeDirUri(uri) : normalizeFileUri(uri)
 }
 
 export function normalizeReadContent(result: unknown): string {

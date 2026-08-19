@@ -25,6 +25,7 @@ logger = get_logger(__name__)
 
 TASK_TYPE = "user_delete"
 _CANCEL_WAIT_SECONDS = 10 * 60
+_SHARED_UPLOAD_ROOT = "viking://upload"
 _ACTIVE_TASK_STATUSES = (
     TaskStatus.PENDING,
     TaskStatus.RUNNING,
@@ -65,14 +66,12 @@ class UserDeletionService:
         service: Any,
         manager: Any,
         service_loop: asyncio.AbstractEventLoop,
-        shared_upload_prefix: str,
         oauth_store: Any = None,
         usage_audit_runtime: Any = None,
     ) -> None:
         self._service = service
         self._manager = manager
         self._service_loop = service_loop
-        self._shared_upload_prefix = shared_upload_prefix.rstrip("/")
         self._oauth_store = oauth_store
         self._usage_audit_runtime = usage_audit_runtime
         self._request_lock = asyncio.Lock()
@@ -435,7 +434,7 @@ class UserDeletionService:
         viking_fs = self._service.viking_fs
         try:
             uploads = await viking_fs.ls(
-                self._shared_upload_prefix,
+                _SHARED_UPLOAD_ROOT,
                 show_all_hidden=True,
                 node_limit=LS_ALL_NODES,
                 ctx=ctx,
@@ -444,14 +443,22 @@ class UserDeletionService:
             return
 
         for upload in uploads:
-            uri = upload.get("uri") or f"{self._shared_upload_prefix}/{upload.get('name', '')}"
-            uri = uri.rstrip("/")
-            if not uri or uri == self._shared_upload_prefix:
+            uri = str(upload.get("uri") or "").rstrip("/")
+            if not uri or uri == _SHARED_UPLOAD_ROOT:
                 continue
+            upload_id = uri.removeprefix(f"{_SHARED_UPLOAD_ROOT}/")
+            if (
+                not upload.get("isDir")
+                or not uri.startswith(f"{_SHARED_UPLOAD_ROOT}/")
+                or not upload_id
+                or "/" in upload_id
+            ):
+                continue
+            meta_uri = f"{uri}/meta"
             try:
-                meta = json.loads(await viking_fs.read_file(f"{uri}/meta.json", ctx=ctx))
+                meta = json.loads(await viking_fs.read_file(meta_uri, ctx=ctx))
             except Exception:
-                logger.warning("Skipping shared upload with unreadable metadata: %s", uri)
+                logger.warning("Skipping shared upload with unreadable metadata: %s", meta_uri)
                 continue
             if meta.get("account") == ctx.account_id and meta.get("user") == ctx.user.user_id:
                 await viking_fs.rm(uri, recursive=True, ctx=ctx)
@@ -520,7 +527,6 @@ async def setup_user_deletion(
     *,
     service: Any,
     manager: Any,
-    shared_upload_prefix: str,
     oauth_store: Any = None,
     usage_audit_runtime: Any = None,
 ) -> Optional[UserDeletionService]:
@@ -531,7 +537,6 @@ async def setup_user_deletion(
         service=service,
         manager=manager,
         service_loop=asyncio.get_running_loop(),
-        shared_upload_prefix=shared_upload_prefix,
         oauth_store=oauth_store,
         usage_audit_runtime=usage_audit_runtime,
     )

@@ -607,7 +607,16 @@ def _find_file_in_pack(pack_uri, retries=10, interval=5):
     return None
 
 
-@pytest.fixture(scope="session", autouse=True)
+def pytest_collection_modifyitems(items):
+    for item in items:
+        if (
+            item.get_closest_marker("cli_remote")
+            and "ensure_resources_dir" not in item.fixturenames
+        ):
+            item.fixturenames.append("ensure_resources_dir")
+
+
+@pytest.fixture(scope="session")
 def ensure_resources_dir():
     r = ov_mkdir("viking://resources")
     if r["exit_code"] != 0:

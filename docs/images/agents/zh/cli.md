@@ -14,7 +14,7 @@ npm i -g @openviking/cli && ov config
 ```text
 https://api.vikingdb.cn-beijing.volces.com/openviking
 ```
-- API Key: 复制以下 API Key 到你的终端
+- API Key: 把本页展示的 API Key 粘贴到终端
 
 
 ### 步骤3：配置完成后，可运行以下命令查看 CLI 用法：

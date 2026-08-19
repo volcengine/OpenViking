@@ -346,6 +346,7 @@ async def delete_account(
     account_prefixes = [
         "viking://user/",
         "viking://resources/",
+        "viking://upload/",
     ]
     for prefix in account_prefixes:
         try:

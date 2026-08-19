@@ -13,11 +13,18 @@ from weakref import WeakKeyDictionary
 from openviking.parse.parsers.media import get_media_type
 from openviking.server.identity import RequestContext
 from openviking.service.task_work_index import bind_task_context, get_task_context
-from openviking.storage.queuefs.semantic_sidecar import write_semantic_sidecars
+from openviking.storage.semantic_sidecar import (
+    SemanticSidecarFormatError,
+    body_for_preview,
+    deterministic_sample,
+    freshness_metadata,
+    write_semantic_sidecars,
+)
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry import bind_telemetry, get_current_telemetry
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.utils import VikingURI
+from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -158,6 +165,8 @@ class SemanticDagExecutor:
         ingest_options: IngestOptions | None = None,
         coalesce_key: str = "",
         coalesce_version: int = 0,
+        source: Optional[Dict[str, str]] = None,
+        generation_trigger: str = "semantic_refresh",
     ):
         self._processor = processor
         self._context_type = context_type
@@ -172,6 +181,8 @@ class SemanticDagExecutor:
         self._ingest_options = IngestOptions.from_value(ingest_options)
         self._coalesce_key = coalesce_key
         self._coalesce_version = coalesce_version
+        self._source = dict(source) if source else None
+        self._generation_trigger = generation_trigger
         self._task_context = get_task_context()
         self._telemetry = get_current_telemetry()
         self._stale = False
@@ -410,7 +421,7 @@ class SemanticDagExecutor:
             else:
                 file_paths.append(item_uri)
 
-        return children_dirs, file_paths
+        return sorted(children_dirs), sorted(file_paths)
 
     def _get_target_file_path(self, current_uri: str) -> Optional[str]:
         if not self._incremental_update or not self._target_uri or not self._root_uri:
@@ -492,7 +503,7 @@ class SemanticDagExecutor:
                         )
                         if overview_content:
                             self._overview_cache[parent_uri] = self._processor._parse_overview_md(
-                                overview_content
+                                body_for_preview(overview_content)
                             )
                         else:
                             self._overview_cache[parent_uri] = {}
@@ -510,6 +521,8 @@ class SemanticDagExecutor:
             if file_name in existing_summaries:
                 return {"name": file_name, "summary": existing_summaries[file_name]}
 
+        except SemanticSidecarFormatError:
+            raise
         except Exception as e:
             logger.debug(f"Failed to read existing summary from overview.md for {file_path}: {e}")
 
@@ -563,7 +576,9 @@ class SemanticDagExecutor:
         try:
             overview = await self._viking_fs.read_file(f"{target_path}/.overview.md", ctx=self._ctx)
             abstract = await self._viking_fs.read_file(f"{target_path}/.abstract.md", ctx=self._ctx)
-            return overview, abstract
+            return body_for_preview(overview), body_for_preview(abstract)
+        except SemanticSidecarFormatError:
+            raise
         except Exception:
             return None, None
 
@@ -590,6 +605,11 @@ class SemanticDagExecutor:
                 summary_dict = await self._processor._generate_single_file_summary(
                     file_path, llm_sem=self._llm_sem, ctx=self._ctx
                 )
+        except SemanticSidecarFormatError:
+            # A generated sidecar that opted into OKF must never be treated as
+            # an empty file summary; doing so would silently feed metadata or
+            # corrupted YAML into a later regeneration.
+            raise
         except Exception as e:
             logger.warning(f"Failed to generate summary for {file_path}: {e}")
             summary_dict = {"name": file_name, "summary": ""}
@@ -735,7 +755,19 @@ class SemanticDagExecutor:
         dir_uri: str,
         overview: str,
         abstract: str,
+        *,
+        total_entries: int,
+        sampled_entries: int,
     ) -> bool:
+        metadata: Dict[str, Any] = {
+            "generated_by": {
+                "component": "SemanticProcessor",
+                "trigger": self._generation_trigger,
+            },
+            "freshness": freshness_metadata(total_entries, sampled_entries),
+        }
+        if dir_uri == self._root_uri and self._source:
+            metadata["source"] = self._source
         wrote = await write_semantic_sidecars(
             viking_fs=self._viking_fs,
             dir_uri=dir_uri,
@@ -743,6 +775,7 @@ class SemanticDagExecutor:
             abstract=abstract,
             ctx=self._ctx,
             is_stale=self._is_stale,
+            metadata=metadata,
             lock=self._lock,
             log_prefix="[SemanticDag]",
         )
@@ -756,6 +789,7 @@ class SemanticDagExecutor:
             return
         need_vectorize = True
         children_changed = True
+        should_write = True
         abstract = ""
         try:
             overview = None
@@ -768,10 +802,28 @@ class SemanticDagExecutor:
                 if not children_changed:
                     need_vectorize = False
                     overview, abstract = await self._read_existing_overview_abstract(dir_uri)
+                    should_write = overview is None or abstract is None
             if overview is None or abstract is None:
                 async with node.lock:
                     file_summaries = self._finalize_file_summaries(node)
                     children_abstracts = await self._finalize_children_abstracts(node)
+                # Freshness describes the directory itself, including direct
+                # entries whose summaries failed. Those entries remain visible
+                # as unsampled coverage instead of disappearing from the count.
+                total_entries = len(node.file_paths) + len(node.children_dirs)
+                sample_limit = getattr(
+                    get_openviking_config().semantic,
+                    "sidecar_sample_size",
+                    32,
+                )
+                tagged_inputs = sorted(
+                    [("file", item) for item in file_summaries]
+                    + [("directory", item) for item in children_abstracts],
+                    key=lambda tagged: str(tagged[1].get("name") or ""),
+                )
+                sampled_inputs = deterministic_sample(tagged_inputs, sample_limit)
+                file_summaries = [item for kind, item in sampled_inputs if kind == "file"]
+                children_abstracts = [item for kind, item in sampled_inputs if kind == "directory"]
                 overview = self._select_direct_media_overview(node, file_summaries)
                 if overview is None:
                     async with self._llm_sem:
@@ -784,13 +836,24 @@ class SemanticDagExecutor:
                 return
 
             # Write directly, protected by the outer semantic lock.
-            try:
-                wrote = await self._write_directory_semantics(dir_uri, overview, abstract)
-                if not wrote:
-                    need_vectorize = False
-            except Exception:
-                logger.info(f"[SemanticDag] {dir_uri} write failed, skipping")
+            if should_write:
+                try:
+                    wrote = await self._write_directory_semantics(
+                        dir_uri,
+                        overview,
+                        abstract,
+                        total_entries=total_entries,
+                        sampled_entries=len(sampled_inputs),
+                    )
+                    if not wrote:
+                        need_vectorize = False
+                except SemanticSidecarFormatError:
+                    raise
+                except Exception:
+                    logger.info(f"[SemanticDag] {dir_uri} write failed, skipping")
 
+        except SemanticSidecarFormatError:
+            raise
         except Exception as e:
             logger.error(f"Failed to generate overview for {dir_uri}: {e}", exc_info=True)
         else:

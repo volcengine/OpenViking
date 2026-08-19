@@ -133,11 +133,12 @@ API keys are sent as `Authorization: Bearer ...` by both hooks and the MCP proxy
 
 ## Verify
 
-Restart OpenCode after installation. In an OpenCode session, the plugin should expose the `openviking` MCP server. OpenCode namespaces MCP tools as `openviking_*`, for example:
+Restart OpenCode after installation. In an OpenCode session, the plugin should expose the `openviking` MCP server with the full server MCP tool set (15 tools). OpenCode namespaces MCP tools as `openviking_*`:
 
-- `openviking_recall`, `openviking_search`, `openviking_find`
-- `openviking_read`, `openviking_list`, `openviking_grep`, `openviking_glob`
-- `openviking_remember`, `openviking_add_resource`, `openviking_forget`, `openviking_health`
+- `openviking_find`, `openviking_search` (`openviking_search` with `mode="context"` replaces the former recall tool)
+- `openviking_read`, `openviking_list`, `openviking_tree`, `openviking_grep`, `openviking_glob`
+- `openviking_remember`, `openviking_write`, `openviking_edit`, `openviking_add_resource`
+- `openviking_list_watches`, `openviking_cancel_watch`, `openviking_forget`, `openviking_health`
 
 Ask OpenCode to search or browse OpenViking memory. Runtime state and errors are written to:
 
@@ -157,3 +158,7 @@ Ask OpenCode to search or browse OpenViking memory. Runtime state and errors are
 | Local `openviking_add_resource` fails | Pass a file path, not a directory; local directories are not uploaded automatically yet |
 
 For all available tools, configuration fields, and runtime file details, see the [plugin README](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-plugin).
+
+## See also
+
+- [Capability Reference](./16-capability-reference.md)

@@ -303,5 +303,6 @@ uv run --project integrations/langchain --extra langgraph python examples/langch
 
 ## 参见
 
+- [集成能力参考](./16-capability-reference.md)
 - [examples/langchain-langgraph/](https://github.com/volcengine/OpenViking/tree/main/examples/langchain-langgraph) — 上面所有示例的完整源码
 - [MCP 客户端](./06-mcp-clients.md) — 非 SDK 方式的 MCP 集成

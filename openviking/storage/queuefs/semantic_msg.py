@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from openviking.utils.ingest_options import IngestOptions
 
+
 def build_semantic_coalesce_key(
     *,
     context_type: str,
@@ -60,6 +61,8 @@ class SemanticMsg:
     changes: Optional[Dict[str, List[str]]] = (
         None  # {"added": [...], "modified": [...], "deleted": [...]}
     )
+    source: Optional[Dict[str, str]] = None
+    generation_trigger: str = "semantic_refresh"
 
     def __init__(
         self,
@@ -80,6 +83,8 @@ class SemanticMsg:
         coalesce_key: str = "",
         coalesce_version: int = 0,
         changes: Optional[Dict[str, List[str]]] = None,
+        source: Optional[Dict[str, str]] = None,
+        generation_trigger: str = "semantic_refresh",
     ):
         self.id = str(uuid4())
         self.uri = uri
@@ -99,6 +104,8 @@ class SemanticMsg:
         self.coalesce_key = coalesce_key
         self.coalesce_version = coalesce_version
         self.changes = changes
+        self.source = dict(source) if source else None
+        self.generation_trigger = generation_trigger
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert object to dictionary."""
@@ -151,6 +158,8 @@ class SemanticMsg:
             coalesce_key=data.get("coalesce_key", ""),
             coalesce_version=data.get("coalesce_version", 0),
             changes=data.get("changes"),
+            source=data.get("source"),
+            generation_trigger=data.get("generation_trigger", "semantic_refresh"),
         )
         if "id" in data and data["id"]:
             obj.id = data["id"]

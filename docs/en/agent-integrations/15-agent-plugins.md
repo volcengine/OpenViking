@@ -26,7 +26,7 @@ Zero npm dependencies — the proxy and the tests run on the Node.js standard li
 2. Point your Agent-Plugins-conforming client at the `agent-plugins/` directory. Each client has its own install command or plugin directory — consult its docs. On load the client will:
    - register the `openviking` MCP server from `mcp.json`, running `node <plugin>/servers/mcp-proxy.mjs` over stdio;
    - discover the `openviking-memory` skill from `skills/`.
-3. Configure credentials (below) and start a session. The model gains `find` / `search` / `recall` / `read` / `list` / `grep` / `glob` / `remember` / `add_resource` / `forget` / `health`, plus `tree` / `write` / `edit` on recent servers.
+3. Configure credentials (below) and start a session. The model gains `find` / `search` / `read` / `list` / `grep` / `glob` / `remember` / `add_resource` / `forget` / `health`, plus `tree` / `write` / `edit` on recent servers.
 
 ## Why a stdio proxy instead of a `streamable-http` entry
 
@@ -57,7 +57,7 @@ Debugging: set `OPENVIKING_DEBUG=1` to write JSON lines to `~/.openviking/logs/a
 
 Agent Plugins 1.0 covers skills and MCP servers only — hooks, commands, and agents are deliberately outside the version, because their semantics differ too much between clients. So this package is the **portable recall + write surface**, driven by the model rather than by lifecycle events: automatic conversation capture and automatic pre-prompt recall are out of scope here.
 
-The bundled `openviking-memory` skill compensates by teaching the model the full loop itself — recall at task start with `find` / `search` / `recall` + `read`, then persist durable facts with `remember` / `write` / `edit`, with priority and safety rules for using retrieved memory.
+The bundled `openviking-memory` skill compensates by teaching the model the full loop itself — recall at task start with `find` / `search` + `read` (using `search` with `mode="context"` when assembled context is useful), then persist durable facts with `remember` / `write` / `edit`, with priority and safety rules for using retrieved memory.
 
 **If your harness has its own hook system, prefer the dedicated plugin.** Hook-driven recall and capture happen without the model spending tool calls or deciding to remember, which is both cheaper and more reliable than the skill-driven loop. Use this Agent Plugins package for harnesses that have no hooks, or when you want one package that works across many clients.
 
@@ -95,3 +95,7 @@ node --test agent-plugins/plugin.test.mjs
 `plugin.test.mjs` checks manifest schema URLs and matching spec versions, the plugin name rules, the closed manifest root, semver, that every `skills/*` child ships a `SKILL.md` with `name` + `description` frontmatter matching its directory, that `mcp.json` entries reference files that exist and stay inside the plugin root, and that `node --check` passes on every `.mjs` in the package.
 
 `servers/shared/*.mjs` are generated copies of `examples/memory-plugin-shared/lib` — edit the shared lib and re-run `node examples/memory-plugin-shared/sync.mjs`; `examples/memory-plugin-shared/sync.test.mjs` fails if they drift. Both test files run in CI.
+
+## See also
+
+- [Capability Reference](./16-capability-reference.md)

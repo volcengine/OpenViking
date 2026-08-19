@@ -1,6 +1,6 @@
 # Codex Memory Plugin
 
-Equip [Codex](https://developers.openai.com/codex) with persistent memory across sessions. Install it once, and your OpenViking profile and memory index are loaded at session start, relevant memories are recalled with every prompt, new turns are captured after each response, and sessions are committed before compaction. The plugin also connects Codex to OpenViking's `/mcp` endpoint, enabling the model to call tools such as `find`, `search`, `recall`, and `remember` directly.
+Equip [Codex](https://developers.openai.com/codex) with persistent memory across sessions. Install it once, and your OpenViking profile and memory index are loaded at session start, relevant memories are recalled with every prompt, new turns are captured after each response, and sessions are committed before compaction. The plugin also connects Codex to OpenViking's `/mcp` endpoint, enabling the model to call tools such as `find`, `search`, `read`, and `remember` directly.
 
 Source: [examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin) | [Blog: Motivation & demo](https://blog.openviking.ai/post/openviking-coding-agent/)
 
@@ -10,6 +10,14 @@ Claude Code and Codex share one installer. It asks for your language (English/�
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh)
+```
+
+TraeCode CLI 2.0 accepts this Codex-format plugin directly. Its default
+installer entry is `--harness trae-cli`:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) \
+  --harness trae-cli
 ```
 
 In regions where GitHub is hard to reach, run the same installer from the Volcengine TOS mirror (or pick "TOS mirror" at the download-source prompt). Codex installs from a TOS-hosted git repo and keeps remote update support:
@@ -45,6 +53,7 @@ Prerequisites: Node.js >= 22, Codex >= 0.130.0, and the `plugin_hooks` feature e
 ## Verify
 
 Launch `codex`; on the first prompt of a session, the `SessionStart` hook should load your profile, and the plugin should then recall relevant memories for every prompt. Set `OPENVIKING_DEBUG=1` to write events to `~/.openviking/logs/codex-hooks.log`.
+For TraeCode CLI 2.0, launch `trae-cli` and use `trae-cli plugin list` to confirm the plugin is enabled.
 
 ## How it works
 
@@ -57,14 +66,14 @@ Tool calls and results are captured as dedicated `tool` parts, and `tool_output`
 <details>
 <summary><b>Configuration</b></summary>
 
-Credential source: active `ovcli.conf` wins by default (`OPENVIKING_CLI_CONFIG_FILE` or `~/.openviking/ovcli.conf`), so `ov config switch <name>` changes hooks, MCP proxy, and child `ov` commands together on the next launch. Set `OPENVIKING_CREDENTIAL_SOURCE=env` only when you intentionally want env vars to override the CLI config. Without an ovcli config, env vars then `ov.conf` then built-in defaults are used.
+Credential source: env vars win by default — when any `OPENVIKING_*` credential env var (`OPENVIKING_URL`/`OPENVIKING_BASE_URL`, `OPENVIKING_BEARER_TOKEN`/`OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, `OPENVIKING_PEER_ID`) is set, its value takes precedence over the active `ovcli.conf`. Only when none of them are set does the active `ovcli.conf` (`OPENVIKING_CLI_CONFIG_FILE` or `~/.openviking/ovcli.conf`) drive hooks, MCP proxy, and child `ov` commands together, so `ov config switch <name>` takes effect on the next launch. Set `OPENVIKING_CREDENTIAL_SOURCE=cli` to force the active ovcli config even while credential env vars are present. Fields not covered by either fall back to `ovcli.conf`, then `ov.conf`, then built-in defaults.
 
 | Env Var | Default | Description |
 |---------|---------|-------------|
 | `OPENVIKING_URL` / `OPENVIKING_BASE_URL` | — | Full server URL |
 | `OPENVIKING_API_KEY` | — | API key (sent as `Authorization: Bearer`) |
 | `OPENVIKING_CLI_CONFIG_FILE` | `~/.openviking/ovcli.conf` | Active CLI config to use for hooks, MCP, and child `ov` commands |
-| `OPENVIKING_CREDENTIAL_SOURCE` | `auto` | Set `env` to force env-var credentials instead of active ovcli config |
+| `OPENVIKING_CREDENTIAL_SOURCE` | `auto` | `auto` prefers env-var credentials when any are set; `cli` forces the active ovcli config, `env` forces env vars |
 | `OPENVIKING_NO_AUTO_INJECT` | `false` | Disable fixed session-start profile/background injection without disabling per-prompt recall |
 | `OPENVIKING_PROFILE_TOKEN_BUDGET` | `10000` | CJK-aware token budget for `profile.md` plus `preferences/` and `entities/` indexes |
 | `OPENVIKING_CODEX_ACTIVE_WINDOW_MS` | `120000` | SessionStart active-window threshold |
@@ -85,10 +94,11 @@ Additional tuning options (e.g., `OPENVIKING_RECALL_LIMIT`, `OPENVIKING_CAPTURE_
 | MCP tool calls fail with a connection error | Server unreachable or the URL is wrong | Check the endpoint: `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
 | `4 hooks need review` | Security review on first launch | Run `/hooks` within Codex and approve the hooks. |
 | Plugin still targets an old server after `ov config switch` | Codex keeps the proxy process from the previous session | Restart Codex; the proxy resolves credentials at startup. |
-| Hooks use one server, MCP another | `OPENVIKING_CREDENTIAL_SOURCE=env` set with stale env vars in one context | Unset it (ovcli.conf then drives both), or make the env vars consistent. |
+| Hooks use one server, MCP another | Stale `OPENVIKING_*` credential env vars in one context (env vars override ovcli.conf by default) | Unset the stale env vars (ovcli.conf then drives both), set `OPENVIKING_CREDENTIAL_SOURCE=cli`, or make the env vars consistent. |
 
 ## See also
 
+- [Capability Reference](./16-capability-reference.md)
 - [Blog: OpenViking in Claude Code / Codex](https://blog.openviking.ai/post/openviking-coding-agent/) — Motivation, architecture overview, and demo.
 - [Plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md) — Full environment variable list and architecture diagram.
 - [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/DESIGN.md) — Commit decision tree.
