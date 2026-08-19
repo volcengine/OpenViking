@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -37,7 +37,6 @@ from openviking.session.memory.streaming_memory_updater import (
     split_request_by_merge_group,
 )
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
-from openviking.storage.viking_fs import LS_ALL_NODES
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -45,7 +44,6 @@ class InMemoryVikingFS:
     def __init__(self, files: dict[str, str] | None = None):
         self.files = dict(files or {})
         self.writes = []
-        self.tree_calls = []
 
     async def ls(self, uri: str, output: str = "original", ctx=None):
         del output, ctx
@@ -61,27 +59,6 @@ class InMemoryVikingFS:
         if uri not in self.files:
             raise FileNotFoundError(uri)
         return self.files[uri]
-
-    async def tree(
-        self,
-        uri: str,
-        output: str = "original",
-        node_limit: int | None = 1000,
-        level_limit: int | None = 3,
-        ctx=None,
-    ):
-        self.tree_calls.append((uri, output, node_limit, level_limit, ctx))
-        prefix = uri.rstrip("/") + "/"
-        return [
-            {
-                "name": path.rsplit("/", 1)[-1],
-                "uri": path,
-                "rel_path": path.removeprefix(prefix),
-                "isDir": False,
-            }
-            for path in sorted(self.files)
-            if path.startswith(prefix)
-        ]
 
     async def write_file(self, uri: str, content: str, ctx=None, lease_ref=None):
         del lease_ref
@@ -106,56 +83,17 @@ class RecordingPathlockClient:
     def __init__(self, events: list[tuple]):
         self.events = events
 
-    async def pathlock_acquire_exact_batch(
-        self,
-        paths,
-        timeout_secs=0.0,
-        owner_lease_ref=None,
-    ):
+    async def pathlock_acquire_exact_batch(self, paths, timeout_secs=0.0):
         lease_number = len([event for event in self.events if event[0] == "acquire"]) + 1
         lease_ref = (
             "memory-batch-lease" if lease_number == 1 else f"memory-batch-lease-{lease_number}"
         )
         lease = {"lease_ref": lease_ref}
-        if owner_lease_ref is not None:
-            lease.update(
-                {
-                    "owner_id": owner_lease_ref["owner_id"],
-                    "ownership_ref": f"{lease_ref}-ownership",
-                }
-            )
-        event = ("acquire", tuple(paths), timeout_secs)
-        if owner_lease_ref is not None:
-            event += (owner_lease_ref,)
-        self.events.append(event)
-        return lease
-
-    async def pathlock_acquire_tree(self, path, timeout_secs=0.0, owner_lease_ref=None):
-        lease = {
-            "lease_ref": "memory-tree-lease",
-            "owner_id": "memory-tree-owner",
-            "ownership_ref": "memory-tree-ownership",
-        }
-        self.events.append(("acquire_tree", path, timeout_secs, owner_lease_ref))
+        self.events.append(("acquire", tuple(paths), timeout_secs))
         return lease
 
     async def pathlock_release(self, lease):
         self.events.append(("release", lease))
-
-
-class SerializingTreePathlockClient(RecordingPathlockClient):
-    def __init__(self, events: list[tuple]):
-        super().__init__(events)
-        self.tree_lock = asyncio.Lock()
-
-    async def pathlock_acquire_tree(self, path, timeout_secs=0.0, owner_lease_ref=None):
-        await self.tree_lock.acquire()
-        return await super().pathlock_acquire_tree(path, timeout_secs, owner_lease_ref)
-
-    async def pathlock_release(self, lease):
-        await super().pathlock_release(lease)
-        if lease.get("lease_ref") == "memory-tree-lease":
-            self.tree_lock.release()
 
 
 class PathlockedInMemoryVikingFS(InMemoryVikingFS):
@@ -238,32 +176,6 @@ def _registry() -> MemoryTypeRegistry:
             ],
         )
     )
-    registry.register(
-        MemoryTypeSchema(
-            memory_type="entities",
-            description="entity memory",
-            directory="viking://user/{{ user_space }}/memories/entities",
-            filename_template="{{ category|lower }}/{{ name|lower }}.md",
-            case_insensitive_filenames=True,
-            fields=[
-                MemoryField(
-                    name="category",
-                    field_type=FieldType.STRING,
-                    merge_op=MergeOp.IMMUTABLE,
-                ),
-                MemoryField(
-                    name="name",
-                    field_type=FieldType.STRING,
-                    merge_op=MergeOp.IMMUTABLE,
-                ),
-                MemoryField(
-                    name="content",
-                    field_type=FieldType.STRING,
-                    merge_op=MergeOp.PATCH,
-                ),
-            ],
-        )
-    )
     return registry
 
 
@@ -304,19 +216,6 @@ def _peer_note_op(name: str, peer_id: str) -> ResolvedOperation:
     op.memory_fields["peer_id"] = peer_id
     op.uris = [f"viking://user/u/peers/{peer_id}/memories/notes/{name}.md"]
     return op
-
-
-def _entity_op(category: str, name: str, content: str) -> ResolvedOperation:
-    return ResolvedOperation(
-        old_memory_file_content=None,
-        memory_type="entities",
-        uris=[f"viking://user/u/memories/entities/{category.lower()}/{name.lower()}.md"],
-        memory_fields={
-            "category": category,
-            "name": name,
-            "content": StrPatch(blocks=[SearchReplaceBlock(search="", replace=content)]),
-        },
-    )
 
 
 async def test_operation_to_patch_omits_raw_operation_metadata():
@@ -1124,21 +1023,6 @@ async def test_classify_memory_merge_mode_treats_noop_str_patch_as_unchanged():
     assert reason == "single_existing_content_unchanged"
 
 
-async def test_classify_memory_merge_mode_merges_empty_search_patch_against_existing():
-    op = _entity_op("concept", "smart", "new fact")
-    op.old_memory_file_content = MemoryFile(
-        uri=op.uris[0],
-        content="old fact",
-        memory_type="entities",
-        extra_fields={"category": "concept", "name": "smart"},
-    )
-
-    fast_path, reason = await classify_memory_merge_mode([op], schema=_registry().get("entities"))
-
-    assert fast_path is False
-    assert reason == "patch_unrepresentable_against_existing"
-
-
 async def test_classify_memory_merge_mode_detects_changed_str_patch_after_preview():
     old_file = MemoryFile(
         uri="viking://user/u/memories/notes/note.md",
@@ -1162,314 +1046,6 @@ async def test_classify_memory_merge_mode_detects_changed_str_patch_after_previe
 
     assert fast_path is False
     assert reason == "single_existing_content_changed"
-
-
-@pytest.mark.asyncio
-async def test_entity_create_reuses_legacy_uri_under_tree_lease(monkeypatch):
-    legacy_uri = "viking://user/u/memories/entities/Concept/SMART.md"
-    canonical_uri = "viking://user/u/memories/entities/concept/smart.md"
-    deleted_uri = "viking://user/u/memories/entities/concept/old.md"
-    neighbor_uri = "viking://user/u/memories/notes/neighbor.md"
-    legacy_file = MemoryFile(
-        uri=legacy_uri,
-        content="old fact",
-        memory_type="entities",
-        extra_fields={"category": "Concept", "name": "SMART"},
-    )
-    deleted_file = MemoryFile(
-        uri=deleted_uri,
-        content="old entity",
-        memory_type="entities",
-        extra_fields={"category": "concept", "name": "old"},
-    )
-    neighbor_file = MemoryFile(
-        uri=neighbor_uri,
-        content="neighbor",
-        memory_type="notes",
-        extra_fields={"note_name": "neighbor"},
-    )
-    fs = PathlockedInMemoryVikingFS(
-        {
-            legacy_uri: MemoryFileUtils.write(legacy_file),
-            deleted_uri: MemoryFileUtils.write(deleted_file),
-            neighbor_uri: MemoryFileUtils.write(neighbor_file),
-        }
-    )
-    fs.search = AsyncMock(return_value=[])
-    monkeypatch.setattr(
-        "openviking.session.memory.streaming_memory_updater.get_viking_fs", lambda: fs
-    )
-    monkeypatch.setattr("openviking.session.memory.memory_updater.get_viking_fs", lambda: fs)
-    merged_op = ResolvedOperation(
-        old_memory_file_content=legacy_file,
-        memory_type="entities",
-        uris=[legacy_uri],
-        memory_fields={
-            "category": "Concept",
-            "name": "SMART",
-            "content": StrPatch(
-                blocks=[SearchReplaceBlock(search="old fact", replace="old fact\nnew fact")]
-            ),
-        },
-    )
-
-    async def fake_merge(self, requests):
-        rebound = requests[0].operations.upsert_operations[0]
-        assert rebound.uris == [legacy_uri]
-        assert rebound.old_memory_file_content is not None
-        assert rebound.memory_fields["category"] == "Concept"
-        assert rebound.memory_fields["name"] == "SMART"
-        assert requests[0].operations.delete_replacements == {deleted_uri: legacy_uri}
-        return ResolvedOperations(
-            upsert_operations=[merged_op],
-            delete_file_contents=[deleted_file],
-            errors=[],
-            delete_replacements={deleted_uri: legacy_uri},
-        )
-
-    monkeypatch.setattr(StreamingMemoryUpdater, "_merge_requests", fake_merge)
-    updater = StreamingMemoryUpdater(
-        registry=_registry(),
-        config=StreamingMemoryUpdaterConfig(max_operations_per_update=2),
-    )
-    request = MemoryUpdateRequest(
-        operations=ResolvedOperations(
-            upsert_operations=[_entity_op("concept", "SMART", "new fact")],
-            delete_file_contents=[deleted_file],
-            errors=[],
-            resolved_links=[StoredLink(from_uri=canonical_uri, to_uri=neighbor_uri)],
-            delete_replacements={deleted_uri: canonical_uri},
-        ),
-        messages=[],
-        ctx=_ctx(),
-    )
-
-    result = await updater.submit(request)
-
-    assert set(result.apply_result.edited_uris) == {legacy_uri, neighbor_uri}
-    assert canonical_uri not in fs.files
-    assert deleted_uri not in fs.files
-    assert "new fact" in MemoryFileUtils.read(fs.files[legacy_uri]).content
-    assert MemoryFileUtils.read(fs.files[legacy_uri]).links[0]["to_uri"] == neighbor_uri
-    assert MemoryFileUtils.read(fs.files[neighbor_uri]).backlinks[0]["from_uri"] == legacy_uri
-    assert result.operations.delete_replacements == {deleted_uri: legacy_uri}
-    assert result.metadata["uri_remap"] == {canonical_uri: legacy_uri}
-    assert fs.tree_calls[0][2:4] == (LS_ALL_NODES, None)
-    tree_event = fs.events[0]
-    exact_event = next(event for event in fs.events if event[0] == "acquire")
-    assert tree_event[:3] == (
-        "acquire_tree",
-        "/user/u/memories/entities",
-        300.0,
-    )
-    assert exact_event[3]["lease_ref"] == "memory-tree-lease"
-    child_release = (
-        "release",
-        {
-            "lease_ref": "memory-batch-lease",
-            "owner_id": "memory-tree-owner",
-            "ownership_ref": "memory-batch-lease-ownership",
-        },
-    )
-    tree_release = (
-        "release",
-        {
-            "lease_ref": "memory-tree-lease",
-            "owner_id": "memory-tree-owner",
-            "ownership_ref": "memory-tree-ownership",
-        },
-    )
-    assert fs.events.index(child_release) < fs.events.index(tree_release)
-
-
-@pytest.mark.asyncio
-async def test_concurrent_entity_first_writers_merge_under_tree_lease(monkeypatch):
-    uri = "viking://user/u/memories/entities/concept/smart.md"
-    fs = PathlockedInMemoryVikingFS()
-    fs._async_agfs = SerializingTreePathlockClient(fs.events)
-    fs.search = AsyncMock(return_value=[])
-    monkeypatch.setattr(
-        "openviking.session.memory.streaming_memory_updater.get_viking_fs", lambda: fs
-    )
-    monkeypatch.setattr("openviking.session.memory.memory_updater.get_viking_fs", lambda: fs)
-
-    async def fake_merge(self, requests):
-        op = requests[0].operations.upsert_operations[0]
-        await asyncio.sleep(0)
-        if op.old_memory_file_content is not None:
-            old = op.old_memory_file_content.content
-            op.memory_fields["content"] = StrPatch(
-                blocks=[SearchReplaceBlock(search=old, replace=f"{old}\nsecond fact")]
-            )
-        return ResolvedOperations(upsert_operations=[op], delete_file_contents=[], errors=[])
-
-    monkeypatch.setattr(StreamingMemoryUpdater, "_merge_requests", fake_merge)
-    requests = [
-        MemoryUpdateRequest(
-            operations=ResolvedOperations(
-                upsert_operations=[_entity_op("concept", "smart", content)],
-                delete_file_contents=[],
-                errors=[],
-            ),
-            messages=[],
-            ctx=_ctx(),
-        )
-        for content in ("first fact", "second fact")
-    ]
-
-    await asyncio.gather(
-        *(
-            StreamingMemoryUpdater(registry=_registry())._process_batch(
-                MemoryMergeGroupKey(peer_id=None, memory_type="entities"),
-                [request],
-                "test",
-            )
-            for request in requests
-        )
-    )
-
-    assert list(fs.files) == [uri]
-    assert MemoryFileUtils.read(fs.files[uri]).content == "first fact\nsecond fact"
-
-
-@pytest.mark.asyncio
-async def test_entity_tree_lease_is_released_when_merge_fails(monkeypatch):
-    fs = PathlockedInMemoryVikingFS()
-    monkeypatch.setattr(
-        "openviking.session.memory.streaming_memory_updater.get_viking_fs", lambda: fs
-    )
-
-    async def fail_merge(self, requests):
-        raise RuntimeError("merge failed")
-
-    monkeypatch.setattr(StreamingMemoryUpdater, "_merge_requests", fail_merge)
-    request = MemoryUpdateRequest(
-        operations=ResolvedOperations(
-            upsert_operations=[_entity_op("concept", "smart", "fact")],
-            delete_file_contents=[],
-            errors=[],
-        ),
-        messages=[],
-        ctx=_ctx(),
-    )
-
-    with pytest.raises(RuntimeError, match="merge failed"):
-        await StreamingMemoryUpdater(registry=_registry())._process_batch(
-            MemoryMergeGroupKey(peer_id=None, memory_type="entities"), [request], "test"
-        )
-
-    assert [event[0] for event in fs.events] == ["acquire_tree", "release"]
-    assert fs.events[-1][1]["lease_ref"] == "memory-tree-lease"
-
-
-@pytest.mark.asyncio
-async def test_entity_case_conflict_routes_to_deterministic_winner(monkeypatch):
-    upper_uri = "viking://user/u/memories/entities/concept/SMART.md"
-    title_uri = "viking://user/u/memories/entities/concept/Smart.md"
-    canonical_uri = "viking://user/u/memories/entities/concept/smart.md"
-    upper_file = MemoryFile(
-        uri=upper_uri,
-        content="upper fact",
-        memory_type="entities",
-        extra_fields={"category": "concept", "name": "SMART"},
-    )
-    title_file = MemoryFile(
-        uri=title_uri,
-        content="title fact",
-        memory_type="entities",
-        extra_fields={"category": "concept", "name": "Smart"},
-    )
-    fs = PathlockedInMemoryVikingFS(
-        {
-            upper_uri: MemoryFileUtils.write(upper_file),
-            title_uri: MemoryFileUtils.write(title_file),
-        }
-    )
-    fs.search = AsyncMock(return_value=[])
-    monkeypatch.setattr(
-        "openviking.session.memory.streaming_memory_updater.get_viking_fs", lambda: fs
-    )
-    monkeypatch.setattr("openviking.session.memory.memory_updater.get_viking_fs", lambda: fs)
-
-    async def fake_merge(self, requests):
-        rebound = requests[0].operations.upsert_operations[0]
-        return ResolvedOperations(
-            upsert_operations=[
-                rebound.model_copy(
-                    update={
-                        "memory_fields": {
-                            **rebound.memory_fields,
-                            "content": StrPatch(
-                                blocks=[
-                                    SearchReplaceBlock(
-                                        search="upper fact",
-                                        replace="upper fact\nnew fact",
-                                    )
-                                ]
-                            ),
-                        }
-                    }
-                )
-            ],
-            delete_file_contents=[],
-            errors=[],
-        )
-
-    monkeypatch.setattr(StreamingMemoryUpdater, "_merge_requests", fake_merge)
-    warning = Mock()
-    monkeypatch.setattr(
-        "openviking.session.memory.streaming_memory_updater.logger.warning", warning
-    )
-    updater = StreamingMemoryUpdater(registry=_registry())
-    request = MemoryUpdateRequest(
-        operations=ResolvedOperations(
-            upsert_operations=[_entity_op("concept", "smart", "new fact")],
-            delete_file_contents=[],
-            errors=[],
-        ),
-        messages=[],
-        ctx=_ctx(),
-    )
-
-    result = await updater._process_batch(
-        MemoryMergeGroupKey(peer_id=None, memory_type="entities"), [request], "test"
-    )
-
-    assert result.apply_result.edited_uris == [upper_uri]
-    assert canonical_uri not in fs.files
-    assert MemoryFileUtils.read(fs.files[title_uri]).content == "title fact"
-    assert result.metadata["case_conflicts"] == {
-        "viking://user/u/memories/entities/concept/smart.md": [upper_uri, title_uri]
-    }
-    warning.assert_called_once()
-    assert "case-insensitive memory URI conflict" in warning.call_args.args[0]
-    assert result.apply_result.errors == []
-
-
-def test_bound_entity_uri_is_not_rerendered():
-    legacy_uri = "viking://user/u/memories/entities/Concept/SMART.md"
-    old_file = MemoryFile(
-        uri=legacy_uri,
-        content="old fact",
-        memory_type="entities",
-        extra_fields={"category": "Concept", "name": "SMART"},
-    )
-    op = ResolvedOperation(
-        old_memory_file_content=old_file,
-        memory_type="entities",
-        uris=[legacy_uri],
-        memory_fields={"category": "Concept", "name": "SMART", "content": "old fact"},
-    )
-
-    enforce_merge_group_peer_id(
-        [op],
-        peer_id=None,
-        memory_type="entities",
-        registry=_registry(),
-        ctx=_ctx(),
-    )
-
-    assert op.uris == [legacy_uri]
 
 
 @pytest.mark.asyncio

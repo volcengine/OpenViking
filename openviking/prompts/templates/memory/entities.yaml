@@ -5,8 +5,6 @@ description: |
   user mentions. Store what the entity is and its durable relations.
 directory: "viking://user/{{ user_space }}/memories/entities"
 filename_template: "{{ category|lower }}/{{ name|lower }}.md"
-# Reuse legacy case variants instead of creating a second entity file.
-case_insensitive_filenames: true
 enabled: true
 embedding_template: |-
   {{ category }}

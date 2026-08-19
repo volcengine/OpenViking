@@ -215,7 +215,6 @@ class MemoryTypeRegistry:
             operation_mode=data.get("operation_mode", "upsert"),
             stage=stage,
             peer_enabled=data.get("peer_enabled", True),
-            case_insensitive_filenames=data.get("case_insensitive_filenames", False),
             overview_template=data.get("overview_template"),
         )
 

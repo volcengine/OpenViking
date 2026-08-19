@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import re
 import threading
-import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Hashable
 
@@ -29,10 +28,7 @@ from openviking.session.memory.dataclass import (
     StoredLink,
 )
 from openviking.session.memory.extract_loop import ExtractLoop
-from openviking.session.memory.memory_isolation_handler import (
-    MemoryIsolationHandler,
-    peer_user_space,
-)
+from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_type_registry import (
     MemoryTypeRegistry,
     create_default_registry,
@@ -44,7 +40,7 @@ from openviking.session.memory.memory_updater import (
     remap_stored_links,
     write_stored_links,
 )
-from openviking.session.memory.merge_op import MergeOp, MergeOpFactory
+from openviking.session.memory.merge_op import MergeOpFactory
 from openviking.session.memory.patch_merge_context_provider import (
     PatchMergeContextProvider,
     PatchMergePatch,
@@ -55,8 +51,7 @@ from openviking.session.memory.utils.streaming_batcher import (
     StreamingBatcher,
     StreamingBatcherConfig,
 )
-from openviking.session.memory.utils.uri import render_template
-from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
+from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
 from openviking.telemetry.tracer import get_trace_id
 from openviking_cli.exceptions import NotFoundError
@@ -241,13 +236,8 @@ class StreamingMemoryUpdater:
         links = merge_link_lists(list(getattr(request.operations, "resolved_links", []) or []))
         if not links:
             return
-        uri_remap = dict(result.metadata.get("uri_remap") or {})
         links = remap_stored_links(
-            links,
-            {
-                **dict(getattr(result.operations, "delete_replacements", {}) or {}),
-                **uri_remap,
-            },
+            links, dict(getattr(result.operations, "delete_replacements", {}) or {})
         )
         viking_fs = safe_get_viking_fs()
         lock_paths = _uri_lock_paths(_link_endpoint_uri_set(links), viking_fs, request.ctx)
@@ -434,62 +424,13 @@ class StreamingMemoryUpdater:
             f"input_deletes={input_deletes}",
             console=self.config.trace_console,
         )
+        merged_operations = await self._merge_requests(requests)
         first_request = requests[0]
-        schema = (self.registry or create_default_registry()).get(group_key.memory_type)
-        viking_fs = safe_get_viking_fs()
-        tree_lease = None
-        root_uri = ""
-        uri_remap: dict[str, str] = {}
-        case_conflicts: dict[str, list[str]] = {}
-        needs_case_rebind = any(
-            op.old_memory_file_content is None and op.uris
-            for request in requests
-            for op in request.operations.upsert_operations
+        apply_result = await self._apply_operations(
+            operations=merged_operations,
+            request=first_request,
+            messages=_combined_request_messages(requests),
         )
-        if getattr(schema, "case_insensitive_filenames", False) and needs_case_rebind:
-            root_uri = _case_insensitive_memory_root(group_key, schema, first_request.ctx)
-            if (
-                viking_fs is None
-                or not hasattr(viking_fs, "_async_agfs")
-                or not callable(getattr(viking_fs, "_uri_to_path", None))
-            ):
-                raise RuntimeError(
-                    "Case-insensitive memory filenames require VikingFS pathlock support"
-                )
-        if root_uri:
-            async with self._apply_lock:
-                root_path = viking_fs._uri_to_path(root_uri, ctx=first_request.ctx)
-                # ponytail: the root lease and process lock span LLM merge; replace them
-                # with a verified post-merge lock-set protocol if latency becomes a bottleneck.
-                tree_lease = await viking_fs._async_agfs.pathlock_acquire_tree(
-                    root_path,
-                    timeout_secs=_MEMORY_APPLY_LOCK_TIMEOUT_SECONDS,
-                )
-                try:
-                    uri_remap, case_conflicts = await _rebind_case_insensitive_targets(
-                        requests,
-                        schema=schema,
-                        root_uri=root_uri,
-                        viking_fs=viking_fs,
-                        ctx=first_request.ctx,
-                    )
-                    merged_operations = await self._merge_requests(requests)
-                    apply_result = await self._apply_operations(
-                        operations=merged_operations,
-                        request=first_request,
-                        messages=_combined_request_messages(requests),
-                        owner_lease_ref=tree_lease,
-                        apply_lock_held=True,
-                    )
-                finally:
-                    await viking_fs._async_agfs.pathlock_release(tree_lease)
-        else:
-            merged_operations = await self._merge_requests(requests)
-            apply_result = await self._apply_operations(
-                operations=merged_operations,
-                request=first_request,
-                messages=_combined_request_messages(requests),
-            )
         result = StreamingMemoryUpdateResult(
             operations=merged_operations,
             apply_result=apply_result,
@@ -498,8 +439,6 @@ class StreamingMemoryUpdater:
                 "flush_reason": reason,
                 "operation_count": _operation_count(merged_operations),
                 "merge_group": _merge_group_key_label(group_key),
-                "uri_remap": uri_remap,
-                "case_conflicts": case_conflicts,
             },
         )
         self._last_result = result
@@ -520,25 +459,21 @@ class StreamingMemoryUpdater:
         operations: ResolvedOperations,
         request: MemoryUpdateRequest,
         messages: list[Message],
-        owner_lease_ref: Any | None = None,
-        apply_lock_held: bool = False,
     ) -> MemoryUpdateResult:
         extract_context = ExtractContext(messages)
         isolation_handler = _make_isolation_handler(request, extract_context)
-
-        async def apply_locked() -> MemoryUpdateResult:
+        async with self._apply_lock:
             viking_fs = safe_get_viking_fs()
             lease = await _acquire_stable_operation_lease(
                 operations,
                 viking_fs,
                 request.ctx,
-                owner_lease_ref=owner_lease_ref,
             )
             try:
                 updater = MemoryUpdater(
                     registry=self.registry,
                     vikingdb=self.vikingdb,
-                    transaction_handle=lease or owner_lease_ref,
+                    transaction_handle=lease,
                 )
                 return await updater.apply_operations(
                     operations,
@@ -549,11 +484,6 @@ class StreamingMemoryUpdater:
             finally:
                 if lease is not None:
                     await viking_fs._async_agfs.pathlock_release(lease)
-
-        if apply_lock_held:
-            return await apply_locked()
-        async with self._apply_lock:
-            return await apply_locked()
 
     async def _merge_requests(self, requests: list[MemoryUpdateRequest]) -> ResolvedOperations:
         all_ops = ResolvedOperations(
@@ -1165,8 +1095,6 @@ async def classify_memory_merge_mode(
     if old_file is None:
         return True, "single_new_file"
     fields = dict(getattr(op, "memory_fields", {}) or {})
-    if _patch_has_empty_search(fields.get("content")):
-        return False, "patch_unrepresentable_against_existing"
     if "content" not in fields:
         return False, "single_existing_non_content_patch"
     old_plain_content = old_file.plain_content().strip()
@@ -1197,16 +1125,6 @@ async def classify_memory_merge_mode(
     if old_plain_content == str(fields.get("content") or "").strip():
         return True, "single_existing_content_unchanged"
     return False, "single_existing_content_changed"
-
-
-def _patch_has_empty_search(value: Any) -> bool:
-    blocks = value.get("blocks") if isinstance(value, dict) else getattr(value, "blocks", None)
-    if not isinstance(blocks, list):
-        return False
-    return any(
-        not (block.get("search") if isinstance(block, dict) else getattr(block, "search", None))
-        for block in blocks
-    )
 
 
 def _inherit_source_metadata_to_merged_operations(
@@ -1303,8 +1221,6 @@ def _uris_for_merge_group_operation(
     ctx: RequestContext,
     peer_id: str | None,
 ) -> list[str]:
-    if schema.case_insensitive_filenames and op.old_memory_file_content is not None:
-        return list(op.uris or [])
     fields = dict(op.memory_fields or {})
     user_id = getattr(getattr(ctx, "user", None), "user_id", None) or fields.get("user_id")
     if not user_id:
@@ -1589,16 +1505,6 @@ def scope_memory_update_result_to_submitter(
     """
 
     scope = _memory_submitter_scope_from_request(request)
-    uri_remap = dict(result.metadata.get("uri_remap") or {})
-    if uri_remap:
-        scope = _MemorySubmitterScope(
-            extraction_id=scope.extraction_id,
-            session_id=scope.session_id,
-            archive_uri=scope.archive_uri,
-            request_uris=frozenset(
-                set(scope.request_uris) | {uri_remap.get(uri, uri) for uri in scope.request_uris}
-            ),
-        )
     if scope.is_empty:
         return result
 
@@ -1903,9 +1809,6 @@ def combine_streaming_memory_results(
                 metadata.setdefault(key, result.metadata.get(key))
         if result.metadata.get("fast_path"):
             metadata["fast_path"] = True
-        for key in ("uri_remap", "case_conflicts"):
-            if result.metadata.get(key):
-                metadata.setdefault(key, {}).update(result.metadata[key])
     metadata["operation_count"] = _operation_count(combined_operations)
     return StreamingMemoryUpdateResult(
         operations=combined_operations,
@@ -1934,114 +1837,6 @@ def _make_isolation_handler(
         allow_self=options.get("allow_self", True),
         allowed_peer_ids=options.get("allowed_peer_ids"),
     )
-
-
-def _case_insensitive_memory_root(
-    group_key: MemoryMergeGroupKey,
-    schema: MemoryTypeSchema,
-    ctx: RequestContext,
-) -> str:
-    user_id = getattr(getattr(ctx, "user", None), "user_id", None)
-    if not user_id:
-        raise ValueError("Case-insensitive memory filename matching requires a user_id")
-    user_space = peer_user_space(user_id, group_key.peer_id) if group_key.peer_id else user_id
-    return render_template(schema.directory, {"user_space": user_space}).rstrip("/")
-
-
-def _fold_uri_relative_path(root_uri: str, uri: str) -> str | None:
-    prefix = root_uri.rstrip("/") + "/"
-    if not str(uri).startswith(prefix):
-        return None
-    relative_path = str(uri)[len(prefix) :]
-    if not relative_path or any(part.startswith(".") for part in relative_path.split("/")):
-        return None
-    return unicodedata.normalize("NFC", relative_path).casefold()
-
-
-async def _rebind_case_insensitive_targets(
-    requests: list[MemoryUpdateRequest],
-    *,
-    schema: MemoryTypeSchema,
-    root_uri: str,
-    viking_fs: Any,
-    ctx: RequestContext,
-) -> tuple[dict[str, str], dict[str, list[str]]]:
-    try:
-        entries = await viking_fs.tree(
-            root_uri,
-            output="original",
-            node_limit=LS_ALL_NODES,
-            level_limit=None,
-            ctx=ctx,
-        )
-    except (FileNotFoundError, NotFoundError):
-        entries = []
-    existing_by_key: dict[str, list[str]] = {}
-    for entry in entries:
-        if entry.get("isDir"):
-            continue
-        uri = str(entry.get("uri") or "")
-        key = _fold_uri_relative_path(root_uri, uri)
-        if key is not None:
-            existing_by_key.setdefault(key, []).append(uri)
-
-    uri_remap: dict[str, str] = {}
-    case_conflicts: dict[str, list[str]] = {}
-    immutable_fields = {field.name for field in schema.fields if field.merge_op != MergeOp.PATCH}
-    operations_by_key: dict[str, list[ResolvedOperation]] = {}
-    for request in requests:
-        for op in request.operations.upsert_operations:
-            if op.old_memory_file_content is not None or not op.uris:
-                continue
-            target_uri = op.uris[0]
-            key = _fold_uri_relative_path(root_uri, target_uri)
-            if key is None:
-                continue
-            operations_by_key.setdefault(key, []).append(op)
-
-    for key, operations in operations_by_key.items():
-        matches = sorted(existing_by_key.get(key, []))
-        winner = matches[0] if matches else min(op.uris[0] for op in operations)
-        old_file = None
-        if matches:
-            if len(matches) > 1:
-                conflict_key = f"{root_uri}/{key}"
-                case_conflicts[conflict_key] = matches
-                logger.warning(
-                    "[streaming_memory_updater] case-insensitive memory URI conflict "
-                    "key=%s winner=%s matches=%s",
-                    key,
-                    winner,
-                    matches,
-                )
-            raw_content = await viking_fs.read_file(winner, ctx=ctx)
-            old_file = MemoryFileUtils.read(raw_content, uri=winner)
-        for op in operations:
-            target_uri = op.uris[0]
-            if target_uri != winner:
-                uri_remap[target_uri] = winner
-            op.uris = [winner]
-            if old_file is not None:
-                op.old_memory_file_content = old_file.model_copy(deep=True)
-                for field_name in immutable_fields:
-                    if field_name in old_file.extra_fields:
-                        op.memory_fields[field_name] = old_file.extra_fields[field_name]
-
-    for request in requests:
-        if uri_remap:
-            operations = request.operations
-            operations.resolved_links = remap_stored_links(
-                list(operations.resolved_links or []), uri_remap
-            )
-            operations.delete_replacements = {
-                str(uri_remap.get(str(deleted_uri), str(deleted_uri))): str(
-                    uri_remap.get(str(replacement_uri), str(replacement_uri))
-                )
-                for deleted_uri, replacement_uri in dict(
-                    operations.delete_replacements or {}
-                ).items()
-            }
-    return uri_remap, case_conflicts
 
 
 def _operation_count(operations: ResolvedOperations) -> int:
@@ -2113,7 +1908,6 @@ async def _acquire_stable_operation_lease(
     operations: ResolvedOperations,
     viking_fs: Any | None,
     ctx: RequestContext,
-    owner_lease_ref: Any | None = None,
 ) -> Any | None:
     lock_paths = _operation_lock_paths(operations, viking_fs, ctx)
     if not lock_paths:
@@ -2121,12 +1915,9 @@ async def _acquire_stable_operation_lease(
 
     required_paths = set(lock_paths)
     for acquisition in range(1, _MEMORY_APPLY_LOCK_MAX_ACQUISITIONS + 1):
-        acquire_kwargs: dict[str, Any] = {"timeout_secs": _MEMORY_APPLY_LOCK_TIMEOUT_SECONDS}
-        if owner_lease_ref is not None:
-            acquire_kwargs["owner_lease_ref"] = owner_lease_ref
         lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(
             sorted(required_paths),
-            **acquire_kwargs,
+            timeout_secs=_MEMORY_APPLY_LOCK_TIMEOUT_SECONDS,
         )
         try:
             relation_uris = await _persisted_replacement_relation_uris(

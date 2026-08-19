@@ -7,8 +7,6 @@ import pytest
 import yaml
 from jinja2 import Template
 
-from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
-
 
 @pytest.mark.parametrize(
     "schema_path",
@@ -25,16 +23,3 @@ def test_entity_filename_is_case_insensitive(schema_path):
     upper_path = template.render(category="CONCEPT", name="SMART")
 
     assert lower_path == upper_path == "concept/smart.md"
-    assert schema["case_insensitive_filenames"] is True
-
-
-def test_custom_entity_schema_does_not_enable_case_insensitive_filenames_by_default():
-    schema = MemoryTypeRegistry(load_schemas=False)._parse_memory_type(
-        {
-            "memory_type": "entities",
-            "directory": "viking://user/{{ user_space }}/memories/entities",
-            "filename_template": "{{ category }}/{{ name }}.md",
-        }
-    )
-
-    assert schema.case_insensitive_filenames is False
