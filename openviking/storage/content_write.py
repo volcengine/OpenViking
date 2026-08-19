@@ -106,7 +106,7 @@ class ContentWriteCoordinator:
         self._validate_mode(mode)
         processing_mode = normalize_processing_mode(processing_mode)
         normalized_uri = self._validate_uri_path(uri, field_name="uri")
-        self._validate_target_uri(normalized_uri)
+        self._ensure_content_write_policy(normalized_uri)
         self._viking_fs._ensure_mutable_access(normalized_uri, ctx)
 
         if mode == "create":
@@ -419,7 +419,7 @@ class ContentWriteCoordinator:
                 raise InvalidArgumentError(
                     f"batch-write target has a different context type: {uri}"
                 )
-            self._validate_target_uri(uri)
+            self._ensure_content_write_policy(uri)
             self._viking_fs._ensure_mutable_access(uri, ctx)
 
             has_content = "content" in raw
@@ -945,16 +945,12 @@ class ContentWriteCoordinator:
         if mode not in {"replace", "append"}:
             raise InvalidArgumentError(f"unsupported tag mode: {mode}")
 
-    def _validate_target_uri(self, uri: str) -> None:
+    def _ensure_content_write_policy(self, uri: str) -> None:
         name = uri.rstrip("/").split("/")[-1]
         if name in _DERIVED_FILENAMES:
             raise InvalidArgumentError(f"cannot write derived semantic file directly: {uri}")
         if is_watch_task_control_uri(uri):
             raise InvalidArgumentError(f"cannot write watch task control file directly: {uri}")
-
-        parsed = VikingURI(uri)
-        if parsed.scope not in {"resources", "user", "agent"}:
-            raise InvalidArgumentError(f"write is not supported for scope: {parsed.scope}")
 
     def _is_not_found(self, exc: Exception) -> bool:
         """Check if an exception indicates a not-found error (OpenViking or AGFS)."""
