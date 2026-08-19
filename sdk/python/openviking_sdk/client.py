@@ -1197,7 +1197,7 @@ class AsyncHTTPClient:
         timeout: Optional[float] = None,
         telemetry: Any = False,
     ) -> Dict[str, Any]:
-        """Apply a preconditioned multi-file content write."""
+        """Apply multiple content writes, then refresh semantics once."""
         normalized_operations = []
         for operation in operations:
             item = dict(operation)

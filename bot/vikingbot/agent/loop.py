@@ -1814,7 +1814,7 @@ class AgentLoop:
                     "role": "user",
                     "content": (
                         "Your response was not submitted. Continue the task and call "
-                        "submit_wiki_bundle with the complete final bundle."
+                        "submit_wiki_bundle once the complete final output is ready."
                     ),
                 }
             )

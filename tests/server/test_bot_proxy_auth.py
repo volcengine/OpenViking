@@ -248,6 +248,16 @@ async def test_compile_proxy_forwards_create_and_status_identity(monkeypatch):
 
         async def post(self, url, json, headers, timeout):
             forwarded.append(("POST", url, json, headers, timeout))
+            if url.endswith("/cancel"):
+                return FakeResponse(
+                    {
+                        "task_id": "cmp_1",
+                        "status": "cancelled",
+                        "stage": "cancelled",
+                        "created_at": "2026-07-20T00:00:00Z",
+                        "updated_at": "2026-07-20T00:00:02Z",
+                    }
+                )
             return FakeResponse(
                 {
                     "task_id": "cmp_1",
@@ -294,10 +304,15 @@ async def test_compile_proxy_forwards_create_and_status_identity(monkeypatch):
             },
         )
         status_response = await client.get("/bot/v1/compile/cmp_1", headers=headers)
+        cancel_response = await client.post(
+            "/bot/v1/compile/cmp_1/cancel",
+            headers=headers,
+        )
 
     assert created.status_code == 202
     assert created.json()["result"]["task_id"] == "cmp_1"
     assert status_response.json()["result"]["stage"] == "agent"
+    assert cancel_response.json()["result"]["status"] == "cancelled"
     post = forwarded[0]
     assert post[1].endswith("/bot/v1/compile")
     assert post[2]["openviking_connection"]["api_key"] == "active-user-key"
@@ -307,6 +322,11 @@ async def test_compile_proxy_forwards_create_and_status_identity(monkeypatch):
     assert get[3]["X-API-Key"] == "active-user-key"
     assert get[3]["X-OpenViking-Account"] == "acct"
     assert get[3]["X-OpenViking-User"] == "alice"
+    cancel = forwarded[2]
+    assert cancel[1].endswith("/bot/v1/compile/cmp_1/cancel")
+    assert cancel[2] == {}
+    assert cancel[3]["X-Gateway-Token"] == "gateway-secret"
+    assert cancel[3]["X-API-Key"] == "active-user-key"
 
 
 @pytest.mark.asyncio

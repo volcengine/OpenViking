@@ -707,7 +707,7 @@ class FSService:
         wait: bool = True,
         timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Apply a preconditioned multi-file write and aggregate downstream refresh."""
+        """Apply multiple file writes and aggregate downstream refresh."""
         root_uri = validate_viking_uri(root_uri, field_name="root_uri")
         viking_fs = self._ensure_initialized()
         coordinator = ContentWriteCoordinator(viking_fs=viking_fs, vikingdb=self._vikingdb)

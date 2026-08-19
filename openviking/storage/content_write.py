@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import base64
 import binascii
-import hashlib
 import os
 from collections import defaultdict
 from typing import Any, Dict, Optional
@@ -51,7 +50,6 @@ from openviking.utils.path_safety import validate_safe_viking_uri_path
 from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import (
     AlreadyExistsError,
-    ConflictError,
     DeadlineExceededError,
     InvalidArgumentError,
     NotFoundError,
@@ -80,7 +78,6 @@ _CREATE_ALLOWED_EXTENSIONS = frozenset(
 _BATCH_MAX_OPERATIONS = 256
 _BATCH_MAX_FILE_BYTES = 8 * 1024 * 1024
 _BATCH_MAX_TOTAL_BYTES = 16 * 1024 * 1024
-_SHA256_PREFIX = "sha256:"
 
 # Subtrees directly under a user root that OpenViking manages itself; only
 # memories/, resources/, and plain files may be written under a user root.
@@ -170,11 +167,12 @@ class ContentWriteCoordinator:
         wait: bool = True,
         timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Write a preconditioned bundle under one directory, then refresh it as a batch.
+        """Write a bundle under one directory, then refresh it as a batch.
 
-        Preconditions are checked for every non-idempotent operation while the target
-        tree lock is held and before the first new write.  Refresh runs only after that
-        lock is released so semantic processing can safely acquire descendant locks.
+        Each operation follows the same create/replace/append semantics as ``write``;
+        ``upsert`` is available for callers that already hold the desired final tree.
+        Refresh runs only after every write and after releasing the tree lock, so derived
+        summaries are generated once per batch.
         """
         normalized_root = self._canonicalize(root_uri, ctx=ctx, field_name="root_uri")
         await self._validate_batch_root(normalized_root, ctx=ctx)
@@ -196,8 +194,7 @@ class ContentWriteCoordinator:
         unchanged: list[str] = []
         refresh_kinds: dict[str, str] = {}
         sidecar_directories: set[str] = set()
-        pending: list[tuple[dict[str, Any], bool]] = []
-        conflict: ConflictError | None = None
+        pending: list[tuple[dict[str, Any], bool, str]] = []
         write_error: Exception | None = None
         lock_released = False
         try:
@@ -208,81 +205,54 @@ class ContentWriteCoordinator:
                 if exists and stat.get("isDir"):
                     raise InvalidArgumentError(f"batch-write target must be a file: {uri}")
 
-                current = await self._viking_fs.read_file_bytes(uri, ctx=ctx) if exists else None
+                requested_mode = operation["mode"]
+                write_mode = requested_mode
+                if write_mode == "upsert":
+                    write_mode = "replace" if exists else "create"
+
                 if is_semantic_sidecar_uri(uri):
                     if not exists:
                         raise InvalidArgumentError(
                             f"cannot create generated semantic sidecar directly: {uri}"
                         )
-                    operation = dict(operation)
-                    operation["content"] = self._prepare_semantic_sidecar_content(
-                        uri=uri,
-                        current_raw=current or b"",
-                        requested_raw=operation["content_bytes"],
-                        mode="replace",
-                    )
-                    operation["content_bytes"] = operation["content"].encode("utf-8")
-                desired_hash = self._content_hash(operation["content_bytes"])
-                if current is not None and self._content_hash(current) == desired_hash:
-                    unchanged.append(uri)
-                    if not is_semantic_sidecar_uri(uri):
-                        refresh_kinds[uri] = (
-                            "added"
-                            if operation["precondition"]["kind"] == "create_if_absent"
-                            else "modified"
-                        )
-                    continue
+                if write_mode == "create" and exists:
+                    raise AlreadyExistsError(uri, "file")
+                if write_mode in {"replace", "append"} and not exists:
+                    raise NotFoundError(uri, "file")
+                pending.append((operation, exists, write_mode))
 
-                precondition = operation["precondition"]
-                if precondition["kind"] == "create_if_absent":
-                    if exists and conflict is None:
-                        conflict = ConflictError(
-                            "Batch write create precondition failed; target already exists.",
-                            resource=uri,
-                        )
-                    pending.append((operation, exists))
-                    continue
-
-                if not exists:
-                    if conflict is None:
-                        conflict = ConflictError(
-                            "Batch write replace precondition failed; target does not exist.",
-                            resource=uri,
-                        )
-                    pending.append((operation, exists))
-                    continue
-                if self._content_hash(current or b"") != precondition["base_hash"]:
-                    if conflict is None:
-                        conflict = ConflictError(
-                            "Batch write replace precondition failed; content hash changed.",
-                            resource=uri,
-                        )
-                pending.append((operation, exists))
-
-            if conflict is None:
-                for operation, existed in pending:
-                    uri = operation["uri"]
-                    try:
+            for operation, existed, write_mode in pending:
+                uri = operation["uri"]
+                try:
+                    if context_type_for_uri(uri) == "memory":
                         await self._viking_fs.write_file(
                             uri,
                             operation["content"],
                             ctx=ctx,
                             lease_ref=lease,
                         )
-                    except Exception as exc:
-                        write_error = exc
-                        break
-                    if existed:
-                        updated.append(uri)
-                        if is_semantic_sidecar_uri(uri):
-                            parent = VikingURI(uri).parent
-                            if parent is not None:
-                                sidecar_directories.add(parent.uri)
-                        else:
-                            refresh_kinds[uri] = "modified"
                     else:
-                        created.append(uri)
-                        refresh_kinds[uri] = "added"
+                        await self._write_in_place(
+                            uri,
+                            operation["content"],
+                            mode=write_mode,
+                            ctx=ctx,
+                            lease_ref=lease,
+                        )
+                except Exception as exc:
+                    write_error = exc
+                    break
+                if existed:
+                    updated.append(uri)
+                    if is_semantic_sidecar_uri(uri):
+                        parent = VikingURI(uri).parent
+                        if parent is not None:
+                            sidecar_directories.add(parent.uri)
+                    else:
+                        refresh_kinds[uri] = "modified"
+                else:
+                    created.append(uri)
+                    refresh_kinds[uri] = "added"
         finally:
             await self._viking_fs._async_agfs.pathlock_release(lease)
             lock_released = True
@@ -316,7 +286,7 @@ class ContentWriteCoordinator:
                         )
                     )
                 except Exception as exc:
-                    if conflict is not None or write_error is not None:
+                    if write_error is not None:
                         logger.error(
                             "Batch refresh failed while preserving an earlier write error",
                             exc_info=True,
@@ -329,8 +299,7 @@ class ContentWriteCoordinator:
                         raise OpenVikingError(
                             "Content is already at the requested state, but semantic/index "
                             f"refresh failed: {cause}. Re-run the same batch-write or ov compile "
-                            "command; matching files will remain unchanged and refresh will be "
-                            "retried.",
+                            "command to rewrite the final state and retry the refresh.",
                             code="REFRESH_FAILED",
                             details={
                                 "root_uri": normalized_root,
@@ -346,8 +315,6 @@ class ContentWriteCoordinator:
             if request_registered:
                 get_request_wait_tracker().cleanup(telemetry_id)
 
-        if conflict is not None:
-            raise conflict
         if write_error is not None:
             raise write_error
         return {
@@ -458,47 +425,24 @@ class ContentWriteCoordinator:
             if total_bytes > _BATCH_MAX_TOTAL_BYTES:
                 raise ResourceExhaustedError("batch-write total content exceeds size limit")
 
-            precondition = raw.get("precondition")
-            if not isinstance(precondition, dict):
-                raise InvalidArgumentError(f"batch-write precondition is required: {uri}")
-            kind = precondition.get("kind")
-            if kind == "create_if_absent":
-                if set(precondition) != {"kind"}:
-                    raise InvalidArgumentError(f"invalid create_if_absent precondition: {uri}")
-                if context_type == "memory":
-                    self._validate_create_extension(uri)
-                normalized_precondition = {"kind": kind}
-            elif kind == "replace_if_hash":
-                if set(precondition) != {"kind", "base_hash"}:
-                    raise InvalidArgumentError(f"invalid replace_if_hash precondition: {uri}")
-                base_hash = precondition.get("base_hash")
-                if not self._is_content_hash(base_hash):
-                    raise InvalidArgumentError(f"invalid replace_if_hash base_hash: {uri}")
-                normalized_precondition = {"kind": kind, "base_hash": base_hash}
-            else:
-                raise InvalidArgumentError(f"unsupported batch-write precondition: {kind}")
+            mode = raw.get("mode", "replace")
+            self._validate_batch_mode(mode)
+            if has_content_base64 and mode == "append":
+                raise InvalidArgumentError(
+                    f"batch-write append does not support binary content: {uri}"
+                )
+            if context_type == "memory" and mode in {"create", "upsert"}:
+                self._validate_create_extension(uri)
+            if context_type == "memory" and mode == "append":
+                raise InvalidArgumentError("batch-write append is not supported for memories")
             normalized.append(
                 {
                     "uri": uri,
                     "content": content,
-                    "content_bytes": encoded_content,
-                    "precondition": normalized_precondition,
+                    "mode": mode,
                 }
             )
         return sorted(normalized, key=lambda operation: operation["uri"])
-
-    @staticmethod
-    def _content_hash(content: str | bytes) -> str:
-        if isinstance(content, str):
-            content = content.encode("utf-8")
-        return _SHA256_PREFIX + hashlib.sha256(content).hexdigest()
-
-    @staticmethod
-    def _is_content_hash(value: Any) -> bool:
-        if not isinstance(value, str) or not value.startswith(_SHA256_PREFIX):
-            return False
-        digest = value[len(_SHA256_PREFIX) :]
-        return len(digest) == 64 and all(char in "0123456789abcdef" for char in digest)
 
     async def _refresh_batch(
         self,
@@ -946,6 +890,10 @@ class ContentWriteCoordinator:
     def _validate_mode(self, mode: str) -> None:
         if mode not in {"replace", "append", "create"}:
             raise InvalidArgumentError(f"unsupported write mode: {mode}")
+
+    def _validate_batch_mode(self, mode: str) -> None:
+        if not isinstance(mode, str) or mode not in {"replace", "append", "create", "upsert"}:
+            raise InvalidArgumentError(f"unsupported batch-write mode: {mode}")
 
     def _validate_tag_mode(self, mode: str) -> None:
         if mode not in {"replace", "append"}:

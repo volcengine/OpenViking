@@ -14,6 +14,7 @@ from vikingbot.agent.loop import (
 from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.agent.tools.compile import (
     CompileScopedTool,
+    SubmitTargetCheckoutTool,
     SubmitWikiBundleTool,
 )
 from vikingbot.agent.tools.ov_file import (
@@ -38,7 +39,11 @@ from vikingbot.compile.readlist import (
     ReadlistTracker,
     ReadTrackingTool,
 )
-from vikingbot.compile.renderer import WikiRenderer, content_hash, wiki_page_path_from_title
+from vikingbot.compile.renderer import (
+    RenderedBundle,
+    WikiRenderer,
+    wiki_page_path_from_title,
+)
 from vikingbot.compile.service import BotCompileService, CompileCapabilities
 from vikingbot.compile.store import CompileTaskStore
 from vikingbot.config.schema import (
@@ -120,11 +125,11 @@ def test_compile_bundle_schema_distinguishes_wiki_pages_and_artifact_files():
     assert "generated Wiki pages only" in properties["links"]["description"]
     assert "known source URIs" in page_properties["body_markdown"]["description"]
     assert (
-        "generated UTF-8 Markdown Wiki body"
-        in page_properties["body_workspace_path"]["description"]
+        "editable UTF-8 Markdown Wiki page" in page_properties["body_workspace_path"]["description"]
     )
     assert (
-        "__compile_staging__/wiki_pages/" in page_properties["body_workspace_path"]["description"]
+        "__compile_staging__/target_checkout/"
+        in page_properties["body_workspace_path"]["description"]
     )
     assert "filename derives from title" in page_properties["path_hint"]["description"]
     assert "supplied source roots" in page_properties["source_ids"]["description"]
@@ -142,6 +147,7 @@ def test_compile_limit_defaults_match_the_resource_envelope():
     assert limits.agent_iterations == 60
     assert limits.source_files == 5000
     assert limits.source_total_bytes == 1024 * 1024 * 1024
+    assert limits.target_total_bytes == 1024 * 1024 * 1024
     assert limits.salvage_grace_seconds == 120
     assert limits.cleanup_grace_seconds == 40
     assert limits.target_inventory_entries == 2000
@@ -223,6 +229,21 @@ def test_submit_tool_schema_requires_workspace_page_bodies_when_available():
     page_schema = tool.parameters["$defs"]["WikiPageDraft"]
     assert "body_markdown" not in page_schema["properties"]
     assert "body_workspace_path" in page_schema["required"]
+
+
+def test_submit_tool_checkout_schema_takes_no_file_manifest():
+    tool = SubmitTargetCheckoutTool(
+        target_uri="viking://resources/wiki",
+        source_roots={"src_1": "viking://resources/source"},
+        limits=CompileLimits(),
+    )
+
+    assert tool.parameters == {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    }
+    assert "Pass no pages, files, paths, or content" in tool.description
 
 
 @pytest.mark.parametrize(
@@ -376,7 +397,7 @@ def test_renderer_creates_okf_pages_links_and_source_fallbacks():
     ]
     assert rendered.link_count == 1
     first = rendered.operations[0]
-    assert first["precondition"] == {"kind": "create_if_absent"}
+    assert first["mode"] == "upsert"
     assert "type: concept" in first["content"]
     assert f"description: {summary}\n" in first["content"]
     assert "Read [Beta](./beta.md) next." in first["content"]
@@ -384,18 +405,19 @@ def test_renderer_creates_okf_pages_links_and_source_fallbacks():
     assert "- [source](viking://resources/source)" in first["content"]
 
 
-def test_renderer_preserves_existing_link_and_keeps_relationship():
+def test_renderer_preserves_existing_link_without_adding_another_mention_or_backlink():
     bundle = WikiBundleDraft.model_validate(
         {
             "pages": [
                 _page(
                     1,
                     "Overview",
-                    body_markdown='Read [Details](./details.md "details") next.',
+                    body_markdown=(
+                        'Read [Details](./details.md "details") next. Details appears again.'
+                    ),
                 ),
                 _page(2, "Details"),
             ],
-            "links": [{"f": 1, "t": 2, "match_text": "Details"}],
         }
     )
 
@@ -412,8 +434,119 @@ def test_renderer_preserves_existing_link_and_keeps_relationship():
         operations["viking://resources/wiki/overview.md"].count('[Details](./details.md "details")')
         == 1
     )
-    assert "- [Overview](./overview.md)" in operations["viking://resources/wiki/details.md"]
+    assert "Details appears again" in operations["viking://resources/wiki/overview.md"]
+    assert "Related pages" not in operations["viking://resources/wiki/details.md"]
     assert rendered.link_count == 0
+
+
+def test_renderer_links_first_filename_mention_in_body_but_not_page_title():
+    bundle = WikiBundleDraft.model_validate(
+        {
+            "pages": [
+                _page(
+                    1,
+                    "Beta Overview",
+                    path_hint="entity/beta-overview.md",
+                    body_markdown="# Beta Overview\n\nBeta appears first. Beta appears again.",
+                ),
+                _page(
+                    2,
+                    "Beta",
+                    path_hint="concept/beta.md",
+                    body_markdown="# Beta\n\nDefinition.",
+                ),
+            ]
+        }
+    )
+
+    rendered = WikiRenderer().render(
+        bundle=bundle,
+        target_uri="viking://resources/wiki",
+        source_roots={"src_1": "viking://resources/source"},
+        catalog_uris=set(),
+        existing_raw={},
+    )
+    content = {operation["uri"]: operation["content"] for operation in rendered.operations}[
+        "viking://resources/wiki/entity/beta-overview.md"
+    ]
+
+    assert "# Beta Overview" in content
+    assert "# [Beta]" not in content
+    assert content.count("](../concept/beta.md)") == 1
+    assert "[Beta](../concept/beta.md) appears first. Beta appears again." in content
+    assert rendered.link_count == 1
+
+
+def test_renderer_auto_links_existing_target_pages_when_a_new_page_is_added():
+    alpha_uri = "viking://resources/wiki/entity/alpha.md"
+    old_alpha = (
+        "---\ntype: entity\ntitle: Alpha\ndescription: Alpha page\n---\n\n"
+        "# Alpha\n\nBeta is mentioned here. Beta appears again.\n\n"
+        "## Related pages\n\n- [Beta](../concept/beta.md)\n"
+    )
+    bundle = WikiBundleDraft.model_validate(
+        {
+            "pages": [
+                _page(
+                    1,
+                    "Beta",
+                    path_hint="concept/beta.md",
+                    body_markdown="# Beta\n\nDefinition.",
+                )
+            ]
+        }
+    )
+
+    rendered = WikiRenderer().render(
+        bundle=bundle,
+        target_uri="viking://resources/wiki",
+        source_roots={"src_1": "viking://resources/source"},
+        catalog_uris=set(),
+        existing_raw={alpha_uri: old_alpha},
+    )
+    operations = {operation["uri"]: operation for operation in rendered.operations}
+
+    assert alpha_uri in rendered.updated
+    assert operations[alpha_uri]["mode"] == "upsert"
+    assert operations[alpha_uri]["content"].count("](../concept/beta.md)") == 1
+    assert (
+        "[Beta](../concept/beta.md) is mentioned here. Beta appears again."
+        in (operations[alpha_uri]["content"])
+    )
+    assert "Related pages" not in operations[alpha_uri]["content"]
+
+
+def test_renderer_skips_ambiguous_duplicate_filenames_across_directories():
+    existing_raw = {
+        "viking://resources/wiki/entity/topic.md": (
+            "---\ntype: entity\ntitle: Entity Topic\ndescription: Entity\n---\n\n"
+            "# Entity Topic\n\nEntity body.\n"
+        ),
+        "viking://resources/wiki/concept/topic.md": (
+            "---\ntype: concept\ntitle: Concept Topic\ndescription: Concept\n---\n\n"
+            "# Concept Topic\n\nConcept body.\n"
+        ),
+    }
+    bundle = WikiBundleDraft.model_validate(
+        {"pages": [_page(1, "Overview", body_markdown="Topic is intentionally ambiguous.")]}
+    )
+
+    rendered = WikiRenderer().render(
+        bundle=bundle,
+        target_uri="viking://resources/wiki",
+        source_roots={"src_1": "viking://resources/source"},
+        catalog_uris=set(),
+        existing_raw=existing_raw,
+    )
+    overview = next(
+        operation["content"]
+        for operation in rendered.operations
+        if operation["uri"] == "viking://resources/wiki/overview.md"
+    )
+
+    assert "Topic is intentionally ambiguous." in overview
+    assert "[Topic]" not in overview
+    assert rendered.updated == []
 
 
 def test_wiki_page_title_path_normalizes_spaced_dashes_only():
@@ -464,8 +597,8 @@ def test_renderer_linkifies_source_uris_without_repeating_them():
     assert overview.count(f"]({source_detail})") == 1
     assert "[source](viking://resources/source)" not in overview
     assert "# Citations" not in overview
-    assert "## Related pages" in details
-    assert "- [Overview](./overview.md)" in details
+    assert "## Related pages" not in details
+    assert "- [Overview](./overview.md)" not in details
     assert "## Sources" in details
     assert rendered.link_count == 1
 
@@ -570,54 +703,6 @@ def test_renderer_accepts_minimal_okf_artifact_with_unknown_fields():
     assert rendered.wiki_uris == ["viking://resources/wiki/research.md"]
 
 
-@pytest.mark.asyncio
-async def test_compile_appends_wiki_search_tag_once_per_uri():
-    class Client:
-        def __init__(self):
-            self.calls = []
-
-        async def set_tags(self, uri, tags, mode):
-            self.calls.append((uri, tags, mode))
-            return {"tags_updated": True}
-
-    raw_client = Client()
-    client = SimpleNamespace(client=raw_client)
-
-    await BotCompileService._tag_wiki_files(
-        client,
-        ["viking://resources/wiki/a.md", "viking://resources/wiki/a.md"],
-        target_uri="viking://resources/wiki",
-    )
-
-    assert raw_client.calls == [("viking://resources/wiki/a.md", ["ov.kind=wiki"], "append")]
-
-
-@pytest.mark.asyncio
-async def test_compile_collects_all_wiki_search_tag_failures():
-    class Client:
-        async def set_tags(self, uri, tags, mode):
-            del tags, mode
-            if uri.endswith("a.md"):
-                raise OpenVikingError("tag service unavailable", code="UNAVAILABLE")
-            return {"tags_updated": False}
-
-    with pytest.raises(OpenVikingError, match="Content was written successfully") as exc:
-        await BotCompileService._tag_wiki_files(
-            SimpleNamespace(client=Client()),
-            ["viking://resources/wiki/a.md", "viking://resources/wiki/b.md"],
-            target_uri="viking://resources/wiki",
-        )
-
-    assert exc.value.code == "REFRESH_FAILED"
-    assert exc.value.details["failures"] == {
-        "viking://resources/wiki/a.md": "tag service unavailable",
-        "viking://resources/wiki/b.md": "indexed record was not found",
-    }
-    assert "ov --sudo reindex viking://resources/wiki --mode vectors_only --wait true" in str(
-        exc.value
-    )
-
-
 @pytest.mark.parametrize(
     ("content", "message"),
     [
@@ -690,7 +775,7 @@ def test_renderer_raw_update_cannot_remove_okf_from_existing_wiki_page():
         )
 
 
-def test_renderer_raw_file_update_uses_byte_hash_and_detects_unchanged():
+def test_renderer_raw_file_update_uses_upsert_and_detects_unchanged():
     uri = "viking://resources/wiki/trace/exploration_tree.yaml"
     old = b"nodes: []\n"
     unchanged_bundle = WikiBundleDraft.model_validate(
@@ -722,13 +807,10 @@ def test_renderer_raw_file_update_uses_byte_hash_and_detects_unchanged():
         existing_bytes={uri: old},
     )
     assert changed.updated == [uri]
-    assert changed.operations[0]["precondition"] == {
-        "kind": "replace_if_hash",
-        "base_hash": content_hash(old),
-    }
+    assert changed.operations[0]["mode"] == "upsert"
 
 
-def test_renderer_empty_existing_update_uses_hash_precondition_and_preserves_uri():
+def test_renderer_empty_existing_update_uses_upsert_and_preserves_uri():
     uri = "viking://resources/wiki/empty.md"
     bundle = WikiBundleDraft.model_validate(
         {
@@ -746,10 +828,7 @@ def test_renderer_empty_existing_update_uses_hash_precondition_and_preserves_uri
     )
     assert rendered.updated == [uri]
     assert rendered.created == []
-    assert rendered.operations[0]["precondition"] == {
-        "kind": "replace_if_hash",
-        "base_hash": content_hash(""),
-    }
+    assert rendered.operations[0]["mode"] == "upsert"
 
 
 def test_renderer_preserves_unknown_frontmatter_and_skill_owned_citations():
@@ -807,10 +886,7 @@ def test_renderer_does_not_repeat_inline_source_links():
                 _page(
                     1,
                     "主题",
-                    body_markdown=(
-                        "事实来自[原始资料]"
-                        "(viking://resources/source/detail.md)。"
-                    ),
+                    body_markdown=("事实来自[原始资料](viking://resources/source/detail.md)。"),
                 )
             ]
         }
@@ -828,7 +904,7 @@ def test_renderer_does_not_repeat_inline_source_links():
     assert "# Citations" not in content
 
 
-def test_renderer_localizes_missing_source_fallback_for_chinese_body():
+def test_renderer_uses_chinese_source_heading_from_compile_language():
     bundle = WikiBundleDraft.model_validate(
         {"pages": [_page(1, "主题", body_markdown="这是没有显式来源链接的正文。")]}
     )
@@ -838,10 +914,118 @@ def test_renderer_localizes_missing_source_fallback_for_chinese_body():
         source_roots={"src_1": "viking://resources/source"},
         catalog_uris=set(),
         existing_raw={},
+        wiki_language="zh-CN",
     )
     content = rendered.operations[0]["content"]
-    assert "## 参考来源" in content
+    assert "## 来源" in content
     assert "# Citations" not in content
+
+
+def test_renderer_uses_compile_language_for_sources_without_related_pages_section():
+    bundle = WikiBundleDraft.model_validate(
+        {
+            "pages": [
+                _page(1, "入口", body_markdown="参见主题。"),
+                _page(2, "主题", body_markdown="English body retained from an older page."),
+            ],
+            "links": [{"f": 1, "t": 2, "match_text": "主题"}],
+        }
+    )
+    rendered = WikiRenderer().render(
+        bundle=bundle,
+        target_uri="viking://resources/wiki",
+        source_roots={"src_1": "viking://resources/source"},
+        catalog_uris=set(),
+        existing_raw={},
+        wiki_language="zh-CN",
+    )
+    content = rendered.operations[1]["content"]
+    assert "## 来源" in content
+    assert "## 相关页面" not in content
+    assert "## Related pages" not in content
+    assert "## Sources" not in content
+
+
+@pytest.mark.asyncio
+async def test_wiki_language_classifier_uses_real_reason_and_one_model_call():
+    class Provider:
+        def __init__(self):
+            self.calls = []
+
+        async def chat(self, **kwargs):
+            self.calls.append(kwargs)
+            return SimpleNamespace(
+                content="zh-CN",
+                usage={"prompt_tokens": 12, "completion_tokens": 1},
+            )
+
+    provider = Provider()
+    service = object.__new__(BotCompileService)
+    service.agent_loop = SimpleNamespace(provider=provider, model="test-model")
+    request = SanitizedCompileRequest.model_validate(
+        {
+            "from": ["viking://resources/source"],
+            "to": "viking://resources/wiki",
+            "skill": "viking://agent/skills/wiki",
+            "reason": "请用中文输出",
+            "reason_provided": True,
+        }
+    )
+
+    language, usage = await service._classify_wiki_language(
+        request=request,
+        sources=[{"overview": "source overview"}],
+        source_sample="source sample",
+        session_key=_FakeCompileSessionKey(),
+    )
+
+    assert language == "zh-CN"
+    assert usage == {"prompt_tokens": 12, "completion_tokens": 1}
+    assert len(provider.calls) == 1
+    call = provider.calls[0]
+    assert call["max_tokens"] == 64
+    assert call["temperature"] == 0.0
+    assert call["session_id"] == "cmp:wiki-language"
+    assert "input_kind=user_reason" in call["messages"][1]["content"]
+    assert "请用中文输出" in call["messages"][1]["content"]
+    assert "source sample" not in call["messages"][1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_wiki_language_classifier_ignores_default_reason_and_defaults_non_chinese_to_en():
+    class Provider:
+        def __init__(self):
+            self.message = ""
+
+        async def chat(self, **kwargs):
+            self.message = kwargs["messages"][1]["content"]
+            return SimpleNamespace(content="ja", usage={})
+
+    provider = Provider()
+    service = object.__new__(BotCompileService)
+    service.agent_loop = SimpleNamespace(provider=provider, model="test-model")
+    request = SanitizedCompileRequest.model_validate(
+        {
+            "from": ["viking://resources/source"],
+            "to": "viking://resources/wiki",
+            "skill": "viking://agent/skills/wiki",
+            "reason": DEFAULT_COMPILE_REASON,
+            "reason_provided": False,
+        }
+    )
+
+    language, usage = await service._classify_wiki_language(
+        request=request,
+        sources=[{"overview": "fallback source overview"}],
+        source_sample="这是实际的资源文本。",
+        session_key=_FakeCompileSessionKey(),
+    )
+
+    assert language == "en"
+    assert usage == {}
+    assert "input_kind=source_content" in provider.message
+    assert "这是实际的资源文本。" in provider.message
+    assert DEFAULT_COMPILE_REASON not in provider.message
 
 
 def test_memory_renderer_round_trips_fields_and_only_bumps_changed_version():
@@ -1191,6 +1375,7 @@ class _RecordingSandbox:
 
 async def _export_into_sandbox(monkeypatch, client, *, uri: str, dest: str = "compile_resources"):
     """Run VikingExportTool against a fake client; returns (result, sandbox writes)."""
+
     class Manager:
         def __init__(self, sandbox):
             self.sandbox = sandbox
@@ -1250,8 +1435,16 @@ async def test_export_directory_strips_namespace_and_skips_binary(monkeypatch):
 
         async def list_resources(self, path, recursive, node_limit):
             return [
-                {"uri": "viking://resources/dream-sessions/08/05/a.jsonl", "size": 100, "isDir": False},
-                {"uri": "viking://resources/dream-sessions/08/05/b.bin", "size": 50, "isDir": False},
+                {
+                    "uri": "viking://resources/dream-sessions/08/05/a.jsonl",
+                    "size": 100,
+                    "isDir": False,
+                },
+                {
+                    "uri": "viking://resources/dream-sessions/08/05/b.bin",
+                    "size": 50,
+                    "isDir": False,
+                },
             ]
 
         async def download_bytes(self, uri):
@@ -1602,7 +1795,7 @@ async def test_materialize_sources_exports_full_tree_and_writes_manifest():
         },
     ]
     sandbox = Sandbox()
-    warnings, manifest_path = await service._materialize_sources(
+    warnings, manifest_path, language_sample = await service._materialize_sources(
         client=Client(),
         sources=sources,
         sandbox=sandbox,
@@ -1619,6 +1812,8 @@ async def test_materialize_sources_exports_full_tree_and_writes_manifest():
     assert "source_id\turi\tworkspace_path\tsize\tstatus" in manifest
     assert "skipped:binary" in manifest
     assert "materialized" in manifest
+    assert "# guide" in language_sample
+    assert '"message":"hi"' in language_sample
 
 
 @pytest.mark.asyncio
@@ -1645,13 +1840,14 @@ async def test_materialize_sources_records_download_failures_without_crashing():
         }
     ]
     sandbox = Sandbox()
-    warnings, manifest_path = await service._materialize_sources(
+    warnings, manifest_path, language_sample = await service._materialize_sources(
         client=Client(),
         sources=sources,
         sandbox=sandbox,
     )
 
     assert manifest_path == "compile_resources/_manifest.tsv"
+    assert language_sample == ""
     assert any("failed to materialize" in warning for warning in warnings)
     assert "skipped:download-error" in sandbox.writes["compile_resources/_manifest.tsv"]
 
@@ -1751,6 +1947,51 @@ async def test_materialize_sources_bounds_downloaded_payloads(monkeypatch):
     assert state["peak"] <= 2
 
 
+@pytest.mark.asyncio
+async def test_materialize_target_checkout_preserves_paths_and_bytes():
+    service = object.__new__(BotCompileService)
+    service.limits = CompileLimits()
+    payloads = {
+        "viking://resources/output/entities/callie.md": b"---\ntype: entity\n---\nCallie",
+        "viking://resources/output/relations.jsonl": b'{"from":"callie"}\n',
+        "viking://resources/output/data.bin": b"\xff\x00",
+    }
+
+    class Client:
+        async def download_bytes(self, uri):
+            return payloads[uri]
+
+    class Sandbox:
+        def __init__(self):
+            self.writes = {}
+
+        async def write_file_bytes(self, path, content):
+            self.writes[path] = content
+
+    inventory = {uri: {"uri": uri, "size": len(payload)} for uri, payload in payloads.items()}
+    sandbox = Sandbox()
+
+    warnings = await service._materialize_target_checkout(
+        client=Client(),
+        target_uri="viking://resources/output",
+        inventory=inventory,
+        sandbox=sandbox,
+    )
+
+    assert warnings == []
+    assert sandbox.writes == {
+        "__compile_staging__/target_checkout/entities/callie.md": payloads[
+            "viking://resources/output/entities/callie.md"
+        ],
+        "__compile_staging__/target_checkout/relations.jsonl": payloads[
+            "viking://resources/output/relations.jsonl"
+        ],
+        "__compile_staging__/target_checkout/data.bin": payloads[
+            "viking://resources/output/data.bin"
+        ],
+    }
+
+
 def test_compile_prompt_mentions_materialized_manifest_when_available():
     request = SanitizedCompileRequest.model_validate(
         {
@@ -1776,6 +2017,34 @@ def test_compile_prompt_mentions_materialized_manifest_when_available():
     assert "Do NOT" in system
     assert "could NOT be materialized" in system
     assert "viking://resources/source/b.bin" in system
+
+
+def test_compile_prompt_describes_editable_target_checkout():
+    request = SanitizedCompileRequest.model_validate(
+        {
+            "from": ["viking://resources/source"],
+            "to": "viking://resources/output",
+            "skill": "viking://agent/skills/compiler",
+            "reason": "Refresh the output",
+        }
+    )
+
+    system, user = BotCompileService._build_prompts(
+        request=request,
+        skill_name="compiler",
+        skill_content="Produce the required files.",
+        catalog=[],
+        capabilities=CompileCapabilities(exec_enabled=True),
+        target_checkout_enabled=True,
+    )
+
+    assert "`__compile_staging__/target_checkout/`" in system
+    assert "editable output working tree" in system
+    assert "update existing files in place" in system
+    assert "submit_wiki_bundle with no arguments" in system
+    assert "complete UTF-8 OKF Markdown file" in system
+    assert "commits only validated changes" in system
+    assert "Inspect the editable target checkout" in user
 
 
 @pytest.mark.asyncio
@@ -1974,6 +2243,165 @@ async def test_submit_tool_materializes_workspace_page_body_before_validation():
 
 
 @pytest.mark.asyncio
+async def test_submit_tool_checkout_writes_complete_tree_with_upsert():
+    relative_files = {
+        "entity/existing.md": (
+            b"---\ntype: entity\ntitle: Existing\ndescription: Updated\n---\n\n"
+            b"Merged body mentioning New."
+        ),
+        "concept/new.md": (
+            b"---\ntype: concept\ntitle: New\ndescription: New concept.\n---\n\n# New\n\nBody."
+        ),
+        "relations.jsonl": b'{"from":"a","to":"b"}\n',
+        "schema.json": b'{"version":1}\n',
+    }
+    files = {
+        f"__compile_staging__/target_checkout/{path}": payload
+        for path, payload in relative_files.items()
+    }
+
+    class Sandbox:
+        async def list_files(self, path, *, max_entries):
+            assert path == "__compile_staging__/target_checkout"
+            assert len(files) <= max_entries
+            return [
+                SandboxFileInfo(path=file_path, size=len(payload))
+                for file_path, payload in files.items()
+            ]
+
+        async def read_file_bytes(self, path, *, max_bytes=None):
+            assert max_bytes is None or len(files[path]) <= max_bytes
+            return files[path]
+
+    class Manager:
+        async def get_sandbox(self, session_key):
+            assert session_key is not None
+            return Sandbox()
+
+    context = ToolContext(
+        session_key=SessionKey(type="compile", channel_id="cmp", chat_id="cmp"),
+        sandbox_manager=Manager(),
+    )
+    existing_page_uri = "viking://resources/wiki/entity/existing.md"
+    tool = SubmitTargetCheckoutTool(
+        target_uri="viking://resources/wiki",
+        source_roots={"src_1": "viking://resources/source"},
+        limits=CompileLimits(),
+    )
+
+    accepted = await tool.execute(context)
+
+    assert accepted == (
+        "Target checkout accepted with 4 changed file(s) and "
+        "2 Wiki page(s) in the preserved final tree."
+    )
+    assert tool.bundle is not None
+    operations = {operation["uri"]: operation for operation in tool.bundle.operations}
+    assert all(operation["mode"] == "upsert" for operation in operations.values())
+    rendered_existing = base64.b64decode(operations[existing_page_uri]["content_base64"])
+    assert b"[New](../concept/new.md)" in rendered_existing
+    assert set(tool.bundle.wiki_uris) == {
+        existing_page_uri,
+        "viking://resources/wiki/concept/new.md",
+    }
+    assert tool.page_count == 2
+
+
+@pytest.mark.asyncio
+async def test_submit_tool_checkout_writes_every_checkout_file_without_deleting_omitted_files():
+    page = b"---\ntype: entity\ntitle: Existing\ndescription: Existing page.\n---\n\nBody."
+    workspace_path = "__compile_staging__/target_checkout/entity/existing.md"
+
+    class Sandbox:
+        async def list_files(self, path, *, max_entries):
+            del max_entries
+            assert path == "__compile_staging__/target_checkout"
+            return [SandboxFileInfo(path=workspace_path, size=len(page))]
+
+        async def read_file_bytes(self, path, *, max_bytes=None):
+            del max_bytes
+            assert path == workspace_path
+            return page
+
+    class Manager:
+        async def get_sandbox(self, session_key):
+            del session_key
+            return Sandbox()
+
+    page_uri = "viking://resources/wiki/entity/existing.md"
+    omitted_uri = "viking://resources/wiki/data.jsonl"
+    tool = SubmitTargetCheckoutTool(
+        target_uri="viking://resources/wiki",
+        source_roots={},
+        limits=CompileLimits(),
+    )
+
+    accepted = await tool.execute(
+        ToolContext(
+            session_key=SessionKey(type="compile", channel_id="cmp", chat_id="cmp"),
+            sandbox_manager=Manager(),
+        )
+    )
+
+    assert accepted.startswith("Target checkout accepted with 1 changed file(s)")
+    assert tool.bundle is not None
+    assert tool.bundle.operations[0]["uri"] == page_uri
+    assert tool.bundle.operations[0]["mode"] == "upsert"
+    assert omitted_uri not in {operation["uri"] for operation in tool.bundle.operations}
+    assert tool.page_count == 1
+    assert tool.file_count == 1
+
+
+@pytest.mark.asyncio
+async def test_submit_tool_checkout_rejects_incomplete_wiki_frontmatter():
+    workspace_path = "__compile_staging__/target_checkout/entity/existing.md"
+
+    class Sandbox:
+        payload = b"---\ntype: concept\n---\n\n# New"
+
+        async def list_files(self, path, *, max_entries):
+            del path, max_entries
+            return [SandboxFileInfo(path=workspace_path, size=len(self.payload))]
+
+        async def read_file_bytes(self, path, *, max_bytes=None):
+            del path, max_bytes
+            return self.payload
+
+    class Manager:
+        async def get_sandbox(self, session_key):
+            del session_key
+            return Sandbox()
+
+    tool = SubmitTargetCheckoutTool(
+        target_uri="viking://resources/wiki",
+        source_roots={},
+        limits=CompileLimits(),
+    )
+    context = ToolContext(
+        session_key=SessionKey(type="compile", channel_id="cmp", chat_id="cmp"),
+        sandbox_manager=Manager(),
+    )
+
+    incomplete = await tool.execute(context)
+    assert "must have non-empty YAML frontmatter fields: title, description" in incomplete
+    assert tool.bundle is None
+
+
+@pytest.mark.asyncio
+async def test_submit_tool_checkout_rejects_manifest_arguments():
+    tool = SubmitTargetCheckoutTool(
+        target_uri="viking://resources/wiki",
+        source_roots={},
+        limits=CompileLimits(),
+    )
+
+    result = await tool.execute(ToolContext(), pages=[], files=[])
+
+    assert result == "Error: submit_wiki_bundle takes no arguments for a Resource checkout."
+    assert tool.bundle is None
+
+
+@pytest.mark.asyncio
 async def test_submit_tool_rejects_artifact_reused_as_wiki_body():
     tool = SubmitWikiBundleTool(
         source_ids={"src_1"},
@@ -1998,7 +2426,7 @@ async def test_submit_tool_rejects_artifact_reused_as_wiki_body():
     )
 
     assert result.startswith("Error: Invalid Wiki bundle:")
-    assert "must be temporary files under __compile_staging__/wiki_pages/" in result
+    assert "must be editable files under __compile_staging__/wiki_pages/" in result
     assert tool.bundle is None
 
 
@@ -2373,7 +2801,9 @@ async def test_read_tracking_tool_records_read_file_edit_and_explicit_exec():
     }
 
     # A failed read is not recorded; a directory token in exec is ignored.
-    failing = ReadTrackingTool(_ReadTrackingFake("read_file", result="Error: missing"), tracker=tracker)
+    failing = ReadTrackingTool(
+        _ReadTrackingFake("read_file", result="Error: missing"), tracker=tracker
+    )
     await failing.execute(ToolContext(), path="compile_resources/src_1/a.md")
     await exec_tool.execute(ToolContext(), command="find compile_resources/src_1 -name '*.md'")
     assert tracker.read_paths == {
@@ -2493,6 +2923,7 @@ async def test_request_normalization_uses_default_reason_and_canonical_skill(mon
     assert normalized.to == "viking://resources/wiki"
     assert normalized.skill == "viking://agent/skills/wiki"
     assert normalized.reason == DEFAULT_COMPILE_REASON
+    assert normalized.reason_provided is False
     assert normalized.runtime_timeout_seconds == 20 * 60
 
     Client.created.clear()
@@ -2801,6 +3232,8 @@ async def test_execute_skill_target_skips_recursive_catalog_and_completes(
         file_catalog_uris,
         workspace_baseline,
         wiki_uri_resolver,
+        target_checkout_enabled,
+        source_roots,
         capabilities,
         materialized=False,
         source_fallback=False,
@@ -2812,6 +3245,8 @@ async def test_execute_skill_target_skips_recursive_catalog_and_completes(
         assert file_catalog_uris == set()
         assert workspace_baseline == set()
         assert callable(wiki_uri_resolver)
+        assert target_checkout_enabled is False
+        assert source_roots == {}
         registry = ToolRegistry()
         registry.register(
             SubmitWikiBundleTool(
@@ -2973,9 +3408,7 @@ async def test_source_file_synthesizes_single_entry_without_listing():
     client = Client()
     service = object.__new__(BotCompileService)
     service.limits = CompileLimits()
-    sources = await service._build_sources(
-        client, ["viking://resources/weekly/2024.md"]
-    )
+    sources = await service._build_sources(client, ["viking://resources/weekly/2024.md"])
 
     assert client.listed is False
     assert sources == [
@@ -3147,6 +3580,37 @@ async def test_target_catalog_search_failure_keeps_collision_inventory():
 
 
 @pytest.mark.asyncio
+async def test_load_target_wiki_raw_reads_every_okf_page_but_skips_markdown_artifacts():
+    wiki_uri = "viking://resources/wiki/entity/topic.md"
+    artifact_uri = "viking://resources/wiki/README.md"
+    contents = {
+        wiki_uri: "---\ntype: entity\ntitle: Topic\n---\n\n# Topic\n",
+        artifact_uri: "# README\n",
+    }
+
+    class Client:
+        async def read_raw(self, uri, *, offset=0, limit=-1):
+            assert offset == 0
+            content = contents[uri]
+            if limit == -1:
+                return content
+            return "".join(content.splitlines(keepends=True)[:limit])
+
+    service = object.__new__(BotCompileService)
+    service.limits = CompileLimits()
+    loaded = await service._load_target_wiki_raw(
+        Client(),
+        {
+            wiki_uri: {"size": len(contents[wiki_uri])},
+            artifact_uri: {"size": len(contents[artifact_uri])},
+            "viking://resources/wiki/image.png": {"size": 10},
+        },
+    )
+
+    assert loaded == {wiki_uri: contents[wiki_uri]}
+
+
+@pytest.mark.asyncio
 async def test_memory_target_catalog_uses_memory_search_results():
     target = "viking://user/alice/memories/preferences/wiki"
     existing = f"{target}/topic.md"
@@ -3303,6 +3767,16 @@ def test_compile_registry_has_a_fixed_ara_compatible_tool_set(exec_enabled):
     assert submit.require_workspace_files is False
     assert submit.require_workspace_pages is False
     assert submit.exec_enabled is exec_enabled
+
+    checkout_registry, _ = service._build_compile_registry(
+        **common,
+        capabilities=CompileCapabilities(exec_enabled=exec_enabled),
+        target_checkout_enabled=True,
+        source_roots={"src_1": "viking://resources/source"},
+    )
+    checkout_submit = checkout_registry.get("submit_wiki_bundle")
+    assert isinstance(checkout_submit, SubmitTargetCheckoutTool)
+    assert checkout_submit.parameters["properties"] == {}
 
 
 def test_compile_registry_keeps_source_fallback_tools_only_when_needed():
@@ -3482,7 +3956,9 @@ def test_compile_prompt_routes_skill_cli_commands_through_exec():
     assert "When the Skill asks to run Bash, shell commands, or a CLI, use the exec tool." in system
     assert "`skills/ara/`" in system
     assert "resolve its relative paths there and use read_file" in system
-    assert "Submit Wiki page bodies and artifact file content inline in submit_wiki_bundle" in system
+    assert (
+        "Submit Wiki page bodies and artifact file content inline in submit_wiki_bundle" in system
+    )
     assert "workspace_path (files) or body_workspace_path (pages)" in system
     assert "Compile host capability notice" not in system
     assert "Preserve every required output type, path, and format" in system
@@ -3525,7 +4001,9 @@ def test_compile_prompt_omits_exec_when_capability_is_disabled():
     assert "Command execution is unavailable." in system
     assert "Do not attempt Bash, shell commands, or CLI commands" in system
     assert "use write_file or edit_file" in system
-    assert "Submit Wiki page bodies and artifact file content inline in submit_wiki_bundle" in system
+    assert (
+        "Submit Wiki page bodies and artifact file content inline in submit_wiki_bundle" in system
+    )
     assert "write_file or exec" not in system
     assert "use the exec tool" not in system
 
@@ -3806,6 +4284,56 @@ async def test_compile_create_task_connection_and_exec(
 
 
 @pytest.mark.asyncio
+async def test_compile_task_can_be_cancelled_by_its_owner(monkeypatch, tmp_path: Path):
+    service = _compile_service(
+        tmp_path,
+        auth_mode="api_key",
+        backend=SandboxBackend.AIOSANDBOX,
+    )
+    started = asyncio.Event()
+
+    async def normalize(request, *, connection):
+        del request, connection
+        return _sanitized_compile_request()
+
+    async def run_task(*args):
+        del args
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(service, "_normalize_request", normalize)
+    monkeypatch.setattr(service, "_run_task", run_task)
+
+    accepted = await service.create_task(
+        _compile_request(connection=True),
+        principal_scope="owner",
+    )
+    await started.wait()
+    runner = next(
+        task for task in service._tasks if task.get_name() == f"compile:{accepted.task_id}"
+    )
+
+    assert await service.cancel_task(accepted.task_id, principal_scope="other") is None
+    assert not runner.done()
+
+    response = await service.cancel_task(accepted.task_id, principal_scope="owner")
+    assert response is not None
+    assert response["status"] in {"cancelling", "cancelled"}
+    await asyncio.gather(runner, return_exceptions=True)
+
+    cancelled = await service.store.get(accepted.task_id)
+    assert cancelled is not None
+    assert cancelled.status == "cancelled"
+    assert cancelled.stage == "cancelled"
+    assert cancelled.result is None
+    assert cancelled.error is None
+    assert service._admitted_tasks == 0
+    assert await service.cancel_task(accepted.task_id, principal_scope="owner") == (
+        cancelled.public_dict()
+    )
+
+
+@pytest.mark.asyncio
 async def test_compile_admission_is_bounded_per_principal_and_globally(monkeypatch, tmp_path: Path):
     limits = CompileLimits(
         accepted_tasks=2,
@@ -3980,17 +4508,12 @@ async def test_timeout_salvage_copies_workspace_and_repairs_links(tmp_path: Path
             assert root_uri == "viking://resources/wiki"
             assert wait is False
             self.operations = operations
-            updated = [
-                operation["uri"]
-                for operation in operations
-                if operation["precondition"]["kind"] == "replace_if_hash"
-            ]
-            created = [
-                operation["uri"]
-                for operation in operations
-                if operation["precondition"]["kind"] == "create_if_absent"
-            ]
-            return {"created": created, "updated": updated, "unchanged": []}
+            assert all(operation["mode"] == "upsert" for operation in operations)
+            return {
+                "created": [operation["uri"] for operation in operations],
+                "updated": [],
+                "unchanged": [],
+            }
 
     client = Client()
     sandbox = _FakeWorkspaceSandbox(files)
@@ -4169,7 +4692,7 @@ async def test_timeout_salvage_skips_oversized_file_before_reading(tmp_path: Pat
     assert result is not None
     assert sandbox.reads == [
         ("existing.txt", limits.output_total_bytes),
-        ("small.txt", limits.output_total_bytes - 2),
+        ("small.txt", limits.output_total_bytes),
     ]
     assert [operation["uri"] for operation in client.operations] == [
         "viking://resources/wiki/small.txt"
@@ -4395,7 +4918,7 @@ async def test_timeout_salvage_respects_combined_output_operation_limit(tmp_path
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("cutoff", ["runtime", "iterations", "accepted", "rendering"])
+@pytest.mark.parametrize("cutoff", ["runtime", "iterations", "accepted", "writing"])
 async def test_compile_cutoff_salvages_before_workspace_cleanup(
     monkeypatch, tmp_path: Path, cutoff: str
 ):
@@ -4461,19 +4984,17 @@ async def test_compile_cutoff_salvages_before_workspace_cleanup(
             if cutoff == "accepted":
                 submit_tool.bundle = WikiBundleDraft.model_validate({"pages": []})
                 await asyncio.Event().wait()
-            if cutoff == "rendering":
+            if cutoff == "writing":
                 return (
-                    WikiBundleDraft.model_validate(
-                        {
-                            "pages": [
-                                _page(
-                                    1,
-                                    "Guide",
-                                    update_uri="viking://resources/wiki/guide.md",
-                                    path_hint=None,
-                                )
-                            ]
-                        }
+                    RenderedBundle(
+                        operations=[
+                            {
+                                "uri": "viking://resources/wiki/guide.md",
+                                "content": "Guide",
+                                "mode": "upsert",
+                            }
+                        ],
+                        created=["viking://resources/wiki/guide.md"],
                     ),
                     [],
                     {},
@@ -4491,9 +5012,10 @@ async def test_compile_cutoff_salvages_before_workspace_cleanup(
                 "files": [],
             }
 
-        async def read_raw(self, uri):
-            assert cutoff == "rendering"
-            assert uri == "viking://resources/wiki/guide.md"
+        async def batch_write(self, **kwargs):
+            assert cutoff == "writing"
+            assert kwargs["operations"][0]["uri"] == "viking://resources/wiki/guide.md"
+            assert kwargs["wait"] is False
             await asyncio.Event().wait()
 
         async def close(self):
@@ -4555,7 +5077,7 @@ async def test_compile_cutoff_salvages_before_workspace_cleanup(
     monkeypatch.setattr(service, "_check_requirements", no_op)
     monkeypatch.setattr(service, "_build_sources", build_sources)
     monkeypatch.setattr(service, "_build_catalog", build_catalog)
-    submit_tool = SimpleNamespace(file_payloads=[])
+    submit_tool = SimpleNamespace(file_payloads=[], page_count=1, file_count=1)
     registry = SimpleNamespace(get=lambda name: submit_tool)
     monkeypatch.setattr(
         service, "_build_compile_registry", lambda *args, **kwargs: (registry, set())
@@ -4579,9 +5101,9 @@ async def test_compile_cutoff_salvages_before_workspace_cleanup(
         request,
         {"api_key": "secret"},
         runtime_deadline=loop.time()
-        + (0.01 if cutoff in {"runtime", "accepted", "rendering"} else 60),
+        + (0.01 if cutoff in {"runtime", "accepted", "writing"} else 60),
     )
-    if cutoff in {"accepted", "rendering"}:
+    if cutoff in {"accepted", "writing"}:
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(execute, timeout=0.01)
     elif cutoff == "runtime":
@@ -4591,8 +5113,8 @@ async def test_compile_cutoff_salvages_before_workspace_cleanup(
 
     completed = await service.store.get(task.task_id)
     assert completed is not None
-    if cutoff in {"accepted", "rendering"}:
-        assert completed.status == "running"
+    if cutoff in {"accepted", "writing"}:
+        assert completed.status == ("committing" if cutoff == "writing" else "running")
         assert completed.stage == cutoff.replace("accepted", "agent")
         assert completed.result is None
         assert observed == ["cleanup"]

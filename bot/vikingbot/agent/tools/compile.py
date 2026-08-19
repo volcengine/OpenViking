@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from collections.abc import Awaitable, Callable
 from typing import Any, Mapping
 
@@ -23,11 +24,13 @@ from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.compile.models import (
     COMPILE_MATERIALIZED_ROOT,
     COMPILE_STAGING_ROOT,
-    COMPILE_WIKI_PAGE_ROOT,
+    COMPILE_TARGET_CHECKOUT_ROOT,
     CompileLimits,
     WikiBundleDraft,
 )
 from vikingbot.compile.renderer import (
+    RenderedBundle,
+    finalize_resource_checkout,
     is_reserved_wiki_page_uri,
     validate_declared_okf_markdown,
     validate_relative_file_path,
@@ -112,7 +115,12 @@ class CompileScopedTool(Tool):
             if not value:
                 return "Error: Compile search requires target_uri within the task scope."
             uris.append(str(value))
-        elif self.name in {"openviking_list", "openviking_grep", "openviking_glob", "openviking_export"}:
+        elif self.name in {
+            "openviking_list",
+            "openviking_grep",
+            "openviking_glob",
+            "openviking_export",
+        }:
             value = kwargs.get("uri")
             if not value or str(value).rstrip("/") in {"viking:", "viking://"}:
                 return f"Error: Compile {self.name} requires uri within the task scope."
@@ -170,6 +178,127 @@ class CompileScopedTool(Tool):
                 return "Error: Compile task tool-result budget exceeded."
             self._result_budget["bytes"] = total
         return rendered
+
+
+class SubmitTargetCheckoutTool(Tool):
+    """Commit the Resource checkout without asking the agent to describe its diff."""
+
+    def __init__(
+        self,
+        *,
+        target_uri: str,
+        source_roots: Mapping[str, str],
+        limits: CompileLimits,
+    ):
+        self.target_uri = target_uri.rstrip("/")
+        self.source_roots = dict(source_roots)
+        self.limits = limits
+        self.bundle: RenderedBundle | None = None
+        self.page_count = 0
+        self.file_count = 0
+
+    @property
+    def name(self) -> str:
+        # Keep the established stop-tool name while Resource targets transition from
+        # structured page/file declarations to a checkout commit.
+        return "submit_wiki_bundle"
+
+    @property
+    def description(self) -> str:
+        return (
+            f"Submit the complete Resource output already written under "
+            f"{COMPILE_TARGET_CHECKOUT_ROOT}/. Pass no pages, files, paths, or content; "
+            "Compile scans the checkout, preserves omitted existing files, and commits "
+            "only validated changes."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        }
+
+    async def execute(self, tool_context: ToolContext, **kwargs: Any) -> str:
+        self.bundle = None
+        self.page_count = 0
+        self.file_count = 0
+        if kwargs:
+            return "Error: submit_wiki_bundle takes no arguments for a Resource checkout."
+        if tool_context.sandbox_manager is None:
+            return "Error: Invalid target checkout: task sandbox is unavailable"
+        try:
+            sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
+            entries = await sandbox.list_files(
+                COMPILE_TARGET_CHECKOUT_ROOT,
+                max_entries=self.limits.target_inventory_entries,
+            )
+            checkout: dict[str, bytes] = {}
+            paths_by_case: dict[str, str] = {}
+            declared_total = 0
+            actual_total = 0
+            checkout_prefix = f"{COMPILE_TARGET_CHECKOUT_ROOT}/"
+            for entry in entries:
+                workspace_path = _normalize_workspace_path(entry.path)
+                if not workspace_path.startswith(checkout_prefix):
+                    raise ValueError(
+                        f"checkout inventory returned an out-of-tree path: {workspace_path}"
+                    )
+                relative = validate_relative_file_path(workspace_path.removeprefix(checkout_prefix))
+                prior = paths_by_case.setdefault(relative.casefold(), relative)
+                if prior != relative:
+                    raise ValueError(f"case-colliding output paths: {prior}, {relative}")
+                if entry.size < 0:
+                    raise ValueError(f"checkout file has an invalid size: {relative}")
+                declared_total += entry.size
+                if declared_total > self.limits.target_total_bytes:
+                    raise ValueError("target checkout exceeds the materialization size limit")
+                payload = await sandbox.read_file_bytes(
+                    workspace_path,
+                    max_bytes=self.limits.target_total_bytes,
+                )
+                actual_total += len(payload)
+                if actual_total > self.limits.target_total_bytes:
+                    raise ValueError("target checkout exceeds the materialization size limit")
+                checkout[relative] = payload
+
+            finalized = finalize_resource_checkout(
+                checkout,
+                target_uri=self.target_uri,
+                source_roots=self.source_roots,
+            )
+            rendered = RenderedBundle(link_count=finalized.link_count)
+            self.page_count = len(finalized.wiki_paths)
+            self.file_count = len(finalized.files)
+            artifact_count = self.file_count - self.page_count
+            if self.page_count > self.limits.output_pages:
+                raise ValueError("Wiki page limit exceeded")
+            if artifact_count > self.limits.output_files:
+                raise ValueError("artifact file limit exceeded")
+            if self.file_count > self.limits.output_operations:
+                raise ValueError("combined output operation limit exceeded")
+            for path, payload in sorted(finalized.files.items()):
+                uri = safe_join_viking_uri(self.target_uri, path).rstrip("/")
+                is_wiki = path in finalized.wiki_paths
+                rendered.operations.append(
+                    {
+                        "uri": uri,
+                        "content_base64": base64.b64encode(payload).decode("ascii"),
+                        "mode": "upsert",
+                    }
+                )
+                if is_wiki:
+                    rendered.wiki_uris.append(uri)
+            self.bundle = rendered
+        except (OSError, ValueError) as exc:
+            return f"Error: Invalid target checkout: {exc}"
+
+        changed = len(rendered.operations)
+        return (
+            f"Target checkout accepted with {changed} changed file(s) and "
+            f"{self.page_count} Wiki page(s) in the preserved final tree."
+        )
 
 
 class SubmitWikiBundleTool(Tool):
@@ -406,21 +535,22 @@ class SubmitWikiBundleTool(Tool):
         }
         errors: list[str] = []
         warnings: list[str] = []
+        page_workspace_root = f"{COMPILE_STAGING_ROOT}/wiki_pages"
         invalid_pages = sorted(
-            path for path in page_paths if not _path_is_within(path, COMPILE_WIKI_PAGE_ROOT)
+            path for path in page_paths if not _path_is_within(path, page_workspace_root)
         )
         if self.require_workspace_pages and invalid_pages:
             errors.append(
-                "Wiki page body workspace paths must be temporary files under "
-                f"{COMPILE_WIKI_PAGE_ROOT}/, not Skill artifact paths: " + ", ".join(invalid_pages)
+                "Wiki page body workspace paths must be editable files under "
+                f"{page_workspace_root}/: " + ", ".join(invalid_pages)
             )
         invalid_artifacts = sorted(
-            path for path in artifact_paths if _path_is_within(path, COMPILE_WIKI_PAGE_ROOT)
+            path for path in artifact_paths if _path_is_within(path, page_workspace_root)
         )
         if invalid_artifacts:
             errors.append(
-                "Skill artifact workspace paths must not use the Wiki page body area under "
-                f"{COMPILE_WIKI_PAGE_ROOT}/: " + ", ".join(invalid_artifacts)
+                "Skill artifact workspace paths must not use the Wiki page body area "
+                f"under {page_workspace_root}/: " + ", ".join(invalid_artifacts)
             )
 
         if self.workspace_baseline is not None:
@@ -547,9 +677,11 @@ class SubmitWikiBundleTool(Tool):
                     f"page {page.page_id} must not include YAML frontmatter. If this is a "
                     "Skill-prescribed artifact, do not edit or strip its frontmatter; submit "
                     f"it through files and create a separate Wiki body under "
-                    f"{COMPILE_WIKI_PAGE_ROOT}/"
+                    f"{COMPILE_STAGING_ROOT}/wiki_pages/"
                 )
-            source_ids = list(dict.fromkeys(source_id for source_id in page.source_ids if source_id))
+            source_ids = list(
+                dict.fromkeys(source_id for source_id in page.source_ids if source_id)
+            )
             if source_ids and any(source_id not in self.source_ids for source_id in source_ids):
                 valid = ", ".join(sorted(self.source_ids))
                 raise ValueError(
@@ -654,8 +786,7 @@ class SubmitWikiBundleTool(Tool):
                 page_uris[link.t],
             ):
                 warnings.append(
-                    f"{prefix} anchor {link.match_text!r} was not found and the link was "
-                    "dropped"
+                    f"{prefix} anchor {link.match_text!r} was not found and the link was dropped"
                 )
                 continue
             valid_links.append(link)
@@ -726,5 +857,6 @@ class SubmitWikiBundleTool(Tool):
 
 __all__ = [
     "CompileScopedTool",
+    "SubmitTargetCheckoutTool",
     "SubmitWikiBundleTool",
 ]
