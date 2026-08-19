@@ -144,7 +144,7 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 	defer closeServer()
 
 	result, err := client.Find(context.Background(), "auth", &FindOptions{
-		TargetURI:   "viking://resources/docs",
+		TargetURI:   "resources/docs",
 		Limit:       5,
 		ContextType: []string{"resource"},
 		Since:       "2026-06-01",
@@ -259,7 +259,7 @@ func TestReindexSendsDryRun(t *testing.T) {
 	}))
 	defer closeServer()
 
-	if _, err := client.Reindex(context.Background(), "viking://resources/demo", &ReindexOptions{
+	if _, err := client.Reindex(context.Background(), "resources/demo", &ReindexOptions{
 		Mode:   "prune_orphans",
 		Wait:   false,
 		DryRun: true,
@@ -282,7 +282,7 @@ func TestReindexSendsExplicitEmptyTags(t *testing.T) {
 	}))
 	defer closeServer()
 
-	if _, err := client.Reindex(context.Background(), "viking://resources/demo", &ReindexOptions{
+	if _, err := client.Reindex(context.Background(), "resources/demo", &ReindexOptions{
 		Tags:    []string{},
 		TagMode: "replace",
 	}); err != nil {
@@ -448,7 +448,7 @@ func TestSearchSendsSessionAndSearchFilters(t *testing.T) {
 	defer closeServer()
 
 	if _, err := client.Search(context.Background(), "auth", &SearchOptions{
-		TargetURI: "viking://resources/docs",
+		TargetURI: "resources/docs",
 		SessionID: "session-1",
 		Since:     "1d",
 		Until:     "2026-06-18",
@@ -525,14 +525,14 @@ func TestRelationRequests(t *testing.T) {
 	}))
 	defer closeServer()
 
-	relations, err := client.Relations(context.Background(), "viking://resources/from")
+	relations, err := client.Relations(context.Background(), "resources/from")
 	if err != nil || len(relations) != 1 {
 		t.Fatalf("relations = %#v, err = %v", relations, err)
 	}
-	if err := client.Link(context.Background(), "viking://resources/from", []string{"viking://resources/to"}, "related"); err != nil {
+	if err := client.Link(context.Background(), "resources/from", []string{"resources/to"}, "related"); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.Unlink(context.Background(), "viking://resources/from", "viking://resources/to"); err != nil {
+	if err := client.Unlink(context.Background(), "resources/from", "resources/to"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -543,7 +543,7 @@ func TestErrorEnvelopePreservesCodeDetailsAndStatus(t *testing.T) {
 	}))
 	defer closeServer()
 
-	_, err := client.Read(context.Background(), "viking://resources/missing", 0, -1)
+	_, err := client.Read(context.Background(), "resources/missing", 0, -1)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -1065,16 +1065,16 @@ func TestWatchManagementRequests(t *testing.T) {
 	ctx := context.Background()
 	if _, err := client.ListWatches(ctx, &ListWatchesOptions{
 		ActiveOnly: true,
-		ToURI:      "viking://resources/guide.md",
+		ToURI:      "resources/guide.md",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.GetWatch(ctx, "task-1", "viking://resources/guide.md"); err != nil {
+	if _, err := client.GetWatch(ctx, "task-1", "resources/guide.md"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := client.UpdateWatch(ctx, UpdateWatchOptions{
 		TaskID:        "task-1",
-		ToURI:         "viking://resources/guide.md",
+		ToURI:         "resources/guide.md",
 		WatchInterval: Float64(30),
 		IsActive:      Bool(false),
 		Reason:        String(""),
@@ -1085,7 +1085,7 @@ func TestWatchManagementRequests(t *testing.T) {
 	if _, err := client.TriggerWatch(ctx, WatchRef{TaskID: "task-1"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.DeleteWatch(ctx, WatchRef{ToURI: "viking://resources/guide.md"}); err != nil {
+	if _, err := client.DeleteWatch(ctx, WatchRef{ToURI: "resources/guide.md"}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1133,7 +1133,7 @@ func TestExportOVPackWritesFile(t *testing.T) {
 	if err := os.WriteFile(existingPath, []byte("old-backup"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	outPath, err := client.ExportOVPack(context.Background(), "viking://resources/docs", directory, nil)
+	outPath, err := client.ExportOVPack(context.Background(), "resources/docs", directory, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1289,7 +1289,7 @@ func TestSetTagsSendsBody(t *testing.T) {
 	}))
 	defer closeServer()
 
-	result, err := client.SetTags(context.Background(), "viking://resources/docs", []string{"team=infra", "tier=gold"}, &SetTagsOptions{
+	result, err := client.SetTags(context.Background(), "resources/docs", []string{"team=infra", "tier=gold"}, &SetTagsOptions{
 		Mode:      "append",
 		Recursive: true,
 		Telemetry: true,
@@ -1325,7 +1325,7 @@ func TestSetTagsDefaultsModeAndOmitsTelemetry(t *testing.T) {
 	}))
 	defer closeServer()
 
-	if _, err := client.SetTags(context.Background(), "viking://resources/docs/readme.md", nil, nil); err != nil {
+	if _, err := client.SetTags(context.Background(), "resources/docs/readme.md", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 }

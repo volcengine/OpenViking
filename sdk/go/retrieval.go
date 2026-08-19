@@ -24,7 +24,7 @@ func (c *Client) Find(ctx context.Context, queryText string, opts *FindOptions) 
 	}
 	payload := map[string]any{
 		"query":      queryText,
-		"target_uri": opts.TargetURI,
+		"target_uri": normalizeTarget(opts.TargetURI),
 		"limit":      actualLimit,
 	}
 	setString(payload, "image_url", imageURL)
@@ -65,7 +65,7 @@ func (c *Client) Search(ctx context.Context, queryText string, opts *SearchOptio
 	}
 	payload := map[string]any{
 		"query":      queryText,
-		"target_uri": opts.TargetURI,
+		"target_uri": normalizeTarget(opts.TargetURI),
 		"limit":      actualLimit,
 	}
 	setString(payload, "image_url", imageURL)
@@ -94,7 +94,7 @@ func (c *Client) Grep(ctx context.Context, uri, pattern string, opts *GrepOption
 		opts = &GrepOptions{}
 	}
 	payload := map[string]any{
-		"uri":              uri,
+		"uri":              NormalizeURI(uri),
 		"pattern":          pattern,
 		"case_insensitive": opts.CaseInsensitive,
 	}
@@ -105,7 +105,7 @@ func (c *Client) Grep(ctx context.Context, uri, pattern string, opts *GrepOption
 		payload["level_limit"] = *opts.LevelLimit
 	}
 	if opts.ExcludeURI != "" {
-		payload["exclude_uri"] = opts.ExcludeURI
+		payload["exclude_uri"] = NormalizeURI(opts.ExcludeURI)
 	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/search/grep", nil, payload, &result)
@@ -122,7 +122,7 @@ func (c *Client) Glob(ctx context.Context, pattern string, uri string, opts *Glo
 	}
 	payload := map[string]any{
 		"pattern": pattern,
-		"uri":     uri,
+		"uri":     NormalizeURI(uri),
 	}
 	if opts.NodeLimit != nil {
 		payload["node_limit"] = *opts.NodeLimit

@@ -68,3 +68,11 @@ func (c *Client) CloseIdleConnections() {
 	}
 	c.httpClient.CloseIdleConnections()
 }
+
+// NormalizeURI normalizes a short OpenViking URI into viking:// form.
+func NormalizeURI(uri string) string {
+	if strings.HasPrefix(uri, "viking://") {
+		return uri
+	}
+	return "viking://" + strings.TrimLeft(uri, "/")
+}

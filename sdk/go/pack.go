@@ -16,7 +16,7 @@ func (c *Client) ExportOVPack(ctx context.Context, uri, to string, opts *PackOpt
 	includeVectors := opts != nil && opts.IncludeVectors
 	outPath := packOutputPath(to, uri, "export")
 	err := c.downloadPack(ctx, "/api/v1/pack/export", map[string]any{
-		"uri":             uri,
+		"uri":             NormalizeURI(uri),
 		"include_vectors": includeVectors,
 	}, outPath)
 	return outPath, err
@@ -116,7 +116,7 @@ func (c *Client) ImportOVPack(ctx context.Context, filePath, parent string, opts
 		return "", err
 	}
 	payload := map[string]any{
-		"parent":       parent,
+		"parent":       NormalizeURI(parent),
 		"temp_file_id": tempID,
 	}
 	if opts != nil {

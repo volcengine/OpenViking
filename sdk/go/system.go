@@ -20,7 +20,7 @@ func (c *Client) WaitProcessed(ctx context.Context, opts *WaitProcessedOptions) 
 // CheckConsistency checks filesystem/vector-index consistency for a URI subtree.
 func (c *Client) CheckConsistency(ctx context.Context, uri string) (map[string]any, error) {
 	var result map[string]any
-	err := c.doJSON(ctx, http.MethodPost, "/api/v1/system/consistency", nil, map[string]any{"uri": uri}, &result)
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/system/consistency", nil, map[string]any{"uri": NormalizeURI(uri)}, &result)
 	return result, err
 }
 

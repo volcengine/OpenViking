@@ -822,7 +822,7 @@ async def test_add_resource_sends_tags_and_tag_mode():
 
 
 @pytest.mark.asyncio
-async def test_find_uses_node_limit_with_explicit_target_uris():
+async def test_find_uses_node_limit_as_http_limit_and_normalizes_target_uri_list():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
     client._http = fake_http
@@ -830,7 +830,7 @@ async def test_find_uses_node_limit_with_explicit_target_uris():
 
     await client.find(
         query="sample",
-        target_uri=["viking://resources/demo", "viking://resources/kept"],
+        target_uri=["/resources/demo", "viking://resources/kept"],
         limit=3,
         node_limit=9,
         score_threshold=0.4,
@@ -863,7 +863,7 @@ async def test_search_uses_session_wrapper_session_id_in_payload():
     client._handle_response_data = lambda _response: {"result": {"total": 0, "resources": []}}
 
     session = Session(client, "thread-123")
-    await client.search(query="sample", target_uri="viking://resources/demo", session=session, limit=5)
+    await client.search(query="sample", target_uri="/resources/demo", session=session, limit=5)
 
     fake_http.post.assert_awaited_once_with(
         "/api/v1/search/search",
@@ -878,18 +878,18 @@ async def test_search_uses_session_wrapper_session_id_in_payload():
 
 
 @pytest.mark.asyncio
-async def test_grep_sends_explicit_uri_and_exclude_uri():
+async def test_grep_normalizes_uri_and_exclude_uri():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
     client._http = fake_http
     client._handle_response = lambda _response: {"count": 0, "matches": []}
 
     await client.grep(
-        "viking://resources/demo",
+        "/resources/demo",
         pattern="Sample",
         case_insensitive=True,
         node_limit=12,
-        exclude_uri="viking://resources/demo/tmp",
+        exclude_uri="/resources/demo/tmp",
     )
 
     fake_http.post.assert_awaited_once_with(
@@ -905,7 +905,7 @@ async def test_grep_sends_explicit_uri_and_exclude_uri():
 
 
 @pytest.mark.asyncio
-async def test_glob_sends_explicit_scope_uri():
+async def test_glob_normalizes_scope_uri():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
     client._http = fake_http
@@ -914,11 +914,11 @@ async def test_glob_sends_explicit_scope_uri():
         "matches": ["viking://resources/demo.md"],
     }
 
-    await client.glob("**/*.md", uri="viking://resources/")
+    await client.glob("**/*.md", uri="/resources/")
 
     fake_http.post.assert_awaited_once_with(
         "/api/v1/search/glob",
-        json={"pattern": "**/*.md", "uri": "viking://resources/", "node_limit": 256},
+        json={"pattern": "**/*.md", "uri": "viking://resources/"},
     )
 
 
@@ -930,7 +930,7 @@ async def test_ls_passes_full_query_params():
     client._handle_response = lambda _response: []
 
     await client.ls(
-        "viking://resources/",
+        "/resources/",
         simple=True,
         recursive=True,
         output="agent",
@@ -964,7 +964,7 @@ async def test_rm_uses_delete_request_with_timeout_when_provided():
     client._http = fake_http
     client._handle_response = lambda _response: None
 
-    await client.rm("viking://resources/demo.md", recursive=True, wait=True, timeout=5.0)
+    await client.rm("/resources/demo.md", recursive=True, wait=True, timeout=5.0)
 
     fake_http.request.assert_awaited_once_with(
         "DELETE",
@@ -997,17 +997,13 @@ async def test_batch_write_http_timeout_outlives_server_wait_timeout():
 
 
 @pytest.mark.asyncio
-async def test_link_sends_single_and_multiple_target_uris():
+async def test_link_normalizes_single_and_multiple_target_uris():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
     client._http = fake_http
     client._handle_response = lambda _response: None
 
-    await client.link(
-        "viking://resources/from",
-        ["viking://resources/a", "viking://resources/b"],
-        reason="demo",
-    )
+    await client.link("/resources/from", ["/resources/a", "viking://resources/b"], reason="demo")
 
     fake_http.post.assert_awaited_once_with(
         "/api/v1/relations/link",
@@ -1020,7 +1016,7 @@ async def test_link_sends_single_and_multiple_target_uris():
 
 
 @pytest.mark.asyncio
-async def test_watch_routes_support_uri_lookup():
+async def test_watch_routes_support_uri_lookup_and_normalization():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(
         get=AsyncMock(return_value=object()),
@@ -1031,17 +1027,17 @@ async def test_watch_routes_support_uri_lookup():
     client._http = fake_http
     client._handle_response = lambda _response: {"ok": True}
 
-    await client.list_watches(active_only=True, to_uri="viking://resources/demo")
-    await client.get_watch("task-1", to_uri="viking://resources/demo")
+    await client.list_watches(active_only=True, to_uri="/resources/demo")
+    await client.get_watch("task-1", to_uri="/resources/demo")
     await client.update_watch(
-        to_uri="viking://resources/demo",
+        to_uri="/resources/demo",
         watch_interval=30,
         is_active=False,
         reason="adjust",
         instruction="refresh",
     )
-    await client.delete_watch(to_uri="viking://resources/demo")
-    await client.trigger_watch(to_uri="viking://resources/demo")
+    await client.delete_watch(to_uri="/resources/demo")
+    await client.trigger_watch(to_uri="/resources/demo")
 
     fake_http.get.assert_any_await(
         "/api/v1/watches",
@@ -1117,7 +1113,7 @@ async def test_export_and_backup_ovpack_append_default_suffixes(tmp_path):
     existing_export.parent.mkdir()
     existing_export.write_bytes(b"old-backup")
 
-    export_path = await client.export_ovpack("viking://resources/demo/", str(tmp_path / "exports" / "demo"))
+    export_path = await client.export_ovpack("/resources/demo/", str(tmp_path / "exports" / "demo"))
     backup_path = await client.backup_ovpack(str(tmp_path / "backup-dir"))
 
     assert export_path.endswith("demo.ovpack")

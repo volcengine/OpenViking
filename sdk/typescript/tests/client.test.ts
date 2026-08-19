@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { OpenVikingClient, OpenVikingError } from "../src/index.js";
+import {
+  OpenVikingClient,
+  OpenVikingError,
+  normalizeURI,
+} from "../src/index.js";
 import type { AddResourceOptions } from "../src/index.js";
 
 const ok = (result: unknown) =>
@@ -19,6 +23,13 @@ describe("OpenVikingClient", () => {
     };
     expect((options as unknown as Record<string, unknown>).parseMode).toBe(
       "no_split",
+    );
+  });
+
+  it("normalizes URIs", () => {
+    expect(normalizeURI("resources/docs")).toBe("viking://resources/docs");
+    expect(normalizeURI("viking://resources/docs")).toBe(
+      "viking://resources/docs",
     );
   });
 
@@ -138,7 +149,7 @@ describe("OpenVikingClient", () => {
       fetch: fetcher,
     });
 
-    await client.write("viking://resources/demo.md", "updated", {
+    await client.write("resources/demo.md", "updated", {
       processingMode: "vectors_only",
       wait: true,
     });
@@ -404,7 +415,7 @@ describe("OpenVikingClient", () => {
       baseUrl: "https://example.com",
       fetch: fetcher,
     });
-    await client.write("viking://resources/empty.md", "");
+    await client.write("resources/empty.md", "");
     await client.addMessage("session", { role: "assistant", content: "" });
     expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toMatchObject({
       content: "",
@@ -727,9 +738,9 @@ describe("OpenVikingClient", () => {
       fetch: fetcher,
     });
 
-    await client.relations("viking://resources/a");
-    await client.link("viking://resources/a", ["viking://resources/b"]);
-    await client.unlink("viking://resources/a", "viking://resources/b");
+    await client.relations("resources/a");
+    await client.link("resources/a", ["resources/b"]);
+    await client.unlink("resources/a", "resources/b");
     await client.gitCommit({ message: "snapshot" });
     await expect(client.isHealthy()).resolves.toBe(true);
 

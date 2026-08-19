@@ -24,7 +24,7 @@ func (c *Client) List(ctx context.Context, uri string, opts *ListOptions) ([]any
 		nodeLimit = 1000
 	}
 	query := url.Values{}
-	query.Set("uri", uri)
+	query.Set("uri", NormalizeURI(uri))
 	queryBool(query, "simple", opts.Simple)
 	queryBool(query, "recursive", opts.Recursive)
 	query.Set("output", output)
@@ -60,7 +60,7 @@ func (c *Client) Tree(ctx context.Context, uri string, opts *TreeOptions) ([]map
 		nodeLimit = 1000
 	}
 	query := url.Values{}
-	query.Set("uri", uri)
+	query.Set("uri", NormalizeURI(uri))
 	query.Set("output", output)
 	queryInt(query, "abs_limit", absLimit)
 	queryBool(query, "show_all_hidden", opts.ShowAllHidden)
@@ -72,7 +72,7 @@ func (c *Client) Tree(ctx context.Context, uri string, opts *TreeOptions) ([]map
 
 // Stat returns metadata for a URI.
 func (c *Client) Stat(ctx context.Context, uri string) (map[string]any, error) {
-	query := url.Values{"uri": []string{uri}}
+	query := url.Values{"uri": []string{NormalizeURI(uri)}}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodGet, "/api/v1/fs/stat", query, nil, &result)
 	return result, err
@@ -80,7 +80,7 @@ func (c *Client) Stat(ctx context.Context, uri string) (map[string]any, error) {
 
 // Attrs returns logical extended attributes for a URI.
 func (c *Client) Attrs(ctx context.Context, uri string) (map[string]any, error) {
-	query := url.Values{"uri": []string{uri}}
+	query := url.Values{"uri": []string{NormalizeURI(uri)}}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodGet, "/api/v1/fs/attrs", query, nil, &result)
 	return result, err
@@ -88,7 +88,7 @@ func (c *Client) Attrs(ctx context.Context, uri string) (map[string]any, error) 
 
 // Mkdir creates a directory.
 func (c *Client) Mkdir(ctx context.Context, uri string, description string) error {
-	payload := map[string]any{"uri": uri}
+	payload := map[string]any{"uri": NormalizeURI(uri)}
 	setString(payload, "description", description)
 	return c.doJSON(ctx, http.MethodPost, "/api/v1/fs/mkdir", nil, payload, nil)
 }
@@ -99,7 +99,7 @@ func (c *Client) Remove(ctx context.Context, uri string, opts *RemoveOptions) er
 		opts = &RemoveOptions{}
 	}
 	query := url.Values{}
-	query.Set("uri", uri)
+	query.Set("uri", NormalizeURI(uri))
 	queryBool(query, "recursive", opts.Recursive)
 	queryBool(query, "wait", opts.Wait)
 	if opts.Timeout != nil {
@@ -111,15 +111,15 @@ func (c *Client) Remove(ctx context.Context, uri string, opts *RemoveOptions) er
 // Move moves a URI to another URI.
 func (c *Client) Move(ctx context.Context, fromURI, toURI string) error {
 	return c.doJSON(ctx, http.MethodPost, "/api/v1/fs/mv", nil, map[string]any{
-		"from_uri": fromURI,
-		"to_uri":   toURI,
+		"from_uri": NormalizeURI(fromURI),
+		"to_uri":   NormalizeURI(toURI),
 	}, nil)
 }
 
 // Read reads file content.
 func (c *Client) Read(ctx context.Context, uri string, offset int, limit int) (string, error) {
 	query := url.Values{}
-	query.Set("uri", uri)
+	query.Set("uri", NormalizeURI(uri))
 	queryInt(query, "offset", offset)
 	queryInt(query, "limit", limit)
 	var result string
@@ -129,7 +129,7 @@ func (c *Client) Read(ctx context.Context, uri string, offset int, limit int) (s
 
 // Abstract reads L0 abstract content.
 func (c *Client) Abstract(ctx context.Context, uri string) (string, error) {
-	query := url.Values{"uri": []string{uri}}
+	query := url.Values{"uri": []string{NormalizeURI(uri)}}
 	var result string
 	err := c.doJSON(ctx, http.MethodGet, "/api/v1/content/abstract", query, nil, &result)
 	return result, err
@@ -137,7 +137,7 @@ func (c *Client) Abstract(ctx context.Context, uri string) (string, error) {
 
 // Overview reads L1 overview content.
 func (c *Client) Overview(ctx context.Context, uri string) (string, error) {
-	query := url.Values{"uri": []string{uri}}
+	query := url.Values{"uri": []string{NormalizeURI(uri)}}
 	var result string
 	err := c.doJSON(ctx, http.MethodGet, "/api/v1/content/overview", query, nil, &result)
 	return result, err
@@ -153,7 +153,7 @@ func (c *Client) Write(ctx context.Context, uri string, content string, opts *Wr
 		mode = "replace"
 	}
 	payload := map[string]any{
-		"uri":     uri,
+		"uri":     NormalizeURI(uri),
 		"content": content,
 		"mode":    mode,
 		"wait":    opts.Wait,
@@ -183,7 +183,7 @@ func (c *Client) SetTags(ctx context.Context, uri string, tags []string, opts *S
 		tags = []string{}
 	}
 	payload := map[string]any{
-		"uri":       uri,
+		"uri":       NormalizeURI(uri),
 		"tags":      tags,
 		"mode":      mode,
 		"recursive": opts.Recursive,
@@ -204,7 +204,7 @@ func (c *Client) Reindex(ctx context.Context, uri string, opts *ReindexOptions) 
 		mode = "vectors_only"
 	}
 	payload := map[string]any{
-		"uri":     uri,
+		"uri":     NormalizeURI(uri),
 		"mode":    mode,
 		"wait":    opts.Wait,
 		"dry_run": opts.DryRun,

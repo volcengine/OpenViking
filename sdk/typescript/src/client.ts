@@ -38,6 +38,10 @@ const compact = (value: JsonObject): JsonObject =>
   );
 const pathPart = (value: string): string => encodeURIComponent(value);
 
+/** Normalize a short OpenViking URI to the canonical `viking://` form. */
+export const normalizeURI = (uri: string): string =>
+  uri.startsWith("viking://") ? uri : `viking://${uri.replace(/^\/+/, "")}`;
+
 /** HTTP client for an existing OpenViking server. */
 export class OpenVikingClient {
   readonly baseUrl: string;
@@ -253,14 +257,14 @@ export class OpenVikingClient {
     return this.request("GET", "/api/v1/watches", {
       query: {
         active_only: options.activeOnly ?? false,
-        to_uri: options.toUri,
+        to_uri: options.toUri ? normalizeURI(options.toUri) : undefined,
       },
     });
   }
   /** Get a watch by task ID. */
   getWatch(taskId: string, toUri?: string): Promise<JsonObject> {
     return this.request("GET", `/api/v1/watches/${pathPart(taskId)}`, {
-      query: { to_uri: toUri },
+      query: { to_uri: toUri ? normalizeURI(toUri) : undefined },
     });
   }
   /** Partially update a watch. */
@@ -277,7 +281,7 @@ export class OpenVikingClient {
         ? `/api/v1/watches/${pathPart(ref.taskId)}`
         : "/api/v1/watches",
       {
-        query: { to_uri: ref.toUri },
+        query: { to_uri: ref.toUri ? normalizeURI(ref.toUri) : undefined },
         body: compact({
           watch_interval: changes.watchInterval,
           is_active: changes.isActive,
@@ -296,7 +300,7 @@ export class OpenVikingClient {
       ref.taskId
         ? `/api/v1/watches/${pathPart(ref.taskId)}`
         : "/api/v1/watches",
-      { query: { to_uri: ref.toUri } },
+      { query: { to_uri: ref.toUri ? normalizeURI(ref.toUri) : undefined } },
     );
   }
   /** Trigger a watch immediately. */
@@ -308,7 +312,7 @@ export class OpenVikingClient {
       ref.taskId
         ? `/api/v1/watches/${pathPart(ref.taskId)}/trigger`
         : "/api/v1/watches/trigger",
-      { query: { to_uri: ref.toUri } },
+      { query: { to_uri: ref.toUri ? normalizeURI(ref.toUri) : undefined } },
     );
   }
 
@@ -359,12 +363,14 @@ export class OpenVikingClient {
   ): Promise<JsonObject> {
     return this.request("POST", "/api/v1/search/grep", {
       body: compact({
-        uri,
+        uri: normalizeURI(uri),
         pattern,
         case_insensitive: options.caseInsensitive ?? false,
         node_limit: options.nodeLimit ?? 256,
         level_limit: options.levelLimit,
-        exclude_uri: options.excludeUri,
+        exclude_uri: options.excludeUri
+          ? normalizeURI(options.excludeUri)
+          : undefined,
       }),
     });
   }
@@ -375,13 +381,13 @@ export class OpenVikingClient {
     nodeLimit = 256,
   ): Promise<JsonObject> {
     return this.request("POST", "/api/v1/search/glob", {
-      body: { pattern, uri, node_limit: nodeLimit },
+      body: { pattern, uri: normalizeURI(uri), node_limit: nodeLimit },
     });
   }
   /** Return relations associated with a resource. */
   relations(uri: string): Promise<unknown[]> {
     return this.request("GET", "/api/v1/relations", {
-      query: { uri },
+      query: { uri: normalizeURI(uri) },
     });
   }
   /** Create one or more resource relations. */
@@ -392,8 +398,10 @@ export class OpenVikingClient {
   ): Promise<void> {
     await this.request("POST", "/api/v1/relations/link", {
       body: {
-        from_uri: fromUri,
-        to_uris: toUris,
+        from_uri: normalizeURI(fromUri),
+        to_uris: Array.isArray(toUris)
+          ? toUris.map(normalizeURI)
+          : normalizeURI(toUris),
         reason,
       },
     });
@@ -402,8 +410,8 @@ export class OpenVikingClient {
   async unlink(fromUri: string, toUri: string): Promise<void> {
     await this.request("DELETE", "/api/v1/relations/link", {
       body: {
-        from_uri: fromUri,
-        to_uri: toUri,
+        from_uri: normalizeURI(fromUri),
+        to_uri: normalizeURI(toUri),
       },
     });
   }
@@ -412,7 +420,7 @@ export class OpenVikingClient {
   list(uri: string, options: ListOptions = {}): Promise<unknown[]> {
     return this.request("GET", "/api/v1/fs/ls", {
       query: {
-        uri,
+        uri: normalizeURI(uri),
         simple: options.simple ?? false,
         recursive: options.recursive ?? false,
         output: options.output ?? "original",
@@ -428,7 +436,7 @@ export class OpenVikingClient {
   tree(uri: string, options: TreeOptions = {}): Promise<JsonObject[]> {
     return this.request("GET", "/api/v1/fs/tree", {
       query: {
-        uri,
+        uri: normalizeURI(uri),
         output: options.output ?? "original",
         abs_limit: options.absLimit ?? 128,
         show_all_hidden: options.showAllHidden ?? false,
@@ -439,19 +447,19 @@ export class OpenVikingClient {
   /** Return URI metadata. */
   stat(uri: string): Promise<JsonObject> {
     return this.request("GET", "/api/v1/fs/stat", {
-      query: { uri },
+      query: { uri: normalizeURI(uri) },
     });
   }
   /** Return URI logical attributes. */
   attrs(uri: string): Promise<JsonObject> {
     return this.request("GET", "/api/v1/fs/attrs", {
-      query: { uri },
+      query: { uri: normalizeURI(uri) },
     });
   }
   /** Create a directory. */
   mkdir(uri: string, description?: string): Promise<void> {
     return this.request("POST", "/api/v1/fs/mkdir", {
-      body: compact({ uri, description }),
+      body: compact({ uri: normalizeURI(uri), description }),
     });
   }
   /** Remove a resource or directory. */
@@ -461,7 +469,7 @@ export class OpenVikingClient {
   ): Promise<void> {
     return this.request("DELETE", "/api/v1/fs", {
       query: {
-        uri,
+        uri: normalizeURI(uri),
         recursive: options.recursive ?? false,
         wait: options.wait ?? false,
         timeout: options.timeout,
@@ -471,25 +479,25 @@ export class OpenVikingClient {
   /** Move a URI. */
   move(fromUri: string, toUri: string): Promise<void> {
     return this.request("POST", "/api/v1/fs/mv", {
-      body: { from_uri: fromUri, to_uri: toUri },
+      body: { from_uri: normalizeURI(fromUri), to_uri: normalizeURI(toUri) },
     });
   }
   /** Read text content. */
   read(uri: string, offset = 0, limit = -1): Promise<string> {
     return this.request("GET", "/api/v1/content/read", {
-      query: { uri, offset, limit },
+      query: { uri: normalizeURI(uri), offset, limit },
     });
   }
   /** Read L0 abstract content. */
   abstract(uri: string): Promise<string> {
     return this.request("GET", "/api/v1/content/abstract", {
-      query: { uri },
+      query: { uri: normalizeURI(uri) },
     });
   }
   /** Read L1 overview content. */
   overview(uri: string): Promise<string> {
     return this.request("GET", "/api/v1/content/overview", {
-      query: { uri },
+      query: { uri: normalizeURI(uri) },
     });
   }
   /** Write text content, including an empty string used to clear a file. */
@@ -500,7 +508,7 @@ export class OpenVikingClient {
   ): Promise<JsonObject> {
     return this.request("POST", "/api/v1/content/write", {
       body: compact({
-        uri,
+        uri: normalizeURI(uri),
         content,
         mode: options.mode ?? "replace",
         processing_mode: options.processingMode,
@@ -518,7 +526,7 @@ export class OpenVikingClient {
   ): Promise<JsonObject> {
     return this.request("POST", "/api/v1/fs/attrs/set_tags", {
       body: compact({
-        uri,
+        uri: normalizeURI(uri),
         tags,
         mode: options.mode ?? "replace",
         recursive: options.recursive ?? false,
@@ -539,7 +547,7 @@ export class OpenVikingClient {
   ): Promise<JsonObject> {
     return this.request("POST", "/api/v1/content/reindex", {
       body: compact({
-        uri,
+        uri: normalizeURI(uri),
         mode: options.mode ?? "vectors_only",
         wait: options.wait ?? true,
         dry_run: options.dryRun ?? false,
@@ -707,7 +715,7 @@ export class OpenVikingClient {
     const output = await packOutputPath(to, uri, "export");
     return this.downloadToFile(
       "/api/v1/pack/export",
-      { uri, include_vectors: includeVectors },
+      { uri: normalizeURI(uri), include_vectors: includeVectors },
       output,
       options.signal,
     );
@@ -742,7 +750,7 @@ export class OpenVikingClient {
       "/api/v1/pack/import",
       {
         body: compact({
-          parent,
+          parent: normalizeURI(parent),
           temp_file_id: await this.upload(local.blob, local.filename),
           on_conflict: options.onConflict,
           vector_mode: options.vectorMode,
@@ -826,7 +834,7 @@ export class OpenVikingClient {
   /** Check filesystem/index consistency. */
   checkConsistency(uri: string): Promise<JsonObject> {
     return this.request("POST", "/api/v1/system/consistency", {
-      body: { uri },
+      body: { uri: normalizeURI(uri) },
     });
   }
   /** Return aggregate observer status. */
@@ -911,7 +919,7 @@ export class OpenVikingClient {
   gitDiff(path: string, toRef: string, fromRef?: string): Promise<JsonObject> {
     return this.request("GET", "/api/v1/snapshot/diff", {
       query: {
-        path,
+        path: normalizeURI(path),
         from: fromRef,
         to: toRef,
       },

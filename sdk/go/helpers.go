@@ -92,6 +92,30 @@ func queryFloat(values url.Values, key string, value float64) {
 	values.Set(key, strconv.FormatFloat(value, 'f', -1, 64))
 }
 
+func normalizeTarget(target any) any {
+	switch v := target.(type) {
+	case nil:
+		return ""
+	case string:
+		if v == "" {
+			return ""
+		}
+		return NormalizeURI(v)
+	case []string:
+		uris := make([]string, 0, len(v))
+		for _, uri := range v {
+			if uri == "" {
+				uris = append(uris, uri)
+			} else {
+				uris = append(uris, NormalizeURI(uri))
+			}
+		}
+		return uris
+	default:
+		return v
+	}
+}
+
 func normalizeImageInput(image string) (string, error) {
 	if image == "" || strings.HasPrefix(image, "data:image/") ||
 		strings.HasPrefix(image, "http://") ||

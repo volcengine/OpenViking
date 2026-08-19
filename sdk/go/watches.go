@@ -14,7 +14,7 @@ func (c *Client) ListWatches(ctx context.Context, opts *ListWatchesOptions) (map
 	if opts != nil {
 		activeOnly = opts.ActiveOnly
 		if opts.ToURI != "" {
-			query.Set("to_uri", opts.ToURI)
+			query.Set("to_uri", NormalizeURI(opts.ToURI))
 		}
 	}
 	queryBool(query, "active_only", activeOnly)
@@ -27,7 +27,7 @@ func (c *Client) ListWatches(ctx context.Context, opts *ListWatchesOptions) (map
 func (c *Client) GetWatch(ctx context.Context, taskID string, toURI string) (map[string]any, error) {
 	query := url.Values{}
 	if toURI != "" {
-		query.Set("to_uri", toURI)
+		query.Set("to_uri", NormalizeURI(toURI))
 	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodGet, "/api/v1/watches/"+url.PathEscape(taskID), query, nil, &result)
@@ -89,7 +89,7 @@ func (c *Client) TriggerWatch(ctx context.Context, ref WatchRef) (map[string]any
 func watchPathAndQuery(taskID string, toURI string) (string, url.Values) {
 	query := url.Values{}
 	if toURI != "" {
-		query.Set("to_uri", toURI)
+		query.Set("to_uri", NormalizeURI(toURI))
 	}
 	if taskID != "" {
 		return "/api/v1/watches/" + url.PathEscape(taskID), query

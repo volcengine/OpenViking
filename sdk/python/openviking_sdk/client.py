@@ -113,6 +113,21 @@ def _normalize_image_input(image: Any) -> Optional[str]:
     return value
 
 
+class VikingURI:
+    @staticmethod
+    def normalize(uri: str) -> str:
+        if not uri:
+            return uri
+        if uri.startswith("viking://"):
+            return uri
+        if uri == "/":
+            return "viking://"
+        cleaned = uri.strip()
+        if cleaned.startswith("/"):
+            cleaned = cleaned[1:]
+        return f"viking://{cleaned}"
+
+
 class Session:
     def __init__(self, client: "AsyncHTTPClient", session_id: str):
         self._client = client
@@ -520,6 +535,16 @@ class AsyncHTTPClient:
         return quote(value, safe="")
 
     @staticmethod
+    def _normalize_target_uri(
+        target_uri: Union[str, List[str]],
+    ) -> Union[str, List[str]]:
+        if isinstance(target_uri, list):
+            return [VikingURI.normalize(u) if u else u for u in target_uri]
+        if target_uri:
+            return VikingURI.normalize(target_uri)
+        return target_uri
+
+    @staticmethod
     def _compact_request_body(body: Dict[str, Any]) -> Dict[str, Any]:
         """Drop None-valued keys (and an empty ``args`` object) from a request body.
 
@@ -904,7 +929,7 @@ class AsyncHTTPClient:
     ) -> Dict[str, Any]:
         params: Dict[str, Any] = {"active_only": active_only}
         if to_uri is not None:
-            params["to_uri"] = to_uri
+            params["to_uri"] = VikingURI.normalize(to_uri)
         response = await self._request("GET", "/api/v1/watches", params=params)
         return self._handle_response(response)
 
@@ -915,7 +940,7 @@ class AsyncHTTPClient:
     ) -> Dict[str, Any]:
         params = {}
         if to_uri is not None:
-            params["to_uri"] = to_uri
+            params["to_uri"] = VikingURI.normalize(to_uri)
         response = await self._request("GET", f"/api/v1/watches/{task_id}", params=params)
         return self._handle_response(response)
 
@@ -943,7 +968,7 @@ class AsyncHTTPClient:
         if task_id:
             params = {}
             if to_uri is not None:
-                params["to_uri"] = to_uri
+                params["to_uri"] = VikingURI.normalize(to_uri)
             response = await self._request(
                 "PATCH", f"/api/v1/watches/{task_id}", params=params, json=payload
             )
@@ -951,7 +976,7 @@ class AsyncHTTPClient:
             response = await self._request(
                 "PATCH",
                 "/api/v1/watches",
-                params={"to_uri": to_uri},
+                params={"to_uri": VikingURI.normalize(to_uri)},
                 json=payload,
             )
         return self._handle_response(response)
@@ -964,11 +989,11 @@ class AsyncHTTPClient:
         if task_id:
             params = {}
             if to_uri is not None:
-                params["to_uri"] = to_uri
+                params["to_uri"] = VikingURI.normalize(to_uri)
             response = await self._request("DELETE", f"/api/v1/watches/{task_id}", params=params)
         else:
             response = await self._request(
-                "DELETE", "/api/v1/watches", params={"to_uri": to_uri}
+                "DELETE", "/api/v1/watches", params={"to_uri": VikingURI.normalize(to_uri)}
             )
         return self._handle_response(response)
 
@@ -980,13 +1005,13 @@ class AsyncHTTPClient:
         if task_id:
             params = {}
             if to_uri is not None:
-                params["to_uri"] = to_uri
+                params["to_uri"] = VikingURI.normalize(to_uri)
             response = await self._request(
                 "POST", f"/api/v1/watches/{task_id}/trigger", params=params
             )
         else:
             response = await self._request(
-                "POST", "/api/v1/watches/trigger", params={"to_uri": to_uri}
+                "POST", "/api/v1/watches/trigger", params={"to_uri": VikingURI.normalize(to_uri)}
             )
         return self._handle_response(response)
 
@@ -1013,7 +1038,7 @@ class AsyncHTTPClient:
         sort_order: str = "asc",
     ) -> List[Any]:
         params: Dict[str, Any] = {
-            "uri": uri,
+            "uri": VikingURI.normalize(uri),
             "simple": simple,
             "recursive": recursive,
             "output": output,
@@ -1043,7 +1068,7 @@ class AsyncHTTPClient:
             "GET",
             "/api/v1/fs/tree",
             params={
-                "uri": uri,
+                "uri": VikingURI.normalize(uri),
                 "output": output,
                 "abs_limit": abs_limit,
                 "show_all_hidden": show_all_hidden,
@@ -1054,18 +1079,18 @@ class AsyncHTTPClient:
 
     async def stat(self, uri: str) -> Dict[str, Any]:
         response = await self._request(
-            "GET", "/api/v1/fs/stat", params={"uri": uri}
+            "GET", "/api/v1/fs/stat", params={"uri": VikingURI.normalize(uri)}
         )
         return self._handle_response(response)
 
     async def attrs(self, uri: str) -> Dict[str, Any]:
         response = await self._request(
-            "GET", "/api/v1/fs/attrs", params={"uri": uri}
+            "GET", "/api/v1/fs/attrs", params={"uri": VikingURI.normalize(uri)}
         )
         return self._handle_response(response)
 
     async def mkdir(self, uri: str, description: Optional[str] = None) -> None:
-        payload = {"uri": uri}
+        payload = {"uri": VikingURI.normalize(uri)}
         if description is not None:
             payload["description"] = description
         response = await self._request("POST", "/api/v1/fs/mkdir", json=payload)
@@ -1078,7 +1103,7 @@ class AsyncHTTPClient:
         wait: bool = False,
         timeout: Optional[float] = None,
     ) -> None:
-        params = {"uri": uri, "recursive": recursive, "wait": wait}
+        params = {"uri": VikingURI.normalize(uri), "recursive": recursive, "wait": wait}
         if timeout is not None:
             params["timeout"] = timeout
         response = await self._request("DELETE", "/api/v1/fs", params=params)
@@ -1088,7 +1113,7 @@ class AsyncHTTPClient:
         response = await self._request(
             "POST",
             "/api/v1/fs/mv",
-            json={"from_uri": from_uri, "to_uri": to_uri},
+            json={"from_uri": VikingURI.normalize(from_uri), "to_uri": VikingURI.normalize(to_uri)},
         )
         self._handle_response(response)
 
@@ -1096,7 +1121,7 @@ class AsyncHTTPClient:
         response = await self._request(
             "GET",
             "/api/v1/content/read",
-            params={"uri": uri, "offset": offset, "limit": limit},
+            params={"uri": VikingURI.normalize(uri), "offset": offset, "limit": limit},
         )
         return self._handle_response(response)
 
@@ -1106,7 +1131,7 @@ class AsyncHTTPClient:
             "GET",
             "/api/v1/content/read",
             params={
-                "uri": uri,
+                "uri": VikingURI.normalize(uri),
                 "offset": offset,
                 "limit": limit,
                 "raw": True,
@@ -1119,7 +1144,7 @@ class AsyncHTTPClient:
         response = await self._request(
             "GET",
             "/api/v1/content/download",
-            params={"uri": uri},
+            params={"uri": VikingURI.normalize(uri)},
         )
         if not response.is_success:
             self._handle_response_data(response)
@@ -1127,13 +1152,13 @@ class AsyncHTTPClient:
 
     async def abstract(self, uri: str) -> str:
         response = await self._request(
-            "GET", "/api/v1/content/abstract", params={"uri": uri}
+            "GET", "/api/v1/content/abstract", params={"uri": VikingURI.normalize(uri)}
         )
         return self._handle_response(response)
 
     async def overview(self, uri: str) -> str:
         response = await self._request(
-            "GET", "/api/v1/content/overview", params={"uri": uri}
+            "GET", "/api/v1/content/overview", params={"uri": VikingURI.normalize(uri)}
         )
         return self._handle_response(response)
 
@@ -1148,7 +1173,7 @@ class AsyncHTTPClient:
         processing_mode: Optional[str] = None,
     ) -> Dict[str, Any]:
         payload = {
-            "uri": uri,
+            "uri": VikingURI.normalize(uri),
             "content": content,
             "mode": mode,
             "wait": wait,
@@ -1173,12 +1198,17 @@ class AsyncHTTPClient:
         telemetry: Any = False,
     ) -> Dict[str, Any]:
         """Apply a preconditioned multi-file content write."""
+        normalized_operations = []
+        for operation in operations:
+            item = dict(operation)
+            item["uri"] = VikingURI.normalize(str(item.get("uri") or ""))
+            normalized_operations.append(item)
         response = await self._request(
             "POST",
             "/api/v1/content/batch-write",
             json={
-                "root_uri": root_uri,
-                "operations": operations,
+                "root_uri": VikingURI.normalize(root_uri),
+                "operations": normalized_operations,
                 "wait": wait,
                 "timeout": timeout,
                 "telemetry": telemetry,
@@ -1199,7 +1229,7 @@ class AsyncHTTPClient:
             "POST",
             "/api/v1/fs/attrs/set_tags",
             json={
-                "uri": uri,
+                "uri": VikingURI.normalize(uri),
                 "tags": tags,
                 "mode": mode,
                 "recursive": recursive,
@@ -1225,7 +1255,7 @@ class AsyncHTTPClient:
         payload = {
             "query": query,
             "image_url": _normalize_image_input(image),
-            "target_uri": target_uri,
+            "target_uri": self._normalize_target_uri(target_uri),
             "limit": actual_limit,
             "score_threshold": score_threshold,
             "filter": filter,
@@ -1257,7 +1287,7 @@ class AsyncHTTPClient:
         payload = {
             "query": query,
             "image_url": _normalize_image_input(image),
-            "target_uri": target_uri,
+            "target_uri": self._normalize_target_uri(target_uri),
             "session_id": sid,
             "limit": actual_limit,
             "score_threshold": score_threshold,
@@ -1279,13 +1309,13 @@ class AsyncHTTPClient:
         exclude_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         request_json = {
-            "uri": uri,
+            "uri": VikingURI.normalize(uri),
             "pattern": pattern,
             "case_insensitive": case_insensitive,
             "node_limit": node_limit,
         }
         if exclude_uri is not None:
-            request_json["exclude_uri"] = exclude_uri
+            request_json["exclude_uri"] = VikingURI.normalize(exclude_uri)
         response = await self._request("POST", "/api/v1/search/grep", json=request_json)
         return self._handle_response(response)
 
@@ -1300,7 +1330,7 @@ class AsyncHTTPClient:
             "/api/v1/search/glob",
             json={
                 "pattern": pattern,
-                "uri": uri,
+                "uri": VikingURI.normalize(uri),
                 "node_limit": node_limit,
             },
         )
@@ -1308,16 +1338,20 @@ class AsyncHTTPClient:
 
     async def relations(self, uri: str) -> List[Any]:
         response = await self._request(
-            "GET", "/api/v1/relations", params={"uri": uri}
+            "GET", "/api/v1/relations", params={"uri": VikingURI.normalize(uri)}
         )
         return self._handle_response(response)
 
     async def link(self, from_uri: str, to_uris: Union[str, List[str]], reason: str = "") -> None:
+        if isinstance(to_uris, str):
+            to_uris = VikingURI.normalize(to_uris)
+        else:
+            to_uris = [VikingURI.normalize(u) for u in to_uris]
         response = await self._request(
             "POST",
             "/api/v1/relations/link",
             json={
-                "from_uri": from_uri,
+                "from_uri": VikingURI.normalize(from_uri),
                 "to_uris": to_uris,
                 "reason": reason,
             },
@@ -1329,8 +1363,8 @@ class AsyncHTTPClient:
             "DELETE",
             "/api/v1/relations/link",
             json={
-                "from_uri": from_uri,
-                "to_uri": to_uri,
+                "from_uri": VikingURI.normalize(from_uri),
+                "to_uri": VikingURI.normalize(to_uri),
             },
         )
         self._handle_response(response)
@@ -1516,6 +1550,7 @@ class AsyncHTTPClient:
         to: str,
         include_vectors: bool = False,
     ) -> str:
+        uri = VikingURI.normalize(uri)
         to_path = Path(to)
         if to_path.is_dir():
             base_name = uri.strip().rstrip("/").split("/")[-1] or "export"
@@ -1555,7 +1590,7 @@ class AsyncHTTPClient:
         on_conflict: Optional[str] = None,
         vector_mode: Optional[str] = None,
     ) -> str:
-        request_data = {"parent": parent}
+        request_data = {"parent": VikingURI.normalize(parent)}
         if on_conflict is not None:
             request_data["on_conflict"] = on_conflict
         if vector_mode is not None:
@@ -1595,7 +1630,7 @@ class AsyncHTTPClient:
         response = await self._request(
             "POST",
             "/api/v1/system/consistency",
-            json={"uri": uri},
+            json={"uri": VikingURI.normalize(uri)},
         )
         return self._handle_response(response)
 
