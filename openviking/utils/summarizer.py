@@ -108,6 +108,8 @@ class Summarizer:
 
         temp_uris = kwargs.get("temp_uris", [])
         ingest_options = IngestOptions.from_value(kwargs.get("ingest_options"))
+        source = kwargs.get("semantic_source")
+        generation_trigger = str(kwargs.get("generation_trigger") or "manual_refresh")
         if not temp_uris:
             temp_uris = resource_uris
         if len(temp_uris) != len(resource_uris):
@@ -189,6 +191,8 @@ class Summarizer:
                     is_code_repo=kwargs.get("is_code_repo", False),
                     target_preexisting=resolve_target_preexisting(idx, target_uri),
                     ingest_options=ingest_options,
+                    source=source,
+                    generation_trigger=generation_trigger,
                 )
                 if msg.telemetry_id:
                     get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)

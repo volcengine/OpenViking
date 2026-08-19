@@ -353,6 +353,7 @@ async def test_to_dict(tracker: TaskTracker):
     task = await tracker.create(
         "session_commit",
         resource_id="s1",
+        auth={"provider": "git_http_basic", "password": "secret"},
         **_owner_kwargs(),
     )
     d = task.to_dict()
@@ -368,6 +369,13 @@ async def test_to_dict(tracker: TaskTracker):
     assert isinstance(d["updated_at_iso"], str)
     assert "account_id" not in d
     assert "user_id" not in d
+    assert "auth" not in d
+    assert await tracker.get_task_auth(task.task_id, **_owner_kwargs()) == {
+        "provider": "git_http_basic",
+        "password": "secret",
+    }
+    assert (await tracker.get(task.task_id, **_owner_kwargs())).auth == {}
+    assert (await tracker.list_tasks(**_owner_kwargs()))[0].auth == {}
 
 
 # ── Sanitization ──
@@ -501,6 +509,7 @@ async def test_persistent_store_writes_task_record_json():
     task = await tracker.create(
         "add_resource",
         resource_id="viking://resources/demo",
+        auth={"provider": "feishu", "access_token": "secret-token"},
         **_owner_kwargs(),
     )
 
@@ -512,7 +521,17 @@ async def test_persistent_store_writes_task_record_json():
     assert payload["account_id"] == "acme"
     assert payload["user_id"] == "alice"
     assert payload["stage"] is None
+    assert payload["auth"] == {
+        "provider": "feishu",
+        "access_token": "secret-token",
+    }
     assert "schema_version" not in payload
+
+    await tracker.complete(task.task_id, {"ok": True}, **_owner_kwargs())
+    terminal_payload = json.loads(
+        agfs.files[f"/local/acme/_system/tasks/alice/{task.task_id}.json"].decode("utf-8")
+    )
+    assert terminal_payload["auth"] == {}
 
 
 async def test_persistent_store_keeps_tasktracker_tasks_dict():
@@ -524,7 +543,12 @@ async def test_persistent_store_keeps_tasktracker_tasks_dict():
 async def test_persistent_store_survives_tracker_reset():
     agfs = _FakeAgfs()
     tracker1 = TaskTracker(store=PersistentTaskStore(agfs))
-    task = await tracker1.create("session_commit", resource_id="sess-123", **_owner_kwargs())
+    task = await tracker1.create(
+        "session_commit",
+        resource_id="sess-123",
+        auth={"provider": "feishu", "access_token": "secret-token"},
+        **_owner_kwargs(),
+    )
     await tracker1.start(task.task_id, account_id="acme", user_id="alice")
 
     tracker2 = TaskTracker(store=PersistentTaskStore(agfs))
@@ -532,6 +556,11 @@ async def test_persistent_store_survives_tracker_reset():
 
     assert loaded is not None
     assert loaded.status == TaskStatus.RUNNING
+    assert loaded.auth == {}
+    assert await tracker2.get_task_auth(task.task_id, **_owner_kwargs()) == {
+        "provider": "feishu",
+        "access_token": "secret-token",
+    }
 
 
 async def test_persistent_store_ignores_existing_task_dirs():

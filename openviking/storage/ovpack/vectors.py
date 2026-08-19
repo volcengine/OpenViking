@@ -9,7 +9,12 @@ import struct
 import zipfile
 from typing import Any
 
-from openviking.core.namespace import context_type_for_uri, is_session_uri, owner_fields_for_uri
+from openviking.core.namespace import (
+    content_owner_context_for_uri,
+    context_type_for_uri,
+    is_session_uri,
+    owner_fields_for_uri,
+)
 from openviking.server.identity import RequestContext
 from openviking.storage.ovpack.format import (
     OVPACK_DENSE_PATH,
@@ -315,12 +320,13 @@ async def restore_vector_snapshot(
         if not isinstance(rel_path, str):
             continue
         target_uri = join_uri(root_uri, rel_path)
-        if is_session_uri(target_uri):
+        if target_uri == "viking://user" or is_session_uri(target_uri):
             continue
+        owner_ctx = content_owner_context_for_uri(target_uri, ctx)
         await _upsert_vector_snapshot_record(
             vector_store,
             target_uri,
             record,
             dense_vectors[record_id],
-            ctx,
+            owner_ctx,
         )

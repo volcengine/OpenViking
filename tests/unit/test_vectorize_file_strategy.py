@@ -1,6 +1,9 @@
+import base64
+import io
 import types
 
 import pytest
+from PIL import Image
 
 from openviking.core.context import ResourceContentType
 from openviking.parse.parsers.media.utils import (
@@ -9,6 +12,7 @@ from openviking.parse.parsers.media.utils import (
 )
 from openviking.utils import embedding_utils
 from openviking.utils.ingest_options import IngestOptions
+from openviking_cli.utils.config.parser_config import ImageConfig
 
 
 class DummyQueue:
@@ -86,6 +90,18 @@ class DummyReq:
     def __init__(self):
         self.user = DummyUser()
         self.account_id = "default"
+
+
+def _jpeg_bytes(width: int, height: int) -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (width, height), "white").save(buf, format="JPEG")
+    return buf.getvalue()
+
+
+def _data_uri_image_size(data_uri: str) -> tuple[int, int]:
+    _, encoded = data_uri.split(";base64,", 1)
+    with Image.open(io.BytesIO(base64.b64decode(encoded))) as img:
+        return img.size
 
 
 def test_get_resource_content_type_recognizes_media_extensions():
@@ -170,6 +186,42 @@ async def test_vectorize_file_uses_summary_first(monkeypatch):
     assert len(queue.items) == 1
     assert queue.items[0].message == "short summary"
     assert "content" not in queue.items[0].context_data
+
+
+@pytest.mark.asyncio
+async def test_vectorize_image_downsamples_large_embedding_input(monkeypatch):
+    queue = DummyQueue()
+    original = _jpeg_bytes(80, 220)
+    fs = DummyFS(original)
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: fs)
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000),
+            image=ImageConfig(
+                preview_max_dimension=64,
+                max_file_size_mb=100.0,
+                large_image_threshold_dimension=100,
+            ),
+        ),
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://resources/docs/large.jpg",
+        summary_dict={"name": "large.jpg", "summary": "large image"},
+        parent_uri="viking://resources/docs",
+        ctx=DummyReq(),
+    )
+
+    assert len(queue.items) == 1
+    message = queue.items[0].message
+    image_part = next(part for part in message if part["type"] == "image_url")
+    width, height = _data_uri_image_size(image_part["image_url"]["url"])
+    assert max(width, height) <= 64
+    assert fs.content == original
+    assert fs.read_file_bytes_calls == 1
 
 
 @pytest.mark.asyncio
@@ -509,25 +561,44 @@ async def test_vectorize_directory_meta_appends_search_tags_by_level(monkeypatch
 async def test_vectorize_directory_meta_l1_abstract_is_overview(monkeypatch):
     """L1 records must carry the overview in the abstract scalar so Rerank
     sees L1 text instead of the L0 abstract."""
+    from openviking.core.context import ContextLevel
+    from openviking.storage.semantic_sidecar import render_semantic_sidecar
+
     queue = DummyQueue()
     monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
     monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("ignored"))
 
+    uri = "viking://user/default/resources/demo"
     overview = "# Overview\n\n" + ("section detail. " * 50)
+    metadata = {
+        "source": {"kind": "http", "uri": "https://example.com/private.pdf"},
+        "generated_by": {"component": "SemanticProcessor", "trigger": "ingest"},
+        "freshness": {
+            "total_entries": 4,
+            "sampled_entries": 2,
+            "unsampled_entries": 2,
+            "pending_child_changes": 0,
+        },
+    }
     await embedding_utils.vectorize_directory_meta(
-        uri="viking://user/default/resources/demo",
-        abstract="demo abstract",
-        overview=overview,
+        uri=uri,
+        abstract=render_semantic_sidecar(ContextLevel.ABSTRACT, uri, "Visible abstract.", metadata),
+        overview=render_semantic_sidecar(ContextLevel.OVERVIEW, uri, overview, metadata),
         ctx=DummyReq(),
     )
 
     assert len(queue.items) == 2
     l0, l1 = queue.items
     assert l0.context_data["level"] == 0
-    assert l0.context_data["abstract"] == "demo abstract"
+    assert l0.context_data["abstract"] == "Visible abstract."
     assert l1.context_data["level"] == 1
-    assert l1.context_data["abstract"] == overview
-    assert l1.message == overview
+    assert l1.context_data["abstract"] == overview.rstrip()
+    assert l1.message == (f"---\ndirectory: {uri}/\n---\n\n{overview.rstrip()}")
+    for item in (l0, l1):
+        assert f"directory: {uri}/" in item.message
+        assert "source:" not in item.message
+        assert "generated_by:" not in item.message
+        assert "freshness:" not in item.message
 
 
 @pytest.mark.asyncio

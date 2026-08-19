@@ -41,6 +41,7 @@ class ContextBuilder:
         is_group_chat: bool = False,
         eval: bool = False,
         openviking_connection: dict[str, Any] | None = None,
+        remote_skills_summary: str = "",
         enable_subagents: bool = True,
         config: "Config | None" = None,
     ):
@@ -55,6 +56,7 @@ class ContextBuilder:
         self._is_group_chat = is_group_chat
         self._eval = eval
         self._openviking_connection = openviking_connection
+        self._remote_skills_summary = remote_skills_summary
         self._enable_subagents = enable_subagents
         self._config = config
         self.latest_relevant_memories: str | None = None
@@ -148,7 +150,7 @@ class ContextBuilder:
 
         # 2. Available skills: only show summary (agent uses read_file to load)
         skills_summary = self.skills.build_skills_summary()
-        if skills_summary:
+        if skills_summary or self._remote_skills_summary:
             required_skill_note = ""
             required_skill_candidates = [
                 "skills/experience_loader/SKILL.md",
@@ -161,12 +163,30 @@ class ContextBuilder:
                         f"`{skill_path}` and apply its instructions.\n"
                     )
                     break
+            local_section = ""
+            if skills_summary:
+                local_section = f"""## Local Skills
+
+Read local SKILL.md files with the read_file tool.
+{skills_summary}"""
+            remote_section = ""
+            if self._remote_skills_summary:
+                remote_section = f"""## OpenViking Skills
+
+These are remote Skill summaries. Read a selected SKILL.md with openviking_multi_read.
+Do not use read_file for their viking:// locations. Text references stay remote; the
+runtime automatically materializes files only when a tool requires a local path.
+After activation, use the canonical resource URIs appended to SKILL.md. When multiple
+remote Skills are active, their tool policies are intersected. Use `workspace:<relative-path>`
+or an absolute path for an ordinary workspace file.
+{self._remote_skills_summary}"""
             parts.append(f"""# Skills
 
-The following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool.
-Skills with available="false" need dependencies installed first - you can try installing them with apt/brew.
+The following local and remote Skills extend your capabilities.
 {required_skill_note}
-{skills_summary}""")
+{local_section}
+
+{remote_section}""")
 
         # Viking peer profile (only if ov tools are enabled). In the current
         # OpenViking identity model, the bot API key owns the User, and the

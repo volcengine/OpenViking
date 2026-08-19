@@ -177,30 +177,43 @@ func TestFindOmitsSearchFiltersWhenUnset(t *testing.T) {
 	}
 }
 
-func TestListSendsOrderingOptions(t *testing.T) {
+func TestListAndTreeSendQueryOptions(t *testing.T) {
+	wantTreeLimits := []string{"0", "3"}
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/fs/ls" {
-			t.Fatalf("path = %s", r.URL.Path)
-		}
-		if got := r.URL.Query().Get("node_limit"); got != "200" {
-			t.Fatalf("node_limit = %q", got)
-		}
-		if got := r.URL.Query().Get("sort_by"); got != "mtime" {
-			t.Fatalf("sort_by = %q", got)
-		}
-		if got := r.URL.Query().Get("sort_order"); got != "desc" {
-			t.Fatalf("sort_order = %q", got)
+		switch r.URL.Path {
+		case "/api/v1/fs/ls":
+			if got := r.URL.Query().Get("node_limit"); got != "200" {
+				t.Fatalf("node_limit = %q", got)
+			}
+			if got := r.URL.Query().Get("sort_by"); got != "mtime" {
+				t.Fatalf("sort_by = %q", got)
+			}
+			if got := r.URL.Query().Get("sort_order"); got != "desc" {
+				t.Fatalf("sort_order = %q", got)
+			}
+		case "/api/v1/fs/tree":
+			if got := r.URL.Query().Get("level_limit"); got != wantTreeLimits[0] {
+				t.Fatalf("level_limit = %q, want %q", got, wantTreeLimits[0])
+			}
+			wantTreeLimits = wantTreeLimits[1:]
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
 		writeOK(t, w, []any{})
 	}))
 	defer closeServer()
 
-	_, err := client.List(context.Background(), "viking://session", &ListOptions{
+	if _, err := client.List(context.Background(), "viking://session", &ListOptions{
 		NodeLimit: 200,
 		SortBy:    "mtime",
 		SortOrder: "desc",
-	})
-	if err != nil {
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Tree(context.Background(), "viking://resources/docs", &TreeOptions{LevelLimit: Int(0)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Tree(context.Background(), "viking://resources/docs", nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -263,6 +276,28 @@ func TestReindexSendsDryRun(t *testing.T) {
 		Mode:   "prune_orphans",
 		Wait:   false,
 		DryRun: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReindexSendsExplicitEmptyTags(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		tags, ok := body["tags"].([]any)
+		if !ok || len(tags) != 0 {
+			t.Fatalf("tags = %#v", body["tags"])
+		}
+		if got := body["tag_mode"]; got != "replace" {
+			t.Fatalf("tag_mode = %#v", got)
+		}
+		writeOK(t, w, map[string]any{"status": "completed"})
+	}))
+	defer closeServer()
+
+	if _, err := client.Reindex(context.Background(), "resources/demo", &ReindexOptions{
+		Tags:    []string{},
+		TagMode: "replace",
 	}); err != nil {
 		t.Fatal(err)
 	}

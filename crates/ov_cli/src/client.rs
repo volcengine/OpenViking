@@ -164,6 +164,8 @@ struct CompileCreateRequest<'a> {
     skill: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    runtime_timeout_seconds: Option<f64>,
 }
 
 // ============ HttpClient ============
@@ -356,12 +358,14 @@ impl HttpClient {
         to: &str,
         skill: &str,
         reason: Option<&str>,
+        runtime_timeout_seconds: Option<f64>,
     ) -> Result<CompileAccepted> {
         let body = CompileCreateRequest {
             from_uris,
             to,
             skill,
             reason,
+            runtime_timeout_seconds,
         };
         self.post("/bot/v1/compile", &body).await
     }
@@ -455,13 +459,22 @@ impl HttpClient {
         mode: &str,
         wait: bool,
         dry_run: bool,
+        tags: Vec<String>,
+        tag_mode: &str,
     ) -> Result<serde_json::Value> {
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "uri": uri,
             "mode": mode,
             "wait": wait,
             "dry_run": dry_run,
         });
+        if !tags.is_empty() {
+            let obj = body
+                .as_object_mut()
+                .expect("reindex request body must be an object");
+            obj.insert("tags".to_string(), serde_json::json!(tags));
+            obj.insert("tag_mode".to_string(), serde_json::json!(tag_mode));
+        }
         self.post("/api/v1/content/reindex", &body).await
     }
 
@@ -2238,7 +2251,9 @@ mod tests {
         tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.expect("request should arrive");
             let mut buffer = vec![0; 4096];
-            let _ = stream.read(&mut buffer).await.expect("request should read");
+            let read = stream.read(&mut buffer).await.expect("request should read");
+            let request = String::from_utf8_lossy(&buffer[..read]);
+            assert!(request.contains(r#""runtime_timeout_seconds":86400.0"#));
             let body = r#"{"status":"ok","result":{"task_id":"cmp_1","status":"accepted","to":"viking://resources/wiki"}}"#;
             let response = format!(
                 "HTTP/1.1 202 Accepted\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
@@ -2266,6 +2281,7 @@ mod tests {
                 "viking://resources/wiki",
                 "viking://agent/skills/wiki",
                 None,
+                Some(86_400.0),
             )
             .await
             .expect("202 response body should deserialize");

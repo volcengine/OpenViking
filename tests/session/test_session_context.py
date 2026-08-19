@@ -16,6 +16,7 @@ from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
 from openviking.storage.queuefs import QueueManager, SessionCommitMsg, get_queue_manager
+from openviking.storage.semantic_sidecar import body_for_preview
 from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
@@ -44,10 +45,21 @@ async def client(
 
     queue_manager = get_queue_manager()
     original_enqueue = queue_manager.enqueue
+    commit_tasks: list[asyncio.Task] = []
+    queued_commit_tasks: set[str] = set()
+    tracker = get_task_tracker()
+    original_has_work = tracker.has_work
+    monkeypatch.setattr(
+        tracker,
+        "has_work",
+        lambda task_id: task_id in queued_commit_tasks or original_has_work(task_id),
+    )
 
     async def enqueue_with_session_commit_fallback(queue_name, data):
         if queue_name != QueueManager.SESSION_COMMIT:
             return await original_enqueue(queue_name, data)
+
+        queued_commit_tasks.add(data["task_id"])
 
         async def process_commit():
             message = SessionCommitMsg(**data)
@@ -58,13 +70,19 @@ async def client(
                     break
                 await asyncio.sleep(0)
             await queued_session.load()
-            await queued_session.resume_queued_commit(message)
+            try:
+                while not await queued_session.resume_queued_commit(message):
+                    await asyncio.sleep(0)
+            finally:
+                queued_commit_tasks.discard(message.task_id)
 
-        asyncio.create_task(process_commit())
+        commit_tasks.append(asyncio.create_task(process_commit()))
         return data["task_id"]
 
     monkeypatch.setattr(queue_manager, "enqueue", enqueue_with_session_commit_fallback)
     yield client
+    if commit_tasks:
+        await asyncio.gather(*commit_tasks, return_exceptions=True)
 
 
 def _estimate_tokens(text: str) -> int:
@@ -154,7 +172,7 @@ class TestGetContextForSearch:
         context = await session.get_context_for_search(query="test")
 
         assert isinstance(context, dict)
-        assert context["latest_archive_overview"] == latest_overview
+        assert context["latest_archive_overview"] == body_for_preview(latest_overview)
         assert len(context["current_messages"]) == 1
 
     async def test_get_context_skips_incomplete_latest_archive(self, client: partial):
@@ -179,7 +197,7 @@ class TestGetContextForSearch:
 
         context = await session.get_context_for_search(query="test")
 
-        assert context["latest_archive_overview"] == completed_overview
+        assert context["latest_archive_overview"] == body_for_preview(completed_overview)
 
     async def test_get_context_includes_incomplete_archive_messages(self, client: partial):
         """Pending archive messages should be merged with current live messages."""
@@ -316,7 +334,7 @@ class TestGetContextForSearch:
             ctx=session.ctx,
         )
         context = await session.get_context_for_search(query="test")
-        assert context["latest_archive_overview"] == first_overview
+        assert context["latest_archive_overview"] == body_for_preview(first_overview)
         assert [m.content for m in context["current_messages"]] == [
             "Second round user",
             "Second round assistant",
@@ -331,7 +349,7 @@ class TestGetContextForSearch:
             ctx=session.ctx,
         )
         context = await session.get_context_for_search(query="test")
-        assert context["latest_archive_overview"] == second_overview
+        assert context["latest_archive_overview"] == body_for_preview(second_overview)
         assert context["current_messages"] == []
 
 

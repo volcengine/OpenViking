@@ -976,7 +976,8 @@ class _OpsMixin:
             raise NotFoundError(uri, "file") from last_not_found
         if isinstance(stat, dict) and stat.get("isDir", False):
             raise InvalidArgumentError(
-                f"Cannot read directory as file: {uri}",
+                f"Directory URI is not readable as a file: {uri}. "
+                "List it first, then read a file URI.",
                 details={"resource": uri, "expected": "file", "actual": "directory"},
             )
         try:

@@ -11,6 +11,7 @@ from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
     OpenVikingError,
+    ResourceExhaustedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -79,6 +80,46 @@ def _hash(value):
 
 def _hash_bytes(value):
     return "sha256:" + hashlib.sha256(value).hexdigest()
+
+
+@pytest.mark.asyncio
+async def test_batch_accepts_256_operations_and_rejects_257(monkeypatch):
+    root = "viking://resources/wiki"
+    vfs = _VFS(root)
+    coordinator = ContentWriteCoordinator(vfs)
+
+    async def refresh(**kwargs):
+        del kwargs
+        return None
+
+    monkeypatch.setattr(coordinator, "_refresh_batch", refresh)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+
+    def operations(prefix, count):
+        return [
+            {
+                "uri": f"{root}/{prefix}-{index}.txt",
+                "content": "x",
+                "precondition": {"kind": "create_if_absent"},
+            }
+            for index in range(count)
+        ]
+
+    result = await coordinator.batch_write(
+        root_uri=root,
+        operations=operations("allowed", 256),
+        ctx=ctx,
+        wait=False,
+    )
+    assert len(result["created"]) == 256
+
+    with pytest.raises(ResourceExhaustedError, match="at most 256 operations"):
+        await coordinator.batch_write(
+            root_uri=root,
+            operations=operations("overflow", 257),
+            ctx=ctx,
+            wait=False,
+        )
 
 
 @pytest.mark.asyncio

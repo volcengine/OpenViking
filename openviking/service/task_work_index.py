@@ -66,6 +66,16 @@ def bind_task_context(
         _current_task_context.reset(token)
 
 
+@contextmanager
+def detach_task_context() -> Iterator[None]:
+    """Keep independently scheduled work outside the current task lifecycle."""
+    token = _current_task_context.set(None)
+    try:
+        yield
+    finally:
+        _current_task_context.reset(token)
+
+
 def get_task_context() -> Optional[TaskExecutionContext]:
     return _current_task_context.get()
 

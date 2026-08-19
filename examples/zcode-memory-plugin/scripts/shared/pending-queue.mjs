@@ -409,6 +409,17 @@ export async function replayPending(fetchJSON, log) {
       res = { ok: false };
     }
 
+    if (entry.type === "commitSession") {
+      log("pending-queue", {
+        action: "commit-replay",
+        sessionId: entry.sessionId,
+        ok: Boolean(res?.ok),
+        status: res?.result?.status || res?.status,
+        trace_id: res?.traceId || res?.result?.trace_id,
+        error: res?.ok ? undefined : res?.error?.message || res?.error?.code,
+      });
+    }
+
     if (res?.ok) {
       await dequeue(claimedFilename);
       replayed++;

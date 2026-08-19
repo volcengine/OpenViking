@@ -25,7 +25,7 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 ## 安装内容
 
 - 生命周期 Hook：自动加载画像、按问题召回、捕获对话、提交会话并保护 `viking://` URI。
-- OpenViking MCP Server：提供 `search`、`recall`、`read`、`remember` 等工具。
+- OpenViking MCP Server：提供 `search`、`read`、`remember` 等工具；`search` 的 `mode="context"` 可返回组装后的上下文。
 - always-on Rule 和记忆 Skill：告诉 Agent 如何使用已注入的上下文和记忆工具。
 
 ## 验证
@@ -74,5 +74,6 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 
 ## 参见
 
+- [集成能力参考](./16-capability-reference.md)
 - [鉴权](../guides/04-authentication.md)
 - [Cursor Hooks 文档](https://cursor.com/docs/hooks)

@@ -129,13 +129,12 @@ If you already have HTTPS configured, just connect to `https://your-server.com/m
 
 ## Available MCP Tools
 
-Once connected, OpenViking exposes 16 tools:
+Once connected, OpenViking exposes 15 tools:
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
 | `find` | Fast semantic retrieval without session context | `query`, `target_uri` (optional), `limit`, `min_score`, `level` (optional), `context_type` (optional) |
-| `search` | Deep semantic retrieval with optional session context and intent analysis | `query`, `target_uri` (optional), `session_id` (optional), `limit`, `min_score`, `level` (optional), `context_type` (optional) |
-| `recall` | Type-quota recall assembled server-side into flat `<memory>` blocks that always carry their URI | `query`, `quotas` (optional), `max_chars`, `min_score`, `peer_scope`, `other_peer_penalty` (optional), `session_id` (optional), `detail` (optional), `max_tokens` (optional), `rewrite` (optional) |
+| `search` | Deep semantic retrieval; `mode="context"` assembles injection-ready context and replaces the former `recall` tool | `query`, `mode` (`list` or `context`), `target_uri` (list mode only), `session_id` (optional), `limit`, `min_score`, `level` (list mode), `context_type` (optional), plus context-mode `quotas`, `purpose`, `max_tokens`, `detail` or `detail_by_category`, `dedup_turns`, `exclude_uris`, `peer_scope`, scalar `other_peer_penalty` or `other_peer_penalties` by category, and `rewrite` (`off` or `auto`) |
 | `read` | Read one or more `viking://` URIs | `uris` (single string or array) |
 | `list` | List entries under a `viking://` directory | `uri`, `recursive` (optional) |
 | `tree` | Show the recursive directory tree under a `viking://` URI, indented by depth — use when you need a full picture of the file tree (prefer `list` for a single level, `glob` for filename patterns) | `uri` (optional), `level_limit` (default 3), `node_limit` (default 1000), `include_abstract` (optional — also show each file's summary) |

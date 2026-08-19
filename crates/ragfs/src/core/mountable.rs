@@ -449,7 +449,9 @@ impl MountableFS {
             .pathlock_manager
             .get()
             .cloned()
-            .expect("pathlock manager must be initialized before multi-write mount");
+            .ok_or_else(|| {
+                Error::config("pathlock manager must be initialized before multi-write mount")
+            })?;
         build_multi_write_fs(
             &self.registry,
             config,
@@ -605,7 +607,9 @@ impl MountableFS {
             .pathlock_manager
             .get()
             .cloned()
-            .expect("pathlock manager must be initialized before raw copy");
+            .ok_or_else(|| {
+                Error::config("pathlock manager must be initialized before raw copy")
+            })?;
         let request = PathLockRequest {
             path: dst_path.to_string(),
             kind: PathLockKind::Exact,
@@ -1665,11 +1669,12 @@ mod tests {
         use crate::cache::{CacheNamespace, CachePolicy, MemoryCacheProvider};
         use crate::plugins::MemFSPlugin;
 
-        let mfs = MountableFS::with_cache(
+        let mfs = with_test_pathlock_manager(Arc::new(MountableFS::with_cache(
             Arc::new(MemoryCacheProvider::new()),
             CacheNamespace::new("copy-cache-test"),
             CachePolicy::default(),
-        );
+        )))
+        .await;
         mfs.register_plugin(MemFSPlugin).await;
         mfs.mount(test_config("memfs", "/local")).await.unwrap();
         mfs.mkdir("/local/dir", 0o755).await.unwrap();
@@ -1846,11 +1851,12 @@ mod tests {
         use crate::core::{FsContextInner, FS_CTX};
         use crate::plugins::MemFSPlugin;
 
-        let mfs = MountableFS::with_cache(
+        let mfs = with_test_pathlock_manager(Arc::new(MountableFS::with_cache(
             Arc::new(MemoryCacheProvider::new()),
             CacheNamespace::new("cached-multiwrite-test"),
             CachePolicy::default(),
-        );
+        )))
+        .await;
         mfs.register_plugin(MemFSPlugin).await;
 
         let mut config = multiwrite_test_config("memfs", "memfs", "/local");
@@ -1886,6 +1892,21 @@ mod tests {
 
         mfs.unmount("/local").await.unwrap();
         assert!(mfs.list_mounts().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn multiwrite_mount_without_pathlock_returns_config_error() {
+        use crate::plugins::MemFSPlugin;
+
+        let mfs = MountableFS::new();
+        mfs.register_plugin(MemFSPlugin).await;
+
+        let error = mfs
+            .mount(multiwrite_test_config("memfs", "memfs", "/local"))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, Error::Config(_)));
     }
 
     #[tokio::test]

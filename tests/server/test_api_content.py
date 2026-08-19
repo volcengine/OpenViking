@@ -113,7 +113,8 @@ async def test_read_directory_uri_returns_invalid_argument(client_with_resource)
     body = resp.json()
     assert body["status"] == "error"
     assert body["error"]["code"] == "INVALID_ARGUMENT"
-    assert "Cannot read directory as file" in body["error"]["message"]
+    assert "Directory URI is not readable as a file" in body["error"]["message"]
+    assert "List it first, then read a file URI." in body["error"]["message"]
     assert body["error"]["details"] == {
         "resource": uri,
         "expected": "file",

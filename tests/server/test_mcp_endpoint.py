@@ -34,7 +34,6 @@ from openviking.server.mcp_endpoint import (
     health,
     list_watches,
     read,
-    recall,
     remember,
     search,
     tree,
@@ -46,6 +45,7 @@ from openviking_cli.exceptions import (
     FailedPreconditionError,
     InvalidArgumentError,
     NotFoundError,
+    PermissionDeniedError,
     UnauthenticatedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
@@ -173,6 +173,30 @@ async def test_search_tools_expose_only_context_type_parameter():
         properties = tools[tool_name].inputSchema["properties"]
         assert "context_type" in properties
         assert "filter" not in properties
+
+
+async def test_recall_tool_is_replaced_by_search_context_mode():
+    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+
+    assert "recall" not in tools
+    search_properties = tools["search"].inputSchema["properties"]
+    assert search_properties["mode"]["enum"] == ["list", "context"]
+    for parameter in (
+        "query_expansion",
+        "max_tokens",
+        "quotas",
+        "purpose",
+        "detail",
+        "detail_by_category",
+        "dedup_turns",
+        "exclude_uris",
+        "peer_scope",
+        "other_peer_penalty",
+        "other_peer_penalties",
+        "rewrite",
+        "rewrite_max_bullets",
+    ):
+        assert parameter in search_properties
 
 
 async def test_tool_schemas_are_portable():
@@ -314,39 +338,101 @@ async def test_search_tool_calls_context_aware_search_with_session(service, monk
     }
 
 
-async def test_recall_tool_returns_assembled_context(service, monkeypatch):
-    memory_uri = "viking://user/test_user/memories/events/e.md"
+async def test_search_context_mode_returns_assembled_context(service, monkeypatch):
+    captured = {}
 
-    async def fake_find(**kwargs):
-        if kwargs["target_uri"].endswith("/events"):
-            return SimpleNamespace(
-                memories=[
-                    SimpleNamespace(
-                        uri=memory_uri,
-                        score=0.9,
-                        abstract="event abstract",
-                    )
-                ]
-            )
-        return SimpleNamespace(memories=[])
+    async def fake_assemble_context(*, service, ctx, params):
+        captured.update(service=service, ctx=ctx, params=params)
+        return SimpleNamespace(
+            digest="",
+            rendered='<memory uri="viking://user/test_user/memories/events/e.md">event</memory>',
+        )
 
-    async def fake_read(uri, **kwargs):
-        del uri, kwargs
-        return "# Summary\nMCP recall event.\n\n# 2026-07-06 ChatLog:\ndetails"
+    monkeypatch.setattr(mcp_endpoint, "assemble_context", fake_assemble_context)
 
-    monkeypatch.setattr(service.search, "find", fake_find)
-    monkeypatch.setattr(service.fs, "read", fake_read)
-
-    result = await recall(
+    result = await search(
         query="what happened",
-        quotas={"events": 1, "entities": 0, "preferences": 0, "experiences": 0},
-        max_chars=800,
+        mode="context",
+        quotas={"events": 1, "entities": 0},
+        purpose="coding",
         min_score=0.1,
+        max_tokens=800,
+        detail_by_category={"events": "overview"},
+        dedup_turns=5,
+        exclude_uris=["viking://user/test_user/memories/events/old.md"],
+        peer_scope="actor",
+        other_peer_penalties={"events": 0.2},
+        rewrite="auto",
+        rewrite_max_bullets=4,
     )
 
-    assert f'<memory uri="{memory_uri}"' in result
-    assert 'type="events"' in result
-    assert "MCP recall event." in result
+    assert result.startswith("<memory")
+    assert captured["service"] is service
+    assert captured["ctx"] == DEFAULT_CTX
+    params = captured["params"]
+    assert params.query == "what happened"
+    assert params.quotas == {"events": 1, "entities": 0}
+    assert params.purpose == "coding"
+    assert params.score_threshold == 0.1
+    assert params.max_tokens == 800
+    assert params.detail == {"events": "overview"}
+    assert params.dedup_turns == 5
+    assert params.exclude_uris == [
+        "viking://user/test_user/memories/events/old.md"
+    ]
+    assert params.peer_scope == "actor"
+    assert params.other_peer_penalty == {"events": 0.2}
+    assert params.rewrite is True
+    assert params.rewrite_max_bullets == 4
+
+
+async def test_search_context_mode_rejects_target_uri():
+    with pytest.raises(InvalidArgumentError, match="target_uri.*mode='context'"):
+        await search(
+            query="what happened",
+            mode="context",
+            target_uri="viking://resources",
+        )
+
+
+async def test_search_mode_defaults_preserve_list_threshold_but_not_context_threshold(
+    service, monkeypatch
+):
+    captured = {}
+
+    async def fake_search(**kwargs):
+        captured["list_threshold"] = kwargs["score_threshold"]
+        return SimpleNamespace(memories=[], resources=[], skills=[])
+
+    async def fake_assemble_context(*, service, ctx, params):
+        captured["context_threshold"] = params.score_threshold
+        return SimpleNamespace(digest="", rendered="")
+
+    monkeypatch.setattr(service.search, "search", fake_search)
+    monkeypatch.setattr(mcp_endpoint, "assemble_context", fake_assemble_context)
+
+    await search(query="list default")
+    await search(query="context default", mode="context")
+
+    assert captured == {"list_threshold": 0.35, "context_threshold": None}
+
+
+async def test_search_context_schema_uses_portable_scalar_types():
+    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+    properties = tools["search"].inputSchema["properties"]
+
+    assert properties["detail"]["type"] == "string"
+    assert properties["detail"]["enum"] == [
+        "auto",
+        "abstract",
+        "overview",
+        "full",
+    ]
+    assert properties["detail_by_category"]["type"] == "object"
+    assert properties["other_peer_penalty"]["type"] == "number"
+    assert properties["other_peer_penalties"]["type"] == "object"
+    assert properties["rewrite"]["type"] == "string"
+    assert properties["rewrite"]["enum"] == ["off", "auto"]
 
 
 async def test_mcp_middleware_sets_actor_peer_context():
@@ -444,7 +530,19 @@ async def test_mcp_middleware_rejects_invalid_actor_peer_header():
 
 async def test_read_nonexistent_uri(service):
     result = await read("viking://user/memories/does_not_exist.md")
-    assert "nothing found" in result.lower()
+    assert "not found" in result.lower()
+
+
+async def test_read_directory_uri_returns_recoverable_hint(service):
+    uri = "viking://resources/test_read_dir_hint"
+    await service.viking_fs.mkdir(uri, ctx=DEFAULT_CTX, exist_ok=True)
+
+    result = await read(uri)
+
+    assert "Directory URI is not readable as a file" in result
+    assert "List it first, then read a file URI." in result
+    assert uri in result
+    assert "nothing found" not in result.lower()
 
 
 async def test_read_batch(service):
@@ -455,10 +553,10 @@ async def test_read_batch(service):
         ]
     )
     assert "===" in result
-    assert "nothing found" in result.lower()
+    assert "not found" in result.lower()
 
 
-async def test_read_uses_public_content_projection(monkeypatch):
+async def test_read_delegates_to_visible_read(monkeypatch):
     read_visible = AsyncMock(return_value="visible memory")
     monkeypatch.setattr(
         mcp_endpoint,
@@ -469,7 +567,8 @@ async def test_read_uses_public_content_projection(monkeypatch):
 
     assert await read(uri) == "visible memory"
     read_visible.assert_awaited_once_with(
-        "viking://user/test_user/project/private.md", ctx=DEFAULT_CTX
+        "viking://user/test_user/project/private.md",
+        ctx=DEFAULT_CTX,
     )
 
 
@@ -949,6 +1048,38 @@ async def test_forget_directory_with_recursive_succeeds(service):
 
     result = await forget(uri=dir_uri, recursive=True)
     assert "deleted" in result.lower()
+
+
+@pytest.mark.parametrize(
+    ("uri", "sentinel_uri"),
+    [
+        (
+            "viking://user",
+            "viking://user/test_user/memories/forget_root_guard.md",
+        ),
+        (
+            "viking://resources",
+            "viking://resources/forget_root_guard/sentinel.md",
+        ),
+    ],
+)
+async def test_forget_rejects_namespace_roots_for_non_root(service, uri, sentinel_uri):
+    ctx = RequestContext(
+        user=UserIdentifier.the_default_user("test_user"),
+        role=Role.USER,
+    )
+    parent_uri = sentinel_uri.rsplit("/", 1)[0]
+    await service.viking_fs.mkdir(parent_uri, ctx=ctx, exist_ok=True)
+    await service.viking_fs.write(sentinel_uri, "must survive", ctx=ctx)
+
+    token = _mcp_ctx.set(ctx)
+    try:
+        with pytest.raises(PermissionDeniedError, match="namespace root"):
+            await forget(uri=uri, recursive=True)
+    finally:
+        _mcp_ctx.reset(token)
+
+    assert (await service.viking_fs.read(sentinel_uri, ctx=ctx)).decode("utf-8") == "must survive"
 
 
 # ---------------------------------------------------------------------------

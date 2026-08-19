@@ -42,6 +42,17 @@ def _build_data(msg: SemanticMsg) -> dict:
 
 
 @pytest.mark.asyncio
+async def test_root_semantic_message_is_acknowledged_without_processing():
+    processor = SemanticProcessor()
+    success = MagicMock()
+    processor.set_callbacks(success, MagicMock(), MagicMock())
+
+    await processor.on_dequeue(_build_data(_make_msg(uri="viking://", context_type="resource")))
+
+    success.assert_called_once_with()
+
+
+@pytest.mark.asyncio
 async def test_memory_empty_dir_still_reports_success():
     """When viking_fs.ls returns an empty list, report_success() must be called."""
     processor = SemanticProcessor()

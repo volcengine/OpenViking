@@ -155,6 +155,7 @@ Rust CLI 通过 `npm i -g @openviking/cli` 安装，也可以从源码构建：`
 - [Trae](https://docs.openviking.ai/zh/agent-integrations/13-trae)
 - [OpenCode](https://docs.openviking.ai/zh/agent-integrations/10-opencode)
 - [pi](https://docs.openviking.ai/zh/agent-integrations/11-pi)
+- [Agent Plugins 1.0](https://docs.openviking.ai/zh/agent-integrations/15-agent-plugins)
 - [MCP 客户端](https://docs.openviking.ai/zh/agent-integrations/06-mcp-clients)
 - [LangChain / LangGraph](https://docs.openviking.ai/zh/agent-integrations/07-langchain-langgraph)
 

@@ -160,6 +160,7 @@ type TreeOptions struct {
 	AbsLimit      int
 	ShowAllHidden bool
 	NodeLimit     int
+	LevelLimit    *int
 }
 
 // RemoveOptions controls Remove.
@@ -185,10 +186,14 @@ type SetTagsOptions struct {
 }
 
 // ReindexOptions controls Reindex.
+// Wait is used as-is when options are provided; set it explicitly to true
+// when adding optional fields such as Tags and synchronous behavior is desired.
 type ReindexOptions struct {
-	Mode   string
-	Wait   bool
-	DryRun bool
+	Mode    string
+	Wait    bool
+	DryRun  bool
+	Tags    []string
+	TagMode string
 }
 
 // FindOptions controls Find.

@@ -76,3 +76,6 @@ A standalone FastAPI server that exposes a curated subset of OpenViking endpoint
 
 The [examples/](https://github.com/volcengine/OpenViking/tree/main/examples) directory also contains deployment and integration samples beyond agent plugins — Grafana dashboards, Kubernetes Helm charts, multi-tenant setups, snapshot workflows, and SDK snippets.
 
+## See also
+
+- [Capability Reference](./16-capability-reference.md)

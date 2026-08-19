@@ -21,6 +21,8 @@ from .semantic_queue import SemanticQueue
 
 logger = get_logger(__name__)
 
+DEFAULT_MAX_CONCURRENT_SESSION_COMMIT = 8
+
 # ========== Singleton Pattern ==========
 _instance: Optional["QueueManager"] = None
 
@@ -33,7 +35,7 @@ def init_queue_manager(
     max_concurrent_semantic: int = 32,
     max_concurrent_external_parse: int = 4,
     max_concurrent_add_resource: int = 4,
-    max_concurrent_session_commit: int = 4,
+    max_concurrent_session_commit: int = DEFAULT_MAX_CONCURRENT_SESSION_COMMIT,
 ) -> "QueueManager":
     """Initialize QueueManager singleton.
 
@@ -82,6 +84,8 @@ class QueueManager:
     ADD_RESOURCE = "AddResource"
     SESSION_COMMIT = "SessionCommit"
     USER_DELETION = "UserDeletion"
+    # A deferred archive re-enqueues itself; throttle the next scheduling round.
+    _SESSION_COMMIT_POLL_INTERVAL = 1.0
 
     def __init__(
         self,
@@ -92,7 +96,7 @@ class QueueManager:
         max_concurrent_semantic: int = 32,
         max_concurrent_external_parse: int = 4,
         max_concurrent_add_resource: int = 4,
-        max_concurrent_session_commit: int = 4,
+        max_concurrent_session_commit: int = DEFAULT_MAX_CONCURRENT_SESSION_COMMIT,
     ):
         """Initialize QueueManager."""
         self._agfs = agfs
@@ -213,6 +217,11 @@ class QueueManager:
         """
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        poll_interval = (
+            self._SESSION_COMMIT_POLL_INTERVAL
+            if queue.name == self.SESSION_COMMIT
+            else self._poll_interval
+        )
         try:
             if max_concurrent > 1:
                 loop.run_until_complete(
@@ -226,12 +235,14 @@ class QueueManager:
                             data = loop.run_until_complete(queue.dequeue())
                             if data is not None:
                                 logger.debug("[QueueManager] Dequeued message from %s", queue.name)
+                            if queue.name == self.SESSION_COMMIT:
+                                stop_event.wait(poll_interval)
                         else:
-                            stop_event.wait(self._poll_interval)
+                            stop_event.wait(poll_interval)
                     except Exception as e:
                         logger.error(f"[QueueManager] Worker error for {queue.name}: {e}")
                         traceback.print_exc()
-                        stop_event.wait(self._poll_interval)
+                        stop_event.wait(poll_interval)
         finally:
             loop.close()
 
@@ -242,6 +253,11 @@ class QueueManager:
 
         A Semaphore caps inflight tasks at max_concurrent.
         """
+        poll_interval = (
+            self._SESSION_COMMIT_POLL_INTERVAL
+            if queue.name == self.SESSION_COMMIT
+            else self._poll_interval
+        )
         sem = asyncio.Semaphore(max_concurrent)
         active_tasks: Set[asyncio.Task] = set()
 
@@ -283,7 +299,7 @@ class QueueManager:
                     f"(active={len(active_tasks)})"
                 )
 
-            await asyncio.sleep(self._poll_interval)
+            await asyncio.sleep(poll_interval)
 
         # Drain remaining in-flight tasks on shutdown (with timeout)
         if active_tasks:

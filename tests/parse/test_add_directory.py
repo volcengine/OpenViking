@@ -270,12 +270,38 @@ class TestEmptyDirectory:
 
     @pytest.mark.asyncio
     async def test_empty_dir_returns_zero_files(self, tmp_empty: Path, parser, fake_fs) -> None:
-        result = await parser.parse(str(tmp_empty))
+        blocked_path = tmp_empty / "blocked.pdf"
+        result = await parser.parse(
+            str(tmp_empty),
+            _source_meta={
+                "feishu_folder_skipped_items": [
+                    {
+                        "path": str(blocked_path),
+                        "name": blocked_path.name,
+                        "type": "file",
+                        "token": "file-token",
+                        "reason": "HTTP 403",
+                    }
+                ]
+            },
+        )
 
         assert result.parser_name == "DirectoryParser"
         assert result.source_format == "directory"
         assert result.temp_dir_path is not None
-        assert result.meta.get("file_count", 0) == 0 or len(fake_fs.files) == 0
+        assert result.meta["file_count"] == 0
+        assert result.meta["total_processable"] == 0
+        assert result.meta["failed_files"] == [
+            {
+                "path": "blocked.pdf",
+                "parser": "feishu",
+                "status": "failed",
+                "type": "file",
+                "token": "file-token",
+                "reason": "HTTP 403",
+            }
+        ]
+        assert any("Skipped Feishu Drive item blocked.pdf: HTTP 403" in w for w in result.warnings)
 
 
 # ---------------------------------------------------------------------------

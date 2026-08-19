@@ -14,6 +14,7 @@ from openviking.core.namespace import (
     canonicalize_uri,
     is_hidden_by_actor_peer_view,
     may_include_hidden_actor_peers,
+    uri_parts,
 )
 from openviking.core.namespace import (
     is_accessible as namespace_is_accessible,
@@ -188,7 +189,18 @@ class _AccessMixin:
             normalized_uri, real_ctx
         ):
             raise PermissionDeniedError(f"Access denied for {uri}", resource=normalized_uri)
-        self._ensure_supported_delete_namespace(normalized_uri)
+        canonical_uri = canonicalize_uri(normalized_uri, real_ctx)
+        self._ensure_supported_delete_namespace(canonical_uri)
+        canonical_parts = uri_parts(canonical_uri)
+        if real_ctx.role != Role.ROOT and (
+            canonical_parts == ["resources"]
+            or (canonical_parts[:1] == ["user"] and len(canonical_parts) == 2)
+        ):
+            raise PermissionDeniedError(
+                "Deleting a namespace root requires root access; use a concrete content "
+                "path instead.",
+                resource=canonical_uri,
+            )
         if real_ctx.role != Role.ROOT and normalized_uri.rstrip("/") == "viking://temp":
             raise PermissionDeniedError(
                 "Temp root is read-only for non-root users",

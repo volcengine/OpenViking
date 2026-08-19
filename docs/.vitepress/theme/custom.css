@@ -12,6 +12,30 @@
   --vp-c-text-2: #47534f;
   --vp-font-family-base: "Avenir Next", "Gill Sans", "Trebuchet MS", sans-serif;
   --vp-font-family-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+
+  /* Embed-widget theming. The widget renders in a shadow root whose :host does
+     `all: initial` — that resets inherited properties but NOT custom
+     properties, so these reach it and paint the panel in the docs palette.
+     Written in terms of --vp-* so the appearance toggle carries them; the
+     .dark block below only redefines what cannot be expressed that way. */
+  --ovw-font: var(--vp-font-family-base);
+  --ovw-mono: var(--vp-font-family-mono);
+  --ovw-bg: var(--vp-c-bg-elv);
+  --ovw-raised: var(--vp-c-bg-soft);
+  --ovw-inset: var(--vp-c-bg-alt);
+  --ovw-code-bg: var(--vp-c-bg-alt);
+  --ovw-fg: var(--vp-c-text-1);
+  --ovw-muted: var(--vp-c-text-2);
+  --ovw-border: var(--vp-c-divider);
+  --ovw-accent: var(--vp-c-brand-1);
+  --ovw-accent-fg: #ffffff;
+  --ovw-accent-soft: var(--vp-c-brand-soft);
+  --ovw-accent-border: rgba(20, 184, 166, 0.34);
+  --ovw-shadow: var(--vp-shadow-3);
+  --ovw-launcher-shadow: var(--vp-shadow-2);
+  --ovw-rail-bg: var(--vp-c-bg);
+  /* Height of the fixed VPNav; without it the rail slides under the navbar. */
+  --ovw-rail-top: 64px;
 }
 
 @media (min-width: 1280px) {
@@ -46,6 +70,11 @@
   --vp-c-bg-soft: #1e1e1e;
   --vp-c-text-1: #edf7f3;
   --vp-c-text-2: #bbcac5;
+
+  /* The rest of the --ovw-* map inherits from --vp-* and flips with this
+     block; only the two literals need restating. */
+  --ovw-accent-fg: #0f0f0f;
+  --ovw-accent-border: rgba(94, 234, 212, 0.34);
 }
 
 .VPHome {
@@ -118,73 +147,6 @@
   display: flex;
   align-items: center;
   margin-right: 12px;
-}
-
-/* VikingBot docs assistant (shared embed widget launcher) */
-.vikingbot-launcher {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-}
-
-.vikingbot-trigger {
-  display: inline-flex;
-  height: 40px;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 8px;
-  margin-right: 12px;
-  padding: 0 14px;
-  border: 1px solid color-mix(in srgb, var(--vp-c-brand-1) 32%, var(--vp-c-divider));
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--vp-c-brand-soft) 45%, var(--vp-c-bg));
-  color: var(--vp-c-brand-1);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: border-color 0.2s, background-color 0.2s, transform 0.2s;
-}
-
-.vikingbot-trigger:hover {
-  border-color: var(--vp-c-brand-1);
-  background: var(--vp-c-brand-soft);
-  transform: translateY(-1px);
-}
-
-.vikingbot-spark {
-  font-size: 17px;
-  line-height: 1;
-}
-
-.vikingbot-trigger-error {
-  position: absolute;
-  z-index: 90;
-  top: calc(100% + 6px);
-  right: 12px;
-  max-width: 260px;
-  padding: 6px 10px;
-  border: 1px solid var(--vp-c-divider);
-  border-radius: 6px;
-  background: var(--vp-c-bg-elv);
-  color: var(--vp-c-text-2);
-  font-size: 12px;
-  line-height: 1.4;
-  box-shadow: var(--vp-shadow-2);
-}
-
-@media (max-width: 1279px) {
-  .vikingbot-trigger-label { display: none; }
-  .vikingbot-trigger { width: 40px; justify-content: center; padding: 0; }
-}
-
-@media (max-width: 767px) {
-  .vikingbot-trigger { margin-right: 8px; }
-  .vikingbot-trigger-error { max-width: 200px; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .vikingbot-trigger { transition: none; }
 }
 
 .ov-docs-search-trigger {
@@ -504,3 +466,125 @@
 .api-example-tabs__panel > p:first-child { margin-top: 0; }
 .api-example-tabs__panel > div[class*='language-'] { margin: 0; }
 .api-example-tabs-enhancer { display: none; }
+
+/* ── VikingBot rail: the host half of the widget's push contract ────────
+   The widget publishes `ov-assistant-open` / `ov-assistant-resizing` /
+   `ov-assistant-pill` plus `--ov-rail` on <html>; nothing below reaches into
+   the widget. 900px is pinned to the widget's own sheet breakpoint — below it
+   the panel is a bottom sheet and there is no rail to make room for. */
+@media (min-width: 900px) {
+  html.ov-assistant-open .Layout,
+  html.ov-assistant-open .VPNav {
+    padding-right: var(--ov-rail);
+  }
+
+  html.ov-assistant-open .Layout,
+  html.ov-assistant-open .VPNav,
+  html.ov-assistant-open .VPSidebar {
+    transition: padding-right 0.24s ease, right 0.24s ease;
+  }
+
+  /* VitePress absolutely positions the title against the sidebar column; once
+     the whole layout is inset, that anchor is wrong and the logo collides with
+     the content. Let it sit in the flex row instead. */
+  html.ov-assistant-open .VPNavBar.has-sidebar .wrapper {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  html.ov-assistant-open .VPNavBar.has-sidebar .container > .title {
+    position: relative;
+    top: auto;
+    left: auto;
+    width: auto;
+    flex: 0 0 auto;
+    padding: 0;
+  }
+
+  html.ov-assistant-open .VPNavBar.has-sidebar .container > .content {
+    padding-right: 0;
+    padding-left: 24px;
+  }
+
+  html.ov-assistant-open .VPNavBarTitle .logo {
+    display: block;
+    width: 28px;
+    height: 28px;
+    flex: 0 0 28px;
+    object-fit: cover;
+  }
+
+  html.ov-assistant-open .VPContent .VPDoc {
+    padding-right: 60px;
+    padding-left: 60px;
+  }
+
+  html.ov-assistant-open .VPContent .VPDoc.has-aside > .container > .content {
+    padding-right: 0;
+    padding-left: 0;
+  }
+}
+
+/* Between the sheet breakpoint and the wide layout there is only room for one
+   of {sidebar, doc, aside, rail}. Drop the two navigation columns rather than
+   squeezing the prose to a gutter. */
+@media (min-width: 900px) and (max-width: 1279px) {
+  html.ov-assistant-open .VPSidebar {
+    display: none;
+  }
+
+  html.ov-assistant-open .VPContent.has-sidebar {
+    padding-left: 0;
+  }
+
+  html.ov-assistant-open .VPContent .VPDoc > .container > .aside {
+    display: none !important;
+  }
+}
+
+/* The sidebar comes back at 1280, but sidebar + aside + rail leaves the prose
+   at ~300px. Screenshots at 1280 made the call: keep the sidebar, drop the
+   aside, and the reading column roughly doubles. */
+@media (min-width: 1280px) and (max-width: 1439px) {
+  html.ov-assistant-open .VPContent .VPDoc > .container > .aside {
+    display: none !important;
+  }
+}
+
+@media (min-width: 900px) and (max-width: 1599px) {
+  html.ov-assistant-open .VPContent .VPDoc {
+    padding-right: 32px;
+    padding-left: 32px;
+  }
+}
+
+@media (min-width: 1280px) {
+  html.ov-assistant-open .VPSidebar {
+    width: var(--vp-sidebar-width);
+    padding-left: 60px;
+  }
+
+  html.ov-assistant-open .VPContent .VPDoc > .container > .aside {
+    max-width: 240px;
+    padding-left: 16px;
+  }
+}
+
+/* A width drag fires on every pointermove; without this each one restarts the
+   0.24s ease and the layout trails the pointer. */
+html.ov-assistant-resizing .Layout,
+html.ov-assistant-resizing .VPNav,
+html.ov-assistant-resizing .VPSidebar {
+  transition: none;
+}
+
+/* Clearance so the entry pill never sits on top of the last line of a page. */
+html.ov-assistant-pill .VPContent {
+  padding-bottom: 96px;
+}
+
+@media (max-width: 899.98px) {
+  html.ov-assistant-pill .VPContent {
+    padding-bottom: calc(86px + env(safe-area-inset-bottom, 0px));
+  }
+}

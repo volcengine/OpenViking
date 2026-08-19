@@ -33,6 +33,10 @@ function safePart(value) {
   return String(value || "unknown").replace(/[^A-Za-z0-9._-]/g, "-");
 }
 
+function responseTraceId(body) {
+  return body?.result?.trace_id || body?.error?.trace_id || body?.trace_id || undefined;
+}
+
 export function stableHash(...values) {
   return createHash("sha256")
     .update(values.map((value) => String(value ?? "")).join("\n"))
@@ -184,10 +188,11 @@ export function makeAgentFetchJSON(cfg, cwd = process.cwd()) {
       if (cfg.userAgent) headers["User-Agent"] = cfg.userAgent;
       const response = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
       const body = await response.json().catch(() => ({}));
+      const traceId = responseTraceId(body);
       if (!response.ok || body.status === "error") {
-        return { ok: false, status: response.status, error: body.error || body };
+        return { ok: false, status: response.status, error: body.error || body, traceId };
       }
-      return { ok: true, result: body.result ?? body };
+      return { ok: true, result: body.result ?? body, traceId };
     } catch (error) {
       return { ok: false, status: 0, error: { message: error?.message || String(error) } };
     } finally {
@@ -210,12 +215,24 @@ export async function addAgentMessages(fetchJSON, sessionId, payloads) {
   return sendSessionMessages(fetchJSON, sessionId, payloads, { enqueueOnRetryable: true });
 }
 
-export async function commitAgentSession(fetchJSON, sessionId) {
+export async function commitAgentSession(fetchJSON, sessionId, log = () => {}) {
   const result = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`, {
     method: "POST",
     body: "{}",
   });
-  if (!result.ok && isRetryableFailure(result)) await enqueue("commitSession", sessionId, {});
+  let queued = false;
+  if (!result.ok && isRetryableFailure(result)) {
+    const pending = await enqueue("commitSession", sessionId, {});
+    queued = Boolean(pending.ok);
+  }
+  log("commit", {
+    sessionId,
+    ok: result.ok,
+    status: result.result?.status || result.status,
+    trace_id: result.traceId || result.result?.trace_id,
+    queued,
+    error: result.ok ? undefined : result.error?.message || result.error?.code,
+  });
   return result;
 }
 

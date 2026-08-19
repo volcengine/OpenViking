@@ -21,6 +21,7 @@ from prompt_toolkit.styles import Style as PromptStyle
 from rich.console import Console
 from rich.table import Table
 
+from openviking.utils.time_utils import parse_iso_datetime
 from vikingbot import __logo__, __version__
 from vikingbot.agent.loop import AgentLoop
 from vikingbot.bus.queue import MessageBus
@@ -857,7 +858,7 @@ def chat(
     # Use unified default session ID
     if session_id is None:
         session_id = get_or_create_machine_id()
-    cron = prepare_cron(bus, quiet=is_single_turn)
+    cron = None if eval else prepare_cron(bus, quiet=is_single_turn)
     channels = prepare_agent_channel(
         config,
         bus,
@@ -878,7 +879,7 @@ def chat(
         try:
             if is_single_turn:
                 # Single-turn mode: run channels and agent, exit after response
-                task_cron = asyncio.create_task(cron.start())
+                task_cron = asyncio.create_task(cron.start()) if cron is not None else None
                 task_channels = asyncio.create_task(channels.start_all())
                 task_agent = asyncio.create_task(agent_loop.run())
 
@@ -890,15 +891,20 @@ def chat(
                 # Cancel all other tasks
                 for task in pending:
                     task.cancel()
-                task_cron.cancel()
+                if task_cron is not None:
+                    task_cron.cancel()
                 task_agent.cancel()
 
                 # Wait for cancellation
-                await asyncio.gather(task_cron, task_agent, return_exceptions=True)
+                background_tasks = [task_agent]
+                if task_cron is not None:
+                    background_tasks.append(task_cron)
+                await asyncio.gather(*background_tasks, return_exceptions=True)
             else:
                 # Interactive mode: run forever
                 tasks = []
-                tasks.append(cron.start())
+                if cron is not None:
+                    tasks.append(cron.start())
                 tasks.append(channels.start_all())
                 tasks.append(agent_loop.run())
 
@@ -1129,9 +1135,11 @@ def cron_add(
     elif cron_expr:
         schedule = CronSchedule(kind="cron", expr=cron_expr)
     elif at:
-        import datetime
-
-        dt = datetime.datetime.fromisoformat(at)
+        try:
+            dt = parse_iso_datetime(at)
+        except ValueError as e:
+            console.print(f"[red]Error: invalid --at datetime: {e}[/red]")
+            raise typer.Exit(1) from e
         schedule = CronSchedule(kind="at", at_ms=int(dt.timestamp() * 1000))
     else:
         console.print("[red]Error: Must specify --every, --cron, or --at[/red]")

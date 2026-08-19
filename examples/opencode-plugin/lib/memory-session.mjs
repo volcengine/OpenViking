@@ -455,15 +455,35 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       for (const state of sessions.values()) {
         if (state.ovSessionId === ovSessionId) state.lastCommitTime = Date.now()
       }
-      log("INFO", "session", "Committed OpenViking session", { openviking_session: ovSessionId, reason })
-      return { status: "accepted", result: res.result }
+      const traceId = res.traceId || res.result?.trace_id
+      log("INFO", "session", "Committed OpenViking session", {
+        openviking_session: ovSessionId,
+        reason,
+        trace_id: traceId,
+      })
+      return { status: "accepted", result: res.result, traceId }
     }
     if (isRetryableFailure(res)) {
       await enqueue("commitSession", ovSessionId, body)
-      log("WARN", "session", "Queued OpenViking session commit", { openviking_session: ovSessionId, reason })
+      log("WARN", "session", "Queued OpenViking session commit", {
+        openviking_session: ovSessionId,
+        reason,
+        trace_id: res.traceId,
+        status: res.status,
+      })
       return { status: "queued" }
     }
-    throw new Error(`Failed to commit OpenViking session ${ovSessionId}: ${res.error?.message || res.status}`)
+    log("ERROR", "session", "Failed to commit OpenViking session", {
+      openviking_session: ovSessionId,
+      reason,
+      trace_id: res.traceId,
+      status: res.status,
+      error: res.error?.message || res.error?.code,
+    })
+    throw new Error(
+      `Failed to commit OpenViking session ${ovSessionId}: ${res.error?.message || res.status}` +
+      (res.traceId ? ` (trace_id=${res.traceId})` : ""),
+    )
   }
 
   async function migrateLegacySessionMap() {

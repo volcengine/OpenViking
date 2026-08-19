@@ -29,9 +29,10 @@ def _raised_error(response, *, operation="resolve wiki node", resource=None):
     return exc_info.value
 
 
-def test_maps_feishu_forbidden_to_permission_denied_and_keeps_details():
+@pytest.mark.parametrize("feishu_code", [1770032, 131006])
+def test_maps_feishu_forbidden_to_permission_denied_and_keeps_details(feishu_code):
     response = _fake_response(
-        code=1770032,
+        code=feishu_code,
         msg="forBidden",
         http_status=400,
     )
@@ -42,8 +43,8 @@ def test_maps_feishu_forbidden_to_permission_denied_and_keeps_details():
     )
 
     assert exc.code == "PERMISSION_DENIED"
-    assert "code=1770032, msg=forBidden" in exc.message
-    assert exc.details["feishu_code"] == 1770032
+    assert f"code={feishu_code}, msg=forBidden" in exc.message
+    assert exc.details["feishu_code"] == feishu_code
     assert exc.details["feishu_msg"] == "forBidden"
     assert exc.details["http_status"] == 400
     assert exc.details["resource"] == "doc_token"

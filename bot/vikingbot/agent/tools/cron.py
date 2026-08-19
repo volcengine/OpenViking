@@ -2,6 +2,7 @@
 
 from typing import TYPE_CHECKING, Any
 
+from openviking.utils.time_utils import parse_iso_datetime
 from vikingbot.agent.tools.base import Tool
 from vikingbot.cron.service import CronService
 from vikingbot.cron.types import CronSchedule
@@ -104,9 +105,10 @@ class CronTool(Tool):
         elif cron_expr:
             schedule = CronSchedule(kind="cron", expr=cron_expr)
         elif at:
-            from datetime import datetime
-
-            dt = datetime.fromisoformat(at)
+            try:
+                dt = parse_iso_datetime(at)
+            except ValueError as e:
+                return f"Error: invalid at datetime: {e}"
             at_ms = int(dt.timestamp() * 1000)
             schedule = CronSchedule(kind="at", at_ms=at_ms)
             delete_after = True

@@ -102,17 +102,23 @@ class DirectBackend(SandboxBackend):
         """Get the current working directory (uses actual host cwd)."""
         return str(self._workspace)
 
-    async def read_file_bytes(self, path: str) -> bytes:
+    def local_file_path(self, path: str) -> Path | None:
         sandbox_path = Path(path)
         if not sandbox_path.is_absolute():
             sandbox_path = self._workspace / path
-
         self._check_path_restriction(sandbox_path)
         if not sandbox_path.exists():
             raise FileNotFoundError(f"File not found: {path}")
         if not sandbox_path.is_file():
             raise IOError(f"Not a file: {path}")
-        return await asyncio.to_thread(sandbox_path.read_bytes)
+        return sandbox_path
+
+    async def read_file_bytes(self, path: str, *, max_bytes: int | None = None) -> bytes:
+        self._validate_max_bytes(max_bytes)
+        sandbox_path = self.local_file_path(path)
+        if sandbox_path is None:
+            raise IOError("Sandbox file is not accessible from the host")
+        return await asyncio.to_thread(self._read_local_bytes, sandbox_path, path, max_bytes)
 
     async def read_file(self, path: str) -> str:
         data = await self.read_file_bytes(path)

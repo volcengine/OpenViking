@@ -846,6 +846,20 @@ class SandboxConfig(BaseModel):
     restrict_workspaces: dict[str, str] = Field(default_factory=dict)
 
 
+class RemoteSkillsConfig(BaseModel):
+    """OpenViking-backed Skill runtime configuration."""
+
+    discovery_limit: int = Field(default=8, ge=1, le=50)
+    score_threshold: float = Field(default=0.35, ge=0.0, le=1.0)
+    discovery_timeout_seconds: float = Field(default=2.0, gt=0.0, le=30.0)
+    max_files: int = Field(default=128, ge=1)
+    max_file_bytes: int = Field(default=8 * 1024 * 1024, ge=1)
+    max_total_bytes: int = Field(default=32 * 1024 * 1024, ge=1)
+    cache_idle_ttl_seconds: float = Field(default=10 * 60, gt=0.0)
+    cache_max_entries: int = Field(default=32, ge=1)
+    cache_max_bytes: int = Field(default=256 * 1024 * 1024, ge=1)
+
+
 class Config(BaseSettings):
     """Root configuration for vikingbot."""
 
@@ -860,6 +874,7 @@ class Config(BaseSettings):
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     ov_server: OpenVikingConfig = Field(default_factory=OpenVikingConfig)
+    remote_skills: RemoteSkillsConfig = Field(default_factory=RemoteSkillsConfig)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
     langfuse: LangfuseConfig = Field(default_factory=LangfuseConfig)

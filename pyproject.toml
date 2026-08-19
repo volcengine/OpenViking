@@ -253,8 +253,10 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
+norecursedirs = ["api_test", "oc2ov_test"]
 markers = [
     "integration: tests that require external services or real model configuration",
+    "cli_remote: tests that require a remote OpenViking CLI binary and server connection",
 ]
 addopts = "-v --cov=openviking --cov-report=term-missing"
 

@@ -54,10 +54,14 @@ from openviking.session.memory.utils.streaming_batcher import (
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
 from openviking.telemetry.tracer import get_trace_id
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
+
+_MEMORY_APPLY_LOCK_TIMEOUT_SECONDS = 300.0
+_MEMORY_APPLY_LOCK_MAX_ACQUISITIONS = 3
 
 
 @dataclass(slots=True)
@@ -235,24 +239,41 @@ class StreamingMemoryUpdater:
         links = remap_stored_links(
             links, dict(getattr(result.operations, "delete_replacements", {}) or {})
         )
-        valid_links = await filter_valid_links(
-            links,
-            upsert_operations=result.operations.upsert_operations,
-            delete_file_contents=result.operations.delete_file_contents,
-            ctx=request.ctx,
-            trace_console=self.config.trace_console,
-        )
-        if not valid_links:
-            return
         viking_fs = safe_get_viking_fs()
-        if viking_fs is not None:
-            updated_uris = await write_stored_links(valid_links, request.ctx, viking_fs)
-            for uri in dict.fromkeys(updated_uris):
-                result.apply_result.add_edited(uri)
-        result.operations.resolved_links = merge_link_lists(
-            list(getattr(result.operations, "resolved_links", []) or []),
-            valid_links,
-        )
+        lock_paths = _uri_lock_paths(_link_endpoint_uri_set(links), viking_fs, request.ctx)
+        async with self._apply_lock:
+            lease = None
+            if lock_paths:
+                lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(
+                    lock_paths,
+                    timeout_secs=_MEMORY_APPLY_LOCK_TIMEOUT_SECONDS,
+                )
+            try:
+                valid_links = await filter_valid_links(
+                    links,
+                    upsert_operations=result.operations.upsert_operations,
+                    delete_file_contents=result.operations.delete_file_contents,
+                    ctx=request.ctx,
+                    trace_console=self.config.trace_console,
+                )
+                if not valid_links:
+                    return
+                if viking_fs is not None:
+                    updated_uris = await write_stored_links(
+                        valid_links,
+                        request.ctx,
+                        viking_fs,
+                        lease_ref=lease,
+                    )
+                    for uri in dict.fromkeys(updated_uris):
+                        result.apply_result.add_edited(uri)
+                result.operations.resolved_links = merge_link_lists(
+                    list(getattr(result.operations, "resolved_links", []) or []),
+                    valid_links,
+                )
+            finally:
+                if lease is not None:
+                    await viking_fs._async_agfs.pathlock_release(lease)
 
     async def _get_group_batcher(
         self,
@@ -439,19 +460,30 @@ class StreamingMemoryUpdater:
         request: MemoryUpdateRequest,
         messages: list[Message],
     ) -> MemoryUpdateResult:
-        updater = MemoryUpdater(
-            registry=self.registry,
-            vikingdb=self.vikingdb,
-        )
         extract_context = ExtractContext(messages)
         isolation_handler = _make_isolation_handler(request, extract_context)
         async with self._apply_lock:
-            return await updater.apply_operations(
+            viking_fs = safe_get_viking_fs()
+            lease = await _acquire_stable_operation_lease(
                 operations,
+                viking_fs,
                 request.ctx,
-                extract_context=extract_context,
-                isolation_handler=isolation_handler,
             )
+            try:
+                updater = MemoryUpdater(
+                    registry=self.registry,
+                    vikingdb=self.vikingdb,
+                    transaction_handle=lease,
+                )
+                return await updater.apply_operations(
+                    operations,
+                    request.ctx,
+                    extract_context=extract_context,
+                    isolation_handler=isolation_handler,
+                )
+            finally:
+                if lease is not None:
+                    await viking_fs._async_agfs.pathlock_release(lease)
 
     async def _merge_requests(self, requests: list[MemoryUpdateRequest]) -> ResolvedOperations:
         all_ops = ResolvedOperations(
@@ -1809,6 +1841,120 @@ def _make_isolation_handler(
 
 def _operation_count(operations: ResolvedOperations) -> int:
     return len(operations.upsert_operations or []) + len(operations.delete_file_contents or [])
+
+
+def _operation_lock_paths(
+    operations: ResolvedOperations,
+    viking_fs: Any | None,
+    ctx: RequestContext,
+) -> list[str]:
+    operation_uris = _operation_uri_set(operations)
+    uris = set(operation_uris)
+    for uri in operation_uris:
+        normalized_uri = str(uri).rstrip("/")
+        directory, separator, _ = normalized_uri.rpartition("/")
+        if separator and directory:
+            uris.add(f"{directory}/.overview.md")
+    uris.update(_link_endpoint_uri_set(list(operations.resolved_links or [])))
+    for deleted_uri, replacement_uri in dict(operations.delete_replacements or {}).items():
+        if deleted_uri:
+            uris.add(str(deleted_uri))
+        if replacement_uri:
+            uris.add(str(replacement_uri))
+    for memory_file in operations.delete_file_contents or []:
+        for link in list(memory_file.links or []) + list(memory_file.backlinks or []):
+            if isinstance(link, dict):
+                from_uri = link.get("from_uri")
+                to_uri = link.get("to_uri")
+            else:
+                from_uri = getattr(link, "from_uri", None)
+                to_uri = getattr(link, "to_uri", None)
+            if from_uri:
+                uris.add(str(from_uri))
+            if to_uri:
+                uris.add(str(to_uri))
+    return _uri_lock_paths(uris, viking_fs, ctx)
+
+
+async def _persisted_replacement_relation_uris(
+    operations: ResolvedOperations,
+    viking_fs: Any,
+    ctx: RequestContext,
+) -> set[str]:
+    uris: set[str] = set()
+    for deleted_uri in dict(operations.delete_replacements or {}):
+        try:
+            content = await viking_fs.read_file(deleted_uri, ctx=ctx)
+        except (FileNotFoundError, NotFoundError):
+            continue
+        if not content:
+            continue
+        memory_file = MemoryFileUtils.read(content, uri=deleted_uri)
+        for link in list(memory_file.links or []) + list(memory_file.backlinks or []):
+            if isinstance(link, dict):
+                from_uri = link.get("from_uri")
+                to_uri = link.get("to_uri")
+            else:
+                from_uri = link.from_uri
+                to_uri = link.to_uri
+            if from_uri:
+                uris.add(str(from_uri))
+            if to_uri:
+                uris.add(str(to_uri))
+    return uris
+
+
+async def _acquire_stable_operation_lease(
+    operations: ResolvedOperations,
+    viking_fs: Any | None,
+    ctx: RequestContext,
+) -> Any | None:
+    lock_paths = _operation_lock_paths(operations, viking_fs, ctx)
+    if not lock_paths:
+        return None
+
+    required_paths = set(lock_paths)
+    for acquisition in range(1, _MEMORY_APPLY_LOCK_MAX_ACQUISITIONS + 1):
+        lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(
+            sorted(required_paths),
+            timeout_secs=_MEMORY_APPLY_LOCK_TIMEOUT_SECONDS,
+        )
+        try:
+            relation_uris = await _persisted_replacement_relation_uris(
+                operations,
+                viking_fs,
+                ctx,
+            )
+            expanded_paths = required_paths | set(_uri_lock_paths(relation_uris, viking_fs, ctx))
+        except BaseException:
+            await viking_fs._async_agfs.pathlock_release(lease)
+            raise
+
+        if expanded_paths == required_paths:
+            return lease
+
+        await viking_fs._async_agfs.pathlock_release(lease)
+        required_paths = expanded_paths
+        if acquisition == _MEMORY_APPLY_LOCK_MAX_ACQUISITIONS:
+            raise RuntimeError(
+                "Unable to stabilize memory apply lock coverage after "
+                f"{_MEMORY_APPLY_LOCK_MAX_ACQUISITIONS} acquisitions"
+            )
+
+    raise AssertionError("unreachable")
+
+
+def _uri_lock_paths(
+    uris: set[str],
+    viking_fs: Any | None,
+    ctx: RequestContext,
+) -> list[str]:
+    if viking_fs is None or not hasattr(viking_fs, "_async_agfs"):
+        return []
+    uri_to_path = getattr(viking_fs, "_uri_to_path", None)
+    if not callable(uri_to_path):
+        return []
+    return sorted(uri_to_path(uri, ctx=ctx) for uri in uris if uri)
 
 
 def _first_uri(uris: list[str] | None) -> str | None:

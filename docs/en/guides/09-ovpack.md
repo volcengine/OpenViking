@@ -21,7 +21,11 @@ Full migration uses the separate `backup/restore` flow. It packages public
 scope roots together:
 
 - `viking://resources`
-- `viking://user`
+- all `viking://user/{user_id}` content in the current account
+
+Only ROOT or ADMIN can call `backup/restore`, and these operations traverse all
+user content within the current account. Backup packages do not contain user
+accounts, API keys, or other authentication data.
 
 Sessions are included through the user namespace at
 `viking://user/{user_id}/sessions/{session_id}`. The
@@ -156,6 +160,15 @@ ov restore ./backups/openviking.ovpack --on-conflict overwrite
 
 Backup packages can only be restored with `restore`; regular `import` rejects
 them.
+
+Backup reads live files and is not an atomic point-in-time snapshot. Content
+that changes during backup may represent different moments. Pause writes during
+the backup window when strict consistency is required.
+
+When restoring into a new environment, restore content first and then create
+users with the same `user_id` values found in the package. Existing user
+directories do not mean that user accounts exist, and the target environment
+generates new API keys.
 
 ## Python SDK
 
@@ -308,6 +321,18 @@ curl -X POST http://localhost:1933/api/v1/pack/backup \
 
 `skip` is a root-level skip, not a file-level merge.
 
+The table above describes regular `import`. For full `restore`, `overwrite`
+performs a merge-upsert: missing target paths are created, matching paths are
+overwritten, and target-only paths absent from the backup are preserved. Restore
+does not delete the full `viking://resources` or `viking://user` tree, and it
+does not create or write the aggregate `viking://user` container itself.
+Vectors are restored or recomputed only for package content that is added or
+overwritten; vectors for target-only content remain unchanged.
+
+Every conflict policy first validates the complete manifest, files, checksums,
+and vector metadata. A corrupt package fails even with `skip`; it cannot return
+success without validation.
+
 ## Package Layout
 
 OVPack v3 is a standard ZIP archive with one package root directory:
@@ -413,6 +438,9 @@ from the package:
 id, uri, account_id, owner_user_id, owner_space,
 created_at, updated_at, active_count
 ```
+
+User ownership is rebuilt from `viking://user/{user_id}` paths. User accounts
+and API keys are not OVPack content.
 
 With `--include-vectors`, export also stores pure-dense vectors and embedding
 metadata. Even when import restores dense snapshots, runtime fields are rebuilt

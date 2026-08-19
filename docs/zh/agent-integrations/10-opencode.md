@@ -133,11 +133,12 @@ API key 会由 hooks 和 MCP proxy 作为 `Authorization: Bearer ...` 发送；`
 
 ## 验证
 
-安装后重启 OpenCode。进入 OpenCode session 后，插件应暴露 `openviking` MCP server。OpenCode 会给 MCP 工具加 `openviking_` 前缀，例如：
+安装后重启 OpenCode。进入 OpenCode session 后，插件应暴露 `openviking` MCP server，透传服务端完整 MCP 工具集（15 个工具）。OpenCode 会给 MCP 工具加 `openviking_` 前缀：
 
-- `openviking_recall`、`openviking_search`、`openviking_find`
-- `openviking_read`、`openviking_list`、`openviking_grep`、`openviking_glob`
-- `openviking_remember`、`openviking_add_resource`、`openviking_forget`、`openviking_health`
+- `openviking_find`、`openviking_search`（`openviking_search` 的 `mode="context"` 替代原 recall 工具）
+- `openviking_read`、`openviking_list`、`openviking_tree`、`openviking_grep`、`openviking_glob`
+- `openviking_remember`、`openviking_write`、`openviking_edit`、`openviking_add_resource`
+- `openviking_list_watches`、`openviking_cancel_watch`、`openviking_forget`、`openviking_health`
 
 可以让 OpenCode 搜索或浏览 OpenViking memory。运行时状态和错误日志会写入：
 
@@ -157,3 +158,7 @@ API key 会由 hooks 和 MCP proxy 作为 `Authorization: Bearer ...` 发送；`
 | 本地 `openviking_add_resource` 失败 | 传入文件路径而不是目录；目前还不支持自动上传本地目录 |
 
 完整 tools、配置字段和运行时文件说明见 [插件 README](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-plugin)。
+
+## 参见
+
+- [集成能力参考](./16-capability-reference.md)

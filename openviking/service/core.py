@@ -19,6 +19,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.service.agent_evolution_service import AgentEvolutionService
 from openviking.service.debug_service import DebugService
 from openviking.service.fs_service import FSService
+from openviking.service.mineru_preflight import wait_for_mineru_ready
 from openviking.service.pack_service import PackService
 from openviking.service.resource_memory_link_service import ResourceMemoryLinkService
 from openviking.service.resource_service import ResourceService
@@ -52,7 +53,7 @@ from openviking_cli.utils.config.storage_config import StorageConfig
 logger = get_logger(__name__)
 
 if TYPE_CHECKING:
-    from openviking.session.compressor_v2 import SessionCompressorV2
+    from openviking.session.compressor_v3 import SessionCompressorV3
 
 
 class OpenVikingService:
@@ -89,8 +90,7 @@ class OpenVikingService:
         self._embedder: Optional[Any] = None
         self._resource_processor: Optional[ResourceProcessor] = None
         self._skill_processor: Optional[SkillProcessor] = None
-        self._session_compressor: Optional["SessionCompressorV2"] = None
-
+        self._session_compressor: Optional["SessionCompressorV3"] = None
         self._directory_initializer: Optional[DirectoryInitializer] = None
         self._uri_mutation_coordinator = UriMutationCoordinator()
         self._watch_scheduler: Optional[WatchScheduler] = None
@@ -149,7 +149,7 @@ class OpenVikingService:
         max_concurrent_semantic: int = 32,
         max_concurrent_external_parse: int = 4,
         max_concurrent_add_resource: int = 4,
-        max_concurrent_session_commit: int = 4,
+        max_concurrent_session_commit: int = 8,
         binding_config: Any = None,
         *,
         git_config: Optional[GitConfig] = None,
@@ -239,7 +239,7 @@ class OpenVikingService:
         return self._vikingdb_manager
 
     @property
-    def session_compressor(self) -> Optional["SessionCompressorV2"]:
+    def session_compressor(self) -> Optional["SessionCompressorV3"]:
         """Get SessionCompressor instance."""
         return self._session_compressor
 
@@ -490,6 +490,25 @@ class OpenVikingService:
             self._queue_manager.start()
             logger.info("QueueManager workers started")
 
+        # Preflight the MinerU endpoint when it will be used, so endpoint
+        # misconfiguration or a stopped service surfaces now instead of on the
+        # first PDF import. Required for strategy="mineru"; advisory for "auto".
+        pdf_config = self._config.pdf
+        should_preflight_mineru = pdf_config.strategy == "mineru" or (
+            pdf_config.strategy == "auto" and pdf_config.mineru_endpoint is not None
+        )
+
+        if should_preflight_mineru and pdf_config.mineru_endpoint:
+            try:
+                await wait_for_mineru_ready(pdf_config.mineru_endpoint)
+                logger.info("MinerU preflight passed: %s", pdf_config.mineru_endpoint)
+            except RuntimeError as exc:
+                if pdf_config.strategy == "mineru":
+                    raise
+                logger.warning(
+                    "MinerU preflight failed (fallback will retry on first parse): %s", exc
+                )
+
         self._initialized = True
         logger.info("OpenVikingService initialized")
 
@@ -548,6 +567,8 @@ class OpenVikingService:
         mode: str = "vectors_only",
         wait: bool = True,
         dry_run: bool = False,
+        tags: list[str] | None = None,
+        tag_mode: str = "replace",
         ctx: RequestContext | None = None,
     ) -> dict[str, Any]:
         """Reindex semantic/vector artifacts for a URI."""
@@ -558,13 +579,17 @@ class OpenVikingService:
         canonical_uri = canonicalize_uri(uri, effective_ctx)
         from openviking.service.reindex_executor import get_reindex_executor
 
-        return await get_reindex_executor().execute(
-            uri=canonical_uri,
-            mode=mode,
-            wait=wait,
-            dry_run=dry_run,
-            ctx=effective_ctx,
-        )
+        execute_kwargs = {
+            "uri": canonical_uri,
+            "mode": mode,
+            "wait": wait,
+            "dry_run": dry_run,
+            "ctx": effective_ctx,
+        }
+        if tags is not None:
+            execute_kwargs["tags"] = tags
+            execute_kwargs["tag_mode"] = tag_mode
+        return await get_reindex_executor().execute(**execute_kwargs)
 
     async def check_consistency(
         self,

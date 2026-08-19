@@ -246,7 +246,7 @@ class TempUploadConfig(BaseModel):
 
     default_mode: Literal["local", "shared"] = "local"
     shared_max_size_bytes: int = 512 * 1024 * 1024
-    shared_prefix: str = "viking://upload"
+    ttl_seconds: int = Field(12 * 60 * 60, ge=0)
 
     model_config = {"extra": "forbid"}
 

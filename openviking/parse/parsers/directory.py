@@ -142,6 +142,14 @@ class DirectoryParser(BaseParser):
                     preserve_structure = True
             processable_files = scan_result.all_processable_files()
             warnings.extend(scan_result.warnings)
+            source_skipped_items = self._source_skipped_items(
+                kwargs.get("_source_meta"),
+                source_path,
+            )
+            warnings.extend(
+                f"Skipped Feishu Drive item {item['path']}: {item.get('reason', 'unknown error')}"
+                for item in source_skipped_items
+            )
 
             viking_fs = self._get_viking_fs()
             temp_uri = self._create_temp_uri()
@@ -164,6 +172,13 @@ class DirectoryParser(BaseParser):
                     warnings=warnings,
                 )
                 result.temp_dir_path = temp_uri
+                result.meta["file_count"] = 0
+                result.meta["dir_name"] = dir_name
+                result.meta["total_processable"] = 0
+                result.meta["processed_files"] = []
+                result.meta["failed_files"] = source_skipped_items
+                result.meta["unsupported_files"] = []
+                result.meta["skipped_files"] = []
                 return result
 
             # ── Phase 2: process each file ────────────────────────────
@@ -259,7 +274,7 @@ class DirectoryParser(BaseParser):
             result.meta["dir_name"] = dir_name
             result.meta["total_processable"] = len(processable_files)
             result.meta["processed_files"] = processed_files
-            result.meta["failed_files"] = failed_files
+            result.meta["failed_files"] = failed_files + source_skipped_items
             result.meta["unsupported_files"] = unsupported_files
             result.meta["skipped_files"] = skipped_files
 
@@ -328,6 +343,41 @@ class DirectoryParser(BaseParser):
             status = DirectoryParser._REASON_TO_STATUS.get(reason, "skip")
             result.append({"path": path, "status": status})
         return result
+
+    @staticmethod
+    def _source_skipped_items(source_meta: Any, source_path: Path) -> List[Dict[str, str]]:
+        """Normalize skipped items reported by a remote source accessor."""
+        if not isinstance(source_meta, dict):
+            return []
+        items = source_meta.get("feishu_folder_skipped_items") or []
+        if not isinstance(items, list):
+            return []
+
+        normalized: List[Dict[str, str]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            raw_path = str(item.get("path") or item.get("name") or item.get("token") or "unknown")
+            display_path = raw_path
+            try:
+                path = Path(raw_path).resolve(strict=False)
+                if path.is_absolute():
+                    display_path = str(path.relative_to(source_path.resolve(strict=False)))
+            except Exception:
+                pass
+            display_path = display_path.replace("\\", "/")
+
+            normalized.append(
+                {
+                    "path": display_path,
+                    "parser": "feishu",
+                    "status": "failed",
+                    "type": str(item.get("type") or ""),
+                    "token": str(item.get("token") or ""),
+                    "reason": str(item.get("reason") or "unknown error"),
+                }
+            )
+        return normalized
 
     # ------------------------------------------------------------------
     # Parser assignment

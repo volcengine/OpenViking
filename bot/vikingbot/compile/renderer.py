@@ -370,6 +370,8 @@ class WikiRenderer:
             raise ValueError("Wiki bundle exceeds the page limit")
         if len(bundle.files) > self.limits.output_files:
             raise ValueError("Wiki bundle exceeds the file limit")
+        if len(bundle.pages) + len(bundle.files) > self.limits.output_operations:
+            raise ValueError("Wiki bundle exceeds the combined output operation limit")
         if not bundle.pages and bundle.links:
             raise ValueError("an empty Wiki bundle cannot contain links")
         target_type = context_type_for_uri(target_uri)
@@ -453,13 +455,14 @@ class WikiRenderer:
                 raise ValueError(f"WikiLink references an unknown page_id: f={link.f}, t={link.t}")
             if not link.match_text:
                 raise ValueError("WikiLink match_text is required")
-            if LinkRenderer._find_match_span(
+            if not LinkRenderer.can_render_link(
                 source_page.body_markdown,
                 link.match_text,
-                LinkRenderer.protected_markdown_spans(source_page.body_markdown),
-            ) is None:
+                page_uris[link.f][0],
+                page_uris[link.t][0],
+            ):
                 raise ValueError(
-                    f"WikiLink match_text is not a linkable body anchor: {link.match_text!r}"
+                    f"WikiLink match_text is not a satisfiable body anchor: {link.match_text!r}"
                 )
 
         resolved_links = resolve_wiki_links(bundle.links, page_uris, strict=True)

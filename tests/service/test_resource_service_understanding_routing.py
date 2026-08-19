@@ -51,9 +51,8 @@ async def test_extensionless_remote_url_queues_frozen_understanding_route(
         pathlock_release=AsyncMock(),
     )
     processor = SimpleNamespace(
-        understanding_api_enabled=lambda: True,
         should_use_understanding_directly=lambda _source, **_kwargs: False,
-        prepare_resource=AsyncMock(return_value=prepared),
+        prepare_durable_source=AsyncMock(return_value=prepared),
         should_use_understanding_api=lambda resource: resource is prepared,
         submit_understanding=AsyncMock(return_value="response-1"),
         tree_builder=SimpleNamespace(
@@ -106,7 +105,7 @@ async def test_extensionless_remote_url_queues_frozen_understanding_route(
     _, message = queue_manager.enqueue.await_args.args
     assert queue_manager.enqueue.await_args.args[0] == QueueManager.EXTERNAL_PARSE
     queued = AddResourceMsg.from_dict(message)
-    assert queued.args["parser_backend"] == "understanding"
+    assert "parser_backend" not in queued.args
     assert queued.args["resolved_extension"] == ".pdf"
     assert queued.understanding_response_id == "response-1"
     assert queued.source_name == "manual.pdf"
@@ -153,15 +152,12 @@ async def test_remote_mpeg_ts_url_queues_understanding_after_prepare(
         )
     )
     processor = SimpleNamespace(
-        understanding_api_enabled=lambda: True,
         should_use_understanding_directly=lambda _source, **_kwargs: False,
-        prepare_resource=AsyncMock(return_value=prepared),
+        prepare_durable_source=AsyncMock(return_value=prepared),
         should_use_understanding_api=lambda resource: resource is prepared,
         submit_understanding=AsyncMock(return_value="response-1"),
         tree_builder=SimpleNamespace(resolve_target_uri=resolve_target_uri),
-        reserve_unique_candidate=AsyncMock(
-            return_value=("viking://resources/video/sample", lock)
-        ),
+        reserve_unique_candidate=AsyncMock(return_value=("viking://resources/video/sample", lock)),
         process_resource=AsyncMock(),
     )
     service = ResourceService(
@@ -170,7 +166,7 @@ async def test_remote_mpeg_ts_url_queues_understanding_after_prepare(
         resource_processor=processor,
         skill_processor=object(),
     )
-    service._should_use_connector = lambda *_args, **_kwargs: False
+    service._connector_delegate = SimpleNamespace(should_delegate=lambda *_args, **_kwargs: False)
     tracker = SimpleNamespace(
         create=AsyncMock(return_value=SimpleNamespace(task_id="task-1")),
         update_stage=AsyncMock(),
@@ -199,7 +195,7 @@ async def test_remote_mpeg_ts_url_queues_understanding_after_prepare(
         "root_uri": "viking://resources/video/sample",
         "task_id": "task-1",
     }
-    processor.prepare_resource.assert_awaited_once()
+    processor.prepare_durable_source.assert_awaited_once()
     processor.process_resource.assert_not_awaited()
     processor.submit_understanding.assert_awaited_once_with(prepared)
     resolve_target_uri.assert_awaited_once()
@@ -207,7 +203,7 @@ async def test_remote_mpeg_ts_url_queues_understanding_after_prepare(
     _, message = queue_manager.enqueue.await_args.args
     assert queue_manager.enqueue.await_args.args[0] == QueueManager.EXTERNAL_PARSE
     queued = AddResourceMsg.from_dict(message)
-    assert queued.args["parser_backend"] == "understanding"
+    assert "parser_backend" not in queued.args
     assert queued.args["resolved_extension"] == "mpegts"
     assert queued.understanding_response_id == "response-1"
     assert queued.source_name == "sample.ts"

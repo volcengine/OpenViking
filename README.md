@@ -143,9 +143,10 @@ Integrations inject OpenViking recall into your agent's context and auto-commit 
 - [OpenClaw](https://docs.openviking.ai/en/agent-integrations/03-openclaw)
 - [Hermes](https://docs.openviking.ai/en/agent-integrations/05-hermes)
 - [Cursor](https://docs.openviking.ai/en/agent-integrations/12-cursor)
-- [Trae](https://docs.openviking.ai/en/agent-integrations/13-trae)
+- [TRAE / TRAE CN / TraeCode CLI 2.0](https://docs.openviking.ai/en/agent-integrations/13-trae)
 - [OpenCode](https://docs.openviking.ai/en/agent-integrations/10-opencode)
 - [pi](https://docs.openviking.ai/en/agent-integrations/11-pi)
+- [Agent Plugins 1.0](https://docs.openviking.ai/en/agent-integrations/15-agent-plugins)
 - [MCP clients](https://docs.openviking.ai/en/agent-integrations/06-mcp-clients)
 - [LangChain / LangGraph](https://docs.openviking.ai/en/agent-integrations/07-langchain-langgraph)
 

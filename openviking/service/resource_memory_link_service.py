@@ -33,6 +33,7 @@ from openviking.session.memory.utils.resource_refs import (
     resource_ref_matches,
     unlink_resource_references_from_memory,
 )
+from openviking.storage.semantic_sidecar import body_for_preview
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
 from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking_cli.exceptions import NotFoundError
@@ -342,9 +343,7 @@ class ResourceMemoryLinkService:
             task_id,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
-            timeout=(
-                _RESOURCE_REASON_COMMIT_TIMEOUT_SECONDS if timeout is None else timeout
-            ),
+            timeout=(_RESOURCE_REASON_COMMIT_TIMEOUT_SECONDS if timeout is None else timeout),
             poll_interval=0.1,
         )
         if task.status == TaskStatus.COMPLETED:
@@ -638,7 +637,7 @@ class ResourceMemoryLinkService:
 
     @staticmethod
     def _clean_resource_abstract(abstract: Any) -> str:
-        text = " ".join(str(abstract or "").split())
+        text = " ".join(body_for_preview(str(abstract or "")).split())
         if not text:
             return ""
         if any(text == marker or text.endswith(marker) for marker in _ABSTRACT_NOT_READY_MARKERS):

@@ -316,7 +316,9 @@ class SkillProcessor:
                     skill_dict = SkillLoader.load(str(skill_file))
                     base_path = data
                     for item in data.rglob("*"):
-                        if item.is_file() and item.name != "SKILL.md":
+                        # Exclude only the top-level SKILL.md (the skill body);
+                        # nested SKILL.md files belong to sub-skills and must be kept.
+                        if item.is_file() and item != skill_file:
                             auxiliary_files.append(item)
                 else:
                     # Single skill markdown file

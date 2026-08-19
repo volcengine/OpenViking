@@ -15,7 +15,6 @@ from starlette.requests import Request
 from openviking.message import ImagePart, Message, TextPart
 from openviking.server.app import create_app
 from openviking.server.config import (
-    AgentEvolutionConfig,
     ServerConfig,
     ToolOutputExternalizationConfig,
 )
@@ -1170,7 +1169,8 @@ async def test_delete_session(client: httpx.AsyncClient):
         json=_message_request("user", content="ensure persisted"),
     )
     # Compress to persist
-    await client.post(f"/api/v1/sessions/{session_id}/commit")
+    commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
+    await _wait_for_task(client, commit_resp.json()["result"]["task_id"])
 
     resp = await client.delete(f"/api/v1/sessions/{session_id}")
     assert resp.status_code == 200
@@ -1285,7 +1285,6 @@ async def test_get_session_context_endpoint_returns_trimmed_latest_archive_and_m
         return []
 
     service.sessions._session_compressor.extract_long_term_memories = _no_memories
-    service.sessions._session_compressor.extract_execution_memories = _no_memories
 
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
@@ -1356,7 +1355,6 @@ async def test_get_session_archive_endpoint_returns_archive_details(
         return []
 
     service.sessions._session_compressor.extract_long_term_memories = _no_memories
-    service.sessions._session_compressor.extract_execution_memories = _no_memories
 
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
@@ -1420,79 +1418,6 @@ async def test_commit_failed_when_long_term_extraction_fails_does_not_block_next
     assert await _archive_marker_exists(session, archive_uri, ".failed.json")
     assert not await _archive_marker_exists(session, archive_uri, ".done")
     assert not await _archive_marker_exists(session, archive_uri, ".partial.json")
-
-    # The failed archive is skipped, not retrievable as a completed archive.
-    archive_resp = await client.get(f"/api/v1/sessions/{session_id}/archives/archive_001")
-    archive_body = archive_resp.json()
-    assert archive_body["status"] == "error"
-    assert archive_body["error"]["code"] == "NOT_FOUND"
-
-    # A failed archive is a skippable terminal state; the next commit proceeds.
-    await client.post(
-        f"/api/v1/sessions/{session_id}/messages",
-        json=_message_request("user", content="second round"),
-    )
-    resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    assert body["result"]["archived"] is True
-
-
-async def test_commit_failed_when_execution_extraction_fails_does_not_block_next_commit(
-    client: httpx.AsyncClient,
-    service,
-):
-    """Binary archive outcome: if execution memory extraction fails (after
-    retries), the whole archive is marked .failed.json and skipped — there is
-    no partial state — but a failed archive must not block the next commit.
-    """
-    service.sessions.set_agent_evolution_config(AgentEvolutionConfig(enabled=True))
-
-    create_resp = await client.post("/api/v1/sessions", json={})
-    session_id = create_resp.json()["result"]["session_id"]
-
-    # Stub long-term extraction to succeed so the only failing Phase 2 step is
-    # execution memory extraction, isolating the execution failure path.
-    async def _no_memories(*args, **kwargs):
-        del args, kwargs
-        return []
-
-    async def failing_extract(*args, **kwargs):
-        del args, kwargs
-        raise RuntimeError("synthetic execution failure")
-
-    service.sessions._session_compressor.extract_long_term_memories = _no_memories
-    service.sessions._session_compressor.extract_execution_memories = failing_extract
-
-    await client.post(
-        f"/api/v1/sessions/{session_id}/messages",
-        json=_message_request("user", content="first round"),
-    )
-    commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
-    task_id = commit_resp.json()["result"]["task_id"]
-    task = await _wait_for_task(client, task_id)
-    # Any Phase 2 step failing fails the whole archive (no partial state).
-    assert task["status"] == "failed"
-
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
-    session = service.sessions.session(ctx, session_id)
-    await session.load()
-    archive_uri = f"{session.uri}/history/archive_001"
-    assert await _archive_marker_exists(session, archive_uri, ".failed.json")
-    assert not await _archive_marker_exists(session, archive_uri, ".done")
-    assert not await _archive_marker_exists(session, archive_uri, ".partial.json")
-
-    # The marker carries the execution-step error, proving execution extraction
-    # (not some other step) is what failed the archive.
-    failed_payload = json.loads(
-        await session._viking_fs.read_file(
-            f"{archive_uri}/.failed.json",
-            ctx=session.ctx,
-        )
-    )
-    assert failed_payload.get("skipped") is True
-    assert "synthetic execution failure" in failed_payload["error"]
 
     # The failed archive is skipped, not retrievable as a completed archive.
     archive_resp = await client.get(f"/api/v1/sessions/{session_id}/archives/archive_001")

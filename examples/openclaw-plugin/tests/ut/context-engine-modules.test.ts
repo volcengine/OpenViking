@@ -172,6 +172,27 @@ describe("context-engine lifecycle service seam", () => {
       keepRecentCount: 0,
     });
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("memories=5"));
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("trace_id=trace-1"));
+  });
+
+  it("logs commit trace_id when Phase 2 reports failure", async () => {
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const ok = await commitOpenVikingSession({
+      sessionId: "failed-session",
+      sessionKey: "agent:main:main",
+      getClient: vi.fn().mockResolvedValue({
+        commitSession: vi.fn().mockResolvedValue({
+          status: "failed",
+          error: "extract failed",
+          trace_id: "trace-failed-commit",
+        }),
+      }),
+      logger,
+      isBypassedSession: () => false,
+    });
+
+    expect(ok).toBe(false);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("trace_id=trace-failed-commit"));
   });
 
   it("compacts an OpenViking session behind the lifecycle service seam", async () => {

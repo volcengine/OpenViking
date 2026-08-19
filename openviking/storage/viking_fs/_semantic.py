@@ -3,12 +3,13 @@
 """Semantic retrieval mixin for VikingFS."""
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
-from openviking.core.namespace import canonicalize_uri
+from openviking.core.context import ContextLevel
 from openviking.core.retrieval_targets import resolve_retrieval_targets
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext
+from openviking.storage.semantic_sidecar import body_for_preview, render_semantic_sidecar
 from openviking.storage.viking_fs._base import (
     _ensure_non_empty_search_query,
     logger,
@@ -16,10 +17,6 @@ from openviking.storage.viking_fs._base import (
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.image_search import build_multimodal_embedding_input
 from openviking_cli.exceptions import NotFoundError
-
-if TYPE_CHECKING:
-    from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
-    from openviking_cli.utils.config import GrepConfig, RerankConfig, RetrievalConfig
 
 
 class _SemanticMixin:
@@ -49,7 +46,7 @@ class _SemanticMixin:
                 raise
             return f"# {uri} [Directory abstract is not ready]"
 
-        return self._decode_bytes(content_bytes)
+        return body_for_preview(self._decode_bytes(content_bytes))
 
     async def _read_abstract_for_known_dir(
         self,
@@ -181,7 +178,7 @@ class _SemanticMixin:
             # Fallback to default if .overview.md doesn't exist
             return f"# {uri}\n\n[Directory overview is not ready]"
 
-        return self._decode_bytes(content_bytes)
+        return body_for_preview(self._decode_bytes(content_bytes))
 
     async def find(
         self,
@@ -337,9 +334,7 @@ class _SemanticMixin:
                 target_abstract = ""
 
         intent_enabled = (
-            bool(self.retrieval_config.enable_intent)
-            if self.retrieval_config is not None
-            else True
+            bool(self.retrieval_config.enable_intent) if self.retrieval_config is not None else True
         )
 
         # With session context: optional intent analysis
@@ -457,11 +452,39 @@ class _SemanticMixin:
 
             if abstract:
                 abstract_uri = f"{uri}/.abstract.md"
-                await self.write_file(abstract_uri, abstract, ctx=ctx)
+                await self.write_file(
+                    abstract_uri,
+                    render_semantic_sidecar(
+                        ContextLevel.ABSTRACT,
+                        uri,
+                        abstract,
+                        {
+                            "generated_by": {
+                                "component": "VikingFS.write_context",
+                                "trigger": "context_write",
+                            }
+                        },
+                    ),
+                    ctx=ctx,
+                )
 
             if overview:
                 overview_uri = f"{uri}/.overview.md"
-                await self.write_file(overview_uri, overview, ctx=ctx)
+                await self.write_file(
+                    overview_uri,
+                    render_semantic_sidecar(
+                        ContextLevel.OVERVIEW,
+                        uri,
+                        overview,
+                        {
+                            "generated_by": {
+                                "component": "VikingFS.write_context",
+                                "trigger": "context_write",
+                            }
+                        },
+                    ),
+                    ctx=ctx,
+                )
 
         except Exception as e:
             logger.error(f"[VikingFS] Failed to write {uri}: {e}")

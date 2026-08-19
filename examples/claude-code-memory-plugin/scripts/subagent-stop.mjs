@@ -267,16 +267,26 @@ async function pushTurns(ovSessionId, turns, { peerId = null, enqueueOnly = fals
   // adds little value.
   let committed = false;
   let commitQueued = false;
+  let commitTraceId = "";
   if (ok + queued > 0) {
     const commitRes = enqueueOnly
       ? await enqueuePendingDirectly("commitSession", ovSessionId, {})
       : await commitSession(fetchJSON, ovSessionId);
     committed = !enqueueOnly && commitRes.ok;
     commitQueued = enqueueOnly ? Boolean(commitRes.ok) : Boolean(commitRes.pendingQueued);
+    commitTraceId = enqueueOnly ? "" : commitRes.traceId || commitRes.result?.trace_id || "";
     if (enqueueOnly && !commitRes.ok) enqueueFailed++;
     else if (!enqueueOnly && commitRes.pendingEnqueueFailed) enqueueFailed++;
   }
-  return { ok, queued, failed, enqueueFailed, committed, commitQueued };
+  return {
+    ok,
+    queued,
+    failed,
+    enqueueFailed,
+    committed,
+    commitQueued,
+    commit_trace_id: commitTraceId || undefined,
+  };
 }
 
 async function main() {
