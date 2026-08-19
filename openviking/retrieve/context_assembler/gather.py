@@ -273,6 +273,7 @@ async def gather_candidates(
         target_uri: str,
         find_limit: int,
         find_filter: Optional[Dict[str, Any]] = None,
+        find_context_type: Optional[ContextType] = None,
     ) -> Any:
         return _safe_find(
             service,
@@ -285,6 +286,7 @@ async def gather_candidates(
             filter=find_filter if find_filter is not None else filter,
             image_url=image_url,
             level=None,
+            context_type=find_context_type,
         )
 
     async def gather_bucket(bucket: str, quota: int) -> List[Candidate]:
@@ -301,6 +303,7 @@ async def gather_candidates(
                 target_uri=target,
                 find_limit=_overfetch(quota),
                 find_filter=bucket_filter,
+                find_context_type=context_type,
             )
             for query in planned
             for target in targets
@@ -314,6 +317,7 @@ async def gather_candidates(
                     target_uri=f"{user_root}/peers",
                     find_limit=_overfetch(max(quota * OTHER_PEER_OVERFETCH, quota)),
                     find_filter=bucket_filter,
+                    find_context_type=context_type,
                 )
                 for query in planned
             )

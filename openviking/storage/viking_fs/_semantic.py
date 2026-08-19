@@ -19,6 +19,7 @@ from openviking.storage.viking_fs._base import (
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.image_search import build_multimodal_embedding_input
 from openviking_cli.exceptions import NotFoundError
+from openviking_cli.retrieve.types import ContextType
 
 
 class _SemanticMixin:
@@ -210,6 +211,7 @@ class _SemanticMixin:
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
         image_url: Optional[str] = None,
+        context_type: Optional[ContextType] = None,
     ):
         """Semantic search.
 
@@ -219,6 +221,7 @@ class _SemanticMixin:
             limit: Return count
             score_threshold: Score threshold
             filter: Metadata filter
+            context_type: Single context type for observer classification
 
         Returns:
             FindResult
@@ -255,7 +258,7 @@ class _SemanticMixin:
 
         typed_query = TypedQuery(
             query=query,
-            context_type=None,
+            context_type=context_type,
             intent="",
             target_directories=retrieval_targets.target_directories,
             embedding_input=(
@@ -307,6 +310,7 @@ class _SemanticMixin:
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
         image_url: Optional[str] = None,
+        context_type: Optional[ContextType] = None,
     ):
         """Complex search with session context.
 
@@ -316,6 +320,9 @@ class _SemanticMixin:
             session_info: Session information
             limit: Return count
             filter: Metadata filter
+            context_type: Single context type for observer classification.
+                Only applies to the no-session/no-intent fallback query below;
+                intent-assigned and image-query TypedQueries set their own type.
 
         Returns:
             FindResult
@@ -387,7 +394,7 @@ class _SemanticMixin:
             typed_queries = [
                 TypedQuery(
                     query=query,
-                    context_type=None,
+                    context_type=context_type,
                     intent="",
                     priority=1,
                     target_directories=retrieval_targets.target_directories,

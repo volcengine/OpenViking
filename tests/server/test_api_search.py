@@ -616,6 +616,94 @@ async def test_search_combines_context_type_list_with_existing_filter(
     }
 
 
+async def test_find_with_single_context_type_passes_typed_context_type(
+    client: httpx.AsyncClient, service, monkeypatch
+):
+    from openviking_cli.retrieve.types import ContextType
+
+    captured = {}
+
+    async def fake_find(*, context_type=None, **kwargs):
+        captured["context_type"] = context_type
+        return {"items": []}
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={"query": "sample", "context_type": "resource"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    assert captured["context_type"] == ContextType.RESOURCE
+
+
+async def test_search_with_single_context_type_passes_typed_context_type(
+    client: httpx.AsyncClient, service, monkeypatch
+):
+    from openviking_cli.retrieve.types import ContextType
+
+    captured = {}
+
+    async def fake_search(*, context_type=None, **kwargs):
+        captured["context_type"] = context_type
+        return {"items": []}
+
+    monkeypatch.setattr(service.search, "search", fake_search)
+
+    resp = await client.post(
+        "/api/v1/search/search",
+        json={"query": "sample", "context_type": "memory"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    assert captured["context_type"] == ContextType.MEMORY
+
+
+async def test_find_with_multi_context_type_leaves_typed_context_type_unset(
+    client: httpx.AsyncClient, service, monkeypatch
+):
+    captured = {}
+
+    async def fake_find(*, context_type=None, **kwargs):
+        captured["context_type"] = context_type
+        return {"items": []}
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={"query": "sample", "context_type": ["memory", "resource"]},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    assert captured["context_type"] is None
+
+
+async def test_find_without_context_type_passes_none(
+    client: httpx.AsyncClient, service, monkeypatch
+):
+    captured = {}
+
+    async def fake_find(*, context_type=None, **kwargs):
+        captured["context_type"] = context_type
+        return {"items": []}
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={"query": "sample"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    assert captured["context_type"] is None
+
+
 async def test_search_compiles_tags_only_filter(client: httpx.AsyncClient, service, monkeypatch):
     captured = {}
 

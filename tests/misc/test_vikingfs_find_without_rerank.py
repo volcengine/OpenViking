@@ -104,6 +104,45 @@ async def test_find_works_without_rerank_config(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_find_forwards_context_type_to_typed_query(monkeypatch) -> None:
+    fs = _make_viking_fs()
+    captured = {}
+
+    class FakeRetriever:
+        def __init__(self, storage, embedder, rerank_config, retrieval_config):
+            pass
+
+        async def retrieve(
+            self,
+            typed_query,
+            ctx,
+            limit,
+            score_threshold,
+            scope_dsl,
+            level,
+        ):
+            captured["typed_query"] = typed_query
+            return QueryResult(
+                query=typed_query,
+                matched_contexts=[],
+                searched_directories=[],
+            )
+
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.HierarchicalRetriever",
+        FakeRetriever,
+    )
+
+    await fs.find(
+        "guide",
+        target_uri="viking://resources/docs",
+        context_type=ContextType.RESOURCE,
+    )
+
+    assert captured["typed_query"].context_type is ContextType.RESOURCE
+
+
+@pytest.mark.asyncio
 async def test_find_accepts_image_url_without_text_query(monkeypatch) -> None:
     fs = _make_viking_fs()
     captured = {}

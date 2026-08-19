@@ -5,8 +5,9 @@ from datetime import datetime, timezone
 
 import pytest
 
-from openviking.utils.search_filters import merge_time_filter
+from openviking.utils.search_filters import merge_time_filter, resolve_single_context_type
 from openviking.utils.time_utils import parse_iso_datetime
+from openviking_cli.retrieve.types import ContextType
 
 
 def test_merge_time_filter_builds_relative_range():
@@ -119,3 +120,28 @@ def test_merge_time_filter_date_only_uses_now_timezone():
 
     assert result["gte"].endswith("Z")
     assert result["lte"].endswith("Z")
+
+
+def test_resolve_single_context_type_returns_none_when_absent():
+    assert resolve_single_context_type(None) is None
+
+
+def test_resolve_single_context_type_resolves_single_string():
+    assert resolve_single_context_type("resource") is ContextType.RESOURCE
+
+
+def test_resolve_single_context_type_resolves_single_enum():
+    assert resolve_single_context_type(ContextType.SKILL) is ContextType.SKILL
+
+
+def test_resolve_single_context_type_returns_none_for_list_of_two():
+    assert resolve_single_context_type(["memory", "resource"]) is None
+
+
+def test_resolve_single_context_type_resolves_single_item_list():
+    assert resolve_single_context_type(["memory"]) is ContextType.MEMORY
+
+
+def test_resolve_single_context_type_rejects_invalid_value():
+    with pytest.raises(ValueError, match="context_type must be one or more of"):
+        resolve_single_context_type("archive")
