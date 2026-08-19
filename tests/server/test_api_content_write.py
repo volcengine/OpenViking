@@ -3,7 +3,11 @@
 
 """Tests for content write endpoint."""
 
+from types import SimpleNamespace
+
 import pytest
+
+from openviking.server.routers import filesystem
 
 
 async def _first_file_uri(client, root_uri: str) -> str:
@@ -25,6 +29,31 @@ async def test_write_endpoint_registered(client):
 async def test_set_tags_endpoint_registered(client):
     resp = await client.get("/api/v1/fs/attrs/set_tags")
     assert resp.status_code == 405
+
+
+async def test_fs_attrs_filters_legacy_non_kv_search_tags(monkeypatch):
+    class FakeVikingDBManagerProxy:
+        def __init__(self, *_args):
+            pass
+
+        async def filter(self, **_kwargs):
+            return [
+                {
+                    "level": 2,
+                    "search_tags": ["default", "team=search", "bad=", "channel=app"],
+                }
+            ]
+
+    monkeypatch.setattr(filesystem, "VikingDBManagerProxy", FakeVikingDBManagerProxy)
+
+    tags = await filesystem._tags_attr(
+        SimpleNamespace(vikingdb_manager=object()),
+        "viking://user/default/memories/events/example.md",
+        SimpleNamespace(),
+        is_dir=False,
+    )
+
+    assert tags == ["team=search", "channel=app"]
 
 
 async def test_write_rejects_directory_uri(client_with_resource):

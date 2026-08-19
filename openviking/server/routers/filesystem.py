@@ -20,6 +20,7 @@ from openviking.server.routers.content import SetTagsRequest
 from openviking.server.routers.content import set_tags as content_set_tags
 from openviking.storage.expr import And, Eq, In
 from openviking.storage.vikingdb_manager import VikingDBManagerProxy
+from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import NotFoundError
 
 router = APIRouter(prefix="/api/v1/fs", tags=["filesystem"])
@@ -59,7 +60,7 @@ async def _tags_attr(
     records = sorted(records, key=lambda item: item.get("level", 99))
     tags: list[str] = []
     for record in records:
-        for tag in record.get("search_tags") or []:
+        for tag in normalize_search_tags(record.get("search_tags"), discard_invalid=True):
             if tag not in tags:
                 tags.append(tag)
     return tags
