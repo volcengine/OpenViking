@@ -474,7 +474,8 @@ Get your API key at https://aistudio.google.com/apikey
       "provider": "dashscope",
       "api_key": "${DASHSCOPE_API_KEY}",
       "model": "text-embedding-v4",
-      "dimension": 1024
+      "dimension": 1024,
+      "input": "text"
     }
   }
 }
@@ -491,11 +492,11 @@ Get your API key at https://aistudio.google.com/apikey
 | `qwen3-vl-embedding` | 2560 | multimodal | Text + image + video |
 | `qwen2.5-vl-embedding` | 1024 | multimodal | Text + image + video |
 
-**Multimodal parameters** (text+image/video models only):
+**Input and multimodal parameters**:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `input_type` | str | `"multimodal"` or `"text"` | Embedding mode (default: `"multimodal"`) |
+| `input` | str | `"multimodal"` | Embedding mode: `"text"` or `"multimodal"` |
 | `enable_fusion` | bool | `false` | Enable fusion vectors for `tongyi-embedding-vision-*` models |
 | `res_level` | int | `2` | Image resolution level (1=high, 2=medium, 3=low) |
 | `max_video_frames` | int | `16` | Maximum video frames to embed |
@@ -507,7 +508,11 @@ Get your API key at https://aistudio.google.com/apikey
 | China | `https://dashscope.aliyuncs.com` (default) | Recommended for users in mainland China |
 | International | `https://dashscope-intl.aliyuncs.com` | For users outside China |
 
-Custom endpoint URLs are also supported by setting a full URL.
+For a custom gateway, set `api_base` to the gateway's base URL. OpenViking
+appends the mode-specific endpoint path automatically, so do not include
+`/compatible-mode/v1` (text mode) or
+`/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding`
+(multimodal mode) in `api_base`.
 
 Get your API key at https://dashscope.console.aliyun.com/api-key
 

@@ -444,7 +444,8 @@ openviking-server doctor
       "provider": "dashscope",
       "api_key": "${DASHSCOPE_API_KEY}",
       "model": "text-embedding-v4",
-      "dimension": 1024
+      "dimension": 1024,
+      "input": "text"
     }
   }
 }
@@ -461,11 +462,11 @@ openviking-server doctor
 | `qwen3-vl-embedding` | 2560 | multimodal | 文本 + 图像 + 视频 |
 | `qwen2.5-vl-embedding` | 1024 | multimodal | 文本 + 图像 + 视频 |
 
-**多模态参数**（仅文本+图像/视频模型支持）:
+**输入和多模态参数**:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `input_type` | str | `"multimodal"` 或 `"text"` | 嵌入模式（默认: `"multimodal"`） |
+| `input` | str | `"multimodal"` | 嵌入模式：`"text"` 或 `"multimodal"` |
 | `enable_fusion` | bool | `false` | 为 `tongyi-embedding-vision-*` 模型启用融合向量 |
 | `res_level` | int | `2` | 图像分辨率级别（1=高，2=中，3=低） |
 | `max_video_frames` | int | `16` | 视频最大嵌入帧数 |
@@ -477,7 +478,11 @@ openviking-server doctor
 | 中国 | `https://dashscope.aliyuncs.com`（默认） | 推荐中国大陆用户使用 |
 | 国际 | `https://dashscope-intl.aliyuncs.com` | 推荐中国境外用户使用 |
 
-也支持设置完整 URL 来自定义端点地址。
+如果使用自定义网关，`api_base` 应填写网关根地址。OpenViking 会根据
+输入模式自动追加 endpoint 路径，因此不要在 `api_base` 中包含
+`/compatible-mode/v1`（文本模式）或
+`/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding`
+（多模态模式）。
 
 获取 API Key: https://dashscope.console.aliyun.com/api-key
 
