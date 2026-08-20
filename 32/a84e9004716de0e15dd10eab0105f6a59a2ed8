@@ -1,0 +1,23 @@
+docs/en/context-compilation/03-knowledge-graph.md
+  s_347bf355ac3e24::t_159fc1c7ae473f 1-106
+examples/compile/ov-compile-skills/knowledge-distillation/SKILL.md
+  s_347bf355ac3e24::t_8d4a5876e4765f 1-208
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "32a84e9004716de0e15dd10eab0105f6a59a2ed8",
+  "prompts": {},
+  "sessions": {
+    "s_347bf355ac3e24": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a01e0e-c257-7793-bae1-6091d5cc6b84",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
