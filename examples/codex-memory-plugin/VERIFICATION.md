@@ -239,6 +239,29 @@ echo '{"session_id":"any","source":"startup","cwd":"/tmp","model":"x","permissio
 # Expect: normal SessionStart behavior without spawning `codex exec` for model probing.
 ```
 
+### 6g. Server-covered marker, skip, and cleanup
+
+Run a local server with `memory.session_auto_commit.idle_enabled=true`, then
+start Codex with:
+
+```bash
+export OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS=60
+```
+
+After `SessionStart`, inspect the current state file. Expect
+`"serverIdleCommit":true` and `"serverIdleTimeoutSeconds":60`. Kill Codex
+without `/compact`, then start another session:
+
+- before 11 minutes, expect `server_covered_skip` and no client `/commit`;
+- after the 60-second timeout plus the 10-minute margin, expect
+  `server_covered_gc` and the local state file removed;
+- `GET /api/v1/sessions/{id}` should report `commit_count >= 1` and
+  `pending_tokens: 0`.
+
+Repeat against a default-config server. Expect
+`auto_commit_idle_enabled:false`, no marker in the state file, and the active
+window / 30-minute idle sweep to behave exactly as in sections 6a–6d.
+
 ## 7. Memory extraction landed in user namespace
 
 Wait ~60 s for OV's extractor, then:

@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  applyAgentSessionPolicy,
   commitAgentSession,
+  loadAgentHookConfig,
   makeAgentFetchJSON,
 } from "./lib/agent-hook-runtime.mjs";
 
@@ -77,4 +79,33 @@ test("agent fetch and commit logging preserve response trace_id", async (t) => {
       error: "commit failed",
     },
   });
+});
+
+test("agent hook config defaults idle policy to one hour and supports off", () => {
+  const previous = process.env.OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS;
+  try {
+    delete process.env.OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS;
+    assert.equal(loadAgentHookConfig("cursor").commitIdleTimeoutSeconds, 3600);
+    assert.equal(loadAgentHookConfig("cursor").commitTurnThreshold, 1);
+
+    process.env.OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS = "off";
+    assert.equal(loadAgentHookConfig("cursor").commitIdleTimeoutSeconds, 0);
+  } finally {
+    if (previous === undefined) delete process.env.OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS;
+    else process.env.OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS = previous;
+  }
+});
+
+test("applyAgentSessionPolicy makes no request when disabled", async () => {
+  let called = false;
+  const result = await applyAgentSessionPolicy(
+    async () => {
+      called = true;
+      return { ok: true, result: {} };
+    },
+    { commitIdleTimeoutSeconds: 0 },
+    "cu-disabled",
+  );
+  assert.equal(called, false);
+  assert.equal(result.method, "disabled");
 });

@@ -23,7 +23,6 @@ from openviking.service.session_service import SessionService
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.memory_config import SessionAutoCommitConfig
 
-
 _REAL_DATETIME = datetime
 
 
@@ -228,6 +227,18 @@ def _session_service_for_auto_commit_test(
     monkeypatch.setattr(service, "get", fake_get)
     monkeypatch.setattr(session_service_module, "get_task_tracker", lambda: _FakeTaskTracker())
     return service
+
+
+def test_idle_auto_commit_enabled_reflects_server_config():
+    service = SessionService()
+    defaults = SessionAutoCommitConfig()
+
+    assert defaults.default_enabled is False
+    assert defaults.idle_enabled is False
+    assert service.idle_auto_commit_enabled is False
+
+    service.set_session_auto_commit_config(SessionAutoCommitConfig(idle_enabled=True))
+    assert service.idle_auto_commit_enabled is True
 
 
 def _meta(

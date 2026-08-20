@@ -10,6 +10,7 @@ import {
 } from "./shared/session-model.mjs"
 import {
   enqueue,
+  listPending,
   replayPending,
 } from "./shared/pending-queue.mjs"
 import {
@@ -19,6 +20,10 @@ import {
   isRetryableFailure,
 } from "./shared/retryable.mjs"
 import {
+  applySessionAutoCommitPolicy,
+  buildIdleAutoCommitPolicy,
+} from "./shared/session-policy.mjs"
+import {
   log,
   effectivePeerId,
   fetchJSON,
@@ -27,6 +32,7 @@ import {
 
 export function createMemorySessionManager({ config, pluginRoot }) {
   const sessions = new Map()
+  const policyAppliedFor = new Set()
   const statePath = path.join(pluginRoot, "openviking-session-state.json")
   const oldSessionMapPath = path.join(pluginRoot, "openviking-session-map.json")
   let saveTimer = null
@@ -48,12 +54,28 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   async function init() {
     if (config.autoCapture) await migrateLegacySessionMap()
     await loadState()
+    const rehydratedSessionIds = [...sessions.keys()]
     const health = await fetchJSON(config, "/health", {}, { timeoutMs: 5000 })
     if (health.ok) {
       await replayPending(
         (endpoint, init = {}, options = {}) => fetchJSON(config, endpoint, init, options),
         (stage, data) => log("DEBUG", "pending", stage, data),
       )
+      for (const sessionId of rehydratedSessionIds) {
+        // A single unrecoverable entry (e.g. an OV session that no longer
+        // exists server-side) must not reject init() and take the plugin down.
+        try {
+          await flushSession(sessionId, {
+            commit: true,
+            reason: "startup-recovery",
+          })
+        } catch (error) {
+          log("WARN", "session", "Startup recovery commit failed", {
+            opencode_session: sessionId,
+            error: error?.message,
+          })
+        }
+      }
     }
   }
 
@@ -178,6 +200,20 @@ export function createMemorySessionManager({ config, pluginRoot }) {
         (endpoint, init = {}, options = {}) => fetchJSON(config, endpoint, init, options),
         (stage, data) => log("DEBUG", "pending", stage, data),
       )
+      if (!policyAppliedFor.has(state.ovSessionId)) {
+        policyAppliedFor.add(state.ovSessionId)
+        const policyResult = await applySessionAutoCommitPolicy(
+          (endpoint, init = {}, options = {}) => fetchJSON(config, endpoint, init, options),
+          state.ovSessionId,
+          buildIdleAutoCommitPolicy(config.commitIdleTimeoutSeconds),
+          {
+            cacheKey: `${config.endpoint}|${config.account || ""}|${config.user || ""}`,
+            actorPeerId: effectivePeerId(config) || "",
+            log: (stage, data) => log("DEBUG", "session-policy", stage, data),
+          },
+        )
+        if (policyResult.method === "error") policyAppliedFor.delete(state.ovSessionId)
+      }
     }
     log("INFO", "event", "OpenViking session derived", {
       opencode_session: sessionId,
@@ -259,25 +295,75 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     debouncedSaveState()
   }
 
-  async function flushAll({ commit = false } = {}) {
+  async function flushAll({ commit = false, commitTimeoutMs } = {}) {
     if (saveTimer) {
       clearTimeout(saveTimer)
       saveTimer = null
     }
+    const commitDeadline = Number.isFinite(Number(commitTimeoutMs))
+      ? Date.now() + Math.max(0, Number(commitTimeoutMs))
+      : 0
     for (const sessionId of sessions.keys()) {
-      await flushSession(sessionId, { commit, reason: "flushAll" })
+      const remainingCommitMs = commitDeadline
+        ? Math.max(0, commitDeadline - Date.now())
+        : commitTimeoutMs
+      await flushSession(sessionId, {
+        commit,
+        reason: "flushAll",
+        commitTimeoutMs: remainingCommitMs,
+        commitDeadline,
+      })
     }
     await enqueueSave()
   }
 
-  async function flushSession(opencodeSessionId, { commit = false, reason = "manual" } = {}) {
+  async function flushSession(
+    opencodeSessionId,
+    { commit = false, reason = "manual", commitTimeoutMs, commitDeadline = 0 } = {},
+  ) {
     if (!opencodeSessionId) return false
     const state = sessions.get(opencodeSessionId)
     if (!state) return false
 
-    const added = await flushPendingMessages(opencodeSessionId, state)
+    const added = await flushPendingMessages(opencodeSessionId, state, {
+      deadlineMs: commitDeadline,
+    })
     if (commit && config.autoCapture) {
-      await commitOvSession(state.ovSessionId, { force: true, reason })
+      const sessionPendingMessages = (await listPending()).filter((item) =>
+        item.entry?.type === "addMessage"
+        && item.entry?.sessionId === state.ovSessionId
+      )
+      const hasPendingMessages = sessionPendingMessages.length > 0
+      const hasUncapturedMessages = [...state.messages.values()].some(
+        (message) => !message.captured,
+      )
+      const effectiveCommitTimeoutMs = commitDeadline
+        ? Math.max(0, commitDeadline - Date.now())
+        : commitTimeoutMs
+      if (hasUncapturedMessages) {
+        // Still commit: what already reached the server must be archived. On
+        // the session.deleted/error path the state entry is dropped right
+        // after this call, so skipping the commit would strand it forever.
+        log("WARN", "session", "Committing while unsent messages remain", {
+          openviking_session: state.ovSessionId,
+          reason,
+        })
+      }
+      if (hasPendingMessages || effectiveCommitTimeoutMs === 0) {
+        const createdAt = sessionPendingMessages.reduce(
+          (latest, item) => Math.max(latest, Number(item.entry?.createdAt || 0)),
+          Date.now(),
+        ) + 1
+        await enqueue("commitSession", state.ovSessionId, {
+          keep_recent_count: config.commitKeepRecentCount,
+        }, { createdAt })
+      } else {
+        await commitOvSession(state.ovSessionId, {
+          force: true,
+          reason,
+          timeoutMs: effectiveCommitTimeoutMs,
+        })
+      }
     } else if (added > 0) {
       await maybeCommitByThreshold(state)
     }
@@ -377,7 +463,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     return body
   }
 
-  async function flushPendingMessages(opencodeSessionId, state) {
+  async function flushPendingMessages(opencodeSessionId, state, { deadlineMs = 0 } = {}) {
     if (!config.autoCapture) return 0
     const toSend = []
     for (const [messageId, message] of state.messages.entries()) {
@@ -392,9 +478,14 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     if (toSend.length === 0) return 0
 
     let added = 0
-    const health = await fetchJSON(config, "/health", {}, { timeoutMs: 5000 })
+    const remainingMs = deadlineMs ? Math.max(0, deadlineMs - Date.now()) : 0
+    if (deadlineMs && remainingMs === 0) return 0
+    const health = await fetchJSON(config, "/health", {}, {
+      timeoutMs: deadlineMs ? Math.min(5000, remainingMs) : 5000,
+    })
     if (!health.ok) {
       for (const item of toSend) {
+        if (deadlineMs && Date.now() >= deadlineMs) break
         const queued = await enqueue("addMessage", state.ovSessionId, item.body)
         if (!queued.ok) break
         item.message.captured = true
@@ -402,7 +493,15 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       }
     } else {
       const res = await sendSessionMessages(
-        (endpoint, init = {}, options = {}) => fetchJSON(config, endpoint, init, { timeoutMs: 10000, ...options }),
+        (endpoint, init = {}, options = {}) => {
+          const requestRemainingMs = deadlineMs
+            ? Math.max(1, deadlineMs - Date.now())
+            : 10000
+          return fetchJSON(config, endpoint, init, {
+            timeoutMs: requestRemainingMs,
+            ...options,
+          })
+        },
         state.ovSessionId,
         toSend.map((item) => item.body),
         { enqueueOnRetryable: true },
@@ -443,14 +542,17 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     return commitOvSession(state.ovSessionId, { force: true, reason: "threshold" })
   }
 
-  async function commitOvSession(ovSessionId, { force = false, reason = "manual", abortSignal } = {}) {
+  async function commitOvSession(
+    ovSessionId,
+    { force = false, reason = "manual", abortSignal, timeoutMs = 30000 } = {},
+  ) {
     if (!force && config.commitTokenThreshold <= 0) return { status: "skipped" }
     const body = { keep_recent_count: config.commitKeepRecentCount }
     const res = await fetchJSON(config, `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`, {
       method: "POST",
       body: JSON.stringify(body),
       signal: abortSignal,
-    }, { timeoutMs: 30000 })
+    }, { timeoutMs })
     if (res.ok) {
       for (const state of sessions.values()) {
         if (state.ovSessionId === ovSessionId) state.lastCommitTime = Date.now()

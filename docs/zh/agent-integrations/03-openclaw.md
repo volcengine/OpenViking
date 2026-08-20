@@ -98,11 +98,34 @@ python examples/openclaw-plugin/health_check_tools/ov-healthcheck.py
 | `apiKey` | 空 | OpenViking API Key |
 | `peer_prefix` | 空 | `peer_role=assistant` 时 assistant peer 身份的可选前缀 |
 | `autoRecallTimeoutMs` | `5000` | 整个 auto-recall 流程的外层超时（毫秒）；本地嵌入硬件较慢时可调大（取值范围 1000–300000） |
+| `commitIdleTimeoutSeconds` | `3600` | session 级服务端 idle policy；`0` 或 `off` 可禁用 |
 
 ```bash
 openclaw config set plugins.entries.openviking.config.baseUrl http://your-server:1933
 openclaw config set plugins.entries.openviking.config.apiKey your-api-key
 ```
+
+插件现在会在 gateway 关闭、重启和 session supersession 时，通过 awaited
+`session_end` 与 `gateway_stop` hook commit 活跃 session。若对话只是长时间无
+新消息，则要等下一条入站消息或 reset 才会结束。要覆盖这个缺口，请在 OpenViking
+**服务端**的 `ov.conf` 中启用 backstop（不是上面的插件配置）：
+
+```json
+{
+  "memory": {
+    "session_auto_commit": {
+      "default_enabled": false,
+      "idle_enabled": true,
+      "check_interval_seconds": 60.0,
+      "scan_batch_size": 16,
+      "scan_batch_pause_seconds": 0.0
+    }
+  }
+}
+```
+
+也可通过 `OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS` 调整；`0`/`off` 会禁用
+session policy。
 
 </details>
 

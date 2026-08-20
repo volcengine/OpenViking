@@ -1,6 +1,6 @@
 import { OpenVikingClient } from "./client.mjs";
 import { resolveConfig } from "./config.mjs";
-import { injectStartupProfile } from "./lifecycle.mjs";
+import { injectStartupProfile, registerSighupTeardown } from "./lifecycle.mjs";
 import { OpenVikingRuntime } from "./runtime.mjs";
 import { registerOpenVikingTools } from "./tools.mjs";
 import { guardVikingUri } from "./uri-guard.mjs";
@@ -13,8 +13,12 @@ export function apply(ctx, input = {}) {
   const client = new OpenVikingClient(config);
   const runtime = new OpenVikingRuntime(client, config, ctx.logger);
   ctx.provide("openvikingMemory", runtime);
+  const unregisterSighup = registerSighupTeardown(() => runtime.disposeAll());
   ctx.effect(
-    () => () => runtime.disposeAll(),
+    () => async () => {
+      unregisterSighup();
+      await runtime.disposeAll();
+    },
     "openvikingMemory.disposeAll()",
   );
 

@@ -216,11 +216,12 @@ export class OVClient {
   async commitSessionResponse(
     sessionId: string,
     keepRecentCount = this.cfg.commitKeepRecentCount,
+    timeoutMs = 30000,
   ): Promise<OVCommitResponse> {
     const res = await this.fetchJSON<OVCommitResult>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`,
       { method: "POST", body: JSON.stringify({ keep_recent_count: keepRecentCount }) },
-      30000,
+      timeoutMs,
     );
     if (res.ok && res.result && !res.result.trace_id && res.traceId) {
       res.result.trace_id = res.traceId;

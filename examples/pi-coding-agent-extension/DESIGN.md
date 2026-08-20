@@ -64,9 +64,7 @@ interface OVConfig {
   captureMode: "semantic" | "keyword"; // "semantic" = always capture, "keyword" = only when trigger phrases match (default: "semantic")
   captureMaxLength: number;     // Max sanitized text length for capture decision (default: 24000)
   captureAssistantTurns: boolean; // Include assistant turns in capture (default: true — memory extraction needs both sides)
-  commitTokenThreshold: number;  // Commit after N pending tokens synced (default: 20000, 0 = session-end only)
-  commitOnShutdown: boolean;     // Commit session on session_shutdown (default: true)
-  mirrorMemoryWrites: boolean;   // Mirror MEMORY.md to OV at commit time (default: true)
+  commitTokenThreshold: number;  // Commit after N pending tokens synced (default: 20000)
   writeQueueFlushInterval: number; // Write queue flush interval in ms (default: 5000)
   writeQueueFlushThreshold: number; // Write queue flush after N queued turns (default: 5)
   bypassPatterns: string[];      // Glob patterns for cwd to skip (default: [])
@@ -443,7 +441,7 @@ Three commit triggers (matching Claude Code plugin's three-way approach):
 
 2. **Pre-compact commit**: When pi fires `compaction` event (before it rewrites the transcript), trigger `commit(wait=true)`. This is critical — without it, content that gets compacted away is lost to OV forever. The Claude Code plugin's `PreCompact` hook does the same thing.
 
-3. **Shutdown commit**: On `session_shutdown`, trigger `commit(wait=true)`. Blocks until extraction completes (with timeout). The safety net for the final turns.
+3. **Shutdown commit**: On awaited `session_shutdown`, flush pending writes and run a bounded synchronous commit in both takeover and non-takeover modes. In takeover mode the local watermark is persisted only after commit succeeds; failure does not advance the boundary and does not queue a delayed commit.
 
 ```typescript
 class SyncManager {
@@ -633,7 +631,7 @@ Main entry point. Wires everything together.
 | `context` | Recall search + injection | Search after user-message rendering, then prepend `<relevant-memories>` (reuse cached block on later LLM iterations) |
 | `turn_end` | Sync | Strip all injected blocks, **capture filter (shouldCapture)**, **preserve tool USE inputs + tool summary line**, drop tool RESULTS, **enqueue to write queue** (auto-flushes at threshold/interval), track pending tokens, check commit threshold |
 | `session_before_compact` | Pre-compact commit + rehydration | Synchronous `commit(wait=true)` before pi rewrites the transcript, then fetch new archive overview and cache for next `before_agent_start` injection — content about to be compacted is preserved in OV and rehydrated after compaction |
-| `session_shutdown` | Final commit | Commit OV session (blocking), rebuild index, optionally mirror MEMORY.md |
+| `session_shutdown` | Final commit | Bounded OV commit in both modes; persist takeover watermark only after success |
 | `agent_end` | Cleanup | Invalidate recall cache |
 
 #### Guard pattern
@@ -786,13 +784,11 @@ A `/viking commit` command (or a `viking_commit` tool) triggers a synchronous `c
 
 ### Session Shutdown
 ```
-1. session_shutdown fires
-2. writeQueue.cancelPending()  ← cancel any pending flush timer
-3. writeQueue.flush()  ← flush remaining queued turns
-4. If mirrorMemoryWrites: read .memory/MEMORY.md → send to OV as session message
-5. sync.commit(wait=true)  ← blocking, with timeout
-6. index_builder.buildIndex()  ← refresh index after commit (new memories extracted)
-7. Cleanup
+1. `session_shutdown` fires and is awaited by pi.
+2. Flush pending writes.
+3. Commit synchronously with a 5-second local bound and `queueOnFailure=false`.
+4. In takeover mode, only a successful commit may persist the current sync watermark.
+5. On failure or timeout, leave the previous watermark unchanged; the next run may replay the unadvanced tail.
 ```
 
 ## Comparison: Hermes vs OpenClaw vs Claude Code vs This Extension
@@ -897,12 +893,10 @@ Default: `~/.pi/agent/extensions/openviking/config.json`
   "resumeContextBudget": 2000,
   "indexBudget": 2000,
   "commitTokenThreshold": 20000,
-  "commitOnShutdown": true,
   "captureToolResults": false,
   "captureMode": "semantic",
   "captureMaxLength": 24000,
   "captureAssistantTurns": true,
-  "mirrorMemoryWrites": true,
   "writeQueueFlushInterval": 5000,
   "writeQueueFlushThreshold": 5,
   "bypassPatterns": [],

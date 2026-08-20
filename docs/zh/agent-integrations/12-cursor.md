@@ -41,10 +41,22 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 - `sessionStart`：加载用户画像和当前项目的记忆索引。
 - `beforeSubmitPrompt`：根据当前问题召回记忆并通过 `additional_context` 注入。
 - `beforeReadFile` 和 `beforeShellExecution`：阻止把 `viking://` 虚拟路径当作本地文件访问，并提示改用 OpenViking MCP 工具。
-- `stop`：增量捕获本轮新增的用户与助手消息。
-- `preCompact` / `sessionEnd`：提交尚未处理的消息，触发记忆抽取。
+- `stop`：增量捕获本轮新增的用户与助手消息，默认每个已捕获 turn 都会 commit。
+- `preCompact`：提交尚未处理的消息，触发记忆抽取。`sessionEnd` 同样已注册，但目前 Cursor 无法真正执行它（见下文），因此真正保住会话尾巴的是每轮 commit。
 
 项目身份优先使用 Cursor 提供的 `workspace_roots`，因此不同项目会使用不同的 workspace peer。连接信息统一读取 `~/.openviking/ovcli.conf`。
+
+| 环境变量 | 默认值 | 含义 |
+| --- | --- | --- |
+| `OPENVIKING_COMMIT_TURN_THRESHOLD` | `1` | 客户端 commit 的已捕获 turn 阈值 |
+| `OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS` | `3600` | 服务端 idle policy；`0`/`off` 可禁用 |
+
+Cursor 当前只会在 `window_close` 时触发 `sessionEnd`，但此时 shell-exec host 已经
+teardown，hook 命令无法启动（[Cursor bug 165492](https://forum.cursor.com/t/sessionend-hook-fires-only-on-window-close-after-shell-exec-teardown-plugin-hook-commands-can-never-execute/165492)）。
+每个 `stop` 都 commit 后，正常尾部不再依赖这个 hook；仍可能丢失最后一个尚未完成的
+in-flight turn。可用 `OPENVIKING_COMMIT_TURN_THRESHOLD` 覆盖默认值。若需额外服务端
+兜底，启用 `memory.session_auto_commit.idle_enabled=true`，并用
+`OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS` 调整或禁用默认一小时 policy。
 
 ## 升级与卸载
 

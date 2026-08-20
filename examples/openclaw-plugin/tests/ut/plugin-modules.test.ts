@@ -434,6 +434,15 @@ describe("plugin module seams", () => {
     const rememberSessionAgentId = vi.fn();
     const verboseRoutingInfo = vi.fn();
     const commitOVSession = vi.fn().mockResolvedValue(true);
+    const createSession = vi.fn().mockResolvedValue({
+      session_id: "oc-session-1",
+      auto_commit_policy: {},
+      auto_commit_idle_enabled: true,
+    });
+    const commitSession = vi.fn().mockResolvedValue({
+      session_id: "oc-session-1",
+      status: "accepted",
+    });
     const logger = { info: vi.fn(), warn: vi.fn() };
 
     registerOpenVikingLifecycleHooks({
@@ -442,6 +451,9 @@ describe("plugin module seams", () => {
       isBypassedSession: (ctx) => ctx?.sessionKey === "bypass",
       verboseRoutingInfo,
       getContextEngine: () => ({ commitOVSession }),
+      getClient: async () => ({ createSession, commitSession } as any),
+      toOvSessionId: (sessionId) => `oc-${sessionId}`,
+      commitIdleTimeoutSeconds: 3600,
       logger,
     });
 
@@ -449,13 +461,30 @@ describe("plugin module seams", () => {
       "session_start",
       "session_end",
       "before_reset",
+      "gateway_stop",
       "after_compaction",
     ]);
 
     await handlers.get("session_start")?.({}, { sessionId: "session-1", agentId: "agent-main" });
     await handlers.get("session_end")?.({}, { sessionId: "session-2", agentId: "agent-main" });
+    await Promise.resolve();
     expect(rememberSessionAgentId).toHaveBeenCalledWith({ sessionId: "session-1", agentId: "agent-main" });
     expect(rememberSessionAgentId).toHaveBeenCalledWith({ sessionId: "session-2", agentId: "agent-main" });
+    expect(createSession).toHaveBeenCalledWith("oc-session-1", {
+      autoCommitPolicy: {
+        idle_timeout_seconds: 3600,
+        pending_token_threshold: 0,
+        message_count_threshold: 0,
+      },
+    });
+    // No agentId: the raw hook ctx.agentId is neither peer-prefixed nor
+    // sanitized, so sending it would scope the commit to a peer the session's
+    // messages were never written under. Every other commit path omits it.
+    expect(commitSession).toHaveBeenCalledWith("oc-session-2", {
+      wait: false,
+      timeoutMs: 1500,
+      keepRecentCount: 0,
+    });
 
     await handlers.get("before_reset")?.({}, { sessionId: "session-3", sessionKey: "key-3" });
     expect(commitOVSession).toHaveBeenCalledWith({ sessionId: "session-3", sessionKey: "key-3" });
@@ -464,6 +493,13 @@ describe("plugin module seams", () => {
     await handlers.get("before_reset")?.({}, { sessionId: "session-4", sessionKey: "bypass" });
     expect(verboseRoutingInfo).toHaveBeenCalledWith(expect.stringContaining("bypassing before_reset"));
     expect(commitOVSession).toHaveBeenCalledTimes(1);
+
+    await handlers.get("gateway_stop")?.({});
+    expect(commitSession).toHaveBeenCalledWith("oc-session-1", {
+      wait: false,
+      timeoutMs: 4500,
+      keepRecentCount: 0,
+    });
   });
 
   it("registers the context engine through a dedicated plugin module", () => {

@@ -337,8 +337,24 @@ export class TakeoverCore {
 
   async shutdown() {
     if (!this.enabled) return;
+    if (this.shutdownComplete) return;
+    const deadline = Date.now() + 5000;
+    let remainingMs = Math.max(1, deadline - Date.now());
+    const flushed = await withTimeout(this.io.flush(remainingMs), remainingMs);
+    if (!flushed) return;
+    remainingMs = Math.max(1, deadline - Date.now());
+    const committed = await withTimeout(
+      this.io.commit({
+        queueOnFailure: false,
+        keepRecentCount: this.config.takeoverKeepRecentTurns,
+        timeoutMs: remainingMs,
+      }),
+      remainingMs,
+    );
+    if (!committed) return;
     this.syncedEntryCount = Math.max(0, Math.floor(Number(this.io.getWatermark()) || 0));
     this.persist();
+    this.shutdownComplete = true;
   }
 
   resetBoundary(reason = "reset") {
@@ -402,5 +418,19 @@ export class TakeoverCore {
     } catch {
       // Logging must not affect pi's context path.
     }
+  }
+}
+
+async function withTimeout(promise, timeoutMs) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise(resolve => {
+        timer = setTimeout(() => resolve(null), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }

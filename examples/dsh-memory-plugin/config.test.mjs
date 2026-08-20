@@ -19,6 +19,7 @@ test("behavior environment overrides are applied and normalized", () => {
   assert.equal(config.recallQueryExpansionConfigured, true);
   assert.equal(config.recallLimit, 7);
   assert.equal(config.recallLimitConfigured, true);
+  assert.equal(config.commitIdleTimeoutSeconds, 3600);
 });
 
 test("explicit plugin config overrides credential files", () => {
@@ -41,4 +42,12 @@ test("explicit plugin config overrides credential files", () => {
   assert.equal(config.account, "plugin-account");
   assert.equal(config.user, "plugin-user");
   assert.equal(config.peerId, "plugin-peer");
+});
+
+test("idle policy can be disabled through the environment", () => {
+  const config = resolveConfig({}, {
+    OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS: "off",
+  }, "/workspace/project");
+
+  assert.equal(config.commitIdleTimeoutSeconds, 0);
 });

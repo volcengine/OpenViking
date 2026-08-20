@@ -31,6 +31,7 @@ function assistant(text, timestamp = 0) {
 function makeCore(overrides = {}) {
   const calls = {
     flushed: 0,
+    flushTimeouts: [],
     committed: 0,
     persisted: [],
     slept: [],
@@ -38,8 +39,9 @@ function makeCore(overrides = {}) {
   };
   let watermark = overrides.watermark ?? 0;
   const io = {
-    flush: async () => {
+    flush: async (timeoutMs) => {
       calls.flushed++;
+      calls.flushTimeouts.push(timeoutMs);
       return overrides.flushResult ?? true;
     },
     commit: async (opts) => {
@@ -329,6 +331,30 @@ test("shutdown persists deduped state once", async () => {
   core.transformContext([user("one")]);
   await core.shutdown();
   await core.shutdown();
+  assert.equal(calls.committed, 1);
+  assert.equal(calls.lastCommitOpts.queueOnFailure, false);
+  assert.ok(calls.lastCommitOpts.timeoutMs > 0);
+  assert.ok(calls.lastCommitOpts.timeoutMs <= 5000);
+  assert.ok(calls.flushTimeouts[0] > 0);
+  assert.ok(calls.flushTimeouts[0] <= 5000);
   assert.equal(calls.persisted.length, 1);
   assert.equal(calls.persisted[0].data.syncedEntryCount, 9);
+});
+
+test("shutdown does not advance the watermark after a failed commit", async () => {
+  const { core, calls } = makeCore({ watermark: 9, commitResult: null });
+  core.restore([
+    {
+      type: "custom",
+      customType: TAKEOVER_ENTRY_TYPE,
+      data: { syncedEntryCount: 4, pendingTokens: 10 },
+    },
+  ]);
+
+  await core.shutdown();
+
+  assert.equal(calls.committed, 1);
+  assert.equal(calls.lastCommitOpts.queueOnFailure, false);
+  assert.equal(core.state.syncedEntryCount, 4);
+  assert.equal(calls.persisted.length, 0);
 });

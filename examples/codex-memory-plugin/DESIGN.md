@@ -118,10 +118,23 @@ If local state still has a live `ovSessionId`, resume injection is skipped:
 the session is appendable and Codex should already be resuming its own
 transcript.
 
-### 5. Idle TTL sweep — fallback
+### 5. Server-side idle auto-commit and local sweep fallback
+
+Every `SessionStart` source best-effort applies an idle-only per-session
+policy: one-hour `idle_timeout_seconds`, with token and message-count triggers
+disabled. The policy is inert unless the server explicitly returns
+`auto_commit_idle_enabled=true`; a policy echo alone is not proof that the
+scheduler is running.
+
+When the server confirms idle sweeping, the state file records
+`serverIdleCommit=true`. The active-window heuristic and local idle sweep both
+skip that session. After the server timeout plus a 10-minute margin, the local
+marker file is garbage-collected without sending a duplicate commit. Old
+servers, transient failures, a disabled knob, and
+`auto_commit_idle_enabled=false` keep the local recovery below unchanged.
 
 State files whose `lastUpdatedAt` is older than `IDLE_TTL_MS` (default 30
-min) get committed and cleared. Mental model: a session not touched for
+min), and are not server-covered, get committed and cleared. Mental model: a session not touched for
 30 min is "temporarily concluded"; if the user resumes later, subsequent
 turns append under the same deterministic OV session id, and the next
 commit creates another archive there.
@@ -140,9 +153,10 @@ is the right cadence. The Stop hook contains a comment marking the option
 to add sweep there if codex's session creation rate is low enough that
 arbitrarily-orphaned state files accumulate.
 
-**Known limitation**: if the user never starts another codex on this
-machine, no sweep ever runs and the OV session stays open server-side
-forever. Accepted. Future work could add an MCP tool
+**Known limitation without the server backstop**: if the user never starts
+another codex on this machine, no local sweep ever runs and the OV session
+stays open server-side. Enable
+`memory.session_auto_commit.idle_enabled=true` to cover that case. Future work could add an MCP tool
 `openviking_commit_pending` so the model can commit explicitly.
 
 ## Stop hook — append + threshold commit
@@ -227,7 +241,10 @@ OV session id, while commits create additional archives under that session.
 {
   "codexSessionId": "0193af...",   // codex thread id
   "ovSessionId": "cx-0193af...-or-null", // null means "committed, awaiting next Stop"
+  "workspacePeerId": "-path-to-workspace", // identity used by a later swept commit
   "capturedTurnCount": 7,            // turns from transcript already appended
+  "serverIdleCommit": true,          // present only when the server confirms idle sweeping
+  "serverIdleTimeoutSeconds": 3600,  // timeout paired with that marker
   "createdAt": 1715000000000,
   "lastUpdatedAt": 1715000300000
 }
@@ -239,6 +256,8 @@ next resolve. The migration window for preserving old UUID sessions has
 closed.
 
 State files are atomic-write (tmpfile + rename) to survive crash mid-write.
+Swept commits send the stored `workspacePeerId`; only pre-upgrade files without
+that field fall back to the new session's active peer.
 
 ## Configuration
 
@@ -249,6 +268,7 @@ Env var overrides for tuning without rebuilding:
 | `OPENVIKING_CODEX_STATE_DIR` | `~/.openviking/codex-plugin-state` | state file dir |
 | `OPENVIKING_CODEX_ACTIVE_WINDOW_MS` | `120000` (2 min) | rule-3 active window |
 | `OPENVIKING_CODEX_IDLE_TTL_MS` | `1800000` (30 min) | idle sweep TTL |
+| `OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS` | `3600` (1 hour) | per-session server idle policy; `0`/`off` disables it |
 | `OPENVIKING_RECALL_TIMEOUT_MS` | `120000` (2 min) | whole UserPromptSubmit auto-recall deadline |
 | `OPENVIKING_RECALL_COMPRESS` | `1` | set `0` / `off` to skip `codex exec` compression |
 | `OPENVIKING_RECALL_COMPRESS_MODEL` | unset | custom first-choice compressor model; `off` disables compression |

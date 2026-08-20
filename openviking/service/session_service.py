@@ -465,6 +465,11 @@ class SessionService:
             return None
         return AutoCommitPolicy.from_dict(session.meta.auto_commit_policy).to_dict()
 
+    @property
+    def idle_auto_commit_enabled(self) -> bool:
+        """Return whether this server runs the idle auto-commit scheduler."""
+        return bool(self._session_auto_commit_config.idle_enabled)
+
     @staticmethod
     def effective_memory_extraction_config(session: Session) -> Dict[str, Any]:
         """Return the caller-facing memory extraction config."""

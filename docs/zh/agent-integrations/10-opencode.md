@@ -115,6 +115,7 @@ node examples/opencode-plugin/scripts/setup.mjs
   },
   "commitTokenThreshold": 20000,
   "commitKeepRecentCount": 10,
+  "commitIdleTimeoutSeconds": 3600,
   "profileTokenBudget": 10000,
   "resumeContextBudget": 32000
 }
@@ -127,9 +128,16 @@ export OPENVIKING_API_KEY="your-api-key-here"
 export OPENVIKING_ACCOUNT="default"   # 可选，仅 trusted-mode 部署需要
 export OPENVIKING_USER="opencode"     # 可选，仅 trusted-mode 部署需要
 export OPENVIKING_PEER_ID="opencode"  # 可选，peer 维度记忆路由需要
+export OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS="3600"
 ```
 
 API key 会由 hooks 和 MCP proxy 作为 `Authorization: Bearer ...` 发送；`account` 和 `user` 是 trusted-mode headers；`peerId` 会作为 `X-OpenViking-Actor-Peer` 和捕获 session message 的 `peer_id` 使用。旧版 `openviking-config.json` 里的凭据字段仍会作为迁移 fallback 读取，但新安装建议使用 `ovcli.conf` 或环境变量。
+
+OpenCode 的 awaited `dispose` hook 要求 OpenCode `>=1.15.11`。插件在
+OpenCode 五秒 shutdown 总预算内使用三秒 commit deadline，使 retryable 失败仍有
+时间进入 pending queue；下次启动时会 flush 并 commit 重载出的未提交 session。
+还可启用 `memory.session_auto_commit.idle_enabled=true` 作为服务端 backstop；
+将环境变量设为 `0`/`off` 可禁用其 policy。
 
 ## 验证
 

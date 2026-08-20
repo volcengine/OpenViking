@@ -14,8 +14,12 @@ export function createTakeoverManager(opts: {
   return new TakeoverCore({
     config,
     io: {
-      flush: () => sync.flushForTakeover(),
-      commit: (commitOpts?: { queueOnFailure?: boolean; keepRecentCount?: number }) => sync.commit(commitOpts),
+      flush: (timeoutMs?: number) => sync.flushForTakeover(timeoutMs),
+      commit: (commitOpts?: {
+        queueOnFailure?: boolean;
+        keepRecentCount?: number;
+        timeoutMs?: number;
+      }) => sync.commit(commitOpts),
       fetchOverview: async (tokenBudget?: number) => {
         if (!sync.sessionId) return "";
         const ctx = await client.getSessionContext(

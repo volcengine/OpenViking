@@ -16,6 +16,8 @@ async function withConfigFile(body, fn, env = {}) {
     OPENVIKING_PEER_ID: process.env.OPENVIKING_PEER_ID,
     OPENVIKING_WORKSPACE_PEER: process.env.OPENVIKING_WORKSPACE_PEER,
     OPENVIKING_RECALL_PEER_SCOPE: process.env.OPENVIKING_RECALL_PEER_SCOPE,
+    OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS:
+      process.env.OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS,
     OPENVIKING_CREDENTIAL_SOURCE: process.env.OPENVIKING_CREDENTIAL_SOURCE,
     OPENVIKING_CLI_CONFIG_FILE: process.env.OPENVIKING_CLI_CONFIG_FILE,
     OPENVIKING_CONFIG_FILE: process.env.OPENVIKING_CONFIG_FILE,
@@ -28,6 +30,7 @@ async function withConfigFile(body, fn, env = {}) {
   delete process.env.OPENVIKING_PEER_ID;
   delete process.env.OPENVIKING_WORKSPACE_PEER;
   delete process.env.OPENVIKING_RECALL_PEER_SCOPE;
+  delete process.env.OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS;
   delete process.env.OPENVIKING_CLI_CONFIG_FILE;
   delete process.env.OPENVIKING_CONFIG_FILE;
   for (const [key, value] of Object.entries(env)) {
@@ -55,7 +58,14 @@ test("loadConfig defaults takeover on", async () => {
     assert.equal(cfg.takeoverOverviewBudget, 3000);
     assert.equal(cfg.takeoverOverviewPollMs, 2000);
     assert.equal(cfg.takeoverOverviewPollMax, 15);
+    assert.equal(cfg.commitIdleTimeoutSeconds, 3600);
   });
+});
+
+test("loadConfig supports disabling the idle policy", async () => {
+  await withConfigFile({}, (cfg) => {
+    assert.equal(cfg.commitIdleTimeoutSeconds, 0);
+  }, { OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS: "off" });
 });
 
 test("loadConfig maps nested takeover block", async () => {

@@ -45,6 +45,7 @@ import { join } from "node:path";
 import { resolveOpenVikingCredentials } from "./ov-credentials.mjs";
 import { buildUserAgent, readManifestVersion } from "./shared/credentials.mjs";
 import { HARNESS_KEYS, loadPluginSettings } from "./shared/plugin-config.mjs";
+import { normalizeIdleTimeoutSeconds } from "./shared/session-policy.mjs";
 
 const USER_AGENT = buildUserAgent(
   "codex",
@@ -256,6 +257,11 @@ export function loadConfig() {
       process.env.OPENVIKING_COMMIT_KEEP_RECENT_COUNT,
       num(cx.commitKeepRecentCount, 10),
     ))),
+    commitIdleTimeoutSeconds: normalizeIdleTimeoutSeconds(
+      process.env.OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS
+        ?? cx.commitIdleTimeoutSeconds,
+      3600,
+    ),
 
     autoCommitOnCompact: envBool("OPENVIKING_AUTO_COMMIT_ON_COMPACT") ?? (cx.autoCommitOnCompact !== false),
     noAutoInject: envBool("OPENVIKING_NO_AUTO_INJECT") ?? (cx.noAutoInject === true),

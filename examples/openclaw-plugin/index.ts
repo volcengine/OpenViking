@@ -374,6 +374,9 @@ const contextEnginePlugin = {
       isBypassedSession,
       verboseRoutingInfo,
       getContextEngine,
+      getClient,
+      toOvSessionId: openClawSessionToOvStorageId,
+      commitIdleTimeoutSeconds: cfg.commitIdleTimeoutSeconds,
       logger: api.logger,
     });
 

@@ -47,6 +47,15 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 - `Stop`：捕获本轮消息并立即提交，使短会话也能进入记忆抽取流程。
 - OpenViking MCP Server：透传服务端完整 MCP 工具集（15 个工具）：`find`、`search`、`read`、`list`、`tree`、`remember`、`write`、`edit`、`add_resource`、`list_watches`、`cancel_watch`、`grep`、`glob`、`forget`、`health`。其中 `search` 的 `mode="context"` 可返回组装后的上下文。
 
+TRAE 与 TRAE CLI 没有单独的 session-end event，因此只可能丢失最后一个尚未完成的
+in-flight turn。每次 `SessionStart` 也会发送默认一小时的 idle policy；启用
+`memory.session_auto_commit.idle_enabled=true` 后服务端 backstop 才会实际运行，
+可用 `OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS` 调整或禁用。
+
+| 环境变量 | 默认值 | 含义 |
+| --- | --- | --- |
+| `OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS` | `3600` | 服务端 idle policy；`0`/`off` 可禁用 |
+
 ## 验证
 
 1. 重启 TRAE、TRAE CN 或 TraeCode CLI 2.0，并新建 Agent 会话。

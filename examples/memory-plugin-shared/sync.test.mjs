@@ -14,6 +14,8 @@ const HARNESS_SHARED_FILES = [
   "debug-log.mjs",
   "setup-wizard.mjs",
   "recall-core.mjs",
+  "retryable.mjs",
+  "session-policy.mjs",
   "workspace-peer.mjs",
   "profile-inject.mjs",
   "uri-guard.mjs",

@@ -79,6 +79,7 @@ const CONFIG_KEYS_TO_PRESERVE = [
   "recallTokenBudget",
   "commitTokenThresholdRatio",
   "commitKeepRecentCount",
+  "commitIdleTimeoutSeconds",
   "bypassSessionPatterns",
   "emitStandardDiagnostics",
   "logFindRequests",

@@ -90,7 +90,7 @@ export async function OpenVikingPlugin({ client, directory }) {
     },
 
     dispose: async () => {
-      await sessionManager.flushAll({ commit: true })
+      await sessionManager.flushAll({ commit: true, commitTimeoutMs: 3000 })
       log("INFO", "plugin", "OpenViking plugin disposed")
     },
   }

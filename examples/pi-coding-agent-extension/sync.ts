@@ -4,6 +4,10 @@ import { dirname } from "node:path";
 import type { OVConfig } from "./config.js";
 import { deriveHarnessSessionId } from "./shared/session-model.mjs";
 import { enqueue, listPending, replayPending } from "./shared/pending-queue.mjs";
+import {
+  applySessionAutoCommitPolicy,
+  buildIdleAutoCommitPolicy,
+} from "./shared/session-policy.mjs";
 import { extractBranchCapturePayloads } from "./lib/capture-adapter.mjs";
 import { countUndeliveredForSession, estimatePayloadTokens } from "./lib/takeover-core.mjs";
 
@@ -58,18 +62,31 @@ export class SyncManager {
     return true;
   }
 
-  async replayPending(): Promise<void> {
+  async replayPending(timeoutMs = 10000): Promise<void> {
     if (!this.client.connected) return;
     await replayPending(
-      (path: string, init?: any) => this.client.fetchJSON(path, init, 10000),
+      (path: string, init?: any) => this.client.fetchJSON(path, init, timeoutMs),
       (stage: string, data: unknown) =>
         debugLog(`${stage}: ${JSON.stringify(data)}`),
     );
   }
 
-  async flushForTakeover(): Promise<boolean> {
+  async applyAutoCommitPolicy(): Promise<void> {
+    if (!this.ovSessionId || !this.client.connected) return;
+    await applySessionAutoCommitPolicy(
+      (path: string, init?: RequestInit, options: { timeoutMs?: number } = {}) =>
+        this.client.fetchJSON(path, init, options.timeoutMs ?? 10000),
+      this.ovSessionId,
+      buildIdleAutoCommitPolicy(this.config.commitIdleTimeoutSeconds),
+      {
+        cacheKey: `${this.config.endpoint}|${this.config.account || ""}|${this.config.user || ""}`,
+      },
+    );
+  }
+
+  async flushForTakeover(timeoutMs = 10000): Promise<boolean> {
     if (!this.ovSessionId) return false;
-    await this.replayPending();
+    await this.replayPending(timeoutMs);
     const pending = await listPending();
     return countUndeliveredForSession(pending, this.ovSessionId) === 0;
   }
@@ -115,11 +132,18 @@ export class SyncManager {
     }
   }
 
-  async commit(opts: { queueOnFailure?: boolean; keepRecentCount?: number } = {}): Promise<any | null> {
+  async commit(
+    opts: {
+      queueOnFailure?: boolean;
+      keepRecentCount?: number;
+      timeoutMs?: number;
+    } = {},
+  ): Promise<any | null> {
     if (!this.ovSessionId) return null;
     const response = await this.client.commitSessionResponse(
       this.ovSessionId,
       opts.keepRecentCount,
+      opts.timeoutMs,
     );
     const result = response.result;
     if (!result) {

@@ -92,6 +92,7 @@ export default async function (pi: ExtensionAPI) {
         return;
       }
       await sync.replayPending();
+      await sync.applyAutoCommitPolicy();
 
       // Profile injection
       profileBlock = await buildSessionProfileBlock(client, config);
@@ -222,7 +223,9 @@ export default async function (pi: ExtensionAPI) {
     if (config.takeoverEnabled) {
       await takeover.shutdown();
     } else {
-      await sync.commit();
+      // Non-takeover mode keeps no local context boundary, so queueing a
+      // failed final commit is safe and is the only recovery path.
+      await sync.commit({ timeoutMs: 5000 });
     }
   });
 

@@ -105,6 +105,7 @@ test("Cursor transcript parser keeps only user and assistant text", () => {
 test("Cursor injects recall before the request and Stop captures transcript deltas", async () => {
   const messages = [];
   const actorPeers = [];
+  let commits = 0;
   const server = createServer((request, response) => {
     let body = "";
     request.on("data", (chunk) => { body += chunk; });
@@ -119,6 +120,7 @@ test("Cursor injects recall before the request and Stop captures transcript delt
         messages.push(...(parsed.messages ?? [parsed]));
         response.end(JSON.stringify({ result: { ok: true } }));
       } else if (request.url?.endsWith("/commit")) {
+        commits += 1;
         response.end(JSON.stringify({ result: { ok: true } }));
       } else {
         response.statusCode = 404;
@@ -156,6 +158,56 @@ test("Cursor injects recall before the request and Stop captures transcript delt
       { role: "user", content: "question" },
       { role: "assistant", content: "answer" },
     ]);
+    assert.equal(commits, 1, "Cursor commits after the first captured turn by default");
+  } finally {
+    server.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Cursor SessionStart applies the idle auto-commit policy", async () => {
+  const requests = [];
+  const server = createServer((request, response) => {
+    let body = "";
+    request.on("data", (chunk) => { body += chunk; });
+    request.on("end", () => {
+      requests.push({ method: request.method, url: request.url, body });
+      response.setHeader("Content-Type", "application/json");
+      if (request.url === "/api/v1/sessions") {
+        response.end(JSON.stringify({
+          status: "ok",
+          result: {
+            auto_commit_policy: JSON.parse(body).auto_commit_policy,
+            auto_commit_idle_enabled: true,
+          },
+        }));
+        return;
+      }
+      response.end(JSON.stringify({ status: "ok", result: {} }));
+    });
+  });
+  await new Promise((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  const root = mkdtempSync(join(tmpdir(), "openviking-cursor-policy-"));
+  try {
+    await runHook("sessionStart", {
+      conversation_id: "cursor-policy",
+      cwd: "/workspace",
+    }, {
+      HOME: root,
+      OPENVIKING_URL: `http://127.0.0.1:${server.address().port}`,
+      OPENVIKING_HOOK_STATE_DIR: join(root, "state"),
+      OPENVIKING_STATE_DIR: join(root, "policy-state"),
+      OPENVIKING_MEMORY_ENABLED: "1",
+    });
+    const created = requests.find((request) => request.url === "/api/v1/sessions");
+    assert.deepEqual(JSON.parse(created.body), {
+      session_id: "cu-cursor-policy",
+      auto_commit_policy: {
+        idle_timeout_seconds: 3600,
+        pending_token_threshold: 0,
+        message_count_threshold: 0,
+      },
+    });
   } finally {
     server.close();
     rmSync(root, { recursive: true, force: true });

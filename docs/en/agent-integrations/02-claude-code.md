@@ -85,6 +85,7 @@ Configuration priority: Environment variables > `ovcli.conf` > `ov.conf` > Built
 | `OPENVIKING_RECALL_LIMIT` | `10` | Legacy width override converted to per-category coding quotas |
 | `OPENVIKING_RECALL_TOKEN_BUDGET` | `2000` | Inline token budget for the final raw-find fallback |
 | `OPENVIKING_AUTO_CAPTURE` | `true` | Auto-capture after each turn |
+| `OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS` | `3600` | Idle timeout sent as a per-session server policy; `0`/`off` disables it |
 | `OPENVIKING_BYPASS_SESSION` | `false` | Skip all hooks for this session |
 | `OPENVIKING_BYPASS_SESSION_PATTERNS` | `""` | CSV glob patterns to auto-bypass |
 | `OPENVIKING_MEMORY_ENABLED` | (auto) | Force on/off |
@@ -93,6 +94,11 @@ Configuration priority: Environment variables > `ovcli.conf` > `ov.conf` > Built
 If recall latency matters most, see [Low-latency recall](./01-overview.md#low-latency-recall) for the environment-variable and `ovcli.conf` settings that disable query expansion and result compression.
 
 For multi-tenant deployments, configure `OPENVIKING_ACCOUNT` and `OPENVIKING_USER`. The complete list of environment variables is available in the [plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#configuration).
+
+Claude Code normally commits on `SessionEnd`. For a server-side backstop against
+an interrupted async writer or machine shutdown, enable
+`memory.session_auto_commit.idle_enabled=true`; see
+[Session Auto Commit Configuration](../guides/01-configuration.md#session-auto-commit-configuration).
 
 </details>
 

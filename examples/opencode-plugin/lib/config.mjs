@@ -2,6 +2,7 @@ import fs from "fs"
 import path from "path"
 import { homedir } from "os"
 import { buildUserAgent, readManifestVersion, resolveOpenVikingCredentials } from "./shared/credentials.mjs"
+import { normalizeIdleTimeoutSeconds } from "./shared/session-policy.mjs"
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs"
 
 const USER_AGENT = buildUserAgent(
@@ -48,6 +49,7 @@ const DEFAULT_CONFIG = {
   captureToolMaxChars: 1000000,
   commitTokenThreshold: 20000,
   commitKeepRecentCount: 10,
+  commitIdleTimeoutSeconds: 3600,
   profileTokenBudget: 10000,
   resumeContextBudget: 32000,
   noAutoInject: false,
@@ -162,6 +164,7 @@ function applyBehaviorConfig(config, fileConfig = {}) {
     "captureToolMaxChars",
     "commitTokenThreshold",
     "commitKeepRecentCount",
+    "commitIdleTimeoutSeconds",
     "profileTokenBudget",
     "resumeContextBudget",
     "noAutoInject",
@@ -221,6 +224,9 @@ function applyEnv(config) {
   if (process.env.OPENVIKING_COMMIT_KEEP_RECENT_COUNT) {
     config.commitKeepRecentCount = process.env.OPENVIKING_COMMIT_KEEP_RECENT_COUNT
   }
+  if (process.env.OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS !== undefined) {
+    config.commitIdleTimeoutSeconds = process.env.OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS
+  }
   if (process.env.OPENVIKING_PROFILE_TOKEN_BUDGET) config.profileTokenBudget = process.env.OPENVIKING_PROFILE_TOKEN_BUDGET
   if (process.env.OPENVIKING_RESUME_CONTEXT_BUDGET) config.resumeContextBudget = process.env.OPENVIKING_RESUME_CONTEXT_BUDGET
   if (process.env.OPENVIKING_NO_AUTO_INJECT !== undefined) {
@@ -271,6 +277,10 @@ function normalizeConfig(config) {
   config.commitKeepRecentCount = Number.isFinite(commitKeepRecentCount)
     ? Math.max(0, Math.round(commitKeepRecentCount))
     : DEFAULT_CONFIG.commitKeepRecentCount
+  config.commitIdleTimeoutSeconds = normalizeIdleTimeoutSeconds(
+    config.commitIdleTimeoutSeconds,
+    DEFAULT_CONFIG.commitIdleTimeoutSeconds,
+  )
   config.profileTokenBudget = Math.max(500, Math.round(Number(config.profileTokenBudget) || 10000))
   config.resumeContextBudget = Math.max(1024, Math.round(Number(config.resumeContextBudget) || 32000))
   if (!Array.isArray(config.bypassSessionPatterns)) config.bypassSessionPatterns = []

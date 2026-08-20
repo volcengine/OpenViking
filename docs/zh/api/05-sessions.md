@@ -159,11 +159,16 @@ ov session new
       "account_id": "default",
       "user_id": "alice"
     },
-    "auto_commit_policy": null
+    "auto_commit_policy": null,
+    "auto_commit_idle_enabled": false
   },
   "time": 0.1
 }
 ```
+
+`auto_commit_idle_enabled` 是服务端 feature-detection 字段。只有当前服务端
+实际运行 idle auto-commit scheduler 时才为 `true`；仅保存了
+`auto_commit_policy` 并不代表 idle sweep 已启用。
 
 ---
 
@@ -269,6 +274,7 @@ ov session list
 - `memories_extracted`: 各类记忆的提取数量统计
 - `last_commit_at`: 最后一次提交的时间
 - `auto_commit_policy`: 填充默认值后的生效自动 commit 策略；未启用时为 `null`
+- `auto_commit_idle_enabled`: 当前服务端是否实际运行 idle auto-commit scheduler
 
 **代码入口**：
 - `openviking/session/session.py:Session.load()` - 会话加载
@@ -392,7 +398,8 @@ ov session get a1b2c3d4
       "idle_timeout_seconds": 86400,
       "keep_recent_count": 0,
       "min_commit_interval_seconds": 0
-    }
+    },
+    "auto_commit_idle_enabled": false
   }
 }
 ```
@@ -426,6 +433,8 @@ ov session get a1b2c3d4
 
 空请求对象是合法的 no-op，并会返回当前生效配置。未知请求字段会被拒绝。
 响应始终返回补齐默认值后的生效策略；自动 commit 已禁用时返回 `null`。
+响应还会返回 `auto_commit_idle_enabled`，用于区分“policy 已保存”和“服务端
+idle scheduler 已实际运行”。
 
 #### 3. 使用示例
 
@@ -516,6 +525,7 @@ ov session config set a1b2c3d4 --no-auto-commit
       "keep_recent_count": 0,
       "min_commit_interval_seconds": 0
     },
+    "auto_commit_idle_enabled": false,
     "memory_extraction_config": {
       "events": {
         "tags": ["team=search", "channel=app"]

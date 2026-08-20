@@ -1,6 +1,10 @@
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import { buildProfileBlock } from "./shared/profile-inject.mjs";
 import { buildRecallBlock } from "./shared/recall-core.mjs";
+import {
+  applySessionAutoCommitPolicy,
+  buildIdleAutoCommitPolicy,
+} from "./shared/session-policy.mjs";
 import { deriveHarnessSessionId } from "./shared/session-model.mjs";
 import {
   dequeue,
@@ -47,6 +51,7 @@ export class OpenVikingRuntime {
       initializationRetryable: false,
       hasPendingWrites: false,
       pendingCreatedAt: 0,
+      shutdownCommitPayload: null,
       disposing: null,
     };
     this.states.set(session.id, state);
@@ -74,15 +79,29 @@ export class OpenVikingRuntime {
       state.initializationRetryable = isRetryableFailure(health);
       return state;
     }
-    const ensured = await this.client.ensureSessionResult(
+    const ensured = await applySessionAutoCommitPolicy(
+      (path, init, options) => this.client.fetchJSON(path, init, options),
       state.ovSessionId,
-      state.config.peerId,
+      buildIdleAutoCommitPolicy(state.config.commitIdleTimeoutSeconds),
+      {
+        cacheKey: `${state.config.endpoint}|${state.config.account || ""}|${state.config.user || ""}`,
+        actorPeerId: state.config.peerId,
+        log: (stage, data) => this.log(stage, data),
+      },
     );
-    if (
-      !ensured.ok
-      && !(ensured.status === 409 && ensured.error?.code === "ALREADY_EXISTS")
-    ) {
-      state.initializationRetryable = isRetryableFailure(ensured);
+    let sessionEnsured = ensured.ensured;
+    let initializationRetryable = ensured.retryable;
+    if (ensured.method === "disabled") {
+      const legacyEnsure = await this.client.ensureSessionResult(
+        state.ovSessionId,
+        state.config.peerId,
+      );
+      sessionEnsured = legacyEnsure.ok
+        || (legacyEnsure.status === 409 && legacyEnsure.error?.code === "ALREADY_EXISTS");
+      initializationRetryable = isRetryableFailure(legacyEnsure);
+    }
+    if (!sessionEnsured) {
+      state.initializationRetryable = initializationRetryable;
       return state;
     }
     await replayPending(
@@ -196,15 +215,34 @@ export class OpenVikingRuntime {
     if (!state) return;
     if (state.disposing) return state.disposing;
     state.disposing = (async () => {
-      this.enqueueWrite(state, async () => {
-        const commitPayload = {
-          keep_recent_count: state.config.commitKeepRecentCount,
-        };
+      const commitPayload = {
+        keep_recent_count: state.config.commitKeepRecentCount,
+      };
+      state.shutdownCommitPayload = commitPayload;
+      const writesDrained = await Promise.race([
+        state.writes.then(() => true),
+        new Promise(resolve => setTimeout(() => resolve(false), 500)),
+      ]);
+      try {
         if (state.hasPendingWrites) {
           await this.enqueueFinalCommit(state, commitPayload);
           return;
         }
-        if (!state.ready && !(await this.ensureState(state)).ready) return;
+        if (!state.ready) {
+          // Never re-run initializeState here: health check, policy apply,
+          // pending replay and profile build are each unbounded relative to
+          // DSH's 5s process grace, so a force-kill mid-init would lose the
+          // tail entirely. Queue the commit for the next startup instead.
+          await this.enqueueFinalCommit(state, commitPayload);
+          return;
+        }
+        if (!writesDrained) {
+          // The direct commit may overtake an in-flight addMessage. Keep one
+          // ordered retry on disk so a late-successful write is committed on
+          // the next startup; enqueuePendingMessage will move it behind any
+          // late-failed write that enters the same queue.
+          await this.enqueueFinalCommit(state, commitPayload);
+        }
         const response = await this.client.commitSession(
           state.ovSessionId,
           state.config.peerId,
@@ -214,13 +252,11 @@ export class OpenVikingRuntime {
           sessionId: state.ovSessionId,
           ok: response.ok,
           trace_id: response.result?.trace_id || response.traceId,
+          bypassedWriteQueue: !writesDrained,
         });
         if (isRetryableFailure(response)) {
           await this.enqueueFinalCommit(state, commitPayload);
         }
-      });
-      try {
-        await state.writes;
       } finally {
         if (this.states.get(session.id) === state) this.states.delete(session.id);
       }
@@ -265,7 +301,12 @@ export class OpenVikingRuntime {
 
   async enqueuePendingMessage(state, payload) {
     const result = await this.enqueuePending(state, "addMessage", payload);
-    if (result.ok) await this.removePendingCommits(state);
+    if (result.ok) {
+      await this.removePendingCommits(state);
+      if (state.shutdownCommitPayload) {
+        await this.enqueueFinalCommit(state, state.shutdownCommitPayload);
+      }
+    }
     return result;
   }
 

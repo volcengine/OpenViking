@@ -20,6 +20,7 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.recallMaxInjectedChars).toBe(4000);
     expect(cfg.recallTokenBudget).toBe(4000);
     expect(cfg.commitTokenThresholdRatio).toBe(0.5);
+    expect(cfg.commitIdleTimeoutSeconds).toBe(3600);
     expect(cfg.captureMode).toBe("semantic");
     expect(cfg.captureMaxLength).toBe(24000);
     expect(cfg.autoRecallTimeoutMs).toBe(5000);
@@ -52,6 +53,18 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
   it("tolerates the deprecated commitTokenThreshold key and ignores it", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({ commitTokenThreshold: 20000 });
     expect(cfg.commitTokenThresholdRatio).toBe(0.5);
+  });
+
+  it("supports disabling the idle policy with config or env", () => {
+    expect(
+      memoryOpenVikingConfigSchema.parse({ commitIdleTimeoutSeconds: "off" })
+        .commitIdleTimeoutSeconds,
+    ).toBe(0);
+    process.env.OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS = "7200";
+    expect(
+      memoryOpenVikingConfigSchema.parse({ commitIdleTimeoutSeconds: 60 })
+        .commitIdleTimeoutSeconds,
+    ).toBe(7200);
   });
 
   it("enables add_resource only when explicitly allowed", () => {

@@ -10,6 +10,7 @@
   "resumeContextBudget": 32000,
   "commitTokenThreshold": 20000,
   "commitKeepRecentCount": 10,
+  "commitIdleTimeoutSeconds": 3600,
   "takeover": {
     "enabled": true,
     "tokenThreshold": 30000,

@@ -189,13 +189,20 @@ Codex fires `SessionStart` with one of three `source` values: `startup` (fresh p
 
 On all three sources, the hook uses the same shared `buildProfileBlock()` implementation as the Claude Code, OpenCode, and pi integrations. It reads the user's `profile.md` and adds URI plus abstract indexes for `preferences/` and `entities/`, with a CJK-aware token budget. The default budget is `10000`; set `OPENVIKING_PROFILE_TOKEN_BUDGET` or `plugin.codex.profileTokenBudget` to change it. Set `OPENVIKING_NO_AUTO_INJECT=1` or `plugin.codex.noAutoInject=true` to disable only this fixed profile/background injection; per-prompt semantic recall remains controlled separately by `OPENVIKING_AUTO_RECALL`.
 
+The same hook also applies a one-hour server idle policy. If the response
+explicitly reports `auto_commit_idle_enabled=true`, the state file is marked
+server-covered and the local heuristic/sweep skips it. A covered state file is
+removed only after the server timeout plus a 10-minute margin. Old servers,
+idle-disabled servers, failures, and `OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS=0`
+keep the local fallback unchanged.
+
 On `startup` or `clear`, the script:
 
-1. Counts state files (excluding the new session_id) whose `lastUpdatedAt` is within `OPENVIKING_CODEX_ACTIVE_WINDOW_MS` (default 2 min) of "now":
+1. Counts uncovered state files (excluding the new session_id) whose `lastUpdatedAt` is within `OPENVIKING_CODEX_ACTIVE_WINDOW_MS` (default 2 min) of "now":
    - **0 active** → no-op (no orphan to commit)
    - **1 active** → commit it (the just-ended session)
    - **≥2 active** → skip; rely on idle TTL (we can't tell which one ended)
-2. **Idle-TTL sweep at the tail**: any state file (regardless of session_id) older than `OPENVIKING_CODEX_IDLE_TTL_MS` (default 30 min) gets committed and cleared.
+2. **Idle-TTL sweep at the tail**: any uncovered state file (regardless of session_id) older than `OPENVIKING_CODEX_IDLE_TTL_MS` (default 30 min) gets committed and cleared.
 
 On any /commit failure (OV unreachable, non-2xx, timeout) we **preserve state** (don't `clearState`) so the next sweep can retry.
 
@@ -232,6 +239,7 @@ Config knobs:
 | `OPENVIKING_RECALL_MAX_TOKENS` | `1600` | Token budget the server assembles the context block within, independent of the local compressor input limit. |
 | `OPENVIKING_RECALL_DEDUP_TURNS` | `5` | Cross-turn cooldown: URIs served in the last N turns are skipped. |
 | `OPENVIKING_RECALL_QUERY_EXPANSION` | `auto` | `auto` lets the server widen short prompts using session context; `off` disables it. |
+| `OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS` | `3600` | Server idle backstop; `0`/`off` disables sending the policy. |
 
 Recall now asks the server to assemble the context block in one request
 (`POST /api/v1/search/search` with `mode="context"`), so budgeting, detail tiers
@@ -266,7 +274,7 @@ After a successful append, Stop reads the session meta and commits when `pending
 
 ### Known gap: SIGTERM / Ctrl+C / `/exit` are silent
 
-Codex fires no hook on process exit. `/compact` is the only fully-deterministic "context disappearing" signal. If you `/exit` without `/compact`, the OV session for that codex session_id stays open. Two fallbacks recover the orphan:
+Codex fires no hook on process exit. `/compact` is the only fully-deterministic "context disappearing" signal. If you `/exit` without `/compact`, the server-side idle scheduler is the only fallback that does not require launching Codex again. Enable `memory.session_auto_commit.idle_enabled=true` to activate the default one-hour policy. Otherwise two local fallbacks recover the orphan only on the next `SessionStart`:
 
 1. The idle-TTL sweep at the next `SessionStart` commits any state file older than 30 min
 2. The active-window heuristic catches it if you `/new` or `/clear` shortly after

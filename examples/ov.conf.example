@@ -212,6 +212,13 @@
         "version": "v2",
         "extraction_enabled": true,
         "session_skill_extraction_enabled": false,
+        "session_auto_commit": {
+            "default_enabled": false,
+            "idle_enabled": false,
+            "check_interval_seconds": 60.0,
+            "scan_batch_size": 16,
+            "scan_batch_pause_seconds": 0.0
+        }
     },
     "ingest": {
         "enabled": false,

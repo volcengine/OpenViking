@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildUserAgent, resolveOpenVikingCredentials } from "./shared/credentials.mjs";
+import { normalizeIdleTimeoutSeconds } from "./shared/session-policy.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
 /** Hand-maintained: this extension ships no manifest to read a version from. */
@@ -31,6 +32,7 @@ export interface OVConfig {
   resumeContextBudget: number;
   commitTokenThreshold: number;
   commitKeepRecentCount: number;
+  commitIdleTimeoutSeconds: number;
   takeoverEnabled: boolean;
   takeoverTokenThreshold: number;
   takeoverKeepRecentTurns: number;
@@ -72,6 +74,7 @@ const DEFAULT_CONFIG: OVConfig = {
   resumeContextBudget: 32000,
   commitTokenThreshold: 20000,
   commitKeepRecentCount: 10,
+  commitIdleTimeoutSeconds: 3600,
   takeoverEnabled: true,
   takeoverTokenThreshold: 30000,
   takeoverKeepRecentTurns: 3,
@@ -144,6 +147,9 @@ export function loadConfig(extensionDir: string): OVConfig {
     config.recallQueryExpansion = process.env.OPENVIKING_RECALL_QUERY_EXPANSION === "off" ? "off" : "auto";
     config.recallQueryExpansionConfigured = true;
   }
+  if (process.env.OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS !== undefined) {
+    config.commitIdleTimeoutSeconds = process.env.OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS as any;
+  }
 
   config.recallLimit = clampInt(config.recallLimit, 1, 50, DEFAULT_CONFIG.recallLimit);
   config.recallMaxContentChars = clampInt(config.recallMaxContentChars, 100, 5000, DEFAULT_CONFIG.recallMaxContentChars);
@@ -154,6 +160,10 @@ export function loadConfig(extensionDir: string): OVConfig {
   config.resumeContextBudget = clampInt(config.resumeContextBudget, 1024, 128000, DEFAULT_CONFIG.resumeContextBudget);
   config.commitTokenThreshold = clampInt(config.commitTokenThreshold, 1000, 1000000, DEFAULT_CONFIG.commitTokenThreshold);
   config.commitKeepRecentCount = clampInt(config.commitKeepRecentCount, 0, 1000, DEFAULT_CONFIG.commitKeepRecentCount);
+  config.commitIdleTimeoutSeconds = normalizeIdleTimeoutSeconds(
+    config.commitIdleTimeoutSeconds,
+    DEFAULT_CONFIG.commitIdleTimeoutSeconds,
+  );
   config.takeoverEnabled = config.takeoverEnabled !== false;
   config.takeoverTokenThreshold = clampInt(config.takeoverTokenThreshold, 1, 1000000, DEFAULT_CONFIG.takeoverTokenThreshold);
   config.takeoverKeepRecentTurns = clampInt(config.takeoverKeepRecentTurns, 0, 100, DEFAULT_CONFIG.takeoverKeepRecentTurns);

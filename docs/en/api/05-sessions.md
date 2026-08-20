@@ -159,11 +159,16 @@ ov session new
       "account_id": "default",
       "user_id": "alice"
     },
-    "auto_commit_policy": null
+    "auto_commit_policy": null,
+    "auto_commit_idle_enabled": false
   },
   "time": 0.1
 }
 ```
+
+`auto_commit_idle_enabled` is a server feature-detection field. It is `true`
+only when this server is running the idle auto-commit scheduler. A stored
+`auto_commit_policy` does not by itself mean idle sweeping is active.
 
 ---
 
@@ -269,6 +274,7 @@ Get session details including metadata, message statistics, commit history, etc.
 - `memories_extracted`: Count statistics of extracted memories by category
 - `last_commit_at`: Time of last commit
 - `auto_commit_policy`: Effective auto-commit policy with defaults filled in; `null` when not enabled
+- `auto_commit_idle_enabled`: Whether this server is actively running the idle auto-commit scheduler
 
 **Code Entries:**
 - `openviking/session/session.py:Session.load()` - Session loading
@@ -392,7 +398,8 @@ ov session get a1b2c3d4
       "idle_timeout_seconds": 86400,
       "keep_recent_count": 0,
       "min_commit_interval_seconds": 0
-    }
+    },
+    "auto_commit_idle_enabled": false
   }
 }
 ```
@@ -428,6 +435,8 @@ effect on subsequent message writes, idle scans, and commits. Only the
 An empty request object is a valid no-op and returns the effective configuration.
 Unknown request fields are rejected. The response always returns the effective
 policy with defaults filled in, or `null` when automatic commits are disabled.
+It also returns `auto_commit_idle_enabled`, allowing clients to distinguish a
+stored policy from an actively running idle scheduler.
 
 #### 3. Usage Examples
 
@@ -518,6 +527,7 @@ ov session config set a1b2c3d4 --no-auto-commit
       "keep_recent_count": 0,
       "min_commit_interval_seconds": 0
     },
+    "auto_commit_idle_enabled": false,
     "memory_extraction_config": {
       "events": {
         "tags": ["team=search", "channel=app"]

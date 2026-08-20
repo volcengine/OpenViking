@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { readFileSync } from "node:fs";
 
 import { getEnv } from "./runtime-utils.js";
+import { normalizeIdleTimeoutSeconds } from "./plugin/openviking-session-policy.js";
 
 /**
  * Subset of OpenClaw's standard `SecretRef` shape supported by the OpenViking
@@ -74,6 +75,8 @@ export type MemoryOpenVikingConfig = {
    * value and always passes 0.
    */
   commitKeepRecentCount?: number;
+  /** Server-side idle auto-commit timeout in seconds. Set 0/off to disable policy plumbing. */
+  commitIdleTimeoutSeconds?: number | string;
   bypassSessionPatterns?: string[];
   /**
    * When true (default), emit structured `openviking: diag {...}` lines (and any future
@@ -127,10 +130,14 @@ export type MemoryOpenVikingConfig = {
 
 /** Runtime config after memoryOpenVikingConfigSchema.parse() has applied defaults. */
 export type ParsedMemoryOpenVikingConfig = Required<
-  Omit<MemoryOpenVikingConfig, "agentExperience" | "recallTargetTypes" | "apiKey">
+  Omit<
+    MemoryOpenVikingConfig,
+    "agentExperience" | "recallTargetTypes" | "apiKey" | "commitIdleTimeoutSeconds"
+  >
 > & {
   /** parse() resolves SecretRef values, so the runtime shape is always a plain string. */
   apiKey: string;
+  commitIdleTimeoutSeconds: number;
   agentExperience: Required<NonNullable<MemoryOpenVikingConfig["agentExperience"]>>;
   recallTargetTypes: Array<"resource" | "user" | "agent">;
 };
@@ -148,6 +155,7 @@ const DEFAULT_RECALL_PREFER_ABSTRACT = false;
 const DEFAULT_RECALL_MAX_INJECTED_CHARS = 4000;
 const DEFAULT_COMMIT_TOKEN_THRESHOLD_RATIO = 0.5;
 const DEFAULT_COMMIT_KEEP_RECENT_COUNT = 10;
+const DEFAULT_COMMIT_IDLE_TIMEOUT_SECONDS = 3600;
 const DEFAULT_BYPASS_SESSION_PATTERNS: string[] = [];
 const DEFAULT_EMIT_STANDARD_DIAGNOSTICS = false;
 const DEFAULT_PEER_ROLE = "assistant" as const;
@@ -527,6 +535,7 @@ export const memoryOpenVikingConfigSchema = {
         "commitTokenThreshold",
         "commitTokenThresholdRatio",
         "commitKeepRecentCount",
+        "commitIdleTimeoutSeconds",
         "bypassSessionPatterns",
         "ingestReplyAssist",
         "ingestReplyAssistMinSpeakerTurns",
@@ -660,6 +669,11 @@ export const memoryOpenVikingConfigSchema = {
           1_000,
           Math.floor(toNumber(cfg.commitKeepRecentCount, DEFAULT_COMMIT_KEEP_RECENT_COUNT)),
         ),
+      ),
+      commitIdleTimeoutSeconds: normalizeIdleTimeoutSeconds(
+        getEnv("OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS")
+          ?? cfg.commitIdleTimeoutSeconds,
+        DEFAULT_COMMIT_IDLE_TIMEOUT_SECONDS,
       ),
       bypassSessionPatterns: toStringArray(
         cfg.bypassSessionPatterns,
@@ -908,6 +922,12 @@ export const memoryOpenVikingConfigSchema = {
       help:
         "Number of most-recent messages to keep live after an afterTurn commit. " +
         "Forwarded as keep_recent_count to the server. Compact path always uses 0.",
+    },
+    commitIdleTimeoutSeconds: {
+      label: "Commit Idle Timeout Seconds",
+      placeholder: String(DEFAULT_COMMIT_IDLE_TIMEOUT_SECONDS),
+      advanced: true,
+      help: "Per-session idle timeout sent to OpenViking. The server must enable memory.session_auto_commit.idle_enabled for it to run.",
     },
     emitStandardDiagnostics: {
       label: "Standard diagnostics (diag JSON lines)",

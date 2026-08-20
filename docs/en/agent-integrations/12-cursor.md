@@ -41,10 +41,24 @@ Quit Cursor completely and restart it after installation.
 - `sessionStart` loads your profile and the current project's memory index.
 - `beforeSubmitPrompt` recalls context for the current request and injects it through `additional_context`.
 - `beforeReadFile` and `beforeShellExecution` redirect accidental local access to `viking://` paths back to OpenViking MCP tools.
-- `stop` incrementally captures new user and assistant messages.
-- `preCompact` and `sessionEnd` commit pending messages for memory extraction.
+- `stop` incrementally captures new user and assistant messages and commits after every captured turn by default.
+- `preCompact` commits pending messages for memory extraction. `sessionEnd` is registered too, but Cursor cannot currently execute it (see below), so commit-on-every-turn is what actually protects the session tail.
 
 Project identity uses Cursor's `workspace_roots`, keeping workspace peers separate. Hooks and MCP share credentials from `~/.openviking/ovcli.conf`.
+
+| Environment variable | Default | Meaning |
+| --- | --- | --- |
+| `OPENVIKING_COMMIT_TURN_THRESHOLD` | `1` | Captured-turn threshold for the client-driven commit |
+| `OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS` | `3600` | Server idle policy; `0`/`off` disables it |
+
+Cursor currently fires `sessionEnd` only during `window_close`, after its
+shell-exec host has already been torn down, so the hook command cannot spawn
+([Cursor bug 165492](https://forum.cursor.com/t/sessionend-hook-fires-only-on-window-close-after-shell-exec-teardown-plugin-hook-commands-can-never-execute/165492)).
+Commit-on-every-`stop` removes the normal tail-loss dependency on that hook;
+only the last in-flight turn can still be lost. The default can be overridden
+with `OPENVIKING_COMMIT_TURN_THRESHOLD`. For an additional server backstop,
+enable `memory.session_auto_commit.idle_enabled=true`; tune or disable the
+one-hour policy with `OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS`.
 
 ## Upgrade and uninstall
 

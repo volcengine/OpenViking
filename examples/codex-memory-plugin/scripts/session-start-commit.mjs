@@ -42,6 +42,10 @@ import { createLogger } from "./debug-log.mjs";
 import { detectRecallCompressorProfile } from "./recall-compressor-profile.mjs";
 import { clearState, deriveOvSessionId, listStates, loadState, saveState } from "./session-state.mjs";
 import { buildProfileBlock } from "./shared/profile-inject.mjs";
+import {
+  applySessionAutoCommitPolicy,
+  buildIdleAutoCommitPolicy,
+} from "./shared/session-policy.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
 const cfg = loadConfig();
@@ -117,11 +121,12 @@ async function fetchJSON(path, init = {}, options = {}) {
   return response.ok ? response.result : null;
 }
 
-async function commitOvSession(ovSessionId) {
+async function commitOvSession(ovSessionId, actorPeerId) {
   if (!ovSessionId) return null;
   return requestJSON(
     `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`,
     { method: "POST", body: JSON.stringify({}) },
+    { actorPeerId },
   );
 }
 
@@ -240,7 +245,8 @@ async function buildResumeArchiveContext(newSessionId) {
 async function commitAndClear(state, reason) {
   if (state.ovSessionId) {
     const ovSessionId = state.ovSessionId;
-    const commit = await commitOvSession(state.ovSessionId);
+    const actorPeerId = state.workspacePeerId || activePeerId;
+    const commit = await commitOvSession(state.ovSessionId, actorPeerId);
     if (!commit?.ok) {
       log("commit", {
         reason,
@@ -271,6 +277,40 @@ async function commitAndClear(state, reason) {
   log("clear_no_ov", { reason, codexSessionId: state.codexSessionId });
   await clearState(state.codexSessionId);
   return { committed: true, ovSessionId: null, traceId: "" };
+}
+
+async function applyCurrentSessionPolicy(codexSessionId) {
+  // Same guard main() uses before persisting workspacePeerId: without a real
+  // session id we would create an "unknown" state file (polluting the active
+  // window) plus a bogus cx-unknown session server-side.
+  if (!codexSessionId || codexSessionId === "unknown") {
+    return { applied: false, idleActive: null, method: "disabled" };
+  }
+  const state = await loadState(codexSessionId);
+  const policy = buildIdleAutoCommitPolicy(cfg.commitIdleTimeoutSeconds);
+  const result = await applySessionAutoCommitPolicy(
+    requestJSON,
+    deriveOvSessionId(codexSessionId),
+    policy,
+    {
+      cacheKey: `${cfg.baseUrl}|${cfg.account || ""}|${cfg.user || ""}`,
+      actorPeerId: activePeerId,
+      log,
+    },
+  );
+  const {
+    serverIdleCommit: _serverIdleCommit,
+    serverIdleTimeoutSeconds: _serverIdleTimeoutSeconds,
+    ...uncoveredState
+  } = state;
+  await saveState(result.idleActive === true
+    ? {
+        ...uncoveredState,
+        serverIdleCommit: true,
+        serverIdleTimeoutSeconds: result.idleTimeoutSeconds,
+      }
+    : uncoveredState);
+  return result;
 }
 
 function describeCommittedSessions(commits) {
@@ -332,6 +372,9 @@ async function main() {
       noop();
       return;
     }
+    await applyCurrentSessionPolicy(newSessionId).catch((err) => {
+      logError("session_policy", err);
+    });
     const [profileContext, archiveContext] = await Promise.all([
       buildSessionProfileContext(),
       buildResumeArchiveContext(newSessionId),
@@ -356,6 +399,9 @@ async function main() {
     return;
   }
 
+  await applyCurrentSessionPolicy(newSessionId).catch((err) => {
+    logError("session_policy", err);
+  });
   const profileContext = await buildSessionProfileContext();
   const now = Date.now();
   const states = await listStates();
@@ -366,9 +412,18 @@ async function main() {
   const otherStates = states.filter(
     (s) => s?.codexSessionId && s.codexSessionId !== newSessionId,
   );
+  const serverCovered = otherStates.filter((s) => s.serverIdleCommit === true);
+  for (const state of serverCovered) {
+    log("server_covered_skip", {
+      stage: "active_window",
+      codexSessionId: state.codexSessionId,
+      ovSessionId: state.ovSessionId,
+    });
+  }
 
   const recentlyActive = otherStates.filter(
-    (s) => typeof s.lastUpdatedAt === "number"
+    (s) => s.serverIdleCommit !== true
+      && typeof s.lastUpdatedAt === "number"
       && (now - s.lastUpdatedAt) <= ACTIVE_WINDOW_MS,
   );
 
@@ -413,6 +468,42 @@ async function main() {
   for (const s of postHeuristic) {
     if (!s?.codexSessionId) continue;
     if (typeof s.lastUpdatedAt !== "number") continue;
+    const coveredTimeoutMs = s.serverIdleCommit === true
+      ? Math.max(0, Number(s.serverIdleTimeoutSeconds || 0) * 1000)
+      : 0;
+    if (s.serverIdleCommit === true && coveredTimeoutMs > 0) {
+      const gcAfterMs = coveredTimeoutMs + 600_000;
+      const ageMs = now - s.lastUpdatedAt;
+      if (ageMs > gcAfterMs) {
+        log("server_covered_gc", {
+          codexSessionId: s.codexSessionId,
+          ovSessionId: s.ovSessionId,
+          ageMs,
+          gcAfterMs,
+        });
+        await clearState(s.codexSessionId);
+      } else {
+        log("server_covered_skip", {
+          stage: "idle_sweep",
+          codexSessionId: s.codexSessionId,
+          ovSessionId: s.ovSessionId,
+          ageMs,
+          gcAfterMs,
+        });
+      }
+      continue;
+    }
+    if (s.serverIdleCommit === true) {
+      // Marked covered but the paired timeout is missing or unusable, so we
+      // cannot tell when the server would have committed. Fall through to the
+      // local sweep rather than leaving the file neither committed nor GC'd.
+      log("server_covered_invalid", {
+        stage: "idle_sweep",
+        codexSessionId: s.codexSessionId,
+        ovSessionId: s.ovSessionId,
+        serverIdleTimeoutSeconds: s.serverIdleTimeoutSeconds ?? null,
+      });
+    }
     if ((now - s.lastUpdatedAt) <= IDLE_TTL_MS) continue;
     log("idle_sweep", {
       codexSessionId: s.codexSessionId,

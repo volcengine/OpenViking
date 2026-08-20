@@ -115,6 +115,7 @@ node examples/opencode-plugin/scripts/setup.mjs
   },
   "commitTokenThreshold": 20000,
   "commitKeepRecentCount": 10,
+  "commitIdleTimeoutSeconds": 3600,
   "profileTokenBudget": 10000,
   "resumeContextBudget": 32000
 }
@@ -127,9 +128,17 @@ export OPENVIKING_API_KEY="your-api-key-here"
 export OPENVIKING_ACCOUNT="default"   # optional, trusted-mode deployments only
 export OPENVIKING_USER="opencode"     # optional, trusted-mode deployments only
 export OPENVIKING_PEER_ID="opencode"  # optional, peer-scoped memory routing
+export OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS="3600"
 ```
 
 API keys are sent as `Authorization: Bearer ...` by both hooks and the MCP proxy. `account` and `user` are trusted-mode headers; `peerId` is sent as `X-OpenViking-Actor-Peer` and as `peer_id` on captured session messages. Existing `openviking-config.json` credential fields are still read as a migration fallback, but new installs should use `ovcli.conf` or env vars.
+
+OpenCode's awaited `dispose` hook requires OpenCode `>=1.15.11`. The plugin
+uses a three-second commit deadline inside OpenCode's five-second shutdown
+budget so retryable failures can reach the pending queue. On the next startup,
+rehydrated uncommitted session entries are flushed and committed. Enable
+`memory.session_auto_commit.idle_enabled=true` for an additional server-side
+backstop; use `0`/`off` for the environment variable to disable its policy.
 
 ## Verify
 

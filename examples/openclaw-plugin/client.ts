@@ -70,6 +70,19 @@ export type OVMemoryPolicy = {
   memory_types?: string[];
 };
 
+export type OVAutoCommitPolicy = {
+  idle_timeout_seconds: number;
+  pending_token_threshold: number;
+  message_count_threshold: number;
+};
+
+export type SessionConfigResult = {
+  session_id: string;
+  user?: unknown;
+  auto_commit_policy?: OVAutoCommitPolicy | null;
+  auto_commit_idle_enabled?: boolean;
+};
+
 export type TaskResult = {
   task_id: string;
   task_type: string;
@@ -408,15 +421,34 @@ export class OpenVikingClient {
 
   async createSession(
     sessionId: string,
-    options?: { memoryPolicy?: OVMemoryPolicy },
-  ): Promise<{ session_id: string; user?: unknown }> {
+    options?: {
+      memoryPolicy?: OVMemoryPolicy;
+      autoCommitPolicy?: OVAutoCommitPolicy;
+    },
+  ): Promise<SessionConfigResult> {
     const body: Record<string, unknown> = { session_id: sessionId };
     if (options?.memoryPolicy) {
       body.memory_policy = options.memoryPolicy;
     }
-    return this.request<{ session_id: string; user?: unknown }>(
+    if (options?.autoCommitPolicy) {
+      body.auto_commit_policy = options.autoCommitPolicy;
+    }
+    return this.request<SessionConfigResult>(
       "/api/v1/sessions",
       { method: "POST", body: JSON.stringify(body) },
+    );
+  }
+
+  async updateSessionConfig(
+    sessionId: string,
+    autoCommitPolicy: OVAutoCommitPolicy,
+  ): Promise<SessionConfigResult> {
+    return this.request<SessionConfigResult>(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/config`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ auto_commit_policy: autoCommitPolicy }),
+      },
     );
   }
 
@@ -864,7 +896,7 @@ export class OpenVikingClient {
     const result = await this.request<CommitSessionResult>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`,
       { method: "POST", body: JSON.stringify(body) },
-      undefined,
+      options?.timeoutMs,
       options?.agentId,
     );
 

@@ -36,6 +36,10 @@ import { replayPending } from "./lib/pending-queue.mjs";
 import { buildProfileBlock, estimateTokens } from "./lib/profile-inject.mjs";
 import { writeJsonState } from "./lib/state.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
+import {
+  applySessionAutoCommitPolicy,
+  buildIdleAutoCommitPolicy,
+} from "./shared/session-policy.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -135,6 +139,23 @@ async function main() {
     }
   } catch (err) {
     logError("pending-replay", err);
+  }
+
+  if (sessionId) {
+    try {
+      await applySessionAutoCommitPolicy(
+        fetchJSON,
+        deriveOvSessionId(sessionId),
+        buildIdleAutoCommitPolicy(cfg.commitIdleTimeoutSeconds),
+        {
+          cacheKey: `${cfg.baseUrl}|${cfg.accountId || ""}|${cfg.userId || ""}`,
+          actorPeerId: effectivePeer.peerId,
+          log,
+        },
+      );
+    } catch (err) {
+      logError("session-policy", err);
+    }
   }
 
   if (!willInjectProfile && !willInjectArchive) {

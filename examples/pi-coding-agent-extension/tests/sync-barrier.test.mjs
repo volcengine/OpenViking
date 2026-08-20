@@ -10,6 +10,10 @@ function config(overrides = {}) {
   return {
     commitTokenThreshold: 20000,
     commitKeepRecentCount: 10,
+    commitIdleTimeoutSeconds: 3600,
+    endpoint: "http://127.0.0.1:1933",
+    account: "",
+    user: "",
     captureAssistantTurns: true,
     captureToolMaxChars: 2000,
     captureMaxLength: 24000,
@@ -34,13 +38,17 @@ function client(overrides = {}) {
 
 async function withPendingDir(fn) {
   const previous = process.env.OPENVIKING_PENDING_DIR;
+  const previousState = process.env.OPENVIKING_STATE_DIR;
   const dir = await mkdtemp(join(tmpdir(), "ov-pi-pending-"));
   process.env.OPENVIKING_PENDING_DIR = dir;
+  process.env.OPENVIKING_STATE_DIR = join(dir, "state");
   try {
     return await fn(dir);
   } finally {
     if (previous === undefined) delete process.env.OPENVIKING_PENDING_DIR;
     else process.env.OPENVIKING_PENDING_DIR = previous;
+    if (previousState === undefined) delete process.env.OPENVIKING_STATE_DIR;
+    else process.env.OPENVIKING_STATE_DIR = previousState;
     await rm(dir, { recursive: true, force: true });
   }
 }
@@ -59,6 +67,41 @@ test("syncBranch returns added token accounting and delivered status", async () 
     assert.ok(result.tokens > 0);
     assert.equal(result.allDelivered, true);
     assert.equal(sync.syncedCount, 1);
+  });
+});
+
+test("applyAutoCommitPolicy sends the idle-only session policy", async () => {
+  await withPendingDir(async () => {
+    const calls = [];
+    const c = client({
+      fetchJSON: async (path, init) => {
+        calls.push({ path, body: JSON.parse(init.body) });
+        return {
+          ok: true,
+          status: 200,
+          result: {
+            auto_commit_policy: JSON.parse(init.body).auto_commit_policy,
+            auto_commit_idle_enabled: true,
+          },
+        };
+      },
+    });
+    const sync = new SyncManager(c, config());
+    await sync.ensureSession("pi-policy");
+
+    await sync.applyAutoCommitPolicy();
+
+    assert.deepEqual(calls, [{
+      path: "/api/v1/sessions",
+      body: {
+        session_id: "pi-pi-policy",
+        auto_commit_policy: {
+          idle_timeout_seconds: 3600,
+          pending_token_threshold: 0,
+          message_count_threshold: 0,
+        },
+      },
+    }]);
   });
 });
 
@@ -116,6 +159,31 @@ test("commit writes failure trace_id to the pi debug log", async () => {
       if (previous === undefined) delete process.env.OV_DEBUG_LOG;
       else process.env.OV_DEBUG_LOG = previous;
     }
+  });
+});
+
+test("a failed shutdown commit is queued for replay in non-takeover mode", async () => {
+  await withPendingDir(async () => {
+    const c = client({
+      commitSessionResponse: async () => ({
+        result: null,
+        status: 503,
+        error: { message: "server down" },
+      }),
+    });
+    const sync = new SyncManager(c, config({ takeoverEnabled: false }));
+    await sync.ensureSession("pi-shutdown-queue");
+
+    // Mirrors the session_shutdown call in index.ts: bounded, but queueing
+    // stays on because non-takeover mode keeps no local context boundary, so
+    // replay at next start is the only recovery path.
+    assert.equal(await sync.commit({ timeoutMs: 5000 }), null);
+
+    const pending = await listPending();
+    assert.equal(
+      pending.filter((item) => item.entry?.type === "commitSession").length,
+      1,
+    );
   });
 });
 

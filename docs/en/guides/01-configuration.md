@@ -1238,6 +1238,8 @@ Notes:
 
 - `memory.session_auto_commit` is a server-wide control surface, not a per-session business policy.
 - Per-session auto-commit behavior is configured through the session-level `auto_commit_policy` (see the table below). Set it when creating a session with `POST /api/v1/sessions`, or partially update it through `PATCH /api/v1/sessions/{session_id}/config`. Omitting `auto_commit_policy` from a PATCH preserves it; sending `null` disables automatic commits. Use `GET /api/v1/sessions/{session_id}` to inspect the effective policy.
+- Memory plugins send an idle-only per-session policy by default (`idle_timeout_seconds=3600`; token and message thresholds disabled). That policy is inert while `idle_enabled=false`. Set `idle_enabled=true` to activate the server-side backstop for sessions whose harness close hook is missing or interrupted. Plugin clients detect activation through `auto_commit_idle_enabled`; the policy echo alone is not proof that the scheduler is running.
+- Tune the plugin policy with `OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS`; use `0`, `off`, `false`, or `no` to stop sending it. The server-side scan still requires `idle_enabled=true`.
 - When `default_enabled=false`, sessions created without `auto_commit_policy` keep auto commit disabled and return `auto_commit_policy: null`. Providing `{}` or any policy field explicitly enables auto commit for that session and fills missing fields from the defaults below.
 - When `default_enabled=true`, sessions created without `auto_commit_policy` get the default policy below.
 - When `idle_enabled=false`:

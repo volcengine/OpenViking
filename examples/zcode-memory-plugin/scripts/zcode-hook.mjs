@@ -19,6 +19,7 @@
 
 import {
   addAgentMessages,
+  applyAgentSessionPolicy,
   buildAgentProfile,
   commitAgentSession,
   createAgentLogger,
@@ -84,6 +85,9 @@ async function main() {
       state = { ...state, lastSessionStartAt: now };
       await writeHookState("zcode", nativeSessionId, state);
       await replayAgentPending(fetchJSON, log).catch((error) => logError("pending", error));
+      await applyAgentSessionPolicy(fetchJSON, cfg, sessionId, log).catch((error) => {
+        logError("session-policy", error);
+      });
       return buildAgentProfile(fetchJSON, cfg, cwd).catch((error) => {
         logError("profile", error);
         return null;

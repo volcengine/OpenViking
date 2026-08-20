@@ -98,11 +98,35 @@ Plugin config lives under `plugins.entries.openviking.config`. Setup usually wri
 | `apiKey` | empty | OpenViking API key |
 | `peer_prefix` | empty | Optional prefix for assistant peer identity when `peer_role=assistant` |
 | `autoRecallTimeoutMs` | `5000` | Outer timeout (ms) for the whole auto-recall flow; increase for slow local embedding hardware (clamped 1000–300000) |
+| `commitIdleTimeoutSeconds` | `3600` | Per-session server idle policy; `0` or `off` disables it |
 
 ```bash
 openclaw config set plugins.entries.openviking.config.baseUrl http://your-server:1933
 openclaw config set plugins.entries.openviking.config.apiKey your-api-key
 ```
+
+The plugin now commits active sessions from the awaited `session_end` and
+`gateway_stop` hooks on gateway shutdown, restart, and session supersession.
+A conversation that simply goes quiet is still not ended until the next
+inbound message or reset. To cover that gap, enable the backstop in the
+OpenViking **server's** `ov.conf` (not in the plugin config above):
+
+```json
+{
+  "memory": {
+    "session_auto_commit": {
+      "default_enabled": false,
+      "idle_enabled": true,
+      "check_interval_seconds": 60.0,
+      "scan_batch_size": 16,
+      "scan_batch_pause_seconds": 0.0
+    }
+  }
+}
+```
+
+You can also set `OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS`; `0`/`off` disables
+the per-session policy.
 
 </details>
 

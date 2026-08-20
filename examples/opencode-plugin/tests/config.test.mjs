@@ -267,3 +267,28 @@ test("loadConfig defaults an invalid commit keep recent count", async () => {
     }
   })
 })
+
+test("loadConfig defaults and disables the idle session policy", async () => {
+  const snapshot = { ...process.env }
+  await withTempDir("ov-oc-idle-policy-", async (dir) => {
+    try {
+      for (const key of Object.keys(process.env)) {
+        if (key.startsWith("OPENVIKING_")) delete process.env[key]
+      }
+      const project = join(dir, "project")
+      process.env.OPENVIKING_CREDENTIAL_SOURCE = "env"
+      process.env.OPENVIKING_URL = "https://env.example.com"
+      await mkdir(join(project, ".opencode"), { recursive: true })
+      await writeFile(
+        join(project, ".opencode", "openviking-config.json"),
+        JSON.stringify({}),
+      )
+
+      assert.equal(loadConfig(dir, project).commitIdleTimeoutSeconds, 3600)
+      process.env.OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS = "off"
+      assert.equal(loadConfig(dir, project).commitIdleTimeoutSeconds, 0)
+    } finally {
+      restoreOpenVikingEnv(snapshot)
+    }
+  })
+})

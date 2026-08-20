@@ -69,6 +69,8 @@ Common environment variables:
 | `OPENVIKING_PEER_ID` | Explicit actor peer |
 | `OPENVIKING_WORKSPACE_PEER` | Derive a peer from each DSH session workspace by default |
 | `OPENVIKING_RECALL_PEER_SCOPE` | `all` for cross-workspace recall or `actor` for isolation |
+| `OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS` | Server-side idle policy in seconds (default `3600`; `0`/`off` disables it) |
+| `OPENVIKING_DSH_SIGHUP` | Set `0` to disable the plugin's graceful SIGHUP teardown |
 
 The patch can also carry plugin config:
 
@@ -88,6 +90,7 @@ The patch can also carry plugin config:
             scoreThreshold: 0.35
             captureToolResults: false
             commitTokenThreshold: 20000
+            commitIdleTimeoutSeconds: 3600
 ```
 
 ## Behavior
@@ -96,10 +99,16 @@ The patch can also carry plugin config:
 - `agent/pre-step` retrieves with the current step input and appends a durable plugin message to that same step.
 - `session/event` captures user, assistant, and optionally tool-result messages without scraping a transcript.
 - `turn/end` checks the OpenViking pending-token threshold and commits when required.
+- Cordis teardown performs a bounded final commit on normal exit, `Ctrl+C`, `SIGTERM`, and terminal-close `SIGHUP`. The shutdown commit bypasses a long in-flight write chain so it fits DSH's process grace period.
 - Failed writes enter the shared OpenViking pending queue for replay at the next session start.
 - `tools/pre-execute` blocks DSH filesystem and shell tools from treating `viking://` URIs as local paths.
 
 Each DSH session maps to `dsh-<session-id>` in OpenViking. Workspace-derived actor peers are resolved per session and sent on every session-specific request.
+
+The remaining hard gaps are a second `Ctrl+C` (upstream force-exits), `SIGKILL`,
+and closing only the browser tab in DSH's web profile. Enable
+`memory.session_auto_commit.idle_enabled=true` on the OpenViking server to
+activate the idle policy as a backstop.
 
 ## Tools
 

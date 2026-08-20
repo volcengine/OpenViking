@@ -1324,6 +1324,8 @@ Redis Sentinel 分别配置数据节点和 Sentinel 的 ACL：
 
 - `memory.session_auto_commit` 是服务端全局配置，不是单个 session 的业务 policy。
 - session 级别的自动触发参数通过 session 级 `auto_commit_policy` 设置（见下表）。可以在创建 session 时通过 `POST /api/v1/sessions` 设置，也可以通过 `PATCH /api/v1/sessions/{session_id}/config` 部分更新。PATCH 时省略 `auto_commit_policy` 会保留现有策略，传 `null` 会禁用自动 commit；通过 `GET /api/v1/sessions/{session_id}` 查看生效策略。
+- 记忆插件默认发送 idle-only 的 session policy（`idle_timeout_seconds=3600`，token 和 message 阈值关闭）。`idle_enabled=false` 时该 policy 只会保存，不会执行；设置 `idle_enabled=true` 后，服务端才会为缺少 close hook 或 close hook 被中断的会话提供 backstop。插件通过 `auto_commit_idle_enabled` 判断调度器是否实际运行，不能只根据 policy echo 判断。
+- 可用 `OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS` 调整插件发送的 idle timeout；设置为 `0`、`off`、`false` 或 `no` 可停止发送。服务端扫描仍然要求 `idle_enabled=true`。
 - `default_enabled=false` 时，未传 `auto_commit_policy` 创建的 session 保持 auto commit 关闭，返回 `auto_commit_policy: null`。显式传 `{}` 或任意 policy 字段会为该 session 开启 auto commit，并用下方默认值补齐缺失字段。
 - `default_enabled=true` 时，未传 `auto_commit_policy` 创建的 session 会带上下方默认 policy。
 - `idle_enabled=false` 时：

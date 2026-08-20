@@ -330,6 +330,7 @@ async def create_session(
             "uri": session.uri,
             "user": session.user.to_dict(),
             "auto_commit_policy": service.sessions.effective_auto_commit_policy(session),
+            "auto_commit_idle_enabled": service.sessions.idle_auto_commit_enabled,
             "memory_extraction_config": service.sessions.effective_memory_extraction_config(
                 session
             ),
@@ -372,6 +373,7 @@ async def get_session(
     result["user"] = session.user.to_dict()
     result["pending_tokens"] = int(session.meta.pending_tokens or 0)
     result["auto_commit_policy"] = service.sessions.effective_auto_commit_policy(session)
+    result["auto_commit_idle_enabled"] = service.sessions.idle_auto_commit_enabled
     result.pop("event_search_tags", None)
     result["memory_extraction_config"] = (
         service.sessions.effective_memory_extraction_config(session)
@@ -428,6 +430,7 @@ async def update_session_config(
         return {
             "session_id": session.session_id,
             "auto_commit_policy": service.sessions.effective_auto_commit_policy(session),
+            "auto_commit_idle_enabled": service.sessions.idle_auto_commit_enabled,
             "memory_extraction_config": service.sessions.effective_memory_extraction_config(
                 session
             ),

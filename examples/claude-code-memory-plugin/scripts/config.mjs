@@ -45,6 +45,7 @@ import { join, resolve as resolvePath } from "node:path";
 
 import { buildUserAgent, readManifestVersion } from "./shared/credentials.mjs";
 import { HARNESS_KEYS, loadPluginSettings, normalizeRewriteMode } from "./shared/plugin-config.mjs";
+import { normalizeIdleTimeoutSeconds } from "./shared/session-policy.mjs";
 
 const DEFAULT_OV_CONF_PATH = join(homedir(), ".openviking", "ov.conf");
 const DEFAULT_OVCLI_CONF_PATH = join(homedir(), ".openviking", "ovcli.conf");
@@ -346,6 +347,11 @@ export function loadConfig() {
       process.env.OPENVIKING_COMMIT_KEEP_RECENT_COUNT,
       num(cc.commitKeepRecentCount, 10),
     ))),
+    commitIdleTimeoutSeconds: normalizeIdleTimeoutSeconds(
+      process.env.OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS
+        ?? cc.commitIdleTimeoutSeconds,
+      3600,
+    ),
 
     // P0-3b: token budget for session-start archive-overview fetch
     resumeContextBudget: Math.max(1024, Math.floor(num(

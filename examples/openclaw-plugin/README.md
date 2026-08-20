@@ -98,7 +98,7 @@ This plugin is registered as the `openviking` context engine in OpenClaw.
 In the current implementation, the plugin plays four roles at once:
 
 - `context-engine`: implements `assemble`, `afterTurn`, and `compact`
-- hook layer: handles `session_start`, `session_end`, and `before_reset`
+- hook layer: handles `session_start`, `session_end`, `gateway_stop`, and `before_reset`
 - tool provider: registers memory/archive tools plus OpenViking resource and skill import tools
 - runtime manager: connects to and monitors a remote OpenViking service
 
@@ -211,6 +211,14 @@ After that, the plugin checks `pending_tokens`. Once it reaches `commitTokenThre
 - if `logFindRequests` is enabled, the logs include the task id and follow-up extraction detail
 
 This automatic path is best-effort and commit-dependent. Short but important facts can stay only in the live session until a threshold commit, `/compact`, or an explicit store happens.
+
+The awaited lifecycle hooks close that gap on gateway shutdown and restart:
+`session_end` performs a short bounded commit for each ending session, while
+`gateway_stop` flushes any remaining live sessions within the gateway shutdown
+budget. Session supersession also emits `session_end`. A conversation that
+only goes quiet still waits for its next inbound message unless the OpenViking
+server enables `memory.session_auto_commit.idle_enabled`; the plugin sends a
+one-hour per-session idle policy by default.
 
 ### Explicit long-term memory writes
 

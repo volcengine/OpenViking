@@ -11,6 +11,15 @@ This package provides a ZCode lifecycle adapter for OpenViking long-term memory.
 
 ZCode does not support `PreCompact`/`SessionEnd`/`SubagentStart`/`SubagentStop`, so the commit-on-`Stop` strategy compensates for the absence of compact/end-of-session signals. The rollout file is the authoritative incremental transcript: stable host `turnId` values drive deduplication and allow a later Stop to recover missed turns. Hook stdin is only a fallback when the rollout file is unavailable.
 
+Only the last in-flight turn can still be lost. `SessionStart` sends a
+one-hour idle auto-commit policy by default; enable
+`memory.session_auto_commit.idle_enabled=true` on the server to activate it.
+Set `OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS=off` to disable the policy.
+
+| Environment variable | Default | Meaning |
+| --- | --- | --- |
+| `OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS` | `3600` | Server idle policy; `0`/`off` disables it |
+
 ## Install
 
 Use the shared installer:

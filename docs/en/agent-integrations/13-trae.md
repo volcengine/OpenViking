@@ -47,6 +47,16 @@ Quit and restart the corresponding client after installation.
 - `Stop` captures and immediately commits the completed turn, including short sessions.
 - The OpenViking MCP server transparently exposes the full server MCP tool set (15 tools): `find`, `search`, `read`, `list`, `tree`, `remember`, `write`, `edit`, `add_resource`, `list_watches`, `cancel_watch`, `grep`, `glob`, `forget`, and `health`. `search` with `mode="context"` returns assembled context.
 
+TRAE and TRAE CLI do not expose a separate session-end event, so only the last
+in-flight turn can be lost. Each `SessionStart` also sends a one-hour idle
+policy. Enable `memory.session_auto_commit.idle_enabled=true` to activate that
+server-side backstop; tune or disable it with
+`OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS`.
+
+| Environment variable | Default | Meaning |
+| --- | --- | --- |
+| `OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS` | `3600` | Server idle policy; `0`/`off` disables it |
+
 ## Verify
 
 1. Restart TRAE, TRAE CN, or TraeCode CLI 2.0 and create a new Agent session.

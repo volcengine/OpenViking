@@ -130,6 +130,7 @@ integrations should configure category `quotas` when they need exact ceilings.
 | `captureToolMaxChars`    | `1000000`  | Guard cap on one tool part's `tool_output`; the server externalizes oversized output |
 | `commitTokenThreshold`   | `20000`    | Pending-token threshold for client-driven commit                         |
 | `commitKeepRecentCount`  | `10`       | Live tail kept after commit                                              |
+| `commitIdleTimeoutSeconds` | `3600`   | Server-side idle policy; `0`/`off` disables sending it                   |
 
 ### Context takeover
 
@@ -193,7 +194,7 @@ The extension is a single directory of TypeScript files loaded by pi's `jiti` tr
 | `context`              | Run current-prompt recall after UI rendering, then inject takeover and recall context |
 | `turn_end`             | Extract branch entries → write or pending-queue OV messages → maybe advance boundary |
 | `session_before_compact`| Takeover mode returns OV overview as pi compaction summary; otherwise commits pending messages |
-| `session_shutdown`     | Persist takeover state or final non-takeover commit                              |
+| `session_shutdown`     | Bounded final commit in both modes; takeover watermark advances only on success  |
 
 ### Recall: Synchronous, Not Stale
 

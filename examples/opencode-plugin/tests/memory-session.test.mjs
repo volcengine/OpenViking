@@ -6,6 +6,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createMemorySessionManager } from "../lib/memory-session.mjs"
+import { listPending } from "../lib/shared/pending-queue.mjs"
 import { initLogger } from "../lib/utils.mjs"
 
 async function withTempDir(prefix, fn) {
@@ -17,7 +18,7 @@ async function withTempDir(prefix, fn) {
   }
 }
 
-async function withCaptureServer(fn) {
+async function withCaptureServer(fn, { commitStatus = 0, batchStatus = 0 } = {}) {
   const requests = []
   const server = createServer(async (req, res) => {
     let body = ""
@@ -26,8 +27,28 @@ async function withCaptureServer(fn) {
     requests.push({ method: req.method, url: req.url, body })
 
     res.setHeader("Content-Type", "application/json")
+    if (commitStatus && req.url?.endsWith("/commit")) {
+      res.statusCode = commitStatus
+      res.end(JSON.stringify({ status: "error", error: { message: "session not found" } }))
+      return
+    }
+    if (batchStatus && req.url?.endsWith("/messages/batch")) {
+      res.statusCode = batchStatus
+      res.end(JSON.stringify({ status: "error", error: { message: "rejected" } }))
+      return
+    }
     if (req.url === "/health") {
       res.end(JSON.stringify({ status: "ok" }))
+    } else if (req.url === "/api/v1/sessions" && req.method === "POST") {
+      const payload = JSON.parse(body || "{}")
+      res.end(JSON.stringify({
+        status: "ok",
+        result: {
+          session_id: payload.session_id,
+          auto_commit_policy: payload.auto_commit_policy,
+          auto_commit_idle_enabled: true,
+        },
+      }))
     } else if (req.url?.startsWith("/api/v1/sessions/") && req.url.endsWith("/messages/batch")) {
       res.end(JSON.stringify({ status: "ok", result: { accepted: true } }))
     } else if (req.url?.startsWith("/api/v1/sessions/")) {
@@ -62,6 +83,7 @@ function baseConfig(endpoint) {
     captureMaxLength: 24000,
     commitTokenThreshold: 20000,
     commitKeepRecentCount: 10,
+    commitIdleTimeoutSeconds: 3600,
   }
 }
 
@@ -171,6 +193,239 @@ test("session.idle event flushes pending OpenCode capture", async () => {
       assert.match(body.messages[0].content, /idle events must flush captures/)
       await manager.flushAll({ commit: false })
     })
+  })
+})
+
+test("session.created applies the idle policy once per OpenViking session", async () => {
+  await withCaptureServer(async ({ endpoint, requests }) => {
+    await withTempDir("ov-oc-policy-", async (dir) => {
+      const manager = createMemorySessionManager({ config: baseConfig(endpoint), pluginRoot: dir })
+      const event = {
+        type: "session.created",
+        properties: { info: { id: "oc-policy" } },
+      }
+
+      await manager.init()
+      await manager.handleEvent(event)
+      await manager.handleEvent(event)
+
+      const creates = requests.filter((request) =>
+        request.method === "POST" && request.url === "/api/v1/sessions"
+      )
+      assert.equal(creates.length, 1)
+      assert.deepEqual(JSON.parse(creates[0].body), {
+        session_id: "oc-oc-policy",
+        auto_commit_policy: {
+          idle_timeout_seconds: 3600,
+          pending_token_threshold: 0,
+          message_count_threshold: 0,
+        },
+      })
+      await manager.flushAll({ commit: false })
+    })
+  })
+})
+
+test("init flushes and commits stale rehydrated session state", async () => {
+  await withCaptureServer(async ({ endpoint, requests }) => {
+    await withTempDir("ov-oc-rehydrate-", async (dir) => {
+      await fs.promises.writeFile(
+        join(dir, "openviking-session-state.json"),
+        JSON.stringify({
+          version: 2,
+          sessions: {
+            "oc-stale": {
+              ovSessionId: "oc-oc-stale",
+              createdAt: Date.now() - 1000,
+              lastActivityAt: Date.now() - 1000,
+              messages: [[
+                "message-stale",
+                {
+                  role: "user",
+                  captured: false,
+                  parts: [[
+                    "part-stale",
+                    {
+                      type: "text",
+                      text: "Recover this stale OpenCode turn.",
+                    },
+                  ]],
+                },
+              ]],
+            },
+          },
+        }),
+      )
+      const manager = createMemorySessionManager({
+        config: baseConfig(endpoint),
+        pluginRoot: dir,
+      })
+
+      await manager.init()
+
+      assert.ok(requests.some((request) =>
+        request.url === "/api/v1/sessions/oc-oc-stale/messages/batch"
+      ))
+      assert.ok(requests.some((request) =>
+        request.url === "/api/v1/sessions/oc-oc-stale/commit"
+      ))
+      await manager.flushAll({ commit: false })
+    })
+  })
+})
+
+test("an unrecoverable startup-recovery commit never rejects init", async () => {
+  await withCaptureServer(async ({ endpoint, requests }) => {
+    await withTempDir("ov-oc-init-throw-", async (dir) => {
+      await fs.promises.writeFile(
+        join(dir, "openviking-session-state.json"),
+        JSON.stringify({
+          version: 2,
+          sessions: {
+            "oc-poison": {
+              ovSessionId: "oc-oc-poison",
+              createdAt: Date.now() - 1000,
+              lastActivityAt: Date.now() - 1000,
+              messages: [],
+            },
+          },
+        }),
+      )
+      const manager = createMemorySessionManager({
+        config: baseConfig(endpoint),
+        pluginRoot: dir,
+      })
+
+      // A 404 on /commit is non-retryable and makes commitOvSession throw. It
+      // must not take the whole plugin down on every subsequent launch.
+      await manager.init()
+
+      assert.ok(requests.some((request) =>
+        request.url === "/api/v1/sessions/oc-oc-poison/commit"
+      ))
+    })
+  }, { commitStatus: 404 })
+})
+
+test("a non-retryable message send still commits what reached the server", async () => {
+  await withCaptureServer(async ({ endpoint, requests }) => {
+    await withTempDir("ov-oc-uncaptured-commit-", async (dir) => {
+      await fs.promises.writeFile(
+        join(dir, "openviking-session-state.json"),
+        JSON.stringify({
+          version: 2,
+          sessions: {
+            "oc-partial": {
+              ovSessionId: "oc-oc-partial",
+              createdAt: Date.now() - 1000,
+              lastActivityAt: Date.now() - 1000,
+              messages: [[
+                "message-partial",
+                {
+                  role: "user",
+                  captured: false,
+                  parts: [["part-partial", { type: "text", text: "Never sendable." }]],
+                },
+              ]],
+            },
+          },
+        }),
+      )
+      const manager = createMemorySessionManager({
+        config: baseConfig(endpoint),
+        pluginRoot: dir,
+      })
+
+      await manager.init()
+
+      // The batch POST is rejected 400 (non-retryable, nothing queued), so the
+      // message stays uncaptured — but the commit must still archive whatever
+      // earlier flushes already stored server-side.
+      assert.ok(requests.some((request) =>
+        request.url === "/api/v1/sessions/oc-oc-partial/messages/batch"
+      ))
+      assert.ok(requests.some((request) =>
+        request.url === "/api/v1/sessions/oc-oc-partial/commit"
+      ))
+    })
+  }, { batchStatus: 400 })
+})
+
+test("an exhausted dispose deadline queues the remaining commit", async () => {
+  await withCaptureServer(async ({ endpoint }) => {
+    await withTempDir("ov-oc-dispose-deadline-", async (dir) => {
+      const previous = process.env.OPENVIKING_PENDING_DIR
+      process.env.OPENVIKING_PENDING_DIR = join(dir, "pending")
+      try {
+        const manager = createMemorySessionManager({
+          config: baseConfig(endpoint),
+          pluginRoot: dir,
+        })
+        await manager.init()
+        await manager.handleEvent({
+          type: "session.created",
+          properties: { info: { id: "oc-deadline" } },
+        })
+
+        await manager.flushAll({ commit: true, commitTimeoutMs: 0 })
+
+        assert.deepEqual((await listPending()).map((item) => item.entry.type), [
+          "commitSession",
+        ])
+      } finally {
+        if (previous === undefined) delete process.env.OPENVIKING_PENDING_DIR
+        else process.env.OPENVIKING_PENDING_DIR = previous
+      }
+    })
+  })
+})
+
+test("dispose queues commit after a retryable pending message", async () => {
+  await withTempDir("ov-oc-dispose-order-", async (dir) => {
+    const previous = process.env.OPENVIKING_PENDING_DIR
+    process.env.OPENVIKING_PENDING_DIR = join(dir, "pending")
+    try {
+      const manager = createMemorySessionManager({
+        config: { ...baseConfig("http://127.0.0.1:1"), timeoutMs: 100 },
+        pluginRoot: dir,
+      })
+      const sessionID = "oc-dispose-order"
+      await manager.handleEvent({
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "message-dispose-order",
+            sessionID,
+            role: "user",
+          },
+        },
+      })
+      await manager.handleEvent({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "part-dispose-order",
+            messageID: "message-dispose-order",
+            sessionID,
+            type: "text",
+            text: "Queue this turn before the final commit.",
+          },
+        },
+      })
+
+      await manager.flushAll({ commit: true, commitTimeoutMs: 3000 })
+
+      const pending = await listPending()
+      assert.deepEqual(pending.map((item) => item.entry.type), [
+        "addMessage",
+        "commitSession",
+      ])
+      assert.ok(pending[1].entry.createdAt > pending[0].entry.createdAt)
+      await manager.flushAll({ commit: false })
+    } finally {
+      if (previous === undefined) delete process.env.OPENVIKING_PENDING_DIR
+      else process.env.OPENVIKING_PENDING_DIR = previous
+    }
   })
 })
 

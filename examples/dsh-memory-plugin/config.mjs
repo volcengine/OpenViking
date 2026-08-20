@@ -1,4 +1,5 @@
 import { buildUserAgent, resolveOpenVikingCredentials } from "./shared/credentials.mjs";
+import { normalizeIdleTimeoutSeconds } from "./shared/session-policy.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
 export const PLUGIN_VERSION = "0.1.0";
@@ -25,6 +26,7 @@ const DEFAULT_CONFIG = Object.freeze({
   profileTokenBudget: 10000,
   commitTokenThreshold: 20000,
   commitKeepRecentCount: 10,
+  commitIdleTimeoutSeconds: 3600,
   captureToolResults: false,
   captureMode: "semantic",
   captureMaxLength: 24000,
@@ -66,6 +68,9 @@ export function resolveConfig(input = {}, env = process.env, cwd = process.cwd()
   if (env.OPENVIKING_RECALL_LIMIT) {
     config.recallLimit = env.OPENVIKING_RECALL_LIMIT;
     config.recallLimitConfigured = true;
+  }
+  if (env.OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS !== undefined) {
+    config.commitIdleTimeoutSeconds = env.OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS;
   }
 
   config.endpoint = String(config.endpoint || DEFAULT_CONFIG.endpoint).replace(/\/+$/, "");
@@ -115,6 +120,10 @@ export function resolveConfig(input = {}, env = process.env, cwd = process.cwd()
     0,
     1000,
     DEFAULT_CONFIG.commitKeepRecentCount,
+  );
+  config.commitIdleTimeoutSeconds = normalizeIdleTimeoutSeconds(
+    config.commitIdleTimeoutSeconds,
+    DEFAULT_CONFIG.commitIdleTimeoutSeconds,
   );
   config.captureMaxLength = clampInteger(
     config.captureMaxLength,

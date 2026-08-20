@@ -632,7 +632,40 @@ async def test_create_session_defaults_auto_commit_policy_to_disabled(
 ):
     resp = await client.post("/api/v1/sessions", json={})
     assert resp.status_code == 200
-    assert resp.json()["result"]["auto_commit_policy"] is None
+    result = resp.json()["result"]
+    assert result["auto_commit_policy"] is None
+    assert result["auto_commit_idle_enabled"] is False
+
+    session_resp = await client.get(f"/api/v1/sessions/{result['session_id']}")
+    assert session_resp.status_code == 200
+    assert session_resp.json()["result"]["auto_commit_policy"] is None
+    assert session_resp.json()["result"]["auto_commit_idle_enabled"] is False
+
+
+async def test_session_responses_report_idle_auto_commit_enabled_when_config_on(
+    client: httpx.AsyncClient,
+    service,
+):
+    service.sessions.set_session_auto_commit_config(SessionAutoCommitConfig(idle_enabled=True))
+
+    created = await client.post(
+        "/api/v1/sessions",
+        json={"auto_commit_policy": {"idle_timeout_seconds": 3600}},
+    )
+    assert created.status_code == 200
+    session_id = created.json()["result"]["session_id"]
+    assert created.json()["result"]["auto_commit_idle_enabled"] is True
+
+    fetched = await client.get(f"/api/v1/sessions/{session_id}")
+    assert fetched.status_code == 200
+    assert fetched.json()["result"]["auto_commit_idle_enabled"] is True
+
+    updated = await client.patch(
+        f"/api/v1/sessions/{session_id}/config",
+        json={"auto_commit_policy": {"idle_timeout_seconds": 7200}},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["result"]["auto_commit_idle_enabled"] is True
 
 
 async def test_create_session_uses_default_policy_when_server_default_enabled(
@@ -744,6 +777,7 @@ async def test_get_session_returns_effective_config(client: httpx.AsyncClient):
     resp = await client.get(f"/api/v1/sessions/{session_id}")
     assert resp.status_code == 200
     assert resp.json()["result"]["auto_commit_policy"] is None
+    assert resp.json()["result"]["auto_commit_idle_enabled"] is False
 
 
 async def test_patch_session_config_is_not_supported(client: httpx.AsyncClient):

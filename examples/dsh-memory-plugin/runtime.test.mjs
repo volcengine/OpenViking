@@ -56,6 +56,59 @@ test("initialization queues capture only when the failure is retryable", async (
   }
 });
 
+test("initialization applies policy to an existing session through PATCH", async () => {
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-policy-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
+  const calls = [];
+  const runtime = new OpenVikingRuntime({
+    async healthResult() {
+      return { ok: true };
+    },
+    async fetchJSON(path, init = {}) {
+      calls.push({ path, method: init.method, body: init.body });
+      if (path === "/api/v1/sessions") {
+        return {
+          ok: false,
+          status: 409,
+          error: { code: "ALREADY_EXISTS" },
+        };
+      }
+      if (path.endsWith("/config")) {
+        const policy = JSON.parse(init.body).auto_commit_policy;
+        return {
+          ok: true,
+          status: 200,
+          result: {
+            auto_commit_policy: policy,
+            auto_commit_idle_enabled: true,
+          },
+        };
+      }
+      return { ok: true, status: 200, result: {} };
+    },
+  }, config({ commitIdleTimeoutSeconds: 3600 }), { debug() {} });
+  const state = runtime.stateFor({
+    id: "policy-existing",
+    header: { cwd: "/workspace" },
+  });
+
+  await runtime.ensureState(state);
+
+  assert.equal(state.ready, true);
+  assert.deepEqual(calls.slice(0, 2).map((call) => call.path), [
+    "/api/v1/sessions",
+    "/api/v1/sessions/dsh-policy-existing/config",
+  ]);
+  assert.deepEqual(JSON.parse(calls[1].body), {
+    auto_commit_policy: {
+      idle_timeout_seconds: 3600,
+      pending_token_threshold: 0,
+      message_count_threshold: 0,
+    },
+  });
+});
+
 test("a retryable threshold commit failure is queued", async () => {
   const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-commit-"));
   tempDirs.push(pendingDir);
@@ -196,7 +249,7 @@ test("dispose waits for the final commit before deleting session state", async (
   const disposing = runtime.dispose(session).then(() => {
     settled = true;
   });
-  await Promise.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(settled, false);
   assert.equal(runtime.states.has(session.id), true);
@@ -224,7 +277,33 @@ test("disposeAll drains every live session", async () => {
   assert.equal(runtime.states.size, 0);
 });
 
-function config() {
+test("dispose is not starved by an in-flight long write", async () => {
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-starved-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
+  let commitCalls = 0;
+  const runtime = new OpenVikingRuntime({
+    async commitSession() {
+      commitCalls += 1;
+      return { ok: true };
+    },
+  }, config(), { debug() {} });
+  const session = { id: "starved", header: { cwd: "/workspace" } };
+  const state = runtime.stateFor(session);
+  state.ready = true;
+  state.writes = new Promise(() => {});
+
+  const started = Date.now();
+  await runtime.dispose(session);
+
+  assert.ok(Date.now() - started < 2000);
+  assert.equal(commitCalls, 1);
+  assert.deepEqual((await listPending()).map((item) => item.entry.type), [
+    "commitSession",
+  ]);
+});
+
+function config(overrides = {}) {
   return {
     explicitPeerId: "",
     workspacePeer: false,
@@ -236,6 +315,9 @@ function config() {
     captureMaxLength: 24000,
     captureMode: "semantic",
     commitKeepRecentCount: 10,
+    commitIdleTimeoutSeconds: 0,
+    profileTokenBudget: 10000,
+    ...overrides,
   };
 }
 

@@ -216,6 +216,12 @@
       "advanced": true,
       "help": "WM v2: number of most-recent messages kept live after an afterTurn commit. Compact path always uses 0."
     },
+    "commitIdleTimeoutSeconds": {
+      "label": "Commit Idle Timeout Seconds",
+      "placeholder": "3600",
+      "advanced": true,
+      "help": "Per-session idle timeout sent to OpenViking. The server must enable memory.session_auto_commit.idle_enabled for it to run."
+    },
     "emitStandardDiagnostics": {
       "label": "Standard diagnostics (diag JSON lines)",
       "advanced": true,
@@ -414,6 +420,9 @@
         "type": "number",
         "minimum": 0,
         "maximum": 1000
+      },
+      "commitIdleTimeoutSeconds": {
+        "type": ["number", "string"]
       },
       "bypassSessionPatterns": {
         "type": "array",

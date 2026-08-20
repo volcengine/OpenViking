@@ -11,6 +11,14 @@
 
 ZCode 不支持 `PreCompact`/`SessionEnd`/`SubagentStart`/`SubagentStop`，因此通过 Stop 时 commit 补足 compact/会话结束信号。Rollout 文件是权威增量对话源：稳定的 host `turnId` 用于去重，也让后续 Stop 能恢复漏掉的回合；只有 rollout 文件不可用时才回退到 Hook stdin。
 
+仍可能丢失最后一个尚未完成的 in-flight turn。`SessionStart` 默认发送一小时 idle
+auto-commit policy；服务端启用 `memory.session_auto_commit.idle_enabled=true`
+后才会执行。设置 `OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS=off` 可禁用该 policy。
+
+| 环境变量 | 默认值 | 含义 |
+| --- | --- | --- |
+| `OPENVIKING_COMMIT_IDLE_TIMEOUT_SECONDS` | `3600` | 服务端 idle policy；`0`/`off` 可禁用 |
+
 ## 安装
 
 使用共享安装脚本：
