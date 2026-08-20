@@ -159,7 +159,10 @@ def test_peer_id_routes_peer_memory_for_all_role_selected_types(stub_provider_co
     ]
 
 
-def test_peer_id_range_does_not_route_without_allowed_peer_ids(stub_provider_config):
+def test_peer_id_range_falls_back_to_self_without_allowed_peer_ids(stub_provider_config):
+    # Issue #4131: ranges that resolve to no writable peer must not silently drop
+    # the memory; they fall back to the session owner's self space (never routed
+    # to another peer's space).
     messages = [
         Message(
             id="msg-peer",
@@ -190,7 +193,7 @@ def test_peer_id_range_does_not_route_without_allowed_peer_ids(stub_provider_con
         extract_context,
     )
 
-    assert profile_uris == []
+    assert profile_uris == ["viking://user/support_bot/memories/profile.md"]
 
 
 def test_deserialize_full_parses_memory_metadata_timestamps_with_z_suffix():

@@ -261,6 +261,17 @@ class MemoryIsolationHandler:
                 fallback_target = self._unique_target_id_in_messages()
                 if fallback_target:
                     target_ids = [fallback_target]
+            if not target_ids and self.allow_self:
+                # Last-resort fallback: unresolved ranges (invalid, out of bounds, or
+                # pointing only at non-writable peers) must not silently drop the
+                # memory. Persist it to the session owner's own space instead.
+                logger.warning(
+                    "Memory ranges %r resolved to no writable target for memory_type=%s; "
+                    "falling back to self space",
+                    operation.memory_fields.get("ranges"),
+                    getattr(memory_type_schema, "memory_type", ""),
+                )
+                target_ids = [_SELF_PEER_ID]
             operation.memory_fields.pop("peer_id", None)
         else:
             target_id = self._resolve_operation_target_id(
