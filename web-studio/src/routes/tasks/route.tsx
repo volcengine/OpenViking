@@ -55,6 +55,7 @@ import {
 } from '#/routes/tasks/-lib/task-record'
 import type { TaskRecord, TaskStatus } from '#/routes/tasks/-lib/task-record'
 import { formatTaskDuration, getTaskDate } from '#/routes/tasks/-lib/task-time'
+import { buildTaskQuery } from './-lib/task-query'
 import { getTaskPipelineGroups } from './-lib/task-pipeline'
 
 export const Route = createFileRoute('/tasks')({
@@ -75,7 +76,6 @@ type TaskTypeFilter =
   | 'all'
 
 const DEFAULT_PAGE_SIZE = 20
-const MAX_TASKS = 300
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const
 const TASK_TYPE_OPTIONS: Exclude<TaskTypeFilter, 'all'>[] = [
   'session_commit',
@@ -116,12 +116,7 @@ async function fetchTasks(
   status: TaskStatusFilter,
   dataScope: TaskDataScope = '24h',
 ): Promise<TaskRecord[]> {
-  const query = {
-    limit: dataScope === 'all' ? 10000 : MAX_TASKS,
-    status: undefined,
-    task_type: taskType === 'all' ? undefined : taskType,
-    include_archived: dataScope === 'all' ? true : undefined,
-  }
+  const query = buildTaskQuery(dataScope, taskType)
   try {
     const result = await getOvResult<unknown>(
       getTasks({
