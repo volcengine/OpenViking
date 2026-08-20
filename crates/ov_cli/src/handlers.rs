@@ -1784,6 +1784,24 @@ pub async fn handle_mv(from_uri: String, to_uri: String, ctx: CliContext) -> Res
     commands::filesystem::mv(&client, &from_uri, &to_uri, ctx.output_format, ctx.compact).await
 }
 
+pub async fn handle_cp(
+    from_uri: String,
+    to_uri: String,
+    recursive: bool,
+    ctx: CliContext,
+) -> Result<()> {
+    let client = ctx.get_client();
+    commands::filesystem::cp(
+        &client,
+        &from_uri,
+        &to_uri,
+        recursive,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
+}
+
 pub async fn handle_stat(uri: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     commands::filesystem::stat(&client, &uri, ctx.output_format, ctx.compact).await

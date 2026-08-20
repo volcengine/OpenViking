@@ -678,6 +678,20 @@ impl HttpClient {
         self.post("/api/v1/fs/mv", &body).await
     }
 
+    pub async fn cp(
+        &self,
+        from_uri: &str,
+        to_uri: &str,
+        recursive: bool,
+    ) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "from_uri": from_uri,
+            "to_uri": to_uri,
+            "recursive": recursive,
+        });
+        self.post("/api/v1/fs/cp", &body).await
+    }
+
     pub async fn stat(&self, uri: &str) -> Result<serde_json::Value> {
         let params = vec![("uri".to_string(), uri.to_string())];
         self.get("/api/v1/fs/stat", &params).await
@@ -2295,6 +2309,27 @@ mod tests {
         assert!(request.starts_with("GET /api/v1/fs/ls?"));
         assert!(!request.contains("tz="));
         assert!(!request.contains("include_mod_time_iso="));
+    }
+
+    #[tokio::test]
+    async fn cp_posts_recursive_request_body() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+
+        client
+            .cp(
+                "viking://resources/source",
+                "viking://resources/target",
+                true,
+            )
+            .await
+            .expect("cp request should succeed");
+
+        let request = request_rx.await.expect("request should be captured");
+        assert!(request.starts_with("POST /api/v1/fs/cp "));
+        assert!(request.contains(r#""from_uri":"viking://resources/source""#));
+        assert!(request.contains(r#""to_uri":"viking://resources/target""#));
+        assert!(request.contains(r#""recursive":true"#));
     }
 
     #[tokio::test]

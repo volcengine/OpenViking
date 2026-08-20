@@ -614,6 +614,18 @@ enum Commands {
         )]
         timeout: Option<f64>,
     },
+    /// [Data] Copy a file or directory
+    Cp {
+        /// Source URI
+        #[arg(value_name = "source")]
+        from_uri: String,
+        /// Target URI
+        #[arg(value_name = "target")]
+        to_uri: String,
+        /// Copy a directory recursively
+        #[arg(short, long, help_heading = "Common options")]
+        recursive: bool,
+    },
     /// [Data] Move or rename resource
     #[command(alias = "rename")]
     Mv {
@@ -3526,6 +3538,11 @@ async fn main() {
             wait,
             timeout,
         } => handlers::handle_rm(uri, recursive, wait, timeout, ctx).await,
+        Commands::Cp {
+            from_uri,
+            to_uri,
+            recursive,
+        } => handlers::handle_cp(from_uri, to_uri, recursive, ctx).await,
         Commands::Mv { from_uri, to_uri } => handlers::handle_mv(from_uri, to_uri, ctx).await,
         Commands::Stat { uri } => handlers::handle_stat(uri, ctx).await,
         Commands::Attrs { action } => match action {
@@ -3823,6 +3840,42 @@ mod tests {
         assert_eq!(cli.account.as_deref(), Some("acme"));
         assert_eq!(cli.user.as_deref(), Some("alice"));
         assert_eq!(cli.actor_peer_id.as_deref(), Some("peer-a"));
+    }
+
+    #[test]
+    fn cli_parses_copy_recursive_flag() {
+        let file = Cli::try_parse_from([
+            "ov",
+            "cp",
+            "viking://resources/a.md",
+            "viking://resources/b.md",
+        ])
+        .expect("file copy should parse");
+        match file.command {
+            Commands::Cp {
+                from_uri,
+                to_uri,
+                recursive,
+            } => {
+                assert_eq!(from_uri, "viking://resources/a.md");
+                assert_eq!(to_uri, "viking://resources/b.md");
+                assert!(!recursive);
+            }
+            _ => panic!("expected cp command"),
+        }
+
+        let directory = Cli::try_parse_from([
+            "ov",
+            "cp",
+            "-r",
+            "viking://resources/src",
+            "viking://resources/dst",
+        ])
+        .expect("recursive directory copy should parse");
+        match directory.command {
+            Commands::Cp { recursive, .. } => assert!(recursive),
+            _ => panic!("expected cp command"),
+        }
     }
 
     #[test]

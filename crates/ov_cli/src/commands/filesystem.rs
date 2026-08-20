@@ -871,6 +871,24 @@ pub async fn mv(
     Ok(())
 }
 
+pub async fn cp(
+    client: &HttpClient,
+    from_uri: &str,
+    to_uri: &str,
+    recursive: bool,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let result = client.cp(from_uri, to_uri, recursive).await?;
+    output_message_result(
+        result,
+        format!("Copied: {} -> {}", from_uri, to_uri),
+        output_format,
+        compact,
+    );
+    Ok(())
+}
+
 pub async fn stat(
     client: &HttpClient,
     uri: &str,
