@@ -34,34 +34,46 @@ class _VectorMixin:
             logger.warning(f"[VikingFS] Failed to delete from vector store: {e}")
             raise
 
-    async def _update_vector_store_uris(
+    async def _copy_vector_store_uris(
         self,
-        uris: List[str],
         old_base: str,
         new_base: str,
+        *,
+        recursive: bool,
         ctx: Optional[RequestContext] = None,
-    ) -> None:
-        """Update URIs in vector store (when moving files).
+    ) -> Any:
+        """Copy a complete vector URI scope while preserving the source."""
+        vector_store = self._get_vector_store()
+        if not vector_store:
+            return None
+        return await vector_store.copy_uri_mapping(
+            ctx=self._ctx_or_default(ctx),
+            source_uri=old_base,
+            target_uri=new_base,
+            recursive=recursive,
+        )
+
+    async def _update_vector_store_uris(
+        self,
+        old_base: str,
+        new_base: str,
+        *,
+        recursive: bool,
+        ctx: Optional[RequestContext] = None,
+    ) -> Any:
+        """Strictly move a complete vector URI scope.
 
         Preserves vector data and updates URI-derived identifiers without regenerating embeddings.
         """
         vector_store = self._get_vector_store()
         if not vector_store:
-            return
-
-        real_ctx = self._ctx_or_default(ctx)
-
-        for uri in uris:
-            try:
-                new_uri = new_base + uri[len(old_base) :]
-                if await vector_store.update_uri_mapping(
-                    ctx=real_ctx,
-                    uri=uri,
-                    new_uri=new_uri,
-                ):
-                    logger.debug(f"[VikingFS] Updated URI: {uri} -> {new_uri}")
-            except Exception as e:
-                logger.warning(f"[VikingFS] Failed to update {uri} in vector store: {e}")
+            return None
+        return await vector_store.update_uri_mapping(
+            ctx=self._ctx_or_default(ctx),
+            source_uri=old_base,
+            target_uri=new_base,
+            recursive=recursive,
+        )
 
     def _get_vector_store(self) -> Optional["VikingVectorIndexBackend"]:
         """Get vector store instance."""
