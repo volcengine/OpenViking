@@ -52,7 +52,12 @@ logger = get_logger(__name__)
 _TOS_BUCKET_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])$")
 
 
-def _validate_tos_uri(value: Any, field: str) -> None:
+def _validate_tos_uri(
+    value: Any,
+    field: str,
+    *,
+    allow_bucket_without_slash: bool = False,
+) -> None:
     """Validate a Connector TOS URI without exposing it in client errors."""
     error = InvalidArgumentError(f"{field} must be a valid TOS URI.")
     if (
@@ -80,6 +85,7 @@ def _validate_tos_uri(value: Any, field: str) -> None:
         or not hostname
         or hostname != parsed.netloc
         or not _TOS_BUCKET_PATTERN.fullmatch(hostname)
+        or (not parsed.path and not allow_bucket_without_slash)
         or (parsed.path and not parsed.path.startswith("/"))
         or parsed.path.startswith("//")
         or parsed.query
@@ -115,6 +121,7 @@ class ConnectorDelegate:
         self._link_reason_memory = link_reason_memory
 
     _WATCH_AUTH_PROVIDER = "connector_encrypted"
+    _WATCH_PLAINTEXT_AUTH_PROVIDER = "connector_plaintext"
 
     def _watch_encryptor(self) -> Any:
         encryptor = getattr(self._viking_fs, "_encryptor", None)
@@ -134,22 +141,29 @@ class ConnectorDelegate:
         path: str,
         connector_args: Optional[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        """Encrypt the private request state needed to replay a Connector watch."""
+        """Build the private request state needed to replay a Connector watch."""
         if not api_key:
             raise InvalidArgumentError("Connector watch requires an API key.")
+        payload = {
+            "api_key": api_key,
+            "account_id": account_id,
+            "add_type": add_type,
+            "path": path,
+            "connector_args": dict(connector_args or {}),
+        }
+        encryptor = getattr(self._viking_fs, "_encryptor", None)
+        if encryptor is None:
+            return {
+                "provider": self._WATCH_PLAINTEXT_AUTH_PROVIDER,
+                "request": payload,
+            }
         try:
             plaintext = json.dumps(
-                {
-                    "api_key": api_key,
-                    "account_id": account_id,
-                    "add_type": add_type,
-                    "path": path,
-                    "connector_args": dict(connector_args or {}),
-                },
+                payload,
                 ensure_ascii=False,
                 separators=(",", ":"),
             ).encode("utf-8")
-            ciphertext = await self._watch_encryptor().encrypt(account_id, plaintext)
+            ciphertext = await encryptor.encrypt(account_id, plaintext)
         except InvalidArgumentError:
             raise
         except Exception as exc:
@@ -162,7 +176,9 @@ class ConnectorDelegate:
     @classmethod
     def is_watch_auth_state(cls, auth_state: Optional[Dict[str, Any]]) -> bool:
         return (
-            isinstance(auth_state, dict) and auth_state.get("provider") == cls._WATCH_AUTH_PROVIDER
+            isinstance(auth_state, dict)
+            and auth_state.get("provider")
+            in {cls._WATCH_AUTH_PROVIDER, cls._WATCH_PLAINTEXT_AUTH_PROVIDER}
         )
 
     async def restore_watch_request(
@@ -172,16 +188,22 @@ class ConnectorDelegate:
         account_id: str,
         path: str,
     ) -> Tuple[str, str, Dict[str, Any]]:
-        """Decrypt and validate a source-bound Connector watch request."""
+        """Restore and validate a source-bound Connector watch request."""
         try:
-            encoded = auth_state.get("ciphertext") if self.is_watch_auth_state(auth_state) else None
-            if not isinstance(encoded, str) or not encoded:
-                raise ValueError("missing ciphertext")
-            ciphertext = base64.b64decode(encoded, validate=True)
-            if not ciphertext.startswith(ENCRYPTED_ENVELOPE_MAGIC):
-                raise ValueError("invalid encrypted envelope")
-            plaintext = await self._watch_encryptor().decrypt(account_id, ciphertext)
-            payload = json.loads(plaintext.decode("utf-8"))
+            provider = auth_state.get("provider")
+            if provider == self._WATCH_PLAINTEXT_AUTH_PROVIDER:
+                payload = auth_state.get("request")
+            elif provider == self._WATCH_AUTH_PROVIDER:
+                encoded = auth_state.get("ciphertext")
+                if not isinstance(encoded, str) or not encoded:
+                    raise ValueError("missing ciphertext")
+                ciphertext = base64.b64decode(encoded, validate=True)
+                if not ciphertext.startswith(ENCRYPTED_ENVELOPE_MAGIC):
+                    raise ValueError("invalid encrypted envelope")
+                plaintext = await self._watch_encryptor().decrypt(account_id, ciphertext)
+                payload = json.loads(plaintext.decode("utf-8"))
+            else:
+                raise ValueError("unknown Connector watch provider")
             if (
                 not isinstance(payload, dict)
                 or payload.get("account_id") != account_id
@@ -460,7 +482,7 @@ class ConnectorDelegate:
             raise InvalidArgumentError(f"'{path}' does not match any Connector source type.")
         add_type, _ = resolved
         if add_type == "tos":
-            _validate_tos_uri(path, "path")
+            _validate_tos_uri(path, "path", allow_bucket_without_slash=True)
 
         task_resource_id = to or ""
         if not task_resource_id:

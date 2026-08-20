@@ -459,28 +459,51 @@ async def test_git_connector_watch_keeps_args_only_in_encrypted_state(
 
 
 @pytest.mark.asyncio
-async def test_connector_watch_requires_encryption_before_remote_submission(
-    monkeypatch,
+async def test_connector_watch_allows_plaintext_private_state_without_encryption(
     connector_config,
     ctx,
     service,
 ):
-    tracker = _task_tracker()
-    connector_client = SimpleNamespace(
-        submit_doc_add=AsyncMock(return_value={"task_key": "connector-1"})
+    watch_manager = WatchManager()
+    service._watch_scheduler = SimpleNamespace(watch_manager=watch_manager)
+    submitted = {}
+
+    async def submit(**kwargs):
+        submitted.update(kwargs)
+        return {"status": "accepted"}
+
+    service._connector.submit = AsyncMock(side_effect=submit)
+    await service.add_resource(
+        path="tos://bucket/docs/",
+        ctx=ctx,
+        to="viking://resources/x/y",
+        watch_interval=5,
     )
-    _install_connector_dependencies(monkeypatch, tracker, connector_client)
-    service._watch_scheduler = SimpleNamespace(watch_manager=WatchManager())
+    await submitted["on_success"]()
 
-    with pytest.raises(InvalidArgumentError, match="encryption.enabled=true"):
-        await service.add_resource(
-            path="tos://bucket/docs/",
-            ctx=ctx,
-            to="viking://resources/x/y",
-            watch_interval=5,
-        )
-
-    connector_client.submit_doc_add.assert_not_awaited()
+    task = await watch_manager.get_task_by_uri(
+        "viking://resources/x/y",
+        account_id="acct",
+        user_id="alice",
+        role=str(Role.USER),
+    )
+    assert task is not None
+    assert task.auth_state == {
+        "provider": "connector_plaintext",
+        "request": {
+            "api_key": "secret",
+            "account_id": "acct",
+            "add_type": "tos",
+            "path": "tos://bucket/docs/",
+            "connector_args": {},
+        },
+    }
+    assert "auth_state" not in task.to_dict()
+    assert await service._connector.restore_watch_request(
+        task.auth_state,
+        account_id="acct",
+        path="tos://bucket/docs/",
+    ) == ("secret", "tos", {})
 
 
 @pytest.mark.asyncio
@@ -647,6 +670,11 @@ async def test_add_resource_rejects_invalid_multiple_tos_sources(
         ("tos://bucket-a/a\x00b", {}, "path"),
         ("tos://bucket-a/a\x7fb", {}, "path"),
         (
+            "tos://bucket-a",
+            {"tos_prefix": ["tos://bucket-a"]},
+            r"args\.tos_prefix\[0\]",
+        ),
+        (
             "tos://bucket-a/docs/",
             {
                 "tos_prefix": [
@@ -661,6 +689,14 @@ async def test_add_resource_rejects_invalid_multiple_tos_sources(
             {
                 "tos_prefix": ["tos://bucket-a/docs/"],
                 "exclude": ["tos://bucket-a/private#latest"],
+            },
+            r"args\.exclude\[0\]",
+        ),
+        (
+            "tos://bucket-a/docs/",
+            {
+                "tos_prefix": ["tos://bucket-a/docs/"],
+                "exclude": ["tos://bucket-a"],
             },
             r"args\.exclude\[0\]",
         ),
