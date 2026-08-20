@@ -376,6 +376,19 @@ async def test_resource_mv_validates_then_moves_then_rewrites_watch_tasks(reques
         watch_scheduler=_FakeWatchScheduler(watch_manager),
     )
 
+    async def enqueue_refresh(**kwargs):
+        events.append(("refresh", kwargs["root_uri"]))
+        assert kwargs == {
+            "root_uri": "viking://resources/codeask",
+            "source_uri": "viking://resources/codeask/wiki",
+            "copied_uri": "viking://resources/codeask/wiki-renamed",
+            "context_type": "resource",
+            "ctx": request_context,
+        }
+        return "queued"
+
+    service._enqueue_copy_refresh = enqueue_refresh
+
     await service.mv(
         "viking://resources/codeask/wiki",
         "viking://resources/codeask/wiki-renamed",
@@ -398,7 +411,7 @@ async def test_resource_mv_validates_then_moves_then_rewrites_watch_tasks(reques
             "ctx": request_context,
         }
     ]
-    assert [event[0] for event in events] == ["validate", "mv", "rewrite"]
+    assert [event[0] for event in events] == ["validate", "mv", "rewrite", "refresh"]
 
 
 @pytest.mark.asyncio
@@ -424,8 +437,22 @@ async def test_resource_mv_conflict_fails_before_resource_move(request_context):
 
 @pytest.mark.asyncio
 async def test_resource_mv_without_watch_scheduler_moves_resource_directly(request_context):
-    viking_fs = _FakeVikingFS()
+    events = []
+    viking_fs = _FakeVikingFS(events=events)
     service = FSService(viking_fs=viking_fs)
+
+    async def enqueue_refresh(**kwargs):
+        events.append(("refresh", kwargs["root_uri"]))
+        assert kwargs == {
+            "root_uri": "viking://resources/codeask",
+            "source_uri": "viking://resources/codeask/wiki",
+            "copied_uri": "viking://resources/codeask/wiki-renamed",
+            "context_type": "resource",
+            "ctx": request_context,
+        }
+        return "queued"
+
+    service._enqueue_copy_refresh = enqueue_refresh
 
     await service.mv(
         "viking://resources/codeask/wiki",
@@ -440,6 +467,25 @@ async def test_resource_mv_without_watch_scheduler_moves_resource_directly(reque
             "ctx": request_context,
         }
     ]
+    assert [event[0] for event in events] == ["mv", "refresh"]
+
+
+@pytest.mark.asyncio
+async def test_resource_mv_watch_control_file_skips_parent_refresh(request_context):
+    viking_fs = _FakeVikingFS()
+    service = FSService(
+        viking_fs=viking_fs,
+        watch_scheduler=_FakeWatchScheduler(_FakeWatchManager()),
+    )
+    service._enqueue_copy_refresh = AsyncMock()
+
+    await service.mv(
+        "viking://resources/.watch_tasks.json",
+        "viking://resources/watch-tasks-backup.json",
+        ctx=request_context,
+    )
+
+    service._enqueue_copy_refresh.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -551,12 +551,15 @@ class FSService:
         watch_manager = self._get_watch_manager()
         if not watch_manager or context_type_for_uri(from_uri) != "resource":
             await viking_fs.mv(from_uri, to_uri, ctx=ctx)
+            await self._refresh_move_target_parent(from_uri=from_uri, to_uri=to_uri, ctx=ctx)
             return
         if context_type_for_uri(to_uri) != "resource":
             await viking_fs.mv(from_uri, to_uri, ctx=ctx)
+            await self._refresh_move_target_parent(from_uri=from_uri, to_uri=to_uri, ctx=ctx)
             return
         if is_watch_task_control_uri(from_uri) or is_watch_task_control_uri(to_uri):
             await viking_fs.mv(from_uri, to_uri, ctx=ctx)
+            await self._refresh_move_target_parent(from_uri=from_uri, to_uri=to_uri, ctx=ctx)
             return
 
         transaction_task = asyncio.create_task(
@@ -588,6 +591,36 @@ class FSService:
                     exc_info=True,
                 )
             raise
+        await self._refresh_move_target_parent(from_uri=from_uri, to_uri=to_uri, ctx=ctx)
+
+    async def _refresh_move_target_parent(
+        self,
+        *,
+        from_uri: str,
+        to_uri: str,
+        ctx: RequestContext,
+    ) -> None:
+        """Queue the same target-parent semantic refresh used by cp after mv commits."""
+        if is_watch_task_control_uri(from_uri) or is_watch_task_control_uri(to_uri):
+            return
+        context_type = context_type_for_uri(to_uri)
+        refresh_parent_uri = self._semantic_refresh_parent_uri(to_uri, context_type)
+        if not refresh_parent_uri:
+            return
+        try:
+            await self._enqueue_copy_refresh(
+                root_uri=refresh_parent_uri,
+                source_uri=from_uri,
+                copied_uri=to_uri,
+                context_type=context_type,
+                ctx=ctx,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Move committed but target parent semantic refresh failed for %s: %s",
+                to_uri,
+                exc,
+            )
 
     async def _move_resource_with_watch_transaction(
         self,
