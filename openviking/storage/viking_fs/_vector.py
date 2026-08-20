@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Vector store integration mixin for VikingFS."""
 
-from typing import TYPE_CHECKING, Any, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any, List, Optional
 
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs._base import logger
@@ -34,68 +34,46 @@ class _VectorMixin:
             logger.warning(f"[VikingFS] Failed to delete from vector store: {e}")
             raise
 
-    async def _update_vector_store_uris(
+    async def _copy_vector_store_uris(
         self,
-        uris: List[str],
         old_base: str,
         new_base: str,
+        *,
+        recursive: bool,
         ctx: Optional[RequestContext] = None,
-    ) -> List[tuple[str, str]]:
-        """Update URIs in vector store (when moving files).
+    ) -> Any:
+        """Copy a complete vector URI scope while preserving the source."""
+        vector_store = self._get_vector_store()
+        if not vector_store:
+            return None
+        return await vector_store.copy_uri_mapping(
+            ctx=self._ctx_or_default(ctx),
+            source_uri=old_base,
+            target_uri=new_base,
+            recursive=recursive,
+        )
+
+    async def _update_vector_store_uris(
+        self,
+        old_base: str,
+        new_base: str,
+        *,
+        recursive: bool,
+        ctx: Optional[RequestContext] = None,
+    ) -> Any:
+        """Strictly move a complete vector URI scope.
 
         Preserves vector data and updates URI-derived identifiers without regenerating embeddings.
         """
         vector_store = self._get_vector_store()
         if not vector_store:
-            return []
-
-        real_ctx = self._ctx_or_default(ctx)
-        mappings: List[tuple[str, str]] = []
-
-        try:
-            for uri in uris:
-                new_uri = new_base + uri[len(old_base) :]
-                updated = await vector_store.update_uri_mapping(
-                    ctx=real_ctx,
-                    uri=uri,
-                    new_uri=new_uri,
-                )
-                if updated:
-                    mappings.append((uri, new_uri))
-                    logger.debug(f"[VikingFS] Updated URI: {uri} -> {new_uri}")
-        except Exception:
-            await self._restore_vector_store_uris(mappings, ctx=real_ctx)
-            raise
-        return mappings
-
-    async def _restore_vector_store_uris(
-        self,
-        mappings: Sequence[tuple[str, str]],
-        ctx: Optional[RequestContext] = None,
-    ) -> None:
-        vector_store = self._get_vector_store()
-        if not vector_store:
-            return
-        real_ctx = self._ctx_or_default(ctx)
-        for old_uri, new_uri in sorted(mappings, key=lambda item: item[0].count("/")):
-            try:
-                restored = await vector_store.update_uri_mapping(
-                    ctx=real_ctx,
-                    uri=new_uri,
-                    new_uri=old_uri,
-                )
-                if not restored:
-                    logger.warning(
-                        "[VikingFS] Vector URI rollback found no records: %s -> %s",
-                        new_uri,
-                        old_uri,
-                    )
-            except Exception:
-                logger.exception(
-                    "[VikingFS] Failed to roll back vector URI: %s -> %s",
-                    new_uri,
-                    old_uri,
-                )
+            return None
+        return await vector_store.update_uri_mapping(
+            ctx=self._ctx_or_default(ctx),
+            source_uri=old_base,
+            target_uri=new_base,
+            recursive=recursive,
+        )
 
     def _get_vector_store(self) -> Optional["VikingVectorIndexBackend"]:
         """Get vector store instance."""

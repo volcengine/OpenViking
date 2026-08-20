@@ -259,6 +259,7 @@ class AsyncAGFSClient:
             src_path,
             dst_path,
             recursive=recursive,
+            stream=True,
             fs_ctx=_fs_ctx_with_auto_pathlock(src_path, fs_ctx, auto_pathlock),
         )
 

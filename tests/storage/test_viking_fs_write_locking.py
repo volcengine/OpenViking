@@ -70,6 +70,8 @@ class _AsyncMoveAGFS:
         """Return the configured source kind and a missing destination."""
         if path.endswith("/source.md") or path.endswith("/source"):
             return {"isDir": self.source_is_dir}
+        if path.endswith("/resources"):
+            return {"isDir": True}
         raise FileNotFoundError(path)
 
     async def pathlock_acquire_batch(
