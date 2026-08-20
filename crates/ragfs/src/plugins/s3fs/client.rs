@@ -83,6 +83,16 @@ where
     ))
 }
 
+fn is_s3_compatible_not_found_code<E>(err: &E) -> bool
+where
+    E: ProvideErrorMetadata,
+{
+    // AWS S3 uses the modeled NoSuchKey error; some TOS direct backends return NotFound.
+    err.code()
+        .map(|code| code == "NotFound")
+        .unwrap_or(false)
+}
+
 fn format_sdk_s3_error<E, R>(op: &str, scope: &str, sdk_err: &SdkError<E, R>) -> Error
 where
     E: std::fmt::Display + ProvideErrorMetadata + RequestId + RequestIdExt,
@@ -512,7 +522,7 @@ impl S3Client {
             Ok(resp) => resp,
             Err(sdk_err) => {
                 let service_err = sdk_err.into_service_error();
-                if service_err.is_no_such_key() {
+                if service_err.is_no_such_key() || is_s3_compatible_not_found_code(&service_err) {
                     return Err(Error::NotFound(key.to_string()));
                 }
                 return Err(format_s3_service_error(
@@ -545,7 +555,7 @@ impl S3Client {
             Ok(resp) => resp,
             Err(sdk_err) => {
                 let service_err = sdk_err.into_service_error();
-                if service_err.is_no_such_key() {
+                if service_err.is_no_such_key() || is_s3_compatible_not_found_code(&service_err) {
                     return Ok(None);
                 }
                 return Err(format_s3_service_error(
@@ -592,7 +602,7 @@ impl S3Client {
             Ok(resp) => resp,
             Err(sdk_err) => {
                 let service_err = sdk_err.into_service_error();
-                if service_err.is_no_such_key() {
+                if service_err.is_no_such_key() || is_s3_compatible_not_found_code(&service_err) {
                     return Err(Error::NotFound(key.to_string()));
                 }
                 return Err(format_s3_service_error(
@@ -846,7 +856,7 @@ impl S3Client {
                 // Check if it's a 404
                 if sdk_err
                     .as_service_error()
-                    .map(|err| err.is_not_found())
+                    .map(|err| err.is_not_found() || is_s3_compatible_not_found_code(err))
                     .unwrap_or(false)
                 {
                     Ok(None)
@@ -1383,5 +1393,32 @@ mod tests {
             }
             other => panic!("expected internal error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_is_s3_compatible_not_found_code_accepts_tos_code() {
+        let tos_not_found = FakeServiceError {
+            raw: "service error",
+            meta: ErrorMetadata::builder().code("NotFound").build(),
+        };
+        assert!(is_s3_compatible_not_found_code(&tos_not_found));
+
+        let no_such_key = FakeServiceError {
+            raw: "service error",
+            meta: ErrorMetadata::builder().code("NoSuchKey").build(),
+        };
+        assert!(!is_s3_compatible_not_found_code(&no_such_key));
+
+        let access_denied = FakeServiceError {
+            raw: "service error",
+            meta: ErrorMetadata::builder().code("AccessDenied").build(),
+        };
+        assert!(!is_s3_compatible_not_found_code(&access_denied));
+
+        let no_code = FakeServiceError {
+            raw: "service error",
+            meta: ErrorMetadata::builder().build(),
+        };
+        assert!(!is_s3_compatible_not_found_code(&no_code));
     }
 }
