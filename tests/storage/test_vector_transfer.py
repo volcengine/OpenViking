@@ -11,7 +11,7 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.collection_schemas import CollectionSchemas
-from openviking.storage.expr import And, Contains, Or, PathScope
+from openviking.storage.expr import And, Contains, Eq, In, Or, PathScope
 from openviking.storage.vectordb import engine as vectordb_engine
 from openviking.storage.viking_vector_index_backend import (
     VectorTransferRollbackError,
@@ -201,6 +201,45 @@ async def test_copy_uri_mapping_keeps_source_and_copies_all_pages():
     assert result.batches == 3
     assert len(_records_under(backend, source)) == 205
     assert len(_records_under(backend, "viking://resources/dst")) == 205
+
+
+@pytest.mark.asyncio
+async def test_get_l2_abstracts_by_uris_uses_strict_batched_lookup():
+    backend = _MemoryTransferBackend([])
+    backend._strict_transfer_page = AsyncMock(
+        side_effect=[
+            (
+                [
+                    {
+                        "uri": "viking://resources/a.md",
+                        "abstract": "summary-a",
+                        "updated_at": 1,
+                    },
+                    {
+                        "uri": "viking://resources/b.md",
+                        "abstract": "",
+                        "updated_at": 1,
+                    },
+                ],
+                None,
+            )
+        ]
+    )
+
+    result = await backend.get_l2_abstracts_by_uris(
+        ["viking://resources/a.md", "viking://resources/b.md"],
+        ctx=_ctx(),
+    )
+
+    assert result == {"viking://resources/a.md": "summary-a"}
+    call = backend._strict_transfer_page.await_args
+    assert call.kwargs["output_fields"] == ["uri", "abstract", "updated_at"]
+    assert call.args[1] == And(
+        [
+            In("uri", ["viking://resources/a.md", "viking://resources/b.md"]),
+            Eq("level", 2),
+        ]
+    )
 
 
 @pytest.mark.asyncio

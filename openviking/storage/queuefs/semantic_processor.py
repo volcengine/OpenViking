@@ -1576,6 +1576,21 @@ class SemanticProcessor(DequeueHandlerBase):
             creator_acl_grant=creator_acl_grant,
         )
 
+    async def _load_transfer_file_summaries(
+        self,
+        file_paths: List[str],
+        ctx: Optional[RequestContext] = None,
+    ) -> Dict[str, str]:
+        """Load copied/moved file summaries from their existing target L2 vectors."""
+        if not file_paths:
+            return {}
+        viking_fs = get_viking_fs()
+        vector_store = viking_fs._get_vector_store()
+        if vector_store is None:
+            return {}
+        active_ctx = ctx or self._default_ctx
+        return await vector_store.get_l2_abstracts_by_uris(file_paths, ctx=active_ctx)
+
     async def _vectorize_single_file(
         self,
         parent_uri: str,

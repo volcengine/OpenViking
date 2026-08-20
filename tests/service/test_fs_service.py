@@ -1005,7 +1005,7 @@ async def test_copy_refresh_message_only_rebuilds_parent_semantics(
     msg = queue_manager.messages[0]
     assert msg.uri == "viking://resources/archive"
     assert msg.recursive is False
-    assert msg.skip_vectorization is True
+    assert msg.skip_vectorization is False
     assert msg.changes == {"added": ["viking://resources/archive/copied.md"]}
     assert msg.generation_trigger == "content_copy"
     assert msg.copy_source_uri == "viking://resources/source.md"

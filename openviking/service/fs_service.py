@@ -561,7 +561,7 @@ class FSService:
             user_id=ctx.user.user_id,
             peer_id=ctx.user.user_id,
             role=str(ctx.role),
-            skip_vectorization=True,
+            skip_vectorization=False,
             telemetry_id=telemetry_id,
             coalesce_key=build_semantic_coalesce_key(
                 context_type=context_type,
