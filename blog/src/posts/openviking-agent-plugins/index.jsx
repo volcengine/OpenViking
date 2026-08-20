@@ -8,7 +8,7 @@ const LLM_PATH = '/post/openviking-agent-plugins/llm.txt';
 
 const SPEC_URL = 'https://agent-plugins.org/specification';
 const AAIF_POST = 'https://aaif.io/blog/from-skills-and-tools-to-portable-agent-plugins';
-const PLUGIN_DIR = 'https://github.com/volcengine/OpenViking/tree/main/agent-plugins';
+const PLUGIN_DIR = 'https://github.com/volcengine/OpenViking?utm_source=blog&utm_medium=article&utm_campaign=openviking-agent-plugins/tree/main/agent-plugins';
 const INTEGRATIONS_EN = 'https://docs.openviking.ai/en/agent-integrations/01-overview';
 const INTEGRATIONS_ZH = 'https://docs.openviking.ai/zh/agent-integrations/01-overview';
 
