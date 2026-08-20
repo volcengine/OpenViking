@@ -71,8 +71,9 @@ const CORE_WORKFLOW: &[HelpCommand] = help_commands![
     "set-tags",
 ];
 
-const FILESYSTEM: &[HelpCommand] =
-    help_commands!["ls", "tree", "mkdir", "rm", "mv", "stat", "attrs", "get"];
+const FILESYSTEM: &[HelpCommand] = help_commands![
+    "ls", "tree", "mkdir", "rm", "cp", "mv", "stat", "attrs", "get"
+];
 
 const SEARCH_CONTEXT: &[HelpCommand] = help_commands![
     "find", "search", "grep", "glob", "abstract", "overview", "read"
@@ -286,6 +287,30 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "ov tree <parent-uri>",
                 description: "Review remaining resources.",
+            },
+        ],
+    },
+    CommandHelpSpec {
+        path: &["cp"],
+        purpose: "Copy a file or directory without reparsing or regenerating vectors.",
+        examples: &[
+            HelpItem {
+                label: "ov cp viking://notes/draft.md viking://notes/draft-copy.md",
+                description: "Copy one file and its vector records.",
+            },
+            HelpItem {
+                label: "ov cp -r viking://projects/source viking://projects/backup",
+                description: "Recursively copy a directory and all vector records.",
+            },
+        ],
+        next_steps: &[
+            HelpItem {
+                label: "ov stat <target-uri>",
+                description: "Confirm the copied resource metadata.",
+            },
+            HelpItem {
+                label: "ov read <target-uri>",
+                description: "Read the copied resource.",
             },
         ],
     },
@@ -2702,6 +2727,13 @@ mod tests {
         assert!(rendered.contains("experimental"));
         assert!(rendered.contains("ov <command> --help"));
         assert!(!rendered.contains("Commands:\n  add-resource"));
+        assert!(rendered.contains("cp"));
+        let cp = command_spec(&["cp".to_string()]).expect("cp command help");
+        assert!(
+            cp.examples
+                .iter()
+                .any(|item| item.label.contains("ov cp -r"))
+        );
     }
 
     #[test]
