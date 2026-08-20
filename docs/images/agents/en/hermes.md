@@ -4,7 +4,9 @@
 hermes memory setup openviking
 ```
 
-Keep **OpenViking Service (VolcEngine Cloud)**. Paste the API key from this page.
+Keep **OpenViking Service (VolcEngine Cloud)**. Paste the API key from this page:
+
+{{OPENVIKING_API_KEY_BLOCK}}
 
 ## Verify
 

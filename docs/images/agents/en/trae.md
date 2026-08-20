@@ -10,6 +10,10 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 
 Select **Volcengine OpenViking Cloud**. Paste the API key from this page.
 
+API Key: Copy the API Key shown on the page and paste it when the installer prompts for it.
+
+{{OPENVIKING_API_KEY_BLOCK}}
+
 ## Verify
 
 Restart TRAE. Confirm `openviking` is connected in settings.

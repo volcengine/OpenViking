@@ -4,7 +4,9 @@
 hermes memory setup openviking
 ```
 
-保持 **OpenViking Service (VolcEngine Cloud)**，把本页 API Key 贴进去。
+保持 **OpenViking Service (VolcEngine Cloud)**，把本页 API Key 贴进去：
+
+{{OPENVIKING_API_KEY_BLOCK}}
 
 ## 验证
 

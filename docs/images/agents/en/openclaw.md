@@ -1,5 +1,9 @@
 ## Install
 
+Copy the API key from this page:
+
+{{OPENVIKING_API_KEY_BLOCK}}
+
 ```bash
 openclaw plugins install clawhub:@openviking/openclaw-plugin
 openclaw openviking setup --base-url https://api.vikingdb.cn-beijing.volces.com/openviking --api-key <API-key-from-this-page>

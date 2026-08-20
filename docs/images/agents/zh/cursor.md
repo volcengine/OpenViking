@@ -6,6 +6,10 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 
 选 **火山引擎 OpenViking 云服务**，把本页 API Key 贴进去。
 
+API Key：复制页面中展示的 API Key，并在安装器提示时粘贴。
+
+{{OPENVIKING_API_KEY_BLOCK}}
+
 ## 验证
 
 1. 重启 Cursor，新建 Agent 会话。

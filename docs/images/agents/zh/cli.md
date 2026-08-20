@@ -16,6 +16,8 @@ https://api.vikingdb.cn-beijing.volces.com/openviking
 ```
 - API Key: 把本页展示的 API Key 粘贴到终端
 
+{{OPENVIKING_API_KEY_BLOCK}}
+
 
 ### 步骤3：配置完成后，可运行以下命令查看 CLI 用法：
 
