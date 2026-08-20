@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from openviking.utils.tags import normalize_search_tags
+
 
 class ContextType(str, Enum):
     """Context type for retrieval."""
@@ -377,7 +379,7 @@ class FindResult:
             "level": ctx.level,
             "score": ctx.score,
             "abstract": ctx.abstract,
-            "tags": ctx.search_tags,
+            "tags": normalize_search_tags(ctx.search_tags, discard_invalid=True),
         }
 
     def _query_to_dict(self, q: TypedQuery) -> Dict[str, Any]:

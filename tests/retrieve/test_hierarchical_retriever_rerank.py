@@ -639,7 +639,7 @@ async def test_convert_to_matched_contexts_propagates_search_tags():
                 "viking://resources/file-a",
                 1.0,
                 abstract="child A",
-                search_tags=["team=infra", "project=viking"],
+                search_tags=["default", "team=infra", "bad=", "project=viking"],
             )
         ],
         ctx=_ctx(),

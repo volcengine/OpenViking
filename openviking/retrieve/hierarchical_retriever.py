@@ -26,6 +26,7 @@ from openviking.storage.expr import FilterExpr
 from openviking.storage.semantic_sidecar import body_for_preview
 from openviking.storage.vikingdb_manager import VikingDBManager, VikingDBManagerProxy
 from openviking.telemetry import get_current_telemetry
+from openviking.utils.tags import normalize_search_tags
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking.utils.token_estimation import (
     estimate_text_tokens,
@@ -621,7 +622,9 @@ class HierarchicalRetriever:
                     abstract=abstract,
                     category=c.get("category", ""),
                     score=final_score,
-                    search_tags=list(c.get("search_tags") or []),
+                    search_tags=normalize_search_tags(
+                        c.get("search_tags"), discard_invalid=True
+                    ),
                 )
             )
 

@@ -14,6 +14,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.storage.viking_fs import VikingFS
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.retrieve import ContextType, FindResult, MatchedContext
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -53,6 +54,41 @@ async def test_find_basic(client_with_resource):
     assert body["result"] is not None
     assert "usage" not in body
     assert "telemetry" not in body
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "service_method"),
+    [
+        ("/api/v1/search/find", "find"),
+        ("/api/v1/search/search", "search"),
+    ],
+)
+async def test_search_endpoints_filter_invalid_result_tags(
+    client: httpx.AsyncClient, service, monkeypatch, endpoint: str, service_method: str
+):
+    async def fake_search(**kwargs):
+        del kwargs
+        return FindResult(
+            memories=[],
+            resources=[
+                MatchedContext(
+                    uri="viking://resources/legacy-tags.md",
+                    context_type=ContextType.RESOURCE,
+                    search_tags=["default", "team=infra", "bad=", "project=viking"],
+                )
+            ],
+            skills=[],
+        )
+
+    monkeypatch.setattr(service.search, service_method, fake_search)
+
+    response = await client.post(endpoint, json={"query": "legacy tags"})
+
+    assert response.status_code == 200
+    assert response.json()["result"]["resources"][0]["tags"] == [
+        "team=infra",
+        "project=viking",
+    ]
 
 
 @pytest.mark.parametrize("endpoint", ["/api/v1/search/find", "/api/v1/search/search"])
