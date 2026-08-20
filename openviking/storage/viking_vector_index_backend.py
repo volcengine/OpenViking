@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Dict, List, Mapping, Optional
 
-from openviking.core.namespace import canonical_user_root, uri_parts, visible_roots
+from openviking.core.namespace import canonical_user_root, resolve_uri, uri_parts, visible_roots
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.acl import (
     ACL_CONTEXT_FIELDS,
@@ -19,13 +19,18 @@ from openviking.storage.acl import (
     acl_grant_tokens,
     acl_principals,
 )
-from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, RawDSL
-from openviking.storage.vector_ids import vector_record_id
+from openviking.storage.expr import And, Contains, Eq, FilterExpr, In, Or, PathScope, RawDSL
+from openviking.storage.vector_migration import (
+    rewrite_vector_record,
+    uri_in_transfer_scope,
+)
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.result import UpdateResult
 from openviking.storage.vectordb.utils.logging_init import init_cpp_logging
 from openviking.storage.vectordb_adapters import create_collection_adapter
 from openviking.utils.tags import merge_search_tags
+from openviking.utils.time_utils import get_current_timestamp
+from openviking_cli.exceptions import ConflictError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.vectordb_config import DEFAULT_INDEX_NAME, VectorDBBackendConfig
 
@@ -72,6 +77,26 @@ VIKINGDB_CONTENT_MAX_SIZE = 1024 * 1024
 class UpsertOptions:
     partial_update: bool = False
     search_tag_mode: str = "replace"
+
+
+@dataclass
+class VectorTransferResult:
+    """Counts produced by one strict online vector URI transfer."""
+
+    scanned: int = 0
+    written: int = 0
+    deleted: int = 0
+    restored: int = 0
+    batches: int = 0
+
+
+class VectorTransferRollbackError(RuntimeError):
+    """Raised when a vector transfer and its compensation both fail."""
+
+    def __init__(self, message: str, *, phase: str, residual_count: int):
+        super().__init__(message)
+        self.phase = phase
+        self.residual_count = residual_count
 
 
 def normalize_upsert_options(
@@ -1435,95 +1460,255 @@ class VikingVectorIndexBackend:
             backend = self._get_backend_for_context(ctx)
             await backend.delete_by_filter(And(conds))
 
-    async def update_uri_mapping(
+    @staticmethod
+    def _uri_transfer_filter(ctx: RequestContext, uri: str, *, recursive: bool) -> FilterExpr:
+        scopes: List[FilterExpr] = [Eq("uri", uri), Contains("uri", uri + "#")]
+        if recursive:
+            scopes.append(PathScope("uri", uri, depth=-1))
+        return And([Eq("account_id", ctx.account_id), Or(scopes)])
+
+    async def _scan_uri_transfer_scope(
         self,
         ctx: RequestContext,
         uri: str,
-        new_uri: str,
-        levels: Optional[List[int]] = None,
-    ) -> bool:
-        conds: List[FilterExpr] = [Eq("uri", uri), Eq("account_id", ctx.account_id)]
-        if levels:
-            conds.append(In("level", levels))
+        *,
+        recursive: bool,
+        include_full_records: bool,
+        batch_size: int = 100,
+    ) -> tuple[List[Dict[str, Any]], int]:
+        """Scan one URI scope without a fixed total-record limit."""
+        records: List[Dict[str, Any]] = []
+        cursor: Optional[str] = None
+        batches = 0
+        seen_cursors: set[str] = set()
+        while True:
+            page, next_cursor = await self.scroll(
+                filter=self._uri_transfer_filter(ctx, uri, recursive=recursive),
+                limit=batch_size,
+                cursor=cursor,
+                output_fields=["id", "uri"],
+                ctx=ctx,
+            )
+            batches += 1
+            scoped = [
+                record
+                for record in page
+                if isinstance(record.get("uri"), str)
+                and uri_in_transfer_scope(record["uri"], uri, recursive=recursive)
+            ]
+            if include_full_records and scoped:
+                ids = [str(record["id"]) for record in scoped if record.get("id")]
+                if len(ids) != len(scoped):
+                    raise RuntimeError(f"Vector records without IDs found under {uri}")
+                full_records = await self.get(ids, ctx=ctx)
+                by_id = {str(record["id"]): record for record in full_records if record.get("id")}
+                if len(by_id) != len(ids):
+                    raise RuntimeError(f"Failed to fetch complete vector records under {uri}")
+                records.extend(by_id[record_id] for record_id in ids)
+            else:
+                records.extend(scoped)
 
-        records = await self.filter(
-            filter=And(conds),
-            limit=100,
-            output_fields=["id"],
-            ctx=ctx,
+            if next_cursor is None:
+                break
+            if next_cursor in seen_cursors:
+                raise RuntimeError(f"Vector scroll cursor repeated under {uri}: {next_cursor}")
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+        return records, batches
+
+    async def _delete_vector_transfer_ids(
+        self,
+        ctx: RequestContext,
+        ids: List[str],
+        *,
+        batch_size: int = 100,
+    ) -> int:
+        deleted = 0
+        for offset in range(0, len(ids), batch_size):
+            deleted += int(await self.delete(ids[offset : offset + batch_size], ctx=ctx) or 0)
+        return deleted
+
+    async def copy_uri_mapping(
+        self,
+        ctx: RequestContext,
+        source_uri: str,
+        target_uri: str,
+        recursive: bool = False,
+    ) -> VectorTransferResult:
+        """Copy every vector record in a URI scope without regenerating embeddings."""
+        source_uri = resolve_uri(source_uri).uri
+        target_uri = resolve_uri(target_uri).uri
+        target_records, _ = await self._scan_uri_transfer_scope(
+            ctx,
+            target_uri,
+            recursive=recursive,
+            include_full_records=False,
         )
-        if not records:
-            return False
-        record_ids = [str(record["id"]) for record in records if record.get("id")]
-        if not record_ids:
-            logger.warning(
-                "update_uri_mapping found records without ids: uri=%s new_uri=%s account_id=%s",
-                uri,
-                new_uri,
-                ctx.account_id,
+        if target_records:
+            raise ConflictError(
+                f"copy target vector scope already exists: {target_uri}",
+                resource=target_uri,
             )
-            return False
-        full_records = await self.get(record_ids, ctx=ctx)
-        if not full_records:
-            logger.warning(
-                "update_uri_mapping failed to fetch full records: uri=%s new_uri=%s account_id=%s ids=%s",
-                uri,
-                new_uri,
-                ctx.account_id,
-                record_ids,
-            )
-            return False
 
-        updated_records: List[Dict[str, Any]] = []
-        ids_to_delete: List[str] = []
-        for record in full_records:
-            if "id" not in record:
-                continue
-            raw_level = record.get("level", 2)
+        source_records, batches = await self._scan_uri_transfer_scope(
+            ctx,
+            source_uri,
+            recursive=recursive,
+            include_full_records=True,
+        )
+        result = VectorTransferResult(scanned=len(source_records), batches=batches)
+        if not source_records:
+            return result
+
+        timestamp = get_current_timestamp()
+        target_payloads = [
+            rewrite_vector_record(
+                record,
+                source_uri=source_uri,
+                target_uri=target_uri,
+                ctx=ctx,
+                mode="copy",
+                timestamp=timestamp,
+            )
+            for record in source_records
+        ]
+        attempted_target_ids: List[str] = []
+        try:
+            for offset in range(0, len(target_payloads), 100):
+                payload_batch = target_payloads[offset : offset + 100]
+                attempted_target_ids.extend(str(payload["id"]) for payload in payload_batch)
+                written_ids = await self.upsert_many(payload_batch, ctx=ctx)
+                if len(written_ids) != len(payload_batch):
+                    raise RuntimeError(
+                        f"Vector copy wrote {len(written_ids)} of {len(payload_batch)} records"
+                    )
+                result.written += len(written_ids)
+        except Exception as transfer_error:
             try:
-                level = int(raw_level)
-            except (TypeError, ValueError):
-                level = 2
+                await self._delete_vector_transfer_ids(ctx, attempted_target_ids)
+            except Exception as rollback_error:
+                diagnostic_suffix = ""
+                try:
+                    residual_records, _ = await self._scan_uri_transfer_scope(
+                        ctx,
+                        target_uri,
+                        recursive=recursive,
+                        include_full_records=False,
+                    )
+                    residual_count = len(residual_records)
+                except Exception as diagnostic_error:
+                    residual_count = len(attempted_target_ids)
+                    diagnostic_suffix = f"; residual scan failed: {diagnostic_error}"
+                raise VectorTransferRollbackError(
+                    f"Vector copy failed and target cleanup failed: {rollback_error}"
+                    f"{diagnostic_suffix}",
+                    phase="copy_target_cleanup",
+                    residual_count=residual_count,
+                ) from transfer_error
+            raise
+        return result
 
-            new_id = vector_record_id(ctx.account_id, new_uri, level)
-
-            updated = {
-                **record,
-                "id": new_id,
-                "uri": new_uri,
-            }
-            if self._acl_enabled(ctx):
-                updated.update(
-                    await self.acl_manager.materialize_moved_record(record, new_uri, ctx)
-                )
-            vector = updated.get("vector")
-            if not vector:
-                logger.warning(
-                    "update_uri_mapping skipped record without dense vector: old_uri=%s new_uri=%s level=%s account_id=%s id=%s",
-                    uri,
-                    new_uri,
-                    level,
-                    ctx.account_id,
-                    record.get("id"),
-                )
-                continue
-            updated_records.append(updated)
-            old_id = record.get("id")
-            if old_id and old_id != new_id:
-                ids_to_delete.append(old_id)
-
-        if not updated_records:
-            return False
-        new_ids = await self._upsert_many_raw(updated_records, ctx=ctx)
-        if len(new_ids) != len(updated_records):
-            raise RuntimeError(
-                f"Failed to update {len(updated_records) - len(new_ids)} URI mapping record(s)"
+    async def update_uri_mapping(
+        self,
+        ctx: RequestContext,
+        source_uri: str,
+        target_uri: str,
+        recursive: bool = False,
+    ) -> VectorTransferResult:
+        """Move every vector record in a URI scope with compensating rollback."""
+        source_uri = resolve_uri(source_uri).uri
+        target_uri = resolve_uri(target_uri).uri
+        target_records, _ = await self._scan_uri_transfer_scope(
+            ctx,
+            target_uri,
+            recursive=recursive,
+            include_full_records=False,
+        )
+        if target_records:
+            raise ConflictError(
+                f"move target vector scope already exists: {target_uri}",
+                resource=target_uri,
             )
 
-        if ids_to_delete:
-            await self.delete(list(set(ids_to_delete)), ctx=ctx)
+        source_records, batches = await self._scan_uri_transfer_scope(
+            ctx,
+            source_uri,
+            recursive=recursive,
+            include_full_records=True,
+        )
+        result = VectorTransferResult(scanned=len(source_records), batches=batches)
+        if not source_records:
+            return result
 
-        return True
+        timestamp = get_current_timestamp()
+        target_payloads = [
+            rewrite_vector_record(
+                record,
+                source_uri=source_uri,
+                target_uri=target_uri,
+                ctx=ctx,
+                mode="move",
+                timestamp=timestamp,
+            )
+            for record in source_records
+        ]
+        target_ids = [str(payload["id"]) for payload in target_payloads]
+        attempted_target_ids: List[str] = []
+        try:
+            for offset in range(0, len(target_payloads), 100):
+                payload_batch = target_payloads[offset : offset + 100]
+                attempted_target_ids.extend(str(payload["id"]) for payload in payload_batch)
+                written_ids = await self.upsert_many(payload_batch, ctx=ctx)
+                if len(written_ids) != len(payload_batch):
+                    raise RuntimeError(
+                        f"Vector move wrote {len(written_ids)} of {len(payload_batch)} records"
+                    )
+                result.written += len(written_ids)
+        except Exception as transfer_error:
+            try:
+                await self._delete_vector_transfer_ids(ctx, attempted_target_ids)
+            except Exception as rollback_error:
+                raise VectorTransferRollbackError(
+                    f"Vector move prepare failed and target cleanup failed: {rollback_error}",
+                    phase="move_target_cleanup",
+                    residual_count=len(attempted_target_ids),
+                ) from transfer_error
+            raise
+
+        source_ids = [str(record["id"]) for record in source_records]
+        try:
+            for offset in range(0, len(source_ids), 100):
+                source_batch = source_ids[offset : offset + 100]
+                deleted = int(await self.delete(source_batch, ctx=ctx) or 0)
+                if deleted != len(source_batch):
+                    raise RuntimeError(
+                        f"Vector move deleted {deleted} of {len(source_batch)} source records"
+                    )
+                result.deleted += deleted
+        except Exception as transfer_error:
+            rollback_errors: List[Exception] = []
+            try:
+                restored_ids = await self.upsert_many(source_records, ctx=ctx)
+                result.restored = len(restored_ids)
+                if result.restored != len(source_records):
+                    raise RuntimeError(
+                        f"Vector move restored {result.restored} of {len(source_records)} records"
+                    )
+            except Exception as rollback_error:
+                rollback_errors.append(rollback_error)
+            try:
+                await self._delete_vector_transfer_ids(ctx, target_ids)
+            except Exception as rollback_error:
+                rollback_errors.append(rollback_error)
+            if rollback_errors:
+                raise VectorTransferRollbackError(
+                    "Vector move source deletion failed and compensation was incomplete: "
+                    + "; ".join(str(error) for error in rollback_errors),
+                    phase="move_source_restore",
+                    residual_count=len(source_records),
+                ) from transfer_error
+            raise
+        return result
 
     async def increment_active_count(self, ctx: RequestContext, uris: List[str]) -> int:
         updated = 0

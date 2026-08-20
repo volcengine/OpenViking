@@ -1,0 +1,276 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+
+from openviking.server.identity import RequestContext, Role
+from openviking.storage.viking_vector_index_backend import (
+    VectorTransferRollbackError,
+    VikingVectorIndexBackend,
+)
+from openviking_cli.exceptions import ConflictError
+from openviking_cli.session.user_id import UserIdentifier
+
+
+def _ctx() -> RequestContext:
+    return RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
+
+
+def _record(record_id: str, uri: str, **overrides: Any) -> dict[str, Any]:
+    return {
+        "id": record_id,
+        "uri": uri,
+        "level": 2,
+        "vector": [0.1, 0.2],
+        "sparse_vector": {"7": 0.8},
+        "content": f"content:{record_id}",
+        "created_at": 10,
+        "updated_at": 11,
+        "active_count": 3,
+        "account_id": "acct",
+        **overrides,
+    }
+
+
+class _MemoryTransferBackend(VikingVectorIndexBackend):
+    """In-memory I/O boundary for exercising the real transfer methods."""
+
+    def __init__(self, records: list[dict[str, Any]]) -> None:
+        self.records = {str(record["id"]): dict(record) for record in records}
+        self.upsert_calls = 0
+        self.fail_upsert_at: int | None = None
+        self.delete_calls = 0
+        self.fail_delete_at: int | None = None
+        self.partial_delete_count = 0
+
+    async def scroll(
+        self,
+        filter=None,
+        limit: int = 100,
+        cursor: str | None = None,
+        output_fields=None,
+        *,
+        ctx: RequestContext,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        del filter, output_fields, ctx
+        offset = int(cursor or 0)
+        ordered = [dict(self.records[key]) for key in sorted(self.records)]
+        page = ordered[offset : offset + limit]
+        next_cursor = str(offset + limit) if offset + limit < len(ordered) else None
+        return page, next_cursor
+
+    async def get(self, ids: list[str], *, ctx: RequestContext) -> list[dict[str, Any]]:
+        del ctx
+        return [dict(self.records[record_id]) for record_id in ids if record_id in self.records]
+
+    async def upsert(self, data: dict[str, Any], *, ctx: RequestContext, options=None) -> str:
+        del ctx, options
+        self.upsert_calls += 1
+        if self.fail_upsert_at == self.upsert_calls:
+            raise RuntimeError("injected vector write failure")
+        record = dict(data)
+        self.records[str(record["id"])] = record
+        return str(record["id"])
+
+    async def upsert_many(
+        self, data_list: list[dict[str, Any]], *, ctx: RequestContext
+    ) -> list[str]:
+        return [await self.upsert(data, ctx=ctx) for data in data_list]
+
+    async def delete(self, ids: list[str], *, ctx: RequestContext) -> int:
+        del ctx
+        self.delete_calls += 1
+        deleted = 0
+        for record_id in ids:
+            if self.records.pop(record_id, None) is not None:
+                deleted += 1
+            if self.fail_delete_at == self.delete_calls and deleted >= self.partial_delete_count:
+                self.fail_delete_at = None
+                raise RuntimeError("injected vector delete failure")
+        return deleted
+
+
+def _records_under(
+    backend: _MemoryTransferBackend, uri: str, *, recursive: bool = True
+) -> list[dict[str, Any]]:
+    return [
+        record
+        for record in backend.records.values()
+        if record["uri"] == uri
+        or record["uri"].startswith(uri + "#")
+        or (recursive and record["uri"].startswith(uri + "/"))
+    ]
+
+
+@pytest.mark.asyncio
+async def test_copy_uri_mapping_keeps_source_and_copies_all_pages():
+    source = "viking://resources/src"
+    records = [_record("source-root", source)] + [
+        _record(f"source-{index:03d}", f"{source}/file-{index:03d}.md") for index in range(204)
+    ]
+    backend = _MemoryTransferBackend(records)
+
+    result = await backend.copy_uri_mapping(
+        _ctx(), source, "viking://resources/dst", recursive=True
+    )
+
+    assert result.scanned == 205
+    assert result.written == 205
+    assert result.batches == 3
+    assert len(_records_under(backend, source)) == 205
+    assert len(_records_under(backend, "viking://resources/dst")) == 205
+
+
+@pytest.mark.asyncio
+async def test_copy_uri_mapping_preserves_dense_sparse_and_chunk_payloads():
+    source = "viking://resources/src.md"
+    backend = _MemoryTransferBackend(
+        [
+            _record("source-file", source, sparse_vector={}),
+            _record("source-chunk", f"{source}#chunk_0001", vector=[]),
+            _record("outside", "viking://resources/other.md"),
+        ]
+    )
+
+    result = await backend.copy_uri_mapping(
+        _ctx(), source, "viking://resources/dst.md", recursive=False
+    )
+
+    copied = _records_under(backend, "viking://resources/dst.md")
+    assert result.written == 2
+    assert {record["uri"] for record in copied} == {
+        "viking://resources/dst.md",
+        "viking://resources/dst.md#chunk_0001",
+    }
+    assert {tuple(record["vector"]) for record in copied} == {(), (0.1, 0.2)}
+    assert {tuple(record["sparse_vector"].items()) for record in copied} == {
+        (),
+        (("7", 0.8),),
+    }
+
+
+@pytest.mark.asyncio
+async def test_copy_uri_mapping_rejects_preexisting_target_before_writing():
+    backend = _MemoryTransferBackend(
+        [
+            _record("source", "viking://resources/src.md"),
+            _record("target", "viking://resources/dst.md#chunk_0001"),
+        ]
+    )
+
+    with pytest.raises(ConflictError, match="target vector scope already exists"):
+        await backend.copy_uri_mapping(
+            _ctx(),
+            "viking://resources/src.md",
+            "viking://resources/dst.md",
+            recursive=False,
+        )
+
+    assert backend.upsert_calls == 0
+    assert len(_records_under(backend, "viking://resources/src.md")) == 1
+
+
+@pytest.mark.asyncio
+async def test_copy_uri_mapping_removes_partial_target_when_write_fails():
+    source = "viking://resources/src"
+    backend = _MemoryTransferBackend(
+        [
+            _record("source-root", source),
+            _record("source-a", f"{source}/a.md"),
+            _record("source-b", f"{source}/b.md"),
+        ]
+    )
+    backend.fail_upsert_at = 3
+
+    with pytest.raises(RuntimeError, match="injected vector write failure"):
+        await backend.copy_uri_mapping(_ctx(), source, "viking://resources/dst", recursive=True)
+
+    assert len(_records_under(backend, source)) == 3
+    assert _records_under(backend, "viking://resources/dst") == []
+
+
+@pytest.mark.asyncio
+async def test_copy_uri_mapping_reports_actual_residual_after_cleanup_failure():
+    source = "viking://resources/src"
+    backend = _MemoryTransferBackend(
+        [
+            _record("source-root", source),
+            _record("source-a", f"{source}/a.md"),
+            _record("source-b", f"{source}/b.md"),
+        ]
+    )
+    backend.fail_upsert_at = 3
+    backend.fail_delete_at = 1
+    backend.partial_delete_count = 1
+
+    with pytest.raises(VectorTransferRollbackError) as exc_info:
+        await backend.copy_uri_mapping(_ctx(), source, "viking://resources/dst", recursive=True)
+
+    assert exc_info.value.phase == "copy_target_cleanup"
+    assert exc_info.value.residual_count == 1
+    assert len(_records_under(backend, "viking://resources/dst")) == 1
+
+
+@pytest.mark.asyncio
+async def test_update_uri_mapping_deletes_source_only_after_targets_exist():
+    source = "viking://resources/src"
+    backend = _MemoryTransferBackend(
+        [
+            _record("source-root", source, created_at=5, updated_at=6, active_count=7),
+            _record("source-a", f"{source}/a.md"),
+            _record("source-b", f"{source}/b.md"),
+        ]
+    )
+
+    result = await backend.update_uri_mapping(
+        _ctx(), source, "viking://resources/dst", recursive=True
+    )
+
+    assert result.scanned == 3
+    assert result.written == 3
+    assert result.deleted == 3
+    assert _records_under(backend, source) == []
+    targets = _records_under(backend, "viking://resources/dst")
+    assert len(targets) == 3
+    root = next(record for record in targets if record["uri"] == "viking://resources/dst")
+    assert (root["created_at"], root["updated_at"], root["active_count"]) == (5, 6, 7)
+
+
+@pytest.mark.asyncio
+async def test_update_uri_mapping_restores_source_and_removes_target_after_partial_delete():
+    source = "viking://resources/src"
+    backend = _MemoryTransferBackend(
+        [
+            _record("source-root", source),
+            _record("source-a", f"{source}/a.md"),
+            _record("source-b", f"{source}/b.md"),
+        ]
+    )
+    backend.fail_delete_at = 1
+    backend.partial_delete_count = 1
+
+    with pytest.raises(RuntimeError, match="injected vector delete failure"):
+        await backend.update_uri_mapping(_ctx(), source, "viking://resources/dst", recursive=True)
+
+    assert len(_records_under(backend, source)) == 3
+    assert _records_under(backend, "viking://resources/dst") == []
+
+
+@pytest.mark.asyncio
+async def test_update_uri_mapping_returns_empty_result_when_source_has_no_vectors():
+    backend = _MemoryTransferBackend([_record("outside", "viking://resources/other.md")])
+
+    result = await backend.update_uri_mapping(
+        _ctx(),
+        "viking://resources/missing.md",
+        "viking://resources/dst.md",
+        recursive=False,
+    )
+
+    assert result.scanned == 0
+    assert result.written == 0
+    assert result.deleted == 0
