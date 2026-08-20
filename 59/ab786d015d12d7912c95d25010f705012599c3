@@ -1,0 +1,513 @@
+.github/scripts/stage-memory-plugin-marketplace.sh
+  s_10d7bb8cee447a::t_d127977e6eb8bb 42-43
+.github/workflows/_test_lite.yml
+  s_10d7bb8cee447a::t_8bcf367f714591 89-90
+.gitignore
+  s_10d7bb8cee447a::t_e2131b32cef2b4 150
+README.md
+  s_10d7bb8cee447a::t_375356a4731540 146
+RELEASE.md
+  s_10d7bb8cee447a::t_0b521706c62892 163
+RELEASE_CN.md
+  s_10d7bb8cee447a::t_6331324f015f7b 149
+agent-plugins/README.md
+  s_10d7bb8cee447a::t_d3b1fef7d9876a 27
+agent-plugins/skills/openviking-memory/SKILL.md
+  s_10d7bb8cee447a::t_80bfe1b40d931f 13,31-33
+bot/tests/test_compile.py
+  s_10d7bb8cee447a::t_2f1361d9443b75 2414,2417
+bot/tests/test_cron_datetime_parsing.py
+  s_10d7bb8cee447a::t_f70ba234a589ac 1-88
+bot/tests/test_sandbox_file_access.py
+  s_10d7bb8cee447a::t_483d0a05634f4f 6,8,39-47,138-147,192-195,201-212,240-249
+bot/vikingbot/agent/context.py
+  s_10d7bb8cee447a::t_508f279fafa959 44,59,153,166-182,185,187-189
+bot/vikingbot/agent/loop.py
+  s_10d7bb8cee447a::t_4376d4cf2da54f 20-21,24,1275,1377,1379-1383,1460-1463,1466-1476,1483-1509,1511,1513-1516,1524-1586,1590-1591,1611,1618-1620,1635-1636,1903,2079-2091,2103,2177,2254-2258,2411-2444
+bot/vikingbot/agent/remote_skill_cache.py
+  s_10d7bb8cee447a::t_5d6cb25d99cb34 1-349
+bot/vikingbot/agent/remote_skills.py
+  s_10d7bb8cee447a::t_1f2248d3ff9f47 1-1418
+bot/vikingbot/agent/tools/base.py
+  s_10d7bb8cee447a::t_431b0937755703 48,56,65-71,144-153
+bot/vikingbot/agent/tools/compile.py
+  s_10d7bb8cee447a::t_cb9b0613713e64 301-307
+bot/vikingbot/agent/tools/cron.py
+  s_10d7bb8cee447a::t_0c4ba4861287c6 5,108-111
+bot/vikingbot/agent/tools/filesystem.py
+  s_10d7bb8cee447a::t_91d542ed8b64a9 30-33,105-108,154-157
+bot/vikingbot/agent/tools/image.py
+  s_10d7bb8cee447a::t_63c3c4ee477af6 86-89
+bot/vikingbot/agent/tools/ov_file.py
+  s_10d7bb8cee447a::t_d7d8a64b53d0b4 6,547-550,560,562,564-582,585,599-600,1006-1010
+bot/vikingbot/agent/tools/registry.py
+  s_10d7bb8cee447a::t_204fe3d80daaca 3,5,10,20-28,120,148-159,172-173,199-201,213,220-221,233-238,242-262,265,301,306-343
+bot/vikingbot/cli/commands.py
+  s_10d7bb8cee447a::t_42b10b7a691046 24,1138-1142
+bot/vikingbot/config/schema.py
+  s_10d7bb8cee447a::t_02d575cd0a82a3 849-862,877
+bot/vikingbot/hooks/builtins/openviking_hooks.py
+  s_10d7bb8cee447a::t_3c1659e6127a0c 321,328,342,354-355,368-369,378,406-410
+bot/vikingbot/openviking_mount/ov_server.py
+  s_10d7bb8cee447a::t_9d109943b172da 624-638,644-646,650-652,1040-1045,1073
+bot/vikingbot/providers/vlm_adapter.py
+  s_10d7bb8cee447a::t_a9ea86b0df12c7 9-10,12-13,18,33-229,323,374,383-412,615-617
+bot/vikingbot/sandbox/backends/aiosandbox.py
+  s_10d7bb8cee447a::t_3ba550fc0afa16 3,5,113-116,165-187,270-282
+bot/vikingbot/sandbox/backends/direct.py
+  s_10d7bb8cee447a::t_cd1e0cbbb55bc0 123,128-138
+bot/vikingbot/sandbox/backends/opensandbox.py
+  s_10d7bb8cee447a::t_c37c78dd31dfa1 5,306-310,341-372,511-529
+bot/vikingbot/sandbox/base.py
+  s_10d7bb8cee447a::t_8245bfda20d956 6-7,131-163,192-257,275-277,372-396
+bot/vikingbot/sandbox/manager.py
+  s_10d7bb8cee447a::t_369454ca552881 18-19,24-29
+crates/ov_cli/src/output.rs
+  s_10d7bb8cee447a::t_e399b90766d69f 9,281,326-332,984,989
+crates/ragfs/src/git/config.rs
+  s_10d7bb8cee447a::t_307a6b7fda0f9e 149
+docs/.vitepress/config.ts
+  s_10d7bb8cee447a::t_0e75a817db7585 125,160,487,546
+docs/design/git-version-control-design.md
+  s_10d7bb8cee447a::t_c87673b1480467 646,712,1015,1018,1040,1062,1071,1082,1092,1096,1109,1113,1123-1124,1207,1209,1232
+docs/design/l0-l1-okf-sidecars-rfc.md
+  s_10d7bb8cee447a::t_0eb64415869408 1-261
+docs/en/agent-integrations/01-overview.md
+  s_10d7bb8cee447a::t_3cc2a421bb1112 11,13,23-26
+docs/en/agent-integrations/02-claude-code.md
+  s_10d7bb8cee447a::t_12cfdf60fd295b 115
+docs/en/agent-integrations/03-openclaw.md
+  s_10d7bb8cee447a::t_d8f4fe62a932d1 118
+docs/en/agent-integrations/04-codex.md
+  s_10d7bb8cee447a::t_9e893dc709581e 3,15-22,56,69,76,97,101
+docs/en/agent-integrations/05-hermes.md
+  s_10d7bb8cee447a::t_c4f0d09cdc71d3 19,22-24,34
+docs/en/agent-integrations/06-mcp-clients.md
+  s_10d7bb8cee447a::t_38d655e19d875e 89
+docs/en/agent-integrations/07-langchain-langgraph.md
+  s_10d7bb8cee447a::t_59d96e8acef6bd 322
+docs/en/agent-integrations/08-community-plugins.md
+  s_10d7bb8cee447a::t_f514bee96f81e1 79-81
+docs/en/agent-integrations/09-log-ingestion.md
+  s_10d7bb8cee447a::t_1b76d711f14006 123
+docs/en/agent-integrations/10-opencode.md
+  s_10d7bb8cee447a::t_f75bc3629e7604 136,138-141,161-164
+docs/en/agent-integrations/11-pi.md
+  s_10d7bb8cee447a::t_f08aa0e47cb2cf 47,98-101
+docs/en/agent-integrations/12-cursor.md
+  s_10d7bb8cee447a::t_0a0ecf5a688f99 28,77
+docs/en/agent-integrations/13-trae.md
+  s_10d7bb8cee447a::t_3aab10e9032072 1,3,7,24,35,48,52,56,62,78,88,92
+docs/en/agent-integrations/14-openviking-helper.md
+  s_10d7bb8cee447a::t_2e5e955a6f2466 61
+docs/en/agent-integrations/15-agent-plugins.md
+  s_10d7bb8cee447a::t_85a0a6bfc6a3e8 29,60,98-101
+docs/en/agent-integrations/16-capability-reference.md
+  s_10d7bb8cee447a::t_99e7b8871d7647 1-496,498,500-505,507,509-513,515,517-523,525-530,532,534-539,541,543-548,550,552-556,558,560-565,567,569-574,576,578-584,586-589,591,593,595,597,599,601,603,605,607,609,611,613,615,617,619,621,623-627,629,631,633,635,637,639,641-645,647,649,651-665,667,669,671-674,676,678-679,681,683,685,687-694,696,698,700,702-707
+docs/en/api/02-resources.md
+  s_10d7bb8cee447a::t_fa8cabf93d07fe 115,137,181,578-607,645-647
+docs/en/api/12-content.md
+  s_10d7bb8cee447a::t_71334057cd7b4b 229,361
+docs/en/concepts/02-context-types.md
+  s_10d7bb8cee447a::t_6add1e69fe8272 104-106,110-112
+docs/en/concepts/03-context-layers.md
+  s_10d7bb8cee447a::t_3ab76475dd2b4f 3,7-11,13,15,17,19,21,27,35,38,40,42,44-46,53,55,57,63,65,67-75,77,79,81,83-99,102,104-109,111,113,115,117-123,125,127,129,131-134,136,139,141,143,145-148,150,152,154,156-162,164-176,179-190,194,196-197
+docs/en/concepts/06-extraction.md
+  s_10d7bb8cee447a::t_ce6fc5771519fb 122,125-136,144
+docs/en/configuration/01-server.md
+  s_10d7bb8cee447a::t_7a1ce02a75b717 216-218,226-233
+docs/en/getting-started/01-introduction.md
+  s_10d7bb8cee447a::t_b052965f6cb30b 65-69,76,82-83
+docs/en/guides/01-configuration.md
+  s_10d7bb8cee447a::t_1d5cf441aea437 1560,1585,1587
+docs/en/guides/06-mcp-integration.md
+  s_10d7bb8cee447a::t_825f3fd3d2d92b 132,137
+docs/images/agents/en/claude-code.md
+  s_10d7bb8cee447a::t_3211efe94b5884 1,4,7,9,11,13-15,17,19-24,26,28-30
+docs/images/agents/en/codex.md
+  s_10d7bb8cee447a::t_d97a31da0fc648 1,4,7,9,11,13,15-20,22,24-26
+docs/images/agents/en/cursor.md
+  s_10d7bb8cee447a::t_4d347643f04fad 1,7,12-13,15,17,19-26
+docs/images/agents/en/deerflow-mcp.md
+  s_10d7bb8cee447a::t_c716865f621097 5,29
+docs/images/agents/en/deerflow-memory-manager.md
+  s_10d7bb8cee447a::t_1c55c057d20243 5,23,60
+docs/images/agents/en/hermes.md
+  s_10d7bb8cee447a::t_1f5d66a4221e24 1,4,7,9,15-22,24,26-27
+docs/images/agents/en/index.json
+  s_10d7bb8cee447a::t_6ec4707fba0772 3,56
+docs/images/agents/en/openclaw.md
+  s_10d7bb8cee447a::t_50d787babbd085 1,4-6,9,11-12,15,17-20,22-25
+docs/images/agents/en/opencode.md
+  s_10d7bb8cee447a::t_0b7282816efcaf 1,4,7,9,11,13,15-19,21,23-24
+docs/images/agents/en/trae.md
+  s_10d7bb8cee447a::t_95240621e3fec4 1,11,15,17,19,21-28
+docs/images/agents/zh/claude-code.md
+  s_10d7bb8cee447a::t_31abb28bde4e02 1,4,7,9,11,13-15,19-24,26,28-30
+docs/images/agents/zh/cli.md
+  s_10d7bb8cee447a::t_6f09cedcc970fb 17
+docs/images/agents/zh/codex.md
+  s_10d7bb8cee447a::t_f98c01c7779f30 1,4,7,9,11,15-20,22,24-26
+docs/images/agents/zh/cursor.md
+  s_10d7bb8cee447a::t_dc436d23563c96 1,7,11-13,19-26
+docs/images/agents/zh/deerflow-mcp.md
+  s_10d7bb8cee447a::t_c23926b38f46bf 5,29
+docs/images/agents/zh/deerflow-memory-manager.md
+  s_10d7bb8cee447a::t_164ebe92d6604c 5,23,60
+docs/images/agents/zh/hermes.md
+  s_10d7bb8cee447a::t_6b32cfd28fa1f6 1,4,7,9,15-22,24,26-27
+docs/images/agents/zh/index.json
+  s_10d7bb8cee447a::t_2bd98b819c333b 3,56
+docs/images/agents/zh/openclaw.md
+  s_10d7bb8cee447a::t_c710cb026d998f 1,4-6,9,11-12,15,17-25
+docs/images/agents/zh/opencode.md
+  s_10d7bb8cee447a::t_a7f43dcb461bc8 1,4,7,9,11,15-19,21,23-24
+docs/images/agents/zh/trae.md
+  s_10d7bb8cee447a::t_11eea20ff99412 1,11,15,21-28
+docs/plans/2026-08-17-shared-temp-upload-timestamp-directory.md
+  s_10d7bb8cee447a::t_84b44b5315be7f 1-112
+docs/zh/agent-integrations/01-overview.md
+  s_10d7bb8cee447a::t_8443bc745d7cee 11,13,23-26
+docs/zh/agent-integrations/02-claude-code.md
+  s_10d7bb8cee447a::t_7241fb6f759c2d 115
+docs/zh/agent-integrations/03-openclaw.md
+  s_10d7bb8cee447a::t_d6a8a9eb2e2c0f 118
+docs/zh/agent-integrations/04-codex.md
+  s_10d7bb8cee447a::t_57675c2d78b8af 3,15-21,55,68,75,96,100
+docs/zh/agent-integrations/05-hermes.md
+  s_10d7bb8cee447a::t_7066f772b46170 17,20-22,32
+docs/zh/agent-integrations/06-mcp-clients.md
+  s_10d7bb8cee447a::t_645740ff2ec607 89
+docs/zh/agent-integrations/07-langchain-langgraph.md
+  s_10d7bb8cee447a::t_1350bc2c5bd3d2 306
+docs/zh/agent-integrations/08-community-plugins.md
+  s_10d7bb8cee447a::t_eb5632cb8dcadb 79-81
+docs/zh/agent-integrations/09-log-ingestion.md
+  s_10d7bb8cee447a::t_612287ce73a21e 121
+docs/zh/agent-integrations/10-opencode.md
+  s_10d7bb8cee447a::t_658052a7d68b64 136,138-141,161-164
+docs/zh/agent-integrations/11-pi.md
+  s_10d7bb8cee447a::t_3832d2b1b0f6a1 47,98-101
+docs/zh/agent-integrations/12-cursor.md
+  s_10d7bb8cee447a::t_af70b24003fc19 28,77
+docs/zh/agent-integrations/13-trae.md
+  s_10d7bb8cee447a::t_3496e4be9c6ec7 1,3,7,24,35,48,52,56,62,78,88,92
+docs/zh/agent-integrations/14-openviking-helper.md
+  s_10d7bb8cee447a::t_084cb83e9a2544 61
+docs/zh/agent-integrations/15-agent-plugins.md
+  s_10d7bb8cee447a::t_56f7774e7b94f2 29,60,98-101
+docs/zh/agent-integrations/16-capability-reference.md
+  s_10d7bb8cee447a::t_77caacb891f9df 1-690
+docs/zh/api/02-resources.md
+  s_10d7bb8cee447a::t_8c2357591cfc97 584-613,653-655
+docs/zh/api/12-content.md
+  s_10d7bb8cee447a::t_2ce6aebe81afb5 229,361
+docs/zh/concepts/02-context-types.md
+  s_10d7bb8cee447a::t_2229eb069be37a 104-106,110-112
+docs/zh/concepts/03-context-layers.md
+  s_10d7bb8cee447a::t_4035d5f33a287c 1,3,7-11,13,15,17,19,21,27,33,35,38,40,42,44-46,53,55,57,63,65,67-75,77,79,81,83-99,102,104-109,111,113,115,117-123,125,127,129,131-134,136,139,141,143,145-148,150,152,154,156-162,164-176,179-190,196
+docs/zh/concepts/06-extraction.md
+  s_10d7bb8cee447a::t_e7661d7206fe1a 121,124-135,143
+docs/zh/configuration/01-server.md
+  s_10d7bb8cee447a::t_acb834707a0a2b 216-218,226-233
+docs/zh/getting-started/01-introduction.md
+  s_10d7bb8cee447a::t_c5cf533e61d753 65-69,76,82-83
+docs/zh/guides/01-configuration.md
+  s_10d7bb8cee447a::t_523a50e570a0d8 1642,1667,1669
+docs/zh/guides/06-mcp-integration.md
+  s_10d7bb8cee447a::t_3849c41cd22023 124,129
+examples/claude-code-memory-plugin/README.md
+  s_10d7bb8cee447a::t_a134f600d65e8d 273,360,373-374,399
+examples/claude-code-memory-plugin/README_CN.md
+  s_10d7bb8cee447a::t_d60f5088219dd5 267,354,367-368,393
+examples/claude-code-memory-plugin/STATUSLINE.md
+  s_10d7bb8cee447a::t_f9cb340d2b2325 45
+examples/claude-code-memory-plugin/scripts/ov-status.mjs
+  s_10d7bb8cee447a::t_20b0ea5ead58bd 9,101
+examples/claude-code-memory-plugin/scripts/shared/recall-core.mjs
+  s_10d7bb8cee447a::t_4ab0715ea7926f 424
+examples/claude-code-memory-plugin/scripts/statusline.mjs
+  s_10d7bb8cee447a::t_c696a48d44527e 192,194
+examples/claude-code-memory-plugin/skills/openviking-memory/SKILL.md
+  s_10d7bb8cee447a::t_35a3eb5fe87e6a 1-81
+examples/codex-memory-plugin/README.md
+  s_10d7bb8cee447a::t_62e4b732d58a31 1,4,26-31,106-108,112,171
+examples/codex-memory-plugin/scripts/config.mjs
+  s_10d7bb8cee447a::t_cacc8223a752ec 5-6,8-10
+examples/codex-memory-plugin/scripts/marketplace.test.mjs
+  s_10d7bb8cee447a::t_fab691ec387fc7 30
+examples/codex-memory-plugin/scripts/shared/recall-core.mjs
+  s_10d7bb8cee447a::t_dedc4985a9e83a 424
+examples/codex-memory-plugin/skills/openviking-memory/SKILL.md
+  s_10d7bb8cee447a::t_4f0b4f57f74cbf 1-81
+examples/cursor-memory-plugin/rules/openviking-memory.mdc
+  s_10d7bb8cee447a::t_0f515189694e64 6
+examples/cursor-memory-plugin/skills/openviking-memory/SKILL.md
+  s_10d7bb8cee447a::t_bbbaa7a24f35de 3-11,16-19,21,23-81
+examples/dsh-memory-plugin/shared/recall-core.mjs
+  s_10d7bb8cee447a::t_19c6e8b5882f65 424
+examples/memory-plugin-shared/install-agent-hooks.test.mjs
+  s_10d7bb8cee447a::t_b6cd8be5463354 2,17,20-25,51,54-69,80,93,95,98-102,104-119,123,128-155,157-164,166,168,170-173,175-228
+examples/memory-plugin-shared/install-tui.test.mjs
+  s_10d7bb8cee447a::t_ef66cd2443ad30 69,90,101,116-119,124-126,130,133-154
+examples/memory-plugin-shared/install.sh
+  s_10d7bb8cee447a::t_c81da35dfeba69 4,13,82-83,149,161-163,383,390-444,513-514,536,594,848,937,980-981,1603-1633,1743-1748,1783-1795,3295,3297-3298,3342-3346
+examples/memory-plugin-shared/lib/recall-core.mjs
+  s_10d7bb8cee447a::t_dd3c4da65383a3 423
+examples/memory-plugin-shared/release-marketplace.test.mjs
+  s_10d7bb8cee447a::t_876b415d16a583 73,85-88
+examples/memory-plugin-shared/sync.mjs
+  s_10d7bb8cee447a::t_ff650c15b36903 43-58,72-80,93-98
+examples/memory-plugin-shared/sync.test.mjs
+  s_10d7bb8cee447a::t_ce00c184fa7c7c 38-48,68-90
+examples/openclaw-plugin/openclaw.plugin.json
+  s_10d7bb8cee447a::t_78b2745bdcbfdb 264-269,524-527
+examples/opencode-plugin/INSTALL-ZH.md
+  s_10d7bb8cee447a::t_f5ab426e99cb40 153-156,176,181,184-185
+examples/opencode-plugin/INSTALL.md
+  s_10d7bb8cee447a::t_d85bbd871c2188 150-153,173,178,181-182
+examples/opencode-plugin/README.md
+  s_10d7bb8cee447a::t_863e7c3df9646e 189,194,197-198
+examples/opencode-plugin/lib/shared/recall-core.mjs
+  s_10d7bb8cee447a::t_08503f5056f98a 424
+examples/ov.conf.example
+  s_10d7bb8cee447a::t_0539ed2380c90b 87-90,93-95,119-129,146-154
+examples/pi-coding-agent-extension/shared/recall-core.mjs
+  s_10d7bb8cee447a::t_8fc02ca235e243 424
+examples/skills/openviking-memory/SKILL.md
+  s_10d7bb8cee447a::t_b6f9dc0ec700c3 1-81
+examples/trae-cli-memory-hooks/README.md
+  s_10d7bb8cee447a::t_d0cc5cd6f1e82e 3-7,14,20-24,26,28,30-31
+examples/trae-cli-memory-hooks/openviking.integration.json
+  s_10d7bb8cee447a::t_3ccd8c9d8884aa 5-6
+examples/zcode-memory-plugin/scripts/shared/recall-core.mjs
+  s_10d7bb8cee447a::t_5ecd64f928d9be 424
+openviking/connector/routing.py
+  s_10d7bb8cee447a::t_c3cb14f80e9094 36-39
+openviking/models/vlm/backends/volcengine_vlm.py
+  s_10d7bb8cee447a::t_642550bf6bbbf6 9,33-50,187,222,406,450
+openviking/parse/accessors/feishu_accessor.py
+  s_10d7bb8cee447a::t_09be869690346f 36,194,202-211,490-625,909,914-916,923-933,935-940,943-951,953-967,980-991,1365-1393,1932-1934,1994-2025,2097-2100,2214-2297
+openviking/parse/backend.py
+  s_10d7bb8cee447a::t_4ec20bddc9eff0 1-21
+openviking/parse/parser_router.py
+  s_10d7bb8cee447a::t_5a17a0308afa2f 14,84-87,110,116,128
+openviking/resource/staged_source.py
+  s_10d7bb8cee447a::t_25b0df918b2351 1-199
+openviking/retrieve/context_assembler/tiers.py
+  s_10d7bb8cee447a::t_f58d69d07f4a20 29,113
+openviking/retrieve/hierarchical_retriever.py
+  s_10d7bb8cee447a::t_a985364d6a4737 18,26-27,154,176-178,608-615,624
+openviking/server/app.py
+  s_10d7bb8cee447a::t_c7856c0a8914e8 781
+openviking/server/config.py
+  s_10d7bb8cee447a::t_f4c811ad2aeecf 249
+openviking/server/mcp_endpoint.py
+  s_10d7bb8cee447a::t_0db3248856f41a 5-7,36-40,56,296,299-312,314-321,324-364,378-379,430-433,1256
+openviking/server/resource_ingest.py
+  s_10d7bb8cee447a::t_3a84a557e0dcd7 7-8,41-43
+openviking/server/routers/admin.py
+  s_10d7bb8cee447a::t_02b6c20dddd190 349
+openviking/server/routers/resources.py
+  s_10d7bb8cee447a::t_db5802ec36289d 226-227,231-233
+openviking/server/routers/skills.py
+  s_10d7bb8cee447a::t_646927f7e86eb4 6-7,10,12,36,40-44,92,105-107,138,260-262,342-506,624-626,630-632,673,686-696,720-722
+openviking/server/temp_upload_store.py
+  s_10d7bb8cee447a::t_ac51a6bf571d83 8,21,26-28,48-49,52-53,65-81,181,185,189-190,192,211-215,284-286,288-290,292-293,295-300,303-304,306,324-391,399
+openviking/service/fs_service.py
+  s_10d7bb8cee447a::t_214fc98fcf5af2 12,28-31,203-223,390-395,421
+openviking/service/reindex_executor.py
+  s_10d7bb8cee447a::t_7e7e3d3fdc59d7 36,59,106-114,143-166,1130-1132,1150-1152,1164-1165,1170-1172,1186,1188-1205,1488,1507,1577-1578,1581-1582,1585,1598-1600,1617,1619-1621,1635-1636,1640-1657,1681-1683,1701-1703,1767
+openviking/service/resource_memory_link_service.py
+  s_10d7bb8cee447a::t_5a0d9b1035a55e 36,346,640
+openviking/service/resource_service.py
+  s_10d7bb8cee447a::t_2445413d996bf3 15,18,22,24,29,32,35-39,55,64-69,87,130,150,169-179,230-233,314-315,318-319,482-483,490-491,500,502-508,518-524,536,539-541,545-553,559-586,601,618-619,622-623,645-677,693,695,698-716,718-784,786-821,823-830,833-889,892-909,911-912,915-916,918,920-925,927-929,947-974,980,982-983,985,987-989,992-997,1004-1005,1009-1010,1021-1022,1024,1028,1035,1050-1056,1058,1064,1070-1073,1075,1078,1081,1262-1263,1265-1266,1269-1270,1314-1353,1431,1488,1499,1504-1522,1530,1573-1598
+openviking/service/task_store.py
+  s_10d7bb8cee447a::t_10c23294d934d0 157
+openviking/service/task_tracker.py
+  s_10d7bb8cee447a::t_5fbe393b0a4f7c 83,93,358,369,594,721,749-770,1052
+openviking/service/user_deletion.py
+  s_10d7bb8cee447a::t_a1dfab50047435 28,437,446-447,449-457,459,461
+openviking/session/memory/memory_updater.py
+  s_10d7bb8cee447a::t_de1eb9d9aff15b 19,43,968,1621-1632
+openviking/session/session.py
+  s_10d7bb8cee447a::t_afbf9231694efb 17,47,799,2461-2471,2476-2486,3322,3332,3866,5214-5224,5230-5240
+openviking/session/skill/skill_operation_updater.py
+  s_10d7bb8cee447a::t_7baa4f5fbe9e1f 18,217
+openviking/storage/collection_schemas.py
+  s_10d7bb8cee447a::t_e9644c90da9e8a 215,850-853,899-905,908
+openviking/storage/content_write.py
+  s_10d7bb8cee447a::t_377f26edcf40b8 39-44,49,66,136,198,212-224,228-233,277-282,294,299-316,377-379,388-390,420-422,522,571-577,606,614,778-781,784-791,793-796,820-830,910-945,1006-1007,1057,1059-1073,1106-1114
+openviking/storage/queuefs/add_resource_msg.py
+  s_10d7bb8cee447a::t_c6e3899afc9aa4 3,6,12-16,28-29,49,59-78,93-104,113,117-118,159-161,163-164,175
+openviking/storage/queuefs/add_resource_processor.py
+  s_10d7bb8cee447a::t_c6f4c80b546b61 57-58,60-77,120-123,145-146,172,186-190,200,214,216-219,225-233,248,258,267-269,282-289
+openviking/storage/queuefs/semantic_dag.py
+  s_10d7bb8cee447a::t_41308929beefaa 16-22,27,168-169,184-185,424,506,524-525,579-581,608-612,758-760,762-770,778,792,805,810-826,839-853,855-856
+openviking/storage/queuefs/semantic_msg.py
+  s_10d7bb8cee447a::t_73a7caf7fc2d3c 13,64-65,86-87,107-108,161-162
+openviking/storage/queuefs/semantic_processor.py
+  s_10d7bb8cee447a::t_da0f2bf1be9862 42-49,256-261,279,434-435,570,581,585-586,675-680,682,695-696,726-727,736-743,1033,1057-1058,1083
+openviking/storage/semantic_sidecar.py
+  s_10d7bb8cee447a::t_15bdbd1a74c0b9 3,5-7,9-17,23-339,349,353-358,363-364,366-367,377-402,409-427,430,433-474
+openviking/storage/vectordb/utils/str_to_uint64.py
+  s_10d7bb8cee447a::t_ee55cfc31d6580 10
+openviking/storage/viking_fs/_access.py
+  s_10d7bb8cee447a::t_dd12506a03a2bd 17,192-203
+openviking/storage/viking_fs/_ops.py
+  s_10d7bb8cee447a::t_92964988bd6cbe 979-980
+openviking/storage/viking_fs/_semantic.py
+  s_10d7bb8cee447a::t_fc8166aea99bcf 7,9,13,51,183,357,633-647,651-665
+openviking/telemetry/request_wait_tracker.py
+  s_10d7bb8cee447a::t_01ff76849ce0d2 23,86-93,135-136,144,147-148
+openviking/utils/embedding_utils.py
+  s_10d7bb8cee447a::t_5d6a082b8e39fe 31,365,372-376,396-437,456-458
+openviking/utils/git_auth.py
+  s_10d7bb8cee447a::t_d41cd04553538a 11,24-34
+openviking/utils/media_processor.py
+  s_10d7bb8cee447a::t_caad5cf3116f7a 7,11,128-157,251
+openviking/utils/resource_processor.py
+  s_10d7bb8cee447a::t_e6486c3f4ef3ae 10,40,48,106,111,114-121,123,303,312,450-454,500,521-522,622-645,665-671,695,706-717,721,727-739,819
+openviking/utils/skill_processor.py
+  s_10d7bb8cee447a::t_b24770b1b83481 319-321
+openviking/utils/summarizer.py
+  s_10d7bb8cee447a::t_07f066a173f732 111-112,194-195
+openviking_cli/rust_cli.py
+  s_10d7bb8cee447a::t_33eb54ea9bf603 78,83-87,89-91
+openviking_cli/setup_wizard.py
+  s_10d7bb8cee447a::t_dd0e26d40aa5e8 51-53,322-326,334-335,343,345,366-368,379,382-386,393-394,767-891,906,1213-1215,1220,1243-1285,1291,1302-1303,1323,1349-1370,1373-1375,1380-1381,1384,1386,1439-1445,1465,1468-1473,1475-1494,1496,1499-1504,1518,1528-1529,1532,1541,1546-1617,1802-1804,1806,2155-2158
+openviking_cli/utils/config/open_viking_config.py
+  s_10d7bb8cee447a::t_9fe4ce54a71826 47,245-249
+openviking_cli/utils/config/parser_config.py
+  s_10d7bb8cee447a::t_6844e1acf48e0d 753-755,770-771
+openviking_cli/utils/config/queue_worker_config.py
+  s_10d7bb8cee447a::t_61fc3ba5ede2f8 20-29,34-36
+openviking_cli/utils/config/reindex_config.py
+  s_10d7bb8cee447a::t_1569466291fbf9 1-17
+pyproject.toml
+  s_10d7bb8cee447a::t_bb6d1235b86be5 256,259
+sdk/python/openviking_sdk/client.py
+  s_10d7bb8cee447a::t_5b306eff7213d3 404,423,860,864,2071,2078,2869
+tests/cli/conftest.py
+  s_10d7bb8cee447a::t_24d3d605bd9ad8 610-619
+tests/cli/test_setup_wizard.py
+  s_10d7bb8cee447a::t_d171cbd2369930 14,20,503-833,1037-1038,1053-1056,1483
+tests/integration/test_gemini_e2e.py
+  s_10d7bb8cee447a::t_b4872d203cba6d 11-12
+tests/misc/test_rust_cli.py
+  s_10d7bb8cee447a::t_fc71faec4e9276 1-19
+tests/misc/test_semantic_config.py
+  s_10d7bb8cee447a::t_299e333fe33d0f 17
+tests/misc/test_vikingfs_uri_guard.py
+  s_10d7bb8cee447a::t_9d31517d5ed101 31-35,38,139-148,150-169,178-195,278-304
+tests/parse/test_feishu_accessor.py
+  s_10d7bb8cee447a::t_cd950f69e38e8f 624-663,711-725
+tests/parse/test_feishu_errors.py
+  s_10d7bb8cee447a::t_7ec7c6b0b42b42 32-33,35,46-47
+tests/parse/test_feishu_parser_api.py
+  s_10d7bb8cee447a::t_bde28813531687 16,19,393,413-425,470-482,497-503,513,536,538-544,547-554,558,563,579,588-625,696-704,721-723,726-727,730-733,865-867,869,876,879-885,895-898,903,912,914-920,923-928,958,967,980-984,992,1003,1033,1048-1094
+tests/retrieve/test_hierarchical_retriever_rerank.py
+  s_10d7bb8cee447a::t_fcd97610f6708f 12,15,668,674-679,682-700,704-709
+tests/server/test_admin_api.py
+  s_10d7bb8cee447a::t_a62279d0b6d34b 643,659-667,690-691
+tests/server/test_admin_rebuild_api.py
+  s_10d7bb8cee447a::t_0dc43e6f894935 3-5,1845,1885-1886,1890-1892,1896-1899,1918-1923,1925-1929,1931,1934,2085-2087,2108,2136-2165
+tests/server/test_api_content.py
+  s_10d7bb8cee447a::t_a49fd34556ee90 116-117
+tests/server/test_api_resources.py
+  s_10d7bb8cee447a::t_f67615c8c4bca4 838,851-859,920,930-936,953
+tests/server/test_api_skills.py
+  s_10d7bb8cee447a::t_5111954a15daad 78-83,92-97
+tests/server/test_mcp_endpoint.py
+  s_10d7bb8cee447a::t_355b51395ec9dd 48,178-201,341-342,344-349,351,353,355-357,359-366,369-435,533-545,556,559,570-571,1053-1084
+tests/service/test_resource_service_connector.py
+  s_10d7bb8cee447a::t_3c59db08f6d869 18,718,732,745,750-751,754-755,767,774-784,786-789,803-812,816,823-835,847-850,859,866-878,890-898,902-906,909-910,914-920,928,935,937-942,944-945,963,968,1023-1035,1043-1047,1049,1120,1130,1281,1291
+tests/service/test_resource_service_parse_mode.py
+  s_10d7bb8cee447a::t_5da8f650a5d254 34-39,84-88,129-135,137,143-152,167-195,214-221,331,339,346,350,352-356,358-359,361,363,367,374
+tests/service/test_resource_service_understanding_routing.py
+  s_10d7bb8cee447a::t_a9dc44a2b23d60 55,108,156,160,169,198,206
+tests/service/test_resource_service_watch.py
+  s_10d7bb8cee447a::t_61ed859af241dd 52-57,184,464-473,486-503,530-537,553-570,579-582
+tests/service/test_watch_recovery.py
+  s_10d7bb8cee447a::t_32302be37d153d 360-362,400-402,424,438-440,461,470,529-531,553,574-576,604
+tests/session/memory/test_memory_updater.py
+  s_10d7bb8cee447a::t_ba1f905b03b2f2 40,320-334
+tests/session/test_session_context.py
+  s_10d7bb8cee447a::t_6262e188fe95fc 19,175,200,337,352
+tests/session/test_session_lifecycle.py
+  s_10d7bb8cee447a::t_82856526459d1d 7,94-95,103
+tests/storage/test_collection_schemas.py
+  s_10d7bb8cee447a::t_4a817a6848c319 682-683,696,1945
+tests/storage/test_content_write_processing_mode.py
+  s_10d7bb8cee447a::t_14f1f56cf9d858 9,13-16,45-61,68-70,104-138
+tests/storage/test_semantic_dag_incremental.py
+  s_10d7bb8cee447a::t_8218cbf3168f21 5,10,13-16,148-158,163-166,185
+tests/storage/test_semantic_dag_stats.py
+  s_10d7bb8cee447a::t_0b2e7abe49ce16 5,23,148-154,170,207,245,277-282,347,361-365,367-376,379-380
+tests/storage/test_semantic_msg_ingest_options.py
+  s_10d7bb8cee447a::t_d5a1306fc0d455 5,13-14,28-32
+tests/storage/test_semantic_processor_l0_l1.py
+  s_10d7bb8cee447a::t_5ec84647b74cf3 6,9,37-49,110,122
+tests/storage/test_semantic_queue_memory_dedupe.py
+  s_10d7bb8cee447a::t_29cd562eb6e901 5,15,144-150,198-204,231,285
+tests/storage/test_viking_fs_tree.py
+  s_10d7bb8cee447a::t_42b3e88dfbd907 64-65,84-102,132-133,438,479,481
+tests/telemetry/test_request_wait_tracker.py
+  s_10d7bb8cee447a::t_2c800950569cc9 57-73
+tests/test_config_loader.py
+  s_10d7bb8cee447a::t_55177edaefac4a 124,129,131,134,139-142,144-145,151,153
+tests/test_task_tracker.py
+  s_10d7bb8cee447a::t_d98c72850ae564 356,372-378,512,524-527,530-535,546-551,559-563
+tests/unit/test_skill_processor_nested_skill_md.py
+  s_10d7bb8cee447a::t_0957aa0f01e1b9 1-76
+tests/unit/test_summarizer_resources_root_split.py
+  s_10d7bb8cee447a::t_3690649ef725e4 155-156,163-167
+tests/unit/test_vectorize_file_strategy.py
+  s_10d7bb8cee447a::t_e50650f1911bb4 564-566,571,573-582,584-586,593,595-601
+tests/unit/test_vikingbot_vlm_adapter_retry.py
+  s_10d7bb8cee447a::t_211b24bcba9863 7-11,14-19,64,66,68,88-95,278-438
+tests/utils/test_resource_processor_processing_mode.py
+  s_10d7bb8cee447a::t_a8eff2f64ee116 4,65,127,200-204,213-222,225-227,229-236,244-264,279-285,289,349-356,385-393,395-409,411-422,424-432,436-448,450,473-480
+tests/vectordb/test_str_to_uint64.py
+  s_10d7bb8cee447a::t_a5a44a914c4664 1-62
+web-studio/package-lock.json
+  s_10d7bb8cee447a::t_b89d52cb643721 60-61
+web-studio/package.json
+  s_10d7bb8cee447a::t_5fe8c90916b33e 70-71
+web-studio/src/routeTree.gen.ts
+  s_10d7bb8cee447a::t_de91a0df933fb5 13-23,25-26,28-30,33-35,38-40,43-45,48-55,63-65,68-70,73-75,78-80,83-85,88-90,98-101,227-231,234-238,241-245,248-252,255-266,276-280,283-287,290-294,297-301,304-308,311-315,325-330
+web-studio/src/routes/monitoring/-components/queue-status-card.tsx
+  s_10d7bb8cee447a::t_b94a1ae66b41bf 1-58,60-62,65-85,88-89,91-101,103-113,115-125,127-132,134-138,141-170
+web-studio/src/routes/resources/-components/file-preview-html.test.tsx
+  s_10d7bb8cee447a::t_2f81c30de7a688 1-118
+web-studio/src/routes/resources/-components/file-preview.tsx
+  s_10d7bb8cee447a::t_5a116e0513880d 6-7,634,638-645,647-654,1606
+web-studio/src/routes/resources/-hooks/viking-fm.ts
+  s_10d7bb8cee447a::t_56e24df512b356 1
+web-studio/src/routes/tasks/-components/task-detail-sheet.tsx
+  s_10d7bb8cee447a::t_0e12a7d667ece9 6,9,18,29-30,38,48-72,74-75,144-195,197-227,229-263,265-269,271-304,306-321,376,387-393,406-442
+web-studio/src/routes/tasks/-lib/task-pipeline.ts
+  s_10d7bb8cee447a::t_5d6e1f0b812235 1,3,5-13,15-28,31-49,51,54-58,60-65,68-76,78-94,97-109,111-121,123-161
+web-studio/src/routes/tasks/-lib/task-time.ts
+  s_10d7bb8cee447a::t_b1f0ca17d9626d 4,32-83
+web-studio/src/routes/tasks/route.tsx
+  s_10d7bb8cee447a::t_ca4df0a69d0a9a 2,6,11,14-15,18,46-48,50,57-58,78,99-113,117,120-121,123-163,170,176-177,182-183,186-197,204-291,301-347,350-356,362,375,380-381,384-411,416-697,699,709-729,732-829,834-856,911,920,927-942,991,993,1036-1041,1046-1050
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "59ab786d015d12d7912c95d25010f705012599c3",
+  "prompts": {},
+  "sessions": {
+    "s_10d7bb8cee447a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a01809-24b9-7a60-a0ef-c3dc4ff32eb0",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

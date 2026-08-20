@@ -1,0 +1,45 @@
+openviking/prompts/templates/memory/entities.yaml
+  s_b3210499670685::t_f8460ab2ea59fd 59
+openviking/prompts/templates/memory/preferences.yaml
+  s_b3210499670685::t_d8f8690f979746 47
+openviking/session/memory/extract_loop.py
+  s_4308f83fbf826b::t_11f4677fe2df89 211,231,806-810,829,832,881,887-892
+openviking/session/memory/merge_op/__init__.py
+  s_4308f83fbf826b::t_3298198c25059c 8,22,29
+openviking/session/memory/merge_op/base.py
+  s_4308f83fbf826b::t_818ff31dc8e2be 9,62,66-90,92,97-99,102,104
+openviking/session/memory/merge_op/patch.py
+  s_4308f83fbf826b::t_17cb1e2ed40263 3,18,32-35,85
+openviking/session/memory/merge_op/patch_handler.py
+  s_4308f83fbf826b::t_692b9e2432ef12 7,11,26,851-876,917-920
+tests/session/memory/test_memory_react.py
+  s_4308f83fbf826b::t_2dfe6eb8591921 356-368
+tests/session/memory/test_merge_ops.py
+  s_4308f83fbf826b::t_7a373a952dcc7e 16,129,134-142,296-318,336-363,388-415
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "286820e78becfe6bc55bf64a588cd5c13c70acd1",
+  "prompts": {},
+  "sessions": {
+    "s_4308f83fbf826b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0154d-c03b-7312-9c0b-0116f1f115bf",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    },
+    "s_b3210499670685": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a01394-3d63-7ba0-9127-f4935897c443",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

@@ -1,0 +1,27 @@
+bot/tests/test_compile.py
+  s_a249c14ec7f94c::t_acbe663404ad81 351,383-384,427,464-466,469,755,800-844
+bot/vikingbot/compile/renderer.py
+  s_a249c14ec7f94c::t_bcde1da0b6c29d 38,180,200,231,237-244,247-250,252-258,457,467,476
+bot/vikingbot/compile/service.py
+  s_a249c14ec7f94c::t_929b69957c982a 2191
+examples/compile/ov-compile-skills/llm-wiki/SKILL.md
+  s_a249c14ec7f94c::t_c1d89eb912e14f 1-243
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "311dfeaff47db62317a8ff2f1915e5e821ca91ce",
+  "prompts": {},
+  "sessions": {
+    "s_a249c14ec7f94c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0182e-2d34-7fe1-b77f-15e7e06d5a16",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
