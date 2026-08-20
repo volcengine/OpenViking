@@ -108,6 +108,9 @@ export function buildContextSearchBody(cfg = {}, options = {}) {
   if (maxTokensConfigured) body.max_tokens = maxTokens;
   if (cfg.recallPeerScope === "actor") body.peer_scope = "actor";
 
+  const contextType = String(options.contextType || cfg.recallContextType || "").trim();
+  if (contextType) body.context_type = contextType;
+
   const sessionId = String(options.sessionId || "").trim();
   if (sessionId) {
     body.session_id = sessionId;
@@ -285,7 +288,7 @@ async function resolveTargetUri(fetchJSON, targetUri, actorPeerId = "") {
 
 async function searchOneSource(fetchJSON, query, source, limit, actorPeerId = "") {
   const resolvedUri = await resolveTargetUri(fetchJSON, source.uri, actorPeerId);
-  const body = { query, target_uri: resolvedUri, limit, score_threshold: 0 };
+  const body = { query, target_uri: resolvedUri, limit, score_threshold: 0, context_type: source.type };
   const res = await fetchJSON("/api/v1/search/find", {
     method: "POST",
     body: JSON.stringify(body),
@@ -295,9 +298,9 @@ async function searchOneSource(fetchJSON, query, source, limit, actorPeerId = ""
   return items.map((item) => ({ ...item, _sourceType: source.type }));
 }
 
-async function searchAllSources(fetchJSON, query, perSourceLimit, actorPeerId = "", log = () => {}) {
+async function searchAllSources(fetchJSON, query, perSourceLimit, actorPeerId = "", log = () => {}, sources = SOURCES) {
   const results = await Promise.all(
-    SOURCES.map((src) => searchOneSource(fetchJSON, query, src, perSourceLimit, actorPeerId)),
+    sources.map((src) => searchOneSource(fetchJSON, query, src, perSourceLimit, actorPeerId)),
   );
   const all = results.flat();
   log("recall_search_summary", {
@@ -575,6 +578,7 @@ export async function postRecall(fetchJSON, body, opts = {}) {
 export async function buildRecallBlock(fetchJSON, cfg, query, options = {}) {
   const actorPeerId = options.actorPeerId ?? cfg.peerId ?? "";
   const log = options.log || (() => {});
+  const contextType = String(options.contextType || cfg.recallContextType || "").trim();
   const trimmed = String(query || "").trim();
   if (!trimmed) return null;
 
@@ -583,13 +587,17 @@ export async function buildRecallBlock(fetchJSON, cfg, query, options = {}) {
   const serverBlock = await buildServerAssembledBlock(fetchJSON, cfg, trimmed, {
     ...options,
     actorPeerId,
+    contextType,
     log,
   });
   if (serverBlock !== null) return serverBlock || null;
 
   const recallLimit = Math.max(1, Number(cfg.recallLimit || DEFAULT_CONTEXT_LIMIT));
   const perSourceLimit = Math.max(recallLimit * 2, 8);
-  const raw = await searchAllSources(fetchJSON, trimmed, perSourceLimit, actorPeerId, log);
+  const sources = contextType
+    ? SOURCES.filter((src) => src.type === contextType)
+    : SOURCES;
+  const raw = await searchAllSources(fetchJSON, trimmed, perSourceLimit, actorPeerId, log, sources);
   if (raw.length === 0) return null;
 
   const profile = buildQueryProfile(trimmed);
