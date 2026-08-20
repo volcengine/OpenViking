@@ -5,7 +5,7 @@ DeerFlow 支持通过 MemoryManager 接入 OpenViking 作为长期记忆后端�
 在 DeerFlow 项目根目录下编辑 `.env` 文件，把本页的 API Key 填进去：
 
 ```bash
-OPENVIKING_API_KEY=[TODO]your-api-key
+OPENVIKING_API_KEY={{OPENVIKING_API_KEY}}
 ```
 
 ## 步骤 2：修改 DeerFlow 的 memory 配置
@@ -20,7 +20,7 @@ memory:
   manager_class: openviking
   mode: middleware
   backend_config:
-    base_url: https://api.vikingdb.cn-beijing.volces.com/openviking
+    base_url: {{OPENVIKING_BASE_URL}}
     owner_user_id: default
     api_key_env: OPENVIKING_API_KEY
     startup_policy: fail_fast
@@ -57,7 +57,7 @@ grep -i "memory manager resolved\|openviking\|deermem" logs/gateway.log
 
 ```text
 Memory manager resolved: OpenVikingMemoryManager (manager_class='openviking')
-HTTP Request: GET https://api.vikingdb.cn-beijing.volces.com/openviking/health "HTTP/1.1 200 OK"
+HTTP Request: GET {{OPENVIKING_BASE_URL}}/health "HTTP/1.1 200 OK"
 ```
 
 ## 步骤 5：验证写入与召回

@@ -5,7 +5,7 @@ DeerFlow 支持通过 MCP Server 接入 OpenViking。MCP 接入的核心价值�
 在 DeerFlow 项目根目录下编辑 `.env` 文件，把本页的 API Key 填进去：
 
 ```bash
-OPENVIKING_API_KEY=[TODO]your-api-key
+OPENVIKING_API_KEY={{OPENVIKING_API_KEY}}
 ```
 
 ## 步骤 2：创建 MCP 配置文件
@@ -26,7 +26,7 @@ cp extensions_config.example.json extensions_config.json
     "openviking": {
       "enabled": true,
       "type": "http",
-      "url": "https://api.vikingdb.cn-beijing.volces.com/openviking/mcp",
+      "url": "{{OPENVIKING_BASE_URL}}/mcp",
       "headers": {
         "X-API-Key": "$OPENVIKING_API_KEY"
       }

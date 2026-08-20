@@ -12,7 +12,7 @@ npm i -g @openviking/cli && ov config
 
 - Base URL: 复制以下 Base URL 到你的终端
 ```text
-https://api.vikingdb.cn-beijing.volces.com/openviking
+{{OPENVIKING_BASE_URL}}
 ```
 - API Key: 把本页展示的 API Key 粘贴到终端
 
