@@ -333,7 +333,7 @@ def _check_cli_compatible():
 CLI_COMPATIBLE = _check_cli_compatible()
 
 
-def pytest_collection_modifyitems(config, items):
+def _apply_cli_skip_markers(items):
     skip_reason = None
     if not CLI_COMPATIBLE:
         skip_reason = "openviking CLI not available"
@@ -614,6 +614,10 @@ def _find_file_in_pack(pack_uri, retries=10, interval=5):
                     return item["uri"]
         time.sleep(interval)
     return None
+
+
+def pytest_collection_modifyitems(items):
+    _apply_cli_skip_markers(items)
 
 
 @pytest.fixture(scope="session")
