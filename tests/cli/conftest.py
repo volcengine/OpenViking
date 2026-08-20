@@ -553,6 +553,16 @@ def ov_mv(src_uri, dst_uri):
     return ov_retry(["mv", src_uri, dst_uri, "-o", "json"], attempts=20, interval=15)
 
 
+def ov_cp(src_uri, dst_uri, *, recursive=False, output="json"):
+    args = ["cp"]
+    if recursive:
+        args.append("-r")
+    args.extend([src_uri, dst_uri])
+    if output:
+        args.extend(["-o", output])
+    return ov_retry(args, attempts=20, interval=15)
+
+
 def ov_write(uri, content, *extra_args):
     return ov_retry(
         [
