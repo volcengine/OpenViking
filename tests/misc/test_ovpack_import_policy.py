@@ -273,9 +273,16 @@ class MissingSidecarBackupVikingFS(FakeBackupVikingFS):
 
 
 class WatchTaskBackupVikingFS(FakeBackupVikingFS):
+    WATCH_CONTROL_FILES = {
+        ".watch_tasks.json": b'{"tasks":[]}',
+        ".watch_tasks.json.bak": b'{"backup":true}',
+        ".watch_tasks.json.tmp": b'{"tmp":true}',
+    }
+
     def __init__(self) -> None:
         super().__init__()
-        self.binary_files["viking://resources/.watch_tasks.json"] = b'{"tasks":[]}'
+        for name, data in self.WATCH_CONTROL_FILES.items():
+            self.binary_files[f"viking://resources/{name}"] = data
 
     async def tree(
         self,
@@ -286,20 +293,24 @@ class WatchTaskBackupVikingFS(FakeBackupVikingFS):
         ctx=None,
     ):
         if uri == "viking://resources":
-            return [
+            entries = [
                 {
                     "rel_path": "README.md",
                     "uri": "viking://resources/README.md",
                     "isDir": False,
                     "size": 5,
-                },
-                {
-                    "rel_path": ".watch_tasks.json",
-                    "uri": "viking://resources/.watch_tasks.json",
-                    "isDir": False,
-                    "size": 13,
-                },
+                }
             ]
+            entries.extend(
+                {
+                    "rel_path": name,
+                    "uri": f"viking://resources/{name}",
+                    "isDir": False,
+                    "size": len(data),
+                }
+                for name, data in self.WATCH_CONTROL_FILES.items()
+            )
+            return entries
         return await super().tree(
             uri,
             show_all_hidden=show_all_hidden,
@@ -745,8 +756,9 @@ async def test_backup_excludes_watch_task_control_files(
         manifest = json.loads(zf.read("openviking-backup/_ovpack/manifest.json").decode("utf-8"))
 
     manifest_paths = {entry["path"] for entry in manifest["entries"]}
-    assert "openviking-backup/files/resources/.watch_tasks.json" not in names
-    assert "resources/.watch_tasks.json" not in manifest_paths
+    for name in (".watch_tasks.json", ".watch_tasks.json.bak", ".watch_tasks.json.tmp"):
+        assert f"openviking-backup/files/resources/{name}" not in names
+        assert f"resources/{name}" not in manifest_paths
     assert "openviking-backup/files/resources/README.md" in names
     assert "resources/README.md" in manifest_paths
 
@@ -760,6 +772,8 @@ async def test_restore_skips_watch_task_control_files(
     files = {
         "resources/README.md": "hello",
         "resources/.watch_tasks.json": '{"tasks":[]}',
+        "resources/.watch_tasks.json.bak": '{"backup":true}',
+        "resources/.watch_tasks.json.tmp": '{"tmp":true}',
     }
     manifest = _manifest_for_files("openviking-backup", files)
     manifest["root"] = {
