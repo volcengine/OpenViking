@@ -175,6 +175,7 @@ class SemanticDagExecutor:
         source: Optional[Dict[str, str]] = None,
         generation_trigger: str = "semantic_refresh",
         aggregate_directory: bool = True,
+        copy_source_uri: str = "",
     ):
         self._processor = processor
         self._context_type = context_type
@@ -193,6 +194,7 @@ class SemanticDagExecutor:
         self._source = dict(source) if source else None
         self._generation_trigger = generation_trigger
         self._aggregate_directory = aggregate_directory
+        self._copy_source_uri = copy_source_uri
         self._task_context = get_task_context()
         self._telemetry = get_current_telemetry()
         self._stale = False
@@ -609,6 +611,29 @@ class SemanticDagExecutor:
 
         return None
 
+    async def _read_copy_source_summary(self, file_path: str) -> Optional[Dict[str, str]]:
+        """Reuse the copied file's source summary without parsing or invoking VLM."""
+        added = self._changes.get("added", [])
+        if not self._copy_source_uri or len(added) != 1 or file_path != added[0]:
+            return await self._read_existing_summary(file_path)
+        source_parent = self._copy_source_uri.rsplit("/", 1)[0]
+        source_name = self._copy_source_uri.rsplit("/", 1)[-1]
+        try:
+            overview = await self._viking_fs.read_file(
+                f"{source_parent}/.overview.md", ctx=self._ctx
+            )
+            summaries = self._processor._parse_overview_md(body_for_preview(overview))
+            if source_name in summaries:
+                return {
+                    "name": file_path.rsplit("/", 1)[-1],
+                    "summary": str(summaries[source_name]),
+                }
+        except SemanticSidecarFormatError:
+            raise
+        except Exception as exc:
+            logger.debug("Failed to reuse copy source summary for %s: %s", file_path, exc)
+        return None
+
     async def _check_dir_children_changed(
         self, dir_uri: str, current_files: List[str], current_dirs: List[str]
     ) -> bool:
@@ -670,7 +695,13 @@ class SemanticDagExecutor:
         need_vectorize = True
         try:
             summary_dict = None
-            if self._incremental_update:
+            if self._generation_trigger == "content_copy":
+                summary_dict = await self._read_copy_source_summary(file_path)
+                if summary_dict is None:
+                    summary_dict = {"name": file_name, "summary": ""}
+                self._file_change_status[file_path] = file_path in self._changed_paths
+                need_vectorize = False
+            elif self._incremental_update:
                 content_changed = await self._check_file_content_changed(file_path)
                 self._file_change_status[file_path] = content_changed
                 node = self._nodes.get(parent_uri)
@@ -830,6 +861,29 @@ class SemanticDagExecutor:
             return None
         return summary
 
+    def _build_content_copy_overview(
+        self,
+        dir_uri: str,
+        existing_overview: Optional[str],
+        file_summaries: List[Dict[str, str]],
+        children_abstracts: List[Dict[str, str]],
+    ) -> str:
+        """Patch copied entries into a parent overview without invoking a model."""
+        overview = (existing_overview or f"# {dir_uri.rsplit('/', 1)[-1]}").rstrip()
+        added_names = {path.rsplit("/", 1)[-1] for path in self._changes.get("added", [])}
+        sections: List[str] = []
+        for item in file_summaries:
+            name = str(item.get("name") or "")
+            if name in added_names:
+                sections.append(f"### {name}\n{str(item.get('summary') or '')}".rstrip())
+        for item in children_abstracts:
+            name = str(item.get("name") or "")
+            if name in added_names:
+                sections.append(f"### {name}/\n{str(item.get('abstract') or '')}".rstrip())
+        if not sections:
+            return overview
+        return f"{overview}\n\n" + "\n\n".join(sections)
+
     @property
     def stale(self) -> bool:
         return self._stale
@@ -909,10 +963,9 @@ class SemanticDagExecutor:
         need_vectorize = True
         children_changed = True
         should_write = True
-        abstract = ""
+        abstract: Optional[str] = None
         try:
-            overview = None
-            abstract = None
+            overview: Optional[str] = None
             if self._incremental_update:
                 children_changed = await self._check_dir_children_changed(
                     dir_uri, node.file_paths, node.children_dirs
@@ -933,17 +986,30 @@ class SemanticDagExecutor:
                 # Sampling happened in _dispatch_dir, before summary work was
                 # scheduled. Only the prepared bounded inputs reach the prompt.
                 sampled_entries = len(file_summaries) + len(children_abstracts)
-                overview = self._select_direct_media_overview(node, file_summaries)
-                if overview is None:
-                    async with self._llm_sem:
-                        overview = await self._processor._generate_overview(
-                            dir_uri,
-                            file_summaries,
-                            children_abstracts,
-                            total_files=len(node.file_paths),
-                            total_children=len(node.children_dirs),
-                        )
-                overview, abstract = self._processor._normalize_overview_generation(overview)
+                if self._generation_trigger == "content_copy":
+                    (
+                        existing_overview,
+                        existing_abstract,
+                    ) = await self._read_existing_overview_abstract(dir_uri)
+                    overview = self._build_content_copy_overview(
+                        dir_uri,
+                        existing_overview,
+                        file_summaries,
+                        children_abstracts,
+                    )
+                    abstract = existing_abstract or ""
+                else:
+                    overview = self._select_direct_media_overview(node, file_summaries)
+                    if overview is None:
+                        async with self._llm_sem:
+                            overview = await self._processor._generate_overview(
+                                dir_uri,
+                                file_summaries,
+                                children_abstracts,
+                                total_files=len(node.file_paths),
+                                total_children=len(node.children_dirs),
+                            )
+                    overview, abstract = self._processor._normalize_overview_generation(overview)
 
             if self._closed:
                 return
@@ -1005,7 +1071,7 @@ class SemanticDagExecutor:
                 self._root_done.set()
             return
 
-        await self._on_child_done(parent_uri, dir_uri, abstract)
+        await self._on_child_done(parent_uri, dir_uri, abstract or "")
         self._release_dir_node(dir_uri)
 
     def get_stats(self) -> DagStats:

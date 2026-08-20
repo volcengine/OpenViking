@@ -495,11 +495,89 @@ class _SingleAccountBackend:
             logger.error("Error getting records: %s", e)
             return []
 
+    def _with_account_filter(
+        self, filter: Optional[Dict[str, Any] | FilterExpr]
+    ) -> Optional[FilterExpr]:
+        if not self._bound_account_id:
+            if isinstance(filter, dict):
+                return RawDSL(filter)
+            return filter
+        account_filter = Eq("account_id", self._bound_account_id)
+        if not filter:
+            return account_filter
+        if isinstance(filter, dict):
+            filter = RawDSL(filter)
+        return And([account_filter, filter])
+
     async def get_strict(self, ids: List[str]) -> List[Dict[str, Any]]:
+        """Fetch records without converting backend errors to misses."""
         records = await self._async_adapter.call("get", ids)
         if self._bound_account_id:
             records = [r for r in records if r.get("account_id") == self._bound_account_id]
         return records
+
+    async def strict_get(self, ids: List[str]) -> List[Dict[str, Any]]:
+        """Transaction alias for strict record reads."""
+        return await self.get_strict(ids)
+
+    async def strict_delete(self, ids: List[str]) -> int:
+        """Delete transaction records and propagate every backend failure."""
+        if self._bound_account_id:
+            records = await self.strict_get(ids)
+            valid_ids = [str(record["id"]) for record in records if record.get("id")]
+            ids = valid_ids
+        if not ids:
+            return 0
+        return int(await self._async_adapter.call("delete", ids=ids) or 0)
+
+    async def strict_query(
+        self,
+        *,
+        filter: Optional[Dict[str, Any] | FilterExpr] = None,
+        limit: int = 10,
+        offset: int = 0,
+        output_fields: Optional[List[str]] = None,
+        order_by: Optional[str] = None,
+        order_desc: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Query transaction records without fail-open exception handling."""
+        return await self._async_adapter.call(
+            "query",
+            query_vector=None,
+            sparse_query_vector=None,
+            filter=self._with_account_filter(filter),
+            limit=limit,
+            offset=offset,
+            output_fields=output_fields,
+            order_by=order_by,
+            order_desc=order_desc,
+        )
+
+    async def strict_scroll(
+        self,
+        filter: Optional[Dict[str, Any] | FilterExpr] = None,
+        limit: int = 100,
+        cursor: Optional[str] = None,
+        output_fields: Optional[List[str]] = None,
+    ) -> tuple[List[Dict[str, Any]], Optional[str]]:
+        """Return a stable URI-ordered page for a transactional scan."""
+        offset = int(cursor) if cursor else 0
+        records = await self.strict_query(
+            filter=filter,
+            limit=limit,
+            offset=offset,
+            output_fields=output_fields,
+            order_by="uri",
+            order_desc=False,
+        )
+        next_cursor = str(offset + len(records)) if len(records) == limit else None
+        return records, next_cursor
+
+    async def strict_count(self, filter: Optional[Dict[str, Any] | FilterExpr] = None) -> int:
+        """Count transaction records without converting backend errors to zero."""
+        return int(
+            await self._async_adapter.call("count", filter=self._with_account_filter(filter)) or 0
+        )
 
     async def delete(self, ids: List[str]) -> int:
         try:
@@ -635,7 +713,7 @@ class _SingleAccountBackend:
             if any(r.get("level") in [0, 1] for r in target_records):
                 total_deleted += await self._remove_descendants(parent_uri=uri)
 
-            ids = [r.get("id") for r in target_records if r.get("id")]
+            ids = [str(r["id"]) for r in target_records if r.get("id")]
             if ids:
                 total_deleted += await self.delete(ids)
             return total_deleted
@@ -1254,6 +1332,37 @@ class VikingVectorIndexBackend:
             output_fields=output_fields,
         )
 
+    async def _strict_transfer_page(
+        self,
+        ctx: RequestContext,
+        filter: FilterExpr,
+        *,
+        limit: int,
+        cursor: Optional[str],
+        output_fields: List[str],
+    ) -> tuple[List[Dict[str, Any]], Optional[str]]:
+        backend = self._get_backend_for_context(ctx)
+        return await backend.strict_scroll(
+            filter=filter,
+            limit=limit,
+            cursor=cursor,
+            output_fields=output_fields,
+        )
+
+    async def _strict_transfer_count(self, ctx: RequestContext, filter: FilterExpr) -> int:
+        backend = self._get_backend_for_context(ctx)
+        return await backend.strict_count(filter=filter)
+
+    async def _strict_transfer_get(
+        self, ctx: RequestContext, ids: List[str]
+    ) -> List[Dict[str, Any]]:
+        backend = self._get_backend_for_context(ctx)
+        return await backend.strict_get(ids)
+
+    async def _strict_transfer_delete(self, ctx: RequestContext, ids: List[str]) -> int:
+        backend = self._get_backend_for_context(ctx)
+        return await backend.strict_delete(ids)
+
     async def count(
         self,
         filter: Optional[Dict[str, Any] | FilterExpr] = None,
@@ -1483,19 +1592,38 @@ class VikingVectorIndexBackend:
         batch_size: int = 100,
     ) -> tuple[List[Dict[str, Any]], int]:
         """Scan one URI scope without a fixed total-record limit."""
+        transfer_filter = self._uri_transfer_filter(ctx, uri, recursive=recursive)
+        expected_count = await self._strict_transfer_count(ctx, transfer_filter)
         records: List[Dict[str, Any]] = []
         cursor: Optional[str] = None
         batches = 0
         seen_cursors: set[str] = set()
+        seen_ids: set[str] = set()
+        scanned_count = 0
         while True:
-            page, next_cursor = await self.scroll(
-                filter=self._uri_transfer_filter(ctx, uri, recursive=recursive),
+            page, next_cursor = await self._strict_transfer_page(
+                ctx,
+                transfer_filter,
                 limit=batch_size,
                 cursor=cursor,
                 output_fields=["id", "uri"],
-                ctx=ctx,
             )
             batches += 1
+            if not page and scanned_count < expected_count:
+                raise RuntimeError(
+                    f"Vector scan ended after {scanned_count} of {expected_count} records under {uri}"
+                )
+            scanned_count += len(page)
+            for record in page:
+                record_id = record.get("id")
+                if not record_id:
+                    raise RuntimeError(f"Vector records without IDs found under {uri}")
+                normalized_id = str(record_id)
+                if normalized_id in seen_ids:
+                    raise RuntimeError(
+                        f"Vector scan returned duplicate vector record {normalized_id} under {uri}"
+                    )
+                seen_ids.add(normalized_id)
             scoped = [
                 record
                 for record in page
@@ -1506,7 +1634,7 @@ class VikingVectorIndexBackend:
                 ids = [str(record["id"]) for record in scoped if record.get("id")]
                 if len(ids) != len(scoped):
                     raise RuntimeError(f"Vector records without IDs found under {uri}")
-                full_records = await self.get(ids, ctx=ctx)
+                full_records = await self._strict_transfer_get(ctx, ids)
                 by_id = {str(record["id"]): record for record in full_records if record.get("id")}
                 if len(by_id) != len(ids):
                     raise RuntimeError(f"Failed to fetch complete vector records under {uri}")
@@ -1514,8 +1642,18 @@ class VikingVectorIndexBackend:
             else:
                 records.extend(scoped)
 
-            if next_cursor is None:
+            if scanned_count == expected_count:
                 break
+            if scanned_count > expected_count:
+                raise RuntimeError(
+                    f"Vector scan returned {scanned_count} records but count was {expected_count} "
+                    f"under {uri}"
+                )
+            if next_cursor is None:
+                raise RuntimeError(
+                    f"Vector scan cursor ended after {scanned_count} of {expected_count} records "
+                    f"under {uri}"
+                )
             if next_cursor in seen_cursors:
                 raise RuntimeError(f"Vector scroll cursor repeated under {uri}: {next_cursor}")
             seen_cursors.add(next_cursor)
@@ -1531,7 +1669,21 @@ class VikingVectorIndexBackend:
     ) -> int:
         deleted = 0
         for offset in range(0, len(ids), batch_size):
-            deleted += int(await self.delete(ids[offset : offset + batch_size], ctx=ctx) or 0)
+            batch = ids[offset : offset + batch_size]
+            batch_deleted = await self._strict_transfer_delete(ctx, batch)
+            residual = await self._strict_transfer_get(ctx, batch)
+            if residual:
+                raise RuntimeError(
+                    f"Vector cleanup deleted {batch_deleted} of {len(batch)} records and left "
+                    f"{len(residual)} records"
+                )
+            if batch_deleted != len(batch):
+                logger.info(
+                    "Vector cleanup removed %s of %s attempted IDs; remaining IDs were never written",
+                    batch_deleted,
+                    len(batch),
+                )
+            deleted += batch_deleted
         return deleted
 
     async def copy_uri_mapping(
@@ -1685,7 +1837,7 @@ class VikingVectorIndexBackend:
         try:
             for offset in range(0, len(source_ids), 100):
                 source_batch = source_ids[offset : offset + 100]
-                deleted = int(await self.delete(source_batch, ctx=ctx) or 0)
+                deleted = await self._strict_transfer_delete(ctx, source_batch)
                 if deleted != len(source_batch):
                     raise RuntimeError(
                         f"Vector move deleted {deleted} of {len(source_batch)} source records"

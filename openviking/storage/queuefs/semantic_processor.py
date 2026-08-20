@@ -248,6 +248,8 @@ class SemanticProcessor(DequeueHandlerBase):
     async def _enqueue_parent_refresh(
         self, msg: SemanticMsg, uri: str, *, l0_body_changed: bool
     ) -> None:
+        if msg.generation_trigger == "content_copy":
+            return
         if msg.context_type not in {"resource", "skill"}:
             return
         if not msg.propagate_to_parent:
@@ -493,6 +495,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                 source=msg.source,
                                 generation_trigger=msg.generation_trigger,
                                 aggregate_directory=msg.aggregate_directory,
+                                copy_source_uri=msg.copy_source_uri,
                             )
                             await executor.run(run_uri)
                             self._cache_dag_stats(

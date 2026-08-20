@@ -67,6 +67,7 @@ class _FakeProcessor:
         self.vectorized_files = []
         self.file_ingest_options = {}
         self.directory_ingest_options = {}
+        self.generated_overviews = []
 
     def _parse_overview_md(self, overview_content):
         results = {}
@@ -82,6 +83,7 @@ class _FakeProcessor:
         return {"name": file_path.split("/")[-1], "summary": "summary"}
 
     async def _generate_overview(self, dir_uri, file_summaries, children_abstracts, **kwargs):
+        self.generated_overviews.append(dir_uri)
         lines = ["FILES:"]
         for item in file_summaries:
             name = item.get("name", "")
@@ -349,6 +351,55 @@ async def test_directory_vectorization_retries_after_matching_sidecar_write(monk
     await make_executor().run(root_uri)
 
     assert vectorize_directory.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_content_copy_reuses_source_summary_without_resummarizing_file(monkeypatch):
+    source_parent = "viking://resources/source"
+    root_uri = "viking://resources/archive"
+    copied_uri = f"{root_uri}/copied.jpg"
+    fake_fs = _FakeVikingFS(
+        tree={root_uri: [{"name": "copied.jpg", "isDir": False}]},
+        file_contents={
+            copied_uri: "binary-placeholder",
+            f"{source_parent}/.overview.md": render_abstract_overview(
+                ContextLevel.OVERVIEW,
+                source_parent,
+                "FILES:\n- original.jpg: already summarized",
+            ),
+        },
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
+    )
+    processor = _FakeProcessor(fake_fs)
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER),
+        incremental_update=True,
+        target_uri=root_uri,
+        recursive=False,
+        changes={"added": [copied_uri]},
+        skip_vectorization=True,
+        generation_trigger="content_copy",
+        copy_source_uri=f"{source_parent}/original.jpg",
+    )
+
+    await executor.run(root_uri)
+
+    assert processor.summarized_files == []
+    assert processor.vectorized_files == []
+    assert processor.generated_overviews == []
+    overview = parse_abstract_overview(
+        fake_fs._file_contents[f"{root_uri}/.overview.md"]
+    ).body
+    assert "### copied.jpg\nalready summarized" in overview
 
 
 if __name__ == "__main__":
