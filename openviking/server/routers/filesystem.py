@@ -38,9 +38,7 @@ def _clean_memory_attrs(raw: str) -> dict[str, Any]:
     return attrs
 
 
-async def _tags_attr(
-    service: Any, uri: str, ctx: RequestContext, *, is_dir: bool
-) -> list[str]:
+async def _tags_attr(service: Any, uri: str, ctx: RequestContext, *, is_dir: bool) -> list[str]:
     vikingdb_manager = getattr(service, "vikingdb_manager", None)
     if not vikingdb_manager:
         return []
@@ -292,6 +290,50 @@ class MvRequest(BaseModel):
 
     from_uri: str
     to_uri: str
+
+
+class CpRequest(BaseModel):
+    """Request model for cp."""
+
+    from_uri: str
+    to_uri: str
+    recursive: bool = False
+
+
+@router.post("/cp")
+async def cp(
+    request: CpRequest,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Copy a file or directory together with its vector records."""
+    service = get_service()
+    from_uri = resolve_path_variables(request.from_uri)
+    to_uri = resolve_path_variables(request.to_uri)
+    try:
+        result = await service.fs.cp(
+            from_uri,
+            to_uri,
+            recursive=request.recursive,
+            ctx=_ctx,
+        )
+    except AGFSNotFoundError:
+        raise NotFoundError(from_uri, "file")
+    except AGFSClientError as exc:
+        mapped = map_exception(exc, resource=from_uri, resource_type="file")
+        if mapped is not None:
+            raise mapped from exc
+        raise
+    except Exception as exc:
+        mapped = map_exception(exc, resource=from_uri)
+        if mapped is not None:
+            raise mapped from exc
+        raise
+
+    response_result = dict(result or {})
+    response_result.setdefault("from", from_uri)
+    response_result.setdefault("to", to_uri)
+    response_result.setdefault("recursive", request.recursive)
+    return Response(status="ok", result=response_result)
 
 
 @router.post("/mv")

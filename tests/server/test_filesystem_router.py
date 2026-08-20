@@ -36,6 +36,69 @@ async def test_rm_preserves_memory_cleanup(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_cp_resolves_paths_and_preserves_service_result(monkeypatch):
+    calls = []
+
+    async def fake_cp(from_uri, to_uri, recursive=False, ctx=None):
+        calls.append((from_uri, to_uri, recursive, ctx))
+        return {
+            "operation_id": "copy-1",
+            "from": from_uri,
+            "to": to_uri,
+            "recursive": recursive,
+            "semantic_root_uri": "viking://resources/archive",
+            "semantic_status": "queued",
+        }
+
+    monkeypatch.setattr(
+        filesystem,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(cp=fake_cp)),
+    )
+    monkeypatch.setattr(
+        filesystem,
+        "resolve_path_variables",
+        lambda uri: uri.replace("{test:resources}", "viking://resources"),
+    )
+    ctx = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
+
+    response = await filesystem.cp(
+        filesystem.CpRequest(
+            from_uri="{test:resources}/a.md",
+            to_uri="{test:resources}/archive/a.md",
+            recursive=True,
+        ),
+        _ctx=ctx,
+    )
+
+    assert calls == [
+        (
+            "viking://resources/a.md",
+            "viking://resources/archive/a.md",
+            True,
+            ctx,
+        )
+    ]
+    assert response.result == {
+        "operation_id": "copy-1",
+        "from": "viking://resources/a.md",
+        "to": "viking://resources/archive/a.md",
+        "recursive": True,
+        "semantic_root_uri": "viking://resources/archive",
+        "semantic_status": "queued",
+    }
+
+
+def test_cp_request_defaults_to_non_recursive():
+    request = filesystem.CpRequest(
+        from_uri="viking://resources/a.md",
+        to_uri="viking://resources/b.md",
+    )
+
+    assert request.recursive is False
+
+
+@pytest.mark.asyncio
 async def test_attrs_returns_memory_fields_and_tags(monkeypatch):
     raw_memory = (
         "Original preference\n\n"
