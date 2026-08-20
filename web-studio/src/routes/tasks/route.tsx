@@ -53,11 +53,7 @@ import { normalizeTaskStatus } from '#/routes/tasks/-lib/task-record'
 import type { TaskRecord } from '#/routes/tasks/-lib/task-record'
 import { formatTaskDuration, getTaskDate } from '#/routes/tasks/-lib/task-time'
 import { fetchTasks, getEffectiveTaskStatus, MAX_TASKS } from './-lib/task-list'
-import type {
-  TaskDataScope,
-  TaskStatusFilter,
-  TaskTypeFilter,
-} from './-lib/task-list'
+import type { TaskStatusFilter, TaskTypeFilter } from './-lib/task-list'
 import { getTaskPipelineGroups } from './-lib/task-pipeline'
 
 export const Route = createFileRoute('/tasks')({
@@ -94,14 +90,13 @@ function TasksRoute() {
   const [taskType, setTaskType] = React.useState<TaskTypeFilter>('all')
   const [statusFilter, setStatusFilter] =
     React.useState<TaskStatusFilter>('all')
-  const [dataScope, setDataScope] = React.useState<TaskDataScope>('24h')
   const [dedupByResource, setDedupByResource] = React.useState<boolean>(true)
   const [selectedTaskId, setSelectedTaskId] = React.useState<string | null>(
     null,
   )
   const tasksQuery = useQuery({
-    queryFn: () => fetchTasks(taskType, statusFilter, dataScope),
-    queryKey: ['tasks', identityScopeKey, taskType, statusFilter, dataScope],
+    queryFn: () => fetchTasks(taskType, statusFilter),
+    queryKey: ['tasks', identityScopeKey, taskType, statusFilter],
     refetchInterval: 10_000,
   })
   const rawTasks = tasksQuery.data ?? []
@@ -723,29 +718,6 @@ function TasksRoute() {
           {t('filters.label')}
         </span>
         <Select
-          value={dataScope}
-          onValueChange={(value) => {
-            setDataScope(value as TaskDataScope)
-            setPage(1)
-          }}
-        >
-          <SelectTrigger
-            size="sm"
-            className="min-w-32 bg-background font-medium"
-            aria-label={t('filters.scope')}
-          >
-            <SelectValue>
-              {dataScope === '24h'
-                ? t('filters.scope24h')
-                : t('filters.scopeAll')}
-            </SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="24h">{t('filters.scope24h')}</SelectItem>
-            <SelectItem value="all">{t('filters.scopeAll')}</SelectItem>
-          </SelectContent>
-        </Select>
-        <Select
           value={taskType}
           onValueChange={(value) => {
             setTaskType(value as TaskTypeFilter)
@@ -799,7 +771,7 @@ function TasksRoute() {
             ))}
           </SelectContent>
         </Select>
-        {hasActiveFilters || dataScope !== '24h' ? (
+        {hasActiveFilters ? (
           <Button
             type="button"
             variant="ghost"
@@ -808,7 +780,6 @@ function TasksRoute() {
             onClick={() => {
               setTaskType('all')
               setStatusFilter('all')
-              setDataScope('24h')
               setPage(1)
             }}
           >
@@ -826,10 +797,10 @@ function TasksRoute() {
           {i18n.language.startsWith('zh')
             ? dedupByResource
               ? '按资源收敛 (最新)'
-              : '全部历史记录'
+              : '逐条任务'
             : dedupByResource
               ? 'Latest per Resource'
-              : 'All History Logs'}
+              : 'Individual Tasks'}
         </Button>
       </div>
 

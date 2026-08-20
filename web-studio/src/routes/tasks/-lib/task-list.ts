@@ -18,8 +18,6 @@ export type TaskTypeFilter =
   | 'snapshot_restore_reindex'
   | 'all'
 
-export type TaskDataScope = '24h' | 'all'
-
 export const MAX_TASKS = 200
 const MAX_EFFECTIVE_RUNNING_TASKS = 8
 
@@ -46,7 +44,6 @@ export function getEffectiveTaskStatus(
 export async function fetchTasks(
   taskType: TaskTypeFilter,
   status: TaskStatusFilter,
-  dataScope: TaskDataScope = '24h',
 ): Promise<TaskRecord[]> {
   const result = await getOvResult<unknown>(
     getTasks({
@@ -56,19 +53,12 @@ export async function fetchTasks(
       },
     }),
   )
-  let fetched = normalizeTasks(result).sort(
+  const fetched = normalizeTasks(result).sort(
     (left, right) =>
       Number(right.created_at || 0) - Number(left.created_at || 0),
   )
-  if (dataScope === '24h') {
-    const nowSec = Math.floor(Date.now() / 1000)
-    fetched = fetched.filter((task) => {
-      const timestamp = Number(task.created_at || task.updated_at || 0)
-      return timestamp > 0 && nowSec - timestamp <= 86_400
-    })
-  }
   if (status !== 'all') {
-    fetched = fetched.filter(
+    return fetched.filter(
       (task) => getEffectiveTaskStatus(task, fetched) === status,
     )
   }
