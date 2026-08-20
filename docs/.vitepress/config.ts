@@ -5,6 +5,7 @@ import { defineConfig, type DefaultTheme } from 'vitepress'
 
 const docsRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const repo = process.env.GITHUB_REPOSITORY || 'volcengine/OpenViking'
+const githubRepositoryUrl = 
 const base = process.env.DOCS_BASE || '/'
 const withTrailingSlash = (url: string) => (url.endsWith('/') ? url : `${url}/`)
 const mainSiteBase = withTrailingSlash(process.env.OPENVIKING_SITE_BASE || 'https://www.openviking.ai/')
