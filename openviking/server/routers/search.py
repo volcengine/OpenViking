@@ -123,20 +123,23 @@ def _typed_context_type(value: Any) -> Optional["ContextType"]:
 
     The API accepts one or more types; TypedQuery carries a single type, so
     a multi-type request keeps its filter-based scoping and is left
-    unclassified (the filter still narrows results correctly).
+    unclassified (the filter still narrows results correctly). Values are
+    normalized (strip + lower) the same way as resolve_context_types.
     """
     from openviking_cli.retrieve import ContextType
 
+    def _coerce(value: Any) -> Optional["ContextType"]:
+        if not isinstance(value, str):
+            return None
+        try:
+            return ContextType(value.strip().lower())
+        except ValueError:
+            return None
+
     if isinstance(value, str):
-        try:
-            return ContextType(value)
-        except ValueError:
-            return None
+        return _coerce(value)
     if isinstance(value, list) and len(value) == 1:
-        try:
-            return ContextType(value[0])
-        except ValueError:
-            return None
+        return _coerce(value[0])
     return None
 
 

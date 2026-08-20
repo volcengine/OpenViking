@@ -16,7 +16,7 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.retrieve.types import ContextType, QueryResult
+from openviking_cli.retrieve.types import ContextType, QueryResult, TypedQuery
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -129,3 +129,119 @@ async def test_search_fallback_propagates_context_type(monkeypatch):
 
     assert captured["typed_query"].context_type == ContextType.MEMORY
     assert captured["typed_query"].intent == ""
+
+
+@pytest.mark.asyncio
+async def test_find_image_query_propagates_context_type(monkeypatch):
+    """find() threads a typed image request (no image->RESOURCE fallback)."""
+    fs = _make_viking_fs()
+    captured = {}
+    _install_fake_retriever(monkeypatch, captured)
+
+    await fs.find(
+        "photo",
+        target_uri=V + "resources/docs",
+        ctx=_ctx(),
+        context_type="memory",
+        image_url="data:image/png;base64,abc",
+    )
+
+    assert captured["typed_query"].context_type == ContextType.MEMORY
+    assert captured["typed_query"].image_query is True
+
+
+@pytest.mark.asyncio
+async def test_search_image_query_propagates_context_type(monkeypatch):
+    """search()'s image branch is consistent with find() (review #4091)."""
+    fs = _make_viking_fs()
+    captured = {}
+    _install_fake_retriever(monkeypatch, captured)
+
+    await fs.search(
+        "photo",
+        target_uri=V + "resources/docs",
+        ctx=_ctx(),
+        context_type="skill",
+        image_url="data:image/png;base64,abc",
+    )
+
+    assert captured["typed_query"].context_type == ContextType.SKILL
+    assert captured["typed_query"].image_query is True
+
+
+@pytest.mark.asyncio
+async def test_find_normalizes_context_type_case_and_whitespace(monkeypatch):
+    """Observer classification matches the filter: "Memory" -> memory."""
+    fs = _make_viking_fs()
+    captured = {}
+    _install_fake_retriever(monkeypatch, captured)
+
+    await fs.find("x", target_uri=V + "resources/docs", ctx=_ctx(), context_type=" Memory ")
+
+    assert captured["typed_query"].context_type == ContextType.MEMORY
+
+
+@pytest.mark.asyncio
+async def test_observer_records_threaded_context_type(monkeypatch):
+    """End-to-end pin for #4090: the threaded type reaches record_query().
+
+    The propagation tests above stub HierarchicalRetriever; this one drives
+    the real retriever against a fake vector proxy so the observer bucket
+    counter (the line #4090 is about) is exercised.
+    """
+    from openviking.models.embedder.base import EmbedResult
+    from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
+    from openviking.retrieve.retrieval_stats import get_stats_collector
+
+    class FakeProxy:
+        captured = {}
+
+        def __init__(self, _storage, _ctx):
+            pass
+
+        @property
+        def collection_name(self):
+            return "test"
+
+        async def collection_exists_bound(self):
+            return True
+
+        async def search_in_tenant(self, **kwargs):
+            self.captured.update(kwargs)
+            return []
+
+    class Embedder:
+        supports_multimodal = False
+
+        def prepare_embedding_input(self, content):
+            return content
+
+        async def embed_async(self, content, is_query=False):
+            return EmbedResult(dense_vector=[1.0])
+
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.VikingDBManagerProxy",
+        FakeProxy,
+    )
+
+    collector = get_stats_collector()
+    collector.reset()
+    try:
+        retriever = HierarchicalRetriever(storage=object(), embedder=Embedder())
+        await retriever.retrieve(
+            TypedQuery(
+                query="guide",
+                context_type=ContextType.MEMORY,
+                intent="",
+                target_directories=[V + "user/acc1/user1"],
+            ),
+            ctx=_ctx(),
+            limit=5,
+        )
+
+        snapshot = collector.snapshot()
+        assert snapshot.queries_by_type.get("memory") == 1
+        assert snapshot.queries_by_type.get("unknown", 0) == 0
+        assert FakeProxy.captured["context_type"] == "memory"
+    finally:
+        collector.reset()

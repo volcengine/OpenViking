@@ -4,7 +4,7 @@ from openviking.models.embedder.base import EmbedResult
 from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
 from openviking.server.identity import RequestContext, Role
 from openviking_cli.exceptions import InvalidArgumentError
-from openviking_cli.retrieve.types import TypedQuery
+from openviking_cli.retrieve.types import ContextType, TypedQuery
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -93,6 +93,33 @@ async def test_image_query_uses_multimodal_input_without_filtering_non_images(mo
     assert FakeProxy.captured["context_type"] == "resource"
     assert FakeProxy.captured["level"] == [2]
     assert FakeProxy.captured["limit"] == 50
+
+
+@pytest.mark.asyncio
+async def test_image_query_with_typed_context_skips_resource_fallback(monkeypatch):
+    """An explicit context_type must not be overridden by the image->RESOURCE default."""
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.VikingDBManagerProxy",
+        FakeProxy,
+    )
+    embedder = MultimodalEmbedder()
+    retriever = HierarchicalRetriever(storage=object(), embedder=embedder)
+    query_input = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}]
+
+    result = await retriever.retrieve(
+        TypedQuery(
+            query="",
+            context_type=ContextType.MEMORY,
+            intent="",
+            embedding_input=query_input,
+            image_query=True,
+        ),
+        ctx=_ctx(),
+        limit=2,
+    )
+
+    assert len(result.matched_contexts) == 2
+    assert FakeProxy.captured["context_type"] == "memory"
 
 
 @pytest.mark.asyncio
