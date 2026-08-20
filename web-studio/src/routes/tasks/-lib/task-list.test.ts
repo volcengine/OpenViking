@@ -35,6 +35,7 @@ describe('task list requests', () => {
     expect(clientMocks.getTasks).toHaveBeenCalledWith({
       query: { limit: MAX_TASKS },
     })
+    expect(MAX_TASKS).toBe(200)
   })
 
   it('uses the generated client contract for task-type filters', async () => {
