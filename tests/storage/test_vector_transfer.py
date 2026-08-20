@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.expr import And, Contains, Or, PathScope
 from openviking.storage.viking_vector_index_backend import (
     VectorTransferRollbackError,
     VikingVectorIndexBackend,
@@ -46,6 +47,12 @@ class _MemoryTransferBackend(VikingVectorIndexBackend):
         self.delete_calls = 0
         self.fail_delete_at: int | None = None
         self.partial_delete_count = 0
+        self.backend_mode = "local"
+        self.scroll_filters = []
+
+    @property
+    def mode(self) -> str:
+        return self.backend_mode
 
     async def scroll(
         self,
@@ -56,7 +63,8 @@ class _MemoryTransferBackend(VikingVectorIndexBackend):
         *,
         ctx: RequestContext,
     ) -> tuple[list[dict[str, Any]], str | None]:
-        del filter, output_fields, ctx
+        del output_fields, ctx
+        self.scroll_filters.append(filter)
         offset = int(cursor or 0)
         ordered = [dict(self.records[key]) for key in sorted(self.records)]
         page = ordered[offset : offset + limit]
@@ -151,6 +159,24 @@ async def test_copy_uri_mapping_preserves_dense_sparse_and_chunk_payloads():
         (),
         (("7", 0.8),),
     }
+
+
+@pytest.mark.asyncio
+async def test_volcengine_transfer_scope_avoids_unsupported_contains_filter():
+    source = "viking://resources/src.md"
+    backend = _MemoryTransferBackend([_record("source", source)])
+    backend.backend_mode = "volcengine"
+
+    await backend.copy_uri_mapping(_ctx(), source, "viking://resources/dst.md", recursive=False)
+
+    assert backend.scroll_filters
+    for filter_expr in backend.scroll_filters:
+        assert isinstance(filter_expr, And)
+        scopes = next(cond for cond in filter_expr.conds if isinstance(cond, Or)).conds
+        assert not any(isinstance(scope, Contains) for scope in scopes)
+        assert any(
+            isinstance(scope, PathScope) and scope.path == "viking://resources" for scope in scopes
+        )
 
 
 @pytest.mark.asyncio

@@ -33,6 +33,7 @@ from openviking.utils.time_utils import get_current_timestamp
 from openviking_cli.exceptions import ConflictError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.vectordb_config import DEFAULT_INDEX_NAME, VectorDBBackendConfig
+from openviking_cli.utils.uri import VikingURI
 
 logger = get_logger(__name__)
 
@@ -1460,11 +1461,16 @@ class VikingVectorIndexBackend:
             backend = self._get_backend_for_context(ctx)
             await backend.delete_by_filter(And(conds))
 
-    @staticmethod
-    def _uri_transfer_filter(ctx: RequestContext, uri: str, *, recursive: bool) -> FilterExpr:
-        scopes: List[FilterExpr] = [Eq("uri", uri), Contains("uri", uri + "#")]
+    def _uri_transfer_filter(self, ctx: RequestContext, uri: str, *, recursive: bool) -> FilterExpr:
+        scopes: List[FilterExpr] = [Eq("uri", uri)]
         if recursive:
             scopes.append(PathScope("uri", uri, depth=-1))
+        if self.mode == "volcengine":
+            parent = VikingURI(uri).parent
+            if parent is not None and parent.uri != "viking://":
+                scopes.append(PathScope("uri", parent.uri, depth=1))
+        else:
+            scopes.append(Contains("uri", uri + "#"))
         return And([Eq("account_id", ctx.account_id), Or(scopes)])
 
     async def _scan_uri_transfer_scope(
