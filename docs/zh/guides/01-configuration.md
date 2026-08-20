@@ -1465,7 +1465,7 @@ Redis Sentinel 分别配置数据节点和 Sentinel 的 ACL：
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `backend` | str | VectorDB 后端类型: 'local'（基于文件）, 'http'（远程服务）, 'volcengine'（云上 VikingDB）, 'vikingdb'（私有部署）或 'cuvs'（本地存储 + GPU dense search） | "local" |
+| `backend` | str | VectorDB 后端类型: 'local'（基于文件）, 'http'（远程服务）, 'volcengine'（云上 VikingDB）, 'vikingdb'（私有部署）, 'qdrant'（REST）或 'cuvs'（本地存储 + GPU dense search） | "local" |
 | `name` | str | VectorDB 的集合名称 | "context" |
 | `url` | str | 'http' 类型的远程服务 URL（例如 'http://localhost:5000'） | null |
 | `project_name` | str | 项目名称（别名 project） | "default" |
@@ -1474,6 +1474,7 @@ Redis Sentinel 分别配置数据节点和 Sentinel 的 ACL：
 | `sparse_weight` | float | 混合向量搜索的稀疏权重，仅在使用混合索引时生效 | 0.0 |
 | `volcengine` | object | 'volcengine' 类型的 VikingDB 配置 | - |
 | `vikingdb` | object | 'vikingdb' 类型的私有部署配置 | - |
+| `qdrant` | object | Qdrant REST 地址、API key、超时、named vector 名称和可选 metadata collection 名称 | - |
 | `cuvs` | object | NVIDIA cuVS 配置，也用于在 'local' 下显式开启显存感知自动模式，参见 [cuVS 使用指南](./16-cuvs.md) | - |
 
 默认使用本地模式
@@ -1505,6 +1506,48 @@ Redis Sentinel 分别配置数据节点和 Sentinel 的 ACL：
       }
   }
 }
+```
+</details>
+
+<details>
+<summary><b>Qdrant REST</b></summary>
+
+Qdrant 使用 Python 标准库 REST transport，不需要新增 `qdrant-client`
+依赖。`sparse_weight=0` 表示 dense-only；设置为 `(0, 1]` 内的值会启用
+named sparse vector 和客户端 weighted RRF hybrid search：
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "backend": "qdrant",
+      "url": "http://127.0.0.1:6333",
+      "project": "default",
+      "name": "context",
+      "dimension": 1536,
+      "sparse_weight": 0.5,
+      "qdrant": {
+        "api_key": "optional-key",
+        "timeout_seconds": 10,
+        "dense_vector_name": "vector",
+        "sparse_vector_name": "sparse_vector"
+      }
+    }
+  }
+}
+```
+
+OpenViking 会在确定性的 sidecar collection 中保存 metadata marker 和 sparse
+term dictionary。没有 marker 的既有 Qdrant collection 会 fail closed，不会被
+隐式接管。URI scope metadata、account 隔离和多 tag 过滤会保留；`Contains`
+及服务端 content grep 不支持，因此 grep 继续使用 filesystem fallback
+（`USE_CONTENT_FIELD=False`）。
+
+要运行 live coverage，请设置 `QDRANT_URL`（可选 `QDRANT_API_KEY`）：
+
+```bash
+QDRANT_URL=http://127.0.0.1:6333 \
+  pytest --confcutdir=tests/storage -q tests/storage/test_qdrant_integration.py
 ```
 </details>
 

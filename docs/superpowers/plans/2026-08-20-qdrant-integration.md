@@ -133,11 +133,12 @@ Run: `uv run --project . pytest -q tests/storage/test_qdrant_adapter.py`
 Verify stable term indices, sidecar persistence, dense+sparse conversion, and
 collision rejection.
 
-- [ ] **Step 2: Implement deterministic collision-checked indices**
+- [ ] **Step 2: Implement deterministic collision-checked Qdrant-compatible indices**
 
-Derive a positive signed-64-bit candidate from SHA-256. Persist each term/index
-pair in the sidecar collection. Query existing records for the candidate index;
-raise a collision error when a different term owns it.
+Derive a positive uint32 candidate from SHA-256 because Qdrant sparse indices
+are uint32 at the REST/protobuf boundary. Persist each term/index pair in the
+sidecar collection. Query existing records for the candidate index; raise a
+collision error when a different term owns it.
 
 - [ ] **Step 3: Wire sparse upsert and search**
 

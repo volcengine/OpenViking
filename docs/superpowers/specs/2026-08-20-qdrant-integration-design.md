@@ -28,8 +28,9 @@ hybrid sparse-vector correctness without reverting the removed implementation.
 
 - Named Qdrant sparse vector support.
 - Durable sparse-term dictionary stored in a sidecar Qdrant collection.
-- Stable SHA-256-derived integer term IDs with collision detection and an
-  explicit error on collision; no lossy hash merging.
+- Stable SHA-256-derived positive uint32 term IDs (the Qdrant REST/protobuf
+  sparse-index limit) with collision detection and an explicit error on
+  collision; no lossy hash merging.
 - Dense-only configurations continue to work without creating sparse metadata.
 - A non-zero sparse query against a backend configured without sparse support
   fails explicitly.

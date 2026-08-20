@@ -66,6 +66,17 @@ pytest tests/ -k "initialize" -v
 pytest tests/client/test_http_client_config.py -v -s
 ```
 
+### Qdrant integration
+
+The Qdrant REST backend has environment-gated live coverage. It is skipped
+when `QDRANT_URL` is unset; set `QDRANT_API_KEY` when the server requires
+authentication:
+
+```bash
+QDRANT_URL=http://127.0.0.1:6333 \
+  pytest --confcutdir=tests/storage -q tests/storage/test_qdrant_integration.py
+```
+
 ### Common Test Scenarios
 
 ```bash

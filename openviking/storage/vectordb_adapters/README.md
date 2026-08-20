@@ -245,3 +245,48 @@ class ThirdPartyCollectionAdapter(CollectionAdapter):
 - create 后可完成 upsert/get/query/delete/count 全流程。
 - 不改上层业务调用方式即可参与 `find/search` 检索链路。
 - 后端差异全部封装在 adapter 层。
+
+---
+
+## 10. Qdrant REST backend
+
+内置 `backend: qdrant` 使用 Python 标准库通过 Qdrant REST API 访问远端
+collection，不新增 `qdrant-client` 依赖：
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "backend": "qdrant",
+      "url": "http://127.0.0.1:6333",
+      "project": "default",
+      "name": "context",
+      "dimension": 1536,
+      "sparse_weight": 0.5,
+      "qdrant": {
+        "api_key": "optional-key",
+        "dense_vector_name": "vector",
+        "sparse_vector_name": "sparse_vector",
+        "timeout_seconds": 10
+      }
+    }
+  }
+}
+```
+
+- `sparse_weight: 0` 是 dense-only；`0 < sparse_weight <= 1` 启用 named sparse
+  vector 与 hybrid weighted-RRF。
+- Qdrant data collection 会附带一个 OpenViking metadata sidecar，保存 schema、
+  index metadata 与 sparse term dictionary；term ID 使用 Qdrant 兼容的
+  positive uint32 SHA-256 candidate，并在碰撞时 fail closed。没有 marker
+  的既有 collection 会 fail closed，不会被隐式接管。
+- `uri` 会保存标准化路径、深度与 ancestor scope roots；上层 account filter
+  与多 `search_tags` AND 语义会保留。
+- `Contains` 与 Qdrant content grep 不支持；`USE_CONTENT_FIELD=False`，grep
+  继续走 filesystem fallback。
+- 可用 `QDRANT_URL`（以及可选的 `QDRANT_API_KEY`）运行 live coverage：
+
+```bash
+QDRANT_URL=http://127.0.0.1:6333 \
+  pytest --confcutdir=tests/storage -q tests/storage/test_qdrant_integration.py
+```

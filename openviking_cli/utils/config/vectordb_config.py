@@ -50,6 +50,22 @@ class VikingDBConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class QdrantConfig(BaseModel):
+    """Configuration for the Qdrant REST backend."""
+
+    url: Optional[str] = Field(default=None, description="Qdrant REST endpoint")
+    api_key: Optional[str] = Field(default=None, description="Optional Qdrant API key")
+    timeout_seconds: float = Field(default=10.0, gt=0)
+    dense_vector_name: str = Field(default="vector", min_length=1)
+    sparse_vector_name: str = Field(default="sparse_vector", min_length=1)
+    metadata_collection_name: Optional[str] = Field(
+        default=None,
+        description="Optional explicit OpenViking metadata collection name",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
 class CuVSConfig(BaseModel):
     """Configuration for GPU dense-vector search through NVIDIA cuVS."""
 
@@ -201,7 +217,7 @@ class VectorDBBackendConfig(BaseModel):
         description=(
             "VectorDB backend type: 'local', 'cuvs', 'http', "
             "'volcengine' (AK/SK signed or API key data-plane only), "
-            "or 'vikingdb' (private deployment)"
+            "'vikingdb' (private deployment), or 'qdrant' (REST)"
         ),
     )
 
@@ -214,7 +230,10 @@ class VectorDBBackendConfig(BaseModel):
 
     url: Optional[str] = Field(
         default=None,
-        description="Remote service URL for 'http' type (e.g., 'http://localhost:5000')",
+        description=(
+            "Remote service URL for 'http' or 'qdrant' backends "
+            "(e.g., 'http://localhost:5000')"
+        ),
     )
 
     project_name: Optional[str] = Field(
@@ -255,6 +274,11 @@ class VectorDBBackendConfig(BaseModel):
         description="VikingDB private deployment configuration for 'vikingdb' type",
     )
 
+    qdrant: Optional[QdrantConfig] = Field(
+        default_factory=QdrantConfig,
+        description="Qdrant REST configuration for the 'qdrant' backend",
+    )
+
     cuvs: Optional[CuVSConfig] = Field(
         default_factory=CuVSConfig,
         description="NVIDIA cuVS dense-vector search configuration for the 'cuvs' backend",
@@ -276,6 +300,7 @@ class VectorDBBackendConfig(BaseModel):
             "http",
             "volcengine",
             "vikingdb",
+            "qdrant",
         ]
 
         # Allow custom backend classes (containing dot) without standard validation
@@ -324,5 +349,9 @@ class VectorDBBackendConfig(BaseModel):
         elif self.backend == "vikingdb":
             if not self.vikingdb or not self.vikingdb.host:
                 raise ValueError("VectorDB vikingdb backend requires 'host' to be set")
+
+        elif self.backend == "qdrant":
+            if not (self.qdrant and (self.qdrant.url or self.url)):
+                raise ValueError("VectorDB qdrant backend requires qdrant.url or url to be set")
 
         return self
