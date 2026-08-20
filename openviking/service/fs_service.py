@@ -529,6 +529,59 @@ class FSService:
             raise
         return decision.action
 
+    async def _enqueue_copy_refresh(
+        self,
+        *,
+        root_uri: str,
+        copied_uri: str,
+        context_type: str,
+        ctx: RequestContext,
+    ) -> str:
+        """Queue a parent-only semantic refresh after a committed copy."""
+        await mark_semantic_sidecars_pending(
+            viking_fs=self._viking_fs,
+            dir_uri=root_uri,
+            changed_entries=1,
+            ctx=ctx,
+        )
+        try:
+            queue_manager = get_queue_manager()
+        except RuntimeError as exc:
+            logger.warning("QueueManager not available, skipping copy refresh: %s", exc)
+            return "skipped"
+
+        semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
+        telemetry_id = get_current_telemetry().telemetry_id
+        msg = SemanticMsg(
+            uri=root_uri,
+            context_type=context_type,
+            recursive=False,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+            peer_id=ctx.user.user_id,
+            role=str(ctx.role),
+            skip_vectorization=True,
+            telemetry_id=telemetry_id,
+            coalesce_key=build_semantic_coalesce_key(
+                context_type=context_type,
+                uri=root_uri,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+                peer_id=ctx.user.user_id,
+            ),
+            changes={"added": [copied_uri]},
+            generation_trigger="content_copy",
+        )
+        if telemetry_id:
+            get_request_wait_tracker().register_semantic_root(telemetry_id, msg.id)
+        try:
+            await semantic_queue.enqueue(msg)
+        except Exception as exc:
+            if telemetry_id:
+                get_request_wait_tracker().mark_semantic_failed(telemetry_id, msg.id, str(exc))
+            raise
+        return "queued"
+
     async def _wait_for_refresh(self, *, timeout: Optional[float]) -> Dict[str, Any]:
         telemetry_id = get_current_telemetry().telemetry_id
         if telemetry_id:
@@ -543,6 +596,55 @@ class FSService:
             )
         except TimeoutError as exc:
             raise DeadlineExceededError("queue processing", timeout) from exc
+
+    async def cp(
+        self,
+        from_uri: str,
+        to_uri: str,
+        recursive: bool,
+        ctx: RequestContext,
+    ) -> Dict[str, Any]:
+        """Copy a resource and queue derived parent semantics after commit."""
+        from_uri = validate_viking_uri(from_uri, field_name="from_uri")
+        to_uri = validate_viking_uri(to_uri, field_name="to_uri")
+        viking_fs = self._ensure_initialized()
+        async with self._uri_mutation_coordinator.mutation(
+            ctx.account_id,
+            [from_uri, to_uri],
+        ):
+            transfer_result = await viking_fs.cp(
+                from_uri,
+                to_uri,
+                recursive=recursive,
+                ctx=ctx,
+            )
+
+        result = dict(transfer_result or {})
+        result.setdefault("from", from_uri)
+        result.setdefault("to", to_uri)
+        result.setdefault("recursive", recursive)
+        context_type = context_type_for_uri(to_uri)
+        refresh_parent_uri = self._semantic_refresh_parent_uri(to_uri, context_type)
+        if not refresh_parent_uri:
+            return result
+
+        result["semantic_root_uri"] = refresh_parent_uri
+        try:
+            result["semantic_status"] = await self._enqueue_copy_refresh(
+                root_uri=refresh_parent_uri,
+                copied_uri=to_uri,
+                context_type=context_type,
+                ctx=ctx,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Copy committed but parent semantic refresh failed for %s: %s",
+                to_uri,
+                exc,
+            )
+            result["semantic_status"] = "failed"
+            result["semantic_error"] = str(exc)
+        return result
 
     async def mv(self, from_uri: str, to_uri: str, ctx: RequestContext) -> None:
         """Move resource."""

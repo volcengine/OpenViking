@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for file-system service coordination behavior."""
 
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -16,6 +17,7 @@ class _FakeVikingFS:
     def __init__(self, *, rm_error=None, events=None):
         self.rm_calls = []
         self.mv_calls = []
+        self.cp_calls = []
         self.rm_error = rm_error
         self.events = events
 
@@ -29,6 +31,42 @@ class _FakeVikingFS:
         self.mv_calls.append({"from_uri": from_uri, "to_uri": to_uri, "ctx": ctx})
         if self.events is not None:
             self.events.append(("mv", from_uri, to_uri))
+
+    async def cp(self, from_uri, to_uri, recursive=False, ctx=None):
+        self.cp_calls.append(
+            {
+                "from_uri": from_uri,
+                "to_uri": to_uri,
+                "recursive": recursive,
+                "ctx": ctx,
+            }
+        )
+        if self.events is not None:
+            self.events.append(("cp", from_uri, to_uri))
+        return {
+            "operation_id": "copy-1",
+            "operation": "copy",
+            "from": from_uri,
+            "to": to_uri,
+            "recursive": recursive,
+        }
+
+
+class _FakeMutationCoordinator:
+    def __init__(self, events=None):
+        self.calls = []
+        self.events = events
+
+    @asynccontextmanager
+    async def mutation(self, account_id, uris):
+        self.calls.append({"account_id": account_id, "uris": list(uris)})
+        if self.events is not None:
+            self.events.append(("mutation-enter", *uris))
+        try:
+            yield
+        finally:
+            if self.events is not None:
+                self.events.append(("mutation-exit", *uris))
 
 
 @pytest.mark.asyncio
@@ -804,6 +842,124 @@ async def test_resource_mv_without_watch_scheduler_moves_resource_directly(reque
             "ctx": request_context,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_resource_cp_coordinates_mutation_without_copying_watch_tasks(request_context):
+    source = "viking://resources/codeask/wiki"
+    target = "viking://resources/archive/wiki"
+    events = []
+    viking_fs = _FakeVikingFS(events=events)
+    coordinator = _FakeMutationCoordinator(events=events)
+    watch_manager = _FakeWatchManager(events=events)
+    service = FSService(
+        viking_fs=viking_fs,
+        watch_scheduler=_FakeWatchScheduler(watch_manager),
+        uri_mutation_coordinator=coordinator,
+    )
+
+    async def enqueue_refresh(**kwargs):
+        events.append(("refresh", kwargs["root_uri"]))
+        assert kwargs == {
+            "root_uri": "viking://resources/archive",
+            "copied_uri": target,
+            "context_type": "resource",
+            "ctx": request_context,
+        }
+        return "queued"
+
+    service._enqueue_copy_refresh = enqueue_refresh
+
+    result = await service.cp(source, target, recursive=True, ctx=request_context)
+
+    assert coordinator.calls == [{"account_id": "default", "uris": [source, target]}]
+    assert viking_fs.cp_calls == [
+        {
+            "from_uri": source,
+            "to_uri": target,
+            "recursive": True,
+            "ctx": request_context,
+        }
+    ]
+    assert [event[0] for event in events] == [
+        "mutation-enter",
+        "cp",
+        "mutation-exit",
+        "refresh",
+    ]
+    assert watch_manager.validate_calls == []
+    assert watch_manager.rewrite_calls == []
+    assert result["from"] == source
+    assert result["to"] == target
+    assert result["semantic_root_uri"] == "viking://resources/archive"
+    assert result["semantic_status"] == "queued"
+
+
+@pytest.mark.asyncio
+async def test_resource_cp_refresh_failure_does_not_roll_back_copy(request_context):
+    source = "viking://resources/source.md"
+    target = "viking://resources/archive/copied.md"
+    viking_fs = _FakeVikingFS()
+    service = FSService(viking_fs=viking_fs)
+    service._enqueue_copy_refresh = AsyncMock(side_effect=RuntimeError("queue unavailable"))
+
+    result = await service.cp(source, target, recursive=False, ctx=request_context)
+
+    assert len(viking_fs.cp_calls) == 1
+    assert viking_fs.mv_calls == []
+    assert result["semantic_status"] == "failed"
+    assert result["semantic_error"] == "queue unavailable"
+
+
+@pytest.mark.asyncio
+async def test_non_resource_cp_skips_parent_semantic_refresh(request_context):
+    viking_fs = _FakeVikingFS()
+    service = FSService(viking_fs=viking_fs)
+    service._enqueue_copy_refresh = AsyncMock()
+
+    result = await service.cp(
+        "viking://user/ryoma/memories/source.md",
+        "viking://user/ryoma/memories/copied.md",
+        recursive=False,
+        ctx=request_context,
+    )
+
+    service._enqueue_copy_refresh.assert_not_awaited()
+    assert "semantic_root_uri" not in result
+
+
+@pytest.mark.asyncio
+async def test_copy_refresh_message_only_rebuilds_parent_semantics(
+    request_context,
+    monkeypatch,
+):
+    service = FSService(viking_fs=_FakeVikingFS())
+    queue_manager = _FakeQueueManager()
+    mark_pending = AsyncMock()
+    monkeypatch.setattr(
+        "openviking.service.fs_service.get_queue_manager",
+        lambda: queue_manager,
+    )
+    monkeypatch.setattr(
+        "openviking.service.fs_service.mark_semantic_sidecars_pending",
+        mark_pending,
+    )
+
+    status = await service._enqueue_copy_refresh(
+        root_uri="viking://resources/archive",
+        copied_uri="viking://resources/archive/copied.md",
+        context_type="resource",
+        ctx=request_context,
+    )
+
+    assert status == "queued"
+    assert len(queue_manager.messages) == 1
+    msg = queue_manager.messages[0]
+    assert msg.uri == "viking://resources/archive"
+    assert msg.recursive is False
+    assert msg.skip_vectorization is True
+    assert msg.changes == {"added": ["viking://resources/archive/copied.md"]}
+    assert msg.generation_trigger == "content_copy"
 
 
 @pytest.mark.asyncio
