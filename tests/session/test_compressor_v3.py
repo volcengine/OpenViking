@@ -108,12 +108,19 @@ async def test_v3_skips_agent_training_when_agent_evolution_is_disabled(monkeypa
             cases=[_training_case()],
             memory_diff={"operations": {}},
             case_uri_by_name={},
+            skipped_operations=[
+                {
+                    "memory_type": "profile",
+                    "reason_code": "peer_memory_disabled",
+                    "reason": "Peer memory writes are disabled",
+                }
+            ],
         )
     )
     compressor.train_from_extracted_cases = AsyncMock()
     compressor._write_final_memory_diff = AsyncMock()
 
-    await compressor.extract_long_term_memories(
+    result = await compressor.extract_long_term_memories(
         messages=_messages(),
         ctx=_ctx(),
         allowed_memory_types={"cases", "profile"},
@@ -121,6 +128,13 @@ async def test_v3_skips_agent_training_when_agent_evolution_is_disabled(monkeypa
     )
 
     compressor.train_from_extracted_cases.assert_not_awaited()
+    assert result["skipped_operations"] == [
+        {
+            "memory_type": "profile",
+            "reason_code": "peer_memory_disabled",
+            "reason": "Peer memory writes are disabled",
+        }
+    ]
 
 
 @pytest.mark.asyncio

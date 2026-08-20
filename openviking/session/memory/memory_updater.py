@@ -22,8 +22,10 @@ from openviking.message.part import TextPart
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import (
     MemoryFile,
+    MemoryOperationSkipCode,
     ResolvedOperation,
     ResolvedOperations,
+    SkippedMemoryOperation,
     StoredLink,
 )
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
@@ -711,6 +713,7 @@ class MemoryUpdateResult:
         self.written_uris: List[str] = []
         self.edited_uris: List[str] = []
         self.deleted_uris: List[str] = []
+        self.skipped_operations: List[SkippedMemoryOperation] = []
         self.errors: List[Tuple[str, Exception]] = []
 
     def add_written(self, uri: str) -> None:
@@ -725,11 +728,15 @@ class MemoryUpdateResult:
     def add_error(self, uri: str, error: Exception) -> None:
         self.errors.append((uri, error))
 
+    def add_skipped(self, operation: SkippedMemoryOperation) -> None:
+        self.skipped_operations.append(operation)
+
     def summary(self) -> str:
         return (
             f"Written: {len(self.written_uris)}, "
             f"Edited: {len(self.edited_uris)}, "
             f"Deleted: {len(self.deleted_uris)}, "
+            f"Skipped: {len(self.skipped_operations)}, "
             f"Errors: {len(self.errors)}"
         )
 
@@ -873,12 +880,38 @@ class MemoryUpdater:
 
         applicable_upserts: List[ResolvedOperation] = []
         has_unresolved_upserts = False
+        has_unexplained_unresolved_upserts = False
         for resolved_op in operations.upsert_operations:
             if resolved_op.uris:
                 applicable_upserts.append(resolved_op)
                 continue
             has_unresolved_upserts = True
             error_target = f"{resolved_op.memory_type}(page_id={resolved_op.page_id})"
+            resolution_skip = getattr(resolved_op, "resolution_skip", None)
+            if resolution_skip is not None:
+                skipped = SkippedMemoryOperation(
+                    memory_type=resolved_op.memory_type,
+                    page_id=resolved_op.page_id,
+                    reason_code=resolution_skip.reason_code,
+                    reason=resolution_skip.reason,
+                    source=resolved_op.source,
+                )
+                result.add_skipped(skipped)
+                message = (
+                    "Skipping memory operation by resolution policy: "
+                    f"memory_type={resolved_op.memory_type} "
+                    f"page_id={resolved_op.page_id} "
+                    f"reason_code={resolution_skip.reason_code.value}"
+                )
+                if resolution_skip.reason_code in {
+                    MemoryOperationSkipCode.INVALID_PEER_ID,
+                    MemoryOperationSkipCode.INVALID_RANGES,
+                }:
+                    logger.warning(message)
+                else:
+                    tracer.info(message)
+                continue
+            has_unexplained_unresolved_upserts = True
             resolution_error = ValueError("Missing resolved URI")
             result.add_error(error_target, resolution_error)
             tracer.error(
@@ -932,6 +965,28 @@ class MemoryUpdater:
         for file_content in operations.delete_file_contents:
             delete_uri = file_content.uri
             if has_unresolved_upserts:
+                if not has_unexplained_unresolved_upserts:
+                    skip = SkippedMemoryOperation(
+                        memory_type=(
+                            file_content.memory_type
+                            or file_content.extra_fields.get("memory_type")
+                            or self.memory_type_from_uri(delete_uri)
+                            or "unknown"
+                        ),
+                        uri=delete_uri,
+                        reason_code=MemoryOperationSkipCode.DEPENDENT_DELETE_SUPPRESSED,
+                        reason=(
+                            "Delete was suppressed because the batch contains an "
+                            "intentionally skipped upsert"
+                        ),
+                    )
+                    result.add_skipped(skip)
+                    tracer.info(
+                        "Skipping dependent memory delete by resolution policy: "
+                        f"memory_type={skip.memory_type} "
+                        "reason_code=dependent_delete_suppressed"
+                    )
+                    continue
                 delete_error = ValueError(
                     "Skipped delete because batch contains unresolved upsert URIs"
                 )

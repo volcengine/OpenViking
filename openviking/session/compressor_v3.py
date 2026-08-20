@@ -361,6 +361,7 @@ class SessionCompressorV3:
         allowed_memory_types: Optional[set[str]] = None,
         agent_evolution_enabled: bool = True,
         allow_self_memory: bool = True,
+        peer_memory_enabled: bool = True,
         allowed_peer_ids: Optional[set[str]] = None,
         event_search_tags: Optional[List[str]] = None,
     ):
@@ -400,6 +401,7 @@ class SessionCompressorV3:
                 archive_uri=archive_uri,
                 allowed_memory_types=allowed_memory_types,
                 allow_self_memory=allow_self_memory,
+                peer_memory_enabled=peer_memory_enabled,
                 allowed_peer_ids=allowed_peer_ids,
                 event_search_tags=event_search_tags,
             )
@@ -453,6 +455,7 @@ class SessionCompressorV3:
                 contexts=result.contexts,
                 train_result=train_result,
                 archive_uri=archive_uri or "",
+                skipped_operations=getattr(result, "skipped_operations", []),
             )
         except Exception:
             if strict_extract_errors:
@@ -601,6 +604,7 @@ class SessionCompressorV3:
         archive_uri: Optional[str] = None,
         allowed_memory_types: Optional[set[str]] = None,
         allow_self_memory: bool = True,
+        peer_memory_enabled: bool = True,
         allowed_peer_ids: Optional[set[str]] = None,
         event_search_tags: Optional[List[str]] = None,
     ) -> "_V3ExtractionResult":
@@ -642,6 +646,7 @@ class SessionCompressorV3:
             allowed_memory_types=allowed_memory_types,
             allow_self=allow_self_memory,
             allowed_peer_ids=allowed_peer_ids,
+            peer_memory_enabled=peer_memory_enabled,
         )
         isolation_handler.prepare_messages()
         context_provider._isolation_handler = isolation_handler
@@ -682,6 +687,7 @@ class SessionCompressorV3:
                     "allowed_memory_types": allowed_memory_types,
                     "allow_self": allow_self_memory,
                     "allowed_peer_ids": allowed_peer_ids,
+                    "peer_memory_enabled": peer_memory_enabled,
                 },
                 metadata={
                     "source_extraction_id": extraction_id,
@@ -719,6 +725,10 @@ class SessionCompressorV3:
             cases=canonical_cases,
             memory_diff=memory_diff,
             case_uri_by_name=_case_uri_by_name(canonical_cases, patch_operations, result),
+            skipped_operations=[
+                item.model_dump(mode="json", exclude_none=True)
+                for item in getattr(result, "skipped_operations", [])
+            ],
         )
 
     def _session_skill_extraction_enabled(self) -> bool:
@@ -1223,6 +1233,7 @@ class _V3ExtractionResult:
     cases: list[Case] = field(default_factory=list)
     memory_diff: dict[str, Any] | None = None
     case_uri_by_name: dict[str, str] = field(default_factory=dict)
+    skipped_operations: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -2046,15 +2057,15 @@ def _v3_extraction_response(
     contexts: list[Context],
     train_result: Any,
     archive_uri: str,
+    skipped_operations: Optional[list[dict[str, Any]]] = None,
 ) -> list[Context] | dict[str, Any]:
     """Build the extraction response.
 
     Historically ``extract_long_term_memories`` returned ``list[Context]`` and
     a number of direct callers still index/compare the return value as a list.
-    Commit orchestration now also understands the execution-memory style
-    ``{"contexts": ..., "session_skills": ...}`` shape so it can count
-    session skills.  Preserve the old list shape unless there are actual
-    session skills to report.
+    Commit orchestration also understands a structured response for session
+    skills and intentionally skipped operations. Preserve the old list shape
+    unless either field has content.
     """
     skill_dicts: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -2064,9 +2075,13 @@ def _v3_extraction_response(
             if uri_str and uri_str not in seen:
                 seen.add(uri_str)
                 skill_dicts.append({"uri": uri_str, "archive_uri": archive_uri})
-    if not skill_dicts:
+    public_skips = list(skipped_operations or [])
+    if not skill_dicts and not public_skips:
         return contexts
-    return {"contexts": contexts, "session_skills": skill_dicts}
+    response: dict[str, Any] = {"contexts": contexts, "session_skills": skill_dicts}
+    if public_skips:
+        response["skipped_operations"] = public_skips
+    return response
 
 
 def _make_memory_diff(

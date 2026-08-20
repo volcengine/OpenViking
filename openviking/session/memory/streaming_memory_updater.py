@@ -26,6 +26,7 @@ from openviking.session.memory.dataclass import (
     MemoryTypeSchema,
     ResolvedOperation,
     ResolvedOperations,
+    SkippedMemoryOperation,
     StoredLink,
 )
 from openviking.session.memory.extract_loop import ExtractLoop
@@ -208,6 +209,7 @@ class StreamingMemoryUpdater:
             f"written_uris={scoped_result.apply_result.written_uris} "
             f"edited_uris={scoped_result.apply_result.edited_uris} "
             f"deleted_uris={scoped_result.apply_result.deleted_uris} "
+            f"skipped_reason_codes={_skipped_reason_codes(scoped_result.apply_result)} "
             f"errors={scoped_result.apply_result.errors}",
             console=self.config.trace_console,
         )
@@ -398,6 +400,7 @@ class StreamingMemoryUpdater:
             f"written_uris={apply_result.written_uris} "
             f"edited_uris={apply_result.edited_uris} "
             f"deleted_uris={apply_result.deleted_uris} "
+            f"skipped_reason_codes={_skipped_reason_codes(apply_result)} "
             f"errors={apply_result.errors}",
             console=self.config.trace_console,
         )
@@ -449,6 +452,7 @@ class StreamingMemoryUpdater:
             f"written_uris={apply_result.written_uris} "
             f"edited_uris={apply_result.edited_uris} "
             f"deleted_uris={apply_result.deleted_uris} "
+            f"skipped_reason_codes={_skipped_reason_codes(apply_result)} "
             f"errors={apply_result.errors}",
             console=self.config.trace_console,
         )
@@ -612,12 +616,16 @@ def split_request_by_merge_group(
             group_key = MemoryMergeGroupKey(peer_id=peer_id, memory_type=single_uri_op.memory_type)
             upsert_groups.setdefault(group_key, []).append(single_uri_op)
 
-    for file in list(operations.delete_file_contents or []):
-        group_key = MemoryMergeGroupKey(
-            peer_id=_peer_id_for_memory_file(file),
-            memory_type=file.memory_type or "",
-        )
-        delete_groups.setdefault(group_key, []).append(file)
+    # Keep deletes in the same apply group as unresolved upserts. MemoryUpdater
+    # can then fail closed: an intentionally skipped replacement must not let
+    # its old file be deleted by a separate group.
+    if not passthrough_upserts:
+        for file in list(operations.delete_file_contents or []):
+            group_key = MemoryMergeGroupKey(
+                peer_id=_peer_id_for_memory_file(file),
+                memory_type=file.memory_type or "",
+            )
+            delete_groups.setdefault(group_key, []).append(file)
 
     group_keys = list(dict.fromkeys(list(upsert_groups.keys()) + list(delete_groups.keys())))
     grouped_requests: list[tuple[MemoryMergeGroupKey, MemoryUpdateRequest]] = []
@@ -650,6 +658,7 @@ def split_request_by_merge_group(
         )
 
     if passthrough_upserts:
+        passthrough_deletes = list(operations.delete_file_contents or [])
         group_key = MemoryMergeGroupKey(peer_id=None, memory_type="")
         grouped_requests.append(
             (
@@ -658,10 +667,19 @@ def split_request_by_merge_group(
                     request,
                     operations=ResolvedOperations(
                         upsert_operations=passthrough_upserts,
-                        delete_file_contents=[],
+                        delete_file_contents=passthrough_deletes,
                         errors=list(operations.errors or []),
                         resolved_links=[],
-                        delete_replacements={},
+                        delete_replacements={
+                            file.uri: replacement_uri
+                            for file in passthrough_deletes
+                            if file.uri
+                            if (
+                                replacement_uri := (
+                                    getattr(operations, "delete_replacements", {}) or {}
+                                ).get(file.uri)
+                            )
+                        },
                     ),
                 ),
             )
@@ -1610,6 +1628,7 @@ def scope_memory_update_result_to_submitter(
     scoped_apply_result = _scope_apply_result_to_uris(
         result.apply_result,
         scoped_uris=scoped_uris,
+        scope=scope,
     )
     metadata = dict(result.metadata or {})
     metadata.update(
@@ -1717,6 +1736,7 @@ def _scope_apply_result_to_uris(
     apply_result: MemoryUpdateResult,
     *,
     scoped_uris: set[str],
+    scope: _MemorySubmitterScope,
 ) -> MemoryUpdateResult:
     scoped = MemoryUpdateResult()
     scoped.written_uris = [
@@ -1733,7 +1753,33 @@ def _scope_apply_result_to_uris(
         for error in list(getattr(apply_result, "errors", []) or [])
         if _apply_error_matches_scoped_uris(error, scoped_uris=scoped_uris)
     ]
+    scoped.skipped_operations = [
+        operation
+        for operation in list(getattr(apply_result, "skipped_operations", []) or [])
+        if _skipped_operation_matches_scope(
+            operation,
+            scope=scope,
+            scoped_uris=scoped_uris,
+        )
+    ]
     return scoped
+
+
+def _skipped_operation_matches_scope(
+    operation: SkippedMemoryOperation,
+    *,
+    scope: _MemorySubmitterScope,
+    scoped_uris: set[str],
+) -> bool:
+    source = getattr(operation, "source", None)
+    if scope.extraction_id and getattr(source, "extraction_id", None) == scope.extraction_id:
+        return True
+    if scope.archive_uri and getattr(source, "archive_uri", None) == scope.archive_uri:
+        return True
+    if scope.session_id and getattr(source, "session_id", None) == scope.session_id:
+        return True
+    uri = str(getattr(operation, "uri", None) or "")
+    return bool(uri and uri in scoped_uris)
 
 
 def _operation_matches_scope(op: ResolvedOperation, *, scope: _MemorySubmitterScope) -> bool:
@@ -1894,6 +1940,7 @@ def combine_streaming_memory_results(
         combined_apply_result.written_uris.extend(result.apply_result.written_uris)
         combined_apply_result.edited_uris.extend(result.apply_result.edited_uris)
         combined_apply_result.deleted_uris.extend(result.apply_result.deleted_uris)
+        combined_apply_result.skipped_operations.extend(result.apply_result.skipped_operations)
         combined_apply_result.errors.extend(result.apply_result.errors)
         for key in ("batch_id", "batch_trace_id"):
             if result.metadata.get(key):
@@ -1965,11 +2012,19 @@ def _make_isolation_handler(
         allowed_memory_types=options.get("allowed_memory_types"),
         allow_self=options.get("allow_self", True),
         allowed_peer_ids=options.get("allowed_peer_ids"),
+        peer_memory_enabled=options.get("peer_memory_enabled"),
     )
 
 
 def _operation_count(operations: ResolvedOperations) -> int:
     return len(operations.upsert_operations or []) + len(operations.delete_file_contents or [])
+
+
+def _skipped_reason_codes(result: MemoryUpdateResult) -> list[str]:
+    return [
+        operation.reason_code.value
+        for operation in list(getattr(result, "skipped_operations", []) or [])
+    ]
 
 
 def _operation_lock_paths(

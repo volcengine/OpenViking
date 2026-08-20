@@ -11,6 +11,7 @@ import pytest
 from openviking.message.message import Message
 from openviking.message.part import TextPart
 from openviking.server.identity import RequestContext, Role
+from openviking.session.memory.dataclass import MemoryOperationSkipCode
 from openviking.session.memory.memory_isolation_handler import (
     MemoryIsolationHandler,
 )
@@ -876,8 +877,75 @@ class TestCalculateMemoryUris:
         uris = handler.calculate_memory_uris(schema, operation, extract_ctx)
 
         assert uris == []
+        assert operation.resolution_skip is not None
+        assert operation.resolution_skip.reason_code == MemoryOperationSkipCode.PEER_NOT_ALLOWED
         assert "peer_id" not in operation.memory_fields
         mock_generate_uri.assert_not_called()
+
+    def test_calculate_memory_uris_classifies_peer_policy_skip(self):
+        from openviking.session.memory.dataclass import MemoryTypeSchema, ResolvedOperation
+
+        ctx = create_ctx(user_id="support_bot")
+        extract_ctx = create_mock_extract_context(
+            [create_message("user", peer_id="web-visitor-alice")]
+        )
+        handler = MemoryIsolationHandler(
+            ctx,
+            extract_ctx,
+            allow_self=False,
+            allowed_peer_ids=set(),
+            peer_memory_enabled=False,
+        )
+        operation = ResolvedOperation(
+            old_memory_file_content=None,
+            memory_fields={"peer_id": "web-visitor-alice"},
+            memory_type="preferences",
+            uris=[],
+        )
+
+        uris = handler.calculate_memory_uris(
+            MemoryTypeSchema(
+                memory_type="preferences",
+                filename_template="preferences.md",
+                directory="viking://user/{user_space}/memories",
+            ),
+            operation,
+            extract_ctx,
+        )
+
+        assert uris == []
+        assert operation.resolution_skip is not None
+        assert operation.resolution_skip.reason_code == (
+            MemoryOperationSkipCode.PEER_MEMORY_DISABLED
+        )
+
+    def test_calculate_memory_uris_classifies_invalid_ranges(self):
+        from openviking.session.memory.dataclass import MemoryTypeSchema, ResolvedOperation
+
+        ctx = create_ctx(user_id="support_bot")
+        extract_ctx = create_mock_extract_context([create_message("user")])
+        handler = MemoryIsolationHandler(ctx, extract_ctx)
+        operation = ResolvedOperation(
+            old_memory_file_content=None,
+            memory_fields={"ranges": "10-20"},
+            memory_type="preferences",
+            uris=[],
+        )
+
+        uris = handler.calculate_memory_uris(
+            MemoryTypeSchema(
+                memory_type="preferences",
+                filename_template="preferences.md",
+                directory="viking://user/{user_space}/memories",
+            ),
+            operation,
+            extract_ctx,
+        )
+
+        assert uris == []
+        assert operation.resolution_skip is not None
+        assert operation.resolution_skip.reason_code == MemoryOperationSkipCode.INVALID_RANGES
+        extract_ctx.read_message_ranges.assert_not_called()
 
     @patch("openviking.session.memory.memory_isolation_handler.generate_uri")
     def test_calculate_memory_uris_missing_peer_id_prefers_self_when_allowed(
@@ -1196,5 +1264,7 @@ class TestCalculateMemoryUris:
         uris = handler.calculate_memory_uris(schema, operation, extract_ctx)
 
         assert uris == []
+        assert operation.resolution_skip is not None
+        assert operation.resolution_skip.reason_code == MemoryOperationSkipCode.INVALID_PEER_ID
         assert "peer_id" not in operation.memory_fields
         mock_generate_uri.assert_not_called()
