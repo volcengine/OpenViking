@@ -860,6 +860,8 @@ class SemanticDagExecutor:
                 async with node.lock:
                     file_summaries = self._finalize_file_summaries(node)
                     children_abstracts = await self._finalize_children_abstracts(node)
+                all_file_summaries = file_summaries
+                all_children_abstracts = children_abstracts
                 # Freshness describes the directory itself, including direct
                 # entries whose summaries failed. Those entries remain visible
                 # as unsampled coverage instead of disappearing from the count.
@@ -885,8 +887,8 @@ class SemanticDagExecutor:
                     overview = self._build_content_copy_overview(
                         dir_uri,
                         existing_overview,
-                        file_summaries,
-                        children_abstracts,
+                        all_file_summaries,
+                        all_children_abstracts,
                     )
                     abstract = existing_abstract or ""
                 else:
