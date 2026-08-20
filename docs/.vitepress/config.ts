@@ -5,7 +5,7 @@ import { defineConfig, type DefaultTheme } from 'vitepress'
 
 const docsRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const repo = process.env.GITHUB_REPOSITORY || 'volcengine/OpenViking'
-const githubRepositoryUrl = 
+const githubRepositoryUrl = `https://github.com/${repo}?utm_source=docs&utm_medium=referral&utm_campaign=docs`
 const base = process.env.DOCS_BASE || '/'
 const withTrailingSlash = (url: string) => (url.endsWith('/') ? url : `${url}/`)
 const mainSiteBase = withTrailingSlash(process.env.OPENVIKING_SITE_BASE || 'https://www.openviking.ai/')
@@ -814,7 +814,7 @@ function buildLlmsTxt(siteConfig: any) {
     '',
     '> Open-source context database for AI Agents. OpenViking unifies memory, resources, and skills management for AI Agents through a file system paradigm.',
     '',
-    `- Source: https://github.com/${process.env.GITHUB_REPOSITORY || 'volcengine/OpenViking'}`,
+    `- Source: ${githubRepositoryUrl}`,
     '',
   ]
 
@@ -909,7 +909,7 @@ export default defineConfig({
     logo: '/ov-logo.png',
     logoLink: mainSiteBase,
     socialLinks: [
-      { icon: 'github', link: `https://github.com/${repo}` }
+      { icon: 'github', link: githubRepositoryUrl }
     ],
     footer: {
       message: 'Released under the Apache-2.0 License.',
