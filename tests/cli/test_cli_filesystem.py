@@ -7,7 +7,7 @@ import tempfile
 import uuid
 
 import pytest
-from conftest import ov, ov_add_resource, ov_mkdir, ov_mv, ov_rm
+from conftest import ov, ov_add_resource, ov_cp, ov_mkdir, ov_mv, ov_rm
 
 pytestmark = pytest.mark.cli_remote
 
@@ -135,3 +135,43 @@ class TestFsMv:
             f"ov mv should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )
         ov_rm(dst_uri)
+
+
+class TestFsCp:
+    def test_cp_file_json_and_human_output(self, test_dir_uri):
+        suffix = uuid.uuid4().hex[:6]
+        source = f"{test_dir_uri}/cp_source_{suffix}.txt"
+        json_target = f"{test_dir_uri}/cp_json_{suffix}.txt"
+        human_target = f"{test_dir_uri}/cp_human_{suffix}.txt"
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False, mode="w") as f:
+            f.write("copy me")
+            temp_path = f.name
+        try:
+            assert ov_add_resource(temp_path, source)["exit_code"] == 0
+            json_result = ov_cp(source, json_target)
+            assert json_result["exit_code"] == 0, json_result["stderr"]
+            assert json_result["json"] and json_result["json"].get("ok") is True
+
+            human_result = ov_cp(source, human_target, output=None)
+            assert human_result["exit_code"] == 0, human_result["stderr"]
+            assert "Copied:" in human_result["stdout"]
+        finally:
+            os.unlink(temp_path)
+            ov_rm(source)
+            ov_rm(json_target)
+            ov_rm(human_target)
+
+    def test_cp_directory_requires_recursive(self, test_dir_uri):
+        suffix = uuid.uuid4().hex[:6]
+        source = f"{test_dir_uri}/cp_dir_source_{suffix}"
+        target = f"{test_dir_uri}/cp_dir_target_{suffix}"
+        try:
+            assert ov_mkdir(source)["exit_code"] == 0
+            without_recursive = ov_cp(source, target)
+            assert without_recursive["exit_code"] != 0
+
+            recursive = ov_cp(source, target, recursive=True)
+            assert recursive["exit_code"] == 0, recursive["stderr"]
+        finally:
+            ov_rm(source)
+            ov_rm(target)
