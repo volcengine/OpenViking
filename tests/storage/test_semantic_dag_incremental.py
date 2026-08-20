@@ -359,9 +359,25 @@ async def test_content_copy_reuses_source_summary_without_resummarizing_file(mon
     root_uri = "viking://resources/archive"
     copied_uri = f"{root_uri}/copied.jpg"
     fake_fs = _FakeVikingFS(
-        tree={root_uri: [{"name": "copied.jpg", "isDir": False}]},
+        tree={
+            root_uri: [
+                {"name": "copied.jpg", "isDir": False},
+                {"name": "keep.txt", "isDir": False},
+            ]
+        },
         file_contents={
             copied_uri: "binary-placeholder",
+            f"{root_uri}/keep.txt": "keep",
+            f"{root_uri}/.overview.md": render_abstract_overview(
+                ContextLevel.OVERVIEW,
+                root_uri,
+                "FILES:\n- keep.txt: existing summary",
+            ),
+            f"{root_uri}/.abstract.md": render_abstract_overview(
+                ContextLevel.ABSTRACT,
+                root_uri,
+                "existing abstract",
+            ),
             f"{source_parent}/.overview.md": render_abstract_overview(
                 ContextLevel.OVERVIEW,
                 source_parent,
@@ -375,6 +391,12 @@ async def test_content_copy_reuses_source_summary_without_resummarizing_file(mon
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_dag.get_openviking_config",
         lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.deterministic_sample",
+        lambda values, _limit: [
+            tagged for tagged in values if tagged[1].endswith("/keep.txt")
+        ],
     )
     processor = _FakeProcessor(fake_fs)
     executor = SemanticDagExecutor(

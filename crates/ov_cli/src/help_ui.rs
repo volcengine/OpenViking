@@ -295,11 +295,11 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         purpose: "Copy a file or directory without reparsing or regenerating vectors.",
         examples: &[
             HelpItem {
-                label: "ov cp viking://notes/draft.md viking://notes/draft-copy.md",
+                label: "ov cp viking://resources/notes/draft.md viking://resources/notes/draft-copy.md",
                 description: "Copy one file and its vector records.",
             },
             HelpItem {
-                label: "ov cp -r viking://projects/source viking://projects/backup",
+                label: "ov cp -r viking://resources/projects/source viking://resources/projects/backup",
                 description: "Recursively copy a directory and all vector records.",
             },
         ],
