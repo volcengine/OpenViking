@@ -14,6 +14,7 @@ from openviking.storage.queuefs.embedding_queue import EmbeddingQueue
 from openviking.storage.queuefs.queue_manager import QueueManager
 from openviking.storage.viking_vector_index_backend import (
     UpsertOptions,
+    VectorTransferResult,
     VikingVectorIndexBackend,
     normalize_upsert_options,
 )
@@ -501,15 +502,30 @@ class VikingDBManagerProxy:
     async def delete_uris(self, uris: List[str]) -> None:
         return await self._manager.delete_uris(self._ctx, uris)
 
+    async def copy_uri_mapping(
+        self,
+        source_uri: str,
+        target_uri: str,
+        recursive: bool = False,
+    ) -> VectorTransferResult:
+        return await self._manager.copy_uri_mapping(
+            self._ctx,
+            source_uri=source_uri,
+            target_uri=target_uri,
+            recursive=recursive,
+        )
+
     async def update_uri_mapping(
         self,
-        uri: str,
-        new_uri: str,
-    ) -> bool:
+        source_uri: str,
+        target_uri: str,
+        recursive: bool = False,
+    ) -> VectorTransferResult:
         return await self._manager.update_uri_mapping(
             self._ctx,
-            uri=uri,
-            new_uri=new_uri,
+            source_uri=source_uri,
+            target_uri=target_uri,
+            recursive=recursive,
         )
 
     async def increment_active_count(self, uris: List[str]) -> int:
