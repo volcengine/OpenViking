@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -12,6 +14,7 @@ from openviking.storage.expr import And, Contains, Or, PathScope
 from openviking.storage.viking_vector_index_backend import (
     VectorTransferRollbackError,
     VikingVectorIndexBackend,
+    _SingleAccountBackend,
 )
 from openviking_cli.exceptions import ConflictError
 from openviking_cli.session.user_id import UserIdentifier
@@ -47,6 +50,7 @@ class _MemoryTransferBackend(VikingVectorIndexBackend):
         self.delete_calls = 0
         self.fail_delete_at: int | None = None
         self.partial_delete_count = 0
+        self.drop_delete_requests = False
         self.backend_mode = "local"
         self.scroll_filters = []
 
@@ -92,6 +96,8 @@ class _MemoryTransferBackend(VikingVectorIndexBackend):
     async def delete(self, ids: list[str], *, ctx: RequestContext) -> int:
         del ctx
         self.delete_calls += 1
+        if self.drop_delete_requests:
+            return 0
         deleted = 0
         for record_id in ids:
             if self.records.pop(record_id, None) is not None:
@@ -100,6 +106,25 @@ class _MemoryTransferBackend(VikingVectorIndexBackend):
                 self.fail_delete_at = None
                 raise RuntimeError("injected vector delete failure")
         return deleted
+
+    async def _strict_transfer_count(self, ctx, filter):
+        del ctx, filter
+        return len(self.records)
+
+    async def _strict_transfer_page(self, ctx, filter, *, limit, cursor, output_fields):
+        return await self.scroll(
+            filter=filter,
+            limit=limit,
+            cursor=cursor,
+            output_fields=output_fields,
+            ctx=ctx,
+        )
+
+    async def _strict_transfer_get(self, ctx, ids):
+        return await self.get(ids, ctx=ctx)
+
+    async def _strict_transfer_delete(self, ctx, ids):
+        return await self.delete(ids, ctx=ctx)
 
 
 def _records_under(
@@ -131,6 +156,58 @@ async def test_copy_uri_mapping_keeps_source_and_copies_all_pages():
     assert result.batches == 3
     assert len(_records_under(backend, source)) == 205
     assert len(_records_under(backend, "viking://resources/dst")) == 205
+
+
+@pytest.mark.asyncio
+async def test_strict_scroll_propagates_real_adapter_query_failure():
+    backend = _SingleAccountBackend.__new__(_SingleAccountBackend)
+    backend._bound_account_id = "acct"
+    backend._async_adapter = SimpleNamespace(
+        call=AsyncMock(side_effect=RuntimeError("injected query failure"))
+    )
+
+    with pytest.raises(RuntimeError, match="injected query failure"):
+        await backend.strict_scroll(limit=100, output_fields=["id", "uri"])
+
+
+@pytest.mark.asyncio
+async def test_strict_delete_removes_existing_subset_when_attempted_ids_include_missing():
+    adapter_call = AsyncMock(
+        side_effect=[
+            [{"id": "written", "account_id": "acct"}],
+            1,
+        ]
+    )
+    backend = _SingleAccountBackend.__new__(_SingleAccountBackend)
+    backend._bound_account_id = "acct"
+    backend._async_adapter = SimpleNamespace(call=adapter_call)
+
+    deleted = await backend.strict_delete(["written", "never-written"])
+
+    assert deleted == 1
+    assert adapter_call.await_args_list[1].args == ("delete",)
+    assert adapter_call.await_args_list[1].kwargs == {"ids": ["written"]}
+
+
+@pytest.mark.asyncio
+async def test_transfer_scan_fails_closed_on_repeated_record_page():
+    backend = _MemoryTransferBackend(
+        [
+            _record("source-a", "viking://resources/src/a.md"),
+            _record("source-b", "viking://resources/src/b.md"),
+        ]
+    )
+
+    async def repeated_page(*_args, **_kwargs):
+        record = dict(backend.records["source-a"])
+        return [record], "1"
+
+    backend._strict_transfer_page = repeated_page
+
+    with pytest.raises(RuntimeError, match="duplicate vector record"):
+        await backend.copy_uri_mapping(
+            _ctx(), "viking://resources/src", "viking://resources/dst", recursive=True
+        )
 
 
 @pytest.mark.asyncio
@@ -239,6 +316,26 @@ async def test_copy_uri_mapping_reports_actual_residual_after_cleanup_failure():
     assert exc_info.value.phase == "copy_target_cleanup"
     assert exc_info.value.residual_count == 1
     assert len(_records_under(backend, "viking://resources/dst")) == 1
+
+
+@pytest.mark.asyncio
+async def test_copy_uri_mapping_reports_rollback_when_delete_returns_zero():
+    source = "viking://resources/src"
+    backend = _MemoryTransferBackend(
+        [
+            _record("source-root", source),
+            _record("source-a", f"{source}/a.md"),
+            _record("source-b", f"{source}/b.md"),
+        ]
+    )
+    backend.fail_upsert_at = 3
+    backend.drop_delete_requests = True
+
+    with pytest.raises(VectorTransferRollbackError) as exc_info:
+        await backend.copy_uri_mapping(_ctx(), source, "viking://resources/dst", recursive=True)
+
+    assert exc_info.value.phase == "copy_target_cleanup"
+    assert exc_info.value.residual_count == 2
 
 
 @pytest.mark.asyncio

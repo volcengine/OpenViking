@@ -124,6 +124,25 @@ async def test_target_source_syncs_before_semantic_dag(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_content_copy_does_not_enqueue_ancestor_refresh(monkeypatch):
+    processor = SemanticProcessor()
+    mark_pending = AsyncMock()
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.mark_semantic_sidecars_pending",
+        mark_pending,
+    )
+    msg = SemanticMsg(
+        uri="viking://resources/archive",
+        context_type="resource",
+        generation_trigger="content_copy",
+    )
+
+    await processor._enqueue_parent_refresh(msg, "viking://resources/archive/copied.jpg")
+
+    mark_pending.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_sync_wrapper_delegates_to_sync_tree_and_cleans_temp(monkeypatch):
     """The wrapper calls viking_fs.sync_tree and then deletes the temp tree."""
     fake_fs = _SyncWrapperVikingFS(target_exists=True)
@@ -174,7 +193,7 @@ async def test_sync_wrapper_whole_tree_mv_for_new_target(monkeypatch):
         AsyncMock(),
     )
 
-    diff = await SemanticProcessor()._sync_topdown_recursive(
+    await SemanticProcessor()._sync_topdown_recursive(
         "viking://temp/import",
         "viking://resources/root",
         lock=None,

@@ -11,12 +11,25 @@ import pytest
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.viking_fs import VikingFS
 from openviking.storage.viking_fs._ops import TransferRollbackError
-from openviking_cli.exceptions import ConflictError, FailedPreconditionError, InvalidArgumentError
+from openviking_cli.exceptions import (
+    ConflictError,
+    FailedPreconditionError,
+    InvalidArgumentError,
+    PermissionDeniedError,
+)
 from openviking_cli.session.user_id import UserIdentifier
 
 
 def _ctx() -> RequestContext:
     return RequestContext(user=UserIdentifier("acct", "alice"), role=Role.ROOT)
+
+
+def _user_ctx(*, actor_peer_id: str | None = None) -> RequestContext:
+    return RequestContext(
+        user=UserIdentifier("acct", "alice"),
+        role=Role.USER,
+        actor_peer_id=actor_peer_id,
+    )
 
 
 class _CopyAGFS:
@@ -178,6 +191,39 @@ def _viking_fs(monkeypatch, agfs: _CopyAGFS) -> VikingFS:
         ),
     )
     return fs
+
+
+@pytest.mark.parametrize(
+    "uri",
+    ["viking://", "viking://user", "viking://resources", "viking://temp"],
+)
+def test_cp_rejects_non_root_container_sources(monkeypatch, uri):
+    fs = _viking_fs(monkeypatch, _CopyAGFS(source_is_dir=True))
+
+    with pytest.raises(PermissionDeniedError, match="container root"):
+        fs._ensure_copy_source_access(uri, recursive=True, ctx=_user_ctx())
+
+
+def test_cp_rejects_watch_control_source(monkeypatch):
+    fs = _viking_fs(monkeypatch, _CopyAGFS())
+
+    with pytest.raises(PermissionDeniedError, match="watch-task control"):
+        fs._ensure_copy_source_access(
+            "viking://resources/.watch_tasks.json",
+            recursive=False,
+            ctx=_ctx(),
+        )
+
+
+def test_cp_rejects_actor_peer_scope_that_can_include_hidden_peers(monkeypatch):
+    fs = _viking_fs(monkeypatch, _CopyAGFS(source_is_dir=True))
+
+    with pytest.raises(PermissionDeniedError, match="hidden peer"):
+        fs._ensure_copy_source_access(
+            "viking://user/alice/peers",
+            recursive=True,
+            ctx=_user_ctx(actor_peer_id="peer-a"),
+        )
 
 
 @pytest.mark.asyncio

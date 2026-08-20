@@ -8,15 +8,18 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
 from openviking.core.namespace import (
+    is_hidden_by_actor_peer_view,
     may_include_hidden_actor_peers,
+    uri_parts,
 )
 from openviking.pyagfs.exceptions import (
     AGFSClientError,
     AGFSDirectoryNotEmptyError,
     AGFSHTTPError,
 )
+from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking.storage.expr import PathScope
 from openviking.storage.internal_names import STORAGE_INTERNAL_ENTRY_NAMES
 from openviking.storage.viking_fs._base import (
@@ -32,6 +35,7 @@ from openviking_cli.exceptions import (
     FailedPreconditionError,
     InvalidArgumentError,
     NotFoundError,
+    PermissionDeniedError,
 )
 from openviking_cli.utils.uri import VikingURI
 
@@ -243,7 +247,7 @@ class _OpsMixin:
         lease_ref: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         """Copy a file or directory together with its vector records."""
-        self._ensure_access(old_uri, ctx)
+        self._ensure_copy_source_access(old_uri, recursive=recursive, ctx=ctx)
         self._ensure_mutable_access(new_uri, ctx)
         old_scope = old_uri.rstrip("/")
         new_scope = new_uri.rstrip("/")
@@ -291,6 +295,8 @@ class _OpsMixin:
                 files_created = await self._copy_agfs_entry(
                     old_path,
                     new_path,
+                    old_uri=old_uri,
+                    new_uri=new_uri,
                     is_dir=is_dir,
                     ctx=ctx,
                     lease_ref=lease,
@@ -357,6 +363,41 @@ class _OpsMixin:
             raise
         raise ConflictError(f"transfer target already exists: {uri}", resource=uri)
 
+    def _ensure_copy_source_access(
+        self,
+        uri: str,
+        *,
+        recursive: bool,
+        ctx: Optional[RequestContext],
+    ) -> None:
+        """Require a copy source to stay inside the caller's visible data view."""
+        self._ensure_access(uri, ctx)
+        real_ctx = self._ctx_or_default(ctx)
+        canonical_uri = uri
+        if is_watch_task_control_uri(canonical_uri):
+            raise PermissionDeniedError(
+                "Copying watch-task control state is not allowed",
+                resource=canonical_uri,
+            )
+        if recursive and (
+            is_hidden_by_actor_peer_view(canonical_uri, real_ctx)
+            or may_include_hidden_actor_peers(canonical_uri, real_ctx)
+        ):
+            raise PermissionDeniedError(
+                "Copy source may include hidden peer data",
+                resource=canonical_uri,
+            )
+        if real_ctx.role != Role.ROOT and uri_parts(canonical_uri) in (
+            [],
+            ["user"],
+            ["resources"],
+            ["temp"],
+        ):
+            raise PermissionDeniedError(
+                "Copying a namespace container root requires root access",
+                resource=canonical_uri,
+            )
+
     async def _ensure_transfer_parent_directory(
         self, path: str, uri: str, *, operation: str
     ) -> None:
@@ -378,6 +419,8 @@ class _OpsMixin:
         old_path: str,
         new_path: str,
         *,
+        old_uri: str,
+        new_uri: str,
         is_dir: bool,
         ctx: Optional[RequestContext],
         lease_ref: Dict[str, Any],
@@ -386,6 +429,8 @@ class _OpsMixin:
             return await self._copy_directory_with_exact_locks(
                 old_path,
                 new_path,
+                old_uri=old_uri,
+                new_uri=new_uri,
                 ctx=ctx,
                 lease_ref=lease_ref,
             )
@@ -603,6 +648,8 @@ class _OpsMixin:
                     await self._copy_agfs_entry(
                         new_path,
                         old_path,
+                        old_uri=new_uri,
+                        new_uri=old_uri,
                         is_dir=is_dir,
                         ctx=ctx,
                         lease_ref=lease,
@@ -668,12 +715,14 @@ class _OpsMixin:
         lease_ref: Dict[str, Any] | None = None,
     ) -> int:
         """Copy source to destination for mv without deleting source."""
-        del old_uri, new_uri, is_temp
+        del is_temp
         if lease_ref is None:
             raise ValueError("mv copy requires a pathlock lease")
         return await self._copy_agfs_entry(
             old_path,
             new_path,
+            old_uri=old_uri,
+            new_uri=new_uri,
             is_dir=is_dir,
             ctx=ctx,
             lease_ref=lease_ref,
@@ -683,6 +732,8 @@ class _OpsMixin:
         self,
         old_path: str,
         new_path: str,
+        old_uri: str,
+        new_uri: str,
         ctx: Optional[RequestContext],
         lease_ref: Dict[str, Any] | None,
     ) -> int:
@@ -709,6 +760,13 @@ class _OpsMixin:
                 continue
             old_child = f"{old_path.rstrip('/')}/{name}"
             new_child = f"{new_path.rstrip('/')}/{name}"
+            old_child_uri = f"{old_uri.rstrip('/')}/{name}"
+            new_child_uri = f"{new_uri.rstrip('/')}/{name}"
+            self._ensure_copy_source_access(
+                old_child_uri,
+                recursive=bool(entry.get("isDir", False)),
+                ctx=ctx,
+            )
             child_lease = await self._async_agfs.pathlock_acquire_exact(
                 new_child,
                 owner_lease_ref=lease_ref,
@@ -718,6 +776,8 @@ class _OpsMixin:
                     copied += await self._copy_directory_with_exact_locks(
                         old_child,
                         new_child,
+                        old_uri=old_child_uri,
+                        new_uri=new_child_uri,
                         ctx=ctx,
                         lease_ref=child_lease,
                     )

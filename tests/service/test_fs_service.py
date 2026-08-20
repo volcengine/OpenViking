@@ -460,6 +460,7 @@ async def test_resource_cp_coordinates_mutation_without_copying_watch_tasks(requ
         events.append(("refresh", kwargs["root_uri"]))
         assert kwargs == {
             "root_uri": "viking://resources/archive",
+            "source_uri": source,
             "copied_uri": target,
             "context_type": "resource",
             "ctx": request_context,
@@ -545,6 +546,7 @@ async def test_copy_refresh_message_only_rebuilds_parent_semantics(
 
     status = await service._enqueue_copy_refresh(
         root_uri="viking://resources/archive",
+        source_uri="viking://resources/source.md",
         copied_uri="viking://resources/archive/copied.md",
         context_type="resource",
         ctx=request_context,
@@ -558,6 +560,7 @@ async def test_copy_refresh_message_only_rebuilds_parent_semantics(
     assert msg.skip_vectorization is True
     assert msg.changes == {"added": ["viking://resources/archive/copied.md"]}
     assert msg.generation_trigger == "content_copy"
+    assert msg.copy_source_uri == "viking://resources/source.md"
 
 
 @pytest.mark.asyncio
