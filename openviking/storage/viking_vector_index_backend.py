@@ -1509,6 +1509,46 @@ class VikingVectorIndexBackend:
             output_fields=LOOKUP_OUTPUT_FIELDS,
         )
 
+    async def get_l2_abstracts_by_uris(
+        self,
+        uris: List[str],
+        *,
+        ctx: RequestContext,
+    ) -> Dict[str, str]:
+        """Strictly load existing L2 abstracts for a bounded URI set."""
+        requested_by_canonical: Dict[str, str] = {}
+        for uri in uris:
+            requested_by_canonical.setdefault(canonicalize_uri(uri, ctx), uri)
+        canonical_uris = list(requested_by_canonical)
+        if not canonical_uris:
+            return {}
+
+        abstracts: Dict[str, str] = {}
+        chunk_size = 100
+        for start in range(0, len(canonical_uris), chunk_size):
+            chunk = canonical_uris[start : start + chunk_size]
+            cursor: Optional[str] = None
+            while True:
+                records, cursor = await self._strict_transfer_page(
+                    ctx,
+                    And([In("uri", chunk), Eq("level", 2)]),
+                    limit=100,
+                    cursor=cursor,
+                    output_fields=["uri", "abstract", "updated_at"],
+                )
+                for record in records:
+                    uri = str(record.get("uri") or "")
+                    abstract = str(record.get("abstract") or "").strip()
+                    if uri and abstract and uri not in abstracts:
+                        abstracts[uri] = abstract
+                if cursor is None:
+                    break
+        return {
+            requested_by_canonical[uri]: abstract
+            for uri, abstract in abstracts.items()
+            if uri in requested_by_canonical
+        }
+
     async def delete_account_data(self, account_id: str, *, ctx: RequestContext) -> int:
         """删除指定 account 的所有数据（仅限，root 角色操作）"""
         self._check_root_role(ctx)

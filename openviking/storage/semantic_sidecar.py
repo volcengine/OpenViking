@@ -137,6 +137,14 @@ def _normalize_metadata(metadata: Mapping[str, Any]) -> Dict[str, Any]:
                     f"semantic sidecar freshness.{field} must be a non-negative integer"
                 )
             counters[field] = value
+        if "missing_summary_entries" in freshness:
+            value = freshness["missing_summary_entries"]
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise SemanticSidecarFormatError(
+                    "semantic sidecar freshness.missing_summary_entries "
+                    "must be a non-negative integer"
+                )
+            counters["missing_summary_entries"] = value
         if counters["sampled_entries"] + counters["unsampled_entries"] != counters["total_entries"]:
             raise SemanticSidecarFormatError(
                 "semantic sidecar freshness sampled + unsampled must equal total"
@@ -315,20 +323,22 @@ def deterministic_sample(items: Sequence[_T], limit: int) -> list[_T]:
 
 
 def freshness_metadata(
-    total_entries: int, sampled_entries: int, pending: int = 0
+    total_entries: int,
+    sampled_entries: int,
+    pending: int = 0,
+    missing_summary_entries: Optional[int] = None,
 ) -> Dict[str, int]:
     """Create validated direct-child freshness counters."""
 
-    return _normalize_metadata(
-        {
-            "freshness": {
-                "total_entries": total_entries,
-                "sampled_entries": sampled_entries,
-                "unsampled_entries": total_entries - sampled_entries,
-                "pending_child_changes": pending,
-            }
-        }
-    )["freshness"]
+    freshness = {
+        "total_entries": total_entries,
+        "sampled_entries": sampled_entries,
+        "unsampled_entries": total_entries - sampled_entries,
+        "pending_child_changes": pending,
+    }
+    if missing_summary_entries is not None:
+        freshness["missing_summary_entries"] = missing_summary_entries
+    return _normalize_metadata({"freshness": freshness})["freshness"]
 
 
 async def _read_existing_document(
