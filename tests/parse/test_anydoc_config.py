@@ -10,12 +10,17 @@ from openviking_cli.utils.config.parser_config import load_parser_configs_from_d
 def test_anydoc_config_defaults():
     configs = load_parser_configs_from_dict({})
     cfg = configs["anydoc"]
-    assert cfg.enable is True
+    assert cfg.enabled is True
 
 
 def test_anydoc_config_from_dict():
-    configs = load_parser_configs_from_dict({"anydoc": {"enable": False}})
-    assert configs["anydoc"].enable is False
+    configs = load_parser_configs_from_dict({"anydoc": {"enabled": False}})
+    assert configs["anydoc"].enabled is False
+
+
+def test_anydoc_config_rejects_enable_alias():
+    with pytest.raises(ValueError, match="enable"):
+        load_parser_configs_from_dict({"anydoc": {"enable": False}})
 
 
 def test_anydoc_config_rejects_legacy_fallback_field():
@@ -23,8 +28,12 @@ def test_anydoc_config_rejects_legacy_fallback_field():
         load_parser_configs_from_dict({"anydoc": {"fallback_to_legacy": True}})
 
 
+def test_anydoc_config_is_exported_from_config_package():
+    assert config_module.AnydocConfig is type(load_parser_configs_from_dict({})["anydoc"])
+
+
 def test_application_anydoc_config_reaches_default_registry(monkeypatch):
-    config = OpenVikingConfig.from_dict({"parsers": {"anydoc": {"enable": False}}})
+    config = OpenVikingConfig.from_dict({"parsers": {"anydoc": {"enabled": False}}})
     monkeypatch.setattr(config_module, "get_openviking_config", lambda: config)
     monkeypatch.setattr(registry_module, "_default_registry", None)
 
@@ -32,4 +41,4 @@ def test_application_anydoc_config_reaches_default_registry(monkeypatch):
 
     assert isinstance(registry._parsers["anydoc"], AnyDocParser)
     assert registry._parsers["anydoc"].anydoc_config is config.anydoc
-    assert registry._parsers["anydoc"].anydoc_config.enable is False
+    assert registry._parsers["anydoc"].anydoc_config.enabled is False

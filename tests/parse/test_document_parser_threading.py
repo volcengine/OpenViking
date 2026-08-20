@@ -126,7 +126,7 @@ async def test_anydoc_parser_forwards_no_split_to_markdown(monkeypatch, tmp_path
 
 @pytest.mark.asyncio
 async def test_anydoc_parser_disabled_rejects_office_file(tmp_path: Path):
-    parser = anydoc.AnyDocParser(anydoc_config=AnydocConfig(enable=False))
+    parser = anydoc.AnyDocParser(anydoc_config=AnydocConfig(enabled=False))
     source = tmp_path / "sample.docx"
     source.write_bytes(b"placeholder")
 

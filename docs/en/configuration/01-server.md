@@ -337,7 +337,7 @@ Parsers live under `parsers`:
     "video": {},
     "markdown": {},
     "anydoc": {
-      "enable": true
+      "enabled": true
     },
     "html": {},
     "text": {},
@@ -360,7 +360,7 @@ Parsers live under `parsers`:
 | `image` | Image understanding and OCR |
 | `audio`, `video` | Audio/video parsing |
 | `markdown`, `html`, `text` | Text document chunking |
-| `anydoc` | Office and EPUB conversion; `enable=false` rejects those formats |
+| `anydoc` | Office and EPUB conversion; `enabled=false` rejects those formats |
 | `directory` | Directory scanning and ignore rules |
 | `feishu` | Feishu/Lark access and parsing |
 | `webfeed` | Sitemap, RSS, and Atom ingestion |

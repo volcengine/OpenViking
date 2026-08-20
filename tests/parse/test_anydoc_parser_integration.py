@@ -122,7 +122,7 @@ async def test_anydoc_parser_reraises_conversion_failure(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_anydoc_parser_disabled_rejects_office_file(tmp_path):
-    parser = anydoc.AnyDocParser(anydoc_config=AnydocConfig(enable=False))
+    parser = anydoc.AnyDocParser(anydoc_config=AnydocConfig(enabled=False))
     source = tmp_path / "book.epub"
     source.write_bytes(b"placeholder")
 
@@ -131,7 +131,7 @@ async def test_anydoc_parser_disabled_rejects_office_file(tmp_path):
 
 
 def test_registry_routes_office_and_epub_extensions_to_anydoc_parser():
-    anydoc_config = AnydocConfig(enable=False)
+    anydoc_config = AnydocConfig(enabled=False)
     registry = ParserRegistry(
         parser_configs={
             "markdown": ParserConfig(),

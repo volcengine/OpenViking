@@ -65,6 +65,7 @@ from .open_viking_config import (
 from .ovcli_config import OVCLIConfig, load_ovcli_config
 from .parser_config import (
     PARSER_CONFIG_REGISTRY,
+    AnydocConfig,
     AudioConfig,
     CodeConfig,
     HTMLConfig,
@@ -146,6 +147,7 @@ __all__ = [
     "AudioConfig",
     "VideoConfig",
     "MarkdownConfig",
+    "AnydocConfig",
     "HTMLConfig",
     "TextConfig",
     "get_parser_config",

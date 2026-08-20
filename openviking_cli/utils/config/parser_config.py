@@ -471,8 +471,6 @@ class MarkdownConfig(ParserConfig):
 class AnydocConfig(ParserConfig):
     """Configuration for the shared anydoc Office converter."""
 
-    enable: bool = True
-
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "AnydocConfig":
         valid_fields = {f.name for f in cls.__dataclass_fields__.values()}

@@ -59,7 +59,7 @@ class AnyDocParser(BaseParser):
         if not path.is_file():
             raise FileNotFoundError(f"Document file not found: {path}")
 
-        if not self.anydoc_config.enable:
+        if not self.anydoc_config.enabled:
             raise RuntimeError(
                 "AnyDoc parser is disabled; Office and EPUB legacy parsers have been removed"
             )
