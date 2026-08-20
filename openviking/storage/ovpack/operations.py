@@ -14,6 +14,7 @@ from openviking.core.namespace import (
     is_session_uri,
     relative_uri_path,
 )
+from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
 from openviking.storage.index_consistency import check_index_consistency
 from openviking.storage.ovpack.format import (
@@ -405,6 +406,8 @@ async def _backup_entries(viking_fs, ctx: RequestContext) -> list[dict[str, Any]
             scoped_entry = dict(entry)
             scoped_entry["rel_path"] = f"{scope}/{rel_path}"
             scoped_entry["uri"] = join_uri(scope_uri, rel_path)
+            if is_watch_task_control_uri(scoped_entry["uri"]):
+                continue
             entries.append(scoped_entry)
     return entries
 
