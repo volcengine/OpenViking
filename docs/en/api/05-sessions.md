@@ -107,7 +107,7 @@ result = await client.create_session()
 print(f"Session ID: {result['session_id']}")
 
 # Create new session with specified ID
-result = await client.create_session(options={"session_id": "my-custom-session-id"})
+result = await client.create_session(session_id="my-custom-session-id")
 print(f"Session ID: {result['session_id']}")
 
 # Create new session with a custom auto-commit policy
@@ -1684,7 +1684,7 @@ await client.add_message(
 # Search with session context
 results = await client.search(
     query="embedding configuration",
-    options={"session_id": session_id},
+    session_id=session_id,
 )
 
 # Add assistant message with context reference
@@ -1774,7 +1774,7 @@ if session_info["message_count"] > 10:
 
 ```python
 # Better search results with conversation context
-results = await client.search(query=query, options={"session_id": session_id})
+results = await client.search(query=query, session_id=session_id)
 ```
 
 ---

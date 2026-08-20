@@ -323,7 +323,7 @@ print(f"Added: {result['uri']}")
 print(f"Auxiliary files: {result['auxiliary_files']}")
 
 # 等待处理完成
-result = client.add_skill(data="./skills/my-skill/", options={"wait": True})
+result = client.add_skill(data="./skills/my-skill/", wait=True)
 client.wait_processed()
 ```
 
@@ -554,7 +554,7 @@ validated = client.validate_skill(data={"name": "search-web", "description": "..
 updated = client.update_skill(
     skill_name="search-web",
     data="./skills/search-web",
-    options={"wait": True},
+    wait=True,
 )
 ```
 

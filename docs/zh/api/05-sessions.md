@@ -107,7 +107,7 @@ result = await client.create_session()
 print(f"Session ID: {result['session_id']}")
 
 # 创建指定 ID 的新会话
-result = await client.create_session(options={"session_id": "my-custom-session-id"})
+result = await client.create_session(session_id="my-custom-session-id")
 print(f"Session ID: {result['session_id']}")
 
 # 创建带自定义自动 commit 策略的新会话
@@ -1653,7 +1653,7 @@ await client.add_message(
 # 使用会话上下文进行搜索
 results = await client.search(
     query="embedding configuration",
-    options={"session_id": session_id},
+    session_id=session_id,
 )
 
 # 添加带有上下文引用的助手回复
@@ -1743,7 +1743,7 @@ if session_info["message_count"] > 10:
 
 ```python
 # 结合对话上下文可获得更好的搜索结果
-results = await client.search(query=query, options={"session_id": session_id})
+results = await client.search(query=query, session_id=session_id)
 ```
 
 ---

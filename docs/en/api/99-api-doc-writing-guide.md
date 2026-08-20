@@ -230,7 +230,7 @@ client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 
 result = client.add_resource(
     path="./documents/guide.md",
-    options={"reason": "User guide documentation"},
+    reason="User guide documentation",
 )
 print(f"Added: {result['root_uri']}")
 

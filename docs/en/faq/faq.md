@@ -170,16 +170,14 @@ Embedding, VLM, storage, and other service configuration is managed by the OpenV
 # Add single file
 await client.add_resource(
     path="./document.pdf",
-    options={
-        "reason": "Project technical documentation",  # Describe resource purpose to improve retrieval quality
-        "to": "viking://resources/docs/",  # Specify storage location
-    },
+    reason="Project technical documentation",  # Describe resource purpose to improve retrieval quality
+    to="viking://resources/docs/",  # Specify storage location
 )
 
 # Add web page
 await client.add_resource(
     path="https://example.com/api-docs",
-    options={"reason": "API reference documentation"},
+    reason="API reference documentation",
 )
 
 # Wait for processing to complete
@@ -199,13 +197,13 @@ await client.wait_processed()
 # find(): Simple direct semantic search
 results = await client.find(
     query="OAuth authentication flow",
-    options={"target_uri": "viking://resources/"},
+    target_uri="viking://resources/",
 )
 
 # search(): Complex tasks requiring intent analysis
 results = await client.search(
     query="Help me implement user login functionality",
-    options={"session_id": session.session_id},
+    session_id=session.session_id,
 )
 ```
 

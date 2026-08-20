@@ -163,16 +163,14 @@ Embedding、VLM、存储等服务配置由 OpenViking Server 通过 `ov.conf` �
 # 添加单个文件
 await client.add_resource(
     path="./document.pdf",
-    options={
-        "reason": "项目技术文档",  # 描述资源用途，提升检索质量
-        "to": "viking://resources/docs/",  # 指定存储位置
-    },
+    reason="项目技术文档",  # 描述资源用途，提升检索质量
+    to="viking://resources/docs/",  # 指定存储位置
 )
 
 # 添加网页
 await client.add_resource(
     path="https://example.com/api-docs",
-    options={"reason": "API 参考文档"},
+    reason="API 参考文档",
 )
 
 # 等待处理完成
@@ -192,13 +190,13 @@ await client.wait_processed()
 # find(): 简单直接的语义搜索
 results = await client.find(
     query="OAuth 认证流程",
-    options={"target_uri": "viking://resources/"},
+    target_uri="viking://resources/",
 )
 
 # search(): 复杂任务，需要意图分析
 results = await client.search(
     query="帮我实现用户登录功能",
-    options={"session_id": session.session_id},
+    session_id=session.session_id,
 )
 ```
 

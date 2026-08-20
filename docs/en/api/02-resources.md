@@ -334,7 +334,7 @@ client.initialize()
 # Add local file
 result = client.add_resource(
     path="./documents/guide.md",
-    options={"reason": "User guide documentation"},
+    reason="User guide documentation",
 )
 print(f"Added: {result['root_uri']}")
 
@@ -347,18 +347,16 @@ result = client.add_resource(
 # Add from URL to specific location
 result = client.add_resource(
     path="https://example.com/api-docs.md",
-    options={
-        "to": "viking://resources/external/api-docs.md",
-        "reason": "External API documentation",
-    },
+    to="viking://resources/external/api-docs.md",
+    reason="External API documentation",
 )
 
 # Recursively crawl a site (same-host BFS; depth levels, max_pages cap)
 result = client.add_resource(
     path="https://docs.openviking.ai/getting-started/01-introduction",
+    wait=True,
+    timeout=180,
     options={
-        "wait": True,
-        "timeout": 180,
         "args": {"depth": 1, "max_pages": 10},
     },
 )
@@ -392,8 +390,8 @@ client.wait_processed()
 # Enable scheduled updates
 client.add_resource(
     path="./documents/guide.md",
+    to="viking://resources/guide.md",
     options={
-        "to": "viking://resources/guide.md",
         "watch_interval": 60,  # Update every 60 minutes
     },
 )
@@ -407,8 +405,8 @@ client.add_resource(
 # Add a Feishu document with scheduled user-token refresh
 client.add_resource(
     path="https://example.feishu.cn/docx/doc_token",
+    to="viking://resources/feishu/doc",
     options={
-        "to": "viking://resources/feishu/doc",
         "watch_interval": 1440,
         "args": {
             "feishu_access_token": "u-...",

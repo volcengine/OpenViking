@@ -662,7 +662,8 @@ root = "viking://resources/my_project"
 client.write(
     uri=f"{root}/guide.md",
     content="# Guide\n\nv1 content\n",
-    options={"mode": "create", "wait": True},
+    mode="create",
+    wait=True,
 )
 v1 = client.snapshot.commit(message="v1 initial import")
 
@@ -670,7 +671,8 @@ v1 = client.snapshot.commit(message="v1 initial import")
 client.write(
     uri=f"{root}/guide.md",
     content="# Guide\n\nv2 content\n",
-    options={"mode": "replace", "wait": True},
+    mode="replace",
+    wait=True,
 )
 v2 = client.snapshot.commit(message="v2 update")
 

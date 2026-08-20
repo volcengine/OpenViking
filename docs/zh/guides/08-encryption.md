@@ -70,7 +70,7 @@ async def test():
     sample.write_text("Hello, encrypted world!", encoding="utf-8")
     await client.add_resource(
         path=str(sample),
-        options={"reason": "测试加密"},
+        reason="测试加密",
     )
 
     # 读取资源（自动解密）
