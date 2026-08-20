@@ -17,13 +17,77 @@ class FakeStorage:
         return path
 
 
+def _style(**overrides):
+    values = {"bold": False, "italic": False, "strike": False, "code": False}
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def _block(kind, **overrides):
+    values = {
+        "kind": kind,
+        "level": None,
+        "anchor": None,
+        "content": None,
+        "list": None,
+        "table": None,
+        "blocks": None,
+        "lang": None,
+        "text": None,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
 def _paragraph(*inlines):
-    return SimpleNamespace(kind="paragraph", content=list(inlines))
+    return _block("paragraph", content=list(inlines))
 
 
 def _text(text, **style):
-    style_obj = SimpleNamespace(**style) if style else None
-    return SimpleNamespace(kind="text", text=text, style=style_obj)
+    style_obj = _style(**style) if style else None
+    return SimpleNamespace(
+        kind="text",
+        text=text,
+        style=style_obj,
+        content=None,
+        target=None,
+        alt=None,
+        source=None,
+        anchor=None,
+        note_id=None,
+    )
+
+
+def _inline(kind, **overrides):
+    values = {
+        "kind": kind,
+        "text": None,
+        "style": None,
+        "content": None,
+        "target": None,
+        "alt": None,
+        "source": None,
+        "anchor": None,
+        "note_id": None,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def _doc(blocks, *, notes=None, assets=None):
+    return SimpleNamespace(blocks=list(blocks), notes=notes or [], assets=assets or [])
+
+
+def _list_item(*blocks, checked=None, marker_label=None):
+    return SimpleNamespace(blocks=list(blocks), checked=checked, marker_label=marker_label)
+
+
+def _cell(*blocks):
+    return SimpleNamespace(blocks=list(blocks), col_span=1, row_span=1)
+
+
+def _slot(cell=None, kind="origin"):
+    return SimpleNamespace(kind=kind, cell=cell, origin_row=None, origin_col=None)
 
 
 def _render_document(tmp_path, document, *, source_format="docx"):
@@ -37,11 +101,7 @@ def _render_document(tmp_path, document, *, source_format="docx"):
 
 
 def test_renderer_escapes_markdown_special_text(tmp_path):
-    document = SimpleNamespace(
-        blocks=[_paragraph(_text("# Heading\n- item [x] a*b*"))],
-        notes=[],
-        assets=[],
-    )
+    document = _doc([_paragraph(_text("# Heading\n- item [x] a*b*"))])
 
     markdown = _render_document(tmp_path, document)
 
@@ -49,8 +109,8 @@ def test_renderer_escapes_markdown_special_text(tmp_path):
 
 
 def test_renderer_merges_adjacent_styled_text_and_preserves_outer_spaces(tmp_path):
-    document = SimpleNamespace(
-        blocks=[
+    document = _doc(
+        [
             _paragraph(
                 _text("  "),
                 _text("foo", bold=True),
@@ -58,9 +118,7 @@ def test_renderer_merges_adjacent_styled_text_and_preserves_outer_spaces(tmp_pat
                 _text("bar", bold=True),
                 _text("  "),
             )
-        ],
-        notes=[],
-        assets=[],
+        ]
     )
 
     markdown = _render_document(tmp_path, document)
@@ -69,13 +127,11 @@ def test_renderer_merges_adjacent_styled_text_and_preserves_outer_spaces(tmp_pat
 
 
 def test_renderer_uses_dynamic_backtick_fences(tmp_path):
-    document = SimpleNamespace(
-        blocks=[
+    document = _doc(
+        [
             _paragraph(_text("`edge`", code=True)),
-            SimpleNamespace(kind="code_block", text="a ``` fence", lang="py"),
-        ],
-        notes=[],
-        assets=[],
+            _block("code_block", text="a ``` fence", lang="py"),
+        ]
     )
 
     markdown = _render_document(tmp_path, document)
@@ -85,27 +141,23 @@ def test_renderer_uses_dynamic_backtick_fences(tmp_path):
 
 
 def test_renderer_formats_urls_and_anchor_links(tmp_path):
-    heading = SimpleNamespace(
-        kind="heading",
+    heading = _block(
+        "heading",
         level=1,
         anchor="target-id",
         content=[_text("Target Title")],
     )
-    external = SimpleNamespace(
-        kind="link",
+    external = _inline(
+        "link",
         content=[],
         target=SimpleNamespace(kind="external", value="https://ex ample.com/a(b)|<x>"),
     )
-    anchor = SimpleNamespace(
-        kind="link",
+    anchor = _inline(
+        "link",
         content=[_text("jump")],
         target=SimpleNamespace(kind="anchor", value="target-id"),
     )
-    document = SimpleNamespace(
-        blocks=[heading, _paragraph(external), _paragraph(anchor)],
-        notes=[],
-        assets=[],
-    )
+    document = _doc([heading, _paragraph(external), _paragraph(anchor)])
 
     markdown = _render_document(tmp_path, document)
 
@@ -117,17 +169,13 @@ def test_renderer_formats_urls_and_anchor_links(tmp_path):
 
 
 def test_renderer_emits_html_anchor_for_non_heading_anchor(tmp_path):
-    anchor = SimpleNamespace(kind="anchor", anchor="Custom Anchor")
-    link = SimpleNamespace(
-        kind="link",
+    anchor = _inline("anchor", anchor="Custom Anchor")
+    link = _inline(
+        "link",
         content=[_text("go")],
         target=SimpleNamespace(kind="anchor", value="Custom Anchor"),
     )
-    document = SimpleNamespace(
-        blocks=[_paragraph(anchor, _text("Target")), _paragraph(link)],
-        notes=[],
-        assets=[],
-    )
+    document = _doc([_paragraph(anchor, _text("Target")), _paragraph(link)])
 
     markdown = _render_document(tmp_path, document)
 
@@ -140,29 +188,25 @@ def test_renderer_serializes_rich_lists(tmp_path):
         blocks = [_paragraph(_text(text))]
         if extra:
             blocks.append(_paragraph(_text(extra)))
-        return SimpleNamespace(
-            blocks=blocks,
-            checked=checked,
-            marker_label=marker_label,
-        )
+        return _list_item(*blocks, checked=checked, marker_label=marker_label)
 
-    alpha = SimpleNamespace(
-        kind="list",
+    alpha = _block(
+        "list",
         list=SimpleNamespace(
             marker="lower_alpha",
             start=2,
             items=[item("Task", checked=False), item("Loose", extra="detail")],
         ),
     )
-    labeled = SimpleNamespace(
-        kind="list",
+    labeled = _block(
+        "list",
         list=SimpleNamespace(
             marker="bullet",
             start=1,
             items=[item("Custom", marker_label="A)")],
         ),
     )
-    document = SimpleNamespace(blocks=[alpha, labeled], notes=[], assets=[])
+    document = _doc([alpha, labeled])
 
     markdown = _render_document(tmp_path, document)
 
@@ -173,41 +217,43 @@ def test_renderer_serializes_rich_lists(tmp_path):
 
 def test_renderer_serializes_table_slots_header_and_cell_blocks(tmp_path):
     def origin(*blocks):
-        return SimpleNamespace(kind="origin", cell=SimpleNamespace(blocks=list(blocks)))
+        return _slot(_cell(*blocks))
 
-    covered = SimpleNamespace(kind="covered")
-    inner_table = SimpleNamespace(
-        kind="table",
+    covered = _slot(kind="covered")
+    inner_table = _block(
+        "table",
         table=SimpleNamespace(
             grid=[[origin(_paragraph(_text("N1"))), origin(_paragraph(_text("N2")))]],
             header_rows=0,
+            kind="data",
         ),
     )
-    list_block = SimpleNamespace(
-        kind="list",
+    list_block = _block(
+        "list",
         list=SimpleNamespace(
             marker="bullet",
             start=1,
-            items=[SimpleNamespace(blocks=[_paragraph(_text("L"))])],
+            items=[_list_item(_paragraph(_text("L")))],
         ),
     )
-    table = SimpleNamespace(
-        kind="table",
+    table = _block(
+        "table",
         table=SimpleNamespace(
             grid=[
                 [origin(_paragraph(_text("A|B"))), covered],
                 [
                     origin(
-                        SimpleNamespace(kind="heading", level=2, content=[_text("Head")]),
+                        _block("heading", level=2, content=[_text("Head")]),
                         list_block,
                     ),
-                    origin(SimpleNamespace(kind="code_block", text="`code`", lang=""), inner_table),
+                    origin(_block("code_block", text="`code`", lang=""), inner_table),
                 ],
             ],
             header_rows=0,
+            kind="data",
         ),
     )
-    document = SimpleNamespace(blocks=[table], notes=[], assets=[])
+    document = _doc([table])
 
     markdown = _render_document(tmp_path, document)
 
@@ -217,19 +263,14 @@ def test_renderer_serializes_table_slots_header_and_cell_blocks(tmp_path):
 
 
 def test_renderer_flattens_single_cell_layout_table(tmp_path):
-    cell = SimpleNamespace(
-        kind="origin",
-        cell=SimpleNamespace(blocks=[_paragraph(_text("Layout text"))]),
-    )
-    document = SimpleNamespace(
-        blocks=[
-            SimpleNamespace(
-                kind="table",
+    cell = _slot(_cell(_paragraph(_text("Layout text"))))
+    document = _doc(
+        [
+            _block(
+                "table",
                 table=SimpleNamespace(kind="layout", grid=[[cell]], header_rows=0),
             )
-        ],
-        notes=[],
-        assets=[],
+        ]
     )
 
     markdown = _render_document(tmp_path, document)
@@ -240,20 +281,21 @@ def test_renderer_flattens_single_cell_layout_table(tmp_path):
 def test_renderer_numbers_notes_by_reference_order(tmp_path):
     body = _paragraph(
         _text("Body"),
-        SimpleNamespace(kind="note_ref", note_id="b"),
+        _inline("note_ref", note_id="b"),
     )
     note_b = SimpleNamespace(
         id="b",
+        kind="footnote",
         blocks=[
             _paragraph(
                 _text("B note"),
-                SimpleNamespace(kind="note_ref", note_id="a"),
+                _inline("note_ref", note_id="a"),
             )
         ],
     )
-    note_a = SimpleNamespace(id="a", blocks=[_paragraph(_text("A note"))])
-    note_c = SimpleNamespace(id="c", blocks=[_paragraph(_text("C note"))])
-    document = SimpleNamespace(blocks=[body], notes=[note_a, note_b, note_c], assets=[])
+    note_a = SimpleNamespace(id="a", kind="footnote", blocks=[_paragraph(_text("A note"))])
+    note_c = SimpleNamespace(id="c", kind="footnote", blocks=[_paragraph(_text("C note"))])
+    document = _doc([body], notes=[note_a, note_b, note_c])
 
     markdown = _render_document(tmp_path, document)
 
@@ -264,15 +306,13 @@ def test_renderer_numbers_notes_by_reference_order(tmp_path):
 
 
 def test_renderer_presentation_blockquote_becomes_speaker_notes(tmp_path):
-    document = SimpleNamespace(
-        blocks=[
-            SimpleNamespace(
-                kind="block_quote",
+    document = _doc(
+        [
+            _block(
+                "block_quote",
                 blocks=[_paragraph(_text("Presenter only"))],
             )
-        ],
-        notes=[],
-        assets=[],
+        ]
     )
 
     markdown = _render_document(tmp_path, document, source_format="pptx")
@@ -281,15 +321,13 @@ def test_renderer_presentation_blockquote_becomes_speaker_notes(tmp_path):
 
 
 def test_renderer_non_presentation_blockquote_stays_quote(tmp_path):
-    document = SimpleNamespace(
-        blocks=[
-            SimpleNamespace(
-                kind="block_quote",
+    document = _doc(
+        [
+            _block(
+                "block_quote",
                 blocks=[_paragraph(_text("Quoted"))],
             )
-        ],
-        notes=[],
-        assets=[],
+        ]
     )
 
     markdown = _render_document(tmp_path, document, source_format="docx")

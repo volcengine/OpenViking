@@ -6,8 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from openviking.parse.parsers.anydoc_adapter import attr
-from openviking.parse.parsers.anydoc_renderer import _AnyDocMarkdownRenderer
+from openviking.parse.parsers.anydoc_renderer import _AnyDocMarkdownRenderer, _attr
 
 
 @dataclass(frozen=True)
@@ -22,7 +21,7 @@ class AnydocConversionResult:
 def _format_name(value: Any) -> str | None:
     if value is None:
         return None
-    name = attr(value, "value", "name", default=value)
+    name = _attr(value, "value", "name", default=value)
     return str(name).split(".")[-1].lower()
 
 

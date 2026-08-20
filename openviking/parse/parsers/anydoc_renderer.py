@@ -1,4 +1,4 @@
-"""Render AnyDoc document models into Markdown with OV media rewrites."""
+"""Render firecrawl-anydoc document models into Markdown with OV media rewrites."""
 
 from __future__ import annotations
 
@@ -7,15 +7,37 @@ import mimetypes
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 from openviking.parse.image_validation import is_valid_image
-from openviking.parse.parsers.anydoc_adapter import asset_id, attr
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 _PRESENTATION_FORMATS = {"ppt", "pptx", "pptm", "pps", "ppsx", "ppsm", "pot", "odp"}
+
+
+def _attr(obj: Any, *names: str, default: Any = None) -> Any:
+    for name in names:
+        if obj is None:
+            break
+        if isinstance(obj, dict) and name in obj:
+            return obj[name]
+        if hasattr(obj, name):
+            return getattr(obj, name)
+    return default
+
+
+def _asset_id(source: Any) -> int | None:
+    raw = _attr(source, "asset_id", "assetId")
+    if raw is None:
+        return None
+    if hasattr(raw, "id"):
+        return int(getattr(raw, "id", raw))
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 @dataclass(frozen=True)
@@ -31,24 +53,17 @@ class _TextRun:
 
 
 def _kind(value: Any) -> str:
-    raw = attr(value, "kind", "type", default="")
-    raw = attr(raw, "value", "name", default=raw)
-    return str(raw).split(".")[-1].replace("_", "").replace("-", "").lower()
+    raw = _attr(value, "kind", default="")
+    raw = _attr(raw, "value", "name", default=raw)
+    return str(raw).split(".")[-1].lower()
 
 
-def _as_list(value: Any) -> list[Any]:
-    if value is None:
-        return []
-    if isinstance(value, (str, bytes, bytearray)):
-        return [value]
-    try:
-        return list(value)
-    except TypeError:
-        return [value]
+def _items(value: list[Any] | None) -> list[Any]:
+    return value or []
 
 
 class _AnyDocMarkdownRenderer:
-    """Render AnyDoc's public document model while materializing image assets."""
+    """Render AnyDoc's public Document model while materializing image assets."""
 
     def __init__(
         self,
@@ -63,111 +78,79 @@ class _AnyDocMarkdownRenderer:
         self.resource_name = resource_name
         self.storage = storage
         self.images_saved = 0
-        self.assets: dict[int, Any] = {}
         self.asset_paths: dict[int, str | None] = {}
         self.assets_referenced: set[int] = set()
         self.warnings: list[str] = []
-        self._collect_assets()
+        self.assets = self._collect_assets()
         self.note_numbers = self._number_notes()
         self.anchors = self._resolve_anchors()
 
-    def _collect_assets(self) -> None:
-        self.assets = {}
-        for index, asset in enumerate(_as_list(attr(self.document, "assets", default=[]))):
-            raw_id = attr(asset, "id", "asset_id", "assetId", default=index)
+    def _collect_assets(self) -> dict[int, Any]:
+        assets: dict[int, Any] = {}
+        for index, asset in enumerate(_items(self.document.assets)):
+            raw_id = _attr(asset.id, "id", default=asset.id)
             try:
-                self.assets[int(attr(raw_id, "id", default=raw_id))] = asset
+                assets[int(raw_id)] = asset
             except (TypeError, ValueError):
-                self.assets[index] = asset
+                assets[index] = asset
+        return assets
 
     def render(self) -> str:
-        parts = [
-            part
-            for block in _as_list(attr(self.document, "blocks", default=[]))
-            if (part := self._render_block(block))
-        ]
+        parts = [part for block in _items(self.document.blocks) if (part := self._render_block(block))]
         parts.extend(self._render_note_definitions())
         markdown = "\n\n".join(parts)
         return f"{markdown}\n" if markdown else ""
 
-    def _render_blocks(self, blocks: Any) -> str:
+    def _render_blocks(self, blocks: list[Any] | None) -> str:
         return "\n\n".join(
-            rendered for block in _as_list(blocks) if (rendered := self._render_block(block))
+            rendered for block in _items(blocks) if (rendered := self._render_block(block))
         )
 
     def _render_block(self, block: Any) -> str:
         kind = _kind(block)
-        content = attr(block, "content", "inlines", default=[])
-
         if kind == "heading":
-            text = self._render_inlines(content, context="heading").strip()
+            text = self._render_inlines(block.content, context="heading").strip()
             if not text:
                 return ""
-            try:
-                level = min(max(int(attr(block, "level", default=1) or 1), 1), 6)
-            except (TypeError, ValueError):
-                level = 1
+            level = min(max(int(block.level or 1), 1), 6)
             return f"{'#' * level} {text}"
         if kind == "paragraph":
-            return self._render_inlines(content, context="block").strip()
+            return self._render_inlines(block.content, context="block").strip()
         if kind == "list":
-            return self._render_list(attr(block, "list", default=None) or block)
+            return self._render_list(block.list)
         if kind == "table":
-            table = attr(block, "table", default=None) or block
-            if _kind(table) == "layout" and self._table_is_single_cell(table):
-                first_cell = attr(_as_list(attr(table, "grid", default=[]))[0][0], "cell")
-                return self._render_blocks(
-                    attr(first_cell, "blocks", "children", "content", default=[])
-                )
-            return self._render_table(table)
-        if kind == "blockquote":
-            inner = self._render_blocks(attr(block, "blocks", "children", "content", default=[]))
+            if block.table.kind == "layout" and self._table_is_single_cell(block.table):
+                cell = block.table.grid[0][0].cell
+                return self._render_blocks(cell.blocks if cell else [])
+            return self._render_table(block.table)
+        if kind == "block_quote":
+            inner = self._render_blocks(block.blocks)
             if not inner:
                 return ""
             if self.source_format in _PRESENTATION_FORMATS:
                 return f"### Speaker Notes\n\n{inner}"
             return "\n".join(">" if not line else f"> {line}" for line in inner.splitlines())
-        if kind == "codeblock":
-            language = str(attr(block, "language", "lang", default="") or "")
-            code = attr(block, "code", "text", "value", default=None)
-            if code is None:
-                code = self._render_inlines(content, context="block")
-            body = str(code).rstrip("\n")
+        if kind == "code_block":
+            body = (block.text or "").rstrip("\n")
             fence = self._backtick_fence(body, 3)
-            return f"{fence}{language}\n{body}\n{fence}"
-        if kind in {"rule", "thematicbreak", "horizontalrule"}:
+            return f"{fence}{block.lang or ''}\n{body}\n{fence}"
+        if kind == "rule":
             return "---"
-
-        nested = attr(block, "blocks", "children", default=None)
-        if nested is not None:
-            return self._render_blocks(nested)
-        if content:
-            return self._render_inlines(content, context="block")
-        text = attr(block, "text", "value", default=None)
-        if text is not None:
-            return self._escape_text(str(text), context="block")
         raise RuntimeError(f"Unsupported AnyDoc block kind: {kind}")
 
     def _render_inlines(
         self,
-        inlines: Any,
+        inlines: list[Any] | None,
         *,
         context: str,
         in_label: bool = False,
     ) -> str:
-        normalized = self._normalize_inlines(_as_list(inlines))
+        normalized = self._normalize_inlines(_items(inlines))
         parts: list[str] = []
         for index, inline in enumerate(normalized):
             if isinstance(inline, _TextRun):
                 next_inline = normalized[index + 1] if index + 1 < len(normalized) else None
-                trailing_active = (
-                    isinstance(next_inline, _TextRun)
-                    and self._style_key(next_inline.style) != self._style_key(None)
-                ) or (
-                    next_inline is not None
-                    and not isinstance(next_inline, _TextRun)
-                    and _kind(next_inline) in {"link", "image", "noteref"}
-                )
+                trailing_active = self._next_inline_is_active(next_inline)
                 rendered_so_far = "".join(parts)
                 parts.append(
                     self._render_text(
@@ -180,67 +163,45 @@ class _AnyDocMarkdownRenderer:
                     )
                 )
                 continue
-
-            kind = _kind(inline)
-            if kind == "link":
-                parts.append(self._render_link(inline, context=context))
-            elif kind == "image":
-                parts.append(self._render_image(inline, context=context, in_label=in_label))
-            elif kind == "anchor":
-                anchor = attr(inline, "anchor", "id", "name", default="")
-                resolved = self.anchors.get(anchor)
-                if resolved and resolved.emit_html:
-                    parts.append(f'<a id="{html.escape(resolved.fragment, quote=True)}"></a>')
-            elif kind == "noteref":
-                note_id = attr(inline, "note_id", "noteId", "id", "label", default="")
-                number = self.note_numbers.get(str(note_id))
-                if number is not None:
-                    parts.append(f"[^{number}]")
-            elif kind in {"linebreak", "softbreak", "hardbreak"}:
-                parts.append(
-                    "\\\n" if context == "block" else "\n" if context == "table_cell" else " "
-                )
-            else:
-                content = attr(inline, "content", "inlines", "children", default=None)
-                if content is not None:
-                    parts.append(self._render_inlines(content, context=context, in_label=in_label))
-                else:
-                    text = attr(inline, "text", "value", default=None)
-                    if text is None:
-                        raise RuntimeError(f"Unsupported AnyDoc inline kind: {kind}")
-                    parts.append(
-                        self._escape_text(
-                            str(text),
-                            context=context,
-                            in_label=in_label,
-                        )
-                    )
+            parts.append(self._render_inline(inline, context=context, in_label=in_label))
         return "".join(parts)
+
+    def _render_inline(self, inline: Any, *, context: str, in_label: bool) -> str:
+        kind = _kind(inline)
+        if kind == "link":
+            return self._render_link(inline, context=context)
+        if kind == "image":
+            return self._render_image(inline, context=context, in_label=in_label)
+        if kind == "anchor":
+            resolved = self.anchors.get(inline.anchor)
+            return f'<a id="{html.escape(resolved.fragment, quote=True)}"></a>' if resolved and resolved.emit_html else ""
+        if kind == "note_ref":
+            number = self.note_numbers.get(inline.note_id or "")
+            return f"[^{number}]" if number is not None else ""
+        if kind == "line_break":
+            return "\\\n" if context == "block" else "\n" if context == "table_cell" else " "
+        raise RuntimeError(f"Unsupported AnyDoc inline kind: {kind}")
 
     def _normalize_inlines(self, inlines: Iterable[Any]) -> list[Any]:
         normalized: list[Any] = []
         plain_style = self._style_key(None)
         for inline in inlines:
-            if isinstance(inline, str):
-                inline = {"kind": "text", "text": inline}
-
-            if _kind(inline) == "anchor":
-                anchor = attr(inline, "anchor", "id", "name", default="")
-                resolved = self.anchors.get(anchor)
+            kind = _kind(inline)
+            if kind == "anchor":
+                resolved = self.anchors.get(inline.anchor)
                 if resolved is None or not resolved.emit_html:
                     continue
-            if _kind(inline) != "text":
+            if kind != "text":
                 normalized.append(inline)
                 continue
-
-            text = str(attr(inline, "text", "value", "content", default="") or "")
-            if not text:
+            if not inline.text:
                 continue
-            style = None if text.isspace() else self._style_from_inline(inline)
+
+            style = None if inline.text.isspace() else inline.style
             style_key = self._style_key(style)
             previous = normalized[-1] if normalized else None
             if isinstance(previous, _TextRun) and self._style_key(previous.style) == style_key:
-                previous.text += text
+                previous.text += inline.text
                 continue
             if (
                 style_key != plain_style
@@ -253,9 +214,9 @@ class _AnyDocMarkdownRenderer:
                 and self._style_key(normalized[-2].style) == style_key
             ):
                 whitespace = normalized.pop().text
-                normalized[-1].text += whitespace + text
+                normalized[-1].text += whitespace + inline.text
                 continue
-            normalized.append(_TextRun(text=text, style=style))
+            normalized.append(_TextRun(text=inline.text, style=style))
         return normalized
 
     def _render_text(
@@ -297,69 +258,44 @@ class _AnyDocMarkdownRenderer:
                 opening += "**"
             if italic:
                 opening += "*"
-            escaped = self._escape_text(
-                core,
-                context=context,
-                styled=True,
-                in_label=in_label,
-            )
+            escaped = self._escape_text(core, context=context, styled=True, in_label=in_label)
             rendered = f"{opening}{escaped}{opening[::-1]}"
         return f"{leading}{rendered}{trailing}"
 
     def _render_link(self, inline: Any, *, context: str) -> str:
-        target = attr(inline, "target", default=None)
-        label = self._render_inlines(
-            attr(inline, "content", "inlines", "children", default=[]),
-            context=context,
-            in_label=True,
-        )
-        if not label:
-            label = self._escape_text(
-                str(attr(inline, "text", "label", default="") or ""),
-                context=context,
-                in_label=True,
-            )
-
-        target_kind = _kind(target)
-        target_value = attr(
-            target,
-            "value",
-            "url",
-            "href",
-            default=attr(inline, "url", "href", "destination", default=""),
-        )
-        if not target_value:
+        target = inline.target
+        label = self._render_inlines(inline.content, context=context, in_label=True)
+        if not target or not target.value:
             return label
-        if target_kind == "anchor":
-            resolved = self.anchors.get(str(target_value))
+        if target.kind == "anchor":
+            resolved = self.anchors.get(target.value)
             if resolved is None:
                 return label
             url = f"#{resolved.fragment}"
-        elif target_kind in {"external", "relative", ""}:
-            url = str(target_value)
+        elif target.kind in {"external", "relative"}:
+            url = target.value
         else:
-            raise RuntimeError(f"Unsupported AnyDoc link target kind: {target_kind}")
+            raise RuntimeError(f"Unsupported AnyDoc link target kind: {target.kind}")
         if label.strip():
             return f"[{label}]({self._format_url(url)})"
         escaped = self._escape_text(url, context=context, in_label=True, trailing_active=True)
         return f"[{escaped}]({self._format_url(url)})"
 
     def _render_image(self, image: Any, *, context: str, in_label: bool) -> str:
-        alt = str(attr(image, "alt", "alt_text", "altText", default="") or "").strip()
+        alt = (image.alt or "").strip()
         escaped_alt = self._escape_text(alt, context=context, in_label=True)
-        source = attr(image, "source")
-        source_kind = _kind(source)
-
-        if source_kind == "external":
-            url = attr(source, "url", "href", "src", default="")
-            return f"![{escaped_alt}]({self._format_url(str(url))})" if url else escaped_alt
-        if source_kind == "unavailable":
+        source = image.source
+        if source is None:
+            return self._escape_text(alt, context=context, in_label=in_label)
+        if source.kind == "external":
+            return f"![{escaped_alt}]({self._format_url(source.url or '')})" if source.url else escaped_alt
+        if source.kind == "unavailable":
             self.warnings.append(f"Embedded image is unavailable: {alt or '<no alt text>'}")
             return self._escape_text(alt, context=context, in_label=in_label)
-        if source_kind != "asset":
+        if source.kind != "asset":
             return self._escape_text(alt, context=context, in_label=in_label)
 
-        reference = asset_id(source)
+        reference = _asset_id(source)
         if reference is None:
             self.warnings.append("AnyDoc image references an asset without an id")
             return self._escape_text(alt, context=context, in_label=in_label)
@@ -377,30 +313,19 @@ class _AnyDocMarkdownRenderer:
             self.warnings.append(f"AnyDoc image references missing asset {reference}")
             self.asset_paths[reference] = None
             return None
-
-        media_type = str(
-            attr(asset, "media_type", "mediaType", "mime_type", "mimeType", default="") or ""
-        )
-        if not media_type.lower().startswith("image/"):
+        if not asset.media_type.lower().startswith("image/"):
             self.warnings.append(
-                f"AnyDoc asset {reference} is not an image ({media_type}); kept as alt text"
+                f"AnyDoc asset {reference} is not an image ({asset.media_type}); kept as alt text"
             )
             self.asset_paths[reference] = None
             return None
 
-        image_data = attr(asset, "bytes", "data", "content", default=None)
-        if image_data is None:
-            self.warnings.append(f"AnyDoc image asset {reference} has no bytes")
-            self.asset_paths[reference] = None
-            return None
-
-        image_bytes = bytes(image_data)
-        extension = self._image_extension(asset, media_type)
+        image_bytes = bytes(asset.data)
+        extension = self._image_extension(asset)
         filename = f"anydoc_asset_{reference}"
-        display_path = Path(f"{filename}{extension}")
-        if not is_valid_image(image_bytes, display_path):
+        if not is_valid_image(image_bytes, Path(f"{filename}{extension}")):
             self.warnings.append(
-                f"AnyDoc asset {reference} is not an ingestable image ({media_type})"
+                f"AnyDoc asset {reference} is not an ingestable image ({asset.media_type})"
             )
             self.asset_paths[reference] = None
             return None
@@ -429,35 +354,16 @@ class _AnyDocMarkdownRenderer:
         return relative
 
     def _render_list(self, list_model: Any) -> str:
-        items = _as_list(attr(list_model, "items", "children", "content", default=[]))
-        if not items:
+        if list_model is None or not list_model.items:
             return ""
-        marker_kind = str(attr(list_model, "marker", default="") or "").lower()
-        ordered = bool(attr(list_model, "ordered", "is_ordered", "isOrdered", default=False))
-        try:
-            start = int(attr(list_model, "start", "start_number", "startNumber", default=1) or 1)
-        except (TypeError, ValueError):
-            start = 1
-
         rendered_items: list[str] = []
         loose = False
-        for index, item in enumerate(items):
-            ordinal = start + index
-            marker_label = attr(item, "marker_label", "markerLabel", default=None)
-            if marker_label:
-                marker = f"- {self._escape_text(str(marker_label), context='block')} "
-            elif marker_kind in {"bullet", "unordered", ""} and not ordered:
-                marker = "- "
-            elif marker_kind in {"decimal", "number", "ordered"} or ordered:
-                marker = f"{ordinal}. "
-            else:
-                marker = f"- {self._marker_label(marker_kind, ordinal)} "
-
-            checked = attr(item, "checked", "is_checked", "isChecked", default=None)
-            checkbox = "[x] " if checked is True else "[ ] " if checked is False else ""
-            body = self._render_blocks(attr(item, "blocks", "children", "content", default=item))
-            item_blocks = _as_list(attr(item, "blocks", "children", "content", default=[]))
-            if len(item_blocks) > 1:
+        for index, item in enumerate(list_model.items):
+            ordinal = int(list_model.start) + index
+            marker = self._list_marker(list_model, item, ordinal)
+            checkbox = "[x] " if item.checked is True else "[ ] " if item.checked is False else ""
+            body = self._render_blocks(item.blocks)
+            if len(item.blocks) > 1:
                 loose = True
             lines = body.splitlines() or [""]
             indent = " " * len(marker)
@@ -472,143 +378,92 @@ class _AnyDocMarkdownRenderer:
         return ("\n\n" if loose else "\n").join(rendered_items)
 
     def _render_table(self, table: Any) -> str:
-        rows = self._table_rows(table)
-        if not rows:
+        if table is None or not table.grid:
             return ""
-        if _kind(table) == "layout" and self._table_is_single_cell(table):
-            return self._render_blocks(
-                attr(rows[0][0], "blocks", "children", "content", default=[])
-            )
+        if table.kind == "layout" and self._table_is_single_cell(table):
+            cell = table.grid[0][0].cell
+            return self._render_blocks(cell.blocks if cell else [])
 
-        width = max((len(row) for row in rows), default=0)
-        rendered_rows: list[list[tuple[str, bool]]] = []
-        for row in rows:
-            rendered_row: list[tuple[str, bool]] = []
-            for slot in row:
-                slot_kind = _kind(slot)
-                if slot_kind == "origin":
-                    rendered_row.append((self._render_cell(attr(slot, "cell", default=None)), False))
-                elif slot_kind == "covered":
-                    rendered_row.append(("", True))
-                elif slot_kind:
-                    raise RuntimeError(f"Unsupported AnyDoc table slot kind: {slot_kind}")
-                else:
-                    rendered_row.append((self._render_cell(slot), False))
-            rendered_row.extend(("", False) for _ in range(width - len(rendered_row)))
-            rendered_rows.append(rendered_row)
-
-        while len(rendered_rows) > 1 and all(
-            not text and not covered for text, covered in rendered_rows[-1]
-        ):
-            rendered_rows.pop()
-        width = max(
-            (
-                max((index + 1 for index, cell in enumerate(row) if cell[0] or cell[1]), default=0)
-                for row in rendered_rows
-            ),
-            default=0,
-        )
+        rows = self._render_table_rows(table)
+        while len(rows) > 1 and all(not text and not covered for text, covered in rows[-1]):
+            rows.pop()
+        width = self._table_width(rows)
         if width == 0:
             return ""
-        rendered_rows = [row[:width] for row in rendered_rows]
-
-        try:
-            header_rows = int(attr(table, "header_rows", "headerRows", default=1) or 0)
-        except (TypeError, ValueError):
-            header_rows = 1
-        if header_rows >= 1 and rendered_rows:
-            header = [text for text, _ in rendered_rows.pop(0)]
-        else:
-            header = [""] * width
+        rows = [row[:width] for row in rows]
+        header = [text for text, _ in rows.pop(0)] if table.header_rows >= 1 else [""] * width
         lines = [self._format_table_row(header), self._format_table_row(["---"] * width)]
-        lines.extend(self._format_table_row([text for text, _ in row]) for row in rendered_rows)
+        lines.extend(self._format_table_row([text for text, _ in row]) for row in rows)
         return "\n".join(lines)
 
-    def _table_rows(self, table: Any) -> list[list[Any]]:
-        grid = attr(table, "grid", default=None)
-        if grid is not None:
-            return [list(row) for row in _as_list(grid)]
-        rows = _as_list(attr(table, "rows", "content", default=[]))
-        return [_as_list(attr(row, "cells", "content", default=row)) for row in rows]
+    def _render_table_rows(self, table: Any) -> list[list[tuple[str, bool]]]:
+        width = max((len(row) for row in table.grid), default=0)
+        rows: list[list[tuple[str, bool]]] = []
+        for row in table.grid:
+            rendered = [
+                (self._render_cell(slot.cell), False)
+                if slot.kind == "origin"
+                else ("", True)
+                for slot in row
+            ]
+            rendered.extend(("", False) for _ in range(width - len(rendered)))
+            rows.append(rendered)
+        return rows
 
-    def _render_cell(self, cell: Any) -> str:
+    def _render_cell(self, cell: Any | None) -> str:
         if cell is None:
             return ""
         parts: list[str] = []
-        for block in _as_list(attr(cell, "blocks", "children", "content", default=cell)):
+        for block in cell.blocks:
             kind = _kind(block)
             if kind == "heading":
-                text = self._render_inlines(
-                    attr(block, "content", "inlines", default=[]),
-                    context="table_cell",
-                ).strip()
+                text = self._render_inlines(block.content, context="table_cell").strip()
                 if text:
                     parts.append(f"**{text}**")
             elif kind == "paragraph":
-                text = self._render_inlines(
-                    attr(block, "content", "inlines", default=[]),
-                    context="table_cell",
-                )
+                text = self._render_inlines(block.content, context="table_cell")
                 if text.strip():
                     parts.append(text)
             elif kind == "list":
-                flattened = self._render_list(attr(block, "list", default=None) or block)
-                flattened = flattened.replace("\n", " ").strip()
-                if flattened:
-                    parts.append(flattened)
-            elif kind == "table":
-                for row in self._table_rows(attr(block, "table", default=None) or block):
-                    values = [
-                        self._render_cell(attr(slot, "cell", default=None))
-                        if _kind(slot) == "origin"
-                        else ""
-                        for slot in row
-                    ]
-                    if any(values):
-                        parts.append(" / ".join(values))
-            elif kind == "blockquote":
-                text = self._render_blocks(
-                    attr(block, "blocks", "children", "content", default=[])
-                ).replace("\n", " ").strip()
+                text = self._render_list(block.list).replace("\n", " ").strip()
                 if text:
                     parts.append(text)
-            elif kind == "codeblock":
-                text = str(attr(block, "code", "text", "value", default="") or "").strip()
+            elif kind == "table":
+                parts.extend(self._flatten_nested_table(block.table))
+            elif kind == "block_quote":
+                text = self._render_blocks(block.blocks).replace("\n", " ").strip()
+                if text:
+                    parts.append(text)
+            elif kind == "code_block":
+                text = (block.text or "").strip()
                 if text:
                     fence = self._backtick_fence(text, 1)
                     pad = " " if text.startswith("`") or text.endswith("`") else ""
                     parts.append(f"{fence}{pad}{text}{pad}{fence}")
-            elif kind in {"rule", "thematicbreak", "horizontalrule"}:
-                continue
-            elif kind:
-                text = attr(block, "text", "value", default=None)
-                if text is None:
-                    raise RuntimeError(f"Unsupported AnyDoc table-cell block kind: {kind}")
-                parts.append(self._escape_text(str(text), context="table_cell"))
-            else:
-                parts.append(self._render_inlines(block, context="table_cell"))
-        joined = "<br>".join(parts)
-        return "<br>".join(line.strip() for line in joined.splitlines() if line.strip())
+            elif kind != "rule":
+                raise RuntimeError(f"Unsupported AnyDoc table-cell block kind: {kind}")
+        return "<br>".join(line.strip() for line in "<br>".join(parts).splitlines() if line.strip())
 
-    @staticmethod
-    def _format_table_row(cells: Iterable[str]) -> str:
-        return "|" + "".join(f" {cell} |" for cell in cells)
+    def _flatten_nested_table(self, table: Any) -> list[str]:
+        lines: list[str] = []
+        for row in table.grid:
+            values = [
+                self._render_cell(slot.cell) if slot.kind == "origin" else "" for slot in row
+            ]
+            if any(values):
+                lines.append(" / ".join(values))
+        return lines
 
     def _render_note_definitions(self) -> list[str]:
         rendered: list[str] = []
-        emitted: set[int] = set()
-        notes_by_id = self._notes_by_id()
-        ordered = sorted(self.note_numbers.items(), key=lambda item: item[1])
-        for note_id, number in ordered:
-            if number in emitted:
-                continue
+        notes_by_id = {note.id: note for note in _items(self.document.notes)}
+        for note_id, number in sorted(self.note_numbers.items(), key=lambda item: item[1]):
             note = notes_by_id.get(note_id)
             if note is None:
                 continue
-            body = self._render_blocks(attr(note, "blocks", "content", "children", default=[]))
+            body = self._render_blocks(note.blocks)
             if not body:
                 continue
-            emitted.add(number)
             lines = body.splitlines()
             definition = f"[^{number}]: {lines[0]}"
             if len(lines) > 1:
@@ -617,143 +472,50 @@ class _AnyDocMarkdownRenderer:
         return rendered
 
     def _number_notes(self) -> dict[str, int]:
-        notes = {
-            str(attr(note, "id", "note_id", "noteId", "label", default=index)): note
-            for index, note in enumerate(_as_list(attr(self.document, "notes", default=[])), start=1)
-            if attr(note, "blocks", "content", "children", default=None)
-        }
+        notes = {note.id: note for note in _items(self.document.notes) if note.blocks}
         order: list[str] = []
         seen: set[str] = set()
 
-        def visit_inlines(inlines: Any) -> None:
-            for inline in _as_list(inlines):
-                if _kind(inline) == "noteref":
-                    note_id = str(attr(inline, "note_id", "noteId", "id", "label", default=""))
-                    if note_id in notes and note_id not in seen:
-                        seen.add(note_id)
-                        order.append(note_id)
-                        visit_blocks(
-                            attr(notes[note_id], "blocks", "content", "children", default=[])
-                        )
-                elif _kind(inline) == "link":
-                    visit_inlines(attr(inline, "content", "inlines", "children", default=[]))
-
-        def visit_blocks(blocks: Any) -> None:
-            for block in _as_list(blocks):
-                kind = _kind(block)
-                if kind in {"heading", "paragraph"}:
-                    visit_inlines(attr(block, "content", "inlines", default=[]))
-                elif kind == "list":
-                    for item in _as_list(
-                        attr(
-                            attr(block, "list", default=None) or block,
-                            "items",
-                            "children",
-                            "content",
-                            default=[],
-                        )
-                    ):
-                        visit_blocks(attr(item, "blocks", "children", "content", default=[]))
-                elif kind == "table":
-                    for row in self._table_rows(attr(block, "table", default=None) or block):
-                        for slot in row:
-                            if _kind(slot) == "origin":
-                                visit_blocks(
-                                    attr(
-                                        attr(slot, "cell", default=None),
-                                        "blocks",
-                                        "children",
-                                        "content",
-                                        default=[],
-                                    )
-                                )
-                elif kind == "blockquote":
-                    visit_blocks(attr(block, "blocks", "children", "content", default=[]))
-
-        visit_blocks(attr(self.document, "blocks", default=[]))
-        for note_id in notes:
-            if note_id not in seen:
+        def add(note_id: str | None) -> None:
+            if note_id and note_id in notes and note_id not in seen:
                 seen.add(note_id)
                 order.append(note_id)
-        return {note_id: index for index, note_id in enumerate(order, 1)}
+                for inline in self._walk_inlines(notes[note_id].blocks):
+                    if _kind(inline) == "note_ref":
+                        add(inline.note_id)
 
-    def _notes_by_id(self) -> dict[str, Any]:
-        return {
-            str(attr(note, "id", "note_id", "noteId", "label", default=index)): note
-            for index, note in enumerate(_as_list(attr(self.document, "notes", default=[])), start=1)
-        }
+        for inline in self._walk_inlines(self.document.blocks):
+            if _kind(inline) == "note_ref":
+                add(inline.note_id)
+        for note_id in notes:
+            add(note_id)
+        return {note_id: index for index, note_id in enumerate(order, 1)}
 
     def _resolve_anchors(self) -> dict[str, _ResolvedAnchor]:
         linked: set[str] = set()
         headings: list[Any] = []
         anchors: list[str] = []
 
-        def visit_inlines(inlines: Any) -> None:
-            for inline in _as_list(inlines):
+        for block in self._walk_blocks(self.document.blocks):
+            if _kind(block) == "heading":
+                headings.append(block)
+            for inline in self._block_inlines(block):
                 kind = _kind(inline)
-                if kind == "link":
-                    target = attr(inline, "target", default=None)
-                    if _kind(target) == "anchor":
-                        value = attr(target, "value", "anchor", "id", default="")
-                        if value:
-                            linked.add(str(value))
-                    visit_inlines(attr(inline, "content", "inlines", "children", default=[]))
-                elif kind == "anchor":
-                    anchor = attr(inline, "anchor", "id", "name", default="")
-                    if anchor:
-                        anchors.append(str(anchor))
-
-        def visit_blocks(blocks: Any) -> None:
-            for block in _as_list(blocks):
-                kind = _kind(block)
-                if kind == "heading":
-                    headings.append(block)
-                    visit_inlines(attr(block, "content", "inlines", default=[]))
-                elif kind == "paragraph":
-                    visit_inlines(attr(block, "content", "inlines", default=[]))
-                elif kind == "list":
-                    for item in _as_list(
-                        attr(
-                            attr(block, "list", default=None) or block,
-                            "items",
-                            "children",
-                            "content",
-                            default=[],
-                        )
-                    ):
-                        visit_blocks(attr(item, "blocks", "children", "content", default=[]))
-                elif kind == "table":
-                    for row in self._table_rows(attr(block, "table", default=None) or block):
-                        for slot in row:
-                            if _kind(slot) == "origin":
-                                visit_blocks(
-                                    attr(
-                                        attr(slot, "cell", default=None),
-                                        "blocks",
-                                        "children",
-                                        "content",
-                                        default=[],
-                                    )
-                                )
-                elif kind == "blockquote":
-                    visit_blocks(attr(block, "blocks", "children", "content", default=[]))
-
-        visit_blocks(attr(self.document, "blocks", default=[]))
-        for note in _as_list(attr(self.document, "notes", default=[])):
-            visit_blocks(attr(note, "blocks", "content", "children", default=[]))
+                if kind == "link" and inline.target and inline.target.kind == "anchor":
+                    linked.add(inline.target.value)
+                elif kind == "anchor" and inline.anchor:
+                    anchors.append(inline.anchor)
+        for note in _items(self.document.notes):
+            for inline in self._walk_inlines(note.blocks):
+                if _kind(inline) == "anchor" and inline.anchor:
+                    anchors.append(inline.anchor)
 
         resolved: dict[str, _ResolvedAnchor] = {}
         used: set[str] = set()
         for heading in headings:
-            plain = self._plain_text(attr(heading, "content", "inlines", default=[]))
-            slug = self._claim_anchor(self._gfm_slug(plain), used)
-            heading_ids = []
-            heading_anchor = attr(heading, "anchor", "id", default="")
-            if heading_anchor:
-                heading_ids.append(str(heading_anchor))
-            heading_ids.extend(
-                self._inline_anchor_ids(attr(heading, "content", "inlines", default=[]))
-            )
+            slug = self._claim_anchor(self._gfm_slug(self._plain_text(heading.content)), used)
+            heading_ids = [heading.anchor] if heading.anchor else []
+            heading_ids.extend(self._inline_anchor_ids(heading.content))
             for anchor_id in heading_ids:
                 resolved.setdefault(anchor_id, _ResolvedAnchor(slug, False))
         for anchor_id in anchors:
@@ -762,69 +524,104 @@ class _AnyDocMarkdownRenderer:
                 resolved[anchor_id] = _ResolvedAnchor(fragment, True)
         return resolved
 
-    def _plain_text(self, inlines: Any) -> str:
+    def _walk_blocks(self, blocks: list[Any] | None) -> Iterator[Any]:
+        for block in _items(blocks):
+            yield block
+            kind = _kind(block)
+            if kind == "list" and block.list:
+                for item in block.list.items:
+                    yield from self._walk_blocks(item.blocks)
+            elif kind == "table" and block.table:
+                for row in block.table.grid:
+                    for slot in row:
+                        if slot.kind == "origin" and slot.cell:
+                            yield from self._walk_blocks(slot.cell.blocks)
+            elif kind == "block_quote":
+                yield from self._walk_blocks(block.blocks)
+
+    def _walk_inlines(self, blocks: list[Any] | None) -> Iterator[Any]:
+        for block in self._walk_blocks(blocks):
+            yield from self._block_inlines(block)
+
+    def _block_inlines(self, block: Any) -> Iterator[Any]:
+        if _kind(block) not in {"heading", "paragraph"}:
+            return
+        yield from self._inline_tree(block.content)
+
+    def _inline_tree(self, inlines: list[Any] | None) -> Iterator[Any]:
+        for inline in _items(inlines):
+            yield inline
+            if _kind(inline) == "link":
+                yield from self._inline_tree(inline.content)
+
+    def _plain_text(self, inlines: list[Any] | None) -> str:
         parts: list[str] = []
-        for inline in _as_list(inlines):
+        for inline in _items(inlines):
             kind = _kind(inline)
             if kind == "text":
-                parts.append(str(attr(inline, "text", "value", "content", default="") or ""))
+                parts.append(inline.text or "")
             elif kind == "link":
-                parts.append(
-                    self._plain_text(attr(inline, "content", "inlines", "children", default=[]))
-                )
+                parts.append(self._plain_text(inline.content))
             elif kind == "image":
-                parts.append(str(attr(inline, "alt", "alt_text", "altText", default="") or ""))
-            elif kind in {"linebreak", "softbreak", "hardbreak"}:
+                parts.append(inline.alt or "")
+            elif kind == "line_break":
                 parts.append(" ")
         return "".join(parts)
 
-    def _inline_anchor_ids(self, inlines: Any) -> list[str]:
+    def _inline_anchor_ids(self, inlines: list[Any] | None) -> list[str]:
         ids: list[str] = []
-        for inline in _as_list(inlines):
+        for inline in _items(inlines):
             kind = _kind(inline)
-            if kind == "anchor":
-                anchor = attr(inline, "anchor", "id", "name", default="")
-                if anchor:
-                    ids.append(str(anchor))
+            if kind == "anchor" and inline.anchor:
+                ids.append(inline.anchor)
             elif kind == "link":
-                ids.extend(
-                    self._inline_anchor_ids(
-                        attr(inline, "content", "inlines", "children", default=[])
-                    )
-                )
+                ids.extend(self._inline_anchor_ids(inline.content))
         return ids
 
     @staticmethod
-    def _table_is_single_cell(table: Any) -> bool:
-        grid = _as_list(attr(table, "grid", default=[]))
-        return len(grid) == 1 and len(grid[0]) == 1 and _kind(grid[0][0]) == "origin"
+    def _next_inline_is_active(inline: Any) -> bool:
+        if inline is None:
+            return False
+        return not isinstance(inline, _TextRun) or _AnyDocMarkdownRenderer._style_key(inline.style) != (
+            False,
+            False,
+            False,
+            False,
+        )
 
     @staticmethod
-    def _style_from_inline(inline: Any) -> Any:
-        return attr(inline, "style", "styles", "marks", default=inline)
+    def _table_is_single_cell(table: Any) -> bool:
+        return len(table.grid) == 1 and len(table.grid[0]) == 1 and table.grid[0][0].kind == "origin"
+
+    @staticmethod
+    def _table_width(rows: list[list[tuple[str, bool]]]) -> int:
+        return max(
+            (
+                max((index + 1 for index, cell in enumerate(row) if cell[0] or cell[1]), default=0)
+                for row in rows
+            ),
+            default=0,
+        )
+
+    @staticmethod
+    def _format_table_row(cells: Iterable[str]) -> str:
+        return "|" + "".join(f" {cell} |" for cell in cells)
 
     @staticmethod
     def _style_key(style: Any) -> tuple[bool, bool, bool, bool]:
         if style is None:
             return False, False, False, False
-        direct = (
-            bool(attr(style, "bold", "strong", default=False)),
-            bool(attr(style, "italic", "emphasis", default=False)),
-            bool(attr(style, "strike", "strikethrough", default=False)),
-            bool(attr(style, "code", "inline_code", "inlineCode", default=False)),
-        )
-        if any(direct):
-            return direct
-        style_names = {
-            _kind(item) or str(item).split(".")[-1].replace("_", "").lower()
-            for item in _as_list(style)
-        }
-        return (
-            "bold" in style_names or "strong" in style_names,
-            "italic" in style_names or "emphasis" in style_names,
-            "strike" in style_names or "strikethrough" in style_names,
-            "code" in style_names or "inlinecode" in style_names,
-        )
+        return bool(style.bold), bool(style.italic), bool(style.strike), bool(style.code)
+
+    @staticmethod
+    def _list_marker(list_model: Any, item: Any, ordinal: int) -> str:
+        if item.marker_label:
+            return f"- {item.marker_label} "
+        if list_model.marker == "bullet":
+            return "- "
+        if list_model.marker == "decimal":
+            return f"{ordinal}. "
+        return f"- {_AnyDocMarkdownRenderer._marker_label(list_model.marker, ordinal)} "
 
     @staticmethod
     def _claim_anchor(base: str, used: set[str]) -> str:
@@ -961,15 +758,12 @@ class _AnyDocMarkdownRenderer:
         return "".join(output)
 
     @staticmethod
-    def _image_extension(asset: Any, media_type: str) -> str:
-        extension = mimetypes.guess_extension(media_type.split(";", 1)[0].strip())
+    def _image_extension(asset: Any) -> str:
+        extension = mimetypes.guess_extension(asset.media_type.split(";", 1)[0].strip())
         if extension == ".jpe":
             extension = ".jpg"
         if not extension:
-            origin = str(
-                attr(asset, "origin_part", "originPart", "filename", "name", default="") or ""
-            )
-            extension = Path(origin).suffix.lower()
+            extension = Path(asset.origin_part or "").suffix.lower()
         if not extension or not re.fullmatch(r"\.[a-z0-9]{1,10}", extension):
             extension = ".png"
         return extension if extension.startswith(".") else f".{extension}"

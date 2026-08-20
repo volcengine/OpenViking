@@ -29,12 +29,38 @@ def _png_bytes(size: tuple[int, int] = (32, 32)) -> bytes:
     return buffer.getvalue()
 
 
+def _style(**overrides):
+    values = {"bold": False, "italic": False, "strike": False, "code": False}
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def _text(text: str, **style):
+    return SimpleNamespace(kind="text", text=text, style=_style(**style) if style else None)
+
+
+def _paragraph(*inlines):
+    return SimpleNamespace(kind="paragraph", content=list(inlines))
+
+
+def _list_item(*blocks, checked=None, marker_label=None):
+    return SimpleNamespace(blocks=list(blocks), checked=checked, marker_label=marker_label)
+
+
+def _cell(*blocks):
+    return SimpleNamespace(blocks=list(blocks), col_span=1, row_span=1)
+
+
+def _slot(cell=None, kind="origin"):
+    return SimpleNamespace(kind=kind, cell=cell, origin_row=None, origin_col=None)
+
+
 def _doc_with_image():
     asset = SimpleNamespace(
         id=0,
         media_type="image/png",
         origin_part="word/media/image1.png",
-        bytes=_png_bytes(),
+        data=_png_bytes(),
     )
     image = SimpleNamespace(
         kind="image",
@@ -65,7 +91,7 @@ def test_converter_skips_non_image_assets(tmp_path, monkeypatch):
         id=0,
         media_type="application/octet-stream",
         origin_part="oleObject1.bin",
-        bytes=b"BIN",
+        data=b"BIN",
     )
     image = SimpleNamespace(
         kind="image",
@@ -156,11 +182,14 @@ def test_converter_adds_path_to_anydoc_conversion_error(tmp_path):
 def test_converter_saves_table_cell_image_once(tmp_path, monkeypatch):
     document = _doc_with_image()
     image = document.blocks[0].content[0]
-    cell = SimpleNamespace(content=[SimpleNamespace(kind="paragraph", content=[image])])
     document.blocks = [
         SimpleNamespace(
             kind="table",
-            rows=[SimpleNamespace(cells=[cell])],
+            table=SimpleNamespace(
+                kind="data",
+                header_rows=1,
+                grid=[[_slot(_cell(_paragraph(image)))]],
+            ),
         )
     ]
     storage = FakeStorage(tmp_path)
@@ -198,7 +227,7 @@ def test_converter_reuses_same_asset_path(tmp_path, monkeypatch):
 
 def test_converter_skips_invalid_image_asset(tmp_path, monkeypatch):
     document = _doc_with_image()
-    document.assets[0].bytes = b"not an image"
+    document.assets[0].data = b"not an image"
     storage = FakeStorage(tmp_path)
     monkeypatch.setattr(
         "openviking.parse.parsers.anydoc_converter._load_document",
@@ -216,7 +245,7 @@ def test_converter_skips_invalid_image_asset(tmp_path, monkeypatch):
 
 def test_converter_skips_tiny_image_asset(tmp_path, monkeypatch):
     document = _doc_with_image()
-    document.assets[0].bytes = _png_bytes((8, 8))
+    document.assets[0].data = _png_bytes((8, 8))
     storage = FakeStorage(tmp_path)
     monkeypatch.setattr(
         "openviking.parse.parsers.anydoc_converter._load_document",
@@ -234,31 +263,23 @@ def test_converter_skips_tiny_image_asset(tmp_path, monkeypatch):
 
 def test_converter_serializes_anydoc_list_and_table_shapes(tmp_path, monkeypatch):
     def paragraph(text):
-        return SimpleNamespace(
-            kind="paragraph",
-            content=[SimpleNamespace(kind="text", text=text, style=None)],
-        )
+        return _paragraph(_text(text))
 
     list_block = SimpleNamespace(
         kind="list",
         list=SimpleNamespace(
             marker="decimal",
             start=1,
-            items=[SimpleNamespace(blocks=[paragraph("Item")])],
+            items=[_list_item(paragraph("Item"))],
         ),
-        content=None,
     )
 
     def cell(text):
-        return SimpleNamespace(
-            kind="origin",
-            cell=SimpleNamespace(blocks=[paragraph(text)]),
-        )
+        return _slot(_cell(paragraph(text)))
 
     table_block = SimpleNamespace(
         kind="table",
-        table=SimpleNamespace(grid=[[cell("A"), cell("B")]]),
-        content=None,
+        table=SimpleNamespace(kind="data", header_rows=1, grid=[[cell("A"), cell("B")]]),
     )
     document = SimpleNamespace(
         blocks=[list_block, table_block],
