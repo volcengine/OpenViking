@@ -209,6 +209,20 @@ class TestOpenAPIAuth:
         assert response.status_code == 409
         assert message_bus.inbound_size == 0
 
+    def test_scoped_session_id_stays_logical_while_storage_path_is_portable(
+        self, message_bus, temp_workspace
+    ):
+        channel = OpenAPIChannel(OpenAPIChannelConfig(), message_bus, temp_workspace)
+        scope = channel._principal_scope("standalone")
+        storage_key = channel._scoped_session_id(scope, "order:123")
+        session_key = SessionKey(type="cli", channel_id="default", chat_id=storage_key)
+
+        assert storage_key == f"{scope}:order:123"
+        assert session_key.safe_name() == f"cli__default__{scope}:order:123"
+        assert channel._session_manager._get_session_path(session_key).name == (
+            f"cli__default__{scope}%3Aorder%3A123.jsonl"
+        )
+
     def test_delete_rotation_survives_restart_and_session_id_reuse(
         self, message_bus, temp_workspace
     ):
