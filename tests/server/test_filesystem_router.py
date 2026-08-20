@@ -83,3 +83,25 @@ async def test_attrs_returns_memory_fields_and_tags(monkeypatch):
         "memory_type": "preferences",
     }
     assert attrs["tags"] == ["team=search"]
+
+
+@pytest.mark.asyncio
+async def test_mkdir_echoes_canonical_home_alias(monkeypatch):
+    seen = {}
+
+    async def fake_mkdir(uri, ctx=None, description=None):
+        seen["uri"] = uri
+
+    monkeypatch.setattr(
+        filesystem,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(mkdir=fake_mkdir)),
+    )
+
+    response = await filesystem.mkdir(
+        filesystem.MkdirRequest(uri="viking://~/resources/notes"),
+        _ctx=RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER),
+    )
+
+    assert seen["uri"] == "viking://user/alice/resources/notes"
+    assert response.result["uri"] == "viking://user/alice/resources/notes"

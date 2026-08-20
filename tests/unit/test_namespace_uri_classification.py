@@ -5,6 +5,7 @@
 import pytest
 
 from openviking.core.namespace import (
+    NamespaceShapeError,
     canonical_session_uri,
     classify_uri,
     context_type_for_uri,
@@ -15,7 +16,10 @@ from openviking.core.namespace import (
     resolve_uri,
     visible_roots,
 )
-from openviking.core.uri_validation import validate_content_target_uri
+from openviking.core.uri_validation import (
+    validate_content_target_uri,
+    validate_request_viking_uri,
+)
 from openviking.server.identity import RequestContext, Role
 from openviking_cli.exceptions import InvalidURIError
 from openviking_cli.session.user_id import UserIdentifier
@@ -191,9 +195,14 @@ def test_request_boundary_expands_current_user_content_roots():
 
 
 def test_unreserved_user_root_segment_keeps_canonical_meaning():
-    # The generic namespace parser stays canonical-first. Callers that expose
-    # a current-user workspace dialect (such as MCP) must opt into that policy
-    # at their boundary instead of guessing from file extensions or server state.
+    # The generic namespace parser stays canonical-first for user id segments: an
+    # unreserved segment under viking://user/ is a peer user id, never a shorthand.
+    # The '~' home alias does not weaken that rule -- it is a reserved token that
+    # cannot be a valid user id (see identifiers.validate_user_id), and it is only
+    # recognized as segment 0, so it never competes with a canonical user segment.
+    # Callers that expose a current-user workspace dialect (such as MCP) must still
+    # opt into that policy at their boundary instead of guessing from file
+    # extensions or server state.
     assert resolve_uri("viking://user/notes/todo.md").uri == "viking://user/notes/todo.md"
     assert (
         resolve_uri("viking://user/bob/zeus-persona.md").uri
@@ -217,3 +226,76 @@ def test_unreserved_user_root_segment_keeps_canonical_meaning():
         resolve_uri("viking://user/alice/notes/todo.md").uri
         == "viking://user/alice/notes/todo.md"
     )
+
+
+def test_home_alias_expands_to_current_user_root_at_request_boundary():
+    for role in (Role.USER, Role.ADMIN):
+        ctx = RequestContext(
+            user=UserIdentifier(account_id="acct", user_id="alice"),
+            role=role,
+        )
+
+        assert resolve_request_uri("viking://~", ctx) == "viking://user/alice"
+        assert resolve_request_uri("viking://~/", ctx) == "viking://user/alice"
+        assert (
+            resolve_request_uri("viking://~/memories/preferences/p.md", ctx)
+            == "viking://user/alice/memories/preferences/p.md"
+        )
+        assert (
+            resolve_request_uri("viking://~/resources/docs/", ctx)
+            == "viking://user/alice/resources/docs"
+        )
+        assert (
+            validate_request_viking_uri("viking://~/resources/docs", ctx)
+            == "viking://user/alice/resources/docs"
+        )
+
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="acct", user_id="alice"),
+        role=Role.USER,
+    )
+    expanded = resolve_request_uri("viking://~/memories", ctx)
+    # The expanded alias is field-for-field identical to the explicit form.
+    assert resolve_uri(expanded) == resolve_uri("viking://user/alice/memories")
+    assert context_type_for_uri(resolve_request_uri("viking://~/memories/m.md", ctx)) == "memory"
+    assert is_content_root_uri(resolve_request_uri("viking://~/resources", ctx), kind="resource")
+    assert (
+        validate_content_target_uri("viking://~/resources", ctx, kind="resource")
+        == "viking://user/alice/resources"
+    )
+
+
+def test_home_alias_fails_closed_without_current_user_resolution():
+    root_ctx = RequestContext(
+        user=UserIdentifier(account_id="acct", user_id="root-actor"),
+        role=Role.ROOT,
+    )
+
+    # Root-role requests skip current-user resolution, so the alias never becomes
+    # a literal '~' namespace -- it is rejected instead of guessing a user.
+    with pytest.raises(NamespaceShapeError, match="Home alias URI is not canonical"):
+        resolve_request_uri("viking://~/resources/docs", root_ctx)
+    with pytest.raises(InvalidURIError, match="Home alias URI is not canonical"):
+        validate_request_viking_uri("viking://~/resources/docs", root_ctx)
+
+    # Every internal consumer of the canonical parser is protected the same way.
+    with pytest.raises(NamespaceShapeError, match="Home alias URI is not canonical"):
+        resolve_uri("viking://~")
+    with pytest.raises(NamespaceShapeError, match="Home alias URI is not canonical"):
+        resolve_uri("viking://~/x")
+    assert not is_content_root_uri("viking://~/resources", kind="resource")
+
+
+def test_home_alias_is_only_recognized_as_first_segment():
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="acct", user_id="alice"),
+        role=Role.USER,
+    )
+
+    # '~' is not a valid user id, so it can never shadow a real user namespace.
+    with pytest.raises(NamespaceShapeError, match="Invalid user_id"):
+        resolve_request_uri("viking://user/~/x", ctx)
+
+    # Anywhere else it stays a literal path segment.
+    assert resolve_request_uri("viking://resources/~/x", ctx) == "viking://resources/~/x"
+    assert resolve_request_uri("viking://user/alice/~/x", ctx) == "viking://user/alice/~/x"

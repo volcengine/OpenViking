@@ -30,6 +30,27 @@ under `viking://user/{user_id}/sessions`.
 `temp`, `queue`, and `upload` are internal implementation
 scopes and cannot be addressed directly through public API URI parameters.
 
+### Home Alias `~`
+
+`~` is a server-side alias for the caller's own user root. `viking://~` expands to
+`viking://user/{user_id}`, and `viking://~/memories/note.md` to
+`viking://user/{user_id}/memories/note.md`, where `{user_id}` comes from the request's
+authenticated identity — the same string therefore points at a different directory for
+each caller.
+
+- Universal: accepted by every control plane (REST API, `ov` CLI, SDKs, MCP), anywhere a
+  public-scope URI is accepted.
+- First segment only: `viking://resources/~/x` and `viking://user/alice/~/x` keep `~` as
+  a literal path segment.
+- Accepted, not advertised: `~` is not part of the public scope list, so the
+  `Invalid scope ... Must be one of:` error message never mentions it.
+- Responses always echo the expanded canonical URI, never `viking://~`, and persisted
+  data (vector records, watch keys) stays canonical as well.
+- Requires an authenticated user identity. Expansion happens at the request boundary for
+  user and admin callers; root-role and unauthenticated contexts, along with places that
+  demand an already-canonical URI (internal storage paths, background tasks), reject the
+  alias instead of guessing a user.
+
 ## Initial Directory Structure
 
 Moving away from traditional flat database thinking, all context is organized as a filesystem. Agents no longer just find data through vector search, but can locate and browse data through deterministic paths and standard filesystem commands. Each context or directory is assigned a unique URI identifier string in the format viking://{scope}/{path}, allowing the system to precisely locate and access resources stored in different locations.

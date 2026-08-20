@@ -260,7 +260,7 @@ async def find(
     level: Optional[List[int]] = None,
     context_type: Optional[Union[str, List[str]]] = None,
 ) -> str:
-    """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, and score."""
+    """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, and score. viking://~ expands server-side to your user root (viking://user/<your-id>)."""
     service = get_service()
     ctx = _get_ctx()
     if target_uri:
@@ -307,7 +307,7 @@ async def search(
     abstract, and score. ``mode="context"`` returns an injection-ready,
     token-budgeted context block and supports category quotas, purpose presets,
     detail tiers, cross-turn deduplication, peer scoping, and optional rewriting.
-    ``target_uri`` is only supported in list mode.
+    ``target_uri`` is only supported in list mode. ``viking://~`` expands server-side to your user root (``viking://user/<your-id>``).
     """
     service = get_service()
     ctx = _get_ctx()
@@ -324,6 +324,11 @@ async def search(
                 "other_peer_penalty cannot be combined with other_peer_penalties "
                 "in mode='context'"
             )
+        # Resolve exclusions with the same strictness as the REST search router,
+        # so alias/shorthand URIs match the canonical URIs they are compared against.
+        resolved_exclude_uris = [
+            _resolve_mcp_workspace_uri(exclude_uri, ctx) for exclude_uri in (exclude_uris or ())
+        ]
         result = await assemble_context(
             service=service,
             ctx=ctx,
@@ -339,7 +344,7 @@ async def search(
                 purpose=purpose,
                 detail=detail_by_category or (None if detail == "auto" else detail),
                 dedup_turns=dedup_turns,
-                exclude_uris=exclude_uris or (),
+                exclude_uris=resolved_exclude_uris,
                 peer_scope=peer_scope,
                 other_peer_penalty=other_peer_penalties or other_peer_penalty,
                 rewrite=rewrite == "auto",
@@ -405,7 +410,7 @@ def _format_search_result(result) -> str:
 
 @mcp.tool()
 async def read(uris: str | list[str]) -> str:
-    """Read full content from one or more viking:// file URIs. Pass a single URI string or a list for batch reads. For directory listing, use the list tool instead."""
+    """Read full content from one or more viking:// file URIs. Pass a single URI string or a list for batch reads. viking://~ expands server-side to your user root (viking://user/<your-id>). For directory listing, use the list tool instead."""
     import asyncio
 
     service = get_service()
@@ -437,7 +442,7 @@ async def read(uris: str | list[str]) -> str:
 
 @mcp.tool(name="list")
 async def ls(uri: str, recursive: bool = False) -> str:
-    """List files and subdirectories under a viking:// directory URI. Use recursive=true for deep listing."""
+    """List files and subdirectories under a viking:// directory URI. Use recursive=true for deep listing. viking://~ expands server-side to your user root (viking://user/<your-id>)."""
     service = get_service()
     ctx = _get_ctx()
     resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
@@ -468,7 +473,7 @@ async def tree(
     node_limit: int = 1000,
     include_abstract: bool = False,
 ) -> str:
-    """Show the recursive directory tree under a viking:// URI, indented by depth, so you can understand the whole layout at a glance. Use this when you need a full picture of the file tree; use list for a single directory level, glob for filename patterns, and grep for content. level_limit caps the depth (default 3); node_limit caps the total entries. Set include_abstract=true to also see each file's summary (slower, but useful for orientation in unfamiliar directories)."""
+    """Show the recursive directory tree under a viking:// URI, indented by depth, so you can understand the whole layout at a glance. Use this when you need a full picture of the file tree; use list for a single directory level, glob for filename patterns, and grep for content. level_limit caps the depth (default 3); node_limit caps the total entries. Set include_abstract=true to also see each file's summary (slower, but useful for orientation in unfamiliar directories). viking://~ expands server-side to your user root (viking://user/<your-id>)."""
     service = get_service()
     ctx = _get_ctx()
     resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
@@ -556,7 +561,7 @@ async def write(
     - Any new file (whether created by "replace" or "create") must end in one of: .md .txt .json .yaml .yml .toml .py .js .ts
     - mode="append": append to the end of an existing file; fails if the file does not exist.
 
-    Writable scopes: viking://resources/, viking://user/{user_id}/, viking://agent/. Documented current-user roots such as viking://user/resources are expanded at this MCP boundary. The managed user subtrees skills/, peers/, privacy/ and sessions/ are read-only. After a write, semantic search indexes refresh in the background; pass wait=true to block until search reflects the change."""
+    Writable scopes: viking://resources/, viking://user/{user_id}/, viking://agent/. Documented current-user roots such as viking://user/resources are expanded at this MCP boundary. viking://~ expands server-side to your user root (viking://user/<your-id>). The managed user subtrees skills/, peers/, privacy/ and sessions/ are read-only. After a write, semantic search indexes refresh in the background; pass wait=true to block until search reflects the change."""
     service = get_service()
     ctx = _get_ctx()
     uri = _resolve_mcp_workspace_uri(uri, ctx)
@@ -592,7 +597,7 @@ async def edit(
 ) -> str:
     """Replace an exact string with new text in an existing viking:// file. Use this for targeted changes instead of rewriting the whole file with the write tool. old_string must match the file's current content exactly, including indentation and newlines; use the read tool first to see it. The edit fails and the file is left unchanged if old_string is not found, or if it matches more than once and replace_all is false (pass more surrounding context to make it unique, or set replace_all=true to replace every occurrence). Pass new_string="" to delete old_string.
 
-    Editing a memory file preserves its metadata; after an edit, search indexes refresh in the background (pass wait=true to block until search reflects the change)."""
+    Editing a memory file preserves its metadata; after an edit, search indexes refresh in the background (pass wait=true to block until search reflects the change). viking://~ expands server-side to your user root (viking://user/<your-id>)."""
     service = get_service()
     ctx = _get_ctx()
     uri = _resolve_mcp_workspace_uri(uri, ctx)
@@ -758,6 +763,8 @@ async def add_resource(
     Local file: pass ``path`` as a filesystem path (e.g. ``/tmp/foo.pdf``). The response is an
     upload instruction — HTTP POST the file to the returned URL and the server ingests it
     automatically; you do NOT need to call this tool again.
+
+    In any target URI, ``viking://~`` expands server-side to your user root (``viking://user/<your-id>``).
 
     Args:
         path: Remote URL or local filesystem path. Required unless ``temp_file_id`` is set.
@@ -1019,7 +1026,7 @@ async def list_watches() -> str:
 
 @mcp.tool()
 async def cancel_watch(to_uri: str) -> str:
-    """Cancel a watch task by its target URI (e.g. "viking://resources/volcengine/OpenViking")."""
+    """Cancel a watch task by its target URI (e.g. "viking://resources/volcengine/OpenViking"). viking://~ expands server-side to your user root (viking://user/<your-id>)."""
     from openviking.resource import watch_manager as _wm_mod
 
     service = get_service()
@@ -1064,7 +1071,7 @@ async def cancel_watch(to_uri: str) -> str:
 async def grep(
     uri: str, pattern: str | list[str], case_insensitive: bool = False, node_limit: int = 10
 ) -> str:
-    """Search content in viking:// files using regex patterns (like grep). Supports multiple patterns searched concurrently. Use this for exact text matching; use the search tool for semantic retrieval."""
+    """Search content in viking:// files using regex patterns (like grep). Supports multiple patterns searched concurrently. viking://~ expands server-side to your user root (viking://user/<your-id>). Use this for exact text matching; use the search tool for semantic retrieval."""
     import asyncio
 
     service = get_service()
@@ -1114,7 +1121,7 @@ async def grep(
 
 @mcp.tool()
 async def glob(pattern: str, uri: str = "viking://", node_limit: int = 100) -> str:
-    """Find viking:// files matching a glob pattern (e.g. **/*.md, *.py). Use this for filename matching; use the search tool for content-based retrieval."""
+    """Find viking:// files matching a glob pattern (e.g. **/*.md, *.py). viking://~ expands server-side to your user root (viking://user/<your-id>). Use this for filename matching; use the search tool for content-based retrieval."""
     service = get_service()
     ctx = _get_ctx()
     resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
@@ -1140,7 +1147,7 @@ async def glob(pattern: str, uri: str = "viking://", node_limit: int = 100) -> s
 
 @mcp.tool()
 async def forget(uri: str, recursive: bool = False) -> str:
-    """Permanently delete a viking:// URI from OpenViking. Irreversible — confirm with user before calling."""
+    """Permanently delete a viking:// URI from OpenViking. viking://~ expands server-side to your user root (viking://user/<your-id>). Irreversible — confirm with user before calling."""
     service = get_service()
     ctx = _get_ctx()
     resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)

@@ -241,6 +241,12 @@ def resolve_uri(
         return _resolve_user_uri(parts)
     if scope == "agent":
         return ResolvedNamespace(uri=canonical_uri, scope=scope)
+    if scope == "~":
+        # The home alias is expanded at the request boundary only. Reaching the
+        # canonical parser with it (root-role requests, internal callers, storage
+        # paths) means no identity is available, so fail closed instead of
+        # creating a literal '~' namespace.
+        raise NamespaceShapeError(f"Home alias URI is not canonical: {'/'.join(parts)}")
     if scope == "session":
         raise NamespaceShapeError(f"Legacy session URI is not canonical: {'/'.join(parts)}")
     if scope in {"resources", "temp", "queue", "upload"}:
@@ -260,6 +266,11 @@ def resolve_current_user_uri(uri: str, ctx: RequestContext) -> str:
     parts = uri_parts(uri)
     if not parts:
         return "viking://"
+
+    if parts[0] == "~":
+        if len(parts) == 1:
+            return canonical_user_root(ctx)
+        return f"{canonical_user_root(ctx)}/{'/'.join(parts[1:])}"
 
     if parts[0] == "session":
         if len(parts) == 1:

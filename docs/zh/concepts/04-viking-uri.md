@@ -28,6 +28,21 @@ viking://{scope}/{path}
 新 session 数据位于 `viking://user/{user_id}/sessions`。
 `temp`、`queue` 和 `upload` 是内部实现作用域，不能通过公开 API 的 URI 参数直接访问。
 
+### Home 别名 `~`
+
+`~` 是当前调用方用户根目录的服务端别名。`viking://~` 展开为 `viking://user/{user_id}`，
+`viking://~/memories/note.md` 展开为 `viking://user/{user_id}/memories/note.md`，
+其中 `{user_id}` 取自请求的认证身份——同一个字符串对不同调用方指向不同目录。
+
+- 通用：所有控制面（REST API、`ov` CLI、SDK、MCP）都接受，可用于任何接受公开作用域 URI 的位置。
+- 仅识别第 0 段：`viking://resources/~/x` 和 `viking://user/alice/~/x` 中的 `~` 仍是字面路径段。
+- 接受但不宣传：`~` 不属于公开作用域列表，`Invalid scope ... Must be one of:` 错误信息中不会出现它。
+- 响应始终回显展开后的 canonical URI，不会返回 `viking://~`；持久化数据（向量记录、watch key）
+  同样保持 canonical 形式。
+- 需要认证用户身份。展开发生在 user / admin 调用方的请求入口；root 角色与未认证上下文，
+  以及要求 URI 已是 canonical 形式的场景（内部存储路径、后台任务），会直接拒绝该别名，
+  而不会猜测用户。
+
 ## 初始目录
 
 摒弃传统的扁平化数据库思维，将所有上下文组织为一套文件系统。Agent 不再仅是通过向量搜索来找数据，而是可以通过确定性的路径和标准文件系统指令来定位和浏览数据。每个上下文或目录分配唯一的 URI 标识字符串，格式为 viking://{scope}/{path}，让系统能精准定位并访问存储在不同位置的资源。
