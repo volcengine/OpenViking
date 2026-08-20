@@ -11,8 +11,8 @@ const STOPWORDS = new Set([
   "what", "when", "where", "which", "who", "whom", "whose", "why", "how", "did", "does",
   "is", "are", "was", "were", "the", "and", "for", "with", "from", "that", "this", "your", "you",
 ]);
-const USER_RESERVED_DIRS = new Set(["memories", "skills"]);
-const SOURCES = [
+const USER_RESERVED_DIRS = new Set(["memories", "skills", "peers"]);
+const USER_SOURCES = [
   { type: "memory", uri: "viking://user/memories", bucket: "memories" },
   { type: "skill", uri: "viking://user/skills", bucket: "skills" },
 ];
@@ -294,13 +294,32 @@ async function searchOneSource(fetchJSON, query, source, limit, actorPeerId = ""
   return items.map((item) => ({ ...item, _sourceType: source.type }));
 }
 
-async function searchAllSources(fetchJSON, query, perSourceLimit, actorPeerId = "", log = () => {}) {
+function buildFallbackSources(actorPeerId = "", peerScope = "") {
+  const peerId = String(actorPeerId).trim();
+  const peerSources = peerId
+    ? USER_SOURCES.map((source) => ({
+      ...source,
+      uri: `viking://user/peers/${peerId}/${source.bucket}`,
+    }))
+    : [];
+  return peerScope === "actor" ? peerSources : [...USER_SOURCES, ...peerSources];
+}
+
+async function searchAllSources(
+  fetchJSON,
+  query,
+  perSourceLimit,
+  actorPeerId = "",
+  peerScope = "",
+  log = () => {},
+) {
+  const sources = buildFallbackSources(actorPeerId, peerScope);
   const results = await Promise.all(
-    SOURCES.map((src) => searchOneSource(fetchJSON, query, src, perSourceLimit, actorPeerId)),
+    sources.map((src) => searchOneSource(fetchJSON, query, src, perSourceLimit, actorPeerId)),
   );
   const all = results.flat();
   log("recall_search_summary", {
-    counts: SOURCES.map((src, i) => ({ type: src.type, uri: src.uri, count: results[i].length })),
+    counts: sources.map((src, i) => ({ type: src.type, uri: src.uri, count: results[i].length })),
     total: all.length,
   });
   return all;
@@ -588,7 +607,14 @@ export async function buildRecallBlock(fetchJSON, cfg, query, options = {}) {
 
   const recallLimit = Math.max(1, Number(cfg.recallLimit || DEFAULT_CONTEXT_LIMIT));
   const perSourceLimit = Math.max(recallLimit * 2, 8);
-  const raw = await searchAllSources(fetchJSON, trimmed, perSourceLimit, actorPeerId, log);
+  const raw = await searchAllSources(
+    fetchJSON,
+    trimmed,
+    perSourceLimit,
+    actorPeerId,
+    cfg.recallPeerScope,
+    log,
+  );
   if (raw.length === 0) return null;
 
   const profile = buildQueryProfile(trimmed);

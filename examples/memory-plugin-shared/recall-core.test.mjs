@@ -281,3 +281,79 @@ test("buildRecallBlock falls back to find when neither context endpoint works", 
   assert.match(block, /^<openviking-context>/);
   assert.match(block, /\[memory 90%\]/);
 });
+
+test("raw fallback searches qualified actor peer trees when actorPeerId is set", async () => {
+  const calls = [];
+  const legacyCachePath = await tempPath("context-face.json");
+  const fetchJSON = async (path, init) => {
+    calls.push({ path, body: init?.body ? JSON.parse(init.body) : null });
+    if (path === "/api/v1/search/search") {
+      return { ok: false, status: 400, error: { message: "Extra inputs: mode" } };
+    }
+    if (path === "/api/v1/search/recall") return { ok: false, status: 404 };
+    if (path === "/api/v1/system/status") return { ok: true, result: { user: "default" } };
+    if (path.startsWith("/api/v1/fs/ls")) return { ok: true, result: [] };
+    if (path === "/api/v1/search/find") {
+      return { ok: true, result: { memories: [], skills: [] } };
+    }
+    return { ok: false, status: 404 };
+  };
+
+  await buildRecallBlock(fetchJSON, {}, "peer memory", {
+    actorPeerId: "peer-123",
+    legacyCachePath,
+  });
+
+  assert.deepEqual(
+    calls.slice(0, 2).map((call) => call.path),
+    ["/api/v1/search/search", "/api/v1/search/recall"],
+  );
+  assert.deepEqual(
+    calls.filter((call) => call.path === "/api/v1/search/find")
+      .map((call) => call.body.target_uri)
+      .sort(),
+    [
+      "viking://user/default/memories",
+      "viking://user/default/peers/peer-123/memories",
+      "viking://user/default/peers/peer-123/skills",
+      "viking://user/default/skills",
+    ],
+  );
+});
+
+test("raw actor-scoped fallback searches only qualified actor peer trees", async () => {
+  const calls = [];
+  const legacyCachePath = await tempPath("context-face.json");
+  const fetchJSON = async (path, init) => {
+    calls.push({ path, body: init?.body ? JSON.parse(init.body) : null });
+    if (path === "/api/v1/search/search") {
+      return { ok: false, status: 400, error: { message: "Extra inputs: mode" } };
+    }
+    if (path === "/api/v1/search/recall") return { ok: false, status: 404 };
+    if (path === "/api/v1/system/status") return { ok: true, result: { user: "default" } };
+    if (path.startsWith("/api/v1/fs/ls")) return { ok: true, result: [] };
+    if (path === "/api/v1/search/find") {
+      return { ok: true, result: { memories: [], skills: [] } };
+    }
+    return { ok: false, status: 404 };
+  };
+
+  await buildRecallBlock(fetchJSON, { recallPeerScope: "actor" }, "peer memory", {
+    actorPeerId: "peer-123",
+    legacyCachePath,
+  });
+
+  assert.deepEqual(
+    calls.slice(0, 2).map((call) => call.path),
+    ["/api/v1/search/search", "/api/v1/search/recall"],
+  );
+  assert.deepEqual(
+    calls.filter((call) => call.path === "/api/v1/search/find")
+      .map((call) => call.body.target_uri)
+      .sort(),
+    [
+      "viking://user/default/peers/peer-123/memories",
+      "viking://user/default/peers/peer-123/skills",
+    ],
+  );
+});
