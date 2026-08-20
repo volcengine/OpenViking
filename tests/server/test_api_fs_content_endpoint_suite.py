@@ -184,6 +184,35 @@ async def test_cp_missing_source_returns_not_found(app, service, monkeypatch):
     _assert_error(response, status_code=404, error_code="NOT_FOUND")
 
 
+async def test_cp_missing_target_parent_reports_directory(app, service, monkeypatch):
+    target_parent = "viking://resources/missing-parent"
+
+    async def fake_cp(*args, **kwargs):
+        raise NotFoundError(target_parent, "directory")
+
+    monkeypatch.setattr(service.fs, "cp", fake_cp, raising=False)
+    response = await _request_with_handler(
+        app,
+        "POST",
+        "/api/v1/fs/cp",
+        json={
+            "from_uri": "viking://resources/source.md",
+            "to_uri": f"{target_parent}/target.md",
+        },
+    )
+
+    _assert_error(
+        response,
+        status_code=404,
+        error_code="NOT_FOUND",
+        message_fragment=f"Directory not found: {target_parent}",
+    )
+    assert response.json()["error"]["details"] == {
+        "resource": target_parent,
+        "type": "directory",
+    }
+
+
 async def test_cp_existing_target_returns_conflict(app, service, monkeypatch):
     async def fake_cp(*args, **kwargs):
         raise ConflictError("copy target already exists")
