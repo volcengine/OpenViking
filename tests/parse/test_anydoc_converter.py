@@ -19,12 +19,22 @@ class FakeStorage:
         return p
 
 
+def _png_bytes(size: tuple[int, int] = (32, 32)) -> bytes:
+    from io import BytesIO
+
+    from PIL import Image
+
+    buffer = BytesIO()
+    Image.new("RGB", size, "white").save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 def _doc_with_image():
     asset = SimpleNamespace(
         id=0,
         media_type="image/png",
         origin_part="word/media/image1.png",
-        bytes=b"\x89PNG\r\n\x1a\n" + b"\x00" * 8,
+        bytes=_png_bytes(),
     )
     image = SimpleNamespace(
         kind="image",
@@ -44,7 +54,9 @@ def test_converter_rewrites_asset_images(tmp_path, monkeypatch):
     )
     result = converter.convert(tmp_path / "x.docx", resource_name="Demo", storage=storage)
     assert result.images_saved == 1
-    assert "](Demo/images/image1.png)" in result.markdown or "image1.png)" in result.markdown
+    assert result.assets_referenced == 1
+    assert result.warnings == ()
+    assert "](Demo/images/anydoc_asset_0.png)" in result.markdown
     assert storage.saved
 
 
@@ -72,6 +84,8 @@ def test_converter_skips_non_image_assets(tmp_path, monkeypatch):
     )
     result = AnyDocConverter().convert(tmp_path / "x.docx", resource_name="Demo", storage=storage)
     assert result.images_saved == 0
+    assert result.assets_referenced == 1
+    assert result.warnings
     assert storage.saved == []
 
 
@@ -92,6 +106,8 @@ def test_converter_continues_when_image_save_fails(tmp_path, monkeypatch):
     )
 
     assert result.images_saved == 0
+    assert result.assets_referenced == 1
+    assert result.warnings
     assert result.markdown.strip() == "chart"
 
 
@@ -157,6 +173,63 @@ def test_converter_saves_table_cell_image_once(tmp_path, monkeypatch):
 
     assert result.images_saved == 1
     assert len(storage.saved) == 1
+
+
+def test_converter_reuses_same_asset_path(tmp_path, monkeypatch):
+    document = _doc_with_image()
+    image = document.blocks[0].content[0]
+    document.blocks = [
+        SimpleNamespace(kind="paragraph", content=[image]),
+        SimpleNamespace(kind="paragraph", content=[image]),
+    ]
+    storage = FakeStorage(tmp_path)
+    monkeypatch.setattr(
+        "openviking.parse.parsers.anydoc_converter._load_document",
+        lambda path, format_hint=None: ("docx", document),
+    )
+
+    result = AnyDocConverter().convert(tmp_path / "x.docx", resource_name="Demo", storage=storage)
+
+    assert result.images_saved == 1
+    assert result.assets_referenced == 1
+    assert len(storage.saved) == 1
+    assert result.markdown.count("Demo/images/anydoc_asset_0.png") == 2
+
+
+def test_converter_skips_invalid_image_asset(tmp_path, monkeypatch):
+    document = _doc_with_image()
+    document.assets[0].bytes = b"not an image"
+    storage = FakeStorage(tmp_path)
+    monkeypatch.setattr(
+        "openviking.parse.parsers.anydoc_converter._load_document",
+        lambda path, format_hint=None: ("docx", document),
+    )
+
+    result = AnyDocConverter().convert(tmp_path / "x.docx", resource_name="Demo", storage=storage)
+
+    assert result.images_saved == 0
+    assert result.assets_referenced == 1
+    assert result.markdown.strip() == "chart"
+    assert result.warnings
+    assert storage.saved == []
+
+
+def test_converter_skips_tiny_image_asset(tmp_path, monkeypatch):
+    document = _doc_with_image()
+    document.assets[0].bytes = _png_bytes((8, 8))
+    storage = FakeStorage(tmp_path)
+    monkeypatch.setattr(
+        "openviking.parse.parsers.anydoc_converter._load_document",
+        lambda path, format_hint=None: ("docx", document),
+    )
+
+    result = AnyDocConverter().convert(tmp_path / "x.docx", resource_name="Demo", storage=storage)
+
+    assert result.images_saved == 0
+    assert result.assets_referenced == 1
+    assert result.markdown.strip() == "chart"
+    assert result.warnings
+    assert storage.saved == []
 
 
 def test_converter_serializes_anydoc_list_and_table_shapes(tmp_path, monkeypatch):

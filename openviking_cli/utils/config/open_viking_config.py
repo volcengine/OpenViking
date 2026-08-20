@@ -32,7 +32,6 @@ from .parser_config import (
     AudioConfig,
     CodeConfig,
     DirectoryConfig,
-    ExcelConfig,
     FeishuConfig,
     HTMLConfig,
     ImageConfig,
@@ -204,14 +203,6 @@ class OpenVikingConfig(BaseModel):
 
     markdown: MarkdownConfig = Field(
         default_factory=MarkdownConfig, description="Markdown parsing configuration"
-    )
-
-    excel: ExcelConfig = Field(
-        # from_dict on an empty mapping, not the bare constructor: an absent
-        # parsers.excel section must record that no key was set, so sectioning
-        # still follows parsers.markdown for deployments predating this section.
-        default_factory=lambda: ExcelConfig.from_dict({}),
-        description="Excel parsing configuration",
     )
 
     anydoc: AnydocConfig = Field(
@@ -407,7 +398,6 @@ class OpenVikingConfig(BaseModel):
                 "audio",
                 "video",
                 "markdown",
-                "excel",
                 "anydoc",
                 "html",
                 "text",

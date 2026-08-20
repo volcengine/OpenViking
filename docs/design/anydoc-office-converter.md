@@ -8,7 +8,7 @@
 
 ## 1. 背景与问题
 
-当前 Office 解析（Word / PowerPoint / Excel / Legacy `.doc` / EPUB）多为 markitdown 风格的自研转换：依赖 `python-docx`、`python-pptx`、`openpyxl`、`ebooklib`、`olefile` 等，再交给 `MarkdownParser` 做结构切分与落盘。
+历史 Office/EPUB 解析多为 markitdown 风格的自研转换：每类格式各自依赖专用 Python 库，再交给 `MarkdownParser` 做结构切分与落盘。当前实现已经删除这些旧 parser 和生产依赖，Office/EPUB 唯一路径为 `AnyDocParser`。
 
 痛点：
 
@@ -30,14 +30,14 @@ PDF 方面：anydoc 的 PDF 走 `pdf-inspector`，且 **不支持** `to_document
 2. 嵌入图片按 OV 现有设计落盘，并在 Markdown 原位置保留 `![alt](rel_path)`。
 3. 下游仍使用现有 `MarkdownParser` → `TreeBuilder` → 语义队列，不改解析哲学。
 4. 扩展常用 Office 变体扩展名，并更新中英文资源文档。
-5. 以可合并 PR 的标准交付：聚焦改动、测试覆盖、文档同步、行为可回退。
+5. 以可合并 PR 的标准交付：聚焦改动、测试覆盖、文档同步。
 
 ### 非目标
 
 1. 不替换 `PDFParser`、MinerU、Understanding、HTML/网页、飞书、代码仓、音视频解析。
 2. 不重写 `MarkdownParser` 切分/落盘逻辑。
 3. 不接入 Firecrawl 托管 OCR / Parse API。
-4. 首 PR 不强制删除 `python-docx` / `python-pptx` / `openpyxl` / `ebooklib` / `olefile`（可作为失败 fallback；清理依赖可跟后续 PR）。
+4. 不在 AnyDoc 失败时回退旧 Office/EPUB parser；旧 parser 已删除。
 
 ---
 
@@ -51,14 +51,14 @@ Accessor → LocalResource
               │
      ┌────────┴────────┐
      │                 │
-  Word/PPT/Excel/   PDFParser
-  LegacyDoc/EPub    (不变)
+ AnyDocParser      PDFParser
+ Office/EPUB       (不变)
      │
      ▼
  AnyDocConverter.convert(path, resource_name, storage)
    ├─ read bytes
    ├─ anydoc.to_document(bytes[, format])
-   ├─ serialize Document → GFM
+   ├─ AnyDocMarkdownRenderer: serialize Document → GFM
    │    └─ Inline.Image(asset) → storage.save_image
    │         → ![alt](rel_to_media_dir)
    └─ return markdown
@@ -74,14 +74,19 @@ Accessor → LocalResource
  TreeBuilder → SemanticQueue
 ```
 
-核心新增模块：`openviking/parse/parsers/anydoc_converter.py`。
+核心模块：
+
+- `openviking/parse/parsers/anydoc.py`：统一 Office/EPUB parser 主入口。
+- `openviking/parse/parsers/anydoc_converter.py`：同步执行 anydoc 转换、调用 renderer、组装转换结果。
+- `openviking/parse/parsers/anydoc_renderer.py`：把 AnyDoc document model 序列化为 Markdown，并处理图片引用改写。
 
 职责边界：
 
 | 组件 | 负责 | 不负责 |
 |------|------|--------|
-| `AnyDocConverter` | anydoc 调用、错误映射、document→GFM、图片落盘与引用改写 | 切分、VikingFS、向量化 |
-| 各 `*Parser` | 扩展名注册、`parse()` 编排、委托 `MarkdownParser` | 具体 Office 字节解析 |
+| `AnyDocParser` | Office/EPUB 扩展名注册、`parse()` 编排、委托 `AnyDocConverter` 和 `MarkdownParser` | 具体 Office 字节解析 |
+| `AnyDocConverter` | anydoc 调用、错误映射、调用 renderer、组装 `AnydocConversionResult` | Markdown 细节渲染、切分、VikingFS、向量化 |
+| `AnyDocMarkdownRenderer` | document→GFM、图片落盘与引用改写、表格/列表/脚注/锚点输出 | 文件格式识别、调用 anydoc、调用 `MarkdownParser` |
 | `MarkdownParser` | 结构切分、本地图片摄入、temp 树 | Office 格式理解 |
 | `PDFParser` | 本地/远程 PDF（含抽图） | — |
 
@@ -89,7 +94,7 @@ Accessor → LocalResource
 
 ## 4. AnyDocConverter 设计
 
-### 4.1 公共 API（建议）
+### 4.1 公共 API
 
 ```python
 @dataclass(frozen=True)
@@ -110,8 +115,7 @@ class AnyDocConverter:
     ) -> AnydocConversionResult: ...
 ```
 
-- 同步实现；由调用方 `asyncio.to_thread` 包装（与现有 Word/PPT 一致）。
-- Excel 进程池 worker 内直接调用同步 `convert`，避免在子进程再开事件循环做转换。
+- 同步实现；由调用方 `asyncio.to_thread` 包装，避免阻塞事件循环。
 
 ### 4.2 Document → Markdown（含图片）
 
@@ -127,24 +131,32 @@ class AnyDocConverter:
 | image + `source.kind == external` | `![alt](url)` |
 | image + `unavailable` | 仅保留 alt 文本（或跳过空 alt） |
 | lineBreak | 换行 |
-| noteRef / anchor | 保持可读的最小表示（脚注可附文末 notes） |
+| noteRef / anchor | 脚注按引用顺序编号；anchor link 解析到 heading slug 或显式 HTML anchor |
 
-表格、列表、标题、代码块、分割线按 anydoc model 语义序列化为 GFM。实现上可：
+表格、列表、标题、代码块、分割线按 anydoc model 语义序列化为 GFM。当前采用自研轻量 renderer，保证图片引用可控，不依赖 anydoc 默认「只输出 alt」行为。
 
-1. **优先**：自研轻量 serializer（只覆盖 OV 需要的块类型），图片处插入本地路径；或
-2. **备选**：若 Python 绑定后续提供「带 asset URL 映射的 serialize」再切换。
+renderer 已覆盖的质量处理：
 
-首 PR 采用 (1)，保证图片引用可控，不依赖 anydoc 默认「只输出 alt」行为。
+1. 文本按上下文转义 Markdown 特殊字符，避免原文中的 `#`、`-`、`*`、`[`、反引号、表格竖线等被误识别成 Markdown 结构。
+2. 相邻同样式 text run 会先合并，再统一输出 bold/italic/strike/code，减少碎片化样式。
+3. inline code 和 code block 会根据内容里的反引号长度选择更长 fence，避免代码内容截断 Markdown。
+4. link 支持 external、relative、anchor；URL 中的 `|`、`<`、`>` 会编码，含空格或括号时用 `<...>` 包裹。
+5. anchor link 会解析到 heading 的 GFM slug；非 heading anchor 被引用时输出 HTML anchor。
+6. list 支持普通项目、数字起始值、alpha/roman marker、marker label、checkbox，以及多 block item 的 loose list。
+7. table 支持 AnyDoc 的 `origin` / `covered` slot、`header_rows`、layout 单格表降级、cell 内列表/标题/代码块/嵌套表压平。
+8. notes 按正文引用顺序编号，未引用但有内容的 note 追加到末尾，输出标准 footnote definition。
+9. PPT 类格式中的 speaker notes 以 `### Speaker Notes` 输出，提升可读性。
 
 ### 4.3 图片落盘（对齐现有 Word/PDF）
 
 对 `media_type` 以 `image/` 开头的 asset：
 
 1. `extension`：从 MIME（`image/png` → `.png`）或 `origin_part` 后缀推断；未知则 `.png`。
-2. `filename`：`image{n}`，`n` 从 1 递增（与 `WordParser` 一致）。
-3. `path = storage.save_image(resource_name, bytes, filename=filename, extension=extension)`。
-4. Markdown：`![alt_or_filename]({path.relative_to(storage.media_dir)})`。
-5. Parser 调用 `MarkdownParser.parse_content(..., allowed_media_dirs=[storage.media_dir])`。
+2. `filename`：`anydoc_asset_{asset_id}`，同一个 AnyDoc asset 多处引用时复用同一落盘路径。
+3. 保存前复用共享图片校验 `openviking.parse.image_validation.is_valid_image`，过滤损坏、极小、极端比例或超大图片。
+4. `path = storage.save_image(resource_name, bytes, filename=filename, extension=extension)`。
+5. Markdown：`![alt_or_filename]({path.relative_to(storage.media_dir)})`。
+6. Parser 调用 `MarkdownParser.parse_content(..., allowed_media_dirs=[storage.media_dir])`。
 
 非 `image/*` 的 embedded object：跳过字节落盘，打 debug 日志，不阻断转换。
 
@@ -153,11 +165,11 @@ class AnyDocConverter:
 | anydoc 异常 | OV 行为 |
 |-------------|---------|
 | `EncryptedError` | 抛出带路径的明确错误，不静默空文档 |
-| `UnsupportedError` | 同上；若启用 fallback 则降级旧转换器 |
-| `MalformedError` / `MissingPartError` / `ResourceLimitError` | 记录 warning + 明确错误；可选 fallback |
+| `UnsupportedError` | 同上 |
+| `MalformedError` / `MissingPartError` / `ResourceLimitError` | 记录 warning + 明确错误 |
 | 其它 | 向上抛出 |
 
-**Fallback（建议默认关闭）**：配置项例如 `parsers.anydoc.fallback_to_legacy: false`。为 true 时，anydoc 失败可回退现有 `_convert_to_markdown` 实现。首 PR 可保留旧代码路径供 fallback/对比，但不默认启用。
+不提供 legacy fallback。anydoc 失败即失败，避免旧路径与新路径行为分叉。
 
 ### 4.5 PDF 明确排除
 
@@ -166,34 +178,31 @@ class AnyDocConverter:
 
 ---
 
-## 5. 各 Parser 接入方式
+## 5. 统一 Parser 接入方式
 
 | Parser | 改动要点 |
 |--------|----------|
-| `WordParser` | `_convert_to_markdown` → `AnyDocConverter`；`supported_extensions` 增加 `.docm`；保留 `allowed_media_dirs` |
-| `LegacyDocParser` | 真实 OLE `.doc` 走 AnyDoc；ZIP/OOXML 伪装 `.doc` **仍**路由到 `WordParser`（现有安全逻辑保留） |
-| `PowerPointParser` | 转换改 AnyDoc；扩展名增加 `.ppt`、`.pptm`、`.pps`、`.ppsx`、`.ppsm`、`.pot` 等 anydoc 支持且合理的集合 |
-| `ExcelParser` | 转换改 AnyDoc；进程池 worker 内改用 `AnyDocConverter`；扩展名增加 `.xlsb`、`.ods`、`.csv`；`max_rows_per_sheet` 见下 |
-| `EPubParser` | 转换改 AnyDoc |
+| `AnyDocParser` | 注册全部 Office/EPUB 扩展名；默认调用 `AnyDocConverter`；再委托 `MarkdownParser`；追加 `storage.media_dir` 到 `allowed_media_dirs` |
 | `PDFParser` | **无改动** |
 
-扩展名注册仍通过各 Parser 的 `supported_extensions` + `ParserRegistry._register`，不引入第三方插件注册。
+扩展名注册通过单一 `AnyDocParser.supported_extensions` + `ParserRegistry._register("anydoc", ...)` 完成，不引入第三方插件注册。
 
-**扩展名映射（首 PR 必须做完）**：
+**扩展名映射**：
 
 | 扩展名 | 挂靠 Parser |
 |--------|-------------|
-| `.docx` `.docm` `.odt` `.rtf` | `WordParser` |
-| `.doc` | `LegacyDocParser`（OLE）；OOXML 伪装仍转 `WordParser` |
-| `.pptx` `.ppt` `.pptm` `.pps` `.ppsx` `.ppsm` `.pot` `.odp` | `PowerPointParser` |
-| `.xlsx` `.xls` `.xlsm` `.xlsb` `.ods` `.csv` | `ExcelParser` |
-| `.epub` | `EPubParser` |
+| `.doc` `.docx` `.docm` `.odt` `.rtf` | `AnyDocParser` |
+| `.pptx` `.ppt` `.pptm` `.pps` `.ppsx` `.ppsm` `.pot` `.odp` | `AnyDocParser` |
+| `.xlsx` `.xls` `.xlsm` `.xlsb` `.ods` `.csv` | `AnyDocParser` |
+| `.epub` | `AnyDocParser` |
+
+当 `parsers.anydoc.enable=false` 时，Office/EPUB 解析直接失败；旧 converter 已删除，不会静默降级。
 
 `.xlsb` 保留支持：anydoc 官方支持列表包含该扩展名，并将
 `format_from_extension(".xlsb")` 映射到共享的 `"xlsx"` 解析器；已用真实二进制
 XLSB 样本验证 `to_document` 可成功转换。
 
-**`max_rows_per_sheet`（拍板）**：anydoc 路径下该配置仍保留，但首 PR **不保证**与 openpyxl 路径逐行等价裁剪。行为定为：默认全量转换；若 `max_rows_per_sheet > 0`，在转换后的 Markdown 上按「每个 sheet 二级标题下的第一个表格」做行截断（表头保留 + 最多 N 行数据），并在截断处追加一行说明注释。做不到稳定识别 sheet 边界时，打 warning 并跳过截断（不静默丢数据）。
+旧 Excel 专用 parser 配置和行数裁剪配置已删除。AnyDoc 默认全量转换；长表格由 `MarkdownParser` 的 row-aware split 避免切断行。
 
 ---
 
@@ -209,8 +218,7 @@ XLSB 样本验证 `to_document` 可成功转换。
 ```yaml
 parsers:
   anydoc:
-    enable: true                 # 总开关；false 时走 legacy 转换
-    fallback_to_legacy: false    # anydoc 失败是否降级
+    enable: true                 # 总开关；false 时 Office/EPUB 解析失败
 ```
 
 配置类放在 `parser_config.py`，缺省值保证未配置时行为为「启用 anydoc、不 fallback」。
@@ -226,10 +234,8 @@ parsers:
 | `test_anydoc_converter_rewrites_asset_images` | 构造/fixture document：asset 落盘 + MD 含 `![](resource/images/...)` |
 | `test_anydoc_converter_skips_non_image_assets` | 非 image MIME 不落盘 |
 | `test_anydoc_converter_rejects_pdf` | PDF 不走 converter |
-| `test_word_parser_anydoc_with_image` | 小 docx fixture 含图 → parse 后 media 存在且可被 Markdown 摄入 |
-| `test_powerpoint_parser_anydoc` | pptx 烟雾 |
-| `test_excel_parser_anydoc_and_process_pool` | 转换路径 + 进程池不回归 |
-| `test_legacy_doc_zip_still_routes_to_word` | ZIP 伪装 `.doc` 路由不变 |
+| `test_anydoc_parser_converts_and_forwards_markdown_options` | AnyDoc 主链路 → MarkdownParser 参数转发、media dir、meta |
+| `test_anydoc_parser_default_reraises_conversion_failure` | 默认失败不 fallback |
 | 现有 PDF / markdown 测试 | 全绿，证明 PDF 未受影响 |
 
 Fixture：在 `tests/parse/fixtures/anydoc/` 放置最小二进制样例（或测试内动态生成 docx）。注意许可证与体积。
@@ -247,8 +253,8 @@ Fixture：在 `tests/parse/fixtures/anydoc/` 放置最小二进制样例（或�
 
 1. 单一主题：Office 转换换 anydoc + 图片桥接。
 2. 含测试与中英文 API 文档。
-3. 不夹杂无关重构；legacy 删除另开 PR。
-4. PR 描述写清：PDF 不变、图片如何从 `assets` 接入、fallback 默认行为。
+3. 不夹杂无关重构；旧 Office/EPUB parser 已在本轮清理。
+4. PR 描述写清：PDF 不变、图片如何从 `assets` 接入、AnyDoc 失败行为。
 
 ---
 
@@ -258,7 +264,7 @@ Fixture：在 `tests/parse/fixtures/anydoc/` 放置最小二进制样例（或�
 |------|------|
 | anydoc 默认 MD 无图片路径 | 强制 `to_document` + OV serializer |
 | PDF 无 document model | 明确排除，保留 `PDFParser` |
-| Excel `max_rows_per_sheet` 语义变化 | 按 §5 拍板：MD 级 best-effort 截断；单测覆盖「可识别 sheet 标题」场景 |
+| Excel 行数控制语义变化 | 旧 Excel 专用配置已删除；通过 Markdown row-aware split 保障不切断表格行 |
 | Python 绑定字段名（camelCase vs snake_case） | 实现时对绑定做适配层，单测锁字段访问 |
 | wheel / 平台支持 | 硬依赖 + CI 验证；文档注明支持平台 |
 | 大文档 assets 内存 | anydoc 自有 `max_asset_total_bytes`；超限按 ConvertError 处理 |
@@ -269,9 +275,9 @@ Fixture：在 `tests/parse/fixtures/anydoc/` 放置最小二进制样例（或�
 ## 10. 实现顺序（概要）
 
 1. 添加依赖与 `AnyDocConverter`（含图片改写）+ 单测。
-2. 接入 `WordParser` / `LegacyDocParser`，打通 `allowed_media_dirs`。
-3. 接入 `PowerPointParser` / `EPubParser`。
-4. 接入 `ExcelParser`（含进程池 worker）。
+2. 新增统一 `AnyDocParser`，打通 `allowed_media_dirs`、`base_dir`、source name 转发和 meta。
+3. `ParserRegistry` 将 Office/EPUB 扩展名统一注册到 `AnyDocParser`。
+4. 旧 Office/EPUB parser 和旧生产依赖已删除，不保留 legacy fallback。
 5. 扩展名与中英文文档。
 6. 回归：PDF 与现有 parse 测试。
 
@@ -281,9 +287,9 @@ Fixture：在 `tests/parse/fixtures/anydoc/` 放置最小二进制样例（或�
 
 ## 11. 已拍板决策
 
-1. **替换范围**：Word / LegacyDoc / PowerPoint / Excel / EPUB 的转换层；**PDF 不换**。
+1. **替换范围**：Office / EPUB 默认主链路统一到 `AnyDocParser`；**PDF 不换**。
 2. **图片**：按 OV 设计从 `document.assets` 落盘并写回 Markdown 引用。
-3. **架构**：共享 `AnyDocConverter`，不在各 Parser 内复制 anydoc 调用。
+3. **架构**：单一 `AnyDocParser` 编排主链路，共享 `AnyDocConverter`，不保留旧 parser fallback。
 4. **交付标准**：可直接开 PR（代码 + 测试 + 文档）。
 5. **扩展名**：§5 表格为必须范围（含 ODT/RTF/ODS/ODP/CSV）。
-6. **Excel 行数限制**：anydoc 路径用 Markdown 级 best-effort 截断，不强制与 openpyxl 逐行一致。
+6. **Excel 行数限制**：旧 Excel 专用配置已删除；AnyDoc 全量转换，Markdown 层做行边界切分。

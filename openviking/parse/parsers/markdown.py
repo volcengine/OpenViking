@@ -19,7 +19,6 @@ The parser handles scenarios:
 
 import asyncio
 import hashlib
-import io
 import os
 import re
 import time
@@ -29,6 +28,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from openviking.parse.accessors.mime_types import IANA_MEDIA_TYPE_TO_EXTENSION
 from openviking.parse.base import NodeType, ParseResult, ResourceNode, create_parse_result
+from openviking.parse.image_validation import is_valid_image
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.code.ast.providers import supports_code_skeleton
 from openviking.parse.parsers.constants import (
@@ -158,6 +158,7 @@ class MarkdownParser(BaseParser):
     # Worst-case token density used by _estimate_token_count (CJK ~0.7 tok/char).
     # Used to bound force-split chunk size so it also respects the token budget.
     MAX_TOKENS_PER_CHAR = 0.7
+    TABLE_HEADER_REPEAT_MAX_CHARS = 1024
     MAX_MERGED_FILENAME_LENGTH = 32  # Maximum length for merged section filenames
 
     # Image validation constants
@@ -663,8 +664,16 @@ class MarkdownParser(BaseParser):
                 # to keep every chunk within the token budget.
                 token_safe_chars = max(1, int(max_size / self.MAX_TOKENS_PER_CHAR))
                 step = min(max_chars, token_safe_chars)
-                for i in range(0, len(para), step):
-                    parts.append(para[i : i + step].strip())
+                table_parts = self._split_markdown_table_by_rows(
+                    para,
+                    max_size=max_size,
+                    max_chars=step,
+                )
+                if table_parts:
+                    parts.extend(table_parts)
+                else:
+                    for i in range(0, len(para), step):
+                        parts.append(para[i : i + step].strip())
             elif (
                 current_tokens + para_tokens > max_size or len(current) + len(para) + 2 > max_chars
             ) and current:
@@ -685,6 +694,94 @@ class MarkdownParser(BaseParser):
                 parts.append(current.strip())
 
         return parts if parts else [content]
+
+    @staticmethod
+    def _is_markdown_table_row(line: str) -> bool:
+        stripped = line.strip()
+        return stripped.startswith("|") and stripped.endswith("|") and "|" in stripped[1:-1]
+
+    @staticmethod
+    def _is_markdown_table_separator(line: str) -> bool:
+        stripped = line.strip()
+        if not stripped.startswith("|") or not stripped.endswith("|"):
+            return False
+        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+        return bool(cells) and all(re.fullmatch(r":?-{3,}:?", cell or "") for cell in cells)
+
+    def _split_markdown_table_by_rows(
+        self,
+        content: str,
+        *,
+        max_size: int,
+        max_chars: int,
+    ) -> Optional[List[str]]:
+        """Split a single oversized Markdown table without cutting rows.
+
+        The first two table rows are treated as the header/separator and repeated
+        in subsequent chunks when they are small enough to fit. Any prefix before
+        the table, such as a section heading merged into the oversized paragraph,
+        is kept on the first chunk only.
+        """
+        lines = content.splitlines()
+        table_start = -1
+        for index in range(len(lines) - 1):
+            if self._is_markdown_table_row(lines[index]) and self._is_markdown_table_separator(
+                lines[index + 1]
+            ):
+                table_start = index
+                break
+        if table_start < 0:
+            return None
+
+        table_end = table_start + 2
+        while table_end < len(lines) and self._is_markdown_table_row(lines[table_end]):
+            table_end += 1
+
+        if table_end - table_start < 3:
+            return None
+        if any(line.strip() for line in lines[table_end:]):
+            return None
+
+        prefix = "\n".join(lines[:table_start]).strip()
+        header = lines[table_start : table_start + 2]
+        rows = lines[table_start + 2 : table_end]
+        header_text = "\n".join(header)
+        repeat_header = (
+            len(header_text) <= self.TABLE_HEADER_REPEAT_MAX_CHARS
+            and len(header_text) < max_chars
+            and self._estimate_token_count(header_text) < max_size
+        )
+
+        parts: List[str] = []
+        current_lines: List[str] = []
+        current_data_rows = 0
+
+        def flush() -> None:
+            nonlocal current_lines, current_data_rows
+            if current_lines:
+                parts.append("\n".join(current_lines).strip())
+                current_lines = []
+                current_data_rows = 0
+
+        if prefix:
+            current_lines.extend([prefix, ""])
+        current_lines.extend(header)
+
+        for row in rows:
+            candidate_lines = [*current_lines, row]
+            candidate = "\n".join(candidate_lines)
+            if current_lines and (
+                len(candidate) > max_chars or self._estimate_token_count(candidate) > max_size
+            ) and current_data_rows > 0:
+                flush()
+                current_lines = [*header, row] if repeat_header else [row]
+                current_data_rows = 1
+            else:
+                current_lines.append(row)
+                current_data_rows += 1
+
+        flush()
+        return parts or None
 
     async def _ingest_local_images(
         self,
@@ -908,45 +1005,7 @@ class MarkdownParser(BaseParser):
         Returns:
             True if the image satisfies all requirements, otherwise False
         """
-        # File size check (local file path limit: 10 MB)
-        if len(image_bytes) > self.IMAGE_MAX_FILE_BYTES:
-            logger.warning(f"[MarkdownParser] Image exceeds 10MB, skipping: {source_path}")
-            return False
-
-        # Pixel size check
-        try:
-            from PIL import Image
-
-            with Image.open(io.BytesIO(image_bytes)) as img:
-                width, height = img.size
-        except Exception as e:
-            logger.warning(
-                f"[MarkdownParser] Cannot read image dimensions, skipping {source_path}: {e}"
-            )
-            return False
-
-        if width <= self.IMAGE_MIN_SIDE or height <= self.IMAGE_MIN_SIDE:
-            logger.warning(
-                f"[MarkdownParser] Image side too small ({width}x{height}), skipping: {source_path}"
-            )
-            return False
-
-        pixels = width * height
-        if pixels < self.IMAGE_MIN_PIXELS or pixels > self.IMAGE_MAX_PIXELS:
-            logger.warning(
-                f"[MarkdownParser] Image pixel count out of range ({pixels}), skipping: {source_path}"
-            )
-            return False
-
-        aspect_ratio = width / height
-        if aspect_ratio < self.IMAGE_MIN_ASPECT_RATIO or aspect_ratio > self.IMAGE_MAX_ASPECT_RATIO:
-            logger.warning(
-                f"[MarkdownParser] Image aspect ratio out of range ({aspect_ratio:.4f}), "
-                f"skipping: {source_path}"
-            )
-            return False
-
-        return True
+        return is_valid_image(image_bytes, source_path)
 
     @staticmethod
     def _is_remote_uri(path: str) -> bool:

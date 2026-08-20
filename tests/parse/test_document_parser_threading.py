@@ -1,9 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Regression tests for offloading synchronous document conversions."""
+"""Regression tests for offloading synchronous AnyDoc conversions."""
 
-import sys
-import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable
@@ -11,7 +9,7 @@ from typing import Any, Callable
 import pytest
 
 from openviking.parse.base import NodeType, ResourceNode, create_parse_result
-from openviking.parse.parsers import anydoc_converter, epub, excel, legacy_doc, powerpoint, word
+from openviking.parse.parsers import anydoc, anydoc_converter
 from openviking_cli.utils.config.parser_config import AnydocConfig
 
 
@@ -50,17 +48,24 @@ def _patch_to_thread(monkeypatch, module) -> list[tuple[Callable[..., Any], tupl
     return calls
 
 
+def _conversion(markdown: str = "# converted docx", source_format: str = "docx"):
+    return SimpleNamespace(
+        markdown=markdown,
+        source_format=source_format,
+        images_saved=0,
+        assets_referenced=0,
+        warnings=(),
+    )
+
+
 @pytest.mark.asyncio
-async def test_word_parser_offloads_docx_conversion(monkeypatch, tmp_path: Path):
-    parser = word.WordParser()
+async def test_anydoc_parser_offloads_docx_conversion(monkeypatch, tmp_path: Path):
+    parser = anydoc.AnyDocParser()
     seen = _stub_markdown_parse(parser)
-    calls = _patch_to_thread(monkeypatch, word)
+    calls = _patch_to_thread(monkeypatch, anydoc)
 
     def convert(self, path: Path, *, resource_name, storage):
-        return SimpleNamespace(
-            markdown="# converted docx",
-            source_format="docx",
-        )
+        return _conversion()
 
     monkeypatch.setattr(anydoc_converter.AnyDocConverter, "convert", convert)
     source = tmp_path / "sample.docx"
@@ -77,25 +82,18 @@ async def test_word_parser_offloads_docx_conversion(monkeypatch, tmp_path: Path)
     assert seen["content"] == "# converted docx"
     assert seen["kwargs"]["allowed_media_dirs"] == [storage.media_dir]
     assert result.source_format == "docx"
-    assert result.parser_name == "WordParser"
+    assert result.parser_name == "AnyDocParser"
 
 
 @pytest.mark.asyncio
-async def test_word_parser_forwards_original_name_to_markdown(monkeypatch, tmp_path: Path):
-    # On single-file upload the on-disk path is a temp name (upload_<uuid>.docx)
-    # and the user's original filename arrives via source_name. WordParser must
-    # forward that name to MarkdownParser explicitly; otherwise parse_content can
-    # only fall back to the temp path and the resource ends up named upload_<uuid>.
-    parser = word.WordParser()
+async def test_anydoc_parser_forwards_original_name_to_markdown(monkeypatch, tmp_path: Path):
+    parser = anydoc.AnyDocParser()
     seen = _stub_markdown_parse(parser)
-    _patch_to_thread(monkeypatch, word)
+    _patch_to_thread(monkeypatch, anydoc)
     monkeypatch.setattr(
         anydoc_converter.AnyDocConverter,
         "convert",
-        lambda *args, **kwargs: SimpleNamespace(
-            markdown="# converted docx",
-            source_format="docx",
-        ),
+        lambda *args, **kwargs: _conversion(),
     )
 
     upload = tmp_path / "upload_abc123.docx"
@@ -108,17 +106,14 @@ async def test_word_parser_forwards_original_name_to_markdown(monkeypatch, tmp_p
 
 
 @pytest.mark.asyncio
-async def test_word_parser_forwards_no_split_to_markdown(monkeypatch, tmp_path: Path):
-    parser = word.WordParser()
+async def test_anydoc_parser_forwards_no_split_to_markdown(monkeypatch, tmp_path: Path):
+    parser = anydoc.AnyDocParser()
     seen = _stub_markdown_parse(parser)
-    _patch_to_thread(monkeypatch, word)
+    _patch_to_thread(monkeypatch, anydoc)
     monkeypatch.setattr(
         anydoc_converter.AnyDocConverter,
         "convert",
-        lambda *args, **kwargs: SimpleNamespace(
-            markdown="# converted docx",
-            source_format="docx",
-        ),
+        lambda *args, **kwargs: _conversion(),
     )
 
     upload = tmp_path / "screenplay.docx"
@@ -130,169 +125,10 @@ async def test_word_parser_forwards_no_split_to_markdown(monkeypatch, tmp_path: 
 
 
 @pytest.mark.asyncio
-async def test_excel_parser_offloads_xlsx_conversion(monkeypatch, tmp_path: Path):
-    parser = excel.ExcelParser(anydoc_config=AnydocConfig(enable=False))
-    seen = _stub_markdown_parse(parser)
-    calls = _patch_to_thread(monkeypatch, excel)
-    fake_openpyxl = SimpleNamespace()
-    monkeypatch.setitem(sys.modules, "openpyxl", fake_openpyxl)
-
-    def convert(path: Path, openpyxl_module) -> str:
-        assert openpyxl_module is fake_openpyxl
-        return "# converted xlsx"
-
-    monkeypatch.setattr(parser, "_convert_to_markdown", convert)
-    source = tmp_path / "sample.xlsx"
+async def test_anydoc_parser_disabled_rejects_office_file(tmp_path: Path):
+    parser = anydoc.AnyDocParser(anydoc_config=AnydocConfig(enable=False))
+    source = tmp_path / "sample.docx"
     source.write_bytes(b"placeholder")
 
-    result = await parser.parse(source)
-
-    assert calls == [(convert, (source, fake_openpyxl), {})]
-    assert seen["content"] == "# converted xlsx"
-    assert result.source_format == "xlsx"
-    assert result.parser_name == "ExcelParser"
-
-
-@pytest.mark.asyncio
-async def test_excel_parser_offloads_xls_conversion(monkeypatch, tmp_path: Path):
-    parser = excel.ExcelParser(anydoc_config=AnydocConfig(enable=False))
-    seen = _stub_markdown_parse(parser)
-    calls = _patch_to_thread(monkeypatch, excel)
-
-    def convert(path: Path) -> str:
-        return "# converted xls"
-
-    monkeypatch.setattr(parser, "_convert_xls_to_markdown", convert)
-    source = tmp_path / "sample.xls"
-    source.write_bytes(b"placeholder")
-
-    result = await parser.parse(source)
-
-    assert calls == [(convert, (source,), {})]
-    assert seen["content"] == "# converted xls"
-    assert result.source_format == "xls"
-    assert result.parser_name == "ExcelParser"
-
-
-@pytest.mark.asyncio
-async def test_powerpoint_parser_offloads_pptx_conversion(monkeypatch, tmp_path: Path):
-    parser = powerpoint.PowerPointParser(anydoc_config=AnydocConfig(enable=False))
-    seen = _stub_markdown_parse(parser)
-    calls = _patch_to_thread(monkeypatch, powerpoint)
-    fake_pptx = SimpleNamespace()
-    monkeypatch.setitem(sys.modules, "pptx", fake_pptx)
-
-    def convert(path: Path, pptx_module) -> str:
-        assert pptx_module is fake_pptx
-        return "# converted pptx"
-
-    monkeypatch.setattr(parser, "_convert_to_markdown", convert)
-    source = tmp_path / "sample.pptx"
-    source.write_bytes(b"placeholder")
-
-    result = await parser.parse(source)
-
-    assert calls == [(convert, (source, fake_pptx), {})]
-    assert seen["content"] == "# converted pptx"
-    assert result.source_format == "pptx"
-    assert result.parser_name == "PowerPointParser"
-
-
-@pytest.mark.asyncio
-async def test_epub_parser_offloads_epub_conversion(monkeypatch, tmp_path: Path):
-    parser = epub.EPubParser(anydoc_config=AnydocConfig(enable=False))
-    seen = _stub_markdown_parse(parser)
-    calls = _patch_to_thread(monkeypatch, epub)
-
-    def convert(path: Path) -> str:
-        return "# converted epub"
-
-    monkeypatch.setattr(parser, "_convert_to_markdown", convert)
-    source = tmp_path / "sample.epub"
-    source.write_bytes(b"placeholder")
-
-    result = await parser.parse(source)
-
-    assert calls == [(convert, (source,), {})]
-    assert seen["content"] == "# converted epub"
-    assert result.source_format == "epub"
-    assert result.parser_name == "EPubParser"
-
-
-@pytest.mark.asyncio
-async def test_legacy_doc_parser_offloads_anydoc_conversion(monkeypatch, tmp_path: Path):
-    parser = legacy_doc.LegacyDocParser()
-    seen = _stub_markdown_parse(parser)
-    calls = _patch_to_thread(monkeypatch, legacy_doc)
-
-    def convert(self, path: Path, *, resource_name, storage):
-        return SimpleNamespace(
-            markdown="# converted doc",
-            source_format="doc",
-        )
-
-    monkeypatch.setattr(anydoc_converter.AnyDocConverter, "convert", convert)
-    source = tmp_path / "sample.doc"
-    source.write_bytes(b"placeholder")
-
-    result = await parser.parse(source)
-
-    assert len(calls) == 1
-    func, args, call_kwargs = calls[0]
-    assert func.__func__ is convert
-    assert args == (source,)
-    assert call_kwargs["resource_name"] == "sample"
-    storage = call_kwargs["storage"]
-    assert seen["content"] == "# converted doc"
-    assert seen["kwargs"]["allowed_media_dirs"] == [storage.media_dir]
-    assert result.source_format == "doc"
-    assert result.parser_name == "LegacyDocParser"
-
-
-@pytest.mark.asyncio
-async def test_legacy_doc_parser_routes_ooxml_payload_to_word_parser(monkeypatch, tmp_path: Path):
-    parser = legacy_doc.LegacyDocParser()
-    _stub_markdown_parse(parser)
-    source = tmp_path / "mislabeled.doc"
-    with zipfile.ZipFile(source, "w") as archive:
-        archive.writestr("[Content_Types].xml", "<Types />")
-        archive.writestr("word/document.xml", "<w:document />")
-
-    seen: dict[str, Any] = {}
-
-    async def parse_word(self, source_path, instruction="", **kwargs):
-        seen["source"] = source_path
-        seen["instruction"] = instruction
-        seen["kwargs"] = kwargs
-        return create_parse_result(
-            root=ResourceNode(type=NodeType.ROOT),
-            source_path=str(source_path),
-            source_format="docx",
-            parser_name="WordParser",
-        )
-
-    monkeypatch.setattr(word.WordParser, "parse", parse_word)
-
-    result = await parser.parse(
-        source,
-        instruction="preserve tables",
-        source_name="mislabeled.doc",
-    )
-
-    assert seen == {
-        "source": source,
-        "instruction": "preserve tables",
-        "kwargs": {"source_name": "mislabeled.doc"},
-    }
-    assert result.source_format == "docx"
-    assert result.parser_name == "WordParser"
-
-
-@pytest.mark.asyncio
-async def test_legacy_doc_parser_rejects_non_word_zip_payload(tmp_path: Path):
-    source = tmp_path / "not-a-word-document.doc"
-    with zipfile.ZipFile(source, "w") as archive:
-        archive.writestr("payload.bin", b"binary")
-
-    with pytest.raises(ValueError, match="ZIP package"):
-        await legacy_doc.LegacyDocParser().parse(source)
+    with pytest.raises(RuntimeError, match="AnyDoc parser is disabled"):
+        await parser.parse(source)
