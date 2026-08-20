@@ -7,7 +7,7 @@ from typing import Optional
 
 from openviking.core.identifiers import validate_user_id
 from openviking.core.peer_id import normalize_peer_id
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.uri import VikingURI
 
@@ -250,7 +250,7 @@ def resolve_uri(
 
 def resolve_request_uri(uri: str, ctx: RequestContext) -> str:
     """Resolve supported current-user shorthands at an authenticated request boundary."""
-    if getattr(ctx.role, "value", ctx.role) == "user":
+    if ctx.role in {Role.USER, Role.ADMIN}:
         return resolve_current_user_uri(uri, ctx)
     return resolve_uri(uri).uri
 
