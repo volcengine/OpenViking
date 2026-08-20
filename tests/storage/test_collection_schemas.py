@@ -8,20 +8,27 @@ import logging
 from types import SimpleNamespace
 
 import pytest
+import requests
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
 from openviking.server.identity import RequestContext, Role, UserIdentifier
+from openviking.service.resource_service import ResourceService
 from openviking.storage.collection_schemas import (
     CollectionSchemas,
     TextEmbeddingHandler,
     _build_embedding_metadata,
     init_context_collection,
 )
-from openviking.storage.errors import EmbeddingRebuildRequiredError
+from openviking.storage.errors import (
+    ConnectionError,
+    EmbeddingRebuildRequiredError,
+    VikingDBException,
+)
 from openviking.storage.expr import Eq
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.vectordb import engine as vectordb_engine
 from openviking.storage.vectordb.collection.result import UpsertDataResult
+from openviking.storage.vectordb.collection.vikingdb_clients import VikingDBClient
 from openviking.storage.vectordb.collection.vikingdb_collection import VikingDBCollection
 from openviking.storage.vectordb.collection.volcengine_api_key_collection import (
     VolcengineApiKeyCollection,
@@ -38,6 +45,7 @@ from openviking.storage.viking_vector_index_backend import (
     VikingVectorIndexBackend,
     _SingleAccountBackend,
 )
+from openviking_cli.exceptions import InternalError
 from openviking_cli.utils.config.vectordb_config import (
     VectorDBBackendConfig,
     VolcengineConfig,
@@ -804,6 +812,91 @@ def test_private_vikingdb_collection_ignores_unknown_fields_on_writes():
 
     assert calls[0][1]["ignore_unknown_fields"] is True
     assert calls[1][1]["ignore_unknown_fields"] is True
+
+
+def test_private_vikingdb_collection_raises_on_data_api_error(monkeypatch):
+    class _Response:
+        status_code = 403
+        text = '{"code":"AccessDenied","message":"license state Downgraded rejects data write"}'
+
+        def json(self):
+            return {
+                "code": "AccessDenied",
+                "message": "license state Downgraded rejects data write",
+            }
+
+    collection = VikingDBCollection(
+        host="https://vikingdb.example.com",
+        meta_data={"ProjectName": "default", "CollectionName": "context"},
+    )
+    monkeypatch.setattr(collection.client, "do_req", lambda *args, **kwargs: _Response())
+
+    with pytest.raises(VikingDBException, match="license state Downgraded") as exc_info:
+        collection.upsert_data([{"id": "rec-1", "content": "hello"}])
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.code == "AccessDenied"
+    assert exc_info.value.error_type == "http_client_error"
+    assert exc_info.value.retryable is False
+    assert exc_info.value.action == "/api/vikingdb/data/upsert"
+
+
+def test_private_vikingdb_collection_marks_server_error_retryable(monkeypatch):
+    class _Response:
+        status_code = 503
+        text = '{"code":"ServiceUnavailable","message":"temporarily unavailable"}'
+
+        def json(self):
+            return {
+                "code": "ServiceUnavailable",
+                "message": "temporarily unavailable",
+            }
+
+    collection = VikingDBCollection(
+        host="https://vikingdb.example.com",
+        meta_data={"ProjectName": "default", "CollectionName": "context"},
+    )
+    monkeypatch.setattr(collection.client, "do_req", lambda *args, **kwargs: _Response())
+
+    with pytest.raises(VikingDBException) as exc_info:
+        collection.upsert_data([{"id": "rec-1", "content": "hello"}])
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.code == "ServiceUnavailable"
+    assert exc_info.value.error_type == "http_server_error"
+    assert exc_info.value.retryable is True
+
+
+def test_private_vikingdb_client_wraps_connection_error(monkeypatch):
+    def _raise_connection_error(**kwargs):
+        del kwargs
+        raise requests.ConnectionError("connection refused")
+
+    monkeypatch.setattr(requests, "request", _raise_connection_error)
+
+    with pytest.raises(ConnectionError, match="connection refused") as exc_info:
+        VikingDBClient("https://vikingdb.example.com").do_req(
+            "POST",
+            "/api/vikingdb/data/upsert",
+            req_body={},
+        )
+
+    assert exc_info.value.status_code is None
+    assert exc_info.value.error_type == "connection_error"
+    assert exc_info.value.retryable is True
+    assert exc_info.value.action == "/api/vikingdb/data/upsert"
+
+
+def test_resource_service_raises_on_queue_status_errors():
+    status = {
+        "embedding": {"processed_count": 1, "error_count": 1, "errors": ["AccessDenied"]},
+        "indexing": {"processed_count": 0, "error_count": 0, "errors": []},
+    }
+
+    with pytest.raises(InternalError, match="queue processing failed") as exc_info:
+        ResourceService._raise_queue_status_errors(status)
+
+    assert "AccessDenied" in str(exc_info.value)
 
 
 def _exercise_fetch_and_search_apis(collection):
@@ -1870,7 +1963,7 @@ async def test_single_account_backend_upsert_partial_update_creates_when_record_
 
 
 @pytest.mark.asyncio
-async def test_single_account_backend_upsert_partial_update_returns_empty_when_get_fails():
+async def test_single_account_backend_upsert_partial_update_raises_when_get_fails():
     class _Adapter:
         mode = "local"
         USE_CONTENT_FIELD = False
@@ -1888,12 +1981,31 @@ async def test_single_account_backend_upsert_partial_update_returns_empty_when_g
         shared_adapter=_Adapter(),
     )
 
-    result = await backend.upsert(
-        {"id": "rec-1", "abstract": "patched"},
-        options=UpsertOptions(partial_update=True),
+    with pytest.raises(RuntimeError, match="backend exploded"):
+        await backend.upsert(
+            {"id": "rec-1", "abstract": "patched"},
+            options=UpsertOptions(partial_update=True),
+        )
+
+
+@pytest.mark.asyncio
+async def test_single_account_backend_count_raises_when_adapter_count_fails():
+    class _Adapter:
+        mode = "local"
+        USE_CONTENT_FIELD = False
+
+        def count(self, filter=None):
+            del filter
+            raise RuntimeError("count backend exploded")
+
+    backend = _SingleAccountBackend(
+        config=VectorDBBackendConfig(backend="local", name="context", dimension=2),
+        bound_account_id="acc1",
+        shared_adapter=_Adapter(),
     )
 
-    assert result == ""
+    with pytest.raises(RuntimeError, match="count backend exploded"):
+        await backend.count()
 
 
 @pytest.mark.asyncio

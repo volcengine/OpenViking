@@ -1604,6 +1604,17 @@ class ResourceService:
             request_wait_tracker.cleanup(telemetry_id)
             unregister_telemetry(telemetry_id)
 
+    @staticmethod
+    def _raise_queue_status_errors(status: Dict[str, Any]) -> None:
+        failed = {
+            name: group
+            for name, group in status.items()
+            if isinstance(group, dict)
+            and (int(group.get("error_count", 0) or 0) > 0 or bool(group.get("errors")))
+        }
+        if failed:
+            raise InternalError(f"queue processing failed: {failed}")
+
     # ── Connector routing ──
 
     @property
@@ -1822,6 +1833,7 @@ class ResourceService:
                     round((time.perf_counter() - wait_start) * 1000, 3),
                 )
                 result["queue_status"] = status
+                self._raise_queue_status_errors(status)
             else:
                 from openviking.service.task_tracker import get_task_tracker
 
