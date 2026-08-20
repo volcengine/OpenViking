@@ -10,7 +10,9 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.collection_schemas import CollectionSchemas
 from openviking.storage.expr import And, Contains, Or, PathScope
+from openviking.storage.vectordb import engine as vectordb_engine
 from openviking.storage.viking_vector_index_backend import (
     VectorTransferRollbackError,
     VikingVectorIndexBackend,
@@ -18,6 +20,7 @@ from openviking.storage.viking_vector_index_backend import (
 )
 from openviking_cli.exceptions import ConflictError
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
 
 def _ctx() -> RequestContext:
@@ -137,6 +140,48 @@ def _records_under(
         or record["uri"].startswith(uri + "#")
         or (recursive and record["uri"].startswith(uri + "/"))
     ]
+
+
+@pytest.mark.asyncio
+async def test_copy_uri_mapping_scans_real_local_path_records(tmp_path):
+    if not getattr(vectordb_engine, "PersistStore", None):
+        pytest.skip("local persistent vectordb engine is not available in this environment")
+
+    source = "viking://resources/src.md"
+    target = "viking://resources/dst.md"
+    backend = VikingVectorIndexBackend(
+        config=VectorDBBackendConfig(
+            backend="local",
+            name="context",
+            dimension=4,
+            path=str(tmp_path),
+        )
+    )
+    try:
+        assert await backend.create_collection(
+            "context", CollectionSchemas.context_collection("context", 4)
+        )
+        assert (
+            await backend.upsert(
+                _record(
+                    "source-file",
+                    source,
+                    vector=[0.1, 0.2, 0.3, 0.4],
+                    created_at="2026-08-20T00:00:00Z",
+                    updated_at="2026-08-20T00:00:00Z",
+                ),
+                ctx=_ctx(),
+            )
+            == "source-file"
+        )
+
+        result = await backend.copy_uri_mapping(_ctx(), source, target, recursive=False)
+
+        assert result.scanned == 1
+        copied = await backend.get_context_by_uri(target, ctx=_ctx())
+        assert [record["uri"] for record in copied] == [target]
+    finally:
+        await backend.close()
 
 
 @pytest.mark.asyncio
