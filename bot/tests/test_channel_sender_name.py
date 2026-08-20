@@ -18,7 +18,7 @@ from vikingbot.config.schema import WhatsAppChannelConfig  # noqa: E402
 @pytest.mark.asyncio
 async def test_whatsapp_sender_name_falls_back_to_sender_id():
     bus = MessageBus()
-    channel = WhatsAppChannel(WhatsAppChannelConfig(), bus)
+    channel = WhatsAppChannel(WhatsAppChannelConfig(allow_from=["123456789"]), bus)
 
     await channel._handle_bridge_message(
         json.dumps(

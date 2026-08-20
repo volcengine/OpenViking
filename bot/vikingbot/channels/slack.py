@@ -5,16 +5,15 @@ import re
 from typing import Any
 
 from loguru import logger
-from slack_sdk.socket_mode.websockets import SocketModeClient
 from slack_sdk.socket_mode.request import SocketModeRequest
 from slack_sdk.socket_mode.response import SocketModeResponse
+from slack_sdk.socket_mode.websockets import SocketModeClient
 from slack_sdk.web.async_client import AsyncWebClient
 
 from vikingbot.bus.events import OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
 from vikingbot.config.schema import SlackChannelConfig
-from vikingbot.channels.utils import extract_image_paths, read_image_file
 
 
 class SlackChannel(BaseChannel):
@@ -185,12 +184,25 @@ class SlackChannel(BaseChannel):
                 return False
             if self.config.dm.policy == "allowlist":
                 return sender_id in self.config.dm.allow_from
-            return True
+            return self.config.dm.policy == "open"
 
         # Group / channel messages
         if self.config.group_policy == "allowlist":
-            return chat_id in self.config.group_allow_from
-        return True
+            return (
+                chat_id in self.config.group_allow_from
+                and sender_id in self.config.group_sender_allow_from
+            )
+        return self.config.group_policy in {"open", "mention"}
+
+    def _is_message_allowed(
+        self,
+        sender_id: str,
+        chat_id: str,
+        metadata: dict[str, Any] | None,
+    ) -> bool:
+        slack_metadata = (metadata or {}).get("slack", {})
+        channel_type = str(slack_metadata.get("channel_type") or "")
+        return self._is_allowed(sender_id, chat_id, channel_type)
 
     def _should_respond_in_channel(self, event_type: str, text: str, chat_id: str) -> bool:
         if self.config.group_policy == "open":

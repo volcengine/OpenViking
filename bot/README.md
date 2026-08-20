@@ -246,7 +246,7 @@ For example, to configure Feishu:
         "enabled": true,
         "app_id": "<feishu-app-id>",
         "app_secret": "<feishu-app-secret>",
-        "allow_from": [],
+        "allow_from": ["<sender-id>"],
         "ov_tools_enable": true
       }
     ]
@@ -314,6 +314,8 @@ Restart `vikingbot gateway` after changing the configuration.
 | `bot.gateway.port` | `18790` | Gateway listen port |
 | `bot.sandbox.backend` | `direct` | Execution backend |
 | `bot.sandbox.mode` | `shared` | Workspace isolation mode |
+| `bot.tools.exec.enabled` | `false` | Expose the shell execution tool |
+| `bot.tools.exec.allow_direct` | `false` | Additional unsafe opt-in required to expose shell execution with the `direct` backend |
 | `bot.sandbox.backends.direct.allow_compile_exec` | `false` | Unsafe opt-in that adds `exec` to Compile when using the `direct` backend; ordinary Compile tasks still run without it |
 | `bot.heartbeat.enabled` | `true` | Whether to check `HEARTBEAT.md` periodically |
 | `bot.heartbeat.interval_seconds` | `600` | Heartbeat interval |
@@ -511,8 +513,8 @@ The repository includes `deploy/docker/deploy_langfuse.sh` for local deployment.
 - Never commit model API Keys, OpenViking API Keys, or Gateway Tokens to the repository.
 - A non-localhost Gateway requires a strong random Token and should be protected with HTTPS at the network layer.
 - `X-Gateway-Token` protects only the Gateway; it does not replace an OpenViking user identity.
-- `allow_from: []` allows every sender. Configure an explicit allowlist for public deployments.
-- The `direct` backend executes files and shell commands with the Bot process user's permissions and is not suitable for untrusted callers.
+- `allow_from: []` rejects every sender. Configure explicit sender IDs, or use `["*"]` only when public access is intentional.
+- The shell `exec` tool is disabled by default. Enabling it with the `direct` backend also requires `bot.tools.exec.allow_direct: true`, because commands run with the Bot process user's permissions.
 - `openviking_connection` may come only from a trusted Server proxy or a trusted local path. Do not accept identity claims directly from a public request body.
 
 ## More Documentation

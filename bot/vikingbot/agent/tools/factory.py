@@ -73,12 +73,15 @@ def register_default_tools(
     registry.register(EditFileTool())
     registry.register(ListDirTool())
 
-    # Shell tool
-    registry.register(
-        ExecTool(
-            timeout=exec_config.timeout,
+    # Shell execution is opt-in. Direct mode also requires a second explicit
+    # acknowledgement because commands run with the Bot process's host access.
+    sandbox_backend = getattr(config.sandbox.backend, "value", config.sandbox.backend)
+    if exec_config.enabled and (sandbox_backend != "direct" or exec_config.allow_direct):
+        registry.register(
+            ExecTool(
+                timeout=exec_config.timeout,
+            )
         )
-    )
 
     # Web tools
     registry.register(
