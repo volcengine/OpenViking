@@ -173,6 +173,18 @@ def test_request_boundary_expands_current_user_content_roots():
     )
     assert (
         resolve_request_uri("viking://user/resources", admin_ctx)
+        == "viking://user/admin/resources"
+    )
+    assert (
+        resolve_request_uri("viking://user/skills", admin_ctx)
+        == "viking://user/admin/skills"
+    )
+    root_ctx = RequestContext(
+        user=UserIdentifier(account_id="acct", user_id="root-actor"),
+        role=Role.ROOT,
+    )
+    assert (
+        resolve_request_uri("viking://user/resources", root_ctx)
         == "viking://user/resources"
     )
     assert is_content_root_uri("viking://resources", kind="resource")
