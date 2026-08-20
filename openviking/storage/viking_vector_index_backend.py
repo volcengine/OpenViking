@@ -567,7 +567,10 @@ class _SingleAccountBackend:
             limit=limit,
             offset=offset,
             output_fields=output_fields,
-            order_by="uri",
+            # The local engine's scalar sorter does not return records for
+            # path/string fields. ``updated_at`` is an indexed date-time field
+            # on every context collection and provides stable offset pages.
+            order_by="updated_at",
             order_desc=False,
         )
         next_cursor = str(offset + len(records)) if len(records) == limit else None
