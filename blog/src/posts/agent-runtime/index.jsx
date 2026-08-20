@@ -7,8 +7,8 @@ import {
 const LLM_PATH = '/post/agent-runtime/llm.txt';
 const ZOUK_DELIVERY_DOC = 'https://github.com/ZaynJarvis/zouk/blob/main/docs/agent-delivery-routing.md';
 const ZOUK_LIFECYCLE_DOC = 'https://github.com/ZaynJarvis/zouk/blob/main/docs/agent-lifecycle.md#idle-delivery-and-wake-policy';
-const OPENVIKING_MCP_DOC = 'https://github.com/volcengine/OpenViking/blob/main/docs/en/guides/06-mcp-integration.md';
-const OPENVIKING_CLAUDE_PLUGIN_DOC = 'https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md';
+const OPENVIKING_MCP_DOC = 'https://github.com/volcengine/OpenViking?utm_source=blog&utm_medium=article&utm_campaign=agent-runtime/blob/main/docs/en/guides/06-mcp-integration.md';
+const OPENVIKING_CLAUDE_PLUGIN_DOC = 'https://github.com/volcengine/OpenViking?utm_source=blog&utm_medium=article&utm_campaign=agent-runtime/blob/main/examples/claude-code-memory-plugin/README.md';
 
 const STREAM_JSON_INPUT = `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Say hi back in one sentence."}]}}`;
 
