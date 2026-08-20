@@ -234,6 +234,14 @@ class ConnectorDelegate:
             )
         return (declared_add_type, True)
 
+    @classmethod
+    def supported_args(cls, path: str, declared_add_type: Optional[str]) -> Set[str]:
+        """Connector-owned ``args`` fields for the resolved source type."""
+        resolved = cls.resolve_add_type(path, declared_add_type)
+        if resolved is None:
+            return set()
+        return set(CONNECTOR_SUPPORTED_ARGS.get(resolved[0], frozenset()))
+
     def should_delegate(
         self,
         path: str,

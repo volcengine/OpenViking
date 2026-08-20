@@ -359,7 +359,7 @@ class ResourceService:
         args: Optional[Dict[str, Any]],
         *,
         watch_interval: float,
-        allow_tos_exclude: bool = False,
+        allowed_reserved_fields: Optional[set[str]] = None,
     ) -> _NormalizedAddResourceArgs:
         if args is None:
             return _NormalizedAddResourceArgs({})
@@ -368,9 +368,9 @@ class ResourceService:
         if not args:
             return _NormalizedAddResourceArgs({})
 
-        reserved_fields = _ADD_RESOURCE_ARGS_RESERVED_FIELDS
-        if allow_tos_exclude:
-            reserved_fields = reserved_fields - {"exclude"}
+        reserved_fields = _ADD_RESOURCE_ARGS_RESERVED_FIELDS - (
+            allowed_reserved_fields or set()
+        )
         reserved = sorted(set(args).intersection(reserved_fields))
         if reserved:
             raise InvalidArgumentError(
@@ -1265,19 +1265,30 @@ class ResourceService:
         self._ensure_initialized()
         processing_mode = normalize_processing_mode(processing_mode)
         self._validate_add_resource_tag_policy(tags=tags, tag_mode=tag_mode)
+        from openviking.connector.delegate import ConnectorDelegate
+
+        allowed_reserved_fields = ConnectorDelegate.supported_args(path, add_type).intersection(
+            _ADD_RESOURCE_ARGS_RESERVED_FIELDS
+        )
         normalized_args = self._normalize_add_resource_args(
             args,
             watch_interval=watch_interval,
-            allow_tos_exclude=isinstance(path, str) and path.startswith("tos://"),
+            allowed_reserved_fields=allowed_reserved_fields,
         )
         mode = (
             normalize_parse_mode(parse_mode)
             if parse_mode is not None
             else normalized_args.parse_mode
         )
-        if "exclude" in normalized_args.processor_kwargs and kwargs.get("exclude") is not None:
+        duplicated_fields = sorted(
+            field
+            for field in allowed_reserved_fields
+            if field in normalized_args.processor_kwargs and kwargs.get(field) is not None
+        )
+        if duplicated_fields:
             raise InvalidArgumentError(
-                "exclude cannot be provided both as a top-level field and args.exclude."
+                f"{', '.join(duplicated_fields)} cannot be provided both as a top-level "
+                "field and in args."
             )
         kwargs.update(normalized_args.processor_kwargs)
         git_repo_source = is_git_repo_url(path)

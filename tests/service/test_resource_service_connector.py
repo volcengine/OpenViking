@@ -651,6 +651,17 @@ async def test_add_resource_rejects_top_level_and_tos_args_exclude(
 
 
 @pytest.mark.asyncio
+async def test_add_resource_keeps_args_exclude_reserved_outside_tos(ctx, service):
+    with pytest.raises(InvalidArgumentError, match="core add_resource fields: exclude"):
+        await service.add_resource(
+            path="/tmp/document.md",
+            ctx=ctx,
+            to="viking://resources/document",
+            args={"exclude": []},
+        )
+
+
+@pytest.mark.asyncio
 async def test_add_resource_routes_git_repo_to_connector(
     monkeypatch,
     connector_config,
