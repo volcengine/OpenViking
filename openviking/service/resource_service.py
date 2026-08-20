@@ -1249,7 +1249,9 @@ class ResourceService:
 
                 Note: Re-adding the same source to the same target updates its active watch
                 task in place. A different source targeting an active watch raises
-                ConflictError; cancel that watch first with watch_interval <= 0.
+                ConflictError; cancel that watch first with watch_interval <= 0. Connector
+                imports create the Watch only after the background import succeeds, so this
+                conflict may be reported after both overlapping imports have written data.
             enforce_public_remote_targets: When True, reject non-public remote hosts and
                 validate each outbound HTTP request URL during fetch.
             args: Parser/accessor-specific options forwarded to the processing chain.
@@ -1345,6 +1347,9 @@ class ResourceService:
             watch_auth_state = None
             defer_watch_creation = bool(watch_manager and manage_watch and watch_interval > 0)
             if defer_watch_creation and watch_manager:
+                # Connector imports may run for a long time. This is only a best-effort
+                # precheck: the authoritative conflict check happens when on_success
+                # creates the Watch, after the Connector may already have written data.
                 await watch_manager.get_upsertable_task_by_uri(
                     path=path,
                     to_uri=target_to,

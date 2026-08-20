@@ -341,6 +341,59 @@ async def test_connector_watch_prechecks_only_active_conflicts(
 
 
 @pytest.mark.asyncio
+async def test_connector_watch_resolves_overlapping_imports_at_finalize(
+    connector_config,
+    ctx,
+):
+    watch_manager = WatchManager()
+    service = ResourceService(
+        vikingdb=object(),
+        viking_fs=SimpleNamespace(
+            exists=AsyncMock(return_value=True),
+            _encryptor=_FakeEncryptor(),
+        ),
+        resource_processor=object(),
+        skill_processor=object(),
+        watch_scheduler=SimpleNamespace(watch_manager=watch_manager),
+    )
+    finalizers = []
+
+    async def submit(**kwargs):
+        finalizers.append(kwargs["on_success"])
+        return {"status": "accepted"}
+
+    service._connector.submit = AsyncMock(side_effect=submit)
+    to_uri = "viking://resources/x/y"
+
+    await service.add_resource(
+        path="tos://bucket/first/",
+        ctx=ctx,
+        to=to_uri,
+        watch_interval=5,
+    )
+    await service.add_resource(
+        path="tos://bucket/second/",
+        ctx=ctx,
+        to=to_uri,
+        watch_interval=5,
+    )
+
+    assert service._connector.submit.await_count == 2
+    await finalizers[0]()
+    with pytest.raises(ConflictError, match="already being monitored"):
+        await finalizers[1]()
+
+    task = await watch_manager.get_task_by_uri(
+        to_uri,
+        account_id="acct",
+        user_id="alice",
+        role=str(Role.USER),
+    )
+    assert task is not None
+    assert task.path == "tos://bucket/first/"
+
+
+@pytest.mark.asyncio
 async def test_git_connector_watch_keeps_args_only_in_encrypted_state(
     monkeypatch,
     connector_config,
