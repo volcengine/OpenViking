@@ -5,7 +5,7 @@ import {
 
 const LLM_PATH = '/post/openviking-agent-memory-design/llm.txt';
 const COVER = '/assets/covers/openviking-agent-memory-design.png';
-const REPO = 'https://github.com/volcengine/OpenViking';
+const REPO = 'https://github.com/volcengine/OpenViking?utm_source=blog&utm_medium=article&utm_campaign=openviking-agent-memory-design';
 const DOCS = 'https://docs.openviking.ai/';
 const MCP_GUIDE = 'https://docs.openviking.ai/en/guides/06-mcp-integration';
 const IMAGE_BASE = '/post/openviking-agent-memory-design/images';
