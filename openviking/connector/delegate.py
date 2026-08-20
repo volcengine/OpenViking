@@ -80,7 +80,7 @@ def _validate_tos_uri(value: Any, field: str) -> None:
         or not hostname
         or hostname != parsed.netloc
         or not _TOS_BUCKET_PATTERN.fullmatch(hostname)
-        or not parsed.path.startswith("/")
+        or (parsed.path and not parsed.path.startswith("/"))
         or parsed.path.startswith("//")
         or parsed.query
         or parsed.fragment

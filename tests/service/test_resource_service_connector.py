@@ -135,11 +135,17 @@ def _install_connector_dependencies(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "tos_path"),
+    [("tos://bucket/a/b/c", "bucket/a/b/c"), ("tos://bucket", "bucket")],
+)
 async def test_add_resource_routes_tos_to_connector(
     monkeypatch,
     connector_config,
     ctx,
     service,
+    path,
+    tos_path,
 ):
     tracker = _task_tracker()
     connector_client = SimpleNamespace(
@@ -148,7 +154,7 @@ async def test_add_resource_routes_tos_to_connector(
     _install_connector_dependencies(monkeypatch, tracker, connector_client)
 
     result = await service.add_resource(
-        path="tos://bucket/a/b/c",
+        path=path,
         ctx=ctx,
         to="viking://resources/x/y",
     )
@@ -162,7 +168,7 @@ async def test_add_resource_routes_tos_to_connector(
     connector_client.submit_doc_add.assert_awaited_once_with(
         add_type="tos",
         api_key="secret",
-        tos_path="bucket/a/b/c",
+        tos_path=tos_path,
         to="viking://resources/x/y",
         include_child=True,
         param_config=None,
@@ -579,7 +585,6 @@ async def test_add_resource_rejects_invalid_multiple_tos_sources(
 @pytest.mark.parametrize(
     ("path", "args", "message"),
     [
-        ("tos://bucket-a", {}, "path"),
         ("tos://bucket-a/docs?version=1", {}, "path"),
         ("tos://Bucket-a/docs", {}, "path"),
         ("tos://bucket-a:443/docs", {}, "path"),
