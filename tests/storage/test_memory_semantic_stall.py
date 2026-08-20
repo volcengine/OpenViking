@@ -16,7 +16,7 @@ from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 
 
-def _make_msg(uri="viking://user/memories", context_type="memory", **kwargs):
+def _make_msg(uri="viking://user/usr1/memories", context_type="memory", **kwargs):
     """Build a minimal SemanticMsg for testing."""
     defaults = {
         "id": "test-msg-1",
@@ -39,6 +39,17 @@ def _make_msg(uri="viking://user/memories", context_type="memory", **kwargs):
 def _build_data(msg: SemanticMsg) -> dict:
     """Wrap a SemanticMsg into the dict format on_dequeue expects."""
     return msg.to_dict()
+
+
+@pytest.mark.asyncio
+async def test_root_semantic_message_is_acknowledged_without_processing():
+    processor = SemanticProcessor()
+    success = MagicMock()
+    processor.set_callbacks(success, MagicMock(), MagicMock())
+
+    await processor.on_dequeue(_build_data(_make_msg(uri="viking://", context_type="resource")))
+
+    success.assert_called_once_with()
 
 
 @pytest.mark.asyncio

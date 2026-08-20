@@ -117,11 +117,7 @@ async def test_session_context_enforces_hard_budget_without_mutating_archive_raw
 async def test_context_stops_at_newest_terminal_without_replaying_older_failed_raw(
     client,
 ):
-    """The read path stops at archive_002 and never replays archive_001 raw.
-
-    Phase 2 still treats the uncovered failed archive as replayable; only
-    ``get_session_context`` stops at the newest terminal.
-    """
+    """The read path stops at archive_002 and never replays archive_001 raw."""
     session = client(session_id="failed_and_wm_disabled_archive_test")
     await session.ensure_exists()
     await _write_archive(
@@ -260,7 +256,7 @@ async def test_later_coverage_absorbs_failed_raw_and_stable_deduplicates_root(
     assert [message["id"] for message in context["messages"]] == ["u1"]
 
 
-async def test_phase2_replays_failed_but_not_completed_without_overview(
+async def test_phase2_skips_failed_and_completed_archives_without_replay(
     client,
 ):
     session = client(session_id="phase2_failed_replay_test")
@@ -288,75 +284,57 @@ async def test_phase2_replays_failed_but_not_completed_without_overview(
         [_text_message("u3", "user", "current three")],
     )
 
-    assert [message.id for message in messages] == ["u1", "u3"]
-    assert start == "archive_001"
+    assert [message.id for message in messages] == ["u3"]
+    assert start == "archive_003"
     assert end == "archive_003"
-    assert failed == ["archive_001"]
+    assert failed == []
     assert completed_steps == {}
 
 
-async def test_phase2_never_replays_an_earlier_pending_archive(
-    client,
-):
-    session = client(session_id="phase2_pending_not_replayed_test")
-    await session.ensure_exists()
-    await _write_archive(session, 1, [_text_message("u1", "user", "pending one")])
-    await _write_archive(
-        session,
-        2,
-        [_text_message("u2", "user", "failed two")],
-        failed=True,
-    )
-    current_uri = await _write_archive(
-        session,
-        3,
-        [_text_message("u3", "user", "current three")],
-    )
-
-    messages, start, end, failed, _completed_steps = await session._prepare_phase2_archive_messages(
-        current_uri,
-        [_text_message("u3", "user", "current three")],
-    )
-
-    assert [message.id for message in messages] == ["u2", "u3"]
-    assert start == "archive_002"
-    assert end == "archive_003"
-    assert failed == ["archive_002"]
-
-
-async def test_phase2_waits_for_all_earlier_pending_archives(
+async def test_phase2_defers_live_predecessor_and_skips_missing_queue_work(
     client,
     monkeypatch,
 ):
-    session = client(session_id="phase2_wait_all_pending_test")
+    session = client(session_id="phase2_predecessor_queue_work_test")
     await session.ensure_exists()
-    first_uri = await _write_archive(
+    await _write_archive(
         session,
         1,
         [_text_message("u1", "user", "pending one")],
+        meta={
+            "phase1": {
+                "status": "ready",
+                "queue_message": {"task_id": "task-1"},
+            }
+        },
     )
-    await _write_archive(
+    second_uri = await _write_archive(
         session,
         2,
-        [_text_message("u2", "user", "completed two")],
-        overview="# Summary\n\ncomplete",
-        done={"starting_message_id": "u2", "ending_message_id": "u2"},
+        [_text_message("u2", "user", "pending two")],
+        meta={
+            "phase1": {
+                "status": "ready",
+                "queue_message": {"task_id": "task-2"},
+            }
+        },
     )
-    monkeypatch.setattr("openviking.session.session._ARCHIVE_WAIT_POLL_SECONDS", 0.01)
+    tracker = get_task_tracker()
+    live_work = {"task-1", "task-2"}
+    monkeypatch.setattr(tracker, "has_work", live_work.__contains__)
 
-    waiter = asyncio.create_task(session._wait_for_previous_archive_done(3))
-    await asyncio.sleep(0.03)
-    assert not waiter.done()
+    assert not await session._can_run_archive(3)
 
-    await session._viking_fs.write_file(
-        f"{first_uri}/.failed.json",
-        json.dumps({"error": "synthetic terminal failure"}),
-        ctx=session.ctx,
+    live_work.remove("task-2")
+    assert await session._can_run_archive(3)
+    failed = json.loads(
+        await session._viking_fs.read_file(f"{second_uri}/.failed.json", ctx=session.ctx)
     )
-    assert await asyncio.wait_for(waiter, timeout=0.5)
+    assert failed["stage"] == "queue_missing"
+    assert not await session._viking_fs.exists(f"{session.uri}/history/archive_001/.failed.json")
 
 
-async def test_missing_previous_archive_directory_does_not_block_phase2(
+async def test_missing_previous_archive_directory_allows_phase2(
     client,
 ):
     session = client(session_id="missing_previous_archive_test")
@@ -367,13 +345,10 @@ async def test_missing_previous_archive_directory_does_not_block_phase2(
         [_text_message("u2", "user", "archive two")],
     )
 
-    assert await asyncio.wait_for(
-        session._wait_for_previous_archive_done(2),
-        timeout=0.5,
-    )
+    assert await session._can_run_archive(2)
 
 
-async def test_phase2_roll_forward_writes_coverage_and_calls_existing_summary_once(
+async def test_phase2_processes_only_current_archive(
     client,
     monkeypatch,
 ):
@@ -398,7 +373,7 @@ async def test_phase2_roll_forward_writes_coverage_and_calls_existing_summary_on
     async def fake_summary(messages, latest_archive_overview=""):
         assert latest_archive_overview == ""
         seen_message_ids.append([message.id for message in messages])
-        return "# Session Summary\n\n## Current State\nBoth rounds are covered."
+        return "# Session Summary\n\n## Current State\nCurrent archive is covered."
 
     config = SimpleNamespace(
         memory=SimpleNamespace(
@@ -431,77 +406,16 @@ async def test_phase2_roll_forward_writes_coverage_and_calls_existing_summary_on
     done = json.loads(await session._viking_fs.read_file(f"{current_uri}/.done", ctx=session.ctx))
     task = await get_task_tracker().get(task_id)
     context = await session.get_session_context()
-    assert seen_message_ids == [["u1", "u2"]]
+    assert seen_message_ids == [["u2"]]
     assert task.result["agent_evolution_enabled"] is True
-    assert done["coverage_start_archive"] == "archive_001"
+    assert done["coverage_start_archive"] == "archive_002"
     assert done["coverage_end_archive"] == "archive_002"
-    assert done["covered_failed_archives"] == ["archive_001"]
-    assert context["latest_archive_overview"].endswith("Both rounds are covered.")
+    assert done["covered_failed_archives"] == []
+    assert context["latest_archive_overview"].endswith("Current archive is covered.")
     assert context["messages"] == []
 
 
-async def test_phase2_rolls_forward_done_archive_with_missing_required_overview(
-    client,
-    monkeypatch,
-):
-    session = client(session_id="invalid_done_roll_forward_test")
-    await session.ensure_exists()
-    await _write_archive(
-        session,
-        1,
-        [_text_message("u1", "user", "raw from invalid completed archive")],
-        done={
-            "starting_message_id": "u1",
-            "ending_message_id": "u1",
-            "working_memory_enabled": True,
-        },
-    )
-    current = _text_message("u2", "user", "current archive")
-    current_uri = await _write_archive(session, 2, [current])
-    seen_message_ids: list[list[str]] = []
-
-    async def fake_summary(messages, latest_archive_overview=""):
-        assert latest_archive_overview == ""
-        seen_message_ids.append([message.id for message in messages])
-        return "# Session Summary\n\n## Current State\nInvalid archive was recovered."
-
-    config = SimpleNamespace(
-        memory=SimpleNamespace(
-            extraction_enabled=False,
-            session_skill_extraction_enabled=False,
-        )
-    )
-    monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
-    monkeypatch.setattr(session, "_generate_archive_summary_async", fake_summary)
-
-    task_id = str(uuid4())
-    await get_task_tracker().create(
-        "session_commit",
-        resource_id=session.session_id,
-        account_id=session.ctx.account_id,
-        user_id=session.ctx.user.user_id,
-        task_id=task_id,
-    )
-    await session._run_memory_extraction(
-        task_id=task_id,
-        archive_uri=current_uri,
-        messages=[current],
-        usage_records=[],
-        first_message_id=current.id,
-        last_message_id=current.id,
-        memory_policy={"working_memory": {"enabled": True}},
-    )
-
-    done = json.loads(await session._viking_fs.read_file(f"{current_uri}/.done", ctx=session.ctx))
-    context = await session.get_session_context()
-    assert seen_message_ids == [["u1", "u2"]]
-    assert done["coverage_start_archive"] == "archive_001"
-    assert done["covered_failed_archives"] == ["archive_001"]
-    assert context["latest_archive_overview"].endswith("Invalid archive was recovered.")
-    assert context["messages"] == []
-
-
-async def test_roll_forward_does_not_repeat_completed_memory_step_messages(
+async def test_phase2_retry_does_not_repeat_completed_current_archive_steps(
     client,
     monkeypatch,
 ):
@@ -516,14 +430,19 @@ async def test_roll_forward_does_not_repeat_completed_memory_step_messages(
         meta={"completed_memory_steps": {"long_term": ["u1"]}},
     )
     current = _text_message("u2", "user", "extract this once")
-    current_uri = await _write_archive(session, 2, [current])
+    current_uri = await _write_archive(
+        session,
+        2,
+        [current],
+        meta={"completed_memory_steps": {"long_term": ["u2"]}},
+    )
     summary_inputs: list[list[str]] = []
     long_term_inputs: list[list[str]] = []
 
     async def fake_summary(messages, latest_archive_overview=""):
         assert latest_archive_overview == ""
         summary_inputs.append([message.id for message in messages])
-        return "# Session Summary\n\n## Current State\nBoth messages are summarized."
+        return "# Session Summary\n\n## Current State\nCurrent message is summarized."
 
     async def fake_long_term(*, messages, **_kwargs):
         long_term_inputs.append([message.id for message in messages])
@@ -567,9 +486,9 @@ async def test_roll_forward_does_not_repeat_completed_memory_step_messages(
     )
 
     done = json.loads(await session._viking_fs.read_file(f"{current_uri}/.done", ctx=session.ctx))
-    assert summary_inputs == [["u1", "u2"]]
-    assert long_term_inputs == [["u2"]]
-    assert done["completed_memory_steps"]["long_term"] == ["u1", "u2"]
+    assert summary_inputs == [["u2"]]
+    assert long_term_inputs == []
+    assert done["completed_memory_steps"]["long_term"] == ["u2"]
 
 
 async def test_completed_partial_turn_inserts_checkpoint_after_user_anchor(
@@ -1833,14 +1752,20 @@ async def test_phase1_enqueues_before_root_rewrite_and_publishes_ready_last(
     )
 
     result = await session.commit_async()
-
-    assert observations == [(["archive me"], "preparing")]
+    session.add_message("user", [TextPart("wait for predecessor")])
+    second = await session.commit_async()
+    assert observations == [
+        (["archive me"], "preparing"),
+        (["wait for predecessor"], "preparing"),
+    ]
     assert (await session._read_phase1_meta(result["archive_uri"]))["status"] == "ready"
+    assert (await session._read_phase1_meta(second["archive_uri"]))["status"] == "ready"
     assert await session._read_live_messages_strict() == []
 
 
 async def test_interrupted_phase1_recovers_when_root_rewrite_is_durable(
     client,
+    monkeypatch,
 ):
     session = client(session_id="phase1_reconcile_durable_root_test")
     await session.ensure_exists()
@@ -1864,6 +1789,7 @@ async def test_interrupted_phase1_recovers_when_root_rewrite_is_durable(
         min_raw_tail_steps=1,
     )
     await session._write_to_agfs_async(messages=[original[1]])
+    monkeypatch.setattr(get_task_tracker(), "has_work", lambda task_id: task_id == "synthetic")
 
     assert await session._ensure_phase1_ready(archive_uri)
     assert (await session._read_phase1_meta(archive_uri))["status"] == "ready"
@@ -1895,7 +1821,11 @@ async def test_interrupted_phase1_before_root_rewrite_becomes_failed(
     assert not await session._ensure_phase1_ready(archive_uri)
     states = await session._scan_archive_states()
     context = await session.get_session_context()
+    failed = json.loads(
+        await session._viking_fs.read_file(f"{archive_uri}/.failed.json", ctx=session.ctx)
+    )
     assert states[0].state == "failed"
+    assert failed["error"] == "Phase 1 has no QueueFS work to resume"
     assert [message["id"] for message in context["messages"]] == ["u1"]
 
 

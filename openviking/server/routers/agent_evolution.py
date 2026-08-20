@@ -4,6 +4,7 @@
 
 from fastapi import APIRouter, Depends, Query
 
+from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
@@ -31,6 +32,7 @@ async def list_experience_trajectories(
 ):
     """List trajectories produced by commits that read an Experience."""
     service = get_service()
+    experience_uri = validate_request_viking_uri(experience_uri, _ctx)
     result = await service.agent_evolution.list_trajectories_by_experience(
         experience_uri=experience_uri,
         ctx=_ctx,
@@ -51,6 +53,7 @@ async def get_experience_outcome_distribution(
 ):
     """Count application trajectories by outcome for an Experience."""
     service = get_service()
+    experience_uri = validate_request_viking_uri(experience_uri, _ctx)
     result = await service.agent_evolution.get_experience_outcome_distribution(
         experience_uri=experience_uri,
         ctx=_ctx,

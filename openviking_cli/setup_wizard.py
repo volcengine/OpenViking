@@ -48,6 +48,9 @@ _SKIP_VLM = object()
 # Sentinel for "user navigated back to the previous step" (← key / [0] Back).
 _GO_BACK = object()
 
+# Free-text equivalent of ← / [0] Back inside prompts that take typed input.
+_BACK_TOKEN = "!back"
+
 # rich ships with typer (a core dependency); degrade gracefully without it.
 try:
     from rich.console import Console as _RichConsole
@@ -316,8 +319,11 @@ def _masked_input(prompt: str) -> str:
     return value
 
 
-def _prompt_required_input(prompt: str, default: str | None = None, *, mask: bool = False) -> str:
-    """Prompt for a required free-text value. When ``mask`` is True, echo ``*`` per char."""
+def _prompt_required_input(
+    prompt: str, default: str | None = None, *, mask: bool = False, allow_back: bool = False
+) -> str | object:
+    """Prompt for a required free-text value. When ``mask`` is True, echo ``*``
+    per char. With ``allow_back``, typing ``!back`` returns ``_GO_BACK``."""
     reader = _masked_input if mask else input
     while True:
         try:
@@ -325,6 +331,8 @@ def _prompt_required_input(prompt: str, default: str | None = None, *, mask: boo
             raw = reader(prompt_text).strip()
         except (EOFError, OSError):
             return default or ""
+        if allow_back and raw == _BACK_TOKEN:
+            return _GO_BACK
         if not raw and default is not None:
             return default
         if raw:
@@ -332,9 +340,9 @@ def _prompt_required_input(prompt: str, default: str | None = None, *, mask: boo
         print(f"  {_red(prompt + ' is required')}")
 
 
-def _prompt_api_key(prompt: str = "API Key") -> str:
+def _prompt_api_key(prompt: str = "API Key", *, allow_back: bool = False) -> str | object:
     """Prompt for an API key with inline masked echo (no extra confirmation line)."""
-    return _prompt_required_input(prompt, mask=True)
+    return _prompt_required_input(prompt, mask=True, allow_back=allow_back)
 
 
 def _stdin_stdout_tty() -> bool:
@@ -355,7 +363,9 @@ _PROVIDER_ENV_KEYS: dict[str, list[str]] = {
 }
 
 
-def _prompt_api_key_with_env(env_vars: list[str] | None, prompt: str = "API Key") -> str:
+def _prompt_api_key_with_env(
+    env_vars: list[str] | None, prompt: str = "API Key", *, allow_back: bool = False
+) -> str | object:
     """Prompt for an API key, offering any matching environment variable first.
 
     Only engages the env-var shortcut on interactive TTYs so scripted or
@@ -366,17 +376,22 @@ def _prompt_api_key_with_env(env_vars: list[str] | None, prompt: str = "API Key"
             value = os.environ.get(var, "").strip()
             if value and _prompt_confirm(f"Found ${var} ({_mask_secret(value)}). Use it?"):
                 return value
-    return _prompt_api_key(prompt)
+    return _prompt_api_key(prompt, allow_back=allow_back)
 
 
-def _prompt_required_int(prompt: str, default: int | None = None) -> int | None:
-    """Prompt for a required integer value."""
+def _prompt_required_int(
+    prompt: str, default: int | None = None, *, allow_back: bool = False
+) -> int | None | object:
+    """Prompt for a required integer value. With ``allow_back``, typing
+    ``!back`` returns ``_GO_BACK``."""
     while True:
         try:
             prompt_text = f"  {prompt} [{default}]: " if default is not None else f"  {prompt}: "
             raw = input(prompt_text).strip()
         except (EOFError, OSError):
             return default
+        if allow_back and raw == _BACK_TOKEN:
+            return _GO_BACK
         if not raw:
             if default is not None:
                 return default
@@ -749,11 +764,131 @@ CLOUD_PROVIDERS: list[CloudProvider] = [
 ]
 
 
-def _get_cloud_provider_by_label(label: str) -> CloudProvider:
-    for provider in CLOUD_PROVIDERS:
-        if provider.label == label:
-            return provider
-    raise ValueError(f"Unknown cloud provider: {label}")
+@dataclass
+class AccessPlan:
+    label: str
+    api_base: str
+    default_embedding_model: str
+    default_embedding_dim: int
+    default_vlm_model: str
+    desc: str
+
+
+# VolcEngine Ark access tiers. The two subscription plans share the same
+# default models; pay-as-you-go keeps the versioned preview models.
+VOLCENGINE_PLANS: list[AccessPlan] = [
+    AccessPlan(
+        "Agent Plan",
+        "https://ark.cn-beijing.volces.com/api/plan/v3",
+        "doubao-embedding-vision",
+        1024,
+        "doubao-seed-2.0-lite",
+        "(subscription — agent workloads)",
+    ),
+    AccessPlan(
+        "Coding Plan",
+        "https://ark.cn-beijing.volces.com/api/coding/v3",
+        "doubao-embedding-vision",
+        1024,
+        "doubao-seed-2.0-lite",
+        "(subscription — coding assistants)",
+    ),
+    AccessPlan(
+        "Pay-as-you-go API",
+        "https://ark.cn-beijing.volces.com/api/v3",
+        "doubao-embedding-vision-251215",
+        1024,
+        "doubao-seed-2-0-code-preview-260215",
+        "(billed by API usage)",
+    ),
+]
+
+# BytePlus ModelArk access tiers.
+BYTEPLUS_PLANS: list[AccessPlan] = [
+    AccessPlan(
+        "ModelArk Coding Plan",
+        "https://ark.ap-southeast.bytepluses.com/api/coding/v3",
+        "skylark-embedding-vision",
+        1024,
+        "dola-seed-2.0-lite",
+        "(subscription — coding assistants)",
+    ),
+    AccessPlan(
+        "Pay-as-you-go API",
+        "https://ark.ap-southeast.bytepluses.com/api/v3",
+        "skylark-embedding-vision-251215",
+        1024,
+        "doubao-seed-2-0-code-preview-260215",
+        "(billed by API usage)",
+    ),
+]
+
+# Cloud providers with a plan submenu, keyed by CLOUD_PROVIDERS label; the
+# domain identifies the provider's own endpoints (both share the "volcengine"
+# provider string, so the domain is what tells them apart).
+_PLAN_MENUS: dict[str, tuple[str, list[AccessPlan]]] = {
+    "VolcEngine (火山引擎)": ("volces.com", VOLCENGINE_PLANS),
+    "BytePlus": ("bytepluses.com", BYTEPLUS_PLANS),
+}
+
+
+def _plan_seed_for(current: dict[str, Any], domain: str) -> str | None:
+    """api_base worth seeding a plan menu with — only an existing endpoint on
+    the same domain, never another provider's."""
+    api_base = str(current.get("api_base") or "")
+    if current.get("provider") == "volcengine" and domain in api_base:
+        return api_base
+    return None
+
+
+def _plan_index_for(plans: list[AccessPlan], api_base: str) -> int | None:
+    """0-based *plans* index matching *api_base*, or None."""
+    for i, plan in enumerate(plans):
+        if plan.api_base == api_base:
+            return i
+    return None
+
+
+def _select_access_plan(
+    provider_label: str,
+    plans: list[AccessPlan],
+    current_api_base: str | None = None,
+    *,
+    allow_back: bool = False,
+) -> AccessPlan | object:
+    """Plan submenu. ``_GO_BACK`` when the user navigated back.
+
+    *current_api_base* seeds the default; a current endpoint that matches no
+    plan (e.g. a proxy) is offered as an extra "keep" option that preserves
+    the endpoint with the pay-as-you-go default models.
+    """
+    options = [(p.label, p.desc) for p in plans]
+    current_idx = _plan_index_for(plans, current_api_base or "")
+    keep_custom = bool(current_api_base) and current_idx is None
+    if keep_custom:
+        options.append(("Custom endpoint", f"(keep current: {current_api_base})"))
+    if current_idx is not None:
+        default = current_idx + 1
+    elif keep_custom:
+        default = len(options)
+    else:
+        default = 1
+    choice = _prompt_choice(
+        f"{provider_label} access:", options, default=default, allow_back=allow_back
+    )
+    if choice == 0:
+        return _GO_BACK
+    if keep_custom and choice == len(options):
+        payg = plans[-1]
+        return AccessPlan(
+            "Custom endpoint",
+            str(current_api_base),
+            payg.default_embedding_model,
+            payg.default_embedding_dim,
+            payg.default_vlm_model,
+            "",
+        )
+    return plans[choice - 1]
 
 
 _WIZARD_VLM_OPTIONS: list[tuple[str, str]] = [
@@ -768,6 +903,7 @@ _WIZARD_VLM_OPTIONS: list[tuple[str, str]] = [
 ]
 
 _WIZARD_VLM_OLLAMA_CHOICE = 8  # index of "Local via Ollama" in _WIZARD_VLM_OPTIONS
+_WIZARD_VLM_CUSTOM_CHOICE = 7  # index of "Custom (OpenAI-compatible)" in _WIZARD_VLM_OPTIONS
 
 
 # ---------------------------------------------------------------------------
@@ -1074,12 +1210,14 @@ def _prompt_vlm_api_key(
     provider: str,
     reuse_key: tuple[str, str] | None,
     reuse_prompt: str = "Reuse the embedding API key for the VLM?",
-) -> str:
+    *,
+    allow_back: bool = False,
+) -> str | object:
     """Get a VLM API key: offer same-provider reuse first, then env vars, then prompt."""
     if reuse_key and reuse_key[0] == provider and reuse_key[1]:
         if _prompt_confirm(reuse_prompt):
             return reuse_key[1]
-    return _prompt_api_key_with_env(_PROVIDER_ENV_KEYS.get(provider))
+    return _prompt_api_key_with_env(_PROVIDER_ENV_KEYS.get(provider), allow_back=allow_back)
 
 
 def _vlm_option_index_for(current: dict[str, Any]) -> int:
@@ -1102,11 +1240,55 @@ def _vlm_option_index_for(current: dict[str, Any]) -> int:
     return 1
 
 
+def _prompt_custom_vlm(
+    current: dict[str, Any],
+    reuse_key: tuple[str, str] | None,
+    reuse_prompt: str,
+) -> dict[str, Any] | None | object:
+    """Custom OpenAI-compatible VLM setup.
+
+    Returns the VLM config dict or ``_GO_BACK`` when the user types ``!back``
+    at any prompt.
+    """
+    print(f"\n  {_bold('Custom OpenAI-compatible VLM configuration')}")
+    print(f"  {_dim(f'Type {_BACK_TOKEN} at any prompt to return to the provider menu.')}")
+    same_openai = current.get("provider") == "openai"
+    vlm_api_base = _prompt_required_input(
+        "API Base URL",
+        default=str(current["api_base"]) if same_openai and current.get("api_base") else None,
+        allow_back=True,
+    )
+    if vlm_api_base is _GO_BACK:
+        return _GO_BACK
+    vlm_api_key = _prompt_vlm_api_key("openai", reuse_key, reuse_prompt, allow_back=True)
+    if vlm_api_key is _GO_BACK:
+        return _GO_BACK
+    vlm_model = _prompt_required_input(
+        "Model",
+        default=str(current["model"]) if same_openai and current.get("model") else None,
+        allow_back=True,
+    )
+    if vlm_model is _GO_BACK:
+        return _GO_BACK
+
+    vlm_config: dict[str, Any] = {
+        "provider": "openai",
+        "model": vlm_model,
+        "api_base": vlm_api_base,
+        "temperature": 0.0,
+        "max_retries": 2,
+    }
+    if vlm_api_key:
+        vlm_config["api_key"] = vlm_api_key
+    return vlm_config
+
+
 def _prompt_cloud_vlm(
     allow_skip: bool = False,
     reuse_key: tuple[str, str] | None = None,
     allow_back: bool = False,
     current: dict[str, Any] | None = None,
+    plan_seed: str | None = None,
 ) -> tuple[dict[str, Any] | None | object, bool | None]:
     """VLM provider selection (cloud APIs, subscriptions, or local Ollama).
 
@@ -1117,7 +1299,8 @@ def _prompt_cloud_vlm(
     *reuse_key* is an optional ``(provider, api_key)`` from the embedding step,
     offered for reuse when the VLM provider matches. *current* (the existing
     VLM config, if any) seeds the menu position, model default, and offers to
-    keep the existing API key.
+    keep the existing API key. *plan_seed* is a VolcEngine api_base from the
+    embedding step, used to default the plan menu to the same tier.
     """
     current = current or {}
     options = list(_WIZARD_VLM_OPTIONS)
@@ -1137,6 +1320,7 @@ def _prompt_cloud_vlm(
             return str(current["model"])
         return fallback
 
+    cloud_plan: AccessPlan | None = None
     while True:
         vlm_mode = _prompt_choice(
             "VLM provider:", options, default=default_idx, allow_back=allow_back
@@ -1162,43 +1346,44 @@ def _prompt_cloud_vlm(
                 continue  # back to the provider menu
             return vlm_config, ollama_running
 
+        if vlm_mode == _WIZARD_VLM_CUSTOM_CHOICE:
+            custom = _prompt_custom_vlm(current, reuse_key, reuse_prompt)
+            if custom is _GO_BACK:
+                continue  # back to the provider menu
+            if custom is None:
+                return None, None
+            return custom, None
+
+        if vlm_mode <= len(CLOUD_PROVIDERS):
+            menu = _PLAN_MENUS.get(CLOUD_PROVIDERS[vlm_mode - 1].label)
+            if menu:  # pick plan / pay-as-you-go first
+                domain, plans = menu
+                seed = _plan_seed_for(current, domain) or (
+                    plan_seed if plan_seed and domain in plan_seed else None
+                )
+                selected = _select_access_plan(
+                    CLOUD_PROVIDERS[vlm_mode - 1].label, plans, seed, allow_back=True
+                )
+                if selected is _GO_BACK:
+                    continue  # back to the provider menu
+                cloud_plan = selected
+
         break
 
-    if vlm_mode == 1:
-        vlm_choice = _get_cloud_provider_by_label("VolcEngine (火山引擎)")
-        print(f"\n  {_bold('VolcEngine VLM configuration')}")
+    if vlm_mode in (1, 2, 3):  # VolcEngine / BytePlus / OpenAI — same order as CLOUD_PROVIDERS
+        vlm_choice = CLOUD_PROVIDERS[vlm_mode - 1]
+        print(f"\n  {_bold(f'{vlm_choice.label} VLM configuration')}")
         vlm_api_key = _prompt_vlm_api_key(vlm_choice.provider, reuse_key, reuse_prompt)
         if not vlm_api_key:
             print(f"  {_red('API key is required')}")
             return None, None
-        vlm_model = _prompt_required_input(
-            "Model", default=_default_model(vlm_choice.provider, vlm_choice.default_vlm_model)
+        default_vlm_model = (
+            cloud_plan.default_vlm_model if cloud_plan else vlm_choice.default_vlm_model
         )
-        vlm_api_base = vlm_choice.default_api_base
-        vlm_provider = vlm_choice.provider
-    elif vlm_mode == 2:
-        vlm_choice = _get_cloud_provider_by_label("BytePlus")
-        print(f"\n  {_bold('BytePlus VLM configuration')}")
-        vlm_api_key = _prompt_vlm_api_key(vlm_choice.provider, reuse_key, reuse_prompt)
-        if not vlm_api_key:
-            print(f"  {_red('API key is required')}")
-            return None, None
         vlm_model = _prompt_required_input(
-            "Model", default=_default_model(vlm_choice.provider, vlm_choice.default_vlm_model)
+            "Model", default=_default_model(vlm_choice.provider, default_vlm_model)
         )
-        vlm_api_base = vlm_choice.default_api_base
-        vlm_provider = vlm_choice.provider
-    elif vlm_mode == 3:
-        vlm_choice = _get_cloud_provider_by_label("OpenAI")
-        print(f"\n  {_bold('OpenAI VLM configuration')}")
-        vlm_api_key = _prompt_vlm_api_key(vlm_choice.provider, reuse_key, reuse_prompt)
-        if not vlm_api_key:
-            print(f"  {_red('API key is required')}")
-            return None, None
-        vlm_model = _prompt_required_input(
-            "Model", default=_default_model(vlm_choice.provider, vlm_choice.default_vlm_model)
-        )
-        vlm_api_base = vlm_choice.default_api_base
+        vlm_api_base = cloud_plan.api_base if cloud_plan else vlm_choice.default_api_base
         vlm_provider = vlm_choice.provider
     elif vlm_mode == 4:
         _ensure_codex_auth()
@@ -1231,19 +1416,6 @@ def _prompt_cloud_vlm(
         )
         vlm_api_base = _DEFAULT_GLM_BASE_URL
         vlm_provider = "glm"
-    else:
-        print(f"\n  {_bold('Custom OpenAI-compatible VLM configuration')}")
-        same_openai = current.get("provider") == "openai"
-        vlm_api_base = _prompt_required_input(
-            "API Base URL",
-            default=str(current["api_base"]) if same_openai and current.get("api_base") else None,
-        )
-        vlm_api_key = _prompt_vlm_api_key("openai", reuse_key, reuse_prompt)
-        vlm_model = _prompt_required_input(
-            "Model",
-            default=str(current["model"]) if same_openai and current.get("model") else None,
-        )
-        vlm_provider = "openai"
 
     vlm_config: dict[str, Any] = {
         "provider": vlm_provider,
@@ -1264,6 +1436,13 @@ def _cloud_provider_index_for(section: dict[str, Any]) -> int:
     for i, p in enumerate(CLOUD_PROVIDERS, 1):
         if p.provider == provider and p.default_api_base == api_base:
             return i
+    # Same provider + same endpoint domain — covers plan endpoints, which
+    # never equal default_api_base (VolcEngine and BytePlus share the
+    # "volcengine" provider string, so the domain is the disambiguator).
+    for i, p in enumerate(CLOUD_PROVIDERS, 1):
+        menu = _PLAN_MENUS.get(p.label)
+        if p.provider == provider and menu and menu[0] in api_base:
+            return i
     for i, p in enumerate(CLOUD_PROVIDERS, 1):
         if p.provider == provider:
             return i
@@ -1283,21 +1462,45 @@ def _prompt_cloud_embedding(
     """
     current = current or {}
     provider_options = [(p.label, "") for p in CLOUD_PROVIDERS]
-    provider_options.append(("Other (manual)", ""))
+    provider_options.append(("Custom / manual", "(OpenAI-compatible endpoint, or edit ov.conf)"))
     default_idx = _cloud_provider_index_for(current) if current else 1
-    choice = _prompt_choice(
-        "Embedding provider:", provider_options, default=default_idx, allow_back=allow_back
-    )
 
-    if choice == 0:
-        return _GO_BACK
+    provider: CloudProvider | None = None
+    plan: AccessPlan | None = None
+    while True:
+        choice = _prompt_choice(
+            "Embedding provider:", provider_options, default=default_idx, allow_back=allow_back
+        )
 
-    if choice > len(CLOUD_PROVIDERS):
-        _wizard_custom()
-        return _CUSTOM_SETUP
+        if choice == 0:
+            return _GO_BACK
 
-    provider = CLOUD_PROVIDERS[choice - 1]
+        if choice > len(CLOUD_PROVIDERS):
+            custom = _prompt_custom_embedding(current)
+            if custom is _GO_BACK:
+                continue  # back to the provider menu
+            return custom
+
+        provider = CLOUD_PROVIDERS[choice - 1]
+        menu = _PLAN_MENUS.get(provider.label)
+        if menu:
+            domain, plans = menu
+            selected = _select_access_plan(
+                provider.label, plans, _plan_seed_for(current, domain), allow_back=True
+            )
+            if selected is _GO_BACK:
+                continue  # back to the provider menu
+            plan = selected
+        break
+
+    assert provider is not None
     same_provider = bool(current) and current.get("provider") == provider.provider
+
+    api_base = plan.api_base if plan else provider.default_api_base
+    default_embedding_model = (
+        plan.default_embedding_model if plan else provider.default_embedding_model
+    )
+    default_embedding_dim = plan.default_embedding_dim if plan else provider.default_embedding_dim
 
     print(f"\n  {_bold('Embedding configuration')}")
     embedding_api_key = ""
@@ -1312,9 +1515,7 @@ def _prompt_cloud_embedding(
         return None
 
     default_model = (
-        str(current["model"])
-        if same_provider and current.get("model")
-        else provider.default_embedding_model
+        str(current["model"]) if same_provider and current.get("model") else default_embedding_model
     )
     embedding_model = _prompt_required_input("Model", default=default_model)
     if (
@@ -1324,11 +1525,11 @@ def _prompt_cloud_embedding(
     ):
         embedding_dim = current["dimension"]
         print(f"  {_dim(f'Dimension: {embedding_dim} (kept from current config)')}")
-    elif embedding_model == provider.default_embedding_model:
-        embedding_dim = provider.default_embedding_dim
+    elif embedding_model == default_embedding_model:
+        embedding_dim = default_embedding_dim
         print(f"  {_dim(f'Dimension: {embedding_dim} (auto-filled for {embedding_model})')}")
     else:
-        embedding_dim = _prompt_required_int("Dimension", default=provider.default_embedding_dim)
+        embedding_dim = _prompt_required_int("Dimension", default=default_embedding_dim)
         if embedding_dim is None:
             print(f"  {_red('Dimension is required')}")
             return None
@@ -1337,12 +1538,80 @@ def _prompt_cloud_embedding(
         "provider": provider.provider,
         "model": embedding_model,
         "api_key": embedding_api_key,
-        "api_base": (
-            str(current["api_base"])
-            if same_provider and current.get("api_base")
-            else provider.default_api_base
-        ),
+        "api_base": api_base,
         "dimension": embedding_dim,
+    }
+
+
+def _prompt_custom_embedding(current: dict[str, Any]) -> dict[str, Any] | None | object:
+    """Custom embedding: interactive OpenAI-compatible prompts or manual editing.
+
+    Returns the dense-embedding config dict, ``None`` on cancel,
+    ``_CUSTOM_SETUP`` when the user chose to edit ov.conf directly, or
+    ``_GO_BACK`` to return to the provider menu.
+    """
+    choice = _prompt_choice(
+        "Custom embedding setup:",
+        [
+            ("Interactive (OpenAI-compatible)", "(enter API base URL, key, model, dimension)"),
+            ("Edit ov.conf manually", "(opens $EDITOR with the example config)"),
+        ],
+        default=1,
+        allow_back=True,
+    )
+    if choice == 0:
+        return _GO_BACK
+    if choice == 2:
+        _wizard_custom()
+        return _CUSTOM_SETUP
+
+    same_openai = current.get("provider") == "openai"
+
+    def _current_value(key: str) -> str | None:
+        return str(current[key]) if same_openai and current.get(key) else None
+
+    print(f"\n  {_bold('Custom OpenAI-compatible embedding configuration')}")
+    print(f"  {_dim(f'Type {_BACK_TOKEN} at any prompt to return to the provider menu.')}")
+    api_base = _prompt_required_input(
+        "API Base URL", default=_current_value("api_base"), allow_back=True
+    )
+    if api_base is _GO_BACK:
+        return _GO_BACK
+
+    api_key: str | object = ""
+    if _current_value("api_key"):
+        masked = _mask_secret(str(current["api_key"]))
+        if _prompt_confirm(f"Keep the existing API key ({masked})?"):
+            api_key = str(current["api_key"])
+    if not api_key:
+        api_key = _prompt_api_key_with_env(_PROVIDER_ENV_KEYS.get("openai"), allow_back=True)
+        if api_key is _GO_BACK:
+            return _GO_BACK
+    if not api_key:
+        print(f"  {_red('API key is required')}")
+        return None
+
+    model = _prompt_required_input("Model", default=_current_value("model"), allow_back=True)
+    if model is _GO_BACK:
+        return _GO_BACK
+    current_dim = current.get("dimension") if same_openai else None
+    dimension = _prompt_required_int(
+        "Dimension",
+        default=current_dim if isinstance(current_dim, int) else None,
+        allow_back=True,
+    )
+    if dimension is _GO_BACK:
+        return _GO_BACK
+    if dimension is None:
+        print(f"  {_red('Dimension is required')}")
+        return None
+
+    return {
+        "provider": "openai",
+        "model": model,
+        "api_key": api_key,
+        "api_base": api_base,
+        "dimension": dimension,
     }
 
 
@@ -1530,8 +1799,11 @@ def _wizard_two_step() -> tuple[dict[str, Any] | None | object, bool | None]:
         reuse_key = None
         if isinstance(dense, dict) and dense.get("api_key"):
             reuse_key = (dense["provider"], dense["api_key"])
+        plan_seed = None
+        if dense.get("provider") == "volcengine" and dense.get("api_base"):
+            plan_seed = str(dense["api_base"])
         vlm_config, vlm_ollama = _prompt_cloud_vlm(
-            allow_skip=True, reuse_key=reuse_key, allow_back=True
+            allow_skip=True, reuse_key=reuse_key, allow_back=True, plan_seed=plan_seed
         )
         if vlm_config is _GO_BACK:
             continue  # back to Step 1
@@ -1880,6 +2152,10 @@ def _summarize_model(section: dict[str, Any]) -> str:
     provider = section.get("provider", "?")
     model = section.get("model", "?")
     text = f"{provider} · {model}"
+    api_base = str(section.get("api_base") or "")
+    if api_base:
+        # The endpoint distinguishes e.g. VolcEngine plans from pay-as-you-go.
+        text += f" @ {api_base.removeprefix('https://').removeprefix('http://')}"
     if section.get("dimension"):
         text += f" ({section['dimension']}d)"
     return text

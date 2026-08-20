@@ -29,7 +29,6 @@ def test_operation_telemetry_summary_includes_memory_extract_breakdown():
     telemetry.set("memory.extract.stage.create_memory.duration_ms", 56.1)
     telemetry.set("memory.extract.stage.merge_existing.duration_ms", 22.7)
     telemetry.set("memory.extract.stage.delete_existing.duration_ms", 0.0)
-    telemetry.set("memory.extract.stage.create_relations.duration_ms", 18.2)
     telemetry.set("memory.extract.stage.flush_semantic.duration_ms", 9.0)
 
     summary = telemetry.finish().summary
@@ -57,7 +56,6 @@ def test_operation_telemetry_summary_includes_memory_extract_breakdown():
             "dedup_ms": 215.6,
             "create_memory_ms": 56.1,
             "merge_existing_ms": 22.7,
-            "create_relations_ms": 18.2,
             "flush_semantic_ms": 9.0,
         },
     }

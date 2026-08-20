@@ -6,9 +6,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Union
 
 from openviking.core.namespace import (
-    NamespaceShapeError,
     canonical_user_root,
-    canonicalize_uri,
     is_hidden_by_actor_peer_view,
     uri_parts,
 )
@@ -16,7 +14,6 @@ from openviking.core.peer_id import normalize_peer_id
 from openviking.server.identity import RequestContext, Role
 from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.retrieve import ContextType
-from openviking_cli.utils.uri import VikingURI
 
 
 @dataclass(frozen=True)
@@ -32,7 +29,7 @@ def resolve_retrieval_targets(
     ctx: RequestContext,
 ) -> ResolvedRetrievalTargets:
     """Resolve search/find target directories."""
-    target_uris = _canonicalize_target_uris(target_uri, ctx)
+    target_uris = _dedupe_target_uris(target_uri)
 
     if not target_uris:
         return ResolvedRetrievalTargets(
@@ -86,21 +83,14 @@ def default_target_directories(
     return [user_root, "viking://resources"]
 
 
-def _canonicalize_target_uris(
-    target_uri: Union[str, List[str]],
-    ctx: RequestContext,
-) -> List[str]:
+def _dedupe_target_uris(target_uri: Union[str, List[str]]) -> List[str]:
     target_uri_list = [target_uri] if isinstance(target_uri, str) else (target_uri or [])
     target_uris: List[str] = []
     for item in target_uri_list:
         if not item or item in {"/", "viking://"}:
             continue
-        try:
-            target_uri = canonicalize_uri(item, ctx)
-        except NamespaceShapeError as exc:
-            raise InvalidArgumentError(str(exc)) from exc
-        if target_uri not in target_uris:
-            target_uris.append(target_uri)
+        if item not in target_uris:
+            target_uris.append(item)
     return target_uris
 
 
@@ -213,13 +203,8 @@ def _dedupe(items: List[str]) -> List[str]:
 
 
 def _is_current_user_root(target_uri: str, ctx: RequestContext) -> bool:
-    normalized = VikingURI.normalize(target_uri).rstrip("/")
-    return normalized in {"viking://user", canonical_user_root(ctx).rstrip("/")}
+    return target_uri.rstrip("/") == canonical_user_root(ctx).rstrip("/")
 
 
 def _is_default_user_content_root(target_uri: str, ctx: RequestContext, segment: str) -> bool:
-    normalized = VikingURI.normalize(target_uri).rstrip("/")
-    return normalized in {
-        f"viking://user/{segment}",
-        f"{canonical_user_root(ctx).rstrip('/')}/{segment}",
-    }
+    return target_uri.rstrip("/") == f"{canonical_user_root(ctx).rstrip('/')}/{segment}"

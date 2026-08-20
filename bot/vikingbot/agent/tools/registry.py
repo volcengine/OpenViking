@@ -1,10 +1,13 @@
 """Tool registry for dynamic tool management."""
 
+import json
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from loguru import logger
 
+from vikingbot.agent.remote_skills import SkillRuntimeError
 from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.config.schema import SessionKey
 from vikingbot.hooks import HookContext
@@ -12,6 +15,15 @@ from vikingbot.hooks.manager import hook_manager
 from vikingbot.integrations.langfuse import LangfuseClient
 from vikingbot.sandbox.manager import SandboxManager
 from vikingbot.utils.tracing import get_current_response_id
+
+
+@dataclass(frozen=True)
+class ToolExecutionResult:
+    """Tool result plus request-scoped Skill resolution metadata."""
+
+    result: Any
+    effective_params: dict[str, Any]
+    skill_uris: tuple[str, ...] = ()
 
 
 class ToolRegistry:
@@ -105,6 +117,7 @@ class ToolRegistry:
         self,
         ov_tools_enable: bool = True,
         disabled_tools: list[str] | None = None,
+        skill_runtime: Any | None = None,
     ) -> list[dict[str, Any]]:
         """
         Get all tool definitions in OpenAI format.
@@ -132,9 +145,18 @@ class ToolRegistry:
         if disabled_tools:
             disabled = set(disabled_tools)
             tools = [tool for tool in tools if tool.name not in disabled]
-        return [tool.to_schema() for tool in tools]
+        definitions: list[dict[str, Any]] = []
+        for tool in tools:
+            definition = (
+                skill_runtime.prepare_tool_definition(tool)
+                if skill_runtime is not None
+                else tool.to_schema()
+            )
+            if definition is not None:
+                definitions.append(definition)
+        return definitions
 
-    async def execute(
+    async def execute_detailed(
         self,
         name: str,
         params: dict[str, Any],
@@ -147,7 +169,8 @@ class ToolRegistry:
         memory_user_ids: list[str] | None = None,
         openviking_connection: dict[str, Any] | None = None,
         channel_metadata: dict[str, Any] | None = None,
-    ) -> str:
+        skill_runtime: Any | None = None,
+    ) -> ToolExecutionResult:
         """
         Execute a tool by name with given parameters.
 
@@ -173,7 +196,9 @@ class ToolRegistry:
         """
         tool = self._tools.get(name)
         if not tool:
-            return f"Error: Tool '{name}' not found"
+            return ToolExecutionResult(
+                result=f"Error: Tool '{name}' not found", effective_params=dict(params)
+            )
 
         tool_context = ToolContext(
             session_key=session_key,
@@ -185,12 +210,15 @@ class ToolRegistry:
             memory_user_ids=memory_user_ids,
             openviking_connection=openviking_connection,
             channel_metadata=dict(channel_metadata or {}),
+            skill_runtime=skill_runtime,
         )
 
         # Langfuse tool call tracing - automatic for all tools
         tool_span = None
         start_time = time.time()
         result = None
+        effective_params = dict(params)
+        skill_uris: tuple[str, ...] = ()
         response_id = get_current_response_id()
         try:
             if self.langfuse.enabled:
@@ -202,14 +230,39 @@ class ToolRegistry:
                 )
                 tool_span = tool_ctx.__enter__()
 
-            errors = tool.validate_params(params)
+            validation_params = (
+                skill_runtime.tool_params_for_validation(params)
+                if skill_runtime is not None
+                else params
+            )
+            errors = tool.validate_params(validation_params)
             if errors:
                 result = f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors)
             else:
-                result = await tool.execute(tool_context, **params)
+                if skill_runtime is not None:
+                    prepared = await skill_runtime.prepare_tool_call(tool, params)
+                    effective_params = prepared.params
+                    skill_uris = prepared.skill_uris
+                    if effective_params != params:
+                        prepared_args = json.dumps(
+                            effective_params,
+                            ensure_ascii=False,
+                            default=str,
+                        )
+                        logger.info("[TOOL_PREPARED]: {}({})", name, prepared_args[:600])
+                result = await tool.execute(tool_context, **effective_params)
+                if skill_runtime is not None:
+                    skill_uris = skill_runtime.skill_uris_for_tool(
+                        name,
+                        effective_params,
+                        skill_uris,
+                    )
+        except SkillRuntimeError as e:
+            result = e
+            logger.warning("Remote Skill tool call rejected: tool={} error={}", name, e)
         except Exception as e:
             result = e
-            logger.exception("Tool call fail: ", e)
+            logger.exception("Tool call failed: {}", e)
         finally:
             # End Langfuse tool call tracing
             duration_ms = (time.time() - start_time) * 1000
@@ -245,14 +298,49 @@ class ToolRegistry:
                 openviking_connection=openviking_connection,
             ),
             tool_name=name,
-            params=params,
+            params=effective_params,
             result=result,
         )
         result = hook_result.get("result")
         if isinstance(result, Exception):
-            return f"Error executing {name}: {str(result)}"
-        else:
-            return result
+            result = f"Error executing {name}: {str(result)}"
+        return ToolExecutionResult(
+            result=result,
+            effective_params=effective_params,
+            skill_uris=skill_uris,
+        )
+
+    async def execute(
+        self,
+        name: str,
+        params: dict[str, Any],
+        session_key: SessionKey,
+        sandbox_manager: SandboxManager | None = None,
+        sender_id: str | None = None,
+        actor_peer_id: str | None = None,
+        memory_peer_ids: list[str] | None = None,
+        memory_owner_user_ids: list[str] | None = None,
+        memory_user_ids: list[str] | None = None,
+        openviking_connection: dict[str, Any] | None = None,
+        channel_metadata: dict[str, Any] | None = None,
+        skill_runtime: Any | None = None,
+    ) -> str:
+        """Execute a tool and return the legacy string result."""
+        outcome = await self.execute_detailed(
+            name,
+            params,
+            session_key,
+            sandbox_manager=sandbox_manager,
+            sender_id=sender_id,
+            actor_peer_id=actor_peer_id,
+            memory_peer_ids=memory_peer_ids,
+            memory_owner_user_ids=memory_owner_user_ids,
+            memory_user_ids=memory_user_ids,
+            openviking_connection=openviking_connection,
+            channel_metadata=channel_metadata,
+            skill_runtime=skill_runtime,
+        )
+        return outcome.result
 
     @property
     def tool_names(self) -> list[str]:

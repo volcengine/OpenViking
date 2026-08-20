@@ -129,7 +129,7 @@ async function main() {
       state = captured.state;
       const shouldCommit = eventName !== "stop" || state.capturedSinceCommit >= cfg.commitTurnThreshold;
       if (shouldCommit) {
-        const result = await commitAgentSession(fetchJSON, sessionId);
+        const result = await commitAgentSession(fetchJSON, sessionId, log);
         if (result.ok) state.capturedSinceCommit = 0;
       }
       await writeHookState(CLIENT_ID, nativeSessionId, state);

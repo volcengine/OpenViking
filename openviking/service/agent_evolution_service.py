@@ -8,7 +8,6 @@ import asyncio
 from datetime import date, datetime, time, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Optional
 
-from openviking.core.namespace import canonicalize_uri
 from openviking.server.identity import RequestContext
 from openviking.session.memory.experience_lineage import (
     TRAJECTORY_OUTCOMES,
@@ -130,10 +129,7 @@ class AgentEvolutionService:
         if self._vikingdb is None:
             raise NotInitializedError("VikingDB")
 
-        trajectory_root = canonicalize_uri(
-            f"viking://user/{ctx.user.user_id}/memories/trajectories",
-            ctx,
-        )
+        trajectory_root = f"viking://user/{ctx.user.user_id}/memories/trajectories"
         return canonical_uri, trajectory_root, self._vikingdb
 
     async def list_trajectories_by_experience(

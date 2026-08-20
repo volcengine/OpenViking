@@ -86,6 +86,7 @@ HTTPS 配置、部署模板和完整授权流程详见 [OAuth 2.1 指南](../gui
 
 ## 参见
 
+- [集成能力参考](./16-capability-reference.md)
 - [MCP 集成指南](../guides/06-mcp-integration.md) — 工具参数、渐进式上传、`OPENVIKING_PUBLIC_BASE_URL`
 - [OAuth 2.1 指南](../guides/11-oauth.md) — 用于 Claude Desktop、Claude.ai、Cursor
 - [MCP 规范](https://modelcontextprotocol.io/)

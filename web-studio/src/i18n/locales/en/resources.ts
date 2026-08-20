@@ -100,6 +100,16 @@ const resources = {
     'targetUri.hint':
       'Choose where to store this resource. Defaults to viking://resources/.',
     'targetUri.browse': 'Browse',
+    destination: {
+      parent: 'Parent Directory',
+      exact: 'Exact Location',
+      parentHint:
+        'The resource name is derived from its source and stored under this parent directory.',
+      exactHint:
+        'Writes the resource to this exact URI. TOS imports require this mode.',
+      tosHint:
+        'TOS imports must use an exact target URI because the server does not derive a resource name.',
+    },
     advancedOptions: 'Advanced Options',
     upload: 'Upload File',
     'upload.processing': 'File uploaded, processing...',
@@ -128,14 +138,142 @@ const resources = {
       remote: 'Remote URL',
     },
     remoteUrl: 'Remote URL',
-    'remoteUrl.placeholder': 'https://github.com/org/repo',
+    'remoteUrl.placeholder': 'Paste a remote resource address',
     'remoteUrl.hint':
       'HTTP(S) URL, Git repository, or other remote resource address.',
+    sourceKind: {
+      feishu: 'Feishu / Lark',
+      feishuHint:
+        'Supports documents, wiki pages, spreadsheets, and bitable links.',
+      git: 'Git Repository',
+      gitHint:
+        'Supports public or private Git repositories with an optional branch or commit.',
+      remoteFile: 'Remote File',
+      remoteFileHint: 'The remote file will be downloaded and parsed.',
+      tos: 'TOS',
+      tosHint: 'Imports a TOS path through the configured Connector.',
+      webFeed: 'Site / Feed',
+      webFeedHint: 'Imports content from a Sitemap, RSS, or Atom feed.',
+      webPage: 'Web Page',
+      webPageHint:
+        'Supports a single page or recursive crawling through same-host links.',
+    },
+    sourcePicker: {
+      title: 'Supported Remote Resource Types',
+      hint: 'Every listed type has a server-side import path. Choose one to configure its parameters, or keep auto detection.',
+      feishu: 'Feishu / Lark',
+      feishuHint: 'Documents, wiki pages, spreadsheets, and bitables',
+      feishuExample: 'https://example.feishu.cn/docx/...',
+      git: 'Git Repository',
+      gitHint: 'Public or private repositories with a branch or commit',
+      gitExample: 'https://github.com/org/repo',
+      webPage: 'Web Page / Site',
+      webPageHint: 'Single pages, crawling, Sitemap, RSS, and Atom',
+      webPageExample: 'https://example.com/docs',
+      remoteFile: 'Remote File',
+      remoteFileHint: 'PDF, Office, Markdown, media files, and more',
+      remoteFileExample: 'https://example.com/file.pdf',
+      tos: 'TOS',
+      tosHint: 'Requires the TOS Connector to be enabled and allowed',
+      tosExample: 'tos://bucket/path',
+    },
+    configurationGuide: {
+      title: 'How do I configure this?',
+      documentation: 'Open the server configuration guide',
+    },
+    feishu: {
+      auth: {
+        title: 'Access Method',
+        hint: 'Choose the identity OpenViking uses to access this resource.',
+        app: 'Server App Credentials',
+        appHint:
+          'Uses FEISHU_APP_ID and FEISHU_APP_SECRET configured on the server.',
+        user: 'User Authorization',
+        userHint:
+          "Uses the current user's Feishu access token for private documents.",
+      },
+      accessToken: 'Access Token',
+      'accessToken.placeholder': 'u-...',
+      'accessToken.hint':
+        'The token is used only for this import and is not stored.',
+      refreshToken: 'Refresh Token',
+      'refreshToken.placeholder': 'r-...',
+      'refreshToken.hint':
+        'Scheduled sync requires a refresh token and the same issuing Feishu app configured on the server.',
+      configuration: {
+        credentials:
+          'Get the App ID and App Secret from the Feishu Open Platform.',
+        server:
+          'Set FEISHU_APP_ID and FEISHU_APP_SECRET on the server, or configure feishu.app_id and feishu.app_secret in ov.conf.',
+        restart:
+          'Restart OpenViking so the configuration takes effect; there is no separate enable switch.',
+      },
+    },
+    git: {
+      refType: 'Revision',
+      branch: 'Branch',
+      'branch.placeholder': 'main',
+      commit: 'Commit',
+      'commit.placeholder': 'Full or short commit SHA',
+      auth: {
+        title: 'Repository Access',
+        public: 'Public Repository',
+        publicHint: 'Access the repository without credentials.',
+        token: 'HTTPS Token',
+        tokenHint: 'Uses HTTPS Basic Auth for a private repository.',
+        httpsOnly: 'Token authentication only supports HTTPS Git URLs.',
+      },
+      username: 'Username',
+      'username.placeholder': 'oauth2',
+      token: 'Access Token',
+      'token.placeholder': 'Personal Access Token',
+      'token.hint':
+        'Credentials are sent in the request body and stored in private Watch authentication state when scheduled sync is enabled.',
+    },
+    web: {
+      mode: {
+        title: 'Import Mode',
+        auto: 'Auto Detect',
+        autoHint: 'Selects a page or feed based on the URL.',
+        single: 'Single Page',
+        singleHint: 'Imports only this page without following links.',
+        recursive: 'Recursive Crawl',
+        recursiveHint: 'Follows same-host links up to the selected depth.',
+        site: 'Site / Feed',
+        siteHint: 'Discovers a Sitemap, RSS, or Atom feed.',
+      },
+      depth: 'Crawl Depth',
+      maxPages: 'Maximum Pages',
+      includePaths: 'Included Path Prefixes',
+      'includePaths.placeholder': '/docs, /en/',
+      excludePaths: 'Excluded Path Prefixes',
+      'excludePaths.placeholder': '/changelog, /archive',
+      allowExternalLinks: 'Allow external links',
+      skipDownloadLinks: 'Skip download links found on pages',
+    },
     watch: {
       enabled: 'Scheduled Sync',
       hint: 'Periodically check this remote resource and import its latest content.',
+      unsupported: 'Scheduled sync is not available for TOS imports.',
+      requiredUnsupported:
+        'This resource type cannot create a scheduled sync. Choose another type.',
       interval: 'Sync interval (minutes)',
       intervalHint: 'For example, 60 for hourly or 1440 for daily.',
+    },
+    tosOptions: {
+      title: 'TOS Import',
+      hint: 'Import an object or prefix from a TOS URI.',
+      limitations:
+        'The TOS Connector must be enabled and allowed by the server. Imports use an exact destination and do not support scheduled sync or parse-layout options.',
+      configuration: {
+        service: 'Deploy a Connector service that handles TOS imports.',
+        endpoints:
+          'Set connector.enable=true in ov.conf. Set connector.connector to the full doc/add endpoint URL and connector.tracker to the full task/info endpoint URL.',
+        allow: 'Add tos to connector.allowed_add_types.',
+        restart: 'Restart OpenViking, then import with tos://bucket/path.',
+        noDocumentation:
+          'Your Connector deployment provides the service endpoints; Studio does not fill them automatically. A dedicated TOS Connector deployment guide is not currently available.',
+      },
     },
     strict: 'Strict Mode',
     'strict.hint':
@@ -146,6 +284,26 @@ const resources = {
     createParent: 'Auto-create Parent Folder',
     'createParent.hint':
       'When enabled, automatically creates the parent directory if it does not exist.',
+    preserveStructure: 'Preserve directory structure',
+    'preserveStructure.serverDefault': 'Use server default',
+    'preserveStructure.preserve': 'Preserve structure',
+    'preserveStructure.flatten': 'Flatten files',
+    parseMode: 'Parse Layout',
+    'parseMode.default': 'Default splitting',
+    'parseMode.noSplit': 'One Markdown body per document',
+    processingMode: 'Processing Mode',
+    'processingMode.semantic': 'Semantic understanding and vectors',
+    'processingMode.vectorsOnly': 'Vectors only',
+    waitForProcessing: 'Wait for processing to finish',
+    timeout: 'Wait Timeout (seconds)',
+    'timeout.placeholder': 'No limit when empty',
+    sourceName: 'Resource Name',
+    'sourceName.placeholder': 'Optional override for the detected source name',
+    tags: 'Retrieval Tags',
+    'tags.placeholder': 'team=docs, env=production',
+    tagMode: 'Tag Write Mode',
+    'tagMode.replace': 'Replace',
+    'tagMode.append': 'Append',
     reason: 'Reason',
     'reason.placeholder': 'Why are you adding this resource?',
     instruction: 'Instruction',

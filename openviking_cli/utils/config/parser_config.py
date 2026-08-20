@@ -148,18 +148,16 @@ class PDFConfig(ParserConfig):
     Attributes:
         strategy: Parsing strategy ("local" | "mineru" | "auto")
         mineru_endpoint: MinerU API endpoint URL
-        mineru_api_key: MinerU API authentication key
         mineru_timeout: MinerU request timeout in seconds
-        mineru_params: Additional MinerU API parameters
+        mineru_bodys: Additional MinerU API multipart form fields
     """
 
     strategy: str = "auto"  # "local" | "mineru" | "auto"
 
     # MinerU API configuration
     mineru_endpoint: Optional[str] = None  # API endpoint URL
-    mineru_api_key: Optional[str] = None  # API authentication key
     mineru_timeout: float = 300.0  # Request timeout in seconds (5 minutes)
-    mineru_params: Optional[dict] = None  # Additional API parameters
+    mineru_bodys: Optional[dict] = None  # Additional API multipart form fields
 
     # Heading detection configuration
     heading_detection: str = "auto"  # "bookmarks" | "font" | "auto" | "none"
@@ -674,6 +672,9 @@ class SemanticConfig:
     overview_batch_size: int = 50
     """Maximum number of file summaries per batch when splitting oversized prompts."""
 
+    sidecar_sample_size: int = 32
+    """Maximum direct-child summaries used in one generated directory sidecar."""
+
     abstract_max_chars: int = 256
     """Maximum characters for generated abstracts."""
 
@@ -688,6 +689,8 @@ class SemanticConfig:
     """Character overlap between adjacent memory chunks for context continuity."""
 
     def __post_init__(self):
+        if self.sidecar_sample_size <= 0:
+            raise ValueError("sidecar_sample_size must be positive")
         if self.memory_chunk_chars <= 0:
             raise ValueError("memory_chunk_chars must be positive")
         if self.memory_chunk_overlap < 0:

@@ -10,13 +10,12 @@ from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from openviking.core.namespace import (
-    canonicalize_uri,
     is_hidden_by_actor_peer_view,
     may_include_hidden_actor_peers,
     resolve_uri,
 )
 from openviking.core.path_variables import resolve_path_variables
-from openviking.core.uri_validation import validate_viking_uri
+from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
 from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.server.auth import (
@@ -108,16 +107,11 @@ class ReindexRequest(BaseModel):
     mode: str = "vectors_only"
     wait: bool = True
     dry_run: bool = False
+    tags: list[str] | None = None
+    tag_mode: str = "replace"
 
 
 router = APIRouter(prefix="/api/v1/content", tags=["content"])
-
-
-def _validate_reindex_uri(uri: str) -> str:
-    raw_uri = uri.strip() if isinstance(uri, str) else ""
-    if raw_uri.startswith("viking://"):
-        return raw_uri
-    return validate_viking_uri(raw_uri)
 
 
 def _authorize_reindex_uri(uri: str, ctx: RequestContext) -> str:
@@ -125,19 +119,18 @@ def _authorize_reindex_uri(uri: str, ctx: RequestContext) -> str:
     if ctx.role != Role.USER:
         return uri
 
-    canonical_uri = canonicalize_uri(uri, ctx)
-    target = resolve_uri(canonical_uri, ctx=ctx, require_canonical=True)
+    target = resolve_uri(uri)
     if (
         target.scope != "user"
         or target.owner_user_id != ctx.user.user_id
-        or is_hidden_by_actor_peer_view(canonical_uri, ctx)
-        or may_include_hidden_actor_peers(canonical_uri, ctx)
+        or is_hidden_by_actor_peer_view(uri, ctx)
+        or may_include_hidden_actor_peers(uri, ctx)
     ):
         raise PermissionDeniedError(
             "USER can only reindex their own user namespace.",
-            resource=canonical_uri,
+            resource=uri,
         )
-    return canonical_uri
+    return uri
 
 
 @router.get("/read")
@@ -150,7 +143,7 @@ async def read(
 ):
     """Read file content (L2)."""
     service = get_service()
-    uri = resolve_path_variables(uri)
+    uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
         if raw:
             result = await service.fs.read(uri, ctx=_ctx, offset=offset, limit=limit)
@@ -174,7 +167,7 @@ async def abstract(
 ):
     """Read L0 abstract."""
     service = get_service()
-    uri = resolve_path_variables(uri)
+    uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
         result = await service.fs.abstract(uri, ctx=_ctx)
     except AGFSNotFoundError:
@@ -194,7 +187,7 @@ async def overview(
 ):
     """Read L1 overview."""
     service = get_service()
-    uri = resolve_path_variables(uri)
+    uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
         result = await service.fs.overview(uri, ctx=_ctx)
     except AGFSNotFoundError:
@@ -214,7 +207,7 @@ async def download(
 ):
     """Download file as raw bytes (for images, binaries, etc.)."""
     service = get_service()
-    uri = resolve_path_variables(uri)
+    uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
         content = await service.fs.read_file_bytes(uri, ctx=_ctx)
     except AGFSNotFoundError:
@@ -248,7 +241,7 @@ async def write(
 ):
     """Write text content to a file (replace, append, or create) and refresh semantics/vectors."""
     service = get_service()
-    uri = resolve_path_variables(request.uri)
+    uri = validate_request_viking_uri(resolve_path_variables(request.uri), _ctx)
     execution = await run_operation(
         operation="content.write",
         telemetry=request.telemetry,
@@ -276,10 +269,12 @@ async def batch_write(
 ):
     """Apply preconditioned file writes and refresh their indexes as one request."""
     service = get_service()
-    root_uri = resolve_path_variables(request.root_uri)
+    root_uri = validate_request_viking_uri(resolve_path_variables(request.root_uri), _ctx)
     operations = [operation.model_dump(exclude_none=True) for operation in request.operations]
     for operation in operations:
-        operation["uri"] = resolve_path_variables(operation["uri"])
+        operation["uri"] = validate_request_viking_uri(
+            resolve_path_variables(operation["uri"]), _ctx
+        )
     execution = await run_operation(
         operation="content.batch_write",
         telemetry=request.telemetry,
@@ -305,7 +300,7 @@ async def set_tags(
 ):
     """Set explicit k=v retrieval tags metadata for a file or directory."""
     service = get_service()
-    uri = resolve_path_variables(request.uri)
+    uri = validate_request_viking_uri(resolve_path_variables(request.uri), _ctx)
     execution = await run_operation(
         operation="content.set_tags",
         telemetry=request.telemetry,
@@ -332,15 +327,20 @@ async def reindex(
     """Reindex semantic/vector artifacts for a URI-scoped maintenance target."""
     if body.dry_run and body.mode != "prune_orphans":
         raise InvalidArgumentError("dry_run is only supported for prune_orphans reindex mode.")
-    uri = resolve_path_variables(body.uri)
-    uri = _validate_reindex_uri(uri)
+    uri = validate_request_viking_uri(resolve_path_variables(body.uri), ctx)
     uri = _authorize_reindex_uri(uri, ctx)
     service = get_service()
+    reindex_kwargs = {
+        "uri": uri,
+        "mode": body.mode,
+        "wait": body.wait,
+        "dry_run": body.dry_run,
+        "ctx": ctx,
+    }
+    if body.tags is not None:
+        reindex_kwargs["tags"] = body.tags
+        reindex_kwargs["tag_mode"] = body.tag_mode
     result = await service.reindex(
-        uri=uri,
-        mode=body.mode,
-        wait=body.wait,
-        dry_run=body.dry_run,
-        ctx=ctx,
+        **reindex_kwargs,
     )
     return Response(status="ok", result=result)

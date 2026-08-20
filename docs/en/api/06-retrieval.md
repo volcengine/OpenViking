@@ -103,7 +103,6 @@ class MatchedContext:
     category: str                    # Category
     score: float                     # Relevance score (0-1)
     match_reason: str                # Why this matched
-    relations: List[RelatedContext]  # Related contexts
 ```
 
 #### 3. Usage Examples
@@ -336,7 +335,6 @@ openviking find "red poster style" --image ./poster.png --uri "viking://resource
                 "score": 0.12808319406977778,
                 "category": "",
                 "match_reason": "",
-                "relations": [],
                 "abstract": "This document is an API documentation reading plan that outlines the structure of subsequent API reference materials organized by functional module. Main sections or topics covered include resource management API, search API, file system operations, ses...",
                 "overview": null
             },
@@ -347,7 +345,6 @@ openviking find "red poster style" --image ./poster.png --uri "viking://resource
                 "score": 0.12054087276495282,
                 "category": "",
                 "match_reason": "",
-                "relations": [],
                 "abstract": "This directory contains structured API reference documentation for the OpenViking platform, compiling detailed HTTP endpoint specifications for core and extended platform capabilities. It covers functional modules including system health checks, semanti...",
                 "overview": null
             }
@@ -563,7 +560,6 @@ openviking search "similar poster" --image ./poster.png --uri "viking://resource
                 "score": 0.95,
                 "category": "",
                 "match_reason": "Context-aware match: OAuth login best practices",
-                "relations": [],
                 "abstract": "OAuth 2.0 best practices for login pages...",
                 "overview": "This guide covers OAuth 2.0 best practices including secure token handling, redirect URI validation, and state parameter usage..."
             }
@@ -1050,35 +1046,6 @@ curl -X GET "http://localhost:1933/api/v1/content/overview?uri=viking://resource
 
 # Step 3: Read full content for file result
 curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://resources/docs/auth.md" \
-    -H "X-API-Key: your-key"
-```
-
-### Get Related Resources
-
-**Python SDK**
-
-```python
-import openviking as ov
-
-client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-client.initialize()
-
-results = client.find("OAuth implementation")
-
-for ctx in results.resources:
-    print(f"Found: {ctx.uri}")
-
-    # Get related resources
-    relations = client.relations(ctx.uri)
-    for rel in relations:
-        print(f"  Related: {rel['uri']} - {rel['reason']}")
-```
-
-**HTTP API**
-
-```bash
-# Get relations for resource
-curl -X GET "http://localhost:1933/api/v1/relations?uri=viking://resources/docs/auth" \
     -H "X-API-Key: your-key"
 ```
 

@@ -5,6 +5,7 @@ import { defineConfig, type DefaultTheme } from 'vitepress'
 
 const docsRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const repo = process.env.GITHUB_REPOSITORY || 'volcengine/OpenViking'
+const githubRepositoryUrl = `https://github.com/${repo}?utm_source=docs&utm_medium=referral&utm_campaign=docs`
 const base = process.env.DOCS_BASE || '/'
 const withTrailingSlash = (url: string) => (url.endsWith('/') ? url : `${url}/`)
 const mainSiteBase = withTrailingSlash(process.env.OPENVIKING_SITE_BASE || 'https://www.openviking.ai/')
@@ -122,6 +123,7 @@ const gettingStartedSidebar = {
 const agentIntegrationSidebar = {
   en: {
     overview: 'Integration Overview',
+    topItems: [['16-capability-reference.md', 'Capability Reference']],
     groups: [
       {
         text: 'Developer Tools',
@@ -146,6 +148,7 @@ const agentIntegrationSidebar = {
         text: 'General Integration',
         items: [
           ['14-openviking-helper.md', 'OpenViking Helper'],
+          ['15-agent-plugins.md', 'Agent Plugins 1.0'],
           ['06-mcp-clients.md', 'MCP Clients'],
           ['09-log-ingestion.md', 'Local Log Import'],
           ['08-community-plugins.md', 'Community Integrations']
@@ -155,6 +158,7 @@ const agentIntegrationSidebar = {
   },
   zh: {
     overview: '集成概览',
+    topItems: [['16-capability-reference.md', '集成能力参考']],
     groups: [
       {
         text: '开发工具',
@@ -179,6 +183,7 @@ const agentIntegrationSidebar = {
         text: '通用接入',
         items: [
           ['14-openviking-helper.md', 'OpenViking Helper'],
+          ['15-agent-plugins.md', 'Agent Plugins 1.0'],
           ['06-mcp-clients.md', 'MCP 客户端'],
           ['09-log-ingestion.md', '本地日志导入'],
           ['08-community-plugins.md', '社区集成']
@@ -205,11 +210,8 @@ const apiReferenceSidebar = {
         ]
       },
       {
-        text: 'Retrieval & Relations',
-        items: [
-          ['06-retrieval.md', 'Retrieval'],
-          ['13-relations.md', 'Relations']
-        ]
+        text: 'Retrieval',
+        items: [['06-retrieval.md', 'Retrieval']]
       },
       {
         text: 'Data Lifecycle',
@@ -265,11 +267,8 @@ const apiReferenceSidebar = {
         ]
       },
       {
-        text: '检索与关系',
-        items: [
-          ['06-retrieval.md', '检索'],
-          ['13-relations.md', '关系']
-        ]
+        text: '检索',
+        items: [['06-retrieval.md', '检索']]
       },
       {
         text: '数据生命周期',
@@ -480,6 +479,7 @@ const guidesSidebar = {
 
 type StructuredSidebarCopy = {
   readonly overview: string
+  readonly topItems?: ReadonlyArray<readonly [string, string]>
   readonly groups: ReadonlyArray<{
     readonly text: string
     readonly items: ReadonlyArray<readonly [string, string]>
@@ -538,6 +538,7 @@ function structuredSidebarSection(
     collapsed,
     items: [
       configuredSidebarItem(locale, section, [overviewFile, copy.overview]),
+      ...(copy.topItems ?? []).map((item) => configuredSidebarItem(locale, section, item)),
       ...configuredSidebarGroups(locale, section, copy.groups)
     ]
   }
@@ -813,7 +814,7 @@ function buildLlmsTxt(siteConfig: any) {
     '',
     '> Open-source context database for AI Agents. OpenViking unifies memory, resources, and skills management for AI Agents through a file system paradigm.',
     '',
-    `- Source: https://github.com/${process.env.GITHUB_REPOSITORY || 'volcengine/OpenViking'}`,
+    `- Source: ${githubRepositoryUrl}`,
     '',
   ]
 
@@ -908,7 +909,7 @@ export default defineConfig({
     logo: '/ov-logo.png',
     logoLink: mainSiteBase,
     socialLinks: [
-      { icon: 'github', link: `https://github.com/${repo}` }
+      { icon: 'github', link: githubRepositoryUrl }
     ],
     footer: {
       message: 'Released under the Apache-2.0 License.',

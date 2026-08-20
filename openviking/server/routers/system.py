@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from openviking.core.path_variables import resolve_path_variables
-from openviking.core.uri_validation import validate_viking_uri
+from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.pyagfs.exceptions import AGFSInvalidOperationError, AGFSNotSupportedError
 from openviking.server.auth import get_request_context, require_role
 from openviking.server.dependencies import get_service
@@ -256,7 +256,7 @@ async def check_consistency(
 ):
     """Check filesystem/vector-index consistency for a URI subtree."""
     service = get_service()
-    uri = validate_viking_uri(request.uri)
+    uri = validate_request_viking_uri(resolve_path_variables(request.uri), ctx)
     result = await service.check_consistency(
         uri=uri,
         ctx=ctx,
@@ -271,7 +271,7 @@ async def backend_sync_status(
 ):
     """Return multi-write backend sync status for a Viking URI subtree."""
     service = get_service()
-    uri = validate_viking_uri(resolve_path_variables(request.uri))
+    uri = validate_request_viking_uri(resolve_path_variables(request.uri), ctx)
     result = await service.fs.system_sync_status(uri, ctx=ctx)
     return Response(status="ok", result=result)
 
@@ -283,7 +283,7 @@ async def backend_sync_retry(
 ):
     """Retry pending multi-write backend sync work for a Viking URI subtree."""
     service = get_service()
-    uri = validate_viking_uri(resolve_path_variables(request.uri))
+    uri = validate_request_viking_uri(resolve_path_variables(request.uri), ctx)
     result = await service.fs.system_sync_retry(uri, ctx=ctx)
     return Response(status="ok", result=result)
 
@@ -295,7 +295,7 @@ async def admin_sync_status(
 ):
     """Return multi-write backend sync status for one URI subtree through the admin API."""
     service = get_service()
-    uri = validate_viking_uri(resolve_path_variables(sync_path))
+    uri = validate_request_viking_uri(resolve_path_variables(sync_path), ctx)
     result = await service.fs.system_sync_status(uri, ctx=ctx)
     return Response(status="ok", result=result)
 
@@ -307,6 +307,6 @@ async def admin_sync_retry(
 ):
     """Retry pending multi-write backend sync work for one URI subtree through the admin API."""
     service = get_service()
-    uri = validate_viking_uri(resolve_path_variables(sync_path))
+    uri = validate_request_viking_uri(resolve_path_variables(sync_path), ctx)
     result = await service.fs.system_sync_retry(uri, ctx=ctx)
     return Response(status="ok", result=result)

@@ -65,10 +65,10 @@ results = client.find(
 | **cases** | `user/memories/cases/` | 用于训练和评估的任务案例 |
 | **trajectories** | `user/memories/trajectories/` | 可复用的任务执行轨迹 |
 | **experiences** | `user/memories/experiences/` | 从执行结果中提炼的可复用经验 |
-| **tools** | `user/memories/tools/` | 工具使用经验与最佳实践 |
-| **skills** | `user/memories/skills/` | 技能执行经验与工作流策略 |
 
 表中的 `user/...` 是当前用户短路径，服务端会将其解析为 `viking://user/{user_id}/...`。当记忆策略允许 Peer 记忆时，支持 Peer 的类型会写入 `viking://user/{user_id}/peers/{peer_id}/memories/...`。记忆类型可通过自定义模板扩展或调整。
+
+Schema 定义的 `memories/tools/` 和 `memories/skills/` 类型已禁用。它们与存放在 `viking://user/{user_id}/skills/{skill_name}/SKILL.md` 下的独立 Skill 不同，后者仍然保留并受支持。
 
 ### 使用
 
@@ -101,13 +101,15 @@ results = await client.find(
 ```
 viking://user/skills/{skill-name}/  # 默认存储路径
 ├── .abstract.md          # L0: 简短描述
-├── SKILL.md              # L1: 详细概览
-└── scripts               # L2: 完整定义
+├── .overview.md          # L1: 目录概览（生成后）
+├── SKILL.md              # L2: 技能定义
+└── scripts               # L2: 附加实现
 
 viking://agent/skills/{skill-name}/  # 通过 --uri 覆盖，公开共享（account 全局）
 ├── .abstract.md          # L0: 简短描述
-├── SKILL.md              # L1: 详细概览
-└── scripts               # L2: 完整定义
+├── .overview.md          # L1: 目录概览（生成后）
+├── SKILL.md              # L2: 技能定义
+└── scripts               # L2: 附加实现
 ```
 
 ### AgentDefinedContextType 子类型

@@ -270,7 +270,6 @@ This group appears on memory-extraction flows such as `session.commit`.
 | `summary.memory.extract.duration_ms` | Total duration of the memory-extraction flow |
 | `summary.memory.extract.candidates.total` | Total extracted candidates before final actions |
 | `summary.memory.extract.candidates.standard` | Standard memory candidates |
-| `summary.memory.extract.candidates.tool_skill` | Tool or skill candidates |
 | `summary.memory.extract.actions.created` | Number of newly created memories |
 | `summary.memory.extract.actions.merged` | Number of merges into existing memories |
 | `summary.memory.extract.actions.deleted` | Number of deleted old memories |
@@ -278,14 +277,11 @@ This group appears on memory-extraction flows such as `session.commit`.
 | `summary.memory.extract.stages.prepare_inputs_ms` | Time spent preparing extraction inputs |
 | `summary.memory.extract.stages.llm_extract_ms` | Time spent in the LLM extraction call |
 | `summary.memory.extract.stages.normalize_candidates_ms` | Time spent parsing and normalizing candidates |
-| `summary.memory.extract.stages.tool_skill_stats_ms` | Time spent aggregating tool or skill stats |
 | `summary.memory.extract.stages.profile_create_ms` | Time spent creating or updating profile memory |
-| `summary.memory.extract.stages.tool_skill_merge_ms` | Time spent merging tool or skill memories |
 | `summary.memory.extract.stages.dedup_ms` | Time spent deduplicating candidates |
 | `summary.memory.extract.stages.create_memory_ms` | Time spent creating new memories |
 | `summary.memory.extract.stages.merge_existing_ms` | Time spent merging into existing memories |
 | `summary.memory.extract.stages.delete_existing_ms` | Time spent deleting older memories |
-| `summary.memory.extract.stages.create_relations_ms` | Time spent creating used-URI relations |
 | `summary.memory.extract.stages.flush_semantic_ms` | Time spent flushing semantic queue work |
 
 ### `summary.search`

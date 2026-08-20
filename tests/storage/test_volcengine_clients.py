@@ -293,6 +293,115 @@ def test_volcengine_collection_update_data_sanitizes_uri_fields(monkeypatch):
     }
 
 
+def test_volcengine_collection_uses_date_time_filter_operator(monkeypatch):
+    captured = {}
+
+    class _Response:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"result": {"agg": {"_total": 1}}}
+
+    collection = VolcengineCollection(
+        ak="test-ak",
+        sk="test-sk",
+        region="cn-beijing",
+        meta_data={"ProjectName": "default", "CollectionName": "context"},
+    )
+
+    def _fake_do_req(method, path=None, req_params=None, req_body=None):
+        captured["path"] = path
+        captured["req_body"] = req_body
+        return _Response()
+
+    monkeypatch.setattr(collection.data_client, "do_req", _fake_do_req)
+
+    # Both date_time fields (created_at, updated_at) must be normalized to
+    # time_range, while numeric range nodes are left untouched.
+    collection.aggregate_data(
+        index_name="default",
+        filters={
+            "op": "and",
+            "conds": [
+                {
+                    "op": "range",
+                    "field": "created_at",
+                    "gte": "2026-08-10T00:00:00+00:00",
+                    "lt": "2026-08-11T00:00:00+00:00",
+                },
+                {
+                    "op": "range",
+                    "field": "updated_at",
+                    "gte": "2026-08-10T00:00:00+00:00",
+                },
+                {"op": "range", "field": "level", "gte": 1},
+            ],
+        },
+    )
+
+    assert captured["path"] == "/api/vikingdb/data/agg"
+    assert captured["req_body"]["filter"] == {
+        "op": "and",
+        "conds": [
+            {
+                "op": "time_range",
+                "field": "created_at",
+                "gte": "2026-08-10T00:00:00+00:00",
+                "lt": "2026-08-11T00:00:00+00:00",
+            },
+            {
+                "op": "time_range",
+                "field": "updated_at",
+                "gte": "2026-08-10T00:00:00+00:00",
+            },
+            {"op": "range", "field": "level", "gte": 1},
+        ],
+    }
+
+
+def test_volcengine_collection_date_time_filter_is_idempotent(monkeypatch):
+    captured = {}
+
+    class _Response:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"result": {"data": []}}
+
+    collection = VolcengineCollection(
+        ak="test-ak",
+        sk="test-sk",
+        region="cn-beijing",
+        meta_data={"ProjectName": "default", "CollectionName": "context"},
+    )
+
+    def _fake_do_req(method, path=None, req_params=None, req_body=None):
+        captured["req_body"] = req_body
+        return _Response()
+
+    monkeypatch.setattr(collection.data_client, "do_req", _fake_do_req)
+
+    # Filters already emitted as time_range (e.g. from merge_time_filter) must
+    # pass through unchanged.
+    collection.search_by_scalar(
+        index_name="default",
+        field="created_at",
+        filters={
+            "op": "time_range",
+            "field": "updated_at",
+            "gte": "2026-08-10T00:00:00+00:00",
+        },
+    )
+
+    assert captured["req_body"]["filter"] == {
+        "op": "time_range",
+        "field": "updated_at",
+        "gte": "2026-08-10T00:00:00+00:00",
+    }
+
+
 def test_volcengine_api_key_collection_update_data_posts_to_update_endpoint(monkeypatch):
     captured = {}
 
@@ -370,6 +479,121 @@ def test_volcengine_api_key_collection_update_data_sanitizes_uri_fields(monkeypa
         "project": "default",
         "collection_name": "context",
         "data": [{"id": "doc-1", "uri": "/resources/demo", "parent_uri": "/resources"}],
+    }
+
+
+def test_volcengine_api_key_collection_uses_date_time_filter_operator(monkeypatch):
+    captured = {}
+
+    class _Response:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"result": {"agg": {"_total": 1}}}
+
+    from openviking.storage.vectordb.collection.volcengine_api_key_collection import (
+        VolcengineApiKeyCollection,
+    )
+
+    collection = VolcengineApiKeyCollection(
+        api_key="vk-test-token",
+        region="cn-beijing",
+        meta_data={"ProjectName": "default", "CollectionName": "context", "IndexName": "default"},
+    )
+
+    def _fake_do_req(method, req_path=None, req_params=None, req_body=None):
+        captured["path"] = req_path
+        captured["req_body"] = req_body
+        return _Response()
+
+    monkeypatch.setattr(collection.data_client, "do_req", _fake_do_req)
+
+    # Both date_time fields (created_at, updated_at) must be normalized to
+    # time_range, while numeric range nodes are left untouched.
+    collection.aggregate_data(
+        index_name="default",
+        filters={
+            "op": "and",
+            "conds": [
+                {
+                    "op": "range",
+                    "field": "created_at",
+                    "gte": "2026-08-10T00:00:00+00:00",
+                    "lt": "2026-08-11T00:00:00+00:00",
+                },
+                {
+                    "op": "range",
+                    "field": "updated_at",
+                    "gte": "2026-08-10T00:00:00+00:00",
+                },
+                {"op": "range", "field": "level", "gte": 1},
+            ],
+        },
+    )
+
+    assert captured["path"] == "/api/vikingdb/data/agg"
+    assert captured["req_body"]["filter"] == {
+        "op": "and",
+        "conds": [
+            {
+                "op": "time_range",
+                "field": "created_at",
+                "gte": "2026-08-10T00:00:00+00:00",
+                "lt": "2026-08-11T00:00:00+00:00",
+            },
+            {
+                "op": "time_range",
+                "field": "updated_at",
+                "gte": "2026-08-10T00:00:00+00:00",
+            },
+            {"op": "range", "field": "level", "gte": 1},
+        ],
+    }
+
+
+def test_volcengine_api_key_collection_date_time_filter_is_idempotent(monkeypatch):
+    captured = {}
+
+    class _Response:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"result": {"data": []}}
+
+    from openviking.storage.vectordb.collection.volcengine_api_key_collection import (
+        VolcengineApiKeyCollection,
+    )
+
+    collection = VolcengineApiKeyCollection(
+        api_key="vk-test-token",
+        region="cn-beijing",
+        meta_data={"ProjectName": "default", "CollectionName": "context", "IndexName": "default"},
+    )
+
+    def _fake_do_req(method, req_path=None, req_params=None, req_body=None):
+        captured["req_body"] = req_body
+        return _Response()
+
+    monkeypatch.setattr(collection.data_client, "do_req", _fake_do_req)
+
+    # Filters already emitted as time_range (e.g. from merge_time_filter) must
+    # pass through unchanged.
+    collection.search_by_scalar(
+        index_name="default",
+        field="created_at",
+        filters={
+            "op": "time_range",
+            "field": "updated_at",
+            "gte": "2026-08-10T00:00:00+00:00",
+        },
+    )
+
+    assert captured["req_body"]["filter"] == {
+        "op": "time_range",
+        "field": "updated_at",
+        "gte": "2026-08-10T00:00:00+00:00",
     }
 
 

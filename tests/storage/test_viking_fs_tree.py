@@ -61,7 +61,8 @@ def make_entry(
 ):
     """Build a Rust-shaped TreeEntry dict for tests.
 
-    ``rel_path`` is derived from ``path`` by stripping the account prefix, and
+    ``rel_path`` is normalized by ``patch_tree_env`` for tree traversal tests,
+    matching the binding contract where it is relative to the query root.
     ``name`` defaults to the last path component when not given.
     """
     if name is None:
@@ -78,6 +79,25 @@ def make_entry(
         },
         "extra": extra or {},
     }
+
+
+def _query_relative_path(path: str, query_root: str) -> str:
+    base = query_root.rstrip("/")
+    normalized = path.rstrip("/")
+    if normalized == base:
+        return ""
+    if normalized.startswith(f"{base}/"):
+        return normalized[len(base) + 1 :]
+    return path.replace("/local/test_account/", "")
+
+
+def _with_query_relative_paths(entries, query_root: str):
+    normalized_entries = []
+    for entry in entries:
+        normalized = dict(entry)
+        normalized["rel_path"] = _query_relative_path(str(entry["path"]), query_root)
+        normalized_entries.append(normalized)
+    return normalized_entries
 
 
 def patch_visibility(monkeypatch, fs, *, is_accessible=True):
@@ -109,8 +129,8 @@ def patch_tree_env(
         fake_tree = entries_or_fn
     else:
 
-        async def fake_tree(_path, **_kwargs):
-            return entries_or_fn
+        async def fake_tree(path, **_kwargs):
+            return _with_query_relative_paths(entries_or_fn, path)
 
     monkeypatch.setattr(fs._async_agfs, "tree_directory", fake_tree)
     monkeypatch.setattr(fs, "_uri_to_path", lambda _uri, **_kwargs: uri_to_path)
@@ -415,7 +435,7 @@ async def test_tree_original_structure(monkeypatch, fs):
     assert e["mode"] == 0o644
     assert e["modTime"] == "2026-01-01T00:00:00Z"
     assert e["isDir"] is False
-    assert e["rel_path"] == "resources/a"
+    assert e["rel_path"] == "a"
     assert e["uri"] == "viking://resources/a"
 
 
@@ -456,7 +476,9 @@ async def test_tree_original_dfs_order(monkeypatch, fs):
     result = await fs._tree_original("viking://resources", ctx=_default_ctx())
     assert result[0]["name"] == "sub"
     assert result[0]["isDir"] is True
+    assert result[0]["rel_path"] == "sub"
     assert result[1]["name"] == "file.txt"
+    assert result[1]["rel_path"] == "sub/file.txt"
 
 
 # ── _tree_agent tests ──

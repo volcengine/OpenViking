@@ -75,10 +75,14 @@ pub async fn reindex(
     mode: &str,
     wait: bool,
     dry_run: bool,
+    tags: Vec<String>,
+    tag_mode: &str,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client.reindex(uri, mode, wait, dry_run).await?;
+    let result = client
+        .reindex(uri, mode, wait, dry_run, tags, tag_mode)
+        .await?;
     crate::output::output_success(result, output_format, compact);
     Ok(())
 }

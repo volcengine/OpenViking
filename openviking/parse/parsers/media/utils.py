@@ -12,6 +12,7 @@ from openviking.core.path_variables import CalendarVariableProvider
 from openviking.parse.parsers.constants import TYPESCRIPT_MPEG_TS_EXTENSION
 from openviking.prompts import render_prompt
 from openviking.storage.viking_fs import get_viking_fs
+from openviking.utils.image_search import prepare_image_bytes_for_model
 from openviking.utils.media_limits import MAX_MEDIA_FILE_BYTES
 from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
@@ -264,7 +265,8 @@ async def generate_image_summary(
         Dictionary with "name" and "summary" keys
     """
     viking_fs = get_viking_fs()
-    vlm = get_openviking_config().vlm
+    config = get_openviking_config()
+    vlm = config.vlm
     file_name = original_filename
 
     try:
@@ -295,7 +297,12 @@ async def generate_image_summary(
         async with llm_sem or asyncio.Semaphore(1):
             response = await vlm.get_vision_completion_async(
                 prompt=prompt,
-                images=[image_bytes],
+                images=[
+                    prepare_image_bytes_for_model(
+                        image_bytes,
+                        config=getattr(config, "image", None),
+                    )
+                ],
             )
 
         logger.info(

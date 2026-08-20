@@ -22,10 +22,10 @@ from openviking_cli.exceptions import InvalidArgumentError
 def test_default_matches_prd_recommended_values():
     policy = AutoCommitPolicy.default()
 
-    assert policy.pending_token_threshold == DEFAULT_PENDING_TOKEN_THRESHOLD == 10000
-    assert policy.message_count_threshold == DEFAULT_MESSAGE_COUNT_THRESHOLD == 50
+    assert policy.pending_token_threshold == DEFAULT_PENDING_TOKEN_THRESHOLD == 150_000
+    assert policy.message_count_threshold == DEFAULT_MESSAGE_COUNT_THRESHOLD == 100
     assert policy.idle_timeout_seconds == DEFAULT_IDLE_TIMEOUT_SECONDS == 86400
-    assert policy.keep_recent_count == DEFAULT_KEEP_RECENT_COUNT == 2
+    assert policy.keep_recent_count == DEFAULT_KEEP_RECENT_COUNT == 0
     assert policy.min_commit_interval_seconds == DEFAULT_MIN_COMMIT_INTERVAL_SECONDS == 0
 
 
@@ -59,6 +59,8 @@ def test_from_dict_clamps_to_upper_bounds():
     assert policy.idle_timeout_seconds == MAX_IDLE_TIMEOUT_SECONDS
     assert policy.keep_recent_count == MAX_MESSAGE_COUNT_THRESHOLD
     assert policy.min_commit_interval_seconds == MAX_IDLE_TIMEOUT_SECONDS
+    assert MAX_PENDING_TOKEN_THRESHOLD == 1_000_000
+    assert MAX_MESSAGE_COUNT_THRESHOLD == 1_000
 
 
 def test_from_dict_clamps_negatives_to_zero():

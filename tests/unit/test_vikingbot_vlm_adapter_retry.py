@@ -4,9 +4,19 @@ import httpx
 import pytest
 import vikingbot.providers.vlm_adapter as vlm_adapter
 from vikingbot.providers.vlm_adapter import VLMProviderAdapter
-from volcenginesdkarkruntime._exceptions import ArkRateLimitError
+from volcenginesdkarkruntime._exceptions import (
+    ArkAPITimeoutError,
+    ArkBadRequestError,
+    ArkRateLimitError,
+)
 
 from openviking.models.vlm.backends.openai_vlm import OpenAIVLM
+from openviking.models.vlm.backends.volcengine_vlm import (
+    VOLCENGINE_CLIENT_REQUEST_ID,
+    VOLCENGINE_CLIENT_REQUEST_ID_HEADER,
+    VolcEngineVLM,
+    build_volcengine_request_headers,
+)
 from openviking.utils.model_retry import is_retryable_rate_limit_error
 
 
@@ -51,9 +61,11 @@ class _FakeStreamingCompletions:
         self.failures = list(failures)
         self.chunks = chunks
         self.calls = 0
+        self.kwargs: list[dict] = []
 
-    async def create(self, **_kwargs):
+    async def create(self, **kwargs):
         self.calls += 1
+        self.kwargs.append(kwargs)
         if self.failures:
             raise self.failures.pop(0)
         return _AsyncChunks(self.chunks)
@@ -71,6 +83,14 @@ class _FakeStreamingVLM:
 
     def get_async_client(self):
         return self._client
+
+
+class _CaptureLogger:
+    def __init__(self):
+        self.messages: list[str] = []
+
+    def error(self, message: str, *args):
+        self.messages.append(message.format(*args))
 
 
 @pytest.mark.asyncio
@@ -253,6 +273,167 @@ async def test_chat_stream_routes_failover_wrapper_through_completion_api():
     assert fake_vlm.calls == 1
     assert [event.type for event in events] == ["response"]
     assert events[0].response.content == "fallback-safe"
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_logs_timeout_cause_and_request_metadata(monkeypatch):
+    request = httpx.Request(
+        "POST",
+        "https://ark.example.test/api/v3/chat/completions?api_key=must-not-leak",
+    )
+    cause = httpx.ReadTimeout("read deadline exceeded", request=request)
+    error = ArkAPITimeoutError(request=request, request_id="request-123")
+    error.__cause__ = cause
+    completions = _FakeStreamingCompletions([error], [])
+    adapter = VLMProviderAdapter(
+        _FakeStreamingVLM(completions),
+        "test-model",
+        langfuse_client=_DisabledLangfuse(),
+    )
+    captured = _CaptureLogger()
+    monkeypatch.setattr(vlm_adapter, "logger", captured)
+
+    events = [
+        event
+        async for event in adapter.chat_stream(
+            messages=[{"role": "user", "content": "hello"}],
+        )
+    ]
+
+    assert events[-1].response.finish_reason == "error"
+    assert len(captured.messages) == 1
+    log_message = captured.messages[0]
+    assert "operation=chat_stream" in log_message
+    assert "error_type=ArkAPITimeoutError" in log_message
+    assert 'client_request_id="request-123"' in log_message
+    assert "server_request_id=-" in log_message
+    assert "server_trace_id=-" in log_message
+    assert "method=POST" in log_message
+    assert "url=https://ark.example.test/api/v3/chat/completions" in log_message
+    assert "cause_chain=ReadTimeout: read deadline exceeded" in log_message
+    assert "must-not-leak" not in log_message
+
+
+def test_exception_log_details_include_redacted_upstream_error_body():
+    request = httpx.Request(
+        "POST",
+        "https://ark.example.test/api/v3/chat/completions?token=query-secret",
+    )
+    response = httpx.Response(
+        400,
+        request=request,
+        headers={
+            "X-Request-Id": "ark-server-request-456",
+            "X-Trace-Id": "ark-server-trace-456",
+        },
+    )
+    error = ArkBadRequestError(
+        "invalid request",
+        response=response,
+        body={
+            "code": "InvalidParameter",
+            "message": "invalid max_tokens",
+            "api_key": "body-secret",
+            "authorization": "Bearer header-secret",
+        },
+        request_id="request-456",
+    )
+
+    details = vlm_adapter._exception_log_details(error)
+
+    assert details == {
+        "error_type": "ArkBadRequestError",
+        "status": "400",
+        "code": '"InvalidParameter"',
+        "client_request_id": '"request-456"',
+        "server_request_id": "ark-server-request-456",
+        "server_trace_id": "ark-server-trace-456",
+        "method": "POST",
+        "url": "https://ark.example.test/api/v3/chat/completions",
+        "response_body": (
+            '{"code":"InvalidParameter","message":"invalid max_tokens",'
+            '"api_key":"<redacted>","authorization":"<redacted>"}'
+        ),
+        "cause_chain": "-",
+        "traceback": "-",
+    }
+
+
+@pytest.mark.asyncio
+async def test_volcengine_stream_uses_unique_default_client_request_ids():
+    completions = _FakeStreamingCompletions([], [])
+    adapter = VLMProviderAdapter(
+        _FakeStreamingVLM(completions),
+        "test-model",
+        langfuse_client=_DisabledLangfuse(),
+    )
+
+    for _ in range(2):
+        _ = [
+            event
+            async for event in adapter.chat_stream(
+                messages=[{"role": "user", "content": "hello"}],
+            )
+        ]
+
+    request_ids = [
+        kwargs["extra_headers"][VOLCENGINE_CLIENT_REQUEST_ID_HEADER]
+        for kwargs in completions.kwargs
+    ]
+    assert len(set(request_ids)) == 2
+    assert all(value.startswith(f"{VOLCENGINE_CLIENT_REQUEST_ID},") for value in request_ids)
+
+
+@pytest.mark.asyncio
+async def test_volcengine_non_stream_uses_unique_default_client_request_ids(monkeypatch):
+    calls: list[dict] = []
+
+    async def create(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="ok", tool_calls=None),
+                    finish_reason="stop",
+                )
+            ],
+            usage=None,
+        )
+
+    vlm = VolcEngineVLM(
+        {
+            "provider": "volcengine",
+            "model": "test-model",
+            "api_key": "test-key",
+            "max_retries": 0,
+        }
+    )
+    monkeypatch.setattr(
+        vlm,
+        "get_async_client",
+        lambda: SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create))),
+    )
+
+    for _ in range(2):
+        assert await vlm.get_completion_async(messages=[{"role": "user", "content": "hi"}]) == "ok"
+
+    request_ids = [kwargs["extra_headers"][VOLCENGINE_CLIENT_REQUEST_ID_HEADER] for kwargs in calls]
+    assert len(set(request_ids)) == 2
+    assert all(value.startswith(f"{VOLCENGINE_CLIENT_REQUEST_ID},") for value in request_ids)
+
+
+def test_volcengine_request_headers_preserve_custom_client_request_id():
+    headers = build_volcengine_request_headers(
+        {
+            "x-client-request-id": "caller-owned-request-id",
+            "X-Tenant": "tenant-a",
+        }
+    )
+
+    assert headers == {
+        "x-client-request-id": "caller-owned-request-id",
+        "X-Tenant": "tenant-a",
+    }
 
 
 def test_rate_limit_classifier_handles_target_error():

@@ -12,8 +12,6 @@ import {
 import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
 import { Textarea } from '#/components/ui/textarea'
-import { parsePositiveMinutes } from '#/lib/watch-interval'
-
 import type { UpdateWatchInput, WatchTask } from '../-lib/api'
 
 type EditWatchDialogProps = {
@@ -40,7 +38,7 @@ export function EditWatchDialog({
     setInstruction(watch?.instruction ?? '')
   }, [watch])
 
-  const interval = parsePositiveMinutes(intervalValue)
+  const interval = intervalValue.trim() ? Number(intervalValue) : null
   const input = getWatchUpdateInput(watch, interval, reason, instruction)
   const canSubmit = interval !== null && Object.keys(input).length > 0
 

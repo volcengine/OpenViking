@@ -180,7 +180,6 @@ async def admin_app(admin_service):
     app.state.user_deletion_service = await setup_user_deletion(
         service=admin_service,
         manager=manager,
-        shared_upload_prefix=config.temp_upload.shared_prefix,
     )
 
     # Set auth plugin (lifespan not triggered in ASGI tests)
@@ -305,7 +304,7 @@ async def test_create_user_paths_accept_initial_user_config(
         viking_fs,
         RequestContext(user=UserIdentifier(acct, "alice"), role=Role.ADMIN),
     )
-    assert alice_settings.resource_uri == "viking://user/resources/admin"
+    assert alice_settings.resource_uri == "viking://user/alice/resources/admin"
 
     resp = await lightweight_admin_client.post(
         f"/api/v1/admin/accounts/{acct}/users",
@@ -322,7 +321,7 @@ async def test_create_user_paths_accept_initial_user_config(
         viking_fs,
         RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER),
     )
-    assert bob_settings.resource_uri == "viking://user/resources/bob"
+    assert bob_settings.resource_uri == "viking://user/bob/resources/bob"
 
 
 async def test_create_user_paths_ignore_deprecated_agent_evolution_config(
@@ -641,7 +640,7 @@ async def test_remove_user(
     admin_service: OpenVikingService,
     admin_app: FastAPI,
 ):
-    """Deletion revokes the user and removes their private data and task records."""
+    """Deletion revokes the user and removes only their private data, uploads, and tasks."""
     acct = _uid()
     await admin_client.post(
         "/api/v1/admin/accounts",
@@ -657,6 +656,15 @@ async def test_remove_user(
     bob_ctx = RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER)
     private_uri = "viking://user/bob/memories/private.md"
     await admin_service.viking_fs.write_file(private_uri, "private", ctx=bob_ctx)
+    alice_upload_uri = "viking://upload/1800000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    bob_upload_uri = "viking://upload/1800000000000-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    upload_ctx = RequestContext(user=UserIdentifier(acct, "alice"), role=Role.ROOT)
+    for upload_uri, user_id in ((alice_upload_uri, "alice"), (bob_upload_uri, "bob")):
+        await admin_service.viking_fs.write_file(
+            f"{upload_uri}/meta",
+            json.dumps({"account": acct, "user": user_id}),
+            ctx=upload_ctx,
+        )
     bob_task = await get_task_tracker().create(
         "session_commit",
         resource_id="bob-session",
@@ -679,6 +687,8 @@ async def test_remove_user(
     deletion_task = await _wait_for_task(admin_client, task_id)
     assert deletion_task["status"] == "completed"
     assert not await admin_service.viking_fs.exists(private_uri, ctx=bob_ctx)
+    assert not await admin_service.viking_fs.exists(bob_upload_uri, ctx=upload_ctx)
+    assert await admin_service.viking_fs.exists(alice_upload_uri, ctx=upload_ctx)
     assert not admin_app.state.api_key_manager.has_user(acct, "bob")
     assert (
         await get_task_tracker().get(
@@ -1231,7 +1241,7 @@ async def test_legacy_cleanup_removes_only_legacy_namespaces(
     )
 
 
-async def test_legacy_agent_and_session_uri_reads_are_read_only(
+async def test_legacy_agent_uri_is_read_only_and_session_storage_uses_canonical_uri(
     admin_service: OpenVikingService,
 ):
     """Old agent/session URIs remain readable but not mutable."""
@@ -1246,6 +1256,11 @@ async def test_legacy_agent_and_session_uri_reads_are_read_only(
         "/local/default/session/old-session/messages.jsonl",
         '{"role":"user"}\n',
     )
+    await _agfs_write(
+        admin_service,
+        "/local/default/session/old-session/.meta.json",
+        '{"created_by_user_id":"admin_user"}',
+    )
 
     assert (
         await admin_service.viking_fs.read_file(
@@ -1256,7 +1271,7 @@ async def test_legacy_agent_and_session_uri_reads_are_read_only(
     )
     assert (
         await admin_service.viking_fs.read_file(
-            "viking://session/old-session/messages.jsonl",
+            "viking://user/admin_user/sessions/old-session/messages.jsonl",
             ctx=ctx,
         )
         == '{"role":"user"}\n'
@@ -1267,8 +1282,6 @@ async def test_legacy_agent_and_session_uri_reads_are_read_only(
             "blocked",
             ctx=ctx,
         )
-    with pytest.raises(PermissionDeniedError):
-        await admin_service.viking_fs.mkdir("viking://session/new-session", ctx=ctx)
 
 
 @pytest_asyncio.fixture(scope="function")

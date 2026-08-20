@@ -882,6 +882,34 @@ Use `github_domains`, `gitlab_domains`, or `azure_devops_domains` when the host
 needs those platform-specific URL semantics. Add other Git hosts to
 `code_hosting_domains`.
 
+### pdf
+
+PDF parsing configuration. Three strategies are supported: `local` (local pdfplumber), `mineru` (remote MinerU API), and `auto` (try local first, fall back to MinerU).
+
+```json
+{
+  "pdf": {
+    "strategy": "auto",
+    "mineru_endpoint": "http://127.0.0.1:8000",
+    "mineru_timeout": 300.0,
+    "mineru_bodys": {
+      "backend": "hybrid-auto-engine",
+      "lang_list": ["ch"],
+      "parse_method": "auto"
+    }
+  }
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `strategy` | str | Parsing strategy: `local` / `mineru` / `auto` (default `auto`) |
+| `mineru_endpoint` | str | MinerU API **base URL** (e.g. `http://127.0.0.1:8000`) |
+| `mineru_timeout` | float | Request timeout in seconds (default `300.0`) |
+| `mineru_bodys` | dict | MinerU API multipart form fields |
+
+**MinerU protocol**: a synchronous `POST {mineru_endpoint}/file_parse` request with the PDF as the multipart `files` field; form parameters are passed through from `mineru_bodys`.
+
 ### rerank
 
 Reranking model for search result refinement. Supports VikingDB (Volcengine), Cohere, and OpenAI-compatible APIs.
@@ -1225,10 +1253,10 @@ When a session carries an `auto_commit_policy`, any field you omit falls back to
 
 | Field | Type | Default | Max | Description |
 |-------|------|---------|-----|-------------|
-| `pending_token_threshold` | int | 10000 | 50000 | When uncommitted pending tokens exceed this value (strictly greater-than), an auto commit is triggered after a message write. |
-| `message_count_threshold` | int | 50 | 500 | When the uncommitted live message count exceeds this value (strictly greater-than), an auto commit is triggered after a message write. |
+| `pending_token_threshold` | int | 150000 | 1000000 | When uncommitted pending tokens exceed this value (strictly greater-than), an auto commit is triggered after a message write. |
+| `message_count_threshold` | int | 100 | 1000 | When the uncommitted live message count exceeds this value (strictly greater-than), an auto commit is triggered after a message write. |
 | `idle_timeout_seconds` | int | 86400 | 604800 | After this many idle seconds, a session with uncommitted content becomes eligible for the server-side idle scheduler. Idle-timeout commits archive the full backlog and ignore `keep_recent_count`. |
-| `keep_recent_count` | int | 2 | 500 | Number of recent live messages to keep (not archived) on a threshold-triggered auto commit. Idle-timeout commits ignore this and commit everything. |
+| `keep_recent_count` | int | 0 | 500 | Number of recent live messages to keep (not archived) on a threshold-triggered auto commit. Idle-timeout commits ignore this and commit everything. |
 | `min_commit_interval_seconds` | int | 0 | 604800 | Minimum seconds between two automatic commits (throttle). |
 
 Code entry: `openviking/session/auto_commit_policy.py:AutoCommitPolicy`.
@@ -1529,7 +1557,7 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
     "temp_upload": {
       "default_mode": "local",
       "shared_max_size_bytes": 536870912,
-      "shared_prefix": "viking://upload"
+      "ttl_seconds": 43200
     },
     "user_config_defaults": {
       "add_targets": {
@@ -1554,9 +1582,9 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 | `cors_origins` | list | Allowed CORS origins | `["*"]` |
 | `public_base_url` | str | Public-facing base URL emitted in MCP-issued upload instructions. Resolution order: env var `OPENVIKING_PUBLIC_BASE_URL` → this field → `X-Forwarded-Host`/`X-Forwarded-Proto` request headers → `Host` request header → listen-address fallback. Set this (or the env var) when the server runs behind a reverse proxy that does not forward `X-Forwarded-*` headers. | `null` |
 | `upload_signed_ttl_seconds` | int | TTL in seconds for the one-shot tokens minted by the MCP `add_resource` tool for local-file uploads via `POST /api/v1/resources/temp_upload?token=...`. | `600` (10 minutes) |
-| `temp_upload.default_mode` | str | Server-side default for `POST /api/v1/resources/temp_upload` when the client does not send `upload_mode`: `"local"` (per-instance disk, current single-node behavior) or `"shared"` (distributed shared store usable across replicas). | `"local"` |
+| `temp_upload.default_mode` | str | Server-side default for `POST /api/v1/resources/temp_upload` when the client does not send `upload_mode`: `"local"` (per-instance disk, current single-node behavior) or `"shared"` (distributed shared store usable across replicas). New shared uploads are stored in internal `viking://upload/<created_at_ms>-<uuid>/content` and `meta` objects, and can be consumed repeatedly for `ttl_seconds`. | `"local"` |
 | `temp_upload.shared_max_size_bytes` | int | Maximum size accepted in `shared` mode, in bytes. Requests above this size are rejected before object-store write. | `536870912` (512 MiB) |
-| `temp_upload.shared_prefix` | str | URI prefix used when allocating shared `temp_file_id` objects. | `"viking://upload"` |
+| `temp_upload.ttl_seconds` | int | Retention time shared by local and shared temporary uploads, in seconds. Each upload cleans files older than this for its mode; shared cleanup uses one upload-root listing, parses creation time from each first-level directory name, and recursively removes expired directories without filesystem modification times. Set to `0` to disable automatic cleanup. | `43200` (12 hours) |
 | `user_config_defaults.add_targets.resource_uri` | str | Deployment default resource add directory used when `add_resource` omits both `to` and `parent`. `viking://user/...` resolves per request user. | `null` |
 | `user_config_defaults.add_targets.skill_uri` | str | Deployment default skill add root used when `add_skill` omits `target_uri`. Only `viking://user/skills` and `viking://agent/skills` are accepted. | `null` |
 | `agent_evolution.enabled` | bool | Instance-wide Agent Evolution switch. When enabled, session commits may generate or update cases, trajectories, and experiences according to the session `memory_policy`. When disabled, production of these memory types stops for every account and user. Existing memories remain readable and searchable. | `false` |

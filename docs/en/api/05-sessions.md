@@ -43,17 +43,17 @@ Create a new session. Sessions are containers for conversations, storing message
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | session_id | str | No | None | Session ID. Creates new session with auto-generated ID if None |
-| memory_policy | object | No | None | Default memory extraction policy for the session. Optional `self` and `peer` switches control write targets, optional `working_memory.enabled=false` skips archive summaries, and optional top-level `memory_types` limits extraction to specific enabled memory schemas. Use JSON booleans for every `enabled` value. Legacy boolean-like values remain accepted temporarily (including string `"false"`, which is parsed as false) but emit a deprecation warning. When `memory_types` is omitted or `null`, all enabled memory schemas are allowed. Invalid shapes or unknown memory types are rejected with `InvalidArgumentError`. |
+| memory_policy | object | No | None | Default memory extraction policy for the session. Optional `self` and `peer` switches control write targets, optional `working_memory.enabled=false` skips archive summaries, and optional top-level `memory_types` limits extraction to specific enabled memory schemas. Including `experiences` automatically activates `cases` and `trajectories`; without `experiences`, explicitly supplied `cases` and `trajectories` are ignored. Use JSON booleans for every `enabled` value. Legacy boolean-like values remain accepted temporarily (including string `"false"`, which is parsed as false) but emit a deprecation warning. When `memory_types` is omitted or `null`, all enabled memory schemas are allowed. Invalid shapes or unknown memory types are rejected with `InvalidArgumentError`. |
 | auto_commit_policy | object | No | None | Optional auto-commit policy (see table below). Any provided fields are validated, clamped to their bounds, and merged over the defaults; the effective policy is returned in the response `result.auto_commit_policy` and persisted into session metadata. If no policy is provided, auto commit is disabled unless `memory.session_auto_commit.default_enabled=true`. The policy can later be partially updated or disabled through `update_session_config()`. |
 
 `auto_commit_policy` fields (all optional; omitted fields fall back to the defaults when a policy is present):
 
 | Field | Type | Default | Max | Description |
 |-------|------|---------|-----|-------------|
-| `pending_token_threshold` | int | 10000 | 50000 | When uncommitted pending tokens exceed this value (strictly greater-than), an auto commit is triggered after a message write. |
-| `message_count_threshold` | int | 50 | 500 | When the uncommitted live message count exceeds this value (strictly greater-than), an auto commit is triggered after a message write. |
+| `pending_token_threshold` | int | 150000 | 1000000 | When uncommitted pending tokens exceed this value (strictly greater-than), an auto commit is triggered after a message write. |
+| `message_count_threshold` | int | 100 | 1000 | When the uncommitted live message count exceeds this value (strictly greater-than), an auto commit is triggered after a message write. |
 | `idle_timeout_seconds` | int | 86400 | 604800 | After this many idle seconds, a session with uncommitted content becomes eligible for the server-side idle scheduler. An idle-timeout commit archives the full backlog and ignores `keep_recent_count`. |
-| `keep_recent_count` | int | 2 | 500 | Number of recent live messages to keep (not archived) on a threshold-triggered auto commit. Idle-timeout commits ignore this and commit everything. |
+| `keep_recent_count` | int | 0 | 500 | Number of recent live messages to keep (not archived) on a threshold-triggered auto commit. Idle-timeout commits ignore this and commit everything. |
 | `min_commit_interval_seconds` | int | 0 | 604800 | Minimum seconds between two automatic commits (throttle). |
 
 All fields have a minimum of `0` and are clamped into `[0, max]`. Unknown keys are rejected with `InvalidArgumentError`.
@@ -387,10 +387,10 @@ ov session get a1b2c3d4
     },
     "pending_tokens": 450,
     "auto_commit_policy": {
-      "pending_token_threshold": 10000,
-      "message_count_threshold": 50,
+      "pending_token_threshold": 150000,
+      "message_count_threshold": 100,
       "idle_timeout_seconds": 86400,
-      "keep_recent_count": 2,
+      "keep_recent_count": 0,
       "min_commit_interval_seconds": 0
     }
   }
@@ -512,10 +512,10 @@ ov session config set a1b2c3d4 --no-auto-commit
   "result": {
     "session_id": "a1b2c3d4",
     "auto_commit_policy": {
-      "pending_token_threshold": 10000,
+      "pending_token_threshold": 150000,
       "message_count_threshold": 25,
       "idle_timeout_seconds": 86400,
-      "keep_recent_count": 2,
+      "keep_recent_count": 0,
       "min_commit_interval_seconds": 0
     },
     "memory_extraction_config": {
@@ -1381,7 +1381,7 @@ Commit a session. Message archiving (Phase 1) completes immediately. Summary gen
 
 **Two-Phase Commit Flow:**
 - **Phase 1 (Synchronous)**: Snapshot current messages, clear live session, create archive directory, write original messages
-- **Phase 2 (Asynchronous)**: Generate summaries (L0/L1), extract long-term memories, update relations and active_count
+- **Phase 2 (Asynchronous)**: Generate summaries (L0/L1), extract long-term memories, and update active_count
 
 **Notes:**
 - Rapid consecutive commits on the same session are accepted; each request gets its own `task_id`.
@@ -1568,7 +1568,6 @@ viking://user/{user_id}/sessions/{session_id}/
 |   +-- {tool_id}/
 |       +-- tool.json
 +-- .meta.json                # Metadata
-+-- .relations.json           # Related contexts
 +-- history/                  # Archived history
     +-- archive_001/
     |   +-- messages.jsonl    # Written in Phase 1

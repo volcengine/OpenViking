@@ -280,6 +280,24 @@ async def test_resource_rm_without_wait_only_queues_refresh(request_context):
 
 
 @pytest.mark.asyncio
+async def test_resource_scope_rm_does_not_refresh_global_root(request_context):
+    service = FSService(viking_fs=_FakeVikingFS())
+    service._enqueue_delete_refresh = AsyncMock()
+    service._wait_for_refresh = AsyncMock()
+
+    result = await service.rm(
+        "viking://resources",
+        ctx=request_context,
+        recursive=True,
+        wait=True,
+    )
+
+    service._enqueue_delete_refresh.assert_not_awaited()
+    service._wait_for_refresh.assert_not_awaited()
+    assert "semantic_root_uri" not in result
+
+
+@pytest.mark.asyncio
 async def test_resource_rm_deactivates_watch_tasks(request_context):
     viking_fs = _FakeVikingFS()
     watch_manager = _FakeWatchManager()

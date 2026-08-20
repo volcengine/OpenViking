@@ -6,9 +6,14 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from openviking.core.context import ContextLevel
 from openviking.server.identity import RequestContext, Role
 from openviking.storage import content_write as content_write_module
 from openviking.storage.content_write import ContentWriteCoordinator
+from openviking.storage.semantic_sidecar import (
+    parse_semantic_sidecar,
+    render_semantic_sidecar,
+)
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -37,13 +42,32 @@ class _FakeVikingFS:
         return f"/fake/{uri}"
 
 
+def _sidecar(level=ContextLevel.ABSTRACT, body="Original body."):
+    return render_semantic_sidecar(
+        level,
+        "viking://resources/demo",
+        body,
+        {
+            "generated_by": {"component": "test", "trigger": "test"},
+            "freshness": {
+                "total_entries": 1,
+                "sampled_entries": 1,
+                "unsampled_entries": 0,
+                "pending_child_changes": 0,
+            },
+        },
+    )
+
+
 @pytest.fixture
 def ctx():
     return RequestContext(user=UserIdentifier("account-1", "user-1"), role=Role.USER)
 
 
 @pytest.mark.asyncio
-async def test_vectors_only_write_skips_semantic_refresh_and_vectorizes_file(monkeypatch, ctx):
+async def test_direct_write_skips_semantic_refresh_for_vectors_only_and_sidecar_body_edits(
+    monkeypatch, ctx
+):
     fake_fs = _FakeVikingFS()
     vectorize_file = AsyncMock(return_value=True)
     semantic_refresh = AsyncMock(side_effect=AssertionError("semantic refresh should not run"))
@@ -76,6 +100,41 @@ async def test_vectors_only_write_skips_semantic_refresh_and_vectorizes_file(mon
     assert "register_request_wait" not in vectorize_file.await_args.kwargs
     assert result["semantic_status"] == "skipped"
     assert result["vector_status"] == "queued"
+
+    current = _sidecar()
+    sidecar_fs = _FakeVikingFS()
+    sidecar_fs.read_file.side_effect = [
+        current,
+        current,
+        _sidecar(ContextLevel.OVERVIEW, "Overview."),
+    ]
+    vectorize_directory = AsyncMock()
+    monkeypatch.setattr(content_write_module, "vectorize_directory_meta", vectorize_directory)
+    sidecar_coordinator = ContentWriteCoordinator(viking_fs=sidecar_fs)
+    sidecar_coordinator._enqueue_semantic_refresh = AsyncMock(
+        side_effect=AssertionError("sidecar body writes must not regenerate semantics")
+    )
+
+    sidecar_result = await sidecar_coordinator._write_direct_with_refresh(
+        uri="viking://resources/demo/.abstract.md",
+        root_uri="viking://resources/demo",
+        content="Updated body only.",
+        mode="replace",
+        context_type="resource",
+        wait=False,
+        timeout=None,
+        ctx=ctx,
+        written_bytes=len("Updated body only.".encode()),
+        telemetry_id="",
+    )
+
+    written = sidecar_fs.write_file.await_args.args[1]
+    assert parse_semantic_sidecar(written).body == "Updated body only.\n"
+    assert parse_semantic_sidecar(written).metadata == parse_semantic_sidecar(current).metadata
+    sidecar_coordinator._enqueue_semantic_refresh.assert_not_awaited()
+    vectorize_directory.assert_awaited_once()
+    assert sidecar_result["semantic_status"] == "skipped"
+    assert sidecar_result["vector_status"] == "queued"
 
 
 @pytest.mark.asyncio
@@ -138,12 +197,18 @@ async def test_vectors_only_write_wait_reports_skipped_when_nothing_enqueued(mon
 
 
 @pytest.mark.asyncio
-async def test_memory_write_accepts_processing_mode_without_switching_refresh(monkeypatch, ctx):
+@pytest.mark.parametrize(
+    ("overview_refreshed", "expected_overview_status"),
+    [(True, "complete"), (False, "skipped")],
+)
+async def test_memory_write_accepts_processing_mode_without_switching_refresh(
+    monkeypatch, ctx, overview_refreshed, expected_overview_status
+):
     fake_fs = _FakeVikingFS()
     monkeypatch.setattr(
         content_write_module.MemoryUpdater,
         "refresh_schema_overview",
-        AsyncMock(),
+        AsyncMock(return_value=overview_refreshed),
     )
     monkeypatch.setattr(
         content_write_module.MemoryUpdater,
@@ -159,8 +224,8 @@ async def test_memory_write_accepts_processing_mode_without_switching_refresh(mo
     coordinator._write_in_place = AsyncMock()
 
     result = await coordinator._write_memory_with_refresh(
-        uri="viking://user/memories/demo.md",
-        root_uri="viking://user/memories",
+        uri="viking://user/user-1/memories/demo.md",
+        root_uri="viking://user/user-1/memories",
         content="updated",
         mode="replace",
         wait=True,
@@ -175,4 +240,4 @@ async def test_memory_write_accepts_processing_mode_without_switching_refresh(mo
     content_write_module.MemoryUpdater.refresh_file_embedding.assert_awaited_once()
     assert result["context_type"] == "memory"
     assert result["semantic_status"] == "skipped"
-    assert result["overview_status"] == "complete"
+    assert result["overview_status"] == expected_overview_status

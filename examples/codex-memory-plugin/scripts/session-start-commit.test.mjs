@@ -141,7 +141,11 @@ function profileHandler(requests, { archiveOverview = "" } = {}) {
     if (req.method === "POST" && url.pathname.endsWith("/commit")) {
       writeJson(res, {
         status: "ok",
-        result: { archived: true, task_id: "task-profile-test" },
+        result: {
+          archived: true,
+          task_id: "task-profile-test",
+          trace_id: "trace-session-start",
+        },
       });
       return;
     }
@@ -210,7 +214,10 @@ test("startup preserves the existing commit systemMessage alongside profile cont
       );
 
       assert.match(output.hookSpecificOutput.additionalContext, /Works on OpenViking integrations/);
-      assert.equal(output.systemMessage, "OpenViking session cx-old-session is committed");
+      assert.equal(
+        output.systemMessage,
+        "OpenViking session cx-old-session is committed (trace_id=trace-session-start)",
+      );
     });
 
     assert.ok(requests.some((request) =>

@@ -79,6 +79,10 @@ function emitSessionStartOutput({ contexts = [], systemMessage = "" } = {}) {
   output(response);
 }
 
+function responseTraceId(body) {
+  return body?.result?.trace_id || body?.error?.trace_id || body?.trace_id || undefined;
+}
+
 async function requestJSON(path, init = {}, options = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), cfg.captureTimeoutMs);
@@ -96,10 +100,11 @@ async function requestJSON(path, init = {}, options = {}) {
     const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
     const body = await res.json().catch(() => null);
     if (!body) return { ok: false, status: res.status };
+    const traceId = responseTraceId(body);
     if (!res.ok || body.status === "error") {
-      return { ok: false, status: res.status, error: body.error || body };
+      return { ok: false, status: res.status, error: body.error || body, traceId };
     }
-    return { ok: true, status: res.status, result: body.result ?? body };
+    return { ok: true, status: res.status, result: body.result ?? body, traceId };
   } catch (error) {
     return { ok: false, status: 0, error: { message: error?.message || String(error) } };
   } finally {
@@ -114,7 +119,7 @@ async function fetchJSON(path, init = {}, options = {}) {
 
 async function commitOvSession(ovSessionId) {
   if (!ovSessionId) return null;
-  return fetchJSON(
+  return requestJSON(
     `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`,
     { method: "POST", body: JSON.stringify({}) },
   );
@@ -236,36 +241,48 @@ async function commitAndClear(state, reason) {
   if (state.ovSessionId) {
     const ovSessionId = state.ovSessionId;
     const commit = await commitOvSession(state.ovSessionId);
-    if (!commit) {
-      logError("commit_failed_keep_state", {
+    if (!commit?.ok) {
+      log("commit", {
         reason,
         codexSessionId: state.codexSessionId,
         ovSessionId: state.ovSessionId,
+        ok: false,
+        status: commit?.status,
+        trace_id: commit?.traceId,
+        error: commit?.error?.message || commit?.error?.code,
       });
-      return { committed: false, ovSessionId: null };
+      return { committed: false, ovSessionId: null, traceId: commit?.traceId || "" };
     }
+    const traceId = commit.traceId || commit.result?.trace_id || "";
     log("commit", {
       reason,
       codexSessionId: state.codexSessionId,
       ovSessionId,
-      archived: commit.archived ?? false,
-      taskId: commit.task_id,
-      status: commit.status,
+      archived: commit.result?.archived ?? false,
+      taskId: commit.result?.task_id,
+      status: commit.result?.status,
+      trace_id: traceId || undefined,
     });
     await clearState(state.codexSessionId);
-    return { committed: true, ovSessionId };
+    return { committed: true, ovSessionId, traceId };
   }
   // No OV session attached — nothing to commit on the server, but the local
   // state file is still stale and should be removed.
   log("clear_no_ov", { reason, codexSessionId: state.codexSessionId });
   await clearState(state.codexSessionId);
-  return { committed: true, ovSessionId: null };
+  return { committed: true, ovSessionId: null, traceId: "" };
 }
 
-function describeCommittedSessions(ovSessionIds) {
-  if (ovSessionIds.length === 1) return `OpenViking session ${ovSessionIds[0]} is committed`;
+function describeCommittedSessions(commits) {
+  if (commits.length === 1) {
+    return `OpenViking session ${commits[0].ovSessionId} is committed` +
+      (commits[0].traceId ? ` (trace_id=${commits[0].traceId})` : "");
+  }
+  const ovSessionIds = commits.map((item) => item.ovSessionId);
   if (ovSessionIds.length > 1) {
-    return `OpenViking sessions ${ovSessionIds.join(", ")} are committed`;
+    const traceIds = commits.map((item) => item.traceId).filter(Boolean);
+    return `OpenViking sessions ${ovSessionIds.join(", ")} are committed` +
+      (traceIds.length ? ` (trace_ids=${traceIds.join(",")})` : "");
   }
   return "OpenViking session state is cleared";
 }
@@ -356,7 +373,7 @@ async function main() {
   );
 
   let heuristicCommitted = 0;
-  const heuristicSessionIds = [];
+  const heuristicCommits = [];
   const skippedSessionIds = new Set();
 
   if (recentlyActive.length === 0) {
@@ -372,7 +389,7 @@ async function main() {
     const r = await commitAndClear(target, "heuristic_1_active");
     if (r.committed) {
       heuristicCommitted += 1;
-      if (r.ovSessionId) heuristicSessionIds.push(r.ovSessionId);
+      if (r.ovSessionId) heuristicCommits.push(r);
     }
   } else {
     log("heuristic", {
@@ -391,7 +408,7 @@ async function main() {
   // -------------------------------------------------------------------------
   const postHeuristic = await listStates();
   let idleCommitted = 0;
-  const idleSessionIds = [];
+  const idleCommits = [];
 
   for (const s of postHeuristic) {
     if (!s?.codexSessionId) continue;
@@ -405,12 +422,13 @@ async function main() {
     const r = await commitAndClear(s, "idle_ttl");
     if (r.committed) {
       idleCommitted += 1;
-      if (r.ovSessionId) idleSessionIds.push(r.ovSessionId);
+      if (r.ovSessionId) idleCommits.push(r);
     }
   }
 
   const totalCommitted = heuristicCommitted + idleCommitted;
-  const ovSessionIds = [...heuristicSessionIds, ...idleSessionIds];
+  const commits = [...heuristicCommits, ...idleCommits];
+  const ovSessionIds = commits.map((item) => item.ovSessionId);
 
   log("done", {
     source,
@@ -424,7 +442,7 @@ async function main() {
   if (totalCommitted > 0) {
     emitSessionStartOutput({
       contexts: [profileContext],
-      systemMessage: describeCommittedSessions(ovSessionIds),
+      systemMessage: describeCommittedSessions(commits),
     });
   } else {
     emitSessionStartOutput({ contexts: [profileContext] });

@@ -2,9 +2,9 @@
 """
 OpenViking V3 cases memory live integration test.
 
-This follows the style of ``test_compressor_v2_xiaomei.py``: it connects to a
-running local OpenViking HTTP service, writes dialogue via add_message, commits
-the session, and verifies that V3 extracts a trainable ``cases`` memory.
+It connects to a running local OpenViking HTTP service, writes dialogue via
+add_message, commits the session, and verifies that V3 extracts a trainable
+``cases`` memory.
 
 Prerequisites for a full pass:
 - OpenViking server is running locally (default: http://localhost:1933)
@@ -305,7 +305,7 @@ def test_local_service_add_dialogue_commit_triggers_v3_case_extraction():
         client.close()
 
 
-# ── CLI entry, like test_compressor_v2_xiaomei.py ───────────────────────────
+# ── CLI entry ───────────────────────────────────────────────────────────────
 
 
 def main() -> None:

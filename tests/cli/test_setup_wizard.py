@@ -11,11 +11,13 @@ from openviking_cli.setup_wizard import (
     _DEFAULT_KIMI_MODEL,
     _GO_BACK,
     _SKIP_VLM,
+    BYTEPLUS_PLANS,
     CLOUD_PROVIDERS,
     EMBEDDING_PRESETS,
     LOCAL_GGUF_PRESETS,
     QUERY_PLANNER_PRESETS,
     VLM_PRESETS,
+    VOLCENGINE_PLANS,
     _build_ollama_config,
     _build_query_planner_config,
     _config_path,
@@ -498,6 +500,337 @@ class TestCloudProviderOrdering:
         assert CLOUD_PROVIDERS[2].provider == "openai"
 
 
+class TestVolcenginePlans:
+    def test_plan_endpoints_and_defaults(self):
+        agent, coding, payg = VOLCENGINE_PLANS
+        assert agent.api_base == "https://ark.cn-beijing.volces.com/api/plan/v3"
+        assert coding.api_base == "https://ark.cn-beijing.volces.com/api/coding/v3"
+        assert payg.api_base == "https://ark.cn-beijing.volces.com/api/v3"
+        for plan in (agent, coding):
+            assert plan.default_vlm_model == "doubao-seed-2.0-lite"
+            assert plan.default_embedding_model == "doubao-embedding-vision"
+            assert plan.default_embedding_dim == 1024
+
+    def test_plan_menu_defaults_to_current_endpoint(self):
+        from openviking_cli.setup_wizard import _select_access_plan
+
+        with patch("openviking_cli.setup_wizard._prompt_choice", return_value=2) as mock_choice:
+            plan = _select_access_plan(
+                "VolcEngine (火山引擎)", VOLCENGINE_PLANS, VOLCENGINE_PLANS[1].api_base
+            )
+        assert plan is VOLCENGINE_PLANS[1]
+        assert mock_choice.call_args.kwargs.get("default") == 2
+
+    def test_plan_menu_offers_keep_for_custom_endpoint(self):
+        from openviking_cli.setup_wizard import _select_access_plan
+
+        custom = "https://proxy.volces.com/custom/v3"
+        with patch("openviking_cli.setup_wizard._prompt_choice", return_value=4) as mock_choice:
+            plan = _select_access_plan("VolcEngine (火山引擎)", VOLCENGINE_PLANS, custom)
+        assert plan.api_base == custom
+        options = mock_choice.call_args.args[1]
+        assert len(options) == len(VOLCENGINE_PLANS) + 1
+        assert mock_choice.call_args.kwargs.get("default") == len(options)
+
+    def test_plan_menu_back_returns_sentinel(self):
+        from openviking_cli.setup_wizard import _select_access_plan
+
+        with patch("openviking_cli.setup_wizard._prompt_choice", return_value=0):
+            assert (
+                _select_access_plan("VolcEngine (火山引擎)", VOLCENGINE_PLANS, allow_back=True)
+                is _GO_BACK
+            )
+
+    def test_byteplus_plan_endpoints_and_defaults(self):
+        coding, payg = BYTEPLUS_PLANS
+        assert coding.label == "ModelArk Coding Plan"
+        assert coding.api_base == "https://ark.ap-southeast.bytepluses.com/api/coding/v3"
+        assert coding.default_vlm_model == "dola-seed-2.0-lite"
+        assert coding.default_embedding_model == "skylark-embedding-vision"
+        assert coding.default_embedding_dim == 1024
+        assert payg.api_base == "https://ark.ap-southeast.bytepluses.com/api/v3"
+
+    def test_vlm_flow_byteplus_coding_plan(self):
+        from openviking_cli.setup_wizard import _prompt_cloud_vlm
+
+        with (
+            # VLM provider -> BytePlus, plan menu -> ModelArk Coding Plan
+            patch("openviking_cli.setup_wizard._prompt_choice", side_effect=[2, 1]),
+            patch("openviking_cli.setup_wizard._prompt_api_key_with_env", return_value="bp-key"),
+            patch(
+                "openviking_cli.setup_wizard._prompt_required_input",
+                side_effect=lambda prompt, default=None, **kw: default,
+            ),
+            patch("builtins.print"),
+        ):
+            vlm_config, _ = _prompt_cloud_vlm()
+
+        assert vlm_config["provider"] == "volcengine"
+        assert vlm_config["model"] == "dola-seed-2.0-lite"
+        assert vlm_config["api_base"] == "https://ark.ap-southeast.bytepluses.com/api/coding/v3"
+
+    def test_embedding_flow_byteplus_coding_plan(self):
+        from openviking_cli.setup_wizard import _prompt_cloud_embedding
+
+        with (
+            # Provider menu -> BytePlus, plan menu -> ModelArk Coding Plan
+            patch("openviking_cli.setup_wizard._prompt_choice", side_effect=[2, 1]),
+            patch("openviking_cli.setup_wizard._prompt_api_key_with_env", return_value="bp-key"),
+            patch(
+                "openviking_cli.setup_wizard._prompt_required_input",
+                side_effect=lambda prompt, default=None, **kw: default,
+            ),
+            patch("builtins.print"),
+        ):
+            dense = _prompt_cloud_embedding()
+
+        assert dense["provider"] == "volcengine"
+        assert dense["model"] == "skylark-embedding-vision"
+        assert dense["api_base"] == "https://ark.ap-southeast.bytepluses.com/api/coding/v3"
+        assert dense["dimension"] == 1024
+
+    def test_provider_index_distinguishes_byteplus_plan_endpoint(self):
+        from openviking_cli.setup_wizard import _cloud_provider_index_for
+
+        byteplus_plan = {
+            "provider": "volcengine",
+            "api_base": "https://ark.ap-southeast.bytepluses.com/api/coding/v3",
+        }
+        volc_plan = {
+            "provider": "volcengine",
+            "api_base": "https://ark.cn-beijing.volces.com/api/plan/v3",
+        }
+        assert _cloud_provider_index_for(byteplus_plan) == 2
+        assert _cloud_provider_index_for(volc_plan) == 1
+
+    def test_embedding_flow_uses_selected_plan(self):
+        from openviking_cli.setup_wizard import _prompt_cloud_embedding
+
+        with (
+            # Provider menu -> VolcEngine, plan menu -> Agent Plan
+            patch("openviking_cli.setup_wizard._prompt_choice", side_effect=[1, 1]),
+            patch("openviking_cli.setup_wizard._prompt_api_key_with_env", return_value="ark-key"),
+            patch(
+                "openviking_cli.setup_wizard._prompt_required_input",
+                side_effect=lambda prompt, default=None, **kw: default,
+            ),
+            patch("builtins.print"),
+        ):
+            dense = _prompt_cloud_embedding()
+
+        assert dense == {
+            "provider": "volcengine",
+            "model": "doubao-embedding-vision",
+            "api_key": "ark-key",
+            "api_base": "https://ark.cn-beijing.volces.com/api/plan/v3",
+            "dimension": 1024,
+        }
+
+    def test_embedding_flow_plan_back_returns_to_provider_menu(self):
+        from openviking_cli.setup_wizard import _prompt_cloud_embedding
+
+        with (
+            # VolcEngine -> plan menu back -> provider menu -> OpenAI
+            patch("openviking_cli.setup_wizard._prompt_choice", side_effect=[1, 0, 3]),
+            patch("openviking_cli.setup_wizard._prompt_api_key_with_env", return_value="sk-x"),
+            patch(
+                "openviking_cli.setup_wizard._prompt_required_input",
+                side_effect=lambda prompt, default=None, **kw: default,
+            ),
+            patch("builtins.print"),
+        ):
+            dense = _prompt_cloud_embedding()
+
+        assert dense["provider"] == "openai"
+        assert dense["api_base"] == "https://api.openai.com/v1"
+
+    def test_vlm_flow_uses_selected_plan(self):
+        from openviking_cli.setup_wizard import _prompt_cloud_vlm
+
+        with (
+            # VLM provider -> VolcEngine, plan menu -> Coding Plan
+            patch("openviking_cli.setup_wizard._prompt_choice", side_effect=[1, 2]),
+            patch("openviking_cli.setup_wizard._prompt_api_key_with_env", return_value="ark-key"),
+            patch(
+                "openviking_cli.setup_wizard._prompt_required_input",
+                side_effect=lambda prompt, default=None, **kw: default,
+            ),
+            patch("builtins.print"),
+        ):
+            vlm_config, _ = _prompt_cloud_vlm()
+
+        assert vlm_config["provider"] == "volcengine"
+        assert vlm_config["model"] == "doubao-seed-2.0-lite"
+        assert vlm_config["api_base"] == "https://ark.cn-beijing.volces.com/api/coding/v3"
+        assert vlm_config["api_key"] == "ark-key"
+
+    def test_vlm_flow_plan_back_returns_to_provider_menu(self):
+        from openviking_cli.setup_wizard import _prompt_cloud_vlm
+
+        with (
+            # VolcEngine -> plan menu back -> provider menu -> GLM
+            patch("openviking_cli.setup_wizard._prompt_choice", side_effect=[1, 0, 6]),
+            patch("openviking_cli.setup_wizard._prompt_api_key_with_env", return_value="glm-key"),
+            patch(
+                "openviking_cli.setup_wizard._prompt_required_input",
+                side_effect=lambda prompt, default=None, **kw: default,
+            ),
+            patch("builtins.print"),
+        ):
+            vlm_config, _ = _prompt_cloud_vlm()
+
+        assert vlm_config["provider"] == "glm"
+
+    def test_two_step_seeds_vlm_plan_from_embedding(self):
+        dense = {
+            "provider": "volcengine",
+            "model": "doubao-embedding-vision",
+            "api_key": "ark-key",
+            "api_base": "https://ark.cn-beijing.volces.com/api/coding/v3",
+            "dimension": 1024,
+        }
+        with (
+            patch(
+                "openviking_cli.setup_wizard._prompt_embedding_flow",
+                return_value=(dense, None),
+            ),
+            patch(
+                "openviking_cli.setup_wizard._prompt_cloud_vlm",
+                return_value=(_SKIP_VLM, None),
+            ) as mock_vlm,
+            patch("builtins.print"),
+        ):
+            config, _ = _wizard_two_step()
+
+        assert "vlm" not in config
+        assert (
+            mock_vlm.call_args.kwargs.get("plan_seed")
+            == "https://ark.cn-beijing.volces.com/api/coding/v3"
+        )
+
+
+class TestCustomEmbedding:
+    def test_interactive_openai_compatible(self):
+        from openviking_cli.setup_wizard import _prompt_cloud_embedding
+
+        answers = {"API Base URL": "https://my.proxy/v1", "Model": "text-embedding-3-large"}
+        with (
+            # Provider menu -> Custom / manual, custom menu -> interactive
+            patch("openviking_cli.setup_wizard._prompt_choice", side_effect=[4, 1]),
+            patch(
+                "openviking_cli.setup_wizard._prompt_required_input",
+                side_effect=lambda prompt, default=None, **kw: answers.get(prompt, default),
+            ),
+            patch(
+                "openviking_cli.setup_wizard._prompt_api_key_with_env",
+                return_value="sk-proxy",
+            ),
+            patch("openviking_cli.setup_wizard._prompt_required_int", return_value=3072),
+            patch("builtins.print"),
+        ):
+            dense = _prompt_cloud_embedding()
+
+        assert dense == {
+            "provider": "openai",
+            "model": "text-embedding-3-large",
+            "api_key": "sk-proxy",
+            "api_base": "https://my.proxy/v1",
+            "dimension": 3072,
+        }
+
+    def test_manual_edit_returns_custom_sentinel(self):
+        from openviking_cli.setup_wizard import _prompt_cloud_embedding
+
+        with (
+            patch("openviking_cli.setup_wizard._prompt_choice", side_effect=[4, 2]),
+            patch("openviking_cli.setup_wizard._wizard_custom") as mock_custom,
+            patch("builtins.print"),
+        ):
+            assert _prompt_cloud_embedding() is _CUSTOM_SETUP
+        mock_custom.assert_called_once()
+
+    def test_custom_back_returns_to_provider_menu(self):
+        from openviking_cli.setup_wizard import _prompt_cloud_embedding
+
+        with (
+            # Custom / manual -> back -> provider menu -> back
+            patch("openviking_cli.setup_wizard._prompt_choice", side_effect=[4, 0, 0]),
+            patch("builtins.print"),
+        ):
+            assert _prompt_cloud_embedding(allow_back=True) is _GO_BACK
+
+    def test_back_token_at_dimension_returns_to_provider_menu(self):
+        from openviking_cli.setup_wizard import _prompt_cloud_embedding
+
+        with (
+            # Custom / manual -> interactive, then !back at the dimension prompt,
+            # provider menu -> back
+            patch("openviking_cli.setup_wizard._prompt_choice", side_effect=[4, 1, 0]),
+            patch(
+                "openviking_cli.setup_wizard._prompt_required_input",
+                side_effect=lambda prompt, default=None, **kw: default or "value",
+            ),
+            patch("openviking_cli.setup_wizard._prompt_api_key_with_env", return_value="sk-x"),
+            patch("openviking_cli.setup_wizard._prompt_required_int", return_value=_GO_BACK),
+            patch("builtins.print"),
+        ):
+            assert _prompt_cloud_embedding(allow_back=True) is _GO_BACK
+
+
+class TestCustomVlm:
+    def test_interactive_custom_vlm(self):
+        from openviking_cli.setup_wizard import _prompt_cloud_vlm
+
+        answers = {"API Base URL": "https://my.proxy/v1", "Model": "my-vlm"}
+        with (
+            patch("openviking_cli.setup_wizard._prompt_choice", return_value=7),
+            patch(
+                "openviking_cli.setup_wizard._prompt_required_input",
+                side_effect=lambda prompt, default=None, **kw: answers.get(prompt, default),
+            ),
+            patch(
+                "openviking_cli.setup_wizard._prompt_api_key_with_env",
+                return_value="sk-proxy",
+            ),
+            patch("builtins.print"),
+        ):
+            vlm_config, _ = _prompt_cloud_vlm()
+
+        assert vlm_config["provider"] == "openai"
+        assert vlm_config["model"] == "my-vlm"
+        assert vlm_config["api_base"] == "https://my.proxy/v1"
+        assert vlm_config["api_key"] == "sk-proxy"
+
+    def test_back_token_in_custom_vlm_returns_to_provider_menu(self):
+        from openviking_cli.setup_wizard import _prompt_cloud_vlm
+
+        with (
+            # Custom -> !back at the URL prompt -> provider menu -> GLM
+            patch("openviking_cli.setup_wizard._prompt_choice", side_effect=[7, 6]),
+            patch(
+                "openviking_cli.setup_wizard._prompt_required_input",
+                side_effect=lambda prompt, default=None, **kw: (
+                    _GO_BACK if prompt == "API Base URL" else default
+                ),
+            ),
+            patch("openviking_cli.setup_wizard._prompt_api_key_with_env", return_value="glm-key"),
+            patch("builtins.print"),
+        ):
+            vlm_config, _ = _prompt_cloud_vlm()
+
+        assert vlm_config["provider"] == "glm"
+
+    def test_required_input_back_token(self):
+        with patch("builtins.input", return_value="!back"):
+            assert _prompt_required_input("Model", allow_back=True) is _GO_BACK
+        with patch("builtins.input", return_value="!back"):
+            assert _prompt_required_input("Model") == "!back"  # literal without allow_back
+
+    def test_required_int_back_token(self):
+        with patch("builtins.input", return_value="!back"):
+            assert _prompt_required_int("Dimension", allow_back=True) is _GO_BACK
+
+
 class TestBackupRotation:
     def test_first_backup_uses_bak_suffix(self, tmp_path):
         config_path = tmp_path / "ov.conf"
@@ -701,7 +1034,8 @@ class TestCurrentConfigSeeding:
             "dimension": 2048,
         }
         with (
-            patch("openviking_cli.setup_wizard._prompt_choice", return_value=1) as mock_choice,
+            # Provider menu -> VolcEngine, plan menu -> pay-as-you-go (matches current api_base)
+            patch("openviking_cli.setup_wizard._prompt_choice", side_effect=[1, 3]) as mock_choice,
             # Keep the existing API key? -> yes
             patch("openviking_cli.setup_wizard._prompt_confirm", return_value=True),
             # Model prompt returns its default (the current model)
@@ -716,8 +1050,10 @@ class TestCurrentConfigSeeding:
 
         assert dense == current
         mock_env_key.assert_not_called()  # key kept, never re-prompted
-        # Provider menu default seeded to the current provider.
-        assert mock_choice.call_args.kwargs.get("default") == 1
+        # Provider menu default seeded to the current provider, plan menu to
+        # the plan matching the current endpoint.
+        assert mock_choice.call_args_list[0].kwargs.get("default") == 1
+        assert mock_choice.call_args_list[1].kwargs.get("default") == 3
 
     def test_vlm_option_index_mapping(self):
         from openviking_cli.setup_wizard import _vlm_option_index_for
@@ -1144,7 +1480,7 @@ class TestTwoStepWizard:
             _wizard_two_step()
 
         mock_vlm.assert_called_once_with(
-            allow_skip=True, reuse_key=("volcengine", "ve-key"), allow_back=True
+            allow_skip=True, reuse_key=("volcengine", "ve-key"), allow_back=True, plan_seed=None
         )
 
     def test_cancel_in_vlm_step_cancels_setup(self):

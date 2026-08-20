@@ -99,13 +99,7 @@ UsageEvent 是可独立传输和消费的完整事件。`UsageContext` 只用于
 - 支持 OpenCode 的 `openviking_*`、OpenClaw 的 `ov_*` 和
   `mcp__openviking__*` 命名空间形式；仅按受支持的工具名精确识别。
 - 通用工具返回其他记忆类型时，只保留当前用户 `memories/experiences/` 目录下的规范文件 URI。
-- `search_experience`、`read_experience` 已下线，不再生成使用事件或 Experience 应用关系。
-
-升级时应先升级 Agent 插件，或让插件与 OpenViking 内核同步升级。若先升级内核、
-仍由旧插件调用 `search_experience`、`read_experience`，工具调用本身不受影响，但升级
-窗口内不会生成 Experience 使用事件。历史 archive 中的专用工具记录不做追溯转换。
-OpenClaw 旧配置中的 `enabledTools: ["experience"]` 仍可启动，该 selector 作为迁移
-别名映射到通用 `ov_search`、`ov_read`；新配置不再使用该别名。
+- 只识别上述正式通用工具，不为未发布的专用工具名提供解析或配置兼容。
 
 ## 6. UsageSink 机制
 

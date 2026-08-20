@@ -169,7 +169,7 @@ sequenceDiagram
 | 向量缓存目录        | 任意非叶段等于 `embedding_cache`                               | embedding 缓存为派生数据                                               |
 | 向量索引文件        | 叶子文件以 `.faiss` 或 `.index` 结尾                            | 纯计算产物,体积大且可重建                                                   |
 
-L0/L1 派生文件(`.abstract.md`、`.overview.md`、`.relations.json`)未命中任一剪枝规则,**会**纳入主线 commit。restore 时随源文件一起回滚,无需重新生成;Python 层在 `restore` 完成后按 `(written_paths, deleted_paths)` 精确触发 L0/L1/DETAIL 向量异步重建(`.relations.json` 不触发向量任务)。
+L0/L1 派生文件(`.abstract.md`、`.overview.md`)未命中任一剪枝规则,**会**纳入主线 commit。restore 时随源文件一起回滚,无需重新生成;Python 层在 `restore` 完成后按 `(written_paths, deleted_paths)` 精确触发 L0/L1/DETAIL 向量异步重建。
 
 此外,版本管理支持账号级 `.ovgitignore` 控制文件,物理路径为 `/local/{account_id}/.ovgitignore`,Git tree path 为 `.ovgitignore`。该文件使用账号根相对的 glob 子集规则,在 `commit` 枚举当前 VFS 文件和扫描上一版 tree 时共同生效;匹配的文件不会进入新的 snapshot commit,即使它们曾存在于历史 commit 中。`.ovgitignore` 文件自身始终进入版本管理,规则无法把它排除。
 
@@ -643,7 +643,7 @@ pub async fn restore(&self, req: RestoreRequest) -> Result<RestoreResponse> {
             self.vfs.write(&account_path(&account, &prefixed(&path)), body).await?;
             Ok::<_, GitError>(prefixed(&path))
         })
-        .buffer_unordered(32)        // 当前实现硬编码 32,未读取 git.tuning.restore_concurrency
+        .buffer_unordered(32)        // 当前实现硬编码 32
         .try_collect().await?;
     let deleted_paths: Vec<String> = stream::iter(diff.to_delete)
         .map(|path| {
@@ -707,9 +707,9 @@ pub async fn restore(&self, req: RestoreRequest) -> Result<RestoreResponse> {
 >
 > - **空目录清理(步骤 6b)**：删除完文件后会沿祖先链 rmdir 至 `project_dir` 或第一个非空目录,避免 VFS 残留空目录。
 > - **幂等删除**：`vfs.rm` 返回 NotFound 视为成功,使 restore 可以在已被并发清理的路径上继续推进。
-> - **written\_paths / deleted\_paths**：`Applied` 响应除了 `written/deleted` 计数外,还返回**全量受影响路径(已加 project\_dir 前缀)**;Python 层按 marker / 源文件 / `.relations.json` 分类,精确触发 L0/L1/DETAIL 向量更新,不再依赖广义的 `_trigger_vector_rebuild(paths)`。
+> - **written\_paths / deleted\_paths**：`Applied` 响应除了 `written/deleted` 计数外,还返回**全量受影响路径(已加 project\_dir 前缀)**;Python 层按 marker / 源文件分类,精确触发 L0/L1/DETAIL 向量更新,不再依赖广义的 `_trigger_vector_rebuild(paths)`。
 > - **没有 commit\_index 刷新**：对应 §8.1 的 Fast Path 1 未实现,restore 末尾也无须刷新 index。
-> - **回写并发度**：当前硬编码 `buffer_unordered(32)`,**尚未**读取 `git.tuning.restore_concurrency` 配置项。
+> - **回写并发度**：当前硬编码 `buffer_unordered(32)`，尚未提供配置项。
 >
 > ✅ **推荐:** 生产环境调用前先以 `dry_run=true` 跑一遍取得差异列表,再让用户确认,避免误覆盖未提交的本地变更。
 
@@ -1012,13 +1012,10 @@ secret_key_env    = "OV_S3_SK"
 cas_mode          = "native"       # "native"(If-Match):当前唯一支持的模式
 use_path_style    = true           # path-style addressing(MinIO/LocalStack/TOS 默认开)
 
-# 高级调优(字段已在 config 中定义,但 MVP 部分尚未生效)
+# 高级调优
 [git.tuning]
-upload_concurrency   = 64          # ⚠️ 当前未读取:commit blob 上传现为串行
-restore_concurrency  = 32          # ⚠️ 当前未读取:restore 回写并发度硬编码 32
-ref_cas_max_retry    = 3           # ⚠️ 当前未读取:commit 内部不做重试(见 §11.3)
-ref_cas_backoff_ms   = 50          # ⚠️ 当前未读取
 commit_index_enabled = true        # Fast Path 1 总开关(默认 true);关闭后强制走 slow path,适合测试 / mtime 不可靠环境
+blob_exists_precheck_enabled = true # Fast Path 3 总开关(默认 true)
 ```
 
 ## 10.2 切换本地↔远程
@@ -1040,7 +1037,7 @@ commit_index_enabled = true        # Fast Path 1 总开关(默认 true);关闭�
 
 | 层次        | 并发原语                     | 说明                               |
 | --------- | ------------------------ | -------------------------------- |
-| Blob 上传   | `buffer_unordered(64)`   | 内容寻址,天然幂等;同 oid 多次 put 安全        |
+| Blob 上传   | 逐文件串行                    | slow path 逐个读取并写入 blob；内容寻址保证同 oid 重复 put 安全 |
 | Tree 写入   | 串行(`Editor::write` 自底向上) | 同 oid 幂等,但顺序必须自底向上               |
 | Commit 写入 | 串行,最后一步                  | 同 oid 幂等                         |
 | Ref 更新    | CAS                      | 本地: 进程锁 + rename(2);S3: If-Match |
@@ -1062,7 +1059,7 @@ expected=parent_b]
     A3 --> OK1[OK new=commit_a]
     B3 --> FAIL[CasConflict
 current=commit_a]
-    FAIL --> RETRY{重试?}
+    FAIL --> RETRY{调用方重试?}
     RETRY -- yes --> B1
     RETRY -- no --> ERR[返回 409
 给上层]
@@ -1071,7 +1068,7 @@ current=commit_a]
 ## 11.3 重试策略
 
 - **幂等部分(blob/tree/commit 写)**: 同 oid 多次 put 安全;后端层面通过 `If-None-Match: *`(S3)与 `try_exists`(local)短路重复写;service 层不额外做 retry。
-- **CAS 冲突**: **当前实现** GitService::commit/restore **内部不做自动重试,直接以 GitError::ConcurrentCommit 上抛给 Python 层,由调用方决定是否 re-read parent 重建 tree 重新提交。git.tuning.ref\_cas\_max\_retry / ref\_cas\_backoff\_ms 配置项已在 GitTuningConfig 中定义但**尚未在代码中读取\*\*,后续接入。
+- **CAS 冲突**: **当前实现** GitService::commit/restore **内部不做自动重试,直接以 GitError::ConcurrentCommit 上抛给 Python 层,由调用方决定是否 re-read parent 重建 tree 重新提交。后续若实现内部重试，再增加对应调优配置。
 - **跨账号**: 不同 account\_id 的 ref 路径不同,天然无冲突,可完全并行
 
 ***
@@ -1082,7 +1079,7 @@ current=commit_a]
 
 - Git 数据路径全部以 `{account_id}` 为顶层前缀,与现有 `/local/{account_id}/` 隔离模型完全一致
 - `GitService` 所有方法的第一个参数都是 `account_id`,binding 层从 `RequestContext.account_id` 注入,不允许跨账号访问
-- Path 解析时必须经过 `validate_account_id`(白名单字符集 + 长度),防止 `../` 注入
+- Path 解析时必须经过 `validate_account_id`（白名单字符集与结构规则），防止 `../` 注入
 
 ## 12.2 加密
 
@@ -1092,11 +1089,11 @@ current=commit_a]
 
 | 维度           | 限制                               | 措施                                   | 当前状态                                             |
 | ------------ | -------------------------------- | ------------------------------------ | ------------------------------------------------ |
-| 单 blob 大小    | ≤ 100MB                          | commit 前 stat 检查,超限报错                | **未实现**(`GitError::BlobTooLarge` 已定义,但无运行时检查)    |
+| 单 blob 大小    | ≤ 100MB                          | commit 前 stat 检查,超限报错                | **未实现**：commit 和普通 show 均无 100MB 全局限制；`show_with_limit` 仅在调用方显式传入上限时生效 |
 | 单 commit 文件数 | ≤ 50000                          | enumerate 阶段提前拒绝                     | **未实现**(`GitError::TooManyFiles` 已定义,但无运行时检查)    |
 | 账号 Git 容量    | 由 quota 系统单独管控                   | 放在 `[git.quota]`,首版默认 10GB           | **未实现**(配置块未引入)                                  |
 | restore 并发   | 同子树串行,同一 account\_id 全量 restore 互斥 | `VikingFS.restore` 用 `LockContext` 树锁包裹 writeback:scoped restore 锁 `project_dir`,全量 restore 锁账号根;防止 VFS 写竞态 | **已实现**(写回阶段加锁;后台 reindex 在锁释放后调度,冲突映射为 `ResourceBusyError`) |
-| 账号 ID 校验     | 白名单字符集 + 长度,防 `../` 注入           | `validate_account_id` 在 binding 入口拒绝 | **未实现**(`GitError::InvalidAccountId` 已定义,但无校验代码) |
+| 账号 ID 校验     | 白名单字符集,防 `../` 注入                 | `validate_account_id` 在 service 公开入口拒绝 | **已实现**，覆盖 commit/show/log/restore 等入口并有 Rust/Python binding 测试 |
 
 ***
 
@@ -1109,11 +1106,11 @@ current=commit_a]
 | 类别        | Variant                                                                                     | 说明                                          |
 | --------- | ------------------------------------------------------------------------------------------- | ------------------------------------------- |
 | 后端透传      | `ObjectStore(ObjectStoreError)`、`RefStore(RefStoreError)`、`Vfs(...)`                        | 来自存储后端 / VFS                                |
-| 路径校验      | `PathNotFound(String)`、`PathIsDirectory(String)`、`InvalidProjectDir(String)`                | show / restore 入参校验                         |
+| 路径校验      | `PathNotFound(String)`、`PathIsDirectory(String)`、`InvalidProjectDir(String)`、`InvalidAccountId(String)` | show / restore / 账号入参校验                    |
 | Tree 内容缺失 | `SubtreeNotFoundInCommit { commit, path }`                                                  | restore 时 source 中缺失目标子树(已通过空树语义包装,正常路径不抛出) |
 | Ref 解析    | `OidPrefixNotFound(String)`、`AmbiguousOid { prefix, candidates }`                           | 缩写 OID 解析失败                                 |
 | 并发        | `ConcurrentCommit`                                                                          | CAS 失败(由 ref\_store conflict 上抛)            |
-| 资源限制      | `BlobTooLarge { path, size, max }`、`TooManyFiles { count, max }`、`InvalidAccountId(String)` | 已定义但**当前无运行时检查**,详见 §12.3                   |
+| 资源限制      | `BlobTooLarge { size, limit }`、`TooManyFiles { count, limit }`                              | 可选的受限 show 会触发 `BlobTooLarge`；全局 blob 大小和 commit 文件数限制尚未实现，详见 §12.3 |
 | 其他        | `FeatureDisabled`、`CorruptedObject(...)`、`Other(String)`                                    | binding 关闭、对象腐烂、兜底                          |
 
 ## 13.2 Python 异常映射
@@ -1123,7 +1120,8 @@ current=commit_a]
 | `FeatureDisabled`                                                    | `AGFSNotSupportedError`     | git 模块未启用   |
 | `ConcurrentCommit`                                                   | `GitConcurrentCommitError`  | 需要上层重试或人工介入 |
 | `PathNotFound` / `OidPrefixNotFound` / 后端 NotFound                   | `AGFSNotFoundError`         | 404 语义      |
-| `PathIsDirectory` / `BlobTooLarge` / `TooManyFiles` / `AmbiguousOid` | `AGFSInvalidOperationError` | 入参或资源错误     |
+| `PathIsDirectory` / `TooManyFiles` / `AmbiguousOid`                  | `AGFSInvalidOperationError` | 入参或资源错误     |
+| `BlobTooLarge`                                                       | `AGFSResourceExhaustedError` | 调用方指定的 blob 读取上限被触发 |
 | `InvalidAccountId` / `InvalidProjectDir`                             | `AGFSInvalidPathError`      | 路径/账号 ID 非法 |
 | `CorruptedObject` / `Other` / `Vfs`                                  | `AGFSInternalError`         | 底层异常        |
 
@@ -1206,10 +1204,9 @@ current=commit_a]
 ### Rust 侧
 
 - **commit / restore 内部 CAS 重试循环** —— 文档 §11.3 旧版描述。当前 `commit()` 明确不做 retry,`ConcurrentCommit` 直接上抛。
-- *git.tuning.* 配置项接入\* —— 文档 §10.1。`upload_concurrency` / `restore_concurrency` / `ref_cas_max_retry` / `ref_cas_backoff_ms` 已在 `GitTuningConfig` 中定义并解析,但代码尚未读取(restore 回写并发度硬编码 32,commit blob 上传为串行)。
+- **可配置并发度与 CAS 重试** —— restore 回写并发度当前硬编码 32，commit blob 上传为串行，commit 内部不做 retry；待实现行为时再增加对应配置项。
 - **S3 RedisLock CAS 模式** —— 文档 §7.2。`CasMode::RedisLock` 仅作为枚举占位,实际调用返回 "not yet implemented" 错误。
-- **资源限制实际生效** —— 文档 §12.3。`BlobTooLarge` / `TooManyFiles` / `[git.quota]` 配置块均未实现(仅错误 variant 已定义)。同账号 restore 写竞态防护已通过 `VikingFS.restore` 的 `LockContext` 树锁实现(见 §12.3)。
-- **账号 ID 校验** —— 文档 §12.1。`validate_account_id` 未实现,`GitError::InvalidAccountId` 仅占位。
+- **commit 资源限制实际生效** —— 文档 §12.3。100MB blob 限制、commit 文件数限制与 `[git.quota]` 配置块尚未实现；`show_with_limit` 只提供调用方指定的读取上限，当前 snapshot diff 使用 10MiB，不代表普通 show 存在全局上限。同账号 restore 写竞态防护已通过 `VikingFS.restore` 的 `LockContext` 树锁实现(见 §12.3)。
 - **本地 ref 跨进程锁** —— 文档 §7.1。`LocalRefStore` 仅有进程内 `DashMap<Mutex>`,未叠加 `flock`。
 - **观测性 (tracing / metrics)** —— 文档 §14.1 / §14.2。span / event / 各类 counter / histogram 均未接入。
 - **健康检查增强** —— 文档 §14.3。当前仅 `git_enabled` / `git_backend`,未接入 `writable` / `last_commit_age_sec` / 心跳。
@@ -1219,7 +1216,7 @@ current=commit_a]
 
 ### Python 侧
 
-- **VikingFS.commit / restore / show / log 已实现**(`openviking/storage/viking_fs.py`),`_uri_to_tree_path` / `_tree_path_to_uri` / `_classify_restore_path` / `_schedule_vector_rebuild` / `_run_vector_rebuild` 均已实现,精确按 marker / source-file / `.relations.json` 调度 `ReindexExecutor`。
+- **VikingFS.commit / restore / show / log 已实现**(`openviking/storage/viking_fs.py`),`_uri_to_tree_path` / `_tree_path_to_uri` / `_classify_restore_path` / `_schedule_vector_rebuild` / `_run_vector_rebuild` 均已实现,精确按 marker / source-file 调度 `ReindexExecutor`。
 - **VikingFS.\_trigger\_vector\_rebuild(account, paths)(早期设计)** 已被更精确的 `_schedule_vector_rebuild(written, deleted)` 替代,**不会**再实现旧 API。
 
 ***
@@ -1232,7 +1229,7 @@ current=commit_a]
 | 大账号 commit 时 enumerate 慢               | 中  | `paths` 参数限定 scope;后续引入增量 diff(基于 mtime + parent tree)                              |
 | 双重加密导致 restore 后内容损坏                   | 高  | restore 路径绕过 `viking_fs.write` 加密,直接走 `MountableFS`;集成测试覆盖                          |
 | L0/L1 派生文件纳入版本历史,模型异步重建导致 commit 间差异增加 | 中  | 用户主动控制 commit 时机,不自动触发;L0/L1 文件通常较小(< 10KB),存储成本可控;如需降频可配置 commit 时忽略 mtime-only 变更 |
-| 同一账号多 Agent 高并发 commit                 | 中  | CAS 冲突自动重试 3 次;长期可引入"基于队列的串行化提交器"                                                   |
+| 同一账号多 Agent 高并发 commit                 | 中  | CAS 冲突直接返回调用方，由调用方决定是否重试；长期可引入"基于队列的串行化提交器"                                      |
 | Git 数据无 GC,长期膨胀                        | 中  | 首版不做 GC,运维侧定期 dump + 压缩;后续接入 reachability-based GC                                  |
 | loose object 数量爆炸,本地 inode 紧张          | 低  | Phase 4 引入 pack file;Git fanout 已经缓解一半                                              |
 
@@ -1261,7 +1258,7 @@ current=commit_a]
 | CAS          | Compare-And-Swap,本文特指 ref 更新时"仅当当前值 = 期望值才写入"                                                    |
 | Root Tree    | commit 对象指向的最顶层 tree 对象,代表整个仓库快照                                                                 |
 | Tree Editor  | `gix_object::tree::Editor`,gitoxide 提供的内存中 tree 构建器,支持 upsert/remove/write                       |
-| 派生文件         | `.abstract.md` / `.overview.md` / `.relations.json`,由 OpenViking 模型异步生成的 L0/L1 摘要文件,已纳入 Git 版本管理 |
+| 派生文件         | `.abstract.md` / `.overview.md`,由 OpenViking 模型异步生成的 L0/L1 摘要文件,已纳入 Git 版本管理 |
 
 ## 20.2 参考资料
 

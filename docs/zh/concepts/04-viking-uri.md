@@ -323,7 +323,7 @@ overview = await client.overview("viking://resources/docs/")
 |------|------|
 | `.abstract.md` | L0 摘要（~100 tokens） |
 | `.overview.md` | L1 概览（~2k tokens） |
-| `.relations.json` | 相关资源 |
+| `` | 相关资源 |
 | `.meta.json` | 元数据 |
 
 ## 最佳实践

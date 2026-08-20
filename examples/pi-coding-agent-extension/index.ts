@@ -245,11 +245,16 @@ export default async function (pi: ExtensionAPI) {
 
       if (args?.trim() === "commit") {
         await sync.shutdown();
+        const commitResult = config.takeoverEnabled ? null : await sync.commit();
         const ok = config.takeoverEnabled
           ? await takeover.commitAndAdvance()
-          : (await sync.commit()) !== null;
+          : commitResult !== null;
         if (ok) {
-          ctx.ui.notify("OpenViking: committed successfully", "info");
+          ctx.ui.notify(
+            "OpenViking: committed successfully" +
+              (commitResult?.trace_id ? ` (trace_id=${commitResult.trace_id})` : ""),
+            "info",
+          );
         } else {
           ctx.ui.notify("OpenViking: commit failed", "error");
         }

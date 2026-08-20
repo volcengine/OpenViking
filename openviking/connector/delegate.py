@@ -31,7 +31,6 @@ from openviking.connector.routing import (
     detect_connector_add_type,
     is_full_commit_sha,
 )
-from openviking.core.content_targets import ContentTargetSpec
 from openviking.parse.mode import ParseMode
 from openviking.resource.processing_mode import (
     DEFAULT_PROCESSING_MODE,
@@ -187,17 +186,6 @@ class ConnectorDelegate:
                 )
                 return False
 
-        if ctx is not None and (to or parent):
-            target = ContentTargetSpec.from_fields(
-                ctx=ctx,
-                kind="resource",
-                to=to,
-                parent=parent,
-                create_parent=bool((kwargs or {}).get("create_parent", False)),
-            )
-            to = target.to
-            parent = target.parent
-
         unsupported = self._unsupported_params(
             add_type=add_type,
             wait=wait,
@@ -328,15 +316,9 @@ class ConnectorDelegate:
             raise InvalidArgumentError(f"'{path}' does not match any Connector source type.")
         add_type, _ = resolved
 
-        target = ContentTargetSpec.from_fields(
-            ctx=ctx,
-            kind="resource",
-            to=to,
-            create_parent=bool(kwargs.get("create_parent", False)),
-        )
-        if not target.to:
+        task_resource_id = to or ""
+        if not task_resource_id:
             raise InvalidArgumentError("Connector import requires an exact 'to' target.")
-        task_resource_id = target.to
 
         if not kwargs.get("create_parent", False):
             # Match the native pipeline default: unless create_parent=true is

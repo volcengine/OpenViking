@@ -12,8 +12,6 @@ from collections import defaultdict
 from typing import Any, Dict, Optional
 
 from openviking.core.namespace import (
-    NamespaceShapeError,
-    canonicalize_uri,
     classify_uri,
     context_type_for_uri,
     relative_uri_path,
@@ -36,12 +34,18 @@ from openviking.session.memory.utils.resource_refs import (
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
+from openviking.storage.semantic_sidecar import (
+    SemanticSidecarFormatError,
+    is_semantic_sidecar_uri,
+    mark_semantic_sidecars_pending,
+    prepare_semantic_sidecar_write,
+)
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import build_queue_status_payload
+from openviking.utils.embedding_utils import vectorize_directory_meta, vectorize_file
 from openviking.utils.path_safety import validate_safe_viking_uri_path
-from openviking.utils.embedding_utils import vectorize_file
 from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import (
     AlreadyExistsError,
@@ -57,7 +61,7 @@ from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_DERIVED_FILENAMES = frozenset({".abstract.md", ".overview.md", ".relations.json"})
+_DERIVED_FILENAMES = frozenset({".relations.json"})
 _CREATE_ALLOWED_EXTENSIONS = frozenset(
     {
         ".md",
@@ -71,10 +75,14 @@ _CREATE_ALLOWED_EXTENSIONS = frozenset(
         ".ts",
     }
 )
-_BATCH_MAX_OPERATIONS = 128
+_BATCH_MAX_OPERATIONS = 256
 _BATCH_MAX_FILE_BYTES = 8 * 1024 * 1024
 _BATCH_MAX_TOTAL_BYTES = 16 * 1024 * 1024
 _SHA256_PREFIX = "sha256:"
+
+# Subtrees directly under a user root that OpenViking manages itself; only
+# memories/, resources/, and plain files may be written under a user root.
+_USER_MANAGED_SUBTREES = frozenset({"skills", "peers", "privacy", "sessions"})
 
 
 class ContentWriteCoordinator:
@@ -95,13 +103,10 @@ class ContentWriteCoordinator:
         timeout: Optional[float] = None,
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
     ) -> Dict[str, Any]:
-        try:
-            normalized_uri = canonicalize_uri(uri, ctx)
-        except NamespaceShapeError as exc:
-            raise InvalidArgumentError(str(exc)) from exc
         self._validate_mode(mode)
         processing_mode = normalize_processing_mode(processing_mode)
-        self._validate_target_uri(normalized_uri)
+        normalized_uri = self._validate_uri_path(uri, field_name="uri")
+        self._ensure_content_write_policy(normalized_uri)
         self._viking_fs._ensure_mutable_access(normalized_uri, ctx)
 
         if mode == "create":
@@ -116,14 +121,18 @@ class ContentWriteCoordinator:
 
         stat = await self._safe_stat(normalized_uri, ctx=ctx)
         if stat.get("isDir"):
-            raise InvalidArgumentError(f"write only supports existing files, got directory: {uri}")
+            raise InvalidArgumentError(
+                f"write only supports existing files, got directory: {normalized_uri}"
+            )
 
         context_type = context_type_for_uri(normalized_uri)
-        root_uri = await self._resolve_root_uri(normalized_uri, ctx=ctx, anchor_to_parent=True)
+        root_uri = await self._resolve_root_uri(
+            normalized_uri, ctx=ctx, anchor_to_parent=True
+        )
         written_bytes = len(content.encode("utf-8"))
         telemetry_id = get_current_telemetry().telemetry_id
 
-        if context_type == "memory":
+        if context_type == "memory" and not is_semantic_sidecar_uri(normalized_uri):
             return await self._write_memory_with_refresh(
                 uri=normalized_uri,
                 root_uri=root_uri,
@@ -166,7 +175,7 @@ class ContentWriteCoordinator:
         tree lock is held and before the first new write.  Refresh runs only after that
         lock is released so semantic processing can safely acquire descendant locks.
         """
-        normalized_root = self._canonicalize(root_uri, ctx=ctx, field_name="root_uri")
+        normalized_root = self._validate_uri_path(root_uri, field_name="root_uri")
         await self._validate_batch_root(normalized_root, ctx=ctx)
         normalized_operations = self._normalize_batch_operations(
             normalized_root, operations, ctx=ctx
@@ -185,6 +194,7 @@ class ContentWriteCoordinator:
         updated: list[str] = []
         unchanged: list[str] = []
         refresh_kinds: dict[str, str] = {}
+        sidecar_directories: set[str] = set()
         pending: list[tuple[dict[str, Any], bool]] = []
         conflict: ConflictError | None = None
         write_error: Exception | None = None
@@ -198,14 +208,28 @@ class ContentWriteCoordinator:
                     raise InvalidArgumentError(f"batch-write target must be a file: {uri}")
 
                 current = await self._viking_fs.read_file_bytes(uri, ctx=ctx) if exists else None
+                if is_semantic_sidecar_uri(uri):
+                    if not exists:
+                        raise InvalidArgumentError(
+                            f"cannot create generated semantic sidecar directly: {uri}"
+                        )
+                    operation = dict(operation)
+                    operation["content"] = self._prepare_semantic_sidecar_content(
+                        uri=uri,
+                        current_raw=current or b"",
+                        requested_raw=operation["content_bytes"],
+                        mode="replace",
+                    )
+                    operation["content_bytes"] = operation["content"].encode("utf-8")
                 desired_hash = self._content_hash(operation["content_bytes"])
                 if current is not None and self._content_hash(current) == desired_hash:
                     unchanged.append(uri)
-                    refresh_kinds[uri] = (
-                        "added"
-                        if operation["precondition"]["kind"] == "create_if_absent"
-                        else "modified"
-                    )
+                    if not is_semantic_sidecar_uri(uri):
+                        refresh_kinds[uri] = (
+                            "added"
+                            if operation["precondition"]["kind"] == "create_if_absent"
+                            else "modified"
+                        )
                     continue
 
                 precondition = operation["precondition"]
@@ -249,7 +273,12 @@ class ContentWriteCoordinator:
                         break
                     if existed:
                         updated.append(uri)
-                        refresh_kinds[uri] = "modified"
+                        if is_semantic_sidecar_uri(uri):
+                            parent = VikingURI(uri).parent
+                            if parent is not None:
+                                sidecar_directories.add(parent.uri)
+                        else:
+                            refresh_kinds[uri] = "modified"
                     else:
                         created.append(uri)
                         refresh_kinds[uri] = "added"
@@ -261,17 +290,29 @@ class ContentWriteCoordinator:
         telemetry_id = get_current_telemetry().telemetry_id
         request_registered = False
         try:
-            if refresh_kinds:
+            if refresh_kinds or sidecar_directories:
                 if wait and telemetry_id:
                     get_request_wait_tracker().register_request(telemetry_id)
                     request_registered = True
                 try:
-                    queue_status = await self._refresh_batch(
-                        refresh_kinds=refresh_kinds,
-                        ctx=ctx,
-                        wait=wait,
-                        timeout=timeout,
-                        telemetry_id=telemetry_id,
+                    for directory_uri in sorted(sidecar_directories):
+                        await self._vectorize_semantic_directory(
+                            directory_uri=directory_uri, ctx=ctx
+                        )
+                    queue_status = (
+                        await self._refresh_batch(
+                            refresh_kinds=refresh_kinds,
+                            ctx=ctx,
+                            wait=wait,
+                            timeout=timeout,
+                            telemetry_id=telemetry_id,
+                        )
+                        if refresh_kinds
+                        else (
+                            await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
+                            if wait
+                            else None
+                        )
                     )
                 except Exception as exc:
                     if conflict is not None or write_error is not None:
@@ -316,10 +357,10 @@ class ContentWriteCoordinator:
             "queue_status": queue_status,
         }
 
-    def _canonicalize(self, uri: str, *, ctx: RequestContext, field_name: str) -> str:
+    def _validate_uri_path(self, uri: str, *, field_name: str) -> str:
         try:
-            return validate_safe_viking_uri_path(canonicalize_uri(uri, ctx))
-        except (NamespaceShapeError, ValueError) as exc:
+            return validate_safe_viking_uri_path(uri)
+        except ValueError as exc:
             raise InvalidArgumentError(f"invalid {field_name}: {exc}") from exc
 
     async def _validate_batch_root(self, root_uri: str, *, ctx: RequestContext) -> None:
@@ -332,7 +373,9 @@ class ContentWriteCoordinator:
                 classification.content_index is None
                 or len(parts) <= classification.content_index + 1
             ):
-                raise InvalidArgumentError("batch-write root must be inside a memory type directory")
+                raise InvalidArgumentError(
+                    "batch-write root must be inside a memory type directory"
+                )
         elif parts == ["resources"] or (
             classification.content_index is not None
             and len(parts) <= classification.content_index + 1
@@ -341,7 +384,9 @@ class ContentWriteCoordinator:
         self._viking_fs._ensure_mutable_access(root_uri, ctx)
         stat = await self._safe_stat(root_uri, ctx=ctx)
         if not stat.get("isDir"):
-            raise InvalidArgumentError(f"batch-write root must be an existing directory: {root_uri}")
+            raise InvalidArgumentError(
+                f"batch-write root must be an existing directory: {root_uri}"
+            )
 
     def _normalize_batch_operations(
         self,
@@ -364,15 +409,17 @@ class ContentWriteCoordinator:
         for raw in operations:
             if not isinstance(raw, dict):
                 raise InvalidArgumentError("batch-write operation must be an object")
-            uri = self._canonicalize(raw.get("uri", ""), ctx=ctx, field_name="operation uri")
+            uri = self._validate_uri_path(raw.get("uri", ""), field_name="operation uri")
             if uri in seen:
                 raise InvalidArgumentError(f"duplicate batch-write target: {uri}")
             seen.add(uri)
             if not relative_uri_path(root_uri, uri):
                 raise InvalidArgumentError(f"batch-write target is outside root_uri: {uri}")
             if context_type_for_uri(uri) != context_type:
-                raise InvalidArgumentError(f"batch-write target has a different context type: {uri}")
-            self._validate_target_uri(uri)
+                raise InvalidArgumentError(
+                    f"batch-write target has a different context type: {uri}"
+                )
+            self._ensure_content_write_policy(uri)
             self._viking_fs._ensure_mutable_access(uri, ctx)
 
             has_content = "content" in raw
@@ -471,9 +518,7 @@ class ContentWriteCoordinator:
                 parent = VikingURI(uri).parent
                 memory_groups[parent.uri if parent is not None else uri].append(uri)
                 continue
-            refresh_root = await self._resolve_root_uri(
-                uri, ctx=ctx, anchor_to_parent=True
-            )
+            refresh_root = await self._resolve_root_uri(uri, ctx=ctx, anchor_to_parent=True)
             resource_groups[(refresh_root, context_type)][change_type].append(uri)
 
         for (refresh_root, context_type), changes in sorted(resource_groups.items()):
@@ -522,6 +567,13 @@ class ContentWriteCoordinator:
         target_uri: str = "",
         recursive: bool = False,
     ) -> None:
+        changed_entries = len({uri for values in changes.values() for uri in values})
+        await mark_semantic_sidecars_pending(
+            viking_fs=self._viking_fs,
+            dir_uri=root_uri,
+            changed_entries=changed_entries,
+            ctx=ctx,
+        )
         queue_manager = get_queue_manager()
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
         telemetry = get_current_telemetry()
@@ -550,6 +602,7 @@ class ContentWriteCoordinator:
                 for change_type in ("added", "modified")
                 if changes.get(change_type)
             },
+            generation_trigger="content_write",
         )
         if msg.telemetry_id:
             get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)
@@ -557,9 +610,7 @@ class ContentWriteCoordinator:
             await semantic_queue.enqueue(msg)
         except Exception as exc:
             if msg.telemetry_id:
-                get_request_wait_tracker().mark_semantic_failed(
-                    msg.telemetry_id, msg.id, str(exc)
-                )
+                get_request_wait_tracker().mark_semantic_failed(msg.telemetry_id, msg.id, str(exc))
             raise
 
     @staticmethod
@@ -584,24 +635,19 @@ class ContentWriteCoordinator:
         recursive: bool = False,
         ctx: RequestContext,
     ) -> Dict[str, Any]:
-        try:
-            normalized_uri = canonicalize_uri(uri, ctx)
-        except NamespaceShapeError as exc:
-            raise InvalidArgumentError(str(exc)) from exc
-
         self._validate_tag_mode(mode)
-        normalized_tags = normalize_search_tags(tags)
-        stat = await self._safe_stat(normalized_uri, ctx=ctx)
+        normalized_tags = normalize_search_tags(tags, discard_invalid=True)
+        stat = await self._safe_stat(uri, ctx=ctx)
         if stat.get("isDir"):
             return await self._set_directory_tags(
-                uri=normalized_uri,
+                uri=uri,
                 tags=normalized_tags,
                 mode=mode,
                 recursive=recursive,
                 ctx=ctx,
             )
         return await self._set_single_uri_tags(
-            uri=normalized_uri,
+            uri=uri,
             tags=normalized_tags,
             mode=mode,
             recursive=recursive,
@@ -723,11 +769,25 @@ class ContentWriteCoordinator:
         try:
             if mode != "create":
                 previous_content = await self._viking_fs.read_file(uri, ctx=ctx)
+            elif is_semantic_sidecar_uri(uri):
+                raise InvalidArgumentError(
+                    f"cannot create generated semantic sidecar directly: {uri}"
+                )
             if wait and telemetry_id:
                 get_request_wait_tracker().register_request(telemetry_id)
-            await self._write_in_place(uri, content, mode=mode, ctx=ctx, lease_ref=lease)
+            await self._write_in_place(
+                uri,
+                content,
+                mode=mode,
+                ctx=ctx,
+                lease_ref=lease,
+                existing_raw=previous_content,
+            )
             content_written = True
-            if processing_mode == VECTORS_ONLY:
+            if is_semantic_sidecar_uri(uri):
+                vector_enqueued = await self._vectorize_semantic_sidecar(uri=uri, ctx=ctx)
+                post_process_started = True
+            elif processing_mode == VECTORS_ONLY:
                 vector_enqueued = await self._vectorize_written_file(
                     uri=uri,
                     context_type=context_type,
@@ -751,7 +811,17 @@ class ContentWriteCoordinator:
                 else None
             )
             result_kwargs = {}
-            if processing_mode == VECTORS_ONLY:
+            if is_semantic_sidecar_uri(uri):
+                _, vector_status = (
+                    self._refresh_statuses(wait=wait, queue_status=queue_status)
+                    if vector_enqueued
+                    else ("skipped", "skipped")
+                )
+                result_kwargs = {
+                    "semantic_status": "skipped",
+                    "vector_status": vector_status,
+                }
+            elif processing_mode == VECTORS_ONLY:
                 if vector_enqueued:
                     _, vector_status = self._refresh_statuses(
                         wait=wait,
@@ -831,6 +901,42 @@ class ContentWriteCoordinator:
             ctx=ctx,
         )
 
+    async def _vectorize_semantic_sidecar(self, *, uri: str, ctx: RequestContext) -> bool:
+        """Re-index a manually edited L0/L1 body without regenerating it."""
+
+        parent = VikingURI(uri).parent
+        if parent is None:
+            return False
+        await self._vectorize_semantic_directory(directory_uri=parent.uri, ctx=ctx)
+        return True
+
+    async def _vectorize_semantic_directory(
+        self, *, directory_uri: str, ctx: RequestContext
+    ) -> None:
+        """Re-index the semantic levels that exist for one directory."""
+
+        async def read_if_exists(uri: str) -> Optional[str]:
+            try:
+                return await self._viking_fs.read_file(uri, ctx=ctx)
+            except Exception as exc:
+                if self._is_not_found(exc):
+                    return None
+                raise
+
+        abstract = await read_if_exists(f"{directory_uri}/.abstract.md")
+        overview = await read_if_exists(f"{directory_uri}/.overview.md")
+        if abstract is None and overview is None:
+            return
+        await vectorize_directory_meta(
+            uri=directory_uri,
+            abstract=abstract or "",
+            overview=overview or "",
+            context_type=context_type_for_uri(directory_uri),
+            ctx=ctx,
+            include_abstract=abstract is not None,
+            include_overview=overview is not None,
+        )
+
     def _validate_mode(self, mode: str) -> None:
         if mode not in {"replace", "append", "create"}:
             raise InvalidArgumentError(f"unsupported write mode: {mode}")
@@ -839,16 +945,12 @@ class ContentWriteCoordinator:
         if mode not in {"replace", "append"}:
             raise InvalidArgumentError(f"unsupported tag mode: {mode}")
 
-    def _validate_target_uri(self, uri: str) -> None:
+    def _ensure_content_write_policy(self, uri: str) -> None:
         name = uri.rstrip("/").split("/")[-1]
         if name in _DERIVED_FILENAMES:
             raise InvalidArgumentError(f"cannot write derived semantic file directly: {uri}")
         if is_watch_task_control_uri(uri):
             raise InvalidArgumentError(f"cannot write watch task control file directly: {uri}")
-
-        parsed = VikingURI(uri)
-        if parsed.scope not in {"resources", "user", "agent"}:
-            raise InvalidArgumentError(f"write is not supported for scope: {parsed.scope}")
 
     def _is_not_found(self, exc: Exception) -> bool:
         """Check if an exception indicates a not-found error (OpenViking or AGFS)."""
@@ -891,6 +993,8 @@ class ContentWriteCoordinator:
         timeout: Optional[float],
         processing_mode: ProcessingMode,
     ) -> Dict[str, Any]:
+        if is_semantic_sidecar_uri(uri):
+            raise InvalidArgumentError(f"cannot create generated semantic sidecar directly: {uri}")
         self._validate_create_extension(uri)
 
         stat = await self._safe_stat(uri, ctx=ctx, allow_not_found=True)
@@ -940,7 +1044,23 @@ class ContentWriteCoordinator:
         mode: str,
         ctx: RequestContext,
         lease_ref: Optional[Dict[str, Any]] = None,
+        existing_raw: Optional[str] = None,
     ) -> None:
+        if is_semantic_sidecar_uri(uri):
+            current_raw = (
+                existing_raw
+                if existing_raw is not None
+                else await self._viking_fs.read_file(uri, ctx=ctx)
+            )
+            rendered = self._prepare_semantic_sidecar_content(
+                uri=uri,
+                current_raw=current_raw,
+                requested_raw=content,
+                mode=mode,
+            )
+            await self._viking_fs.write_file(uri, rendered, ctx=ctx, lease_ref=lease_ref)
+            return
+
         if context_type_for_uri(uri) == "memory":
             if mode == "replace":
                 existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
@@ -962,13 +1082,25 @@ class ContentWriteCoordinator:
             return
 
         if mode == "append":
+            # Plain concatenation for resource/skill files: MEMORY_FIELDS is a
+            # reserved trailer of memory namespaces only (see content_visibility),
+            # so non-memory appends must not round-trip through MemoryFileUtils
+            # (which strips trailing newlines and injects a metadata trailer).
             existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
-            mf = MemoryFileUtils.read(existing_raw, uri=uri)
-            mf.content = mf.content + content
-            updated_raw = MemoryFileUtils.write(mf)
-            await self._viking_fs.write_file(uri, updated_raw, ctx=ctx, lease_ref=lease_ref)
+            await self._viking_fs.write_file(
+                uri, existing_raw + content, ctx=ctx, lease_ref=lease_ref
+            )
             return
         await self._viking_fs.write_file(uri, content, ctx=ctx, lease_ref=lease_ref)
+
+    @staticmethod
+    def _prepare_semantic_sidecar_content(
+        *, uri: str, current_raw: str | bytes, requested_raw: str | bytes, mode: str
+    ) -> str:
+        try:
+            return prepare_semantic_sidecar_write(uri, current_raw, requested_raw, mode=mode)
+        except SemanticSidecarFormatError as exc:
+            raise InvalidArgumentError(str(exc)) from exc
 
     async def _enqueue_semantic_refresh(
         self,
@@ -1047,7 +1179,7 @@ class ContentWriteCoordinator:
             if wait and telemetry_id and self._vikingdb_has_queue():
                 get_request_wait_tracker().register_request(telemetry_id)
                 request_registered = True
-            await MemoryUpdater.refresh_schema_overview(
+            overview_refreshed = await MemoryUpdater.refresh_schema_overview(
                 viking_fs=self._viking_fs,
                 directory_uri=root_uri,
                 ctx=ctx,
@@ -1081,7 +1213,7 @@ class ContentWriteCoordinator:
                 queue_status=queue_status,
                 semantic_status="skipped",
                 vector_status=vector_status,
-                overview_status="complete",
+                overview_status="complete" if overview_refreshed else "skipped",
             )
         except Exception:
             if not released:
@@ -1319,18 +1451,30 @@ class ContentWriteCoordinator:
                         root_uri = parent.uri
                 else:
                     root_uri = VikingURI.build(*parts[: resources_idx + 2])
-            else:
-                try:
-                    memories_idx = parts.index("memories")
-                except ValueError as exc:
-                    raise InvalidArgumentError(
-                        f"write only supports memory or resource files under user scope: {uri}"
-                    ) from exc
+            elif "memories" in parts:
+                memories_idx = parts.index("memories")
                 if len(parts) <= memories_idx + 1:
                     raise InvalidArgumentError(
                         f"memory write target must be inside a memory type directory: {uri}"
                     )
-                root_uri = VikingURI.build(*parts[: memories_idx + 2])
+                if anchor_to_parent:
+                    parent = parsed.parent
+                    if parent is not None:
+                        root_uri = parent.uri
+                else:
+                    root_uri = VikingURI.build(*parts[: memories_idx + 2])
+            else:
+                # Plain files directly under the user root are allowed (e.g. a
+                # persona file at viking://user/<user>/persona.md); the managed
+                # subtrees (skills/, peers/, privacy/, sessions/) are not.
+                if len(parts) <= 2 or parts[2] in _USER_MANAGED_SUBTREES:
+                    raise InvalidArgumentError(
+                        "user-scope writes need a file under memories/, resources/, "
+                        f"or directly at the user root: {uri}"
+                    )
+                parent = parsed.parent
+                if parent is not None:
+                    root_uri = parent.uri
 
         stat = await self._safe_stat(root_uri, ctx=ctx, allow_not_found=_allow_not_found)
         if stat.get("not_found") or not stat.get("isDir"):

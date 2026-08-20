@@ -75,4 +75,24 @@ describe('EditWatchDialog', () => {
       ),
     ).toEqual({ reason: 'New reason' })
   })
+
+  it('defers interval range validation to the server', () => {
+    const onSubmit = vi.fn()
+    render(
+      <EditWatchDialog
+        watch={watch}
+        pending={false}
+        onOpenChange={vi.fn()}
+        onSubmit={onSubmit}
+      />,
+    )
+
+    fireEvent.change(
+      screen.getByRole('spinbutton', { name: 'editDialog.interval' }),
+      { target: { value: '-1' } },
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'save' }))
+
+    expect(onSubmit).toHaveBeenCalledWith({ watchInterval: -1 })
+  })
 })

@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 #
 # OpenViking Memory Plugin shared installer for Claude Code, Codex, Cursor,
-# TRAE / TRAE CN, ZCode, OpenCode, and pi.
+# TRAE / TRAE CN, TraeCode CLI 2.0, ZCode, OpenCode, and pi.
 #
 # One-liner (GitHub):
 #   bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh)
 # One-liner (TOS mirror, for regions where GitHub is unreachable):
 #   bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --dist tos
 # Non-interactive:
-#   bash install.sh --harness claude,codex,cursor,trae,trae-cn,zcode,opencode,pi --dist github --lang en --url http://127.0.0.1:1933 --api-key ''
+#   bash install.sh --harness claude,codex,cursor,trae,trae-cn,trae-cli,zcode,opencode,pi --dist github --lang en --url http://127.0.0.1:1933
 # Format-compatible CLI aliases:
-#   bash install.sh --harness codex --codex-bin codex,traex
+#   bash install.sh --harness trae-cli
 #   bash install.sh --harness claude --claude-bin claude,seed
 # Fork / branch verification:
 #   OPENVIKING_REPO_URL=https://github.com/you/OpenViking.git \
@@ -79,6 +79,8 @@ CC_REMOTE_MKT_DIR="$OV_HOME/marketplaces/openviking-claude"
 CC_REMOTE_MANIFEST="$CC_REMOTE_MKT_DIR/.claude-plugin/marketplace.json"
 
 REQUESTED_HARNESSES=""
+PUBLIC_SELECTED_HARNESSES=""
+TRAECODE_CLI_BIN=""
 CLAUDE_BINS_ARG="${OPENVIKING_CLAUDE_BINS:-${OPENVIKING_CLAUDE_BIN:-}}"
 CODEX_BINS_ARG="${OPENVIKING_CODEX_BINS:-${OPENVIKING_CODEX_BIN:-}}"
 SOURCE_ARG=""
@@ -143,7 +145,8 @@ usage() {
 Usage: install.sh [options]
 
 Options:
-  --harness LIST     Comma-separated harnesses: claude, codex, cursor, trae, trae-cn, zcode, opencode, pi.
+  --harness LIST     Comma-separated harnesses: claude, codex, cursor, trae, trae-cn, trae-cli, zcode, opencode, pi.
+                     Use trae-cli for TraeCode CLI 2.0 (installed through its Codex-compatible plugin format).
   --claude-bin LIST  Comma-separated Claude-format CLI commands (default: claude).
   --codex-bin LIST   Comma-separated Codex-format CLI commands (default: codex).
   --dist CHANNEL     github (default) | tos (mirror for GitHub-blocked regions).
@@ -155,7 +158,9 @@ Options:
   --user ID          Optional OpenViking user.
   --statusline       Register the Claude Code statusline without asking.
   --no-statusline    Skip the statusline prompt.
-  --uninstall        Remove Cursor/TRAE OpenViking integration files and config.
+  --uninstall        Remove Cursor/TRAE/TRAE CN/ZCode integration files and config,
+                     plus any legacy TraeCode CLI hook config.
+                     For Codex-format plugins, use the client's plugin uninstall command.
   --yes, -y          Use defaults for prompts when possible.
 EOF
 }
@@ -369,16 +374,72 @@ EOF
 }
 
 refresh_available_harnesses() {
-  HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0
+  HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0
   has_available_bin "$CLAUDE_BINS" && HAVE_CLAUDE=1
   has_available_bin "$CODEX_BINS" && HAVE_CODEX=1
   { command -v cursor >/dev/null 2>&1 || command -v cursor-agent >/dev/null 2>&1 || [ -d "/Applications/Cursor.app" ] || [ -d "$HOME/.cursor" ]; } && HAVE_CURSOR=1
   { [ -d "/Applications/Trae.app" ] || [ -d "/Applications/TRAE.app" ] || [ -d "$HOME/.trae" ]; } && HAVE_TRAE=1
   { [ -d "/Applications/Trae CN.app" ] || [ -d "/Applications/TRAE SOLO CN.app" ] || [ -d "$HOME/.trae-cn" ]; } && HAVE_TRAE_CN=1
+  { command -v trae-cli >/dev/null 2>&1 || command -v traecli >/dev/null 2>&1 || command -v traex >/dev/null 2>&1; } && HAVE_TRAE_CLI=1
   command -v opencode >/dev/null 2>&1 && HAVE_OPENCODE=1
   command -v pi >/dev/null 2>&1 && HAVE_PI=1
   { command -v zcode >/dev/null 2>&1 || [ -d "$HOME/.zcode" ]; } && HAVE_ZCODE=1
   return 0
+}
+
+resolve_traecode_cli_bin() {
+  local bin
+  for bin in trae-cli traecli traex; do
+    if command -v "$bin" >/dev/null 2>&1; then
+      printf '%s' "$bin"
+      return 0
+    fi
+  done
+  printf '%s' 'trae-cli'
+}
+
+normalize_trae_cli_harness() {
+  local h normalized="" found=0 trae_cli_bin
+  while IFS= read -r h; do
+    [ -n "$h" ] || continue
+    if [ "$h" = "trae-cli" ]; then
+      found=1
+      continue
+    fi
+    list_contains_line "$(split_harnesses "$normalized")" "$h" \
+      || normalized="${normalized:+$normalized,}$h"
+  done <<EOF
+$(split_harnesses "$SELECTED_HARNESSES")
+EOF
+  [ "$found" -eq 1 ] || return 0
+  PUBLIC_SELECTED_HARNESSES="$SELECTED_HARNESSES"
+  [ "$UNINSTALL" -eq 0 ] || return 0
+
+  trae_cli_bin="$(resolve_traecode_cli_bin)"
+  TRAECODE_CLI_BIN="$trae_cli_bin"
+  if [ -z "$CODEX_BINS_ARG" ] \
+    && ! list_contains_line "$(split_harnesses "$normalized")" codex; then
+    CODEX_BINS="$trae_cli_bin"
+    TUI_CODEX_BINS="$trae_cli_bin"
+  else
+    CODEX_BINS="$(append_csv_list "$CODEX_BINS" "$trae_cli_bin")"
+    TUI_CODEX_BINS="$(append_csv_list "$TUI_CODEX_BINS" "$trae_cli_bin")"
+  fi
+  if list_contains_line "$(split_harnesses "$normalized")" codex; then
+    SELECTED_HARNESSES="$normalized"
+  else
+    SELECTED_HARNESSES="${normalized:+$normalized,}codex"
+  fi
+}
+
+add_detected_traecode_cli_alias() {
+  local trae_cli_bin
+  [ -z "$CODEX_BINS_ARG" ] || return 0
+  [ "$HAVE_TRAE_CLI" -eq 1 ] || return 0
+  [ -z "$REQUESTED_HARNESSES" ] || return 0
+  trae_cli_bin="$(resolve_traecode_cli_bin)"
+  CODEX_BINS="$(append_csv_list "$CODEX_BINS" "$trae_cli_bin")"
+  TUI_CODEX_BINS="$(append_csv_list "$TUI_CODEX_BINS" "$trae_cli_bin")"
 }
 
 bin_basename() {
@@ -444,11 +505,13 @@ NODE
 CLAUDE_BINS="$(normalize_bin_list "$CLAUDE_BINS_ARG" claude)"
 CODEX_BINS="$(normalize_bin_list "$CODEX_BINS_ARG" codex)"
 
-HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0
+HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0
 refresh_available_harnesses
 
 TUI_CLAUDE_BINS="$CLAUDE_BINS"
 TUI_CODEX_BINS="$CODEX_BINS"
+add_detected_traecode_cli_alias
+refresh_available_harnesses
 SEL_CLAUDE_BINS=""
 SEL_CODEX_BINS=""
 SEL_OPENCODE=0
@@ -528,6 +591,7 @@ tui_bin_label() {
   case "$kind:$bin" in
     claude:claude) printf 'Claude Code' ;;
     codex:codex) printf 'Codex' ;;
+    codex:trae-cli|codex:traecli|codex:traex) printf 'TraeCode CLI 2.0' ;;
     opencode:*) printf 'OpenCode' ;;
     pi:*) printf 'pi' ;;
     cursor:*) printf 'Cursor' ;;
@@ -553,10 +617,10 @@ tui_bin_selected() {
     [ "$SEL_CURSOR_APP" -eq 1 ]
   elif [ "$kind" = "trae" ]; then
     [ "$SEL_TRAE" -eq 1 ]
-  elif [ "$kind" = "zcode" ]; then
-    [ "$SEL_ZCODE" -eq 1 ]
-  else
+  elif [ "$kind" = "trae-cn" ]; then
     [ "$SEL_TRAE_CN" -eq 1 ]
+  else
+    [ "$SEL_ZCODE" -eq 1 ]
   fi
 }
 
@@ -597,10 +661,10 @@ tui_toggle_bin() {
     SEL_CURSOR_APP=$((1 - SEL_CURSOR_APP)); return 0
   elif [ "$kind" = "trae" ]; then
     SEL_TRAE=$((1 - SEL_TRAE)); return 0
-  elif [ "$kind" = "zcode" ]; then
-    SEL_ZCODE=$((1 - SEL_ZCODE)); return 0
-  else
+  elif [ "$kind" = "trae-cn" ]; then
     SEL_TRAE_CN=$((1 - SEL_TRAE_CN)); return 0
+  else
+    SEL_ZCODE=$((1 - SEL_ZCODE)); return 0
   fi
   if list_contains_line "$selected" "$bin"; then
     while IFS= read -r item; do
@@ -870,6 +934,7 @@ select_harnesses() {
 
   if [ -n "$REQUESTED_HARNESSES" ]; then
     SELECTED_HARNESSES="$REQUESTED_HARNESSES"
+    normalize_trae_cli_harness
     return
   fi
   default="${detected:-claude,codex}"
@@ -913,6 +978,7 @@ validate_selected_harnesses() {
   while IFS= read -r h; do
     case "$h" in
       claude|codex|cursor|trae|trae-cn|opencode|pi|zcode) ;;
+      trae-cli) [ "$UNINSTALL" -eq 1 ] || bad=1 ;;
       *) err "Unsupported harness: $h"; bad=1 ;;
     esac
   done <<EOF
@@ -951,7 +1017,7 @@ EOF
   if contains_harness pi && command -v pi >/dev/null 2>&1; then ok=1; fi
   # Cursor and TRAE are config-driven integrations. They may be installed
   # before the desktop app itself, so a CLI in PATH is not required.
-  if contains_harness cursor || contains_harness trae || contains_harness trae-cn || contains_harness zcode; then ok=1; fi
+  if contains_harness cursor || contains_harness trae || contains_harness trae-cn || contains_harness trae-cli || contains_harness zcode; then ok=1; fi
   if [ "$ok" -ne 1 ]; then
     err "$(t 'No selected compatible CLI command was found in PATH.' '未在 PATH 中找到任何已选择的兼容 CLI 命令。')"
     exit 2
@@ -1534,6 +1600,37 @@ codex_cmd() {
   command "$CODEX_BIN" "$@"
 }
 
+codex_bin_label() {
+  case "$(bin_basename "$CODEX_BIN")" in
+    trae-cli|traecli|traex) printf 'TraeCode CLI 2.0' ;;
+    codex) printf 'Codex' ;;
+    *) printf '%s %s' "$CODEX_BIN" "$(t '(Codex-format)' '（Codex 格式）')" ;;
+  esac
+}
+
+remove_legacy_trae_cli_integration() {
+  case "$(bin_basename "$CODEX_BIN")" in
+    trae-cli|traecli|traex) ;;
+    *) return 0 ;;
+  esac
+  local trae_home="${TRAE_HOME:-$HOME/.trae}"
+  local trae_cli_home="${TRAECLI_HOME:-$trae_home/cli}"
+  if grep -qi 'openviking' "$trae_cli_home/hooks.json" 2>/dev/null \
+    || [ -d "$OV_HOME/agent-integrations/trae-cli" ] \
+    || grep -qF '[mcp_servers."openviking-memory"]' "$trae_home/traecli.toml" 2>/dev/null; then
+    agent_remove_trae_cli_configs "$trae_cli_home/hooks.json" "$trae_home/traecli.toml"
+    rm -rf "$OV_HOME/agent-integrations/trae-cli"
+    info "$(t 'Removed the deprecated TRAE CLI Hooks integration after installing the TraeCode CLI 2.0 plugin.' 'TraeCode CLI 2.0 插件安装成功后，已移除弃用的 TRAE CLI Hooks 集成。')"
+  fi
+  if [ ! -d "$OV_HOME/agent-integrations/cursor" ] \
+    && [ ! -d "$OV_HOME/agent-integrations/trae" ] \
+    && [ ! -d "$OV_HOME/agent-integrations/trae-cn" ] \
+    && [ ! -d "$OV_HOME/agent-integrations/trae-cli" ] \
+    && [ ! -d "$OV_HOME/agent-integrations/zcode" ]; then
+    rm -rf "$OV_HOME/agent-integrations/memory-plugin-shared"
+  fi
+}
+
 codex_marketplace_current_source() {
   local raw
   raw="$(codex_cmd plugin marketplace list --json 2>/dev/null || true)"
@@ -1643,7 +1740,12 @@ NODE
 }
 
 install_codex() {
-  heading "$(t '4. Codex plugin' '4. Codex 插件')"
+  local plugin_installed=0
+  if is_native_codex_bin; then
+    heading "$(t '4. Codex plugin' '4. Codex 插件')"
+  else
+    heading "4. $(codex_bin_label)"
+  fi
   command -v "$CODEX_BIN" >/dev/null 2>&1 || {
     warn "$(t 'Codex-format CLI not found; skipping:' '未找到 Codex 格式 CLI，跳过：') $CODEX_BIN"
     return 0
@@ -1678,11 +1780,20 @@ install_codex() {
       codex_marketplace_sync "$MKT_DIR" "$MKT_DIR" || return 1
       ;;
   esac
-  if ! codex_cmd plugin add "$PLUGIN_ID" >/dev/null 2>&1; then
-    codex_cmd plugin install "$PLUGIN_ID" >/dev/null 2>&1 || \
-      warn "$CODEX_BIN plugin add/install returned non-zero for $PLUGIN_ID"
+  if codex_cmd plugin add "$PLUGIN_ID" >/dev/null 2>&1; then
+    plugin_installed=1
+  elif codex_cmd plugin install "$PLUGIN_ID" >/dev/null 2>&1; then
+    plugin_installed=1
+  else
+    warn "$CODEX_BIN plugin add/install returned non-zero for $PLUGIN_ID"
   fi
-  codex_cmd plugin enable "$PLUGIN_ID" >/dev/null 2>&1 || true
+  if [ "$plugin_installed" -eq 1 ]; then
+    if codex_cmd plugin enable "$PLUGIN_ID" >/dev/null 2>&1; then
+      remove_legacy_trae_cli_integration
+    elif ! is_native_codex_bin; then
+      warn "$(t 'Plugin installed but could not be enabled; keeping the deprecated TRAE CLI Hooks integration.' '插件已安装但未能启用；保留弃用的 TRAE CLI Hooks 集成。')"
+    fi
+  fi
   if is_native_codex_bin; then
     ensure_codex_config
     info "$(t 'Codex plugin enabled in' 'Codex 插件已在配置中启用：') $CODEX_CONFIG"
@@ -1950,6 +2061,208 @@ atomicWrite(installedManifestPath, {
 NODE
 }
 
+agent_write_trae_cli_configs() { # agent_write_trae_cli_configs <hooks> <traecli.toml> <root> <node-bin>
+  local hooks_path="$1" config_path="$2" root="$3" node_bin="$4"
+  "$NODE_BIN" - "$hooks_path" "$config_path" "$root" "$node_bin" "$SOURCE_MODE" <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+const [hooksPath, configPath, root, nodeBin, sourceMode] = process.argv.slice(2);
+const clientId = "trae-cli";
+const serverName = "openviking-memory";
+
+function readJson(file) {
+  if (!fs.existsSync(file)) return {};
+  const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${file} top-level value must be an object`);
+  }
+  return parsed;
+}
+
+function atomicWrite(file, content) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  let previous = "";
+  try { previous = fs.readFileSync(file, "utf8"); } catch {}
+  if (previous === content) return;
+  if (previous) fs.writeFileSync(`${file}.bak`, previous, { mode: 0o600 });
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, content, { mode: 0o600 });
+  fs.renameSync(tmp, file);
+}
+
+function shellArg(value) {
+  return `'${String(value).replace(/'/g, `'"'"'`)}'`;
+}
+
+function isOpenVikingHook(value) {
+  const text = JSON.stringify(value || {}).toLowerCase();
+  return text.includes("openviking_integration_id")
+    || (text.includes("openviking") && [
+      "trae-cli-hook.mjs",
+      "session-start.mjs",
+      "auto-recall.mjs",
+      "auto-capture.mjs",
+      "uri-guard.mjs",
+    ].some((name) => text.includes(name)));
+}
+
+function stripTomlSections(content, prefix) {
+  const lines = String(content || "").split(/\r?\n/u);
+  const out = [];
+  let skipping = false;
+  for (const line of lines) {
+    const match = /^\s*\[([^\]]+)\]\s*$/u.exec(line);
+    if (match) skipping = match[1] === prefix || match[1].startsWith(`${prefix}.`);
+    if (!skipping) out.push(line);
+  }
+  return out.join("\n").replace(/\n{3,}/gu, "\n\n").trimEnd();
+}
+
+function stripLegacyOpenVikingServer(content) {
+  const lines = String(content || "").split(/\r?\n/u);
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = /^\s*\[([^\]]+)\]\s*$/u.exec(lines[index]);
+    if (!match || !["mcp_servers.openviking", 'mcp_servers."openviking"'].includes(match[1])) continue;
+    let end = index + 1;
+    while (end < lines.length && !/^\s*\[[^\]]+\]\s*$/u.test(lines[end])) end += 1;
+    const block = lines.slice(index, end).join("\n").toLowerCase();
+    if (block.includes("mcp-proxy.mjs") && block.includes("openviking")) {
+      return stripTomlSections(content, match[1]);
+    }
+  }
+  return content;
+}
+
+const manifest = readJson(path.join(root, "openviking.integration.json"));
+if (manifest.id !== "openviking-memory" || !manifest.clients?.includes(clientId)) {
+  throw new Error("Invalid OpenViking TRAE CLI integration manifest");
+}
+const integrationEnv = {
+  OPENVIKING_INTEGRATION_ID: manifest.id,
+  OPENVIKING_INTEGRATION_VERSION: manifest.version,
+  OPENVIKING_HOOK_SOURCE: clientId,
+};
+const envPrefix = Object.entries(integrationEnv)
+  .map(([key, value]) => `${key}=${shellArg(value)}`)
+  .join(" ");
+
+function renderHookValue(value) {
+  if (Array.isArray(value)) return value.map(renderHookValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value).map(([key, child]) => {
+    if (key !== "command" || typeof child !== "string") {
+      return [key, renderHookValue(child)];
+    }
+    const match = /^node\s+__OPENVIKING_TRAE_CLI_ROOT__\/(\S+)$/u.exec(child);
+    if (!match) throw new Error(`Unsupported TRAE CLI hook command template: ${child}`);
+    const command = `${shellArg(nodeBin)} ${shellArg(path.join(root, match[1]))}`;
+    return [key, `${envPrefix} ${command} # openviking-memory`];
+  }));
+}
+
+const hookTemplate = readJson(path.join(root, "hooks", "hooks.json"));
+const hooksConfig = readJson(hooksPath);
+hooksConfig.version = Number.isFinite(Number(hooksConfig.version)) ? Number(hooksConfig.version) : 1;
+hooksConfig.hooks = hooksConfig.hooks && typeof hooksConfig.hooks === "object"
+  ? hooksConfig.hooks : {};
+for (const [event, entries] of Object.entries(hookTemplate.hooks || {})) {
+  const current = Array.isArray(hooksConfig.hooks[event]) ? hooksConfig.hooks[event] : [];
+  hooksConfig.hooks[event] = [
+    ...current.filter((item) => !isOpenVikingHook(item)),
+    ...renderHookValue(entries),
+  ];
+}
+atomicWrite(hooksPath, `${JSON.stringify(hooksConfig, null, 2)}\n`);
+
+let toml = "";
+try { toml = fs.readFileSync(configPath, "utf8"); } catch {}
+toml = stripLegacyOpenVikingServer(toml);
+toml = stripTomlSections(toml, `mcp_servers."${serverName}"`);
+const envToml = Object.entries(integrationEnv)
+  .map(([key, value]) => `${key} = ${JSON.stringify(value)}`)
+  .join(", ");
+const section = [
+  `[mcp_servers."${serverName}"]`,
+  `command = ${JSON.stringify(nodeBin)}`,
+  `args = [${JSON.stringify(path.join(root, "servers", "mcp-proxy.mjs"))}]`,
+  `env = { ${envToml} }`,
+].join("\n");
+atomicWrite(configPath, `${toml ? `${toml}\n\n` : ""}${section}\n`);
+
+const manifestPath = path.join(root, "integration.json");
+const previous = readJson(manifestPath);
+const now = new Date().toISOString();
+const unchanged = previous.version === manifest.version
+  && previous.source === sourceMode
+  && previous.hooksConfig === hooksPath
+  && previous.mcpConfig === configPath;
+atomicWrite(manifestPath, `${JSON.stringify({
+  schemaVersion: 1,
+  id: manifest.id,
+  version: manifest.version,
+  client: clientId,
+  installMode: "managed-native",
+  source: sourceMode,
+  capabilities: manifest.capabilities,
+  hooksConfig: hooksPath,
+  mcpConfig: configPath,
+  installedAt: previous.installedAt || now,
+  updatedAt: unchanged ? previous.updatedAt || previous.installedAt || now : now,
+}, null, 2)}\n`);
+NODE
+}
+
+agent_remove_trae_cli_configs() { # agent_remove_trae_cli_configs <hooks> <traecli.toml>
+  local hooks_path="$1" config_path="$2"
+  "$NODE_BIN" - "$hooks_path" "$config_path" <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+const [hooksPath, configPath] = process.argv.slice(2);
+
+function atomicWrite(file, content) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, content, { mode: 0o600 });
+  fs.renameSync(tmp, file);
+}
+
+function ownsHook(value) {
+  const text = JSON.stringify(value || {}).toLowerCase();
+  return text.includes("openviking_integration_id")
+    || (text.includes("openviking") && [
+      "trae-cli-hook.mjs",
+      "session-start.mjs",
+      "auto-recall.mjs",
+      "auto-capture.mjs",
+      "uri-guard.mjs",
+    ].some((name) => text.includes(name)));
+}
+
+if (fs.existsSync(hooksPath)) {
+  const hooks = JSON.parse(fs.readFileSync(hooksPath, "utf8"));
+  for (const event of Object.keys(hooks.hooks || {})) {
+    if (!Array.isArray(hooks.hooks[event])) continue;
+    hooks.hooks[event] = hooks.hooks[event].filter((item) => !ownsHook(item));
+    if (hooks.hooks[event].length === 0) delete hooks.hooks[event];
+  }
+  atomicWrite(hooksPath, `${JSON.stringify(hooks, null, 2)}\n`);
+}
+
+if (fs.existsSync(configPath)) {
+  const lines = fs.readFileSync(configPath, "utf8").split(/\r?\n/u);
+  const prefix = 'mcp_servers."openviking-memory"';
+  const out = [];
+  let skipping = false;
+  for (const line of lines) {
+    const match = /^\s*\[([^\]]+)\]\s*$/u.exec(line);
+    if (match) skipping = match[1] === prefix || match[1].startsWith(`${prefix}.`);
+    if (!skipping) out.push(line);
+  }
+  atomicWrite(configPath, `${out.join("\n").replace(/\n{3,}/gu, "\n\n").trimEnd()}\n`);
+}
+NODE
+}
+
 agent_remove_json_configs() { # agent_remove_json_configs <hooks> <mcp>
   local hooks_path="$1" mcp_path="$2"
   "$NODE_BIN" - "$hooks_path" "$mcp_path" <<'NODE'
@@ -2027,6 +2340,13 @@ uninstall_agent_integrations() {
     rm -rf "$OV_HOME/agent-integrations/trae-cn"
     info "$(t 'Removed TRAE CN OpenViking hooks and MCP config.' '已移除 TRAE CN OpenViking hooks 与 MCP 配置。')"
   fi
+  if contains_harness trae-cli; then
+    local trae_home="${TRAE_HOME:-$HOME/.trae}"
+    local trae_cli_home="${TRAECLI_HOME:-$trae_home/cli}"
+    agent_remove_trae_cli_configs "$trae_cli_home/hooks.json" "$trae_home/traecli.toml"
+    rm -rf "$OV_HOME/agent-integrations/trae-cli"
+    info "$(t 'Removed TRAE CLI OpenViking hooks and MCP config.' '已移除 TRAE CLI OpenViking hooks 与 MCP 配置。')"
+  fi
   if contains_harness zcode; then
     # ZCode reads hooks/MCP from config.json, not standalone files.
     # Use a node script to strip openviking entries from config.json.
@@ -2073,6 +2393,7 @@ CLEAN_NODE
   if [ ! -d "$OV_HOME/agent-integrations/cursor" ] \
     && [ ! -d "$OV_HOME/agent-integrations/trae" ] \
     && [ ! -d "$OV_HOME/agent-integrations/trae-cn" ] \
+    && [ ! -d "$OV_HOME/agent-integrations/trae-cli" ] \
     && [ ! -d "$OV_HOME/agent-integrations/zcode" ]; then
     rm -rf "$OV_HOME/agent-integrations/memory-plugin-shared"
   fi
@@ -2236,6 +2557,19 @@ install_trae_variant() { # install_trae_variant <trae|trae-cn>
   agent_write_json_configs trae "$hooks_path" "$mcp_path" "$root" "$client_id" "$NODE_BIN"
   info "$client_id hooks: $hooks_path"
   info "$client_id MCP: $mcp_path"
+}
+
+install_trae_cli() {
+  heading "$(t 'TRAE CLI integration' 'TRAE CLI 集成')"
+  local root trae_home trae_cli_home hooks_path config_path
+  root="$(assemble_agent_integration trae-cli-memory-hooks trae-cli)" || return 1
+  trae_home="${TRAE_HOME:-$HOME/.trae}"
+  trae_cli_home="${TRAECLI_HOME:-$trae_home/cli}"
+  hooks_path="$trae_cli_home/hooks.json"
+  config_path="$trae_home/traecli.toml"
+  agent_write_trae_cli_configs "$hooks_path" "$config_path" "$root" "$NODE_BIN"
+  info "$(t 'TRAE CLI hooks installed:' 'TRAE CLI hooks 已安装：') $hooks_path"
+  info "$(t 'TRAE CLI MCP installed:' 'TRAE CLI MCP 已安装：') $config_path (mcp_servers.openviking-memory)"
 }
 
 # ---------------------------------------------------------------------------
@@ -2818,6 +3152,36 @@ EOF
       ok=0; agent_fatal=1
     fi
   fi
+  if contains_harness trae-cli; then
+    local trae_home="${TRAE_HOME:-$HOME/.trae}"
+    local trae_cli_home="${TRAECLI_HOME:-$trae_home/cli}"
+    local trae_cli_hooks="$trae_cli_home/hooks.json"
+    local trae_cli_config="$trae_home/traecli.toml"
+    if grep -q 'scripts/session-start.mjs' "$trae_cli_hooks" 2>/dev/null \
+      && grep -q 'scripts/auto-recall.mjs' "$trae_cli_hooks" 2>/dev/null \
+      && grep -q 'scripts/auto-capture.mjs' "$trae_cli_hooks" 2>/dev/null \
+      && grep -q 'scripts/uri-guard.mjs' "$trae_cli_hooks" 2>/dev/null \
+      && grep -q 'OPENVIKING_INTEGRATION_ID' "$trae_cli_hooks" 2>/dev/null \
+      && grep -q '\[mcp_servers."openviking-memory"\]' "$trae_cli_config" 2>/dev/null \
+      && grep -q 'mcp-proxy.mjs' "$trae_cli_config" 2>/dev/null \
+      && [ -f "$OV_HOME/agent-integrations/trae-cli/scripts/trae-cli-hook.mjs" ] \
+      && [ -f "$OV_HOME/agent-integrations/trae-cli/scripts/uri-guard.mjs" ] \
+      && [ -f "$OV_HOME/agent-integrations/trae-cli/integration.json" ]; then
+      "$NODE_BIN" --check "$OV_HOME/agent-integrations/trae-cli/scripts/trae-cli-hook.mjs" \
+        || { ok=0; agent_fatal=1; }
+      "$NODE_BIN" --check "$OV_HOME/agent-integrations/trae-cli/scripts/uri-guard.mjs" \
+        || { ok=0; agent_fatal=1; }
+      if ! printf '%s' '{}' | env HOME="$HOME" OPENVIKING_MEMORY_ENABLED=0 \
+        "$NODE_BIN" "$OV_HOME/agent-integrations/trae-cli/scripts/session-start.mjs" >/dev/null; then
+        warn "trae-cli: $(t 'installed Hook runtime failed its smoke test' '已安装的 Hook 运行时 smoke test 失败')"
+        ok=0; agent_fatal=1
+      fi
+      info "trae-cli: $(t 'hooks and MCP are configured' 'hooks 与 MCP 已配置')"
+    else
+      warn "trae-cli: $(t 'OpenViking hook or MCP config is incomplete' 'OpenViking hook 或 MCP 配置不完整')"
+      ok=0; agent_fatal=1
+    fi
+  fi
   if contains_harness zcode; then
     local zcode_config="$HOME/.zcode/cli/config.json"
     if grep -q 'scripts/session-start.mjs' "$zcode_config" 2>/dev/null \
@@ -2928,9 +3292,10 @@ select_harnesses
 validate_selected_harnesses
 select_compatible_bins
 refresh_available_harnesses
-info "$(t 'Selected harnesses:' '已选择：') $(printf '%s' "$SELECTED_HARNESSES" | tr ',' ' ')"
+info "$(t 'Selected harnesses:' '已选择：') $(printf '%s' "${PUBLIC_SELECTED_HARNESSES:-$SELECTED_HARNESSES}" | tr ',' ' ')"
 if contains_harness claude; then info "$(t 'Claude-format commands:' 'Claude 格式命令：') $(list_words "$CLAUDE_BINS")"; fi
-if contains_harness codex; then info "$(t 'Codex-format commands:' 'Codex 格式命令：') $(list_words "$CODEX_BINS")"; fi
+if [ -n "$TRAECODE_CLI_BIN" ]; then info "TraeCode CLI 2.0: $TRAECODE_CLI_BIN"; fi
+if contains_harness codex && [ -z "$TRAECODE_CLI_BIN" ]; then info "$(t 'Codex-format commands:' 'Codex 格式命令：') $(list_words "$CODEX_BINS")"; fi
 validate_selected_bins
 if [ "$UNINSTALL" -eq 1 ]; then
   uninstall_agent_integrations
@@ -2974,7 +3339,11 @@ case "$SOURCE_MODE" in
   *) if contains_harness claude || contains_harness codex; then info "Marketplace: ${MKT_DIR:-$CODEX_TOS_GIT_URL}"; fi ;;
 esac
 if contains_harness claude; then info "Claude-format: $(list_words "$CLAUDE_BINS") -> $PLUGIN_ID"; fi
-if contains_harness codex; then info "Codex-format:  $(list_words "$CODEX_BINS") -> $PLUGIN_ID"; fi
+if [ -n "$TRAECODE_CLI_BIN" ]; then
+  info "TraeCode CLI 2.0: $TRAECODE_CLI_BIN -> $PLUGIN_ID"
+elif contains_harness codex; then
+  info "Codex-format:  $(list_words "$CODEX_BINS") -> $PLUGIN_ID"
+fi
 if contains_harness cursor; then info "Cursor: Hooks + MCP + Rule + Skill"; fi
 if contains_harness trae; then info "TRAE: ~/.trae/hooks.json + MCP"; fi
 if contains_harness trae-cn; then info "TRAE CN: ~/.trae-cn/hooks.json + MCP"; fi

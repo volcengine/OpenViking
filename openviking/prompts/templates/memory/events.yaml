@@ -146,4 +146,7 @@ fields:
       - Range: "start-end" (e.g., "0-3" means messages 0 to 3)
       - Single index: "N" (e.g., "7" means only message 7)
       - Mixed: "0-3,7,15-20" (ranges and single indices combined)
+      For events, ranges MUST include at least one user-role message that states or supports the event.
+      If an assistant message confirms, normalizes, or completes the event, include both the originating user message and the assistant message.
+      Never output assistant-only ranges for events.
     merge_op: immutable

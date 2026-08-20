@@ -258,8 +258,7 @@ async def test_glob_keeps_directory_matches(monkeypatch, fs):
 
 
 @pytest.mark.asyncio
-async def test_glob_preserves_legacy_session_alias(monkeypatch, fs):
-    """中文注释：legacy session URI 仍应保持旧别名返回。"""
+async def test_glob_preserves_canonical_session_uri(monkeypatch, fs):
     monkeypatch.setattr(
         fs, "_uri_to_path", lambda _uri, **_kwargs: "/local/test_account/user/alice/sessions/sess_1"
     )
@@ -284,9 +283,16 @@ async def test_glob_preserves_legacy_session_alias(monkeypatch, fs):
 
     monkeypatch.setattr(fs._async_agfs, "glob_directory", fake_glob_directory)
 
-    result = await fs.glob("**/*.jsonl", uri="viking://session/alice/sess_1", ctx=_default_ctx())
+    result = await fs.glob(
+        "**/*.jsonl",
+        uri="viking://user/alice/sessions/sess_1",
+        ctx=_default_ctx(),
+    )
 
-    assert result == {"matches": ["viking://session/alice/sess_1/messages.jsonl"], "count": 1}
+    assert result == {
+        "matches": ["viking://user/alice/sessions/sess_1/messages.jsonl"],
+        "count": 1,
+    }
 
 
 @pytest.mark.asyncio

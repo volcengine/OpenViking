@@ -104,7 +104,6 @@ class MatchedContext:
     category: str                    # 分类
     score: float                     # 相关性分数 (0-1)
     match_reason: str                # 匹配原因
-    relations: List[RelatedContext]  # 关联上下文
 ```
 
 #### 3. 使用示例
@@ -337,7 +336,6 @@ openviking find "红色海报风格" --image ./poster.png --uri "viking://resour
                 "score": 0.12808319406977778,
                 "category": "",
                 "match_reason": "",
-                "relations": [],
                 "abstract": "This document is an API documentation reading plan that outlines the structure of subsequent API reference materials organized by functional module. Main sections or topics covered include resource management API, search API, file system operations, ses...",
                 "overview": null
             },
@@ -348,7 +346,6 @@ openviking find "红色海报风格" --image ./poster.png --uri "viking://resour
                 "score": 0.12054087276495282,
                 "category": "",
                 "match_reason": "",
-                "relations": [],
                 "abstract": "This directory contains structured API reference documentation for the OpenViking platform, compiling detailed HTTP endpoint specifications for core and extended platform capabilities. It covers functional modules including system health checks, semanti...",
                 "overview": null
             }
@@ -565,7 +562,6 @@ openviking search "similar poster" --image ./poster.png --uri "viking://resource
                 "score": 0.95,
                 "category": "",
                 "match_reason": "Context-aware match: OAuth login best practices",
-                "relations": [],
                 "abstract": "OAuth 2.0 best practices for login pages...",
                 "overview": "This guide covers OAuth 2.0 best practices including secure token handling, redirect URI validation, and state parameter usage..."
             }
@@ -1051,35 +1047,6 @@ curl -X GET "http://localhost:1933/api/v1/content/overview?uri=viking://resource
 
 # 步骤 3：读取文件结果的完整内容
 curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://resources/docs/auth.md" \
-    -H "X-API-Key: your-key"
-```
-
-### 获取关联资源
-
-**Python SDK**
-
-```python
-import openviking as ov
-
-client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-client.initialize()
-
-results = client.find("OAuth implementation")
-
-for ctx in results.resources:
-    print(f"Found: {ctx.uri}")
-
-    # 获取关联资源
-    relations = client.relations(ctx.uri)
-    for rel in relations:
-        print(f"  Related: {rel['uri']} - {rel['reason']}")
-```
-
-**HTTP API**
-
-```bash
-# 获取资源的关联关系
-curl -X GET "http://localhost:1933/api/v1/relations?uri=viking://resources/docs/auth" \
     -H "X-API-Key: your-key"
 ```
 

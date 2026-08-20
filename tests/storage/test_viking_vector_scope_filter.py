@@ -80,7 +80,7 @@ def test_all_targets_may_be_under_different_visible_roots():
     ctx = _ctx()
     targets = [
         "viking://resources/wiki/physics",
-        "viking://user/resources/private-notes",
+        "viking://user/alice/resources/private-notes",
         "viking://agent/skills/research",
     ]
 

@@ -5,7 +5,6 @@ import {
   getTasks,
   getOvResult,
   isOvClientError,
-  postResources,
   postResourcesTempUpload,
 } from '#/lib/ov-client'
 import { parseUploadError } from '../-lib/upload'
@@ -14,10 +13,16 @@ import {
   mergeServerTasks,
   normalizeTaskList,
 } from '../-lib/resource-upload-tasks'
+import {
+  buildRemoteResourceRequest,
+  buildUploadedResourceRequest,
+} from '../-lib/resource-import-request'
+import { postResourceImport } from '../-lib/resource-import-api'
 import type {
-  AddResourceResult,
+  ResourceImportCommonBody,
+  ResourceImportResult,
   TempUploadResult,
-} from '@ov-server/api/v1/resources'
+} from '../-lib/resource-import-types'
 import type { TaskListResult } from '@ov-server/api/v1/tasks'
 
 export type ResourceUploadTaskStatus =
@@ -61,7 +66,7 @@ export type UploadBatchItem = {
 
 export type UploadBatchParams = {
   files: UploadBatchItem[]
-  commonBody: Record<string, unknown>
+  commonBody: ResourceImportCommonBody
 }
 
 export type RemoteStartResult = {
@@ -71,7 +76,7 @@ export type RemoteStartResult = {
 
 export type RemoteStartParams = {
   url: string
-  commonBody: Record<string, unknown>
+  commonBody: ResourceImportCommonBody
   onAccepted?: (result: RemoteStartResult) => void
   onCompleted?: () => void
   onFailed?: () => void
@@ -234,7 +239,7 @@ export function ResourceUploadProvider({
     async (
       taskId: string,
       params: UploadBatchItem,
-      commonBody: Record<string, unknown>,
+      commonBody: ResourceImportCommonBody,
     ) => {
       try {
         updateTask(taskId, (task) => ({
@@ -274,14 +279,14 @@ export function ResourceUploadProvider({
           progress: null,
         }))
 
-        const addResult = await getOvResult<AddResourceResult>(
-          postResources({
-            body: {
-              ...commonBody,
-              temp_file_id: tempFileId,
-              source_name: params.file.name,
-            } as Parameters<typeof postResources>[0]['body'],
-          }),
+        const addResult = await getOvResult<ResourceImportResult>(
+          postResourceImport(
+            buildUploadedResourceRequest(
+              tempFileId,
+              params.file.name,
+              commonBody,
+            ),
+          ),
         )
 
         if (addResult.status === 'error') {
@@ -404,14 +409,11 @@ export function ResourceUploadProvider({
 
       void (async () => {
         try {
-          const result = await getOvResult<AddResourceResult>(
-            postResources({
-              body: {
-                ...params.commonBody,
-                path: params.url,
-              } as Parameters<typeof postResources>[0]['body'],
-              signal: controller.signal,
-            }),
+          const result = await getOvResult<ResourceImportResult>(
+            postResourceImport(
+              buildRemoteResourceRequest(params.url, params.commonBody),
+              controller.signal,
+            ),
           )
 
           if (result.status === 'error') {

@@ -850,6 +850,34 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 需要 GitHub、GitLab 或 Azure DevOps 专属 URL 语义时，应配置到对应的平台字段；
 其他 Git 主机统一添加到 `code_hosting_domains`。
 
+### pdf
+
+PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru`（远程 MinerU API）、`auto`（先本地、失败回退 MinerU）。
+
+```json
+{
+  "pdf": {
+    "strategy": "auto",
+    "mineru_endpoint": "http://127.0.0.1:8000",
+    "mineru_timeout": 300.0,
+    "mineru_bodys": {
+      "backend": "hybrid-auto-engine",
+      "lang_list": ["ch"],
+      "parse_method": "auto"
+    }
+  }
+}
+```
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `strategy` | str | 解析策略：`local` / `mineru` / `auto`（默认 `auto`） |
+| `mineru_endpoint` | str | MinerU API **base URL**（如 `http://127.0.0.1:8000`） |
+| `mineru_timeout` | float | 请求超时秒数（默认 `300.0`） |
+| `mineru_bodys` | dict | MinerU API multipart form 参数 |
+
+**MinerU 协议**：同步调用 `POST {mineru_endpoint}/file_parse`，multipart 文件字段为 `files`，form 参数由 `mineru_bodys` 透传。
+
 ### rerank
 
 用于搜索结果精排的 Rerank 模型。支持 VikingDB (火山引擎)、Cohere 和 OpenAI 兼容接口。
@@ -1311,10 +1339,10 @@ Redis Sentinel 分别配置数据节点和 Sentinel 的 ACL：
 
 | 字段 | 类型 | 默认值 | 上限 | 说明 |
 |------|------|--------|------|------|
-| `pending_token_threshold` | int | 10000 | 50000 | 当未提交的 pending token 超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
-| `message_count_threshold` | int | 50 | 500 | 当未提交的 live message 数量超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
+| `pending_token_threshold` | int | 150000 | 1000000 | 当未提交的 pending token 超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
+| `message_count_threshold` | int | 100 | 1000 | 当未提交的 live message 数量超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
 | `idle_timeout_seconds` | int | 86400 | 604800 | 有未提交内容的 session 在空闲这么多秒后，进入服务端 idle scheduler 的处理范围。idle 触发的 commit 会归档全部积压消息，并忽略 `keep_recent_count`。 |
-| `keep_recent_count` | int | 2 | 500 | 阈值触发的自动 commit 后保留（不归档）的最近 live message 数量。idle 超时触发的 commit 会忽略该值并归档所有消息。 |
+| `keep_recent_count` | int | 0 | 500 | 阈值触发的自动 commit 后保留（不归档）的最近 live message 数量。idle 超时触发的 commit 会忽略该值并归档所有消息。 |
 | `min_commit_interval_seconds` | int | 0 | 604800 | 两次自动 commit 之间的最小间隔秒数（节流）。 |
 
 代码入口：`openviking/session/auto_commit_policy.py:AutoCommitPolicy`。
@@ -1611,7 +1639,7 @@ openviking add-resource ./docs --exclude "*.tmp"
     "temp_upload": {
       "default_mode": "local",
       "shared_max_size_bytes": 536870912,
-      "shared_prefix": "viking://upload"
+      "ttl_seconds": 43200
     },
     "user_config_defaults": {
       "add_targets": {
@@ -1636,9 +1664,9 @@ openviking add-resource ./docs --exclude "*.tmp"
 | `cors_origins` | list | CORS 允许的来源 | `["*"]` |
 | `public_base_url` | str | MCP `add_resource` 工具向客户端返回的上传指令里使用的对外可见 base URL。解析顺序：环境变量 `OPENVIKING_PUBLIC_BASE_URL` → 本字段 → 请求头 `X-Forwarded-Host` / `X-Forwarded-Proto` → 请求头 `Host` → 监听地址兜底。当 server 部署在反向代理后且代理不转发 `X-Forwarded-*` 时，请显式设置本字段（或环境变量）。 | `null` |
 | `upload_signed_ttl_seconds` | int | MCP `add_resource` 为本地文件上传 mint 的一次性 token 的过期时间（秒），走 `POST /api/v1/resources/temp_upload?token=...`。 | `600`（10 分钟） |
-| `temp_upload.default_mode` | str | `POST /api/v1/resources/temp_upload` 的服务端默认模式（客户端未显式传 `upload_mode` 时使用）：`"local"`（仅当前实例本地磁盘，单机默认行为）或 `"shared"`（分布式共享存储，多副本部署可跨实例消费）。 | `"local"` |
+| `temp_upload.default_mode` | str | `POST /api/v1/resources/temp_upload` 的服务端默认模式（客户端未显式传 `upload_mode` 时使用）：`"local"`（仅当前实例本地磁盘，单机默认行为）或 `"shared"`（分布式共享存储，多副本部署可跨实例消费）。新的 shared 上传会固定写入内部 `viking://upload/<created_at_ms>-<uuid>/content` 和 `meta` 对象，在 `ttl_seconds` 指定的时间内可重复消费。 | `"local"` |
 | `temp_upload.shared_max_size_bytes` | int | `shared` 模式下接受的最大文件大小（字节）。超过此阈值的请求会在写入对象存储之前被拒绝。 | `536870912`（512 MiB） |
-| `temp_upload.shared_prefix` | str | 分配 shared `temp_file_id` 对象时使用的 URI 前缀。 | `"viking://upload"` |
+| `temp_upload.ttl_seconds` | int | local 和 shared 临时上传文件共用的保留时间（秒）。每次对应模式的上传会清理超过此时间的文件；shared 只需一次上传根目录列举，从每个一级目录名解析创建时间，并递归删除过期目录，不依赖文件系统修改时间；设为 `0` 时禁用自动清理。 | `43200`（12 小时） |
 | `user_config_defaults.add_targets.resource_uri` | str | `add_resource` 未传 `to` 和 `parent` 时使用的部署级默认资源添加目录。`viking://user/...` 会按请求用户解析。 | `null` |
 | `user_config_defaults.add_targets.skill_uri` | str | `add_skill` 未传 `target_uri` 时使用的部署级默认技能添加根目录。仅允许 `viking://user/skills` 和 `viking://agent/skills`。 | `null` |
 | `agent_evolution.enabled` | bool | 实例级 Agent 进化开关。开启时，session commit 可按 session `memory_policy` 生成或更新 cases、trajectories 和 experiences；关闭时，所有账号和用户均停止生产这三类记忆。已有记忆仍可读取和检索。 | `false` |

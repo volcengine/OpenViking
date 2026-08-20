@@ -84,8 +84,7 @@ Results are grouped by `context_type`:
       "score": 0.95,
       "abstract": "OAuth 2.0 best practices...",
       "overview": "This guide covers...",
-      "match_reason": "Context-aware match: OAuth login best practices",
-      "relations": []
+      "match_reason": "Context-aware match: OAuth login best practices"
     }
   ],
   "skills": [],

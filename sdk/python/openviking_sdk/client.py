@@ -68,7 +68,6 @@ GATEWAY_TOKEN_HEADER = "X-Gateway-Token"
 _SESSION_CONFIG_UNSET = object()
 
 
-
 def _image_mime_type(file_name: str = "") -> str:
     mime_type, _ = mimetypes.guess_type(file_name or "")
     if mime_type and mime_type.startswith("image/"):
@@ -402,9 +401,7 @@ class AsyncHTTPClient:
         self._ldap_username = config.ldap_username
         self._ldap_password = config.ldap_password
         self._oidc_token = config.oidc_token
-        self._event_hooks = {
-            event: list(hooks) for event, hooks in (event_hooks or {}).items()
-        }
+        self._event_hooks = {event: list(hooks) for event, hooks in (event_hooks or {}).items()}
         self._http: Optional[httpx.AsyncClient] = None
         self._observer: Optional[_HTTPObserver] = None
         self._snapshot: Optional["AsyncHTTPSnapshotNamespace"] = None
@@ -423,6 +420,7 @@ class AsyncHTTPClient:
         # LDAP Basic Auth
         if self._auth_mode == "ldap" and self._ldap_username and self._ldap_password:
             from .config import get_basic_auth_header
+
             headers["Authorization"] = get_basic_auth_header(
                 self._ldap_username, self._ldap_password
             )
@@ -517,6 +515,12 @@ class AsyncHTTPClient:
         retry_headers = dict(headers)
         retry_headers[GATEWAY_TOKEN_HEADER] = self._gateway_token
         return await self._send_http_request(method, url, retry_headers, request_kwargs)
+
+    def _wait_request_kwargs(self, *, wait: bool, timeout: Optional[float]) -> Dict[str, Any]:
+        if not wait or timeout is None:
+            return {}
+        read_timeout = max(self._timeout, timeout + 30.0)
+        return {"timeout": httpx.Timeout(self._timeout, read=read_timeout)}
 
     async def close(self) -> None:
         if self._http:
@@ -853,9 +857,11 @@ class AsyncHTTPClient:
         include_source: bool = False,
         level: Optional[int] = None,
         target_uri: Optional[str] = None,
+        include_integrity: bool = False,
     ) -> Dict[str, Any]:
         params: Dict[str, Any] = {
             "include_files": include_files,
+            "include_integrity": include_integrity,
             "include_source": include_source,
         }
         if include_content is not None:
@@ -1057,6 +1063,7 @@ class AsyncHTTPClient:
         abs_limit: int = 128,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
+        level_limit: int = 3,
     ) -> List[Dict[str, Any]]:
         response = await self._request(
             "GET",
@@ -1067,6 +1074,7 @@ class AsyncHTTPClient:
                 "abs_limit": abs_limit,
                 "show_all_hidden": show_all_hidden,
                 "node_limit": node_limit,
+                "level_limit": level_limit,
             },
         )
         return self._handle_response(response)
@@ -1207,6 +1215,7 @@ class AsyncHTTPClient:
                 "timeout": timeout,
                 "telemetry": telemetry,
             },
+            **self._wait_request_kwargs(wait=wait, timeout=timeout),
         )
         return self._handle_response_data(response).get("result", {})
 
@@ -1328,39 +1337,6 @@ class AsyncHTTPClient:
             },
         )
         return self._handle_response(response)
-
-    async def relations(self, uri: str) -> List[Any]:
-        response = await self._request(
-            "GET", "/api/v1/relations", params={"uri": VikingURI.normalize(uri)}
-        )
-        return self._handle_response(response)
-
-    async def link(self, from_uri: str, to_uris: Union[str, List[str]], reason: str = "") -> None:
-        if isinstance(to_uris, str):
-            to_uris = VikingURI.normalize(to_uris)
-        else:
-            to_uris = [VikingURI.normalize(u) for u in to_uris]
-        response = await self._request(
-            "POST",
-            "/api/v1/relations/link",
-            json={
-                "from_uri": VikingURI.normalize(from_uri),
-                "to_uris": to_uris,
-                "reason": reason,
-            },
-        )
-        self._handle_response(response)
-
-    async def unlink(self, from_uri: str, to_uri: str) -> None:
-        response = await self._request(
-            "DELETE",
-            "/api/v1/relations/link",
-            json={
-                "from_uri": VikingURI.normalize(from_uri),
-                "to_uri": VikingURI.normalize(to_uri),
-            },
-        )
-        self._handle_response(response)
 
     async def create_session(
         self,
@@ -1641,11 +1617,17 @@ class AsyncHTTPClient:
         mode: str = "vectors_only",
         wait: bool = True,
         dry_run: bool = False,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
     ) -> Dict[str, Any]:
+        payload = {"uri": uri, "mode": mode, "wait": wait, "dry_run": dry_run}
+        if tags is not None:
+            payload["tags"] = tags
+            payload["tag_mode"] = tag_mode
         response = await self._request(
             "POST",
             "/api/v1/content/reindex",
-            json={"uri": uri, "mode": mode, "wait": wait, "dry_run": dry_run},
+            json=payload,
         )
         return self._handle_response(response)
 
@@ -2055,12 +2037,14 @@ class SyncHTTPClient:
         include_source: bool = False,
         level: Optional[int] = None,
         target_uri: Optional[str] = None,
+        include_integrity: bool = False,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.get_skill(
                 skill_name,
                 include_content=include_content,
                 include_files=include_files,
+                include_integrity=include_integrity,
                 include_source=include_source,
                 level=level,
                 target_uri=target_uri,
@@ -2183,6 +2167,7 @@ class SyncHTTPClient:
         abs_limit: int = 128,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
+        level_limit: int = 3,
     ) -> List[Dict[str, Any]]:
         return run_async(
             self._async_client.tree(
@@ -2191,6 +2176,7 @@ class SyncHTTPClient:
                 abs_limit=abs_limit,
                 show_all_hidden=show_all_hidden,
                 node_limit=node_limit,
+                level_limit=level_limit,
             )
         )
 
@@ -2375,15 +2361,6 @@ class SyncHTTPClient:
         node_limit: int = 256,
     ) -> Dict[str, Any]:
         return run_async(self._async_client.glob(pattern, uri=uri, node_limit=node_limit))
-
-    def relations(self, uri: str) -> List[Any]:
-        return run_async(self._async_client.relations(uri))
-
-    def link(self, from_uri: str, to_uris: Union[str, List[str]], reason: str = "") -> None:
-        run_async(self._async_client.link(from_uri, to_uris, reason=reason))
-
-    def unlink(self, from_uri: str, to_uri: str) -> None:
-        run_async(self._async_client.unlink(from_uri, to_uri))
 
     def create_session(
         self,
@@ -2591,8 +2568,19 @@ class SyncHTTPClient:
         mode: str = "vectors_only",
         wait: bool = True,
         dry_run: bool = False,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
     ) -> Dict[str, Any]:
-        return run_async(self._async_client.reindex(uri=uri, mode=mode, wait=wait, dry_run=dry_run))
+        kwargs = {
+            "uri": uri,
+            "mode": mode,
+            "wait": wait,
+            "dry_run": dry_run,
+        }
+        if tags is not None:
+            kwargs["tags"] = tags
+            kwargs["tag_mode"] = tag_mode
+        return run_async(self._async_client.reindex(**kwargs))
 
     def admin_create_account(
         self,
@@ -2840,9 +2828,7 @@ class SyncHTTPSnapshotNamespace:
         from_ref: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Compare one file between two snapshot refs."""
-        return run_async(
-            self._ns().diff(path, from_ref=from_ref, to_ref=to_ref)
-        )
+        return run_async(self._ns().diff(path, from_ref=from_ref, to_ref=to_ref))
 
     def get_gitignore(self) -> str:
         return run_async(self._ns().get_gitignore())

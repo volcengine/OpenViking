@@ -701,6 +701,13 @@ def validate_openviking_auth(config: Config) -> None:
     api_key = getattr(ov_server, "api_key", None)
     if api_key:
         headers["X-API-Key"] = api_key
+    if auth_mode == "trusted":
+        headers["X-OpenViking-Account"] = str(
+            getattr(ov_server, "account_id", "") or "default"
+        ).strip()
+        headers["X-OpenViking-User"] = str(
+            getattr(ov_server, "admin_user_id", "") or "default"
+        ).strip()
 
     health = _request_openviking_json(server_url, "/health", headers=headers)
     if not health.ok:

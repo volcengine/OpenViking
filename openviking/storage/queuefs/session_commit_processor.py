@@ -44,7 +44,7 @@ class SessionCommitProcessor(DequeueHandlerBase):
         )
         return msg, ctx
 
-    async def _process(self, msg: SessionCommitMsg, ctx: RequestContext) -> None:
+    async def _process(self, msg: SessionCommitMsg, ctx: RequestContext) -> bool:
         # Bind a root observability context so Phase-2 extraction VLM/embedding
         # token events are attributed to the committing account/user rather than
         # "__unknown__" (mirrors SemanticProcessor.on_dequeue). Must bind inside
@@ -81,10 +81,19 @@ class SessionCommitProcessor(DequeueHandlerBase):
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
                 )
-                return
+                return True
             await session.load()
             with bind_task_context(msg.task_id, ctx.account_id, ctx.user.user_id):
-                await session.resume_queued_commit(msg)
+                processed = await session.resume_queued_commit(msg)
+            if not processed:
+                from openviking.storage.queuefs import QueueManager, get_queue_manager
+
+                await get_queue_manager().enqueue(
+                    QueueManager.SESSION_COMMIT,
+                    msg.to_dict(),
+                )
+                self.report_requeue()
+            return processed
         finally:
             reset_root_observability_context(root_context_token)
 
@@ -128,7 +137,7 @@ class SessionCommitProcessor(DequeueHandlerBase):
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             self.report_error(str(exc), data)
             return None
-        future: concurrent.futures.Future[None] = asyncio.run_coroutine_threadsafe(
+        future: concurrent.futures.Future[bool] = asyncio.run_coroutine_threadsafe(
             self._process(msg, ctx),
             self._service_loop,
         )

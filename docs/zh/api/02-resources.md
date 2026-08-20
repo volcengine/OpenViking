@@ -42,7 +42,7 @@ OpenViking 支持多种资源类型，按照功能分类如下：
 云文档类
 | 类型 | 说明 |
 |------|------|
-| 飞书/Lark | URL 方式，支持 docx, wiki, sheets, bitable。默认使用 FEISHU_APP_ID 和 FEISHU_APP_SECRET 应用凭证；用户 token 导入可传 `args.feishu_access_token`，用户 token watch 还需传 `args.feishu_refresh_token` |
+| 飞书/Lark | URL 方式，支持 doc/docx, wiki, sheets, bitable。默认使用 FEISHU_APP_ID 和 FEISHU_APP_SECRET 应用凭证；用户 token 导入可传 `args.feishu_access_token`，用户 token watch 还需传 `args.feishu_refresh_token` |
 
 网页类（递归网页爬虫）
 | 类型 | 资源名 | 说明 |
@@ -581,7 +581,36 @@ task_id      uuid-xxx
 | `queue_status` | object | （可选，仅当 `wait=true` 时）队列处理状态，包含 `pending`、`processing`、`completed` 计数 |
 | `memory_linking` | object | （可选，仅当 `reason` 触发记忆生成时）本次资源 URI 与用户记忆的关联结果 |
 
-对于 `wait=false` 的 Git 仓库来源，后台任务的 `task_type="add_resource"`，`resource_id` 等于返回的 `root_uri`。运行中的任务记录可能包含 `stage`；完成后的任务 `result` 会包含带有 semantic 和 embedding 汇总的 `queue_status`。
+**完成后的资源添加任务结果**
+
+对于 `wait=false` 的 Git 仓库来源，后台任务的 `task_type="add_resource"`，`resource_id` 等于返回的 `root_uri`。运行中的任务记录可能包含 `stage`。轮询 `/api/v1/tasks/{task_id}` 直到任务完成。完成后，任务内层的 `result` 会包含最终队列汇总和 `context_count`：
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "task_id": "uuid-xxx",
+    "task_type": "add_resource",
+    "status": "completed",
+    "resource_id": "viking://resources/guide",
+    "result": {
+      "status": "success",
+      "root_uri": "viking://resources/guide",
+      "queue_status": {
+        "Embedding": {
+          "processed": 11,
+          "requeue_count": 0,
+          "error_count": 0,
+          "errors": []
+        }
+      },
+      "context_count": 11
+    }
+  }
+}
+```
+
+`context_count` 是本次上传任务成功生成并完成索引的上下文数量。每条上下文对应的嵌入记录成功写入后，计数增加一次。该值不是 `root_uri` 下已有上下文的总数。如果服务器在任务持久化最终指标前重启，该字段会被省略，以避免返回不完整的计数。
 
 ---
 
@@ -621,8 +650,9 @@ task_id      uuid-xxx
 
 - 默认值是 `local`，所以现有客户端在不改动的情况下仍保持原有行为。
 - 只有在你明确需要分布式共享临时上传时，才应显式使用 `upload_mode=shared`。
-- `shared` 模式下返回的一次性 `temp_file_id` 形如 `shared_<upload_id>`。
-- shared 上传对象存放在内部 `viking://upload/...` 命名空间下，不属于普通文件系统浏览空间。
+- `shared` 模式下返回的 `temp_file_id` 形如 `shared_<upload_id>`；同一 account 在文件保留期间可以重复消费。
+- 新的 shared 上传会创建内部目录 `viking://upload/<created_at_ms>-<uuid>/`，目录内包含 `content` 和 `meta`。目录名中的 13 位 Unix 毫秒时间戳即上传创建时间；`meta` 最后写入，代表上传已完整完成。这些对象不属于普通文件系统浏览空间。
+- shared 上传会保留 `server.temp_upload.ttl_seconds` 指定的时长（默认 12 小时）。每次新的 shared 上传会对内部上传根目录执行一次列举，从每个一级上传目录名解析创建时间戳，并递归删除过期目录，不依赖文件系统修改时间。
 
 #### 3. 使用示例
 

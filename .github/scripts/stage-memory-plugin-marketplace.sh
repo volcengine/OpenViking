@@ -14,6 +14,7 @@ cp -R \
   "${ROOT}/examples/codex-memory-plugin" \
   "${ROOT}/examples/cursor-memory-plugin" \
   "${ROOT}/examples/trae-memory-hooks" \
+  "${ROOT}/examples/trae-cli-memory-hooks" \
   "${ROOT}/examples/zcode-memory-plugin" \
   "${ROOT}/examples/opencode-plugin" \
   "${ROOT}/examples/pi-coding-agent-extension" \
@@ -21,6 +22,8 @@ cp -R \
   "${STAGE}/"
 
 for required in \
+  claude-code-memory-plugin/skills/ov-experience-memory/SKILL.md \
+  codex-memory-plugin/skills/ov-experience-memory/SKILL.md \
   cursor-memory-plugin/.cursor-plugin/plugin.json \
   cursor-memory-plugin/hooks/hooks.json \
   cursor-memory-plugin/.mcp.json \
@@ -36,6 +39,8 @@ for required in \
   cursor-memory-plugin/servers/mcp-proxy.mjs \
   cursor-memory-plugin/rules/openviking-memory.mdc \
   cursor-memory-plugin/skills/openviking-memory/SKILL.md \
+  claude-code-memory-plugin/skills/openviking-memory/SKILL.md \
+  codex-memory-plugin/skills/openviking-memory/SKILL.md \
   trae-memory-hooks/hooks/hooks.json \
   trae-memory-hooks/.mcp.json \
   trae-memory-hooks/openviking.integration.json \
@@ -46,6 +51,16 @@ for required in \
   trae-memory-hooks/scripts/trae-turns.mjs \
   trae-memory-hooks/scripts/uri-guard.mjs \
   trae-memory-hooks/servers/mcp-proxy.mjs \
+  trae-cli-memory-hooks/hooks/hooks.json \
+  trae-cli-memory-hooks/.mcp.json \
+  trae-cli-memory-hooks/openviking.integration.json \
+  trae-cli-memory-hooks/scripts/trae-cli-hook.mjs \
+  trae-cli-memory-hooks/scripts/session-start.mjs \
+  trae-cli-memory-hooks/scripts/auto-recall.mjs \
+  trae-cli-memory-hooks/scripts/auto-capture.mjs \
+  trae-cli-memory-hooks/scripts/trae-cli-turns.mjs \
+  trae-cli-memory-hooks/scripts/uri-guard.mjs \
+  trae-cli-memory-hooks/servers/mcp-proxy.mjs \
   zcode-memory-plugin/.zcode-plugin/plugin.json \
   zcode-memory-plugin/hooks/hooks.json \
   zcode-memory-plugin/.mcp.json \

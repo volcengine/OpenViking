@@ -132,30 +132,44 @@ export function registerOpenVikingMemoryTools(deps: OpenVikingMemoryToolsDeps): 
           const memoriesCount = totalCommitMemories(commitResult);
           if (commitResult.status === "failed") {
             deps.logger.warn(
-              `openviking: memory_store commit failed (sessionId=${sessionId}): ${commitResult.error ?? "unknown"}`,
+              `openviking: memory_store commit failed (sessionId=${sessionId}): ` +
+                `${commitResult.error ?? "unknown"}, trace_id=${commitResult.trace_id ?? "none"}`,
             );
             return {
-              content: [{ type: "text", text: `Memory extraction failed for session ${sessionId}: ${commitResult.error ?? "unknown"}` }],
+              content: [{
+                type: "text",
+                text: `Memory extraction failed for session ${sessionId}: ${commitResult.error ?? "unknown"}` +
+                  (commitResult.trace_id ? ` (trace_id=${commitResult.trace_id})` : ""),
+              }],
               details: {
                 action: "failed",
                 sessionId,
                 status: "failed",
                 error: commitResult.error,
+                traceId: commitResult.trace_id,
                 usedTempSession,
               },
             };
           }
           if (commitResult.status === "timeout") {
             deps.logger.warn(
-              `openviking: memory_store commit timed out (sessionId=${sessionId}), task_id=${commitResult.task_id ?? "none"}. Memories may still be extracting in background.`,
+              `openviking: memory_store commit timed out (sessionId=${sessionId}), ` +
+                `task_id=${commitResult.task_id ?? "none"}, trace_id=${commitResult.trace_id ?? "none"}. ` +
+                "Memories may still be extracting in background.",
             );
             return {
-              content: [{ type: "text", text: `Memory extraction timed out for session ${sessionId}. It may still complete in the background (task_id=${commitResult.task_id ?? "none"}).` }],
+              content: [{
+                type: "text",
+                text: `Memory extraction timed out for session ${sessionId}. ` +
+                  `It may still complete in the background (task_id=${commitResult.task_id ?? "none"}` +
+                  `${commitResult.trace_id ? `, trace_id=${commitResult.trace_id}` : ""}).`,
+              }],
               details: {
                 action: "timeout",
                 sessionId,
                 status: "timeout",
                 taskId: commitResult.task_id,
+                traceId: commitResult.trace_id,
                 usedTempSession,
               },
             };
@@ -166,13 +180,17 @@ export function registerOpenVikingMemoryTools(deps: OpenVikingMemoryToolsDeps): 
                 "Check OpenViking server logs for embedding/extract errors (e.g. 401 API key, or extraction pipeline).",
             );
           } else {
-            deps.logger.info?.(`openviking: memory_store committed, memories=${memoriesCount}`);
+            deps.logger.info?.(
+              `openviking: memory_store committed, memories=${memoriesCount}, ` +
+                `trace_id=${commitResult.trace_id ?? "none"}`,
+            );
           }
           return {
             content: [
               {
                 type: "text",
-                text: `Stored in OpenViking session ${sessionId} and committed ${memoriesCount} memories.`,
+                text: `Stored in OpenViking session ${sessionId} and committed ${memoriesCount} memories.` +
+                  (commitResult.trace_id ? ` (trace_id=${commitResult.trace_id})` : ""),
               },
             ],
             details: {
@@ -181,6 +199,7 @@ export function registerOpenVikingMemoryTools(deps: OpenVikingMemoryToolsDeps): 
               memoriesCount,
               status: commitResult.status,
               archived: commitResult.archived ?? false,
+              traceId: commitResult.trace_id,
               usedTempSession,
             },
           };

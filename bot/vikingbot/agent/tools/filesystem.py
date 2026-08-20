@@ -27,6 +27,10 @@ class ReadFileTool(Tool):
             "required": ["path"],
         }
 
+    @property
+    def resource_inputs(self) -> dict[str, str]:
+        return {"path": "local_file"}
+
     async def execute(self, tool_context: "ToolContext", path: str, **kwargs: Any) -> str:
         try:
             sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
@@ -98,6 +102,10 @@ class EditFileTool(Tool):
             "required": ["path", "old_text", "new_text"],
         }
 
+    @property
+    def resource_inputs(self) -> dict[str, str]:
+        return {"path": "local_file"}
+
     async def execute(
         self, tool_context: "ToolContext", path: str, old_text: str, new_text: str, **kwargs: Any
     ) -> str:
@@ -142,6 +150,10 @@ class ListDirTool(Tool):
             "properties": {"path": {"type": "string", "description": "The directory path to list"}},
             "required": ["path"],
         }
+
+    @property
+    def resource_inputs(self) -> dict[str, str]:
+        return {"path": "local_directory"}
 
     async def execute(self, tool_context: "ToolContext", path: str, **kwargs: Any) -> str:
         try:

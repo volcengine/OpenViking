@@ -8,18 +8,19 @@ from openviking_cli.session.user_id import UserIdentifier
 
 
 @pytest.mark.asyncio
-async def test_mv_canonicalizes_user_shorthand_before_vector_update(monkeypatch):
+async def test_mv_preserves_canonical_user_uris_for_vector_update(monkeypatch):
     ctx = RequestContext(user=UserIdentifier("acc", "default"), role=Role.ROOT)
     fs = VikingFS.__new__(VikingFS)
     fs._async_agfs = AsyncMock()
     fs._async_agfs.stat.return_value = {"isDir": False}
+    fs._async_agfs.pathlock_acquire_batch.return_value = {"lease_ref": "lease-1"}
     fs._collect_uris = AsyncMock(return_value=[])
     fs._copy_for_mv = AsyncMock()
     fs._update_vector_store_uris = AsyncMock()
 
     await fs.mv(
-        "viking://user/peers/vaka/memories/profile.md",
-        "viking://user/memories/profile.md",
+        "viking://user/default/peers/vaka/memories/profile.md",
+        "viking://user/default/memories/profile.md",
         ctx=ctx,
     )
 

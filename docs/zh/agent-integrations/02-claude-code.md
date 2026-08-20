@@ -112,6 +112,7 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 
 ## 参见
 
+- [集成能力参考](./16-capability-reference.md)
 - [博客：在 Claude Code / Codex 中接入 OpenViking](https://blog.openviking.ai/post/openviking-coding-agent/) — 探讨为 Coding Agent 添加长期记忆的动机与实际效果。
 - [插件 README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md) — 查看完整的环境变量列表、Hook 运行细节及系统架构图。
 - [MCP 客户端](./06-mcp-clients.md) — 了解 MCP 工具参数及其他客户端集成指南。

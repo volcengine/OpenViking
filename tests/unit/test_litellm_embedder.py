@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for LiteLLM Embedder and factory integration."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -42,6 +42,23 @@ class TestLiteLLMDenseEmbedder:
         call_kwargs = mock_litellm.embedding.call_args[1]
         assert call_kwargs["model"] == "openai/text-embedding-3-small"
         assert call_kwargs["api_key"] == "test-key"
+
+    @patch("openviking.models.embedder.litellm_embedders.litellm")
+    async def test_embed_async_truncates_vector_to_configured_dimension(self, mock_litellm):
+        """Async embedding should truncate vectors to the configured dimension."""
+        mock_litellm.aembedding = AsyncMock(
+            return_value=_mock_litellm_response(vectors=[[0.1, 0.2, 0.3, 0.4]])
+        )
+
+        from openviking.models.embedder.litellm_embedders import LiteLLMDenseEmbedder
+
+        embedder = LiteLLMDenseEmbedder(
+            model_name="bedrock/amazon.titan-embed-text-v2:0",
+            dimension=3,
+        )
+        result = await embedder.embed_async("Hello world")
+
+        assert result.dense_vector == [0.1, 0.2, 0.3]
 
     @patch("openviking.models.embedder.litellm_embedders.litellm")
     def test_embed_with_api_base(self, mock_litellm):

@@ -4,11 +4,11 @@
 Patch handler for memory updates.
 
 Supports two modes:
-1. Content patch: SEARCH/REPLACE format (enhanced with RooCode's multi-search-replace strategy)
+1. Content patch: structured SEARCH/REPLACE and DELETE blocks
 2. Field patch: Field-level updates based on merge_op
 
 Enhanced features from RooCode:
-- Support for multiple SEARCH/REPLACE blocks
+- Support for multiple SEARCH/REPLACE and DELETE blocks
 - Fuzzy matching (fuzzy matching)
 - Line number handling (add, strip, detect)
 - Marker escaping support
@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from openviking.session.memory.merge_op.base import StrPatch
+from openviking.session.memory.merge_op.base import DeleteBlock, StrPatch
 from openviking.session.memory.utils.line_numbers import (
     add_line_numbers,
     every_line_has_line_numbers,
@@ -848,6 +848,32 @@ class MultiSearchReplaceDiffStrategy:
 # ============================================================================
 
 
+def _delete_complete_lines(content: str, delete_content: str) -> str:
+    """Delete a unique block of complete lines, including one adjacent line ending."""
+    start = content.index(delete_content)
+    end = start + len(delete_content)
+
+    starts_at_line_boundary = start == 0 or content[start - 1] == "\n"
+    ends_at_line_boundary = (
+        end == len(content) or content.startswith("\r\n", end) or content.startswith("\n", end)
+    )
+    if not starts_at_line_boundary or not ends_at_line_boundary:
+        raise PatchParseError("DELETE content must contain one or more complete lines")
+
+    # Prefer consuming the following line ending. At EOF, consume the preceding
+    # line ending so deleting the final line does not leave a trailing blank line.
+    if content.startswith("\r\n", end):
+        end += 2
+    elif content.startswith("\n", end):
+        end += 1
+    elif start > 0 and content[start - 2 : start] == "\r\n":
+        start -= 2
+    elif start > 0 and content[start - 1] == "\n":
+        start -= 1
+
+    return content[:start] + content[end:]
+
+
 def apply_str_patch(original_content: str, patch: StrPatch) -> str:
     """Apply a StrPatch to original content.
 
@@ -888,7 +914,10 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
                 "to make sure it is unique."
             )
 
-        result_content = result_content.replace(search_content, replace_content, 1)
+        if isinstance(block, DeleteBlock):
+            result_content = _delete_complete_lines(result_content, search_content)
+        else:
+            result_content = result_content.replace(search_content, replace_content, 1)
 
     if all_applied:
         return result_content
