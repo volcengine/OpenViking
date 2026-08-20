@@ -5,7 +5,7 @@ import {
 } from '../../blog-components';
 
 const AGENT_HUB_URL = 'https://openviking.ai/studio/agent-hub';
-const OPENVIKING_GITHUB = 'https://github.com/volcengine/OpenViking';
+const OPENVIKING_GITHUB = 'https://github.com/volcengine/OpenViking?utm_source=blog&utm_medium=article&utm_campaign=agent-swarm-memory';
 const OPENVIKING_DOCS = 'https://docs.openviking.ai';
 const AGENT_PLAN_POST = 'https://mp.weixin.qq.com/s/LaQB9nyyX2GhDJKMNYcdaA';
 const PEER_MODEL_POST = '/post/openviking-user-peer-model';
