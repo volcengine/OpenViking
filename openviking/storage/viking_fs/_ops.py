@@ -406,7 +406,11 @@ class _OpsMixin:
             parent_stat = await self._async_agfs.stat(parent_path)
         except Exception as exc:
             if is_not_found_error(exc):
-                raise FileNotFoundError(f"{operation} target parent not found: {uri}") from exc
+                parent_uri = VikingURI(uri).parent
+                raise NotFoundError(
+                    parent_uri.uri if parent_uri is not None else "",
+                    "directory",
+                ) from exc
             mapped = map_exception(exc, resource=uri)
             if mapped is not None:
                 raise mapped from exc

@@ -15,6 +15,7 @@ from openviking_cli.exceptions import (
     ConflictError,
     FailedPreconditionError,
     InvalidArgumentError,
+    NotFoundError,
     PermissionDeniedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
@@ -365,13 +366,18 @@ async def test_cp_rejects_missing_target_parent_before_locking(monkeypatch):
     fs = _viking_fs(monkeypatch, agfs)
     monkeypatch.setattr(fs, "_copy_vector_store_uris", AsyncMock(), raising=False)
 
-    with pytest.raises(FileNotFoundError, match="target parent not found"):
+    with pytest.raises(NotFoundError) as exc_info:
         await fs.cp(
             "viking://resources/source.md",
             "viking://resources/target.md",
             ctx=_ctx(),
         )
 
+    assert exc_info.value.message == "Directory not found: viking://resources"
+    assert exc_info.value.details == {
+        "resource": "viking://resources",
+        "type": "directory",
+    }
     assert not any(event[0] == "acquire-batch" for event in agfs.events)
 
 
@@ -382,13 +388,18 @@ async def test_mv_rejects_missing_target_parent_before_locking(monkeypatch):
     monkeypatch.setattr(fs, "_ensure_delete_access", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(fs, "_update_vector_store_uris", AsyncMock())
 
-    with pytest.raises(FileNotFoundError, match="target parent not found"):
+    with pytest.raises(NotFoundError) as exc_info:
         await fs.mv(
             "viking://resources/source.md",
             "viking://resources/target.md",
             ctx=_ctx(),
         )
 
+    assert exc_info.value.message == "Directory not found: viking://resources"
+    assert exc_info.value.details == {
+        "resource": "viking://resources",
+        "type": "directory",
+    }
     assert not any(event[0] == "acquire-batch" for event in agfs.events)
 
 
