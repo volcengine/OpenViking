@@ -1,6 +1,6 @@
 {
   "name": "@openviking/dsh-memory-plugin",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "OpenViking memory and context bundle for DeepSeek Harness",
   "type": "module",
   "main": "index.mjs",
@@ -35,9 +35,9 @@
     "prepublishOnly": "npm run check && npm test"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-llm": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-mcp-client": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-skill-filesystem": "0.1.0-rc.6"
+    "@deepseek-ai/dsh-llm": ">=0.1.0-rc.6 <0.2.0",
+    "@deepseek-ai/dsh-mcp-client": ">=0.1.0-rc.6 <0.2.0",
+    "@deepseek-ai/dsh-skill-filesystem": ">=0.1.0-rc.6 <0.2.0"
   },
   "devDependencies": {
     "@deepseek-ai/dsh-llm": "0.1.0-rc.6",
