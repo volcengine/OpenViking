@@ -302,7 +302,7 @@ function buildFallbackSources(actorPeerId = "", peerScope = "") {
       uri: `viking://user/peers/${peerId}/${source.bucket}`,
     }))
     : [];
-  return peerScope === "actor" ? peerSources : [...USER_SOURCES, ...peerSources];
+  return peerScope === "actor" && peerId ? peerSources : [...USER_SOURCES, ...peerSources];
 }
 
 async function searchAllSources(
