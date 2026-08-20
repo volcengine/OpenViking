@@ -71,7 +71,7 @@ function runAutoRecall(input, env) {
   });
 }
 
-function hookEnv(root, baseUrl, peerScope = "all") {
+function hookEnv(root, baseUrl, peerScope = "all", actorPeerId = "peer-123") {
   return {
     HOME: root,
     TMPDIR: root,
@@ -79,16 +79,17 @@ function hookEnv(root, baseUrl, peerScope = "all") {
     OPENVIKING_CONFIG_FILE: join(root, "missing-ov.conf"),
     OPENVIKING_CLI_CONFIG_FILE: join(root, "missing-ovcli.conf"),
     OPENVIKING_MEMORY_ENABLED: "1",
-    OPENVIKING_PEER_ID: "peer-123",
+    ...(actorPeerId ? { OPENVIKING_PEER_ID: actorPeerId } : {}),
     OPENVIKING_RECALL_COMPRESS: "off",
     OPENVIKING_RECALL_PEER_SCOPE: peerScope,
     OPENVIKING_STATE_DIR: join(root, "state"),
     OPENVIKING_TIMEOUT_MS: "5000",
     OPENVIKING_URL: baseUrl,
+    OPENVIKING_WORKSPACE_PEER: "0",
   };
 }
 
-async function runFallbackRecall(peerScope) {
+async function runFallbackRecall(peerScope, actorPeerId = "peer-123") {
   const root = await mkdtemp(join(tmpdir(), "ov-cc-recall-peer-"));
   const calls = [];
   try {
@@ -131,7 +132,7 @@ async function runFallbackRecall(peerScope) {
     }, async (baseUrl) => {
       await runAutoRecall(
         { session_id: `recall-${peerScope}`, cwd: root, prompt: "find peer memory" },
-        hookEnv(root, baseUrl, peerScope),
+        hookEnv(root, baseUrl, peerScope, actorPeerId),
       );
     });
     return calls;
@@ -176,6 +177,25 @@ test("raw actor-scoped fallback searches only qualified actor peer trees", async
     [
       "viking://~/peers/peer-123/memories",
       "viking://~/peers/peer-123/skills",
+    ],
+  );
+});
+
+test("raw actor-scoped fallback preserves qualified user trees without actorPeerId", async () => {
+  const calls = await runFallbackRecall("actor", "");
+  const searchCalls = calls.filter((call) => call.path.startsWith("/api/v1/search/"));
+
+  assert.deepEqual(
+    searchCalls.slice(0, 2).map((call) => call.path),
+    ["/api/v1/search/search", "/api/v1/search/recall"],
+  );
+  assert.deepEqual(
+    searchCalls.filter((call) => call.path === "/api/v1/search/find")
+      .map((call) => call.body.target_uri)
+      .sort(),
+    [
+      "viking://user/default/memories",
+      "viking://user/default/skills",
     ],
   );
 });
