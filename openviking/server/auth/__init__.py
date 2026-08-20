@@ -75,6 +75,19 @@ def normalize_actor_peer_header(value: Optional[str]) -> Optional[str]:
         raise InvalidArgumentError(str(exc)) from exc
 
 
+def resolve_actor_peer_headers(
+    actor_peer_header: Optional[str],
+    legacy_agent_header: Optional[str],
+) -> Optional[str]:
+    actor_peer_id = normalize_actor_peer_header(actor_peer_header)
+    legacy_agent_id = normalize_actor_peer_header(legacy_agent_header)
+    if actor_peer_id and legacy_agent_id and actor_peer_id != legacy_agent_id:
+        raise InvalidArgumentError(
+            "X-OpenViking-Agent and X-OpenViking-Actor-Peer must match when both are set."
+        )
+    return actor_peer_id or legacy_agent_id
+
+
 def _explicit_identity_from_request(request: Request) -> tuple[Optional[str], Optional[str]]:
     path_params = getattr(request, "path_params", {}) or {}
     query_params = request.query_params
@@ -98,6 +111,15 @@ def _get_plugin(request: Request):
     return plugin
 
 
+def resolve_group_ids(request: Request, account_id: str, user_id: str) -> tuple[str, ...]:
+    """Resolve server-managed account groups for a request identity."""
+    manager = getattr(request.app.state, "api_key_manager", None)
+    if manager is None:
+        return ()
+    resolver = getattr(manager, "get_user_group_ids", None)
+    return tuple(resolver(account_id, user_id)) if resolver is not None else ()
+
+
 def _build_request_context(
     request: Request,
     identity: ResolvedIdentity,
@@ -107,12 +129,12 @@ def _build_request_context(
 ) -> RequestContext:
     plugin = _get_plugin(request)
     plugin.get_request_context_checks(request.url.path, identity)
+    account_id = identity.account_id or "default"
+    user_id = identity.user_id or "default"
     ctx = RequestContext(
-        user=UserIdentifier(
-            identity.account_id or "default",
-            identity.user_id or "default",
-        ),
+        user=UserIdentifier(account_id, user_id),
         role=identity.role,
+        group_ids=resolve_group_ids(request, account_id, user_id),
         actor_peer_id=actor_peer_id,
         from_oauth=identity.from_oauth,
         api_key=api_key,
@@ -128,11 +150,11 @@ def _build_request_context(
         raise FailedPreconditionError(
             "User deletion is in progress",
             details={"task_id": deletion.get("task_id")},
-        )
+    )
     update_root_span_identity(
         request_state=request.state,
-        account_id=identity.account_id,
-        user_id=identity.user_id,
+        account_id=account_id,
+        user_id=user_id,
     )
     return ctx
 
@@ -162,6 +184,7 @@ async def get_request_context(
     request: Request,
     identity: ResolvedIdentity = Depends(resolve_identity),
     x_openviking_actor_peer: Optional[str] = Header(None, alias="X-OpenViking-Actor-Peer"),
+    x_openviking_agent: Optional[str] = Header(None, alias="X-OpenViking-Agent"),
     x_api_key_ctx: Optional[str] = Header(None, alias="X-API-Key"),
     authorization_ctx: Optional[str] = Header(None, alias="Authorization"),
 ) -> RequestContext:
@@ -169,10 +192,9 @@ async def get_request_context(
     return _build_request_context(
         request,
         identity,
-        actor_peer_id=normalize_actor_peer_header(x_openviking_actor_peer),
+        actor_peer_id=resolve_actor_peer_headers(x_openviking_actor_peer, x_openviking_agent),
         api_key=_extract_api_key(x_api_key_ctx, authorization_ctx),
     )
-
 
 async def get_session_request_context(
     request: Request,
@@ -196,6 +218,7 @@ async def get_upload_request_context(
     x_openviking_account: Optional[str] = Header(None, alias="X-OpenViking-Account"),
     x_openviking_user: Optional[str] = Header(None, alias="X-OpenViking-User"),
     x_openviking_actor_peer: Optional[str] = Header(None, alias="X-OpenViking-Actor-Peer"),
+    x_openviking_agent: Optional[str] = Header(None, alias="X-OpenViking-Agent"),
 ) -> RequestContext:
     """Two-layer auth for the ``temp_upload`` route: API key first, else a signed token.
 
@@ -217,6 +240,7 @@ async def get_upload_request_context(
             ctx = RequestContext(
                 user=UserIdentifier(consumed.account_id, consumed.user_id),
                 role=Role.USER,
+                group_ids=resolve_group_ids(request, consumed.account_id, consumed.user_id),
                 # Actor peer comes from the token (bound at mint time from the trusted MCP
                 # context), never from this upload request's headers, so server-side
                 # auto-ingest keeps the caller's peer scope for reason-memory routing.
@@ -236,7 +260,14 @@ async def get_upload_request_context(
     identity = await resolve_identity(
         request, x_api_key, authorization, x_openviking_account, x_openviking_user
     )
-    return await get_request_context(request, identity, x_openviking_actor_peer)
+    return await get_request_context(
+        request,
+        identity,
+        x_openviking_actor_peer,
+        x_openviking_agent,
+        x_api_key,
+        authorization,
+    )
 
 
 def require_role(*allowed_roles: Role):

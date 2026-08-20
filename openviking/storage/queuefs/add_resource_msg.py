@@ -20,6 +20,7 @@ class AddResourceMsg:
     root_uri: str
     account_id: str
     user_id: str
+    group_ids: list[str] = field(default_factory=list)
     role: str
     path: str = ""
     source_path: str = ""
@@ -127,6 +128,11 @@ class AddResourceMsg:
             root_uri=str(root_uri),
             account_id=str(data.get("account_id", "default")),
             user_id=str(data.get("user_id", "default")),
+            group_ids=(
+                [str(group_id) for group_id in data["group_ids"]]
+                if isinstance(data.get("group_ids"), list)
+                else []
+            ),
             role=str(data.get("role", "root")),
             actor_peer_id=data.get("actor_peer_id"),
             telemetry_id=str(data.get("telemetry_id"))

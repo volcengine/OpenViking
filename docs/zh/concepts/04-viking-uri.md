@@ -86,6 +86,8 @@ viking://user/resources/                      # 当前用户资源
 viking://user/resources/docs/                 # 当前用户资源目录
 ```
 
+`viking://resources/...` 是当前 account 的共享区，可通过 [资源访问控制（ACL）](./15-acl.md) 细化目录或文件权限。`viking://user/{user}/resources/...` 是个人私有区；分享资源需要将其移动到共享区。
+
 ### 用户技能和 peer 内容
 
 ```

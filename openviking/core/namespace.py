@@ -158,6 +158,14 @@ def canonical_user_root(ctx: RequestContext) -> str:
     return f"viking://user/{user_space_fragment(ctx)}"
 
 
+def canonical_user_content_root(ctx: RequestContext, kind: str) -> str:
+    """Return the canonical current-user content root for a supported content kind."""
+    segment = _CONTENT_SEGMENT_BY_KIND.get(kind)
+    if segment is None:
+        raise ValueError(f"Unsupported content kind: {kind}")
+    return f"{canonical_user_root(ctx)}/{segment}"
+
+
 def user_space_fragment(ctx: RequestContext) -> str:
     return ctx.user.user_id
 
@@ -253,6 +261,11 @@ def resolve_request_uri(uri: str, ctx: RequestContext) -> str:
     if getattr(ctx.role, "value", ctx.role) == "user":
         return resolve_current_user_uri(uri, ctx)
     return resolve_uri(uri).uri
+
+
+def canonicalize_uri(uri: str, ctx: RequestContext) -> str:
+    """Canonicalize a Viking URI according to the current request-boundary contract."""
+    return resolve_request_uri(uri, ctx)
 
 
 def resolve_current_user_uri(uri: str, ctx: RequestContext) -> str:
@@ -359,6 +372,7 @@ def content_owner_context_for_uri(uri: str, ctx: RequestContext) -> RequestConte
     return RequestContext(
         user=UserIdentifier(ctx.account_id, owner_user_id),
         role=ctx.role,
+        group_ids=ctx.group_ids,
         actor_peer_id=ctx.actor_peer_id,
         from_oauth=ctx.from_oauth,
         api_key=ctx.api_key,

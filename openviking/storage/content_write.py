@@ -31,6 +31,7 @@ from openviking.session.memory.utils.resource_refs import (
     RESOURCE_REF_SOURCE_CONTENT_WRITE,
     sync_memory_resource_refs,
 )
+from openviking.storage.acl import AclAction
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
@@ -54,6 +55,7 @@ from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
     OpenVikingError,
+    PermissionDeniedError,
     ResourceExhaustedError,
 )
 from openviking_cli.utils import VikingURI
@@ -107,7 +109,7 @@ class ContentWriteCoordinator:
         processing_mode = normalize_processing_mode(processing_mode)
         normalized_uri = self._validate_uri_path(uri, field_name="uri")
         self._ensure_content_write_policy(normalized_uri)
-        self._viking_fs._ensure_mutable_access(normalized_uri, ctx)
+        await self._ensure_mutable_target(normalized_uri, ctx)
 
         if mode == "create":
             return await self._create_and_write(
@@ -177,7 +179,7 @@ class ContentWriteCoordinator:
         """
         normalized_root = self._validate_uri_path(root_uri, field_name="root_uri")
         await self._validate_batch_root(normalized_root, ctx=ctx)
-        normalized_operations = self._normalize_batch_operations(
+        normalized_operations = await self._normalize_batch_operations(
             normalized_root, operations, ctx=ctx
         )
 
@@ -381,14 +383,14 @@ class ContentWriteCoordinator:
             and len(parts) <= classification.content_index + 1
         ):
             raise InvalidArgumentError("batch-write root must be inside a resource directory")
-        self._viking_fs._ensure_mutable_access(root_uri, ctx)
+        await self._ensure_mutable_target(root_uri, ctx)
         stat = await self._safe_stat(root_uri, ctx=ctx)
         if not stat.get("isDir"):
             raise InvalidArgumentError(
                 f"batch-write root must be an existing directory: {root_uri}"
             )
 
-    def _normalize_batch_operations(
+    async def _normalize_batch_operations(
         self,
         root_uri: str,
         operations: list[dict[str, Any]],
@@ -420,7 +422,7 @@ class ContentWriteCoordinator:
                     f"batch-write target has a different context type: {uri}"
                 )
             self._ensure_content_write_policy(uri)
-            self._viking_fs._ensure_mutable_access(uri, ctx)
+            await self._ensure_mutable_target(uri, ctx)
 
             has_content = "content" in raw
             has_content_base64 = "content_base64" in raw
@@ -584,6 +586,7 @@ class ContentWriteCoordinator:
             recursive=recursive,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
+            group_ids=ctx.group_ids,
             role=str(ctx.role),
             skip_vectorization=False,
             telemetry_id=telemetry.telemetry_id,
@@ -636,18 +639,20 @@ class ContentWriteCoordinator:
         ctx: RequestContext,
     ) -> Dict[str, Any]:
         self._validate_tag_mode(mode)
+        normalized_uri = self._validate_uri_path(uri, field_name="uri")
         normalized_tags = normalize_search_tags(tags, discard_invalid=True)
-        stat = await self._safe_stat(uri, ctx=ctx)
+        await self._ensure_mutable_target(normalized_uri, ctx)
+        stat = await self._safe_stat(normalized_uri, ctx=ctx)
         if stat.get("isDir"):
             return await self._set_directory_tags(
-                uri=uri,
+                uri=normalized_uri,
                 tags=normalized_tags,
                 mode=mode,
                 recursive=recursive,
                 ctx=ctx,
             )
         return await self._set_single_uri_tags(
-            uri=uri,
+            uri=normalized_uri,
             tags=normalized_tags,
             mode=mode,
             recursive=recursive,
@@ -687,6 +692,14 @@ class ContentWriteCoordinator:
         if overview_status is not None:
             result["overview_status"] = overview_status
         return result
+
+    async def _ensure_mutable_target(self, uri: str, ctx: RequestContext) -> None:
+        try:
+            await self._viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
+        except PermissionDeniedError as exc:
+            if not await self._viking_fs._can_access(uri, ctx, action=AclAction.READ):
+                raise NotFoundError(uri, "file") from exc
+            raise
 
     def _build_tags_result(
         self,
@@ -1310,6 +1323,12 @@ class ContentWriteCoordinator:
 
         if not updated_targets:
             raise NotFoundError(uri, "semantic file")
+
+        await self._viking_fs._ensure_access_many(
+            [str(target["uri"]) for target in updated_targets],
+            ctx,
+            action=AclAction.WRITE,
+        )
 
         applied_uris: list[str] = []
         skipped_count = 0

@@ -137,12 +137,51 @@ def _admin_headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {ROOT_API_KEY}"}
 
 
-def _extract_user_key(users: list[object], user_id: str) -> str:
+def _find_user(users: list[object], user_id: str) -> dict[str, object] | None:
     for user in users:
         if isinstance(user, dict) and user.get("user_id") == user_id:
-            api_key = user.get("api_key")
-            if isinstance(api_key, str):
-                return api_key
+            return user
+    return None
+
+
+def _extract_user_key(user: dict[str, object] | None) -> str:
+    if not user:
+        return ""
+    api_key = user.get("api_key")
+    return api_key if isinstance(api_key, str) else ""
+
+
+def _regular_user_candidates(user_id: str) -> list[str]:
+    if CLI_USER:
+        return [user_id]
+    return [user_id, f"{user_id}-regular"]
+
+
+def _register_regular_user(account_id: str, user_id: str) -> str:
+    register_resp = httpx.post(
+        f"{BASE_URL}/api/v1/admin/accounts/{account_id}/users",
+        headers=_admin_headers(),
+        json={"user_id": user_id, "role": "user"},
+        timeout=10.0,
+    )
+    if register_resp.status_code in (200, 201):
+        user_key = register_resp.json().get("result", {}).get("user_key")
+        if isinstance(user_key, str) and user_key:
+            return user_key
+    return ""
+
+
+def _regenerate_user_key(account_id: str, user_id: str) -> str:
+    key_resp = httpx.post(
+        f"{BASE_URL}/api/v1/admin/accounts/{account_id}/users/{user_id}/key",
+        headers=_admin_headers(),
+        json={},
+        timeout=10.0,
+    )
+    if key_resp.status_code == 200:
+        user_key = key_resp.json().get("result", {}).get("user_key")
+        if isinstance(user_key, str) and user_key:
+            return user_key
     return ""
 
 
@@ -172,8 +211,9 @@ def _resolve_api_key() -> str:
     # Retry a few times to handle server startup race conditions.
     account_id = CLI_ACCOUNT or "test-account"
     user_id = CLI_USER or "test-user"
+    admin_user_id = f"{user_id}-admin"
 
-    for attempt in range(5):
+    for _attempt in range(5):
         try:
             list_resp = httpx.get(
                 f"{BASE_URL}/api/v1/admin/accounts/{account_id}/users",
@@ -184,54 +224,28 @@ def _resolve_api_key() -> str:
                 create_resp = httpx.post(
                     f"{BASE_URL}/api/v1/admin/accounts",
                     headers=_admin_headers(),
-                    json={"account_id": account_id, "admin_user_id": user_id},
+                    json={"account_id": account_id, "admin_user_id": admin_user_id},
                     timeout=10.0,
                 )
                 if create_resp.status_code in (200, 201):
-                    user_key = create_resp.json().get("result", {}).get("user_key")
-                    if isinstance(user_key, str) and user_key:
+                    user_key = _register_regular_user(account_id, user_id)
+                    if user_key:
                         return user_key
             elif list_resp.status_code == 200:
                 users = list_resp.json().get("result", [])
                 if isinstance(users, list):
-                    user_key = _extract_user_key(users, user_id)
-                    if user_key:
-                        return user_key
-                    user_exists = any(
-                        (isinstance(user, dict) and user.get("user_id") == user_id)
-                        or (isinstance(user, str) and user == user_id)
-                        for user in users
-                    )
-                else:
-                    user_exists = False
-
-                if not user_exists:
-                    register_resp = httpx.post(
-                        f"{BASE_URL}/api/v1/admin/accounts/{account_id}/users",
-                        headers=_admin_headers(),
-                        json={"user_id": user_id, "role": "admin"},
-                        timeout=10.0,
-                    )
-                    if register_resp.status_code in (200, 201):
-                        user_key = register_resp.json().get("result", {}).get("user_key")
-                        if isinstance(user_key, str) and user_key:
-                            return user_key
-                else:
-                    httpx.put(
-                        f"{BASE_URL}/api/v1/admin/accounts/{account_id}/users/{user_id}/role",
-                        headers=_admin_headers(),
-                        json={"role": "admin"},
-                        timeout=10.0,
-                    )
-                    key_resp = httpx.post(
-                        f"{BASE_URL}/api/v1/admin/accounts/{account_id}/users/{user_id}/key",
-                        headers=_admin_headers(),
-                        json={},
-                        timeout=10.0,
-                    )
-                    if key_resp.status_code == 200:
-                        user_key = key_resp.json().get("result", {}).get("user_key")
-                        if isinstance(user_key, str) and user_key:
+                    for candidate_user_id in _regular_user_candidates(user_id):
+                        user_record = _find_user(users, candidate_user_id)
+                        if user_record is None:
+                            user_key = _register_regular_user(account_id, candidate_user_id)
+                        elif user_record.get("role") == "user":
+                            user_key = _extract_user_key(user_record) or _regenerate_user_key(
+                                account_id,
+                                candidate_user_id,
+                            )
+                        else:
+                            user_key = ""
+                        if user_key:
                             return user_key
         except Exception:
             pass
@@ -363,6 +377,13 @@ def pytest_collection_modifyitems(config, items):
         for item in items:
             if item.get_closest_marker("cli_remote"):
                 item.add_marker(skip_cli)
+
+    for item in items:
+        if (
+            item.get_closest_marker("cli_remote")
+            and "ensure_resources_dir" not in item.fixturenames
+        ):
+            item.fixturenames.append("ensure_resources_dir")
 
 
 def _parse_cli_json(stdout):
@@ -605,15 +626,6 @@ def _find_file_in_pack(pack_uri, retries=10, interval=5):
                     return item["uri"]
         time.sleep(interval)
     return None
-
-
-def pytest_collection_modifyitems(items):
-    for item in items:
-        if (
-            item.get_closest_marker("cli_remote")
-            and "ensure_resources_dir" not in item.fixturenames
-        ):
-            item.fixturenames.append("ensure_resources_dir")
 
 
 @pytest.fixture(scope="session")

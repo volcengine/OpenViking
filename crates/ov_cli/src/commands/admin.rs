@@ -129,6 +129,102 @@ pub async fn remove_user(
     Ok(())
 }
 
+pub async fn create_group(
+    client: &HttpClient,
+    account_id: &str,
+    name: &str,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    show_admin(
+        client.admin_create_group(account_id, name).await?,
+        output_format,
+        compact,
+    )
+}
+
+pub async fn list_groups(
+    client: &HttpClient,
+    account_id: &str,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    show_admin(
+        client.admin_list_groups(account_id).await?,
+        output_format,
+        compact,
+    )
+}
+
+pub async fn list_group_members(
+    client: &HttpClient,
+    account_id: &str,
+    group_id: &str,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    show_admin(
+        client
+            .admin_list_group_members(account_id, group_id)
+            .await?,
+        output_format,
+        compact,
+    )
+}
+
+pub async fn add_group_member(
+    client: &HttpClient,
+    account_id: &str,
+    group_id: &str,
+    user_id: &str,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    show_admin(
+        client
+            .admin_add_group_member(account_id, group_id, user_id)
+            .await?,
+        output_format,
+        compact,
+    )
+}
+
+pub async fn remove_group_member(
+    client: &HttpClient,
+    account_id: &str,
+    group_id: &str,
+    user_id: &str,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    show_admin(
+        client
+            .admin_remove_group_member(account_id, group_id, user_id)
+            .await?,
+        output_format,
+        compact,
+    )
+}
+
+pub async fn delete_group(
+    client: &HttpClient,
+    account_id: &str,
+    group_id: &str,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    show_admin(
+        client.admin_delete_group(account_id, group_id).await?,
+        output_format,
+        compact,
+    )
+}
+
+fn show_admin(value: Value, output_format: OutputFormat, compact: bool) -> Result<()> {
+    output_success(&value, output_format, compact);
+    Ok(())
+}
+
 pub async fn set_role(
     client: &HttpClient,
     account_id: &str,

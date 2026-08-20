@@ -29,6 +29,7 @@ from openviking.server.identity import RequestContext
 from openviking.service.task_tracker import get_task_tracker
 from openviking.service.task_work_index import bind_task_context
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.storage.acl import AclAction
 from openviking.storage.expr import And, Eq, Or, PathScope
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
@@ -188,6 +189,7 @@ class ReindexExecutor:
         self._validate_mode(object_type, mode)
         if dry_run and mode != "prune_orphans":
             raise InvalidArgumentError("dry_run is only supported for prune_orphans reindex mode.")
+        await get_viking_fs()._ensure_access(uri, ctx, action=AclAction.WRITE)
         ingest_options = self._resolve_ingest_options(
             mode=mode,
             tags=tags,
@@ -1031,6 +1033,7 @@ class ReindexExecutor:
             account_id=owner_ctx.account_id,
             user_id=owner_ctx.user.user_id,
             peer_id=owner_ctx.user.user_id,
+            group_ids=owner_ctx.group_ids,
             role=str(ctx.role),
             skip_vectorization=True,
         )

@@ -3,7 +3,7 @@
 """Regression test for VikingFS.find without rerank configuration."""
 
 import contextvars
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -25,7 +25,7 @@ def _make_viking_fs() -> VikingFS:
     fs.retrieval_config = None
     fs.vector_store = MagicMock(name="vector_store")
     fs._bound_ctx = contextvars.ContextVar("vikingfs_bound_ctx_test", default=None)
-    fs._ensure_access = MagicMock()
+    fs._ensure_access = AsyncMock()
     fs._get_vector_store = MagicMock(return_value=fs.vector_store)
     fs._get_embedder = MagicMock(return_value=fs.query_embedder)
     fs._ctx_or_default = MagicMock(return_value=_ctx())

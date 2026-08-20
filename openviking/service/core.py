@@ -27,6 +27,7 @@ from openviking.service.session_auto_commit import SessionAutoCommitScheduler
 from openviking.service.session_service import SessionService
 from openviking.service.task_tracker import get_task_tracker, set_task_tracker
 from openviking.session import create_session_compressor
+from openviking.storage.acl import AclManager
 from openviking.storage.collection_schemas import init_context_collection
 from openviking.storage.index_consistency import check_index_consistency
 from openviking.storage.queuefs.add_resource_processor import AddResourceProcessor
@@ -180,6 +181,7 @@ class OpenVikingService:
         self._vikingdb_manager = VikingDBManager(
             vectordb_config=config.vectordb, queue_manager=self._queue_manager
         )
+        AclManager(self._vikingdb_manager)
 
         # Configure queues if QueueManager is available.
         # Workers are NOT started here — start() is called after VikingFS is initialized
@@ -335,7 +337,6 @@ class OpenVikingService:
         if self._vikingdb_manager is None:
             raise RuntimeError("VikingDBManager not initialized")
         await init_context_collection(self._vikingdb_manager)
-
         if self._agfs_client is None:
             raise RuntimeError("AGFS client not initialized")
         if self._embedder is None:
@@ -346,6 +347,7 @@ class OpenVikingService:
             query_embedder=self._embedder,
             rerank_config=config.rerank,
             vector_store=self._vikingdb_manager,
+            acl_manager=self._vikingdb_manager.acl_manager,
             retrieval_config=config.retrieval,
             grep_config=config.grep,
             enable_recorder=enable_recorder,

@@ -402,6 +402,7 @@ class FSService:
             recursive=False,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
+            group_ids=ctx.group_ids,
             peer_id=ctx.user.user_id,
             role=str(ctx.role),
             skip_vectorization=False,
@@ -717,6 +718,27 @@ class FSService:
             recursive=recursive,
             ctx=ctx,
         )
+
+    async def get_acl(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
+        return await self._ensure_initialized().get_acl(uri, ctx=ctx)
+
+    async def set_acl(
+        self, uri: str, entries: List[Dict[str, str]], ctx: RequestContext
+    ) -> Dict[str, Any]:
+        return await self._ensure_initialized().set_acl(uri, entries, ctx=ctx)
+
+    async def grant_acl(
+        self, uri: str, principal: str, level: str, ctx: RequestContext
+    ) -> Dict[str, Any]:
+        return await self._ensure_initialized().grant_acl(uri, principal, level, ctx=ctx)
+
+    async def revoke_acl(
+        self, uri: str, principal: str, ctx: RequestContext
+    ) -> Dict[str, Any]:
+        return await self._ensure_initialized().revoke_acl(uri, principal, ctx=ctx)
+
+    async def delete_acl(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
+        return await self._ensure_initialized().delete_acl(uri, ctx=ctx)
 
     async def commit(
         self,

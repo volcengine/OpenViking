@@ -18,10 +18,7 @@ from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
 from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
-from openviking.server.auth import (
-    get_request_context,
-    require_role,
-)
+from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext, Role
@@ -322,7 +319,7 @@ async def set_tags(
 @router.post("/reindex")
 async def reindex(
     body: ReindexRequest = Body(...),
-    ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN, Role.USER),
+    ctx: RequestContext = Depends(get_request_context),
 ):
     """Reindex semantic/vector artifacts for a URI-scoped maintenance target."""
     if body.dry_run and body.mode != "prune_orphans":

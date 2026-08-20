@@ -14,6 +14,7 @@ from openviking.pyagfs.exceptions import (
 )
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext
+from openviking.storage.acl import AclAction
 from openviking.storage.viking_fs._base import (
     _prepare_snapshot_diff,
     logger,
@@ -35,7 +36,7 @@ class _SnapshotMixin:
         self, uri: str, ctx: Optional[RequestContext] = None
     ) -> Dict[str, Any]:
         """Return multi-write sync status for one Viking URI subtree."""
-        self._ensure_access(uri, ctx)
+        await self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         return await self._async_agfs.system_sync_status(
@@ -47,7 +48,7 @@ class _SnapshotMixin:
         self, uri: str, ctx: Optional[RequestContext] = None
     ) -> Dict[str, Any]:
         """Retry multi-write sync for one Viking URI subtree."""
-        self._ensure_mutable_access(uri, ctx)
+        await self._ensure_access(uri, ctx, action=AclAction.WRITE)
         real_ctx = self._ctx_or_default(ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         return await self._async_agfs.system_sync_retry(
@@ -434,7 +435,7 @@ class _SnapshotMixin:
     ) -> Dict[str, Any]:
         """Return a unified text diff for one path between two snapshots."""
         real_ctx = self._ctx_or_default(ctx)
-        self._ensure_access(path, real_ctx)
+        await self._ensure_access(path, real_ctx)
 
         from_meta: Optional[Dict[str, Any]] = None
         if from_ref:

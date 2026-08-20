@@ -57,7 +57,7 @@ class _GrepMixin:
         Returns:
             Dict with matches, count, match_count, files_scanned
         """
-        self._ensure_access(uri, ctx)
+        await self._ensure_access(uri, ctx)
         # Skip vector_store.count() — the count field is not needed for grep,
         # and avoiding it saves one VikingDB API call.
         await self.stat(uri, ctx=ctx, skip_count=True)
@@ -248,7 +248,7 @@ class _GrepMixin:
         excluded_prefix = None
         if exclude_uri:
             excluded_prefix = exclude_uri.rstrip("/")
-            self._ensure_access(excluded_prefix, ctx)
+            await self._ensure_access(excluded_prefix, ctx)
             filter_expr = And([
                 filter_expr,
                 RawDSL({
@@ -390,7 +390,7 @@ class _GrepMixin:
         excluded_path = None
         if exclude_uri:
             normalized_excluded_uri = exclude_uri.rstrip("/")
-            self._ensure_access(normalized_excluded_uri, ctx)
+            await self._ensure_access(normalized_excluded_uri, ctx)
             excluded_path = self._uri_to_path(normalized_excluded_uri, ctx=ctx)
 
         try:
@@ -486,7 +486,7 @@ class _GrepMixin:
         excluded_prefix = None
         if exclude_uri:
             excluded_prefix = exclude_uri.rstrip("/")
-            self._ensure_access(excluded_prefix, ctx)
+            await self._ensure_access(excluded_prefix, ctx)
         file_uris = await self._collect_grep_files(
             uri,
             excluded_prefix=excluded_prefix,
