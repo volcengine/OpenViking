@@ -32,7 +32,6 @@ _INTERNAL_PAYLOAD_FIELDS = {
     "_openviking_original_id",
     "uri_depth",
     "scope_roots",
-    "parent_uri",
 }
 
 
@@ -249,10 +248,23 @@ class QdrantCollection(ICollection):
         for item in fields:
             if item.get("FieldName") != field:
                 continue
-            field_type = item.get("FieldType")
-            if field_type in {"int", "int32", "int64"}:
+            field_type = str(item.get("FieldType") or "").lower()
+            if field_type.startswith("list<") and field_type.endswith(">"):
+                field_type = field_type[5:-1]
+            if field_type in {
+                "int",
+                "int8",
+                "int16",
+                "int32",
+                "int64",
+                "uint",
+                "uint8",
+                "uint16",
+                "uint32",
+                "uint64",
+            }:
                 return "integer"
-            if field_type in {"float", "double"}:
+            if field_type in {"float", "float16", "float32", "float64", "double"}:
                 return "float"
             if field_type in {"bool", "boolean"}:
                 return "bool"
@@ -263,8 +275,16 @@ class QdrantCollection(ICollection):
             return "keyword"
         return "keyword"
 
-    def create_index(self, index_name: str, meta_data: dict[str, Any]):
-        self._indexes[index_name] = dict(meta_data)
+    @staticmethod
+    def _index_fields(meta: dict[str, Any]) -> list[str]:
+        scalar_index = meta.get("ScalarIndex")
+        if isinstance(scalar_index, dict):
+            return [str(field) for field in scalar_index]
+        if isinstance(scalar_index, (list, tuple, set)):
+            return [str(field) for field in scalar_index]
+        return []
+
+    def _ensure_remote_indexes(self, meta_data: dict[str, Any]) -> None:
         scalar_fields = list(meta_data.get("ScalarIndex") or [])
         scalar_fields.extend(["uri_depth", "scope_roots"])
         for field in dict.fromkeys(scalar_fields):
@@ -282,9 +302,34 @@ class QdrantCollection(ICollection):
                     params={"wait": "true"},
                 )
             except QdrantError as exc:
-                if exc.status not in {400, 409}:
+                if exc.status != 409:
                     raise
-        self._write_metadata_marker()
+
+    def _delete_remote_indexes(self, fields: list[str]) -> None:
+        for field in dict.fromkeys(fields):
+            try:
+                self._client.request(
+                    "DELETE",
+                    self._path(
+                        self._collection_name,
+                        f"/index/{quote(field, safe='')}",
+                    ),
+                    params={"wait": "true"},
+                )
+            except QdrantError as exc:
+                if exc.status != 404:
+                    raise
+
+    def create_index(self, index_name: str, meta_data: dict[str, Any]):
+        self._ensure_remote_indexes(meta_data)
+        previous_indexes = self._indexes
+        self._indexes = dict(previous_indexes)
+        self._indexes[index_name] = dict(meta_data)
+        try:
+            self._write_metadata_marker()
+        except Exception:
+            self._indexes = previous_indexes
+            raise
         return meta_data
 
     def has_index(self, index_name: str) -> bool:
@@ -305,16 +350,66 @@ class QdrantCollection(ICollection):
         scalar_index: dict[str, Any] | list[str] | None = None,
         description: str | None = None,
     ):
+        if index_name not in self._indexes:
+            return None
         meta = dict(self._indexes.get(index_name, {}))
         if scalar_index is not None:
             meta["ScalarIndex"] = scalar_index
         if description is not None:
             meta["Description"] = description
-        self.create_index(index_name, meta)
+
+        old_fields = set(self._index_fields(self._indexes.get(index_name, {})))
+        other_fields = {
+            field
+            for name, item in self._indexes.items()
+            if name != index_name
+            for field in self._index_fields(item)
+        }
+        self._ensure_remote_indexes(meta)
+        self._delete_remote_indexes(
+            [
+                field
+                for field in old_fields - set(self._index_fields(meta))
+                if field not in other_fields
+            ]
+        )
+        previous_indexes = self._indexes
+        self._indexes = dict(previous_indexes)
+        self._indexes[index_name] = meta
+        try:
+            self._write_metadata_marker()
+        except Exception:
+            self._indexes = previous_indexes
+            raise
         return meta
 
     def drop_index(self, index_name: str):
+        removed = self._indexes.get(index_name)
+        if removed is None:
+            return True
+
+        remaining_fields = {
+            field
+            for name, meta in self._indexes.items()
+            if name != index_name
+            for field in self._index_fields(meta)
+        }
+        if any(name != index_name for name in self._indexes):
+            remaining_fields.update({"uri_depth", "scope_roots"})
+        fields_to_remove = list(
+            dict.fromkeys([*self._index_fields(removed), "uri_depth", "scope_roots"])
+        )
+        self._delete_remote_indexes(
+            [field for field in fields_to_remove if field not in remaining_fields]
+        )
+        previous_indexes = self._indexes
+        self._indexes = dict(previous_indexes)
         self._indexes.pop(index_name, None)
+        try:
+            self._write_metadata_marker()
+        except Exception:
+            self._indexes = previous_indexes
+            raise
         return True
 
     def _upsert_points(self, collection_name: str, points: list[dict[str, Any]]) -> None:
@@ -354,25 +449,41 @@ class QdrantCollection(ICollection):
         order_by: dict[str, Any] | None = None,
         output_fields: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        body: dict[str, Any] = {
-            "limit": limit,
-            "with_payload": self._payload_selector(output_fields),
-            "with_vector": with_vectors,
-        }
-        if filter:
-            body["filter"] = filter
-        if order_by:
-            body["order_by"] = order_by
-        response = self._client.request(
-            "POST",
-            self._path(collection_name, "/points/scroll"),
-            body,
-        )
-        result = self._result(response)
-        if isinstance(result, dict):
-            points = result.get("points")
-            return points if isinstance(points, list) else []
-        return []
+        if limit <= 0:
+            return []
+
+        points: list[dict[str, Any]] = []
+        offset: Any = None
+        while len(points) < limit:
+            body: dict[str, Any] = {
+                "limit": limit - len(points),
+                "with_payload": self._payload_selector(output_fields),
+                "with_vector": with_vectors,
+            }
+            if filter:
+                body["filter"] = filter
+            if order_by:
+                body["order_by"] = order_by
+            if offset is not None:
+                body["offset"] = offset
+            response = self._client.request(
+                "POST",
+                self._path(collection_name, "/points/scroll"),
+                body,
+            )
+            result = self._result(response)
+            if not isinstance(result, dict):
+                break
+            page = result.get("points")
+            if not isinstance(page, list) or not page:
+                break
+            points.extend(point for point in page if isinstance(point, dict))
+            if len(points) >= limit:
+                break
+            offset = result.get("next_page_offset")
+            if offset is None:
+                break
+        return points[:limit]
 
     def _point_from_record(self, record: dict[str, Any]) -> dict[str, Any]:
         original_id = record.get("id")
@@ -433,12 +544,20 @@ class QdrantCollection(ICollection):
 
     def _decode_sparse_vector(self, value: Any) -> dict[str, float]:
         if not isinstance(value, dict):
-            return {}
-        indices = value.get("indices") or []
-        values = value.get("values") or []
+            raise ValueError("Qdrant sparse vector must be a mapping")
+        indices = value.get("indices")
+        values = value.get("values")
+        if (
+            not isinstance(indices, list)
+            or not isinstance(values, list)
+            or len(indices) != len(values)
+        ):
+            raise ValueError(
+                "Qdrant sparse vector indices and values must be lists of equal length"
+            )
         self._get_sparse_dictionary()
         result: dict[str, float] = {}
-        for index, weight in zip(indices, values, strict=False):
+        for index, weight in zip(indices, values, strict=True):
             term = self._resolve_sparse_index(int(index))
             if term is None:
                 raise ValueError(f"unknown sparse term index: {index}")
@@ -446,21 +565,32 @@ class QdrantCollection(ICollection):
         return result
 
     def update_data(self, data_list: list[dict[str, Any]]):
-        updated: list[str] = []
+        pending: list[tuple[str, dict[str, Any]]] = []
+        missing: list[Any] = []
         for item in data_list:
-            record_id = item.get("id")
-            if record_id is None:
-                continue
+            if "id" not in item:
+                raise ValueError("primary key 'id' is required for update")
+            record_id = item["id"]
             points = self._retrieve_points(
                 self._collection_name,
                 [to_qdrant_point_id(record_id)],
                 with_vectors=True,
             )
-            merged = self._vectors_to_record(points[0]) if points else {}
+            if not points:
+                missing.append(record_id)
+                continue
+            merged = self._vectors_to_record(points[0])
             merged.update(item)
             merged["id"] = record_id
+            pending.append((str(record_id), merged))
+
+        if missing:
+            raise ValueError(f"record not found for primary key(s): {missing}")
+
+        updated: list[str] = []
+        for record_id, merged in pending:
             self.upsert_data([merged])
-            updated.append(str(record_id))
+            updated.append(record_id)
         return updated
 
     def fetch_data(self, primary_keys: list[Any]) -> FetchDataInCollectionResult:
@@ -783,18 +913,36 @@ class QdrantCollection(ICollection):
         if not points:
             return None
         value = points[0].get("payload", {}).get("index")
-        return int(value) if value is not None else None
+        if value is None:
+            return None
+        index = int(value)
+        owner = self._resolve_sparse_index(index)
+        if owner is not None and owner != term:
+            raise ValueError(
+                "sparse term index collision: "
+                f"index={index} existing_term={owner!r} new_term={term!r}"
+            )
+        return index
 
     def _resolve_sparse_index(self, index: int) -> str | None:
         points = self._scroll(
             self._metadata_collection_name,
             filter={"must": [{"key": "index", "match": {"value": int(index)}}]},
-            limit=1,
+            limit=2,
         )
         if not points:
             return None
-        value = points[0].get("payload", {}).get("term")
-        return str(value) if value is not None else None
+        terms = {
+            str(value)
+            for point in points
+            if (value := point.get("payload", {}).get("term")) is not None
+        }
+        if len(terms) > 1:
+            raise ValueError(
+                "sparse term index collision: "
+                f"index={index} existing_terms={sorted(terms)!r}"
+            )
+        return next(iter(terms), None)
 
     def _persist_sparse_term(self, term: str, index: int) -> None:
         self._upsert_points(

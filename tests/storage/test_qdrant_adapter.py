@@ -11,9 +11,9 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from openviking.storage.expr import And, Contains, Eq, In, PathScope
+from openviking.storage.expr import And, Contains, Eq, In, Or, PathScope, RawDSL
 from openviking.storage.vectordb.collection.qdrant_collection import QdrantCollection
-from openviking.storage.vectordb.collection.qdrant_rest import QdrantRestClient
+from openviking.storage.vectordb.collection.qdrant_rest import QdrantError, QdrantRestClient
 from openviking.storage.vectordb.qdrant_sparse import SparseTermDictionary, stable_sparse_index
 from openviking.storage.vectordb.qdrant_utils import (
     build_qdrant_payload,
@@ -170,6 +170,58 @@ def test_account_filter_is_preserved() -> None:
     assert result["must"][1]["key"] == "scope_roots"
 
 
+def test_composed_raw_filter_preserves_all_boolean_clauses() -> None:
+    result = compile_qdrant_filter(
+        And(
+            [
+                RawDSL(
+                    {
+                        "must": [{"key": "account_id", "match": {"value": "acct"}}],
+                        "should": [{"key": "kind", "match": {"value": "doc"}}],
+                    }
+                ),
+                Eq("name", "README.md"),
+            ]
+        )
+    )
+
+    assert result == {
+        "must": [
+            {"key": "account_id", "match": {"value": "acct"}},
+            {"key": "name", "match": {"value": "README.md"}},
+        ],
+        "should": [{"key": "kind", "match": {"value": "doc"}}],
+    }
+
+
+def test_or_does_not_flatten_must_not_into_should() -> None:
+    result = compile_qdrant_filter(
+        Or(
+            [
+                RawDSL(
+                    {
+                        "must_not": [
+                            {"key": "kind", "match": {"value": "draft"}},
+                        ]
+                    }
+                ),
+                Eq("account_id", "acct"),
+            ]
+        )
+    )
+
+    assert result == {
+        "should": [
+            {
+                "must_not": [
+                    {"key": "kind", "match": {"value": "draft"}},
+                ]
+            },
+            {"key": "account_id", "match": {"value": "acct"}},
+        ]
+    }
+
+
 def test_point_id_is_deterministic_and_original_id_round_trips() -> None:
     first = to_qdrant_point_id("viking://resources/doc.md")
     second = to_qdrant_point_id("viking://resources/doc.md")
@@ -178,6 +230,366 @@ def test_point_id_is_deterministic_and_original_id_round_trips() -> None:
     assert first == second
     assert first != "viking://resources/doc.md"
     assert payload["_openviking_original_id"] == "viking://resources/doc.md"
+
+
+def test_parent_uri_round_trips_on_read() -> None:
+    collection = QdrantCollection(
+        client=QdrantRestClient("http://qdrant.local", opener=_ScriptedTransport()),
+        collection_name="docs",
+        metadata_collection_name="docs__meta",
+        dense_vector_name="dense",
+        sparse_vector_name="sparse",
+        vector_dim=2,
+        distance="cosine",
+        sparse_enabled=False,
+        sparse_weight=0.0,
+    )
+
+    record = collection._payload_to_record(
+        {
+            "id": to_qdrant_point_id("doc-1"),
+            "payload": {
+                "_openviking_original_id": "doc-1",
+                "uri": "/resources/doc.md",
+                "parent_uri": "/resources",
+            },
+        }
+    )
+
+    assert record["parent_uri"] == "/resources"
+
+
+def test_numeric_scalar_field_types_map_to_qdrant_numeric_schemas() -> None:
+    collection = QdrantCollection(
+        client=QdrantRestClient("http://qdrant.local", opener=_ScriptedTransport()),
+        collection_name="docs",
+        metadata_collection_name="docs__meta",
+        dense_vector_name="dense",
+        sparse_vector_name="sparse",
+        vector_dim=2,
+        distance="cosine",
+        sparse_enabled=False,
+        sparse_weight=0.0,
+    )
+    collection._schema = {
+        "Fields": [
+            {"FieldName": "score", "FieldType": "float32"},
+            {"FieldName": "counts", "FieldType": "list<int64>"},
+        ]
+    }
+
+    assert collection._field_schema("score") == "float"
+    assert collection._field_schema("counts") == "integer"
+
+
+def test_drop_index_removes_remote_payload_indexes_and_metadata() -> None:
+    collection = QdrantCollection(
+        client=QdrantRestClient("http://qdrant.local", opener=_ScriptedTransport()),
+        collection_name="docs",
+        metadata_collection_name="docs__meta",
+        dense_vector_name="dense",
+        sparse_vector_name="sparse",
+        vector_dim=2,
+        distance="cosine",
+        sparse_enabled=False,
+        sparse_weight=0.0,
+    )
+    collection._indexes = {"default": {"ScalarIndex": ["account_id"]}}
+    marker_writes: list[dict[str, object]] = []
+    collection._write_metadata_marker = lambda: marker_writes.append(  # type: ignore[method-assign]
+        dict(collection._indexes)
+    )
+
+    requests: list[tuple[str, str, dict[str, object], dict[str, object]]] = []
+
+    def request(method: str, path: str, body=None, *, params=None):
+        requests.append((method, path, body or {}, params or {}))
+        return {}
+
+    collection._client.request = request  # type: ignore[method-assign]
+
+    assert collection.drop_index("default") is True
+    assert requests == [
+        (
+            "DELETE",
+            "/collections/docs/index/account_id",
+            {},
+            {"wait": "true"},
+        ),
+        (
+            "DELETE",
+            "/collections/docs/index/uri_depth",
+            {},
+            {"wait": "true"},
+        ),
+        (
+            "DELETE",
+            "/collections/docs/index/scope_roots",
+            {},
+            {"wait": "true"},
+        ),
+    ]
+    assert collection.list_indexes() == []
+    assert marker_writes == [{}]
+
+
+def test_drop_index_keeps_shared_uri_indexes_for_remaining_indexes() -> None:
+    collection = QdrantCollection(
+        client=QdrantRestClient("http://qdrant.local", opener=_ScriptedTransport()),
+        collection_name="docs",
+        metadata_collection_name="docs__meta",
+        dense_vector_name="dense",
+        sparse_vector_name="sparse",
+        vector_dim=2,
+        distance="cosine",
+        sparse_enabled=False,
+        sparse_weight=0.0,
+    )
+    collection._indexes = {
+        "one": {"ScalarIndex": ["account_id"]},
+        "two": {"ScalarIndex": ["kind"]},
+    }
+    collection._write_metadata_marker = lambda: None  # type: ignore[method-assign]
+    requests: list[tuple[str, str, dict[str, object], dict[str, object]]] = []
+
+    def request(method: str, path: str, body=None, *, params=None):
+        requests.append((method, path, body or {}, params or {}))
+        return {}
+
+    collection._client.request = request  # type: ignore[method-assign]
+
+    assert collection.drop_index("one") is True
+    assert requests == [
+        (
+            "DELETE",
+            "/collections/docs/index/account_id",
+            {},
+            {"wait": "true"},
+        )
+    ]
+
+
+def test_update_index_removes_remote_fields_removed_from_metadata() -> None:
+    collection = QdrantCollection(
+        client=QdrantRestClient("http://qdrant.local", opener=_ScriptedTransport()),
+        collection_name="docs",
+        metadata_collection_name="docs__meta",
+        dense_vector_name="dense",
+        sparse_vector_name="sparse",
+        vector_dim=2,
+        distance="cosine",
+        sparse_enabled=False,
+        sparse_weight=0.0,
+    )
+    collection._indexes = {"default": {"ScalarIndex": ["account_id", "kind"]}}
+    collection._write_metadata_marker = lambda: None  # type: ignore[method-assign]
+    requests: list[tuple[str, str, dict[str, object], dict[str, object]]] = []
+
+    def request(method: str, path: str, body=None, *, params=None):
+        requests.append((method, path, body or {}, params or {}))
+        return {}
+
+    collection._client.request = request  # type: ignore[method-assign]
+
+    assert collection.update_index("default", scalar_index=["account_id"]) == {
+        "ScalarIndex": ["account_id"]
+    }
+    assert (
+        "DELETE",
+        "/collections/docs/index/kind",
+        {},
+        {"wait": "true"},
+    ) in requests
+    assert collection.get_index_meta_data("default") == {
+        "ScalarIndex": ["account_id"]
+    }
+
+
+def test_update_index_ignores_missing_indexes() -> None:
+    collection = QdrantCollection(
+        client=QdrantRestClient("http://qdrant.local", opener=_ScriptedTransport()),
+        collection_name="docs",
+        metadata_collection_name="docs__meta",
+        dense_vector_name="dense",
+        sparse_vector_name="sparse",
+        vector_dim=2,
+        distance="cosine",
+        sparse_enabled=False,
+        sparse_weight=0.0,
+    )
+    requests: list[tuple[str, str, dict[str, object], dict[str, object]]] = []
+
+    def request(method: str, path: str, body=None, *, params=None):
+        requests.append((method, path, body or {}, params or {}))
+        return {}
+
+    collection._client.request = request  # type: ignore[method-assign]
+    collection._write_metadata_marker = lambda: pytest.fail(  # type: ignore[method-assign]
+        "missing index must not publish metadata"
+    )
+
+    assert collection.update_index("missing", scalar_index=["foo"]) is None
+    assert collection.list_indexes() == []
+    assert requests == []
+
+
+def test_drop_index_keeps_metadata_when_remote_delete_fails() -> None:
+    collection = QdrantCollection(
+        client=QdrantRestClient("http://qdrant.local", opener=_ScriptedTransport()),
+        collection_name="docs",
+        metadata_collection_name="docs__meta",
+        dense_vector_name="dense",
+        sparse_vector_name="sparse",
+        vector_dim=2,
+        distance="cosine",
+        sparse_enabled=False,
+        sparse_weight=0.0,
+    )
+    collection._indexes = {"default": {"ScalarIndex": ["account_id"]}}
+    marker_writes: list[dict[str, object]] = []
+    collection._write_metadata_marker = lambda: marker_writes.append(  # type: ignore[method-assign]
+        dict(collection._indexes)
+    )
+
+    def request(*_args, **_kwargs):
+        raise QdrantError("delete failed", status=503)
+
+    collection._client.request = request  # type: ignore[method-assign]
+
+    with pytest.raises(QdrantError, match="delete failed"):
+        collection.drop_index("default")
+    assert collection.get_index_meta_data("default") == {
+        "ScalarIndex": ["account_id"]
+    }
+    assert marker_writes == []
+
+
+def test_drop_index_keeps_retryable_metadata_when_marker_write_fails() -> None:
+    collection = QdrantCollection(
+        client=QdrantRestClient("http://qdrant.local", opener=_ScriptedTransport()),
+        collection_name="docs",
+        metadata_collection_name="docs__meta",
+        dense_vector_name="dense",
+        sparse_vector_name="sparse",
+        vector_dim=2,
+        distance="cosine",
+        sparse_enabled=False,
+        sparse_weight=0.0,
+    )
+    collection._indexes = {"default": {"ScalarIndex": ["account_id"]}}
+    marker_attempts = 0
+
+    def write_marker():
+        nonlocal marker_attempts
+        marker_attempts += 1
+        if marker_attempts == 1:
+            raise QdrantError("marker failed", status=503)
+
+    collection._write_metadata_marker = write_marker  # type: ignore[method-assign]
+    collection._client.request = lambda *_args, **_kwargs: {}  # type: ignore[method-assign]
+
+    with pytest.raises(QdrantError, match="marker failed"):
+        collection.drop_index("default")
+    assert collection.has_index("default")
+
+    assert collection.drop_index("default") is True
+    assert not collection.has_index("default")
+    assert marker_attempts == 2
+
+
+def test_update_index_keeps_retryable_metadata_when_marker_write_fails() -> None:
+    collection = QdrantCollection(
+        client=QdrantRestClient("http://qdrant.local", opener=_ScriptedTransport()),
+        collection_name="docs",
+        metadata_collection_name="docs__meta",
+        dense_vector_name="dense",
+        sparse_vector_name="sparse",
+        vector_dim=2,
+        distance="cosine",
+        sparse_enabled=False,
+        sparse_weight=0.0,
+    )
+    collection._indexes = {"default": {"ScalarIndex": ["account_id", "kind"]}}
+    marker_attempts = 0
+
+    def write_marker():
+        nonlocal marker_attempts
+        marker_attempts += 1
+        if marker_attempts == 1:
+            raise QdrantError("marker failed", status=503)
+
+    collection._write_metadata_marker = write_marker  # type: ignore[method-assign]
+    collection._client.request = lambda *_args, **_kwargs: {}  # type: ignore[method-assign]
+
+    with pytest.raises(QdrantError, match="marker failed"):
+        collection.update_index("default", scalar_index=["account_id"])
+    assert collection.get_index_meta_data("default") == {
+        "ScalarIndex": ["account_id", "kind"]
+    }
+
+    assert collection.update_index("default", scalar_index=["account_id"]) == {
+        "ScalarIndex": ["account_id"]
+    }
+    assert collection.get_index_meta_data("default") == {
+        "ScalarIndex": ["account_id"]
+    }
+    assert marker_attempts == 2
+
+
+def test_create_index_keeps_retryable_metadata_when_marker_write_fails() -> None:
+    collection = QdrantCollection(
+        client=QdrantRestClient("http://qdrant.local", opener=_ScriptedTransport()),
+        collection_name="docs",
+        metadata_collection_name="docs__meta",
+        dense_vector_name="dense",
+        sparse_vector_name="sparse",
+        vector_dim=2,
+        distance="cosine",
+        sparse_enabled=False,
+        sparse_weight=0.0,
+    )
+    marker_attempts = 0
+
+    def write_marker():
+        nonlocal marker_attempts
+        marker_attempts += 1
+        if marker_attempts == 1:
+            raise QdrantError("marker failed", status=503)
+
+    collection._write_metadata_marker = write_marker  # type: ignore[method-assign]
+    collection._client.request = lambda *_args, **_kwargs: {}  # type: ignore[method-assign]
+
+    with pytest.raises(QdrantError, match="marker failed"):
+        collection.create_index("default", {"ScalarIndex": ["account_id"]})
+    assert not collection.has_index("default")
+
+    assert collection.create_index("default", {"ScalarIndex": ["account_id"]}) == {
+        "ScalarIndex": ["account_id"]
+    }
+    assert collection.has_index("default")
+    assert marker_attempts == 2
+
+
+def test_create_index_does_not_publish_metadata_after_remote_400() -> None:
+    collection = QdrantCollection(
+        client=QdrantRestClient("http://qdrant.local", opener=_ScriptedTransport()),
+        collection_name="docs",
+        metadata_collection_name="docs__meta",
+        dense_vector_name="dense",
+        sparse_vector_name="sparse",
+        vector_dim=2,
+        distance="cosine",
+        sparse_enabled=False,
+        sparse_weight=0.0,
+    )
+
+    def request(*_args, **_kwargs):
+        raise QdrantError("bad schema", status=400)
+
+    collection._client.request = request  # type: ignore[method-assign]
+    with pytest.raises(QdrantError, match="bad schema"):
+        collection.create_index("default", {"ScalarIndex": ["account_id"]})
+    assert collection.list_indexes() == []
 
 
 def test_sparse_term_collision_raises_instead_of_merging() -> None:
@@ -583,6 +995,111 @@ def test_sparse_decode_rejects_unknown_term_index() -> None:
 
     with pytest.raises(ValueError, match="unknown sparse term index"):
         collection._decode_sparse_vector({"indices": [7], "values": [1.5]})
+
+
+def test_sparse_decode_rejects_malformed_vectors() -> None:
+    collection = QdrantCollection(
+        client=QdrantRestClient("http://qdrant.local", opener=_ScriptedTransport()),
+        collection_name="docs",
+        metadata_collection_name="docs__meta",
+        dense_vector_name="dense",
+        sparse_vector_name="sparse",
+        vector_dim=2,
+        distance="cosine",
+        sparse_enabled=True,
+        sparse_weight=0.5,
+    )
+
+    with pytest.raises(ValueError, match="indices and values"):
+        collection._decode_sparse_vector({"indices": [7], "values": []})
+    with pytest.raises(ValueError, match="sparse vector"):
+        collection._decode_sparse_vector([])
+
+
+def test_update_data_rejects_missing_records_before_upsert() -> None:
+    collection = QdrantCollection(
+        client=QdrantRestClient("http://qdrant.local", opener=_ScriptedTransport()),
+        collection_name="docs",
+        metadata_collection_name="docs__meta",
+        dense_vector_name="dense",
+        sparse_vector_name="sparse",
+        vector_dim=2,
+        distance="cosine",
+        sparse_enabled=False,
+        sparse_weight=0.0,
+    )
+    collection._retrieve_points = lambda *_args, **_kwargs: []  # type: ignore[method-assign]
+    upserts: list[list[dict[str, object]]] = []
+    collection.upsert_data = lambda data: upserts.append(data)  # type: ignore[method-assign]
+
+    with pytest.raises(ValueError, match="record not found"):
+        collection.update_data(
+            [{"id": "missing", "name": "new", "vector": [0.1, 0.2]}]
+        )
+    assert upserts == []
+
+
+def test_update_data_requires_primary_key() -> None:
+    collection = QdrantCollection(
+        client=QdrantRestClient("http://qdrant.local", opener=_ScriptedTransport()),
+        collection_name="docs",
+        metadata_collection_name="docs__meta",
+        dense_vector_name="dense",
+        sparse_vector_name="sparse",
+        vector_dim=2,
+        distance="cosine",
+        sparse_enabled=False,
+        sparse_weight=0.0,
+    )
+    upserts: list[list[dict[str, object]]] = []
+    collection.upsert_data = lambda data: upserts.append(data)  # type: ignore[method-assign]
+
+    with pytest.raises(ValueError, match="primary key 'id' is required for update"):
+        collection.update_data([{"name": "missing-id"}])
+    assert upserts == []
+
+
+def test_scroll_follows_qdrant_next_page_offset() -> None:
+    transport = _ScriptedTransport(
+        (
+            200,
+            {
+                "result": {
+                    "points": [{"id": "first", "payload": {}}],
+                    "next_page_offset": "cursor-2",
+                }
+            },
+        ),
+        (
+            200,
+            {
+                "result": {
+                    "points": [{"id": "second", "payload": {}}],
+                    "next_page_offset": None,
+                }
+            },
+        ),
+    )
+    collection = QdrantCollection(
+        client=QdrantRestClient("http://qdrant.local", opener=transport),
+        collection_name="docs",
+        metadata_collection_name="docs__meta",
+        dense_vector_name="dense",
+        sparse_vector_name="sparse",
+        vector_dim=2,
+        distance="cosine",
+        sparse_enabled=False,
+        sparse_weight=0.0,
+    )
+
+    points = collection._scroll(
+        "docs",
+        filter=None,
+        limit=2,
+    )
+
+    assert [point["id"] for point in points] == ["first", "second"]
+    assert transport.requests[1]["body"]["offset"] == "cursor-2"
 
 
 def test_dense_query_rejects_wrong_dimension() -> None:

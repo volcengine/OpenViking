@@ -159,7 +159,38 @@ def _compile(expr: FilterExpr | dict[str, Any]) -> dict[str, Any]:
             return {}
         if len(clauses) == 1:
             return clauses[0]
-        return {"must": [condition for item in clauses for condition in item.get("must", [item])]}
+        simple_keys = {"must", "must_not"}
+        complex_count = 0
+        for item in clauses:
+            keys = [key for key, value in item.items() if value]
+            if not (
+                len(keys) == 1
+                and keys[0] in simple_keys
+                and isinstance(item[keys[0]], list)
+            ):
+                complex_count += 1
+
+        result: dict[str, Any] = {}
+        for item in clauses:
+            keys = [key for key, value in item.items() if value]
+            if (
+                len(keys) == 1
+                and keys[0] in simple_keys
+                and isinstance(item[keys[0]], list)
+            ):
+                result.setdefault(keys[0], []).extend(item[keys[0]])
+                continue
+            if complex_count == 1:
+                for key, value in item.items():
+                    if not value:
+                        continue
+                    if key in simple_keys and isinstance(value, list):
+                        result.setdefault(key, []).extend(value)
+                    else:
+                        result[key] = value
+            else:
+                result.setdefault("must", []).append(item)
+        return result
     if isinstance(expr, Or):
         clauses = [_compile(item) for item in expr.conds if item is not None]
         clauses = [item for item in clauses if item]
@@ -167,7 +198,19 @@ def _compile(expr: FilterExpr | dict[str, Any]) -> dict[str, Any]:
             return {}
         if len(clauses) == 1:
             return clauses[0]
-        return {"should": [condition for item in clauses for condition in item.get("should", [item])]}
+        conditions: list[Any] = []
+        for item in clauses:
+            keys = [key for key, value in item.items() if value]
+            if (
+                len(keys) == 1
+                and keys[0] in {"must", "should"}
+                and isinstance(item[keys[0]], list)
+                and len(item[keys[0]]) == 1
+            ):
+                conditions.append(item[keys[0]][0])
+            else:
+                conditions.append(item)
+        return {"should": conditions}
     if isinstance(expr, Eq):
         field = expr.field
         value = _normalize_path(expr.value) if field in _URI_FIELDS else expr.value
