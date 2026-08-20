@@ -14,6 +14,7 @@ import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from openviking.metrics.datasources import HttpRequestLifecycleDataSource
 from openviking.observability.context import get_root_observability_context
 from openviking.observability.http_observability_middleware import (
     create_http_observability_middleware,
@@ -128,9 +129,15 @@ async def test_invalid_request_ids_are_rejected_without_logging_raw_values() -> 
     assert all(raw not in rendered for raw in ("contains spaces", "x" * 129, "first", "second"))
 
 
-async def test_unhandled_500_keeps_request_id_for_log_and_response() -> None:
+async def test_unhandled_500_keeps_request_id_for_log_and_response(monkeypatch) -> None:
     app = create_app(config=ServerConfig(), service=SimpleNamespace())
     records: list[logging.LogRecord] = []
+    completed_requests: list[dict] = []
+    monkeypatch.setattr(
+        HttpRequestLifecycleDataSource,
+        "record_request",
+        lambda **kwargs: completed_requests.append(kwargs),
+    )
     server_logger = logging.getLogger("openviking")
 
     handler = _CaptureHandler(records)
@@ -159,6 +166,35 @@ async def test_unhandled_500_keeps_request_id_for_log_and_response() -> None:
     assert len(error_records) == 1
     assert error_records[0].request_id == "failed-request-001"
     assert error_records[0].getMessage().startswith("[request_id=failed-request-001] ")
+    assert len(completed_requests) == 1
+    assert completed_requests[0]["error_code"] == "INTERNAL"
+    assert completed_requests[0]["error_message"] == "Internal server error"
+    assert completed_requests[0]["error_details"] is None
+    assert "synthetic failure" not in str(completed_requests[0])
+
+
+async def test_mapped_exception_audit_matches_public_response(monkeypatch) -> None:
+    app = create_app(config=ServerConfig(), service=SimpleNamespace())
+    completed_requests: list[dict] = []
+    monkeypatch.setattr(
+        HttpRequestLifecycleDataSource,
+        "record_request",
+        lambda **kwargs: completed_requests.append(kwargs),
+    )
+
+    @app.get("/_request-id-test/invalid")
+    async def invalid():
+        raise ValueError("invalid page size")
+
+    response = await _request(app, "/_request-id-test/invalid")
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
+    assert len(completed_requests) == 1
+    assert completed_requests[0]["status"] == "400"
+    assert completed_requests[0]["error_code"] == "INVALID_ARGUMENT"
+    assert completed_requests[0]["error_message"] == "invalid page size"
+    assert completed_requests[0]["error_details"] == response.json()["error"]["details"]
 
 
 async def test_concurrent_requests_do_not_mix_or_leak_request_ids() -> None:

@@ -18,6 +18,13 @@ const resources = {
         'Usage/Audit is not initialized, so server-side request logs are unavailable.',
       title: 'Audit logs unavailable',
     },
+    details: {
+      code: 'Error code',
+      data: 'Error details',
+      hide: 'Hide error details',
+      message: 'Error message',
+      show: 'Show error details',
+    },
     empty: {
       description: 'Start your first audited API call!',
       filteredDescription:

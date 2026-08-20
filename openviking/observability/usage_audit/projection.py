@@ -10,6 +10,10 @@ from datetime import datetime, timezone
 from typing import Any, Sequence
 
 from openviking.observability.events import ObservabilityEvent
+from openviking.observability.http_error_context import (
+    sanitize_public_http_error,
+    serialize_public_error_details,
+)
 
 UNKNOWN_IDENTITY = "__unknown__"
 AUDIT_EXCLUDED_ROUTES = frozenset(
@@ -230,10 +234,24 @@ def _project_http_request(
     audit_user = normalize_identity(payload.get("user_id") or event.user_id) or None
     row_user = audit_user or ""
     status = "success" if 200 <= status_code < 400 else "error"
+    error_code: str | None = None
+    error_message: str | None = None
+    error_details: str | None = None
+    if status_code >= 400 and any(
+        payload.get(key) is not None for key in ("error_code", "error_message", "error_details")
+    ):
+        captured_error = sanitize_public_http_error(
+            code=payload.get("error_code"),
+            message=payload.get("error_message"),
+            details=payload.get("error_details"),
+        )
+        error_code = captured_error.code or None
+        error_message = captured_error.message or None
+        error_details = serialize_public_error_details(captured_error.details)
 
     retrieval_operation = retrieval_operation_for_http(method, route)
     if retrieval_operation:
-        key = (
+        retrieval_key = (
             audit_account,
             row_user,
             event_date,
@@ -241,13 +259,13 @@ def _project_http_request(
             retrieval_operation,
             status,
         )
-        prev_count, prev_results = retrieval_rows[key]
-        retrieval_rows[key] = (prev_count + 1, prev_results)
+        prev_count, prev_results = retrieval_rows[retrieval_key]
+        retrieval_rows[retrieval_key] = (prev_count + 1, prev_results)
 
     context_operation = context_write_operation_for_http(method, route, status_code)
     if context_operation:
-        key = (audit_account, row_user, event_date, hour, context_operation)
-        context_rows[key] += 1
+        context_key = (audit_account, row_user, event_date, hour, context_operation)
+        context_rows[context_key] += 1
 
     audit_rows.append(
         (
@@ -259,6 +277,9 @@ def _project_http_request(
             str(payload.get("api_type") or derive_api_type(route)),
             status_code,
             duration_ms,
+            error_code,
+            error_message,
+            error_details,
             created_at,
         )
     )

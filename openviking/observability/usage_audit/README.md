@@ -159,7 +159,14 @@ vector filter，也不从历史写入事件累计当前库存。
 - `api_type`
 - `status_code`
 - `duration_ms`
+- `error_code`（仅标准错误响应）
+- `error_message`（仅标准错误响应）
+- `error_details`（仅标准错误响应，可空）
 - `created_at`
+
+错误字段来自 OpenViking 已返回给调用方的标准错误结构，不读取或缓存 HTTP response
+body。`error_details` 经过凭据脱敏和大小限制；它可能包含被拒绝的参数值，但不会额外保存
+原始 request body、header、query string、stack trace 或 exception text。
 
 以下 route 不进入审计：
 
