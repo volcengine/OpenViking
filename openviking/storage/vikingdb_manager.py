@@ -466,6 +466,7 @@ class VikingDBManagerProxy:
         target_directories: Optional[List[str]] = None,
         extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
         limit: int = 10,
+        offset: int = 0,
     ) -> List[Dict[str, Any]]:
         return await self._manager.search_children_in_tenant(
             self._ctx,
@@ -476,6 +477,7 @@ class VikingDBManagerProxy:
             target_directories=target_directories,
             extra_filter=extra_filter,
             limit=limit,
+            offset=offset,
         )
 
     async def get_context_by_uri(
