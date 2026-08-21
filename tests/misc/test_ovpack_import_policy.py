@@ -539,7 +539,7 @@ def test_index_consistency_report_limits_public_and_error_records():
 
 
 @pytest.mark.asyncio
-async def test_export_ovpack_writes_v3_manifest_with_semantic_sidecars(
+async def test_export_ovpack_writes_v3_manifest_with_abstract_overviews(
     temp_ovpack_path: Path, request_ctx: RequestContext
 ):
     await export_ovpack(
@@ -580,7 +580,7 @@ async def test_export_ovpack_writes_v3_manifest_with_semantic_sidecars(
 
 
 @pytest.mark.asyncio
-async def test_export_ovpack_skips_missing_semantic_sidecars(
+async def test_export_ovpack_skips_missing_abstract_overviews(
     temp_ovpack_path: Path,
     request_ctx: RequestContext,
 ):
@@ -672,7 +672,7 @@ async def test_backup_restore_contract(
 
 
 @pytest.mark.asyncio
-async def test_backup_skips_missing_semantic_sidecars(
+async def test_backup_skips_missing_abstract_overviews(
     temp_ovpack_path: Path,
     request_ctx: RequestContext,
 ):

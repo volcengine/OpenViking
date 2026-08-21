@@ -13,6 +13,7 @@ from openviking.service.task_work_index import (
     bind_task_context,
     get_task_context,
 )
+from openviking.storage.abstract_overview import parse_abstract_overview
 from openviking.storage.queuefs.named_queue import NamedQueue
 from openviking.storage.queuefs.semantic_dag import (
     DagStats,
@@ -20,7 +21,6 @@ from openviking.storage.queuefs.semantic_dag import (
     SemanticDagExecutor,
     SemanticNodeScheduler,
 )
-from openviking.storage.semantic_sidecar import parse_semantic_sidecar
 from openviking.telemetry import (
     OperationTelemetry,
     bind_telemetry,
@@ -30,8 +30,9 @@ from openviking_cli.session.user_id import UserIdentifier
 
 
 class _FakeVikingFS:
-    def __init__(self, tree):
+    def __init__(self, tree, abstracts=None):
         self._tree = tree
+        self._abstracts = abstracts or {}
         self.writes = []
         self._async_agfs = self
 
@@ -41,6 +42,9 @@ class _FakeVikingFS:
 
     async def write_file(self, path, content, ctx=None, lease_ref=None):
         self.writes.append((path, content))
+
+    async def abstract(self, uri, ctx=None):
+        return self._abstracts.get(uri, "")
 
     async def pathlock_acquire_exact_batch(self, paths):
         return {"paths": paths}
@@ -57,15 +61,19 @@ class _FakeProcessor:
         self.vectorized_dirs = []
         self.vectorized_files = []
         self.vectorized_contexts = {}
+        self.summarized_files = []
+        self.overview_inputs = []
         self.verify_streaming = verify_streaming
 
     async def _generate_single_file_summary(self, file_path, llm_sem=None, ctx=None):
+        self.summarized_files.append(file_path)
         result = {"name": file_path.split("/")[-1], "summary": "summary"}
         if self.verify_streaming:
             result["content"] = "x" * 100_000
         return result
 
-    async def _generate_overview(self, dir_uri, file_summaries, children_abstracts):
+    async def _generate_overview(self, dir_uri, file_summaries, children_abstracts, **kwargs):
+        self.overview_inputs.append((dir_uri, file_summaries, children_abstracts, kwargs))
         if self.verify_streaming:
             assert all("content" not in item for item in file_summaries)
             assert all(
@@ -145,10 +153,10 @@ class _ScheduledExecutor:
         self.failure = exc
 
 
-def _patch_semantic_config(monkeypatch, *, sidecar_sample_size=32):
+def _patch_semantic_config(monkeypatch, *, overview_sample_limit=32):
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_dag.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(sidecar_sample_size=sidecar_sample_size)),
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=overview_sample_limit)),
     )
 
 
@@ -230,6 +238,116 @@ async def test_semantic_dag_bounds_active_node_work(monkeypatch):
     assert stats.in_progress_nodes == 0
     assert processor.max_active_summaries <= 3
     assert max_running <= 3
+
+
+@pytest.mark.asyncio
+async def test_incremental_wide_directory_samples_before_summary_work(monkeypatch):
+    root_uri = "viking://resources/wide"
+    tree = {
+        root_uri: [{"name": f"file-{idx:03}.txt", "isDir": False} for idx in range(40)],
+    }
+    fake_fs = _FakeVikingFS(tree)
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    _patch_semantic_config(monkeypatch, overview_sample_limit=4)
+
+    processor = _FakeProcessor()
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=ctx,
+        incremental_update=True,
+        target_uri=root_uri,
+        recursive=False,
+        changes={"modified": [f"{root_uri}/file-020.txt"]},
+        skip_vectorization=True,
+    )
+
+    await executor.run(root_uri)
+
+    # Four deterministic aggregation inputs plus the changed file, when it is
+    # outside that sample, are the only files that need summary preparation.
+    assert len(processor.summarized_files) <= 5
+    assert executor.get_stats().total_nodes <= 6
+
+
+@pytest.mark.asyncio
+async def test_non_recursive_memory_samples_files_and_reads_child_abstracts(monkeypatch):
+    root_uri = "viking://user/alice/memories"
+    child_a = f"{root_uri}/a-child"
+    child_d = f"{root_uri}/d-child"
+    tree = {
+        root_uri: [
+            {"name": "a-child", "isDir": True},
+            {"name": "b.md", "isDir": False},
+            {"name": "c.md", "isDir": False},
+            {"name": "d-child", "isDir": True},
+            {"name": "e.md", "isDir": False},
+            {"name": "f.md", "isDir": False},
+        ],
+        child_a: [{"name": "nested.md", "isDir": False}],
+        child_d: [{"name": "nested.md", "isDir": False}],
+    }
+    fake_fs = _FakeVikingFS(tree, abstracts={child_a: "child a abstract"})
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    _patch_semantic_config(monkeypatch, overview_sample_limit=3)
+
+    processor = _FakeProcessor()
+    ctx = RequestContext(user=UserIdentifier("acc1", "alice"), role=Role.USER)
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="memory",
+        max_concurrent_llm=2,
+        ctx=ctx,
+        recursive=False,
+        skip_vectorization=True,
+        generation_trigger="reindex",
+    )
+
+    await executor.run(root_uri)
+
+    assert processor.summarized_files == [f"{root_uri}/c.md", f"{root_uri}/f.md"]
+    assert executor.get_stats().total_nodes == 3
+    assert processor.vectorized_files == []
+    assert processor.vectorized_dirs == []
+    _, file_summaries, child_abstracts, coverage = processor.overview_inputs[-1]
+    assert [item["name"] for item in file_summaries] == ["c.md", "f.md"]
+    assert child_abstracts == [{"name": "a-child", "abstract": "child a abstract"}]
+    assert coverage["total_files"] == 4
+    assert coverage["total_children"] == 2
+
+
+@pytest.mark.asyncio
+async def test_deferred_aggregation_processes_only_changed_files(monkeypatch):
+    root_uri = "viking://resources/wide"
+    changed = f"{root_uri}/file-020.txt"
+    tree = {
+        root_uri: [{"name": f"file-{idx:03}.txt", "isDir": False} for idx in range(40)],
+    }
+    fake_fs = _FakeVikingFS(tree)
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    _patch_semantic_config(monkeypatch, overview_sample_limit=4)
+
+    processor = _FakeProcessor()
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=ctx,
+        incremental_update=True,
+        target_uri=root_uri,
+        recursive=False,
+        changes={"modified": [changed]},
+        aggregate_directory=False,
+    )
+
+    await executor.run(root_uri)
+
+    assert processor.vectorized_files == [changed]
+    assert processor.vectorized_dirs == []
+    assert executor.get_stats().total_nodes == 2
 
 
 @pytest.mark.asyncio
@@ -364,14 +482,14 @@ async def test_semantic_dag_skip_vectorization_does_not_schedule_tasks(monkeypat
         f"{root_uri}/.overview.md",
         f"{root_uri}/.abstract.md",
     ]
-    assert [parse_semantic_sidecar(raw).body.strip() for _, raw in fake_fs.writes] == [
+    assert [parse_abstract_overview(raw).body.strip() for _, raw in fake_fs.writes] == [
         "overview",
         "abstract",
         "overview",
         "abstract",
     ]
     assert all(
-        parse_semantic_sidecar(raw).metadata["generated_by"]["component"] == "SemanticProcessor"
+        parse_abstract_overview(raw).metadata["generated_by"]["component"] == "SemanticProcessor"
         for _, raw in fake_fs.writes
     )
     assert processor.vectorized_dirs == []

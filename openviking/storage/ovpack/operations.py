@@ -74,7 +74,7 @@ from openviking_cli.utils.uri import VikingURI
 
 logger = get_logger(__name__)
 
-OPTIONAL_SEMANTIC_SIDECARS = frozenset({".abstract.md", ".overview.md"})
+OPTIONAL_ABSTRACT_OVERVIEW_FILES = frozenset({".abstract.md", ".overview.md"})
 
 
 def _index_records_by_level(
@@ -144,11 +144,11 @@ def _exportable_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return exportable
 
 
-def _is_optional_semantic_sidecar(entry: dict[str, Any]) -> bool:
+def _is_optional_abstract_overview(entry: dict[str, Any]) -> bool:
     if entry.get("isDir"):
         return False
     rel_path = str(entry.get("rel_path") or "")
-    return leaf_name(rel_path) in OPTIONAL_SEMANTIC_SIDECARS
+    return leaf_name(rel_path) in OPTIONAL_ABSTRACT_OVERVIEW_FILES
 
 
 async def _filter_existing_optional_sidecars(
@@ -159,7 +159,7 @@ async def _filter_existing_optional_sidecars(
 ) -> list[dict[str, Any]]:
     filtered: list[dict[str, Any]] = []
     for entry in entries:
-        if not _is_optional_semantic_sidecar(entry):
+        if not _is_optional_abstract_overview(entry):
             filtered.append(entry)
             continue
 
@@ -172,7 +172,7 @@ async def _filter_existing_optional_sidecars(
         if exists:
             filtered.append(entry)
         else:
-            logger.info(f"[ovpack] Skipping missing semantic sidecar: {uri}")
+            logger.info(f"[ovpack] Skipping missing abstract overview: {uri}")
     return filtered
 
 

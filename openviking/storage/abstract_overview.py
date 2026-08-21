@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""OKF documents and atomic writeback for generated semantic sidecars.
+"""OKF documents and atomic writeback for generated abstract overviews.
 
 Only .abstract.md and .overview.md use this module. Ordinary Markdown keeps
 its frontmatter as user content and is never parsed implicitly.
@@ -8,8 +8,9 @@ its frontmatter as user content and is never parsed implicitly.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Mapping, Optional, Sequence, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Dict, Mapping, Optional, Sequence, TypeVar
 
 import yaml
 
@@ -18,9 +19,12 @@ from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext
 from openviking_cli.utils.logger import get_logger
 
+if TYPE_CHECKING:
+    from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessDecision
+
 logger = get_logger(__name__)
 
-SEMANTIC_SIDECAR_FILENAMES = frozenset({".abstract.md", ".overview.md"})
+ABSTRACT_OVERVIEW_FILENAMES = frozenset({".abstract.md", ".overview.md"})
 EMBEDDING_METADATA_FIELDS = ("directory",)
 _METADATA_ORDER = ("directory", "source", "generated_by", "freshness")
 _MAX_SOURCE_URI_CHARS = 4096
@@ -28,16 +32,16 @@ _MAX_LABEL_CHARS = 128
 _T = TypeVar("_T")
 
 
-class SemanticSidecarFormatError(ValueError):
-    """A generated semantic sidecar has invalid OKF frontmatter."""
+class AbstractOverviewFormatError(ValueError):
+    """A generated abstract overview has invalid OKF frontmatter."""
 
 
-class SemanticSidecarMetadataError(SemanticSidecarFormatError):
+class AbstractOverviewMetadataError(AbstractOverviewFormatError):
     """A public write attempted to change protected sidecar metadata."""
 
 
 @dataclass(frozen=True)
-class SemanticSidecarDocument:
+class AbstractOverviewDocument:
     """Parsed machine metadata and visible Markdown body."""
 
     metadata: Dict[str, Any]
@@ -45,28 +49,40 @@ class SemanticSidecarDocument:
     legacy: bool = False
 
 
-def is_semantic_sidecar_uri(uri: str) -> bool:
+@dataclass(frozen=True)
+class AbstractOverviewWriteResult:
+    """Visible-body changes produced by one successful sidecar writeback."""
+
+    wrote: bool
+    overview_body_changed: bool = False
+    abstract_body_changed: bool = False
+
+    def __bool__(self) -> bool:
+        return self.wrote
+
+
+def is_abstract_overview_uri(uri: str) -> bool:
     """Return whether uri names one of the two generated sidecars."""
 
-    return uri.rstrip("/").rsplit("/", 1)[-1] in SEMANTIC_SIDECAR_FILENAMES
+    return uri.rstrip("/").rsplit("/", 1)[-1] in ABSTRACT_OVERVIEW_FILENAMES
 
 
 def _normalize_directory_uri(dir_uri: str) -> str:
     value = str(dir_uri or "").strip()
     if not value:
-        raise SemanticSidecarFormatError("semantic sidecar directory must not be empty")
+        raise AbstractOverviewFormatError("abstract overview directory must not be empty")
     if not value.startswith("viking://"):
-        raise SemanticSidecarFormatError("semantic sidecar directory must be a viking:// URI")
+        raise AbstractOverviewFormatError("abstract overview directory must be a viking:// URI")
     return value.rstrip("/") + "/"
 
 
 def _bounded_string(value: Any, *, field: str, limit: int) -> str:
     if not isinstance(value, str) or not value.strip():
-        raise SemanticSidecarFormatError(f"semantic sidecar {field} must be a non-empty string")
+        raise AbstractOverviewFormatError(f"abstract overview {field} must be a non-empty string")
     normalized = value.strip()
     if len(normalized) > limit:
-        raise SemanticSidecarFormatError(
-            f"semantic sidecar {field} exceeds the {limit}-character policy limit"
+        raise AbstractOverviewFormatError(
+            f"abstract overview {field} exceeds the {limit}-character policy limit"
         )
     return normalized
 
@@ -86,7 +102,7 @@ def _normalize_metadata(metadata: Mapping[str, Any]) -> Dict[str, Any]:
     source = metadata.get("source")
     if source is not None:
         if not isinstance(source, Mapping) or not {"kind", "uri"}.issubset(source):
-            raise SemanticSidecarFormatError("semantic sidecar source must contain kind and uri")
+            raise AbstractOverviewFormatError("abstract overview source must contain kind and uri")
         normalized["source"] = {
             "kind": _bounded_string(source["kind"], field="source.kind", limit=_MAX_LABEL_CHARS),
             "uri": _bounded_string(source["uri"], field="source.uri", limit=_MAX_SOURCE_URI_CHARS),
@@ -98,8 +114,8 @@ def _normalize_metadata(metadata: Mapping[str, Any]) -> Dict[str, Any]:
             "component",
             "trigger",
         }.issubset(generated_by):
-            raise SemanticSidecarFormatError(
-                "semantic sidecar generated_by must contain component and trigger"
+            raise AbstractOverviewFormatError(
+                "abstract overview generated_by must contain component and trigger"
             )
         normalized["generated_by"] = {
             "component": _bounded_string(
@@ -123,7 +139,7 @@ def _normalize_metadata(metadata: Mapping[str, Any]) -> Dict[str, Any]:
             "pending_child_changes",
         }
         if not isinstance(freshness, Mapping) or not required.issubset(freshness):
-            raise SemanticSidecarFormatError("semantic sidecar freshness has an invalid field set")
+            raise AbstractOverviewFormatError("abstract overview freshness has an invalid field set")
         counters: Dict[str, int] = {}
         for field in (
             "total_entries",
@@ -133,20 +149,20 @@ def _normalize_metadata(metadata: Mapping[str, Any]) -> Dict[str, Any]:
         ):
             value = freshness[field]
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-                raise SemanticSidecarFormatError(
-                    f"semantic sidecar freshness.{field} must be a non-negative integer"
+                raise AbstractOverviewFormatError(
+                    f"abstract overview freshness.{field} must be a non-negative integer"
                 )
             counters[field] = value
         if counters["sampled_entries"] + counters["unsampled_entries"] != counters["total_entries"]:
-            raise SemanticSidecarFormatError(
-                "semantic sidecar freshness sampled + unsampled must equal total"
+            raise AbstractOverviewFormatError(
+                "abstract overview freshness sampled + unsampled must equal total"
             )
         normalized["freshness"] = counters
 
     return {field: normalized[field] for field in _METADATA_ORDER if field in normalized}
 
 
-def parse_semantic_sidecar(raw: str | bytes) -> SemanticSidecarDocument:
+def parse_abstract_overview(raw: str | bytes) -> AbstractOverviewDocument:
     """Parse OKF Markdown while accepting frontmatter-free legacy content.
 
     A leading delimiter opts a generated sidecar into strict OKF parsing.
@@ -157,15 +173,15 @@ def parse_semantic_sidecar(raw: str | bytes) -> SemanticSidecarDocument:
         try:
             text = raw.decode("utf-8")
         except UnicodeDecodeError as exc:
-            raise SemanticSidecarFormatError("semantic sidecar is not valid UTF-8") from exc
+            raise AbstractOverviewFormatError("abstract overview is not valid UTF-8") from exc
     elif isinstance(raw, str):
         text = raw
     else:
-        raise TypeError("semantic sidecar content must be str or bytes")
+        raise TypeError("abstract overview content must be str or bytes")
 
     lines = text.splitlines(keepends=True)
     if not lines or lines[0].rstrip("\r\n") != "---":
-        return SemanticSidecarDocument(metadata={}, body=text, legacy=True)
+        return AbstractOverviewDocument(metadata={}, body=text, legacy=True)
 
     closing_index: Optional[int] = None
     for index in range(1, len(lines)):
@@ -173,28 +189,28 @@ def parse_semantic_sidecar(raw: str | bytes) -> SemanticSidecarDocument:
             closing_index = index
             break
     if closing_index is None:
-        raise SemanticSidecarFormatError("semantic sidecar frontmatter is not closed")
+        raise AbstractOverviewFormatError("abstract overview frontmatter is not closed")
 
     try:
         loaded = yaml.safe_load("".join(lines[1:closing_index]))
     except yaml.YAMLError as exc:
-        raise SemanticSidecarFormatError(f"invalid semantic sidecar YAML: {exc}") from exc
+        raise AbstractOverviewFormatError(f"invalid abstract overview YAML: {exc}") from exc
     if loaded is None:
         loaded = {}
     if not isinstance(loaded, Mapping):
-        raise SemanticSidecarFormatError("semantic sidecar frontmatter must be a YAML object")
+        raise AbstractOverviewFormatError("abstract overview frontmatter must be a YAML object")
     if "directory" not in loaded:
-        raise SemanticSidecarFormatError("semantic sidecar frontmatter must contain directory")
+        raise AbstractOverviewFormatError("abstract overview frontmatter must contain directory")
 
     body = "".join(lines[closing_index + 1 :])
     if body.startswith("\r\n"):
         body = body[2:]
     elif body.startswith("\n"):
         body = body[1:]
-    return SemanticSidecarDocument(metadata=_normalize_metadata(loaded), body=body, legacy=False)
+    return AbstractOverviewDocument(metadata=_normalize_metadata(loaded), body=body, legacy=False)
 
 
-def render_semantic_sidecar(
+def render_abstract_overview(
     level: int | ContextLevel,
     dir_uri: str,
     body: str,
@@ -205,11 +221,11 @@ def render_semantic_sidecar(
     try:
         resolved_level = ContextLevel(int(level))
     except (TypeError, ValueError) as exc:
-        raise SemanticSidecarFormatError(f"invalid semantic sidecar level: {level}") from exc
+        raise AbstractOverviewFormatError(f"invalid abstract overview level: {level}") from exc
     if resolved_level not in {ContextLevel.ABSTRACT, ContextLevel.OVERVIEW}:
-        raise SemanticSidecarFormatError("semantic sidecars only support L0 and L1")
+        raise AbstractOverviewFormatError("abstract overviews only support L0 and L1")
     if not isinstance(body, str):
-        raise TypeError("semantic sidecar body must be a string")
+        raise TypeError("abstract overview body must be a string")
 
     merged: Dict[str, Any] = dict(metadata or {})
     merged["directory"] = _normalize_directory_uri(dir_uri)
@@ -222,7 +238,7 @@ def render_semantic_sidecar(
     return f"---\n{frontmatter}\n---\n\n{body.strip()}\n"
 
 
-def prepare_semantic_sidecar_write(
+def prepare_abstract_overview_write(
     uri: str,
     current_raw: str | bytes,
     requested_raw: str | bytes,
@@ -242,14 +258,14 @@ def prepare_semantic_sidecar_write(
     """
 
     if mode not in {"replace", "append"}:
-        raise ValueError(f"unsupported semantic sidecar write mode: {mode}")
-    if not is_semantic_sidecar_uri(uri):
-        raise ValueError(f"not a semantic sidecar URI: {uri}")
+        raise ValueError(f"unsupported abstract overview write mode: {mode}")
+    if not is_abstract_overview_uri(uri):
+        raise ValueError(f"not an abstract overview URI: {uri}")
 
-    current = parse_semantic_sidecar(current_raw)
-    requested = parse_semantic_sidecar(requested_raw)
+    current = parse_abstract_overview(current_raw)
+    requested = parse_abstract_overview(requested_raw)
     if not requested.legacy and requested.metadata != current.metadata:
-        raise SemanticSidecarMetadataError("cannot modify protected semantic sidecar metadata")
+        raise AbstractOverviewMetadataError("cannot modify protected abstract overview metadata")
 
     requested_body = requested.body
     body = current.body + requested_body if mode == "append" else requested_body
@@ -260,13 +276,13 @@ def prepare_semantic_sidecar_write(
     # metadata as a side effect.  Legacy sidecars have no metadata baseline,
     # so their first body edit naturally migrates them using the target URI.
     dir_uri = current.metadata.get("directory") or uri.rstrip("/").rsplit("/", 1)[0]
-    return render_semantic_sidecar(level, dir_uri, body, current.metadata)
+    return render_abstract_overview(level, dir_uri, body, current.metadata)
 
 
 def body_for_preview(raw: str | bytes) -> str:
-    """Return only user-visible Markdown from a semantic sidecar."""
+    """Return only user-visible Markdown from an abstract overview."""
 
-    document = parse_semantic_sidecar(raw)
+    document = parse_abstract_overview(raw)
     if document.legacy:
         return document.body
     # Rendering adds one canonical terminal newline to the stored document.
@@ -280,7 +296,7 @@ def body_for_embedding(
 ) -> str:
     """Return body plus explicitly whitelisted stable metadata."""
 
-    document = parse_semantic_sidecar(raw)
+    document = parse_abstract_overview(raw)
     selected = {
         field: document.metadata[field] for field in whitelist if field in document.metadata
     }
@@ -298,7 +314,14 @@ def body_for_embedding(
 def embedding_text_for_body(level: int | ContextLevel, dir_uri: str, body: str) -> str:
     """Build embedding text for a freshly generated visible body."""
 
-    return body_for_embedding(render_semantic_sidecar(level, dir_uri, body))
+    return body_for_embedding(render_abstract_overview(level, dir_uri, body))
+
+
+def semantic_body_digest(body: str) -> str:
+    """Hash normalized visible Markdown, excluding all OKF metadata."""
+
+    normalized = body.replace("\r\n", "\n").replace("\r", "\n").strip()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def deterministic_sample(items: Sequence[_T], limit: int) -> list[_T]:
@@ -333,12 +356,12 @@ def freshness_metadata(
 
 async def _read_existing_document(
     viking_fs: Any, uri: str, ctx: Optional[RequestContext]
-) -> Optional[SemanticSidecarDocument]:
+) -> Optional[AbstractOverviewDocument]:
     raw = await _raw_if_exists(viking_fs, uri, ctx)
-    return parse_semantic_sidecar(raw) if raw is not None else None
+    return parse_abstract_overview(raw) if raw is not None else None
 
 
-async def write_semantic_sidecars(
+async def write_abstract_overview(
     *,
     viking_fs: Any,
     dir_uri: str,
@@ -347,9 +370,10 @@ async def write_semantic_sidecars(
     ctx: Optional[RequestContext],
     is_stale: Callable[[], bool],
     metadata: Optional[Mapping[str, Any]] = None,
+    consume_pending: Optional[int] = None,
     lock: Optional[Dict[str, Any]] = None,
     log_prefix: str = "[Semantic]",
-) -> bool:
+) -> AbstractOverviewWriteResult:
     """Render and atomically write sidecars while preserving source metadata.
 
     Exact equality is checked under the lock so stable refreshes do not touch
@@ -358,7 +382,7 @@ async def write_semantic_sidecars(
 
     if is_stale():
         logger.info("%s Skipping stale semantic write for %s", log_prefix, dir_uri)
-        return False
+        return AbstractOverviewWriteResult(wrote=False)
 
     overview_uri = f"{dir_uri}/.overview.md"
     abstract_uri = f"{dir_uri}/.abstract.md"
@@ -373,7 +397,7 @@ async def write_semantic_sidecars(
     try:
         if is_stale():
             logger.info("%s Skipping stale semantic write for %s", log_prefix, dir_uri)
-            return False
+            return AbstractOverviewWriteResult(wrote=False)
 
         existing_overview = await _read_existing_document(viking_fs, overview_uri, ctx)
         existing_abstract = await _read_existing_document(viking_fs, abstract_uri, ctx)
@@ -383,10 +407,37 @@ async def write_semantic_sidecars(
                 merged_metadata["source"] = existing.metadata["source"]
                 break
 
-        rendered_overview = render_semantic_sidecar(
+        # A refresh consumes only the counter observed when that refresh
+        # started. Changes arriving during generation remain pending.
+        requested_freshness = merged_metadata.get("freshness")
+        if isinstance(requested_freshness, Mapping):
+            current_pending = 0
+            for existing in (existing_overview, existing_abstract):
+                freshness = existing.metadata.get("freshness") if existing else None
+                if isinstance(freshness, Mapping):
+                    current_pending = max(
+                        current_pending, int(freshness.get("pending_child_changes", 0))
+                    )
+            next_freshness = dict(requested_freshness)
+            consumed = current_pending if consume_pending is None else max(consume_pending, 0)
+            next_freshness["pending_child_changes"] = max(
+                current_pending - consumed, 0
+            )
+            merged_metadata["freshness"] = next_freshness
+
+        overview_body_changed = (
+            existing_overview is None
+            or semantic_body_digest(existing_overview.body) != semantic_body_digest(overview)
+        )
+        abstract_body_changed = (
+            existing_abstract is None
+            or semantic_body_digest(existing_abstract.body) != semantic_body_digest(abstract)
+        )
+
+        rendered_overview = render_abstract_overview(
             ContextLevel.OVERVIEW, dir_uri, overview, merged_metadata
         )
-        rendered_abstract = render_semantic_sidecar(
+        rendered_abstract = render_abstract_overview(
             ContextLevel.ABSTRACT, dir_uri, abstract, merged_metadata
         )
         current_overview = await _raw_if_exists(viking_fs, overview_uri, ctx)
@@ -400,7 +451,11 @@ async def write_semantic_sidecars(
             await viking_fs.write_file(
                 abstract_uri, rendered_abstract, ctx=ctx, lease_ref=sidecar_lease
             )
-        return True
+        return AbstractOverviewWriteResult(
+            wrote=True,
+            overview_body_changed=overview_body_changed,
+            abstract_body_changed=abstract_body_changed,
+        )
     finally:
         if owns_lease:
             await viking_fs._async_agfs.pathlock_release(sidecar_lease)
@@ -423,52 +478,157 @@ async def _raw_if_exists(viking_fs: Any, uri: str, ctx: Optional[RequestContext]
         raise
 
 
-async def mark_semantic_sidecars_pending(
+async def plan_abstract_overview_refresh(
+    *,
+    viking_fs: Any,
+    dir_uri: str,
+    changed_entries: int,
+    ctx: Optional[RequestContext],
+    l0_body_changed: bool = True,
+    force_refresh: bool = False,
+    overview_sample_limit: int = 32,
+    refresh_ratio: float = 0.10,
+) -> FreshnessDecision:
+    """Atomically record direct-child changes and choose refresh scheduling.
+
+    Both sidecars receive the same counter snapshot under one exact-path lease.
+    A missing or legacy baseline is refreshed immediately and migrated by the
+    ensuing semantic task.
+    """
+    # Lazy import keeps this low-level sidecar module importable by VikingFS
+    # while queuefs itself imports VikingFS during package initialization.
+    from openviking.storage.queuefs.semantic_ops.freshness_policy import (
+        FreshnessAction,
+        FreshnessDecision,
+        decide_parent_refresh,
+    )
+
+    if changed_entries <= 0 or not l0_body_changed:
+        return FreshnessDecision(FreshnessAction.NOOP, 0, 0)
+    uris = [
+        f"{dir_uri.rstrip('/')}/.overview.md",
+        f"{dir_uri.rstrip('/')}/.abstract.md",
+    ]
+    # Missing/legacy sidecars have no counter to update and must refresh now.
+    # Avoid acquiring exact paths in that common migration case; if a baseline
+    # appears immediately afterwards, the queued full refresh safely replaces it.
+    preliminary = [await _read_existing_document(viking_fs, uri, ctx) for uri in uris]
+    if not all(
+        document is not None
+        and not document.legacy
+        and isinstance(document.metadata.get("freshness"), Mapping)
+        for document in preliminary
+    ):
+        return decide_parent_refresh(
+            l0_body_changed=True,
+            has_freshness_baseline=False,
+            total_entries=0,
+            pending_before=0,
+            current_change_count=changed_entries,
+            overview_sample_limit=overview_sample_limit,
+            refresh_ratio=refresh_ratio,
+            force_refresh=force_refresh,
+        )
+    lock_paths = [viking_fs._uri_to_path(uri, ctx=ctx) for uri in uris]
+    lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(lock_paths)
+    try:
+        documents = [await _read_existing_document(viking_fs, uri, ctx) for uri in uris]
+        baselines = [
+            document.metadata["freshness"]
+            for document in documents
+            if document is not None
+            and not document.legacy
+            and isinstance(document.metadata.get("freshness"), Mapping)
+        ]
+        if len(baselines) != len(uris):
+            return decide_parent_refresh(
+                l0_body_changed=True,
+                has_freshness_baseline=False,
+                total_entries=0,
+                pending_before=0,
+                current_change_count=changed_entries,
+                overview_sample_limit=overview_sample_limit,
+                refresh_ratio=refresh_ratio,
+                force_refresh=force_refresh,
+            )
+
+        baseline = baselines[0]
+        decision = decide_parent_refresh(
+            l0_body_changed=True,
+            has_freshness_baseline=True,
+            total_entries=int(baseline["total_entries"]),
+            # A mismatch should not normally exist, but preserving the larger
+            # counter is safer than losing an already-observed change.
+            pending_before=max(int(item["pending_child_changes"]) for item in baselines),
+            current_change_count=changed_entries,
+            overview_sample_limit=overview_sample_limit,
+            refresh_ratio=refresh_ratio,
+            force_refresh=force_refresh,
+        )
+        for level, uri, document in zip(
+            (ContextLevel.OVERVIEW, ContextLevel.ABSTRACT), uris, documents, strict=True
+        ):
+            if document is None or document.legacy:
+                continue
+            freshness = document.metadata.get("freshness")
+            if not isinstance(freshness, Mapping):
+                continue
+            metadata = dict(document.metadata)
+            updated_freshness = dict(freshness)
+            updated_freshness["pending_child_changes"] = decision.pending_after
+            metadata["freshness"] = updated_freshness
+            rendered = render_abstract_overview(level, dir_uri, document.body, metadata)
+            raw = await _raw_if_exists(viking_fs, uri, ctx)
+            if rendered != raw:
+                await viking_fs.write_file(uri, rendered, ctx=ctx, lease_ref=lease)
+        return decision
+    finally:
+        await viking_fs._async_agfs.pathlock_release(lease)
+
+
+async def read_abstract_overview_pending_snapshot(
+    *,
+    viking_fs: Any,
+    dir_uri: str,
+    ctx: Optional[RequestContext],
+    lock: Optional[Dict[str, Any]] = None,
+) -> int:
+    """Read the pending counter captured at the start of an aggregation."""
+
+    uris = [
+        f"{dir_uri.rstrip('/')}/.overview.md",
+        f"{dir_uri.rstrip('/')}/.abstract.md",
+    ]
+    owns_lease = lock is None
+    snapshot_lease = lock
+    if owns_lease:
+        lock_paths = [viking_fs._uri_to_path(uri, ctx=ctx) for uri in uris]
+        snapshot_lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(lock_paths)
+    try:
+        pending_values = []
+        for uri in uris:
+            document = await _read_existing_document(viking_fs, uri, ctx)
+            freshness = document.metadata.get("freshness") if document else None
+            if document is not None and not document.legacy and isinstance(freshness, Mapping):
+                pending_values.append(int(freshness["pending_child_changes"]))
+        return max(pending_values, default=0)
+    finally:
+        if owns_lease:
+            await viking_fs._async_agfs.pathlock_release(snapshot_lease)
+
+
+async def mark_abstract_overview_pending(
     *,
     viking_fs: Any,
     dir_uri: str,
     changed_entries: int,
     ctx: Optional[RequestContext],
 ) -> None:
-    """Increment pending changes while leaving visible sidecar bodies untouched.
+    """Compatibility wrapper for callers that only need the metadata mark."""
 
-    Legacy documents have no freshness baseline and are left alone until their
-    next natural refresh migrates them to OKF. Both sidecars are updated under
-    one exact-path lease so their counters remain symmetric.
-    """
-
-    if changed_entries <= 0:
-        return
-    uris = [
-        f"{dir_uri.rstrip('/')}/.overview.md",
-        f"{dir_uri.rstrip('/')}/.abstract.md",
-    ]
-    preliminary = [await _raw_if_exists(viking_fs, uri, ctx) for uri in uris]
-    if not any(
-        raw is not None
-        and not parse_semantic_sidecar(raw).legacy
-        and "freshness" in parse_semantic_sidecar(raw).metadata
-        for raw in preliminary
-    ):
-        return
-
-    lock_paths = [viking_fs._uri_to_path(uri, ctx=ctx) for uri in uris]
-    lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(lock_paths)
-    try:
-        for level, uri in zip((ContextLevel.OVERVIEW, ContextLevel.ABSTRACT), uris, strict=True):
-            raw = await _raw_if_exists(viking_fs, uri, ctx)
-            if raw is None:
-                continue
-            document = parse_semantic_sidecar(raw)
-            freshness = document.metadata.get("freshness")
-            if document.legacy or not isinstance(freshness, Mapping):
-                continue
-            metadata = dict(document.metadata)
-            updated_freshness = dict(freshness)
-            updated_freshness["pending_child_changes"] += changed_entries
-            metadata["freshness"] = updated_freshness
-            rendered = render_semantic_sidecar(level, dir_uri, document.body, metadata)
-            if rendered != raw:
-                await viking_fs.write_file(uri, rendered, ctx=ctx, lease_ref=lease)
-    finally:
-        await viking_fs._async_agfs.pathlock_release(lease)
+    await plan_abstract_overview_refresh(
+        viking_fs=viking_fs,
+        dir_uri=dir_uri,
+        changed_entries=changed_entries,
+        ctx=ctx,
+    )

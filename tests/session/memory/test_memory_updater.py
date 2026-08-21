@@ -37,7 +37,7 @@ from openviking.session.memory.utils import (
     MemoryFileUtils,
     parse_memory_file_with_fields,
 )
-from openviking.storage.semantic_sidecar import parse_semantic_sidecar
+from openviking.storage.abstract_overview import parse_abstract_overview
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -317,7 +317,7 @@ class TestMemoryUpdater:
 
         await updater.generate_overview("events", directory, ctx, extract_context=None)
 
-        document = parse_semantic_sidecar(viking_fs.store[overview_uri])
+        document = parse_abstract_overview(viking_fs.store[overview_uri])
         assert document.metadata["generated_by"] == {
             "component": "MemoryUpdater",
             "trigger": "memory_update",

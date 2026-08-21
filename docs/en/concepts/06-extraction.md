@@ -126,7 +126,7 @@ L0/L1 are directory sidecars, not per-file sidecars. Parent-summary generation c
 
 ### Freshness, Sampling, and Parent Refresh
 
-Each generation records direct-child `total_entries`, `sampled_entries`, and `unsampled_entries`. When the direct-child count exceeds `semantic.sidecar_sample_size` (32 by default), OpenViking uses deterministic stable sampling. `pending_child_changes` increases when a known child change is not yet reflected in the parent body and resets to 0 after a successful refresh.
+Each generation records direct-child `total_entries`, `sampled_entries`, and `unsampled_entries`. When the direct-child count exceeds `semantic.overview_sample_limit` (32 by default), OpenViking uses deterministic stable sampling. `pending_child_changes` increases when a known child change is not yet reflected in the parent body and resets to 0 after a successful refresh.
 
 Currently, each successful resource/skill semantic task schedules the next parent refresh and marks that parent pending before enqueue, continuing to the namespace-root boundary.
 
@@ -141,7 +141,7 @@ Currently, each successful resource/skill semantic task schedules the next paren
 | `max_concurrent_llm` | 10 | Concurrent LLM calls |
 | `max_images_per_call` | 10 | Max images per VLM call |
 | `max_sections_per_call` | 20 | Max sections per VLM call |
-| `sidecar_sample_size` | 32 | Maximum direct-child sample used for one directory summary |
+| `overview_sample_limit` | 32 | Maximum direct-child sample used for one directory summary |
 
 ## Code Skeleton Extraction
 

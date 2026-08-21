@@ -15,9 +15,12 @@ DEFAULT_COMPILE_REASON = (
     "into the outputs required by the Skill."
 )
 COMPILE_STAGING_ROOT = "__compile_staging__"
-COMPILE_WIKI_PAGE_ROOT = f"{COMPILE_STAGING_ROOT}/wiki_pages"
+COMPILE_TARGET_CHECKOUT_ROOT = f"{COMPILE_STAGING_ROOT}/target_checkout"
+COMPILE_MATERIALIZED_ROOT = "compile_resources"
+COMPILE_MANIFEST_NAME = "_manifest.tsv"
 OKF_VERSION = "0.1"
-TERMINAL_STATUSES = frozenset({"completed", "failed"})
+TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
+WikiLanguage = Literal["en", "zh-CN"]
 
 
 class CompileLimits(BaseModel):
@@ -25,12 +28,17 @@ class CompileLimits(BaseModel):
 
     source_roots: int = 16
     source_catalog_entries: int = 200
+    source_files: int = 5000
+    source_total_bytes: int = 1024 * 1024 * 1024
+    target_total_bytes: int = 1024 * 1024 * 1024
     skill_files: int = 128
     skill_file_bytes: int = 8 * 1024 * 1024
     skill_total_bytes: int = 32 * 1024 * 1024
     target_inventory_entries: int = 2000
     target_catalog_pages: int = 10
-    initial_prompt_chars: int = 200_000
+    initial_prompt_chars: int = 300_000
+    agent_context_chars: int = 240_000
+    agent_iterations: int = 60
     tool_uri_count: int = 32
     tool_result_bytes: int = 1024 * 1024
     tool_total_result_bytes: int = 8 * 1024 * 1024
@@ -42,7 +50,7 @@ class CompileLimits(BaseModel):
     accepted_tasks: int = 40
     accepted_tasks_per_principal: int = 10
     queue_wait_seconds: float = 60 * 60
-    task_runtime_seconds: float = 40 * 60
+    task_runtime_seconds: float = 60 * 60
     salvage_grace_seconds: float = 120
     cleanup_grace_seconds: float = 40
     terminal_task_retention_seconds: float = 24 * 60 * 60
@@ -71,6 +79,7 @@ class SanitizedCompileRequest(BaseModel):
     from_: list[str] = Field(alias="from")
     to: str
     reason: str
+    reason_provided: bool = False
     skill: str
     runtime_timeout_seconds: float | None = Field(
         default=None,
@@ -90,18 +99,24 @@ class WikiPageDraft(BaseModel):
         default=None,
         description=(
             "Inline Markdown body for an actual Wiki page. Link relevant known source "
-            "URIs with ordinary Markdown links; never invent link targets."
-        )
+            "URIs with ordinary Markdown links; never invent link targets. For very large "
+            "bodies, write the Markdown to the workspace with write_file and submit "
+            "body_workspace_path instead."
+        ),
     )
     body_workspace_path: str | None = Field(
         default=None,
         description=(
-            f"Relative path under {COMPILE_WIKI_PAGE_ROOT}/ for a generated "
-            "UTF-8 Markdown Wiki body."
+            f"Relative path under {COMPILE_TARGET_CHECKOUT_ROOT}/ for an editable "
+            "UTF-8 Markdown Wiki page in the target checkout."
         ),
     )
     source_ids: list[str] = Field(
-        description="Identifiers of supplied source roots that support this Wiki page."
+        default_factory=list,
+        description=(
+            "Identifiers of supplied source roots that support this Wiki page. Omit to "
+            "cite every supplied source root."
+        ),
     )
     tags: list[str] = Field(default_factory=list)
     path_hint: str | None = Field(
@@ -116,9 +131,7 @@ class WikiPageDraft(BaseModel):
     @model_validator(mode="after")
     def validate_body(self) -> "WikiPageDraft":
         if (self.body_markdown is None) == (self.body_workspace_path is None):
-            raise ValueError(
-                "exactly one of body_markdown or body_workspace_path is required"
-            )
+            raise ValueError("exactly one of body_markdown or body_workspace_path is required")
         return self
 
 
@@ -135,7 +148,11 @@ class CompileFileDraft(BaseModel):
     )
     content: str | None = Field(
         default=None,
-        description="Exact UTF-8 text file content, including any required frontmatter.",
+        description=(
+            "Exact UTF-8 text file content, including any required frontmatter. For very "
+            "large files, write the file to the workspace with write_file and submit "
+            "workspace_path instead."
+        ),
     )
     workspace_path: str | None = Field(
         default=None,
@@ -158,9 +175,7 @@ class WikiBundleDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     pages: list[WikiPageDraft] = Field(
-        description=(
-            "Actual Wiki pages only; do not place Skill-prescribed artifact files here."
-        )
+        description=("Actual Wiki pages only; do not place Skill-prescribed artifact files here.")
     )
     files: list[CompileFileDraft] = Field(
         default_factory=list,
@@ -206,7 +221,15 @@ class CompileTask(BaseModel):
     task_id: str
     principal_scope: str
     sanitized_request: SanitizedCompileRequest
-    status: Literal["accepted", "running", "committing", "completed", "failed"]
+    status: Literal[
+        "accepted",
+        "running",
+        "committing",
+        "cancelling",
+        "completed",
+        "failed",
+        "cancelled",
+    ]
     stage: str
     created_at: str
     updated_at: str
@@ -253,6 +276,7 @@ __all__ = [
     "SanitizedCompileRequest",
     "TERMINAL_STATUSES",
     "WikiBundleDraft",
+    "WikiLanguage",
     "WikiPageDraft",
     "utc_now",
 ]

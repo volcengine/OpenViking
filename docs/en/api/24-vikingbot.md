@@ -145,7 +145,7 @@ Start an asynchronous, Skill-driven Compile task. VikingBot loads the selected S
 | `to` | string | Yes | - | Target Resource or Memory directory, or a supported Skill namespace |
 | `skill` | string | Yes | - | Skill directory or its `SKILL.md` URI |
 | `reason` | string | No | Skill-driven default | Additional instructions for this Compile run |
-| `runtime_timeout_seconds` | number | No | 2400 | Positive finite runtime limit no greater than the server maximum (2400 seconds by default) |
+| `runtime_timeout_seconds` | number | No | 3600 | Positive finite runtime limit no greater than the server maximum (3600 seconds by default) |
 
 **HTTP API**
 
@@ -178,7 +178,7 @@ ov compile \
 
 `--wait` polls the status endpoint until the task reaches a terminal state. `--timeout` limits only the local wait and does not cancel the server task. `--runtime-timeout` sets `runtime_timeout_seconds` for this run and can only shorten the server-owned runtime maximum; an excessive value is rejected with `429 RESOURCE_EXHAUSTED`. Reaching that deadline while the Agent is running, or reaching the configured AgentLoop iteration limit (`bot.agents.max_tool_iterations`, 50 by default), attempts to save eligible partial Resource output within a separate short grace period. The task fails if there is no eligible output to save; non-Resource targets and deadlines in later stages do not use this fallback.
 
-The `direct` backend runs Compile `exec` commands with the Bot host's permissions. `bot.sandbox.backends.direct.allow_compile_exec` defaults to `false`, so Compile omits `exec` while ordinary Wiki and artifact generation can still run through file tools. A Skill that declares `requires.bins` or `requires.env` fails with `SKILL_CAPABILITY_UNAVAILABLE` before any command probe runs. Setting the option to `true` is an explicit unsafe opt-in; isolated backends with filesystem and network policies are recommended for CLI-dependent Skills. Admission overflow returns `429 RESOURCE_EXHAUSTED`.
+The `direct` backend runs Compile `exec` commands with the Bot host's permissions. `bot.sandbox.backends.direct.allow_compile_exec` defaults to `true`: the Compile toolchain is open source, so `exec` runs directly in the user's shell by default, and ordinary Wiki and artifact generation run through file tools as before. A Skill that declares `requires.bins` or `requires.env` still probes the commands; set the option to `false` to omit `exec` from Compile (then such Skills fail with `SKILL_CAPABILITY_UNAVAILABLE` before any command probe runs). Isolated backends with filesystem and network policies are recommended for CLI-dependent Skills. Admission overflow returns `429 RESOURCE_EXHAUSTED`.
 
 **Response Example**
 
@@ -210,6 +210,12 @@ curl http://localhost:1933/bot/v1/compile/cmp_01abc \
   -H "X-API-Key: your-key"
 ```
 
+The CLI accepts the `cmp_...` task ID returned by Compile directly:
+
+```bash
+ov task status cmp_01abc
+```
+
 **Response Example**
 
 ```json
@@ -237,6 +243,27 @@ curl http://localhost:1933/bot/v1/compile/cmp_01abc \
 }
 ```
 
+### compile_cancel()
+
+Request cooperative cancellation of a Compile task by task ID. The task first enters `cancelling`, then becomes `cancelled` after its in-process work and cleanup settle. Writes that already completed are not rolled back. Repeated cancellation of a `cancelled` task is idempotent; a missing task or a task owned by another principal returns `404`.
+
+**CLI**
+
+```bash
+ov task cancel cmp_01abc
+```
+
+**HTTP API**
+
+```http
+POST /bot/v1/compile/{task_id}/cancel
+```
+
+```bash
+curl -X POST http://localhost:1933/bot/v1/compile/cmp_01abc/cancel \
+  -H "X-API-Key: your-key"
+```
+
 Task lifecycle values are:
 
 | Status | Typical stages |
@@ -244,8 +271,10 @@ Task lifecycle values are:
 | `accepted` | `queued` |
 | `running` | `loading_skill`, `collecting_context`, `agent`, `rendering` |
 | `committing` | `writing`, `refreshing`, `salvaging` |
+| `cancelling` | Settling in-process work and resource cleanup |
 | `completed` | `completed`, `salvaged` |
 | `failed` | Stage where the failure occurred; the response contains `error.code` and `error.message` |
+| `cancelled` | `cancelled` |
 
 ### feedback()
 

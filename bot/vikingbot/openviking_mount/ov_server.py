@@ -690,12 +690,16 @@ class VikingClient:
         uri: str,
         level: str = "abstract",
         user_id: Optional[str] = None,
+        offset: int = 0,
+        limit: int = -1,
     ) -> str:
         """读取内容
 
         Args:
             uri: Viking URI
             level: 读取级别 ("abstract" - L0摘要, "overview" - L1概览, "read" - L2完整内容)
+            offset: Starting line number (0-indexed); only used for level="read"
+            limit: Number of lines to read, -1 means read to end; only used for level="read"
         """
         client = self.client
         should_close = False
@@ -709,7 +713,9 @@ class VikingClient:
             elif level == "overview":
                 return await client.overview(uri)
             elif level == "read":
-                return await client.read(uri)
+                if offset == 0 and limit == -1:
+                    return await client.read(uri)
+                return await client.read(uri, offset=offset, limit=limit)
             elif level == "raw":
                 read_raw = getattr(client, "read_raw", None)
                 if read_raw is not None:

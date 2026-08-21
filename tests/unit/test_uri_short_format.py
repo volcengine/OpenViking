@@ -49,6 +49,35 @@ class TestVikingURIExplicitFormat:
         with pytest.raises(ValueError, match="Invalid scope"):
             VikingURI("viking://invalid_scope/foo")
 
+    def test_home_alias_is_parsable(self):
+        """'viking://~' should parse with the home alias scope."""
+        uri = VikingURI("viking://~")
+        assert uri.uri == "viking://~"
+        assert uri.scope == "~"
+
+    def test_home_alias_with_suffix_is_parsable(self):
+        """'viking://~/notes' keeps the alias scope and its suffix."""
+        uri = VikingURI("viking://~/notes")
+        assert uri.uri == "viking://~/notes"
+        assert uri.scope == "~"
+        assert uri.full_path == "~/notes"
+
+    def test_invalid_scope_error_copy_hides_home_alias(self):
+        """The parser's own scope enumeration never advertises the alias."""
+        with pytest.raises(ValueError, match="Invalid scope") as exc_info:
+            VikingURI("viking://invalid_scope/foo")
+        message = str(exc_info.value)
+        assert "Must be one of:" in message
+        assert "~" not in message.split("Must be one of:", 1)[1]
+
+    def test_build_rejects_home_alias_scope(self):
+        """build() must never mint an alias URI: responses stay canonical."""
+        with pytest.raises(ValueError, match="Invalid scope"):
+            VikingURI.build("~")
+        with pytest.raises(ValueError, match="Invalid scope"):
+            VikingURI.build("~", "notes")
+        assert VikingURI.build("user", "alice") == "viking://user/alice"
+
     @pytest.mark.parametrize(
         "value,scope",
         [

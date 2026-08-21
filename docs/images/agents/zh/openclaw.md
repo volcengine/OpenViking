@@ -4,6 +4,10 @@
 
 {{OPENVIKING_API_KEY_BLOCK}}
 
+复制本页 API Key：
+
+{{OPENVIKING_API_KEY_BLOCK}}
+
 ```bash
 openclaw plugins install clawhub:@openviking/openclaw-plugin
 openclaw openviking setup --base-url {{OPENVIKING_BASE_URL}} --api-key <API-Key>

@@ -29,11 +29,11 @@ from openviking.server.identity import RequestContext
 from openviking.service.task_tracker import get_task_tracker
 from openviking.service.task_work_index import bind_task_context
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.storage.abstract_overview import body_for_preview, embedding_text_for_body
 from openviking.storage.expr import And, Eq, Or, PathScope
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
-from openviking.storage.semantic_sidecar import body_for_preview, embedding_text_for_body
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -180,6 +180,7 @@ class ReindexExecutor:
         mode: str,
         wait: bool,
         dry_run: bool = False,
+        recursive: bool = True,
         tags: list[str] | None = None,
         tag_mode: str = "replace",
         ctx: RequestContext,
@@ -212,6 +213,7 @@ class ReindexExecutor:
                 object_type=object_type,
                 mode=mode,
                 dry_run=dry_run,
+                recursive=recursive,
                 ingest_options=ingest_options,
                 ctx=ctx,
             )
@@ -236,6 +238,7 @@ class ReindexExecutor:
                 object_type=object_type,
                 mode=mode,
                 dry_run=dry_run,
+                recursive=recursive,
                 ingest_options=ingest_options,
                 ctx=ctx,
             )
@@ -482,6 +485,7 @@ class ReindexExecutor:
         object_type: str,
         mode: str,
         dry_run: bool = False,
+        recursive: bool = True,
         ingest_options: IngestOptions | None = None,
         ctx: RequestContext,
     ) -> dict[str, Any]:
@@ -544,23 +548,20 @@ class ReindexExecutor:
                     run=run,
                 )
             elif object_type == "resource":
-                await self._reindex_resource(
-                    uri=uri,
-                    mode=mode,
-                    run=run,
-                )
+                resource_kwargs = {"uri": uri, "mode": mode, "run": run}
+                if not recursive:
+                    resource_kwargs["recursive"] = False
+                await self._reindex_resource(**resource_kwargs)
             elif object_type == "skill":
-                await self._reindex_skill(
-                    uri=uri,
-                    mode=mode,
-                    run=run,
-                )
+                skill_kwargs = {"uri": uri, "mode": mode, "run": run}
+                if not recursive:
+                    skill_kwargs["recursive"] = False
+                await self._reindex_skill(**skill_kwargs)
             elif object_type == "memory":
-                await self._reindex_memory(
-                    uri=uri,
-                    mode=mode,
-                    run=run,
-                )
+                memory_kwargs = {"uri": uri, "mode": mode, "run": run}
+                if not recursive:
+                    memory_kwargs["recursive"] = False
+                await self._reindex_memory(**memory_kwargs)
             else:
                 raise OpenVikingError(
                     f"Unsupported reindex type: {object_type}",
@@ -602,6 +603,7 @@ class ReindexExecutor:
         object_type: str,
         mode: str,
         dry_run: bool = False,
+        recursive: bool = True,
         ingest_options: IngestOptions | None = None,
         ctx: RequestContext,
     ) -> None:
@@ -615,6 +617,7 @@ class ReindexExecutor:
                     object_type=object_type,
                     mode=mode,
                     dry_run=dry_run,
+                    recursive=recursive,
                     ingest_options=ingest_options,
                     ctx=ctx,
                 )
@@ -938,19 +941,26 @@ class ReindexExecutor:
         uri: str,
         mode: str,
         run: _ReindexRunContext,
+        recursive: bool = True,
     ) -> None:
         counters = run.counters
         ctx = run.ctx
         if mode == "semantic_and_vectors":
-            await self._run_semantic_processor(
-                uri=uri,
-                context_type="resource",
-                ctx=ctx,
-                lock=run.lock,
-            )
+            semantic_kwargs = {
+                "uri": uri,
+                "context_type": "resource",
+                "ctx": ctx,
+                "lock": run.lock,
+            }
+            if not recursive:
+                semantic_kwargs["recursive"] = False
+            await self._run_semantic_processor(**semantic_kwargs)
+            vector_kwargs = {"uri": uri, "counters": counters, "ctx": ctx}
+            if not recursive:
+                vector_kwargs["recursive"] = False
             await self._reindex_resource_vectors(
                 **self._with_ingest_options(
-                    {"uri": uri, "counters": counters, "ctx": ctx},
+                    vector_kwargs,
                     run.ingest_options,
                 )
             )
@@ -968,11 +978,19 @@ class ReindexExecutor:
         uri: str,
         mode: str,
         run: _ReindexRunContext,
+        recursive: bool = True,
     ) -> None:
         counters = run.counters
         ctx = run.ctx
         if mode == "semantic_and_vectors":
             await self._regenerate_skill_semantics(uri=uri, ctx=ctx)
+            vector_kwargs = {"uri": uri, "counters": counters, "ctx": ctx}
+            if not recursive:
+                vector_kwargs["recursive"] = False
+            await self._reindex_skill_vectors(
+                **self._with_ingest_options(vector_kwargs, run.ingest_options)
+            )
+            return
         await self._reindex_skill_vectors(
             **self._with_ingest_options(
                 {"uri": uri, "counters": counters, "ctx": ctx},
@@ -986,21 +1004,28 @@ class ReindexExecutor:
         uri: str,
         mode: str,
         run: _ReindexRunContext,
+        recursive: bool = True,
     ) -> None:
         counters = run.counters
         ctx = run.ctx
         if mode == "semantic_and_vectors":
             stat = await get_viking_fs().stat(uri, ctx=ctx)
             if stat.get("isDir", stat.get("is_dir")):
-                await self._run_semantic_processor(
-                    uri=uri,
-                    context_type="memory",
-                    ctx=ctx,
-                    lock=run.lock,
-                )
+                semantic_kwargs = {
+                    "uri": uri,
+                    "context_type": "memory",
+                    "ctx": ctx,
+                    "lock": run.lock,
+                }
+                if not recursive:
+                    semantic_kwargs["recursive"] = False
+                await self._run_semantic_processor(**semantic_kwargs)
+            vector_kwargs = {"uri": uri, "counters": counters, "ctx": ctx}
+            if not recursive:
+                vector_kwargs["recursive"] = False
             await self._reindex_memory_vectors(
                 **self._with_ingest_options(
-                    {"uri": uri, "counters": counters, "ctx": ctx},
+                    vector_kwargs,
                     run.ingest_options,
                 )
             )
@@ -1019,6 +1044,7 @@ class ReindexExecutor:
         context_type: str,
         ctx: RequestContext,
         lock: dict | None = None,
+        recursive: bool = True,
     ) -> None:
         processor = SemanticProcessor(
             max_concurrent_llm=get_openviking_config().vlm.max_concurrent,
@@ -1027,12 +1053,15 @@ class ReindexExecutor:
         msg = SemanticMsg(
             uri=uri,
             context_type=context_type,
-            recursive=True,
+            recursive=recursive,
             account_id=owner_ctx.account_id,
             user_id=owner_ctx.user.user_id,
             peer_id=owner_ctx.user.user_id,
             role=str(ctx.role),
             skip_vectorization=True,
+            generation_trigger="reindex",
+            use_hierarchical_aggregation=context_type == "memory",
+            propagate_to_parent=recursive,
         )
         await processor.on_dequeue({"data": msg.to_json()}, lock=lock)
 
@@ -1042,6 +1071,7 @@ class ReindexExecutor:
         uri: str,
         counters: _ReindexCounters,
         ctx: RequestContext,
+        recursive: bool = True,
         ingest_options: IngestOptions | None = None,
     ) -> None:
         viking_fs = get_viking_fs()
@@ -1050,7 +1080,7 @@ class ReindexExecutor:
                 raise NotFoundError(uri, "resource")
             stat = await viking_fs.stat(uri, ctx=ctx)
             is_dir = stat.get("isDir", stat.get("is_dir")) if isinstance(stat, dict) else False
-            if is_dir:
+            if is_dir and recursive:
                 entries = await self._tree_all(viking_fs, uri, show_all_hidden=True, ctx=ctx)
             else:
                 entries = []
@@ -1451,6 +1481,7 @@ class ReindexExecutor:
         uri: str,
         counters: _ReindexCounters,
         ctx: RequestContext,
+        recursive: bool = True,
         ingest_options: IngestOptions | None = None,
     ) -> None:
         viking_fs = get_viking_fs()
@@ -1518,7 +1549,7 @@ class ReindexExecutor:
                 counters.warnings.append(f"Failed to reindex {uri} L1 vector: {exc}")
 
         skill_file_uri = f"{uri}/SKILL.md"
-        if await viking_fs.exists(skill_file_uri, ctx=ctx):
+        if recursive and await viking_fs.exists(skill_file_uri, ctx=ctx):
             counters.scanned_records += 1
             skill_content = await self._safe_read_text(skill_file_uri, ctx=ctx)
             if skill_content:
@@ -1546,13 +1577,18 @@ class ReindexExecutor:
         uri: str,
         counters: _ReindexCounters,
         ctx: RequestContext,
+        recursive: bool = True,
         ingest_options: IngestOptions | None = None,
     ) -> None:
         viking_fs = get_viking_fs()
         if await viking_fs.exists(uri, ctx=ctx):
             stat = await viking_fs.stat(uri, ctx=ctx)
             if stat.get("isDir", stat.get("is_dir")):
-                entries = await self._tree_all(viking_fs, uri, show_all_hidden=False, ctx=ctx)
+                entries = (
+                    await self._tree_all(viking_fs, uri, show_all_hidden=False, ctx=ctx)
+                    if recursive
+                    else []
+                )
                 directory_uris = {uri}
                 for entry in entries:
                     entry_uri = entry.get("uri")

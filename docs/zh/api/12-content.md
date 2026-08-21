@@ -6,7 +6,7 @@
 
 ### abstract()
 
-读取 L0 摘要（约 100 token 的概要）。
+读取 L0 摘要（约 100 token 的概要），不包括 okf 文件头。
 
 **参数**
 
@@ -72,7 +72,7 @@ openviking abstract viking://resources/docs/
 
 ### overview()
 
-读取 L1 概览，适用于目录。
+读取 L1 概览，适用于目录，不包括 okf 文件头。
 
 **参数**
 
@@ -137,7 +137,7 @@ openviking overview viking://resources/docs/
 
 ### read()
 
-读取 L2 完整内容。
+读取 L0/L1/L2 文件完整文本内容。
 
 **参数**
 
@@ -328,7 +328,7 @@ openviking write viking://resources/docs/api.md \
 
 ### batch_write()
 
-在一个 Resource 或 Memory 目录下执行一组带前置条件的文件写入，并在同一次请求中刷新受影响的语义与向量索引。
+在一个 Resource 或 Memory 目录下写入多个文件；全部写完后，再统一刷新一次受影响的语义与向量索引。
 
 **参数**
 
@@ -347,18 +347,18 @@ openviking write viking://resources/docs/api.md \
 | `uri` | string | 是 | 位于 `root_uri` 下的目标文件 URI |
 | `content` | string | 条件必填 | UTF-8 文本；与 `content_base64` 必须且只能提供一个 |
 | `content_base64` | string | 条件必填 | Base64 编码的字节；Memory 目标不支持 |
-| `precondition.kind` | string | 是 | `create_if_absent` 或 `replace_if_hash` |
-| `precondition.base_hash` | string | 条件必填 | `replace_if_hash` 必填，格式为 `sha256:<小写十六进制>` |
+| `mode` | string | 否 | `replace`（默认）、`append`、`create` 或 `upsert` |
 
 **说明**
 
 - 单次请求最多包含 256 个 operation，单文件不超过 8 MiB，总内容不超过 16 MiB。
 - 所有目标必须是 `root_uri` 下的文件、属于同一 context type，且 canonical URI 不能重复。
 - Resource 目标允许任意安全文件扩展名；Memory 目标仍使用文本扩展名白名单，且不接受二进制内容。
-- 系统会在目标 tree lock 内、首次产生新写入之前检查所有非幂等前置条件；不满足时返回 `409 Conflict`。
-- 如果目标已经包含期望字节，则归入 `unchanged`；因此刷新失败后可以安全重试，而不会重复写入相同内容。
-- API 能保证前置条件冲突不会产生新写入，但底层 I/O 中途失败时，本批次较早完成的写入仍可能已经可见。
-- 已存在的 `.abstract.md` / `.overview.md` 可以通过 `replace_if_hash` 修改正文。系统保留并校验受保护的 OKF metadata，拒绝 `create_if_absent` 创建 sidecar；这类操作只重建对应目录实际存在的 L0/L1 向量。
+- `replace`、`append`、`create` 与 `write()` 语义一致；`upsert` 会覆盖已有文件或创建缺失文件。
+- 写入期间整批共用一个目标 tree lock。所有文件写完并释放锁后才启动语义处理，因此 `.overview.md` / `.abstract.md` 每批只统一刷新一次。
+- 底层 I/O 中途失败时，本批次较早完成的写入仍可能已经可见。
+- 已存在的 `.abstract.md` / `.overview.md` 可以 replace 或 append；系统会保留并校验受保护的 OKF metadata，并只重建对应目录实际存在的 L0/L1 向量。
+- 响应体中，通过 `semantic_status`（`queued`、`complete` 或 `deferred`）表达目录聚合状态，通过 `vector_status` 表达变化文件的向量维护状态。
 
 **Python SDK**
 
@@ -369,15 +369,12 @@ result = client.batch_write(
         {
             "uri": "viking://resources/wiki/new.md",
             "content": "# 新页面\n",
-            "precondition": {"kind": "create_if_absent"},
+            "mode": "upsert",
         },
         {
             "uri": "viking://resources/wiki/existing.md",
             "content": "# 更新后的页面\n",
-            "precondition": {
-                "kind": "replace_if_hash",
-                "base_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-            },
+            "mode": "upsert",
         },
     ],
     wait=True,
@@ -400,7 +397,7 @@ curl -X POST http://localhost:1933/api/v1/content/batch-write \
       {
         "uri": "viking://resources/wiki/new.md",
         "content": "# 新页面\n",
-        "precondition": {"kind": "create_if_absent"}
+        "mode": "upsert"
       }
     ],
     "wait": true
@@ -417,6 +414,8 @@ curl -X POST http://localhost:1933/api/v1/content/batch-write \
     "created": ["viking://resources/wiki/new.md"],
     "updated": [],
     "unchanged": [],
+    "semantic_status": "complete",
+    "vector_status": "complete",
     "queue_status": {
       "Semantic": {
         "processed": 1,
@@ -583,6 +582,7 @@ ov set-tags viking://resources/project/ \
 | mode | str | 否 | `vectors_only` | 重建模式：`vectors_only`、`semantic_and_vectors` 或 `prune_orphans` |
 | wait | bool | 否 | `true` | 是否等待任务完成 |
 | dry_run | bool | 否 | `false` | 仅适用于 `mode="prune_orphans"`；只报告 orphan 向量记录，不实际删除 |
+| recursive | bool | 否 | `true` | 是否递归处理下级内容；`false` 仅对 `resource`、`memory` 或 `skill` 目录的 `semantic_and_vectors` 生效 |
 | tags | list[str] | 否 | `null` | 写入本次成功重建的全部向量记录。省略时保留已有 tags；空数组配合 `replace` 可清空 |
 | tag_mode | str | 否 | `replace` | `tags` 的写入模式：`replace` 或 `append` |
 
@@ -612,6 +612,8 @@ session 子树会被跳过。
 对于 `resource` 和 `skill`，`semantic_and_vectors` 会刷新目录/文件语义产物，包括 `.abstract.md` 和 `.overview.md`。对于 `memory`，它会重建当前已持久化 memory 子树的语义和向量，但不会回放历史记忆抽取顺序。
 
 对于 `semantic_and_vectors`，语义刷新和向量重建由 reindex executor 串行编排。语义刷新阶段不会再额外向后台 embedding queue 投递自己的向量化任务；向量由 reindex 阶段统一重建，因此 `wait=true` 表示等待 reindex 操作本身完成。
+
+对 `resource` 或 `memory` 目录设置 `recursive=false` 时，只重新生成目标目录的 `.abstract.md`、`.overview.md`，并重建该目录的 L0/L1 向量；下级目录不会重新生成语义产物，下级目录和文件也不会重新向量化。目标目录仍会读取本轮确定性采样命中的既有下级摘要；若采样命中直接文件，仍会为当前目录聚合准备这些文件的摘要。对 `skill` 目标设置 `recursive=false` 时，会根据 `SKILL.md` 重新生成 skill 目录的 L0/L1 语义产物及向量，但不会重建 `SKILL.md` 的 L2 向量。该参数不改变 `vectors_only`、`prune_orphans` 或 namespace 目标的既有行为。
 
 对于 `prune_orphans`，源文件是否存在以当前文件系统为准。如果整个目录已经不存在，该目录下的正文文件向量和语义 sidecar 向量（例如 `.abstract.md`、`.overview.md`）会一起清理。`dry_run` 用在其他模式时会被拒绝。
 

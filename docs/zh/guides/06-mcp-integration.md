@@ -146,6 +146,11 @@ claude mcp add --transport http openviking \
 `viking://user/<当前用户>/notes/todo.md`，不依赖文件名或扩展名判断。工具返回的、
 包含当前用户 ID 的 canonical URI 也可以直接使用；这套简写不用于跨用户访问。
 
+`viking://~` 是另一个通用别名，表示调用方的用户根目录：它在所有控制面（REST API、`ov` CLI、
+SDK 和 MCP）上都会展开为 `viking://user/<当前用户>`，且响应始终回显展开后的 canonical URI。
+上面的 `viking://user/<path>` 简写则仍是 MCP 专属。详见
+[Viking URI](../concepts/04-viking-uri.md)。
+
 > **注**：MCP 仅暴露 watch 管理的最小闭包（`list_watches` + `cancel_watch`）。pause / resume / trigger 和统一的 `update` 动作刻意不在此处暴露，请通过 REST `/api/v1/watches/*` 接口或 `ov task watch` CLI 使用上述操作。
 
 > 未传 `args.feishu_access_token` 的飞书/Lark 导入保持现有应用/tenant token 行为，也支持 watch。飞书/Lark 一次性用户 token 导入只传 `args.feishu_access_token`；飞书/Lark 用户 token watch 还必须传 `args.feishu_refresh_token`，并要求 OpenViking 服务端配置同一个飞书应用凭证。

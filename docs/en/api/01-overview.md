@@ -480,6 +480,8 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | DELETE | `/api/v1/admin/accounts/{account_id}` | Delete an account |
 | POST | `/api/v1/admin/accounts/{account_id}/users` | Register a user |
 | GET | `/api/v1/admin/accounts/{account_id}/users` | List users |
+| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | Get a user's memory policy |
+| PATCH | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | Update a user's memory policy |
 | DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | Remove a user |
 | PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | Promote a user to ADMIN |
 | POST | `/api/v1/admin/accounts/{account_id}/users/{user_id}/key` | Regenerate a user key |
@@ -510,6 +512,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/bot/v1/feedback` | Submit feedback for a VikingBot answer |
 | POST | `/bot/v1/compile` | Start a Skill-driven Compile task |
 | GET | `/bot/v1/compile/{task_id}` | Get Compile task status |
+| POST | `/bot/v1/compile/{task_id}/cancel` | Cancel a Compile task |
 
 ---
 

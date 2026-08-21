@@ -7,6 +7,7 @@ from loguru import logger
 from vikingbot.config.schema import Config, SessionKey
 from vikingbot.sandbox.backends import get_backend
 from vikingbot.sandbox.base import SandboxBackend, UnsupportedBackendError
+from vikingbot.utils.session_paths import resolve_workspace_path, workspace_name
 
 
 class SandboxManager:
@@ -39,13 +40,15 @@ class SandboxManager:
         """Get or create session-specific sandbox."""
         workspace_id = self.to_workspace_id(session_key)
         if workspace_id not in self._sandboxes:
-            sandbox = await self._create_sandbox(workspace_id)
+            sandbox = await self._create_sandbox(
+                workspace_id,
+                self.get_workspace_path(session_key),
+            )
             self._sandboxes[workspace_id] = sandbox
         return self._sandboxes[workspace_id]
 
-    async def _create_sandbox(self, workspace_id: str) -> SandboxBackend:
+    async def _create_sandbox(self, workspace_id: str, workspace: Path) -> SandboxBackend:
         """Create new sandbox instance."""
-        workspace = self.workspace / workspace_id
         instance = self._backend_cls(self.config.sandbox, workspace_id, workspace)
         try:
             await instance.start()
@@ -110,15 +113,14 @@ class SandboxManager:
         self._sandboxes.clear()
 
     def get_workspace_path(self, session_key: SessionKey) -> Path:
-        return self.workspace / self.to_workspace_id(session_key)
+        return resolve_workspace_path(
+            self.workspace,
+            session_key,
+            self.config.sandbox.mode,
+        )
 
     def to_workspace_id(self, session_key: SessionKey):
-        if self.config.sandbox.mode == "shared":
-            return "shared"
-        elif self.config.sandbox.mode == "per-channel":
-            return session_key.channel_key()
-        else:  # per-session
-            return session_key.safe_name()
+        return workspace_name(session_key, self.config.sandbox.mode, portable=False)
 
     async def get_sandbox_cwd(self, session_key: SessionKey) -> str:
         sandbox: SandboxBackend = await self._get_or_create_sandbox(session_key)

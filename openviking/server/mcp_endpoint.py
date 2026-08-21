@@ -324,6 +324,11 @@ async def search(
                 "other_peer_penalty cannot be combined with other_peer_penalties "
                 "in mode='context'"
             )
+        # Resolve exclusions with the same strictness as the REST search router,
+        # so alias/shorthand URIs match the canonical URIs they are compared against.
+        resolved_exclude_uris = [
+            _resolve_mcp_workspace_uri(exclude_uri, ctx) for exclude_uri in (exclude_uris or ())
+        ]
         result = await assemble_context(
             service=service,
             ctx=ctx,
@@ -339,7 +344,7 @@ async def search(
                 purpose=purpose,
                 detail=detail_by_category or (None if detail == "auto" else detail),
                 dedup_turns=dedup_turns,
-                exclude_uris=exclude_uris or (),
+                exclude_uris=resolved_exclude_uris,
                 peer_scope=peer_scope,
                 other_peer_penalty=other_peer_penalties or other_peer_penalty,
                 rewrite=rewrite == "auto",

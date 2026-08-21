@@ -12,7 +12,7 @@ import pytest
 from openviking.core.context import ContextLevel
 from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever, RetrieverMode
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.semantic_sidecar import render_semantic_sidecar
+from openviking.storage.abstract_overview import render_abstract_overview
 from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.retrieve.types import ContextType, TypedQuery
 from openviking_cli.session.user_id import UserIdentifier
@@ -639,7 +639,7 @@ async def test_convert_to_matched_contexts_propagates_search_tags():
                 "viking://resources/file-a",
                 1.0,
                 abstract="child A",
-                search_tags=["team=infra", "project=viking"],
+                search_tags=["default", "team=infra", "bad=", "project=viking"],
             )
         ],
         ctx=_ctx(),
@@ -668,7 +668,7 @@ async def test_convert_to_matched_contexts_defaults_tags_and_body_previews():
                 uri,
                 1.0,
                 level=int(ContextLevel.ABSTRACT),
-                abstract=render_semantic_sidecar(
+                abstract=render_abstract_overview(
                     ContextLevel.ABSTRACT, uri, "Visible abstract.", metadata
                 ),
             ),
@@ -676,7 +676,7 @@ async def test_convert_to_matched_contexts_defaults_tags_and_body_previews():
                 uri,
                 0.9,
                 level=int(ContextLevel.OVERVIEW),
-                abstract=render_semantic_sidecar(
+                abstract=render_abstract_overview(
                     ContextLevel.OVERVIEW, uri, "# Visible overview", metadata
                 ),
             ),

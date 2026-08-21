@@ -14,7 +14,9 @@ from openviking.core.namespace import (
 from openviking_cli.exceptions import InvalidURIError, PermissionDeniedError
 from openviking_cli.utils.uri import VikingURI
 
-_PUBLIC_API_SCOPES = frozenset({"", *VikingURI.PUBLIC_SCOPES, *VikingURI.LEGACY_SCOPES})
+_PUBLIC_API_SCOPES = frozenset(
+    {"", *VikingURI.PUBLIC_SCOPES, *VikingURI.LEGACY_SCOPES, *VikingURI.ALIAS_SCOPES}
+)
 _ALL_API_SCOPES = frozenset({"", *VikingURI.VISITABLE_SCOPES})
 
 
@@ -49,7 +51,10 @@ def validate_viking_uri(
 
     scopes = _allowed_api_scopes(allow_internal=allow_internal, allowed_scopes=allowed_scopes)
     if parsed.scope not in scopes:
-        scope_names = ", ".join(sorted(scope for scope in scopes if scope))
+        # Alias scopes are accepted but never advertised in scope error messages.
+        scope_names = ", ".join(
+            sorted(scope for scope in scopes if scope and scope not in VikingURI.ALIAS_SCOPES)
+        )
         if not parsed.scope:
             reason = f"URI must include one of: {scope_names}"
         else:

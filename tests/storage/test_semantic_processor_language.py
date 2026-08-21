@@ -209,7 +209,8 @@ class TestOverviewGenerationFlow:
         )
         assert f"Output Language: {lang}" in prompt
         assert "Output in Markdown format" in prompt
-        assert "Brief Description" in prompt
+        expected_brief_heading = "简要描述" if lang == "zh-CN" else "Brief Description"
+        assert expected_brief_heading in prompt
         assert "abstract_max_chars" not in prompt
 
     def test_overview_generation_prompt_preserves_repository_hierarchy(self):
@@ -237,12 +238,14 @@ class TestOverviewGenerationFlow:
             in prompt
         )
         assert (
-            "- Describe only what the provided summaries state; do not invent or generalize entities, facts, or relationships not present in them."
+            "- Describe only what the provided summaries state; do not invent entities, facts, or relationships not present in them."
             in prompt
         )
         assert "Before output, remove any named entity absent from the provided summaries" in prompt
         assert "never fill gaps with outside knowledge" in prompt
         assert "Who it's suitable for, if stated in the provided summaries" in prompt
+        assert "keep this paragraph useful as a standalone retrieval abstract" in prompt
+        assert "**Directory Coverage** (H2)" in prompt
 
     def test_chinese_overview_uses_localized_headings(self):
         prompt = render_prompt(
@@ -257,6 +260,8 @@ class TestOverviewGenerationFlow:
 
         assert "**快速导航** (H2)" in prompt
         assert "**详细说明** (H2)" in prompt
+        assert "**目录覆盖** (H2)" in prompt
+        assert "**Directory Coverage** (H2)" not in prompt
         assert "**Quick Navigation** (H2)" not in prompt
         assert "**Detailed Description** (H2)" not in prompt
 

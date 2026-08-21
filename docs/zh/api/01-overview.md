@@ -475,6 +475,8 @@ JSON 输出 - 错误：
 | DELETE | `/api/v1/admin/accounts/{account_id}` | 删除账号 |
 | POST | `/api/v1/admin/accounts/{account_id}/users` | 注册用户 |
 | GET | `/api/v1/admin/accounts/{account_id}/users` | 列出用户 |
+| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | 获取用户记忆策略 |
+| PATCH | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | 更新用户记忆策略 |
 | DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | 移除用户 |
 | PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | 将用户提升为 ADMIN |
 | POST | `/api/v1/admin/accounts/{account_id}/users/{user_id}/key` | 重新生成用户 Key |
@@ -505,6 +507,7 @@ JSON 输出 - 错误：
 | POST | `/bot/v1/feedback` | 提交 VikingBot 回答反馈 |
 | POST | `/bot/v1/compile` | 启动 Skill 驱动的 Compile 任务 |
 | GET | `/bot/v1/compile/{task_id}` | 获取 Compile 任务状态 |
+| POST | `/bot/v1/compile/{task_id}/cancel` | 取消 Compile 任务 |
 
 ---
 

@@ -39,7 +39,7 @@ class _FakeProcessor:
         self.summarized_files.append(file_path)
         return {"name": file_path.split("/")[-1], "summary": "summary"}
 
-    async def _generate_overview(self, dir_uri, file_summaries, children_abstracts):
+    async def _generate_overview(self, dir_uri, file_summaries, children_abstracts, **kwargs):
         return "overview"
 
     def _normalize_overview_generation(self, overview):

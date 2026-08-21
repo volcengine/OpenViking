@@ -44,6 +44,7 @@ from openviking_cli.exceptions import (
     AlreadyExistsError,
     FailedPreconditionError,
     InvalidArgumentError,
+    InvalidURIError,
     NotFoundError,
     PermissionDeniedError,
     UnauthenticatedError,
@@ -1225,6 +1226,30 @@ async def test_edit_memory_file_preserves_metadata(service):
     assert "coffee" in raw_after
     visible = await service.fs.read_visible(uri, ctx=DEFAULT_CTX)
     assert visible.strip() == "likes: coffee"
+
+
+async def test_write_home_alias_uri(service):
+    """`viking://~/...` writes into the caller's canonical user root."""
+    user_ctx = RequestContext(DEFAULT_CTX.user, Role.USER)
+    canonical = f"viking://user/{DEFAULT_CTX.user.user_id}/memories/preferences/home_alias.md"
+    token = _mcp_ctx.set(user_ctx)
+    try:
+        result = await write(uri="viking://~/memories/preferences/home_alias.md", content="x")
+        listing = await list_tool(uri="viking://~/memories/preferences")
+    finally:
+        _mcp_ctx.reset(token)
+    # Responses echo the expanded canonical URI, never the alias.
+    assert canonical in result
+    assert "viking://~" not in result
+    assert "home_alias.md" in listing
+    visible = await service.fs.read_visible(canonical, ctx=DEFAULT_CTX)
+    assert visible.strip() == "x"
+
+
+async def test_home_alias_rejected_for_root_role(service):
+    """Root-role MCP calls skip current-user resolution, so the alias fails closed."""
+    with pytest.raises(InvalidURIError, match="Home alias URI is not canonical"):
+        await list_tool(uri="viking://~/memories")
 
 
 async def test_write_user_shorthand_uri(service):

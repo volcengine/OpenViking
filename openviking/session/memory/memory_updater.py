@@ -40,7 +40,7 @@ from openviking.session.memory.utils.resource_refs import (
 )
 from openviking.session.memory.utils.template_utils import TemplateUtils
 from openviking.session.memory.utils.uri import render_template
-from openviking.storage.semantic_sidecar import freshness_metadata, render_semantic_sidecar
+from openviking.storage.abstract_overview import freshness_metadata, render_abstract_overview
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -1619,7 +1619,7 @@ class MemoryUpdater:
         try:
             await viking_fs.write_file(
                 overview_path,
-                render_semantic_sidecar(
+                render_abstract_overview(
                     ContextLevel.OVERVIEW,
                     directory,
                     rendered,

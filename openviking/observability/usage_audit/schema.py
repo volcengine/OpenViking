@@ -8,10 +8,10 @@ serve any region. Token and retrieval rollups are hour-grained so cross-tz
 "today" queries can slice at user-local day boundaries.
 """
 
-# Bump when the table layout changes incompatibly. Stored on the `_schema_meta`
-# row so `SQLiteUsageAuditStore.initialize` can reset the local SQLite store
-# when an older snapshot is detected.
-SCHEMA_VERSION = 4
+# Stored on the `_schema_meta` row. Version 4 has an explicit additive migration;
+# unhandled newer transitions fail closed, while older incompatible snapshots
+# continue to use the reset path.
+SCHEMA_VERSION = 5
 
 SQLITE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS _schema_meta (
@@ -80,6 +80,9 @@ CREATE TABLE IF NOT EXISTS request_audit (
     api_type TEXT NOT NULL,
     status_code INTEGER NOT NULL,
     duration_ms REAL NOT NULL,
+    error_code TEXT,
+    error_message TEXT,
+    error_details TEXT,
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_request_audit_account_created

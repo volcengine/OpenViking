@@ -33,6 +33,10 @@ def user_config_uri(ctx: RequestContext) -> str:
     return f"{canonical_user_root(ctx)}/settings/user_config.json"
 
 
+def user_config_backup_uri(ctx: RequestContext) -> str:
+    return f"{canonical_user_root(ctx)}/settings/user_config.backup.json"
+
+
 @asynccontextmanager
 async def _user_config_lock(
     viking_fs: VikingFS,
@@ -67,6 +71,17 @@ def _ensure_mutable(viking_fs: VikingFS, uri: str, ctx: RequestContext) -> None:
     ensure = getattr(viking_fs, "_ensure_mutable_access", None)
     if callable(ensure):
         ensure(uri, ctx)
+
+
+def validate_user_memory_policy(memory_policy: Optional[dict[str, Any]]) -> None:
+    if memory_policy is None:
+        return
+    from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+    from openviking.session.memory_policy import MemoryPolicy
+
+    MemoryPolicy.from_dict(memory_policy).validate_memory_types(
+        set(MemoryTypeRegistry().list_names(include_disabled=False))
+    )
 
 
 def validate_resource_add_target(
@@ -154,17 +169,33 @@ async def update_user_config(
         runtime = validate_add_targets(current.add_targets, ctx=ctx, viking_fs=viking_fs)
         current.add_targets.resource_uri = runtime.resource_uri
         current.add_targets.skill_uri = runtime.skill_uri
+        validate_user_memory_policy(current.memory_policy)
         if current.model_dump() != before:
+            before_content = json.dumps(before, ensure_ascii=False, sort_keys=True)
             await viking_fs.write_file(
-                uri,
-                json.dumps(
-                    current.model_dump(exclude_none=True),
-                    ensure_ascii=False,
-                    sort_keys=True,
-                ),
+                user_config_backup_uri(ctx),
+                before_content,
                 ctx=ctx,
-                lease_ref=handle,
             )
+            try:
+                await viking_fs.write_file(
+                    uri,
+                    json.dumps(
+                        current.model_dump(exclude_none=True),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                    ctx=ctx,
+                    lease_ref=handle,
+                )
+            except Exception:
+                await viking_fs.write_file(
+                    uri,
+                    before_content,
+                    ctx=ctx,
+                    lease_ref=handle,
+                )
+                raise
         return result
 
 
@@ -176,6 +207,7 @@ async def write_user_config(
     runtime = validate_add_targets(user_config.add_targets, ctx=ctx, viking_fs=viking_fs)
     user_config.add_targets.resource_uri = runtime.resource_uri
     user_config.add_targets.skill_uri = runtime.skill_uri
+    validate_user_memory_policy(user_config.memory_policy)
     uri = user_config_uri(ctx)
     async with _user_config_lock(viking_fs, uri, ctx) as handle:
         await viking_fs.write_file(
@@ -224,6 +256,28 @@ async def delete_user_add_targets(viking_fs: VikingFS, ctx: RequestContext) -> N
         user_config.add_targets = AddTargetsConfig()
 
     await update_user_config(viking_fs, ctx, _clear)
+
+
+async def read_user_memory_policy(
+    viking_fs: VikingFS,
+    ctx: RequestContext,
+) -> Optional[dict[str, Any]]:
+    return (await read_user_config(viking_fs, ctx)).memory_policy
+
+
+async def write_user_memory_policy(
+    viking_fs: VikingFS,
+    ctx: RequestContext,
+    memory_policy: Optional[dict[str, Any]],
+) -> Optional[dict[str, Any]]:
+    normalized = UserConfig(memory_policy=memory_policy).memory_policy
+    validate_user_memory_policy(normalized)
+
+    def _set(user_config: UserConfig) -> None:
+        user_config.memory_policy = normalized
+
+    await update_user_config(viking_fs, ctx, _set)
+    return normalized
 
 
 async def effective_resource_add_target(

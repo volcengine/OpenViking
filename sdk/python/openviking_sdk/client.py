@@ -1199,7 +1199,7 @@ class AsyncHTTPClient:
         timeout: Optional[float] = None,
         telemetry: Any = False,
     ) -> Dict[str, Any]:
-        """Apply a preconditioned multi-file content write."""
+        """Apply multiple content writes, then refresh semantics once."""
         normalized_operations = []
         for operation in operations:
             item = dict(operation)
@@ -1617,10 +1617,18 @@ class AsyncHTTPClient:
         mode: str = "vectors_only",
         wait: bool = True,
         dry_run: bool = False,
+        recursive: bool = True,
         tags: Optional[List[str]] = None,
         tag_mode: str = "replace",
     ) -> Dict[str, Any]:
-        payload = {"uri": uri, "mode": mode, "wait": wait, "dry_run": dry_run}
+        payload = {
+            "uri": uri,
+            "mode": mode,
+            "wait": wait,
+            "dry_run": dry_run,
+        }
+        if not recursive:
+            payload["recursive"] = False
         if tags is not None:
             payload["tags"] = tags
             payload["tag_mode"] = tag_mode
@@ -2568,6 +2576,7 @@ class SyncHTTPClient:
         mode: str = "vectors_only",
         wait: bool = True,
         dry_run: bool = False,
+        recursive: bool = True,
         tags: Optional[List[str]] = None,
         tag_mode: str = "replace",
     ) -> Dict[str, Any]:
@@ -2577,6 +2586,8 @@ class SyncHTTPClient:
             "wait": wait,
             "dry_run": dry_run,
         }
+        if not recursive:
+            kwargs["recursive"] = False
         if tags is not None:
             kwargs["tags"] = tags
             kwargs["tag_mode"] = tag_mode

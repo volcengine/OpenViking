@@ -3,7 +3,7 @@
 """Server configuration for OpenViking HTTP Server."""
 
 import sys
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
@@ -109,12 +109,22 @@ class UserConfig(BaseModel):
     """User configuration values that can be defaulted or initialized."""
 
     add_targets: AddTargetsConfig = Field(default_factory=AddTargetsConfig)
+    memory_policy: Optional[Dict[str, Any]] = None
     agent_evolution: DeprecatedUserAgentEvolutionConfig = Field(
         default_factory=DeprecatedUserAgentEvolutionConfig,
         exclude=True,
     )
 
     model_config = {"extra": "forbid"}
+
+    @field_validator("memory_policy", mode="before")
+    @classmethod
+    def validate_memory_policy(cls, value: Any) -> Optional[Dict[str, Any]]:
+        if value is None:
+            return None
+        from openviking.session.memory_policy import MemoryPolicy
+
+        return MemoryPolicy.from_dict(value).to_dict()
 
 
 class MetricsAccountDimensionConfig(BaseModel):

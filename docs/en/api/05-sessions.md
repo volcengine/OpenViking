@@ -1405,6 +1405,10 @@ Commit a session. Message archiving (Phase 1) completes immediately. Summary gen
 | session_id | str | Yes | - | Session ID to commit |
 | keep_recent_count | int | No | 0 | Number of recent live messages to retain (kept live, not archived) after commit. `0` (default) archives all messages. |
 
+The effective policy is resolved in this order: Session `.meta.json`, latest
+`settings/user_config.json`, then the kernel default. The fully resolved policy
+is stored in the queued task before Phase 2 starts.
+
 #### 3. Usage Examples
 
 **HTTP API**

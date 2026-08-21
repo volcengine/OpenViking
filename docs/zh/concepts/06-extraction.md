@@ -125,7 +125,7 @@ L0/L1 是目录级 sidecar，不是 per-file sidecar。生成父目录摘要时�
 
 ### Freshness、采样与父级刷新
 
-每次生成都会记录直接子项的 `total_entries`、`sampled_entries` 和 `unsampled_entries`。直接子项超过 `semantic.sidecar_sample_size`（默认 32）时，系统使用确定性稳定采样。已知子项发生变化但父正文尚未刷新时，`pending_child_changes` 会递增；刷新成功后重置为 0。
+每次生成都会记录直接子项的 `total_entries`、`sampled_entries` 和 `unsampled_entries`。直接子项超过 `semantic.overview_sample_limit`（默认 32）时，系统使用确定性稳定采样。已知子项发生变化但父正文尚未刷新时，`pending_child_changes` 会递增；刷新成功后重置为 0。
 
 当前每个成功的 resource/skill 语义任务都会继续安排父目录刷新，并在入队前将父目录标记为 pending。该行为会一直传播到 namespace 根边界。
 
@@ -140,7 +140,7 @@ L0/L1 是目录级 sidecar，不是 per-file sidecar。生成父目录摘要时�
 | `max_concurrent_llm` | 10 | 并发 LLM 调用数 |
 | `max_images_per_call` | 10 | 单次 VLM 最大图片数 |
 | `max_sections_per_call` | 20 | 单次 VLM 最大章节数 |
-| `sidecar_sample_size` | 32 | 单个目录摘要使用的直接子项样本上限 |
+| `overview_sample_limit` | 32 | 单个目录摘要使用的直接子项样本上限 |
 
 ## 代码骨架提取
 

@@ -4,6 +4,7 @@
 
 import asyncio
 import json
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -12,11 +13,13 @@ import pytest
 
 from openviking.connector import delegate as connector_delegate_module
 from openviking.parse.mode import ParseMode
+from openviking.resource.watch_manager import WatchManager
+from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.server.identity import RequestContext, Role
 from openviking.service import resource_service as resource_service_module
 from openviking.service.resource_service import ResourceService
 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg, AddResourcePhase
-from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.exceptions import ConflictError, InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
 # Deterministic stand-in for the code-hosting predicate: routing tests must
@@ -27,6 +30,14 @@ _GIT_REPO_PREFIX = "https://git.example/"
 class _BackgroundTask:
     def add_done_callback(self, _callback):
         pass
+
+
+class _FakeEncryptor:
+    async def encrypt(self, _account_id, plaintext):
+        return b"OVE1" + plaintext[::-1]
+
+    async def decrypt(self, _account_id, ciphertext):
+        return ciphertext[4:][::-1]
 
 
 @pytest.fixture
@@ -97,7 +108,13 @@ def _task_tracker():
     )
 
 
-def _install_connector_dependencies(monkeypatch, tracker, connector_client):
+def _install_connector_dependencies(
+    monkeypatch,
+    tracker,
+    connector_client,
+    *,
+    discard_monitor=True,
+):
     monkeypatch.setattr(
         "openviking.service.task_tracker.get_task_tracker",
         lambda: tracker,
@@ -107,6 +124,8 @@ def _install_connector_dependencies(monkeypatch, tracker, connector_client):
         "ConnectorClient",
         lambda **_kwargs: connector_client,
     )
+    if not discard_monitor:
+        return
 
     def discard_monitor(coro):
         coro.close()
@@ -116,11 +135,17 @@ def _install_connector_dependencies(monkeypatch, tracker, connector_client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "tos_path"),
+    [("tos://bucket/a/b/c", "bucket/a/b/c"), ("tos://bucket", "bucket")],
+)
 async def test_add_resource_routes_tos_to_connector(
     monkeypatch,
     connector_config,
     ctx,
     service,
+    path,
+    tos_path,
 ):
     tracker = _task_tracker()
     connector_client = SimpleNamespace(
@@ -129,7 +154,7 @@ async def test_add_resource_routes_tos_to_connector(
     _install_connector_dependencies(monkeypatch, tracker, connector_client)
 
     result = await service.add_resource(
-        path="tos://bucket/a/b/c",
+        path=path,
         ctx=ctx,
         to="viking://resources/x/y",
     )
@@ -143,7 +168,7 @@ async def test_add_resource_routes_tos_to_connector(
     connector_client.submit_doc_add.assert_awaited_once_with(
         add_type="tos",
         api_key="secret",
-        tos_path="bucket/a/b/c",
+        tos_path=tos_path,
         to="viking://resources/x/y",
         include_child=True,
         param_config=None,
@@ -156,6 +181,578 @@ async def test_add_resource_routes_tos_to_connector(
         account_id="acct",
         user_id="alice",
     )
+
+
+@pytest.mark.asyncio
+async def test_connector_watch_stores_only_encrypted_replay_state(
+    monkeypatch,
+    connector_config,
+    ctx,
+):
+    tracker = _task_tracker()
+    connector_client = SimpleNamespace(
+        submit_doc_add=AsyncMock(return_value={"task_key": "connector-1"})
+    )
+    _install_connector_dependencies(
+        monkeypatch,
+        tracker,
+        connector_client,
+        discard_monitor=False,
+    )
+    watch_manager = WatchManager()
+    viking_fs = SimpleNamespace(
+        exists=AsyncMock(return_value=True),
+        _encryptor=_FakeEncryptor(),
+    )
+    service = ResourceService(
+        vikingdb=object(),
+        viking_fs=viking_fs,
+        resource_processor=object(),
+        skill_processor=object(),
+        watch_scheduler=SimpleNamespace(watch_manager=watch_manager),
+    )
+    release_monitor = asyncio.Event()
+
+    async def complete_monitor(**kwargs):
+        await release_monitor.wait()
+        await kwargs["on_success"]()
+        return {"status": "completed"}
+
+    monkeypatch.setattr(service._connector, "_monitor", complete_monitor)
+
+    await service.add_resource(
+        path="tos://bucket/docs/",
+        ctx=ctx,
+        to="viking://resources/x/y",
+        watch_interval=5,
+        args={"tos_prefix": ["tos://bucket/docs/"]},
+    )
+
+    assert (
+        await watch_manager.get_task_by_uri(
+            "viking://resources/x/y",
+            account_id="acct",
+            user_id="alice",
+            role=str(Role.USER),
+        )
+        is None
+    )
+    background_tasks = list(service._background_tasks)
+    release_monitor.set()
+    await asyncio.gather(*background_tasks)
+
+    task = await watch_manager.get_task_by_uri(
+        "viking://resources/x/y",
+        account_id="acct",
+        user_id="alice",
+        role=str(Role.USER),
+    )
+    assert task is not None
+    assert task.auth_state["provider"] == "connector_encrypted"
+    assert "secret" not in json.dumps(task.auth_state)
+    assert "auth_state" not in task.to_dict()
+    assert await service._connector.restore_watch_request(
+        task.auth_state,
+        account_id="acct",
+        path="tos://bucket/docs/",
+    ) == (
+        "secret",
+        "tos",
+        {"tos_prefix": ["tos://bucket/docs/"]},
+    )
+
+
+@pytest.mark.asyncio
+async def test_connector_watch_prechecks_only_active_conflicts(
+    monkeypatch,
+    connector_config,
+    ctx,
+):
+    tracker = _task_tracker()
+    connector_client = SimpleNamespace(
+        submit_doc_add=AsyncMock(return_value={"task_key": "connector-1"})
+    )
+    _install_connector_dependencies(
+        monkeypatch,
+        tracker,
+        connector_client,
+        discard_monitor=False,
+    )
+    watch_manager = WatchManager()
+    service = ResourceService(
+        vikingdb=object(),
+        viking_fs=SimpleNamespace(
+            exists=AsyncMock(return_value=True),
+            _encryptor=_FakeEncryptor(),
+        ),
+        resource_processor=object(),
+        skill_processor=object(),
+        watch_scheduler=SimpleNamespace(watch_manager=watch_manager),
+    )
+    to_uri = "viking://resources/x/y"
+    existing = await watch_manager.create_task(
+        path="tos://bucket/old/",
+        account_id="acct",
+        user_id="alice",
+        original_role=str(Role.USER),
+        to_uri=to_uri,
+        watch_interval=5,
+    )
+
+    with pytest.raises(ConflictError, match="already being monitored"):
+        await service.add_resource(
+            path="tos://bucket/new/",
+            ctx=ctx,
+            to=to_uri,
+            watch_interval=5,
+        )
+
+    connector_client.submit_doc_add.assert_not_awaited()
+    tracker.create.assert_not_awaited()
+
+    await watch_manager.update_task(
+        task_id=existing.task_id,
+        account_id="acct",
+        user_id="alice",
+        role=str(Role.USER),
+        is_active=False,
+    )
+    release_monitor = asyncio.Event()
+
+    async def complete_monitor(**kwargs):
+        await release_monitor.wait()
+        await kwargs["on_success"]()
+        return {"status": "completed"}
+
+    monkeypatch.setattr(service._connector, "_monitor", complete_monitor)
+    await service.add_resource(
+        path="tos://bucket/new/",
+        ctx=ctx,
+        to=to_uri,
+        watch_interval=5,
+    )
+
+    assert existing.is_active is False
+    assert existing.path == "tos://bucket/old/"
+    release_monitor.set()
+    await asyncio.gather(*list(service._background_tasks))
+    assert existing.is_active is True
+    assert existing.path == "tos://bucket/new/"
+
+
+@pytest.mark.asyncio
+async def test_connector_watch_resolves_overlapping_imports_at_finalize(
+    connector_config,
+    ctx,
+):
+    watch_manager = WatchManager()
+    service = ResourceService(
+        vikingdb=object(),
+        viking_fs=SimpleNamespace(
+            exists=AsyncMock(return_value=True),
+            _encryptor=_FakeEncryptor(),
+        ),
+        resource_processor=object(),
+        skill_processor=object(),
+        watch_scheduler=SimpleNamespace(watch_manager=watch_manager),
+    )
+    finalizers = []
+
+    async def submit(**kwargs):
+        finalizers.append(kwargs["on_success"])
+        return {"status": "accepted"}
+
+    service._connector.submit = AsyncMock(side_effect=submit)
+    to_uri = "viking://resources/x/y"
+
+    await service.add_resource(
+        path="tos://bucket/first/",
+        ctx=ctx,
+        to=to_uri,
+        watch_interval=5,
+    )
+    await service.add_resource(
+        path="tos://bucket/second/",
+        ctx=ctx,
+        to=to_uri,
+        watch_interval=5,
+    )
+
+    assert service._connector.submit.await_count == 2
+    await finalizers[0]()
+    with pytest.raises(ConflictError, match="already being monitored"):
+        await finalizers[1]()
+
+    task = await watch_manager.get_task_by_uri(
+        to_uri,
+        account_id="acct",
+        user_id="alice",
+        role=str(Role.USER),
+    )
+    assert task is not None
+    assert task.path == "tos://bucket/first/"
+
+
+@pytest.mark.asyncio
+async def test_git_connector_watch_keeps_args_only_in_encrypted_state(
+    monkeypatch,
+    connector_config,
+    ctx,
+):
+    connector_config.allowed_add_types = ["git"]
+    tracker = _task_tracker()
+    connector_client = SimpleNamespace(
+        submit_doc_add=AsyncMock(return_value={"task_key": "connector-1"})
+    )
+    _install_connector_dependencies(
+        monkeypatch,
+        tracker,
+        connector_client,
+        discard_monitor=False,
+    )
+    watch_manager = WatchManager()
+    service = ResourceService(
+        vikingdb=object(),
+        viking_fs=SimpleNamespace(
+            exists=AsyncMock(return_value=True),
+            _encryptor=_FakeEncryptor(),
+        ),
+        resource_processor=object(),
+        skill_processor=object(),
+        watch_scheduler=SimpleNamespace(watch_manager=watch_manager),
+    )
+
+    async def complete_monitor(**kwargs):
+        await kwargs["on_success"]()
+        return {"status": "completed"}
+
+    monkeypatch.setattr(service._connector, "_monitor", complete_monitor)
+    connector_args = {
+        "branch": "main",
+        "token": "secret-token",
+        "username": "oauth2",
+    }
+
+    await service.add_resource(
+        path="https://git.example/org/private.git",
+        ctx=ctx,
+        to="viking://resources/private",
+        watch_interval=5,
+        args=connector_args,
+    )
+    await asyncio.gather(*list(service._background_tasks))
+
+    task = await watch_manager.get_task_by_uri(
+        "viking://resources/private",
+        account_id="acct",
+        user_id="alice",
+        role=str(Role.USER),
+    )
+    assert task is not None
+    assert task.processor_kwargs == {}
+    assert "secret-token" not in json.dumps(task.to_dict())
+    assert await service._connector.restore_watch_request(
+        task.auth_state,
+        account_id="acct",
+        path="https://git.example/org/private.git",
+    ) == ("secret", "git", connector_args)
+
+
+@pytest.mark.asyncio
+async def test_connector_watch_allows_plaintext_private_state_without_encryption(
+    connector_config,
+    ctx,
+    service,
+):
+    watch_manager = WatchManager()
+    service._watch_scheduler = SimpleNamespace(watch_manager=watch_manager)
+    submitted = {}
+
+    async def submit(**kwargs):
+        submitted.update(kwargs)
+        return {"status": "accepted"}
+
+    service._connector.submit = AsyncMock(side_effect=submit)
+    await service.add_resource(
+        path="tos://bucket/docs/",
+        ctx=ctx,
+        to="viking://resources/x/y",
+        watch_interval=5,
+    )
+    await submitted["on_success"]()
+
+    task = await watch_manager.get_task_by_uri(
+        "viking://resources/x/y",
+        account_id="acct",
+        user_id="alice",
+        role=str(Role.USER),
+    )
+    assert task is not None
+    assert task.auth_state == {
+        "provider": "connector_plaintext",
+        "request": {
+            "api_key": "secret",
+            "account_id": "acct",
+            "add_type": "tos",
+            "path": "tos://bucket/docs/",
+            "connector_args": {},
+        },
+    }
+    assert "auth_state" not in task.to_dict()
+    assert await service._connector.restore_watch_request(
+        task.auth_state,
+        account_id="acct",
+        path="tos://bucket/docs/",
+    ) == ("secret", "tos", {})
+
+
+@pytest.mark.asyncio
+async def test_connector_watch_scheduler_restores_request_credentials(
+    connector_config,
+):
+    viking_fs = SimpleNamespace(_encryptor=_FakeEncryptor())
+    service = ResourceService(
+        vikingdb=object(),
+        viking_fs=viking_fs,
+        resource_processor=object(),
+        skill_processor=object(),
+    )
+    service.refresh_resource = AsyncMock(return_value={"status": "completed"})
+    scheduler = WatchScheduler(resource_service=service)
+    watch_manager = WatchManager()
+    scheduler._watch_manager = watch_manager
+    auth_state = await service._connector.create_watch_auth_state(
+        api_key="secret",
+        account_id="acct",
+        add_type="tos",
+        path="tos://bucket/docs/",
+        connector_args={"tos_prefix": ["tos://bucket/docs/"]},
+    )
+    task = await watch_manager.create_task(
+        path="tos://bucket/docs/",
+        to_uri="viking://resources/x/y",
+        watch_interval=5,
+        account_id="acct",
+        user_id="alice",
+        auth_state=auth_state,
+    )
+
+    await scheduler._execute_stable_task(task)
+
+    call = service.refresh_resource.await_args
+    assert call.kwargs["ctx"].api_key == "secret"
+    assert call.kwargs["add_type"] == "tos"
+    assert call.kwargs["args"] == {"tos_prefix": ["tos://bucket/docs/"]}
+
+
+@pytest.mark.asyncio
+async def test_connector_watch_deactivates_when_target_is_deleted():
+    from openviking_cli.exceptions import NotFoundError
+
+    class MissingTargetFS:
+        async def stat(self, uri, ctx=None):
+            raise NotFoundError(uri, "resource")
+
+    service = ResourceService()
+    service.refresh_resource = AsyncMock(return_value={"status": "completed"})
+    scheduler = WatchScheduler(resource_service=service, viking_fs=MissingTargetFS())
+    watch_manager = WatchManager()
+    scheduler._watch_manager = watch_manager
+    task = await watch_manager.create_task(
+        path="tos://bucket/docs/",
+        to_uri="viking://resources/x/y",
+        watch_interval=5,
+        account_id="acct",
+        user_id="alice",
+        auth_state={"provider": "connector_encrypted", "ciphertext": "unused"},
+    )
+
+    await scheduler._execute_stable_task(task)
+
+    updated = await watch_manager.get_task(task.task_id)
+    assert updated is not None
+    assert updated.is_active is False
+    service.refresh_resource.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_connector_watch_refresh_waits_for_remote_completion(
+    connector_config,
+    ctx,
+    service,
+):
+    service._connector.submit = AsyncMock(return_value={"status": "completed"})
+
+    await service.refresh_resource(
+        path="tos://bucket/docs/",
+        ctx=ctx,
+        to="viking://resources/x/y",
+        watch_interval=5,
+        add_type="tos",
+    )
+
+    assert service._connector.submit.await_args.kwargs["wait_for_completion"] is True
+
+
+@pytest.mark.asyncio
+async def test_add_resource_routes_multiple_tos_sources_to_connector(
+    monkeypatch,
+    connector_config,
+    ctx,
+    service,
+):
+    tracker = _task_tracker()
+    connector_client = SimpleNamespace(
+        submit_doc_add=AsyncMock(return_value={"task_key": "connector-1"})
+    )
+    _install_connector_dependencies(monkeypatch, tracker, connector_client)
+
+    await service.add_resource(
+        path="tos://bucket-a/docs/",
+        ctx=ctx,
+        to="viking://resources/x/y",
+        args={
+            "tos_prefix": ["tos://bucket-a/docs/", "tos://bucket-b/manual.pdf"],
+            "exclude": ["tos://bucket-a/docs/drafts/"],
+        },
+    )
+
+    connector_client.submit_doc_add.assert_awaited_once_with(
+        add_type="tos",
+        api_key="secret",
+        tos_path=None,
+        to="viking://resources/x/y",
+        include_child=True,
+        param_config={
+            "tos_prefix": ["tos://bucket-a/docs/", "tos://bucket-b/manual.pdf"],
+            "exclude": ["tos://bucket-a/docs/drafts/"],
+        },
+        auth_config=None,
+        extra_params=None,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        ({"tos_prefix": []}, "non-empty list"),
+        ({"exclude": ["tos://bucket-a/private/"]}, "requires args.tos_prefix"),
+        ({"tos_prefix": ["tos://bucket-b/docs/"]}, "first item"),
+    ],
+)
+async def test_add_resource_rejects_invalid_multiple_tos_sources(
+    connector_config,
+    ctx,
+    service,
+    args,
+    message,
+):
+    with pytest.raises(InvalidArgumentError, match=message):
+        await service.add_resource(
+            path="tos://bucket-a/docs/",
+            ctx=ctx,
+            to="viking://resources/x/y",
+            args=args,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "args", "message"),
+    [
+        ("tos://bucket-a/docs?version=1", {}, "path"),
+        ("tos://Bucket-a/docs", {}, "path"),
+        ("tos://bucket-a:443/docs", {}, "path"),
+        ("tos://user@bucket-a/docs", {}, "path"),
+        ("tos://bucket-a/docs%2Fv1", {}, "path"),
+        ("tos://bucket-a//docs", {}, "path"),
+        ("tos://bucket-a/a\x00b", {}, "path"),
+        ("tos://bucket-a/a\x7fb", {}, "path"),
+        (
+            "tos://bucket-a",
+            {"tos_prefix": ["tos://bucket-a"]},
+            r"args\.tos_prefix\[0\]",
+        ),
+        (
+            "tos://bucket-a/docs/",
+            {
+                "tos_prefix": [
+                    "tos://bucket-a/docs/",
+                    "tos://bucket-b/manual?version=1",
+                ]
+            },
+            r"args\.tos_prefix\[1\]",
+        ),
+        (
+            "tos://bucket-a/docs/",
+            {
+                "tos_prefix": ["tos://bucket-a/docs/"],
+                "exclude": ["tos://bucket-a/private#latest"],
+            },
+            r"args\.exclude\[0\]",
+        ),
+        (
+            "tos://bucket-a/docs/",
+            {
+                "tos_prefix": ["tos://bucket-a/docs/"],
+                "exclude": ["tos://bucket-a"],
+            },
+            r"args\.exclude\[0\]",
+        ),
+    ],
+)
+async def test_add_resource_rejects_invalid_tos_uri_before_connector_call(
+    monkeypatch,
+    connector_config,
+    ctx,
+    service,
+    path,
+    args,
+    message,
+):
+    connector_client_factory = Mock(side_effect=AssertionError("Connector must not be called"))
+    monkeypatch.setattr(connector_delegate_module, "ConnectorClient", connector_client_factory)
+
+    with pytest.raises(InvalidArgumentError, match=message):
+        await service.add_resource(
+            path=path,
+            ctx=ctx,
+            to="viking://resources/x/y",
+            args=args,
+        )
+
+    connector_client_factory.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_add_resource_rejects_top_level_and_tos_args_exclude(
+    connector_config,
+    ctx,
+    service,
+):
+    with pytest.raises(InvalidArgumentError, match="both as a top-level field"):
+        await service.add_resource(
+            path="tos://bucket-a/docs/",
+            ctx=ctx,
+            to="viking://resources/x/y",
+            exclude="**/private/**",
+            args={
+                "tos_prefix": ["tos://bucket-a/docs/"],
+                "exclude": [],
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_add_resource_keeps_args_exclude_reserved_outside_tos(ctx, service):
+    with pytest.raises(InvalidArgumentError, match="core add_resource fields: exclude"):
+        await service.add_resource(
+            path="/tmp/document.md",
+            ctx=ctx,
+            to="viking://resources/document",
+            args={"exclude": []},
+        )
 
 
 @pytest.mark.asyncio
@@ -1323,6 +1920,7 @@ async def test_monitor_connector_task_maps_terminal_status(
 
     monkeypatch.setattr(connector_delegate_module.asyncio, "sleep", no_sleep)
     client = SimpleNamespace(get_task_info=AsyncMock(return_value=task_info))
+    on_success = AsyncMock()
 
     outcome = await ResourceService()._connector._monitor(
         client=client,
@@ -1331,15 +1929,18 @@ async def test_monitor_connector_task_maps_terminal_status(
         poll_interval_ms=1,
         timeout_seconds=1,
         ctx=ctx,
+        on_success=on_success,
     )
 
     assert tracker.update_stage.await_args.args[1] == expected_stage
     if expected_error is None:
         assert outcome["status"] == "completed"
+        on_success.assert_awaited_once_with()
         tracker.complete.assert_awaited_once()
         tracker.fail.assert_not_awaited()
     else:
         assert outcome == {"status": "failed", "error": expected_error}
+        on_success.assert_not_awaited()
         assert tracker.fail.await_args.args[1] == expected_error
         tracker.complete.assert_not_awaited()
 
@@ -1349,6 +1950,7 @@ async def test_monitor_connector_task_retries_transient_polling_error(
     monkeypatch,
     connector_config,
     ctx,
+    caplog,
 ):
     tracker = _task_tracker()
     monkeypatch.setattr(
@@ -1363,22 +1965,24 @@ async def test_monitor_connector_task_retries_transient_polling_error(
     client = SimpleNamespace(
         get_task_info=AsyncMock(
             side_effect=[
-                httpx.ReadTimeout("temporary timeout"),
+                httpx.ReadTimeout("token=secret"),
                 {"Status": "succeeded"},
             ]
         )
     )
 
-    await ResourceService()._connector._monitor(
-        client=client,
-        connector_task_key="connector-1",
-        ov_task_id="task-1",
-        poll_interval_ms=1,
-        timeout_seconds=1,
-        ctx=ctx,
-    )
+    with caplog.at_level(logging.WARNING):
+        await ResourceService()._connector._monitor(
+            client=client,
+            connector_task_key="connector-1",
+            ov_task_id="task-1",
+            poll_interval_ms=1,
+            timeout_seconds=1,
+            ctx=ctx,
+        )
 
     assert client.get_task_info.await_count == 2
+    assert "secret" not in caplog.text
     tracker.complete.assert_awaited_once()
     tracker.fail.assert_not_awaited()
 

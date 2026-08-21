@@ -180,6 +180,7 @@ class _OpsMixin:
                 )
             lock_method = self._async_agfs.pathlock_acquire_tree
         else:
+            recursive = False
             lock_method = self._async_agfs.pathlock_acquire_exact
 
         lease = lease_ref

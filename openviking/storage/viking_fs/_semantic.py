@@ -3,13 +3,13 @@
 """Semantic retrieval mixin for VikingFS."""
 
 import asyncio
-from typing import Any, Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 from openviking.core.context import ContextLevel
 from openviking.core.retrieval_targets import resolve_retrieval_targets
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext
-from openviking.storage.semantic_sidecar import body_for_preview, render_semantic_sidecar
+from openviking.storage.abstract_overview import body_for_preview, render_abstract_overview
 from openviking.storage.viking_fs._base import (
     _ensure_non_empty_search_query,
     logger,
@@ -454,7 +454,7 @@ class _SemanticMixin:
                 abstract_uri = f"{uri}/.abstract.md"
                 await self.write_file(
                     abstract_uri,
-                    render_semantic_sidecar(
+                    render_abstract_overview(
                         ContextLevel.ABSTRACT,
                         uri,
                         abstract,
@@ -472,7 +472,7 @@ class _SemanticMixin:
                 overview_uri = f"{uri}/.overview.md"
                 await self.write_file(
                     overview_uri,
-                    render_semantic_sidecar(
+                    render_abstract_overview(
                         ContextLevel.OVERVIEW,
                         uri,
                         overview,

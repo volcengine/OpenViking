@@ -117,6 +117,38 @@ Content-Type: application/json
 Before an existing setting is replaced, it is backed up to
 `/local/{account_id}/_system/setting.backup.json`.
 
+### user_settings
+
+ROOT can manage any User and ADMIN can manage Users in its own account. The
+User settings endpoint currently allowlists only `memory_policy`. The shared
+top-level `memory_types` filter controls which memory schemas may be extracted.
+User memories are routed to Self or Peer according to each message's `peer_id`;
+Agent memory types remain Self-only.
+
+```http
+GET /api/v1/admin/accounts/{account_id}/users/{user_id}/settings
+PATCH /api/v1/admin/accounts/{account_id}/users/{user_id}/settings
+Content-Type: application/json
+
+{
+  "memory_policy": {
+    "memory_types": ["profile", "preferences", "events", "entities", "experiences"]
+  }
+}
+```
+
+The response contains the User-level `memory_policy`, expanded with its default
+memory types and Agent-memory dependencies. `experiences` expands to
+`cases`, `trajectories`, and `experiences`. The policy is independent of the
+account-level Agent Evolution switch, which is managed through the dedicated
+account endpoint. Updates are backed up to the User's
+`settings/user_config.backup.json` before replacement. A Session without an
+explicit policy reads the latest User policy when it is committed; if the User
+has no override, it falls back to `server.user_config_defaults.memory_policy`
+and then to the kernel default. To clear a persisted User override and resume
+inheriting these defaults, PATCH `{"memory_policy": null}`. An empty object
+`{"memory_policy": {}}` is an explicit policy and does not clear the override.
+
 ---
 
 ### create_account
@@ -147,7 +179,7 @@ Create a new workspace with its first admin user.
 | account_id | str | Yes | - | Workspace ID |
 | admin_user_id | str | Yes | - | First admin user ID |
 | seed | str | No | `null` | Optional deterministic API key seed. When set, the key secret is `sha256(user_id + "\0" + seed)` |
-| user_config | object | No | `null` | Initial config for the first admin user. Currently supports `add_targets.resource_uri` and `add_targets.skill_uri` |
+| user_config | object | No | `null` | Initial config for the first admin user. Supports `add_targets.resource_uri`, `add_targets.skill_uri`, and `memory_policy` |
 
 **Notes:**
 - In `trusted` mode, `user_key` is omitted from the response
@@ -495,7 +527,7 @@ Register a new user in a workspace.
 | user_id | str | Yes | - | User ID |
 | role | str | No | "user" | Role to assign. `ROOT` and same-account `ADMIN` may register `"user"` or `"admin"`. ROOT identity comes only from `server.root_api_key`. |
 | seed | str | No | `null` | Optional deterministic API key seed. When set, the key secret is `sha256(user_id + "\0" + seed)` |
-| user_config | object | No | `null` | Initial config for the new user. Currently supports `add_targets.resource_uri` and `add_targets.skill_uri` |
+| user_config | object | No | `null` | Initial config for the new user. Supports `add_targets.resource_uri`, `add_targets.skill_uri`, and `memory_policy` |
 
 **Notes:**
 - In `trusted` mode, `user_key` is omitted from the response
