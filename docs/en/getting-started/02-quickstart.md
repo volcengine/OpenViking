@@ -40,6 +40,26 @@ pipx upgrade openviking
 
 After installation, use `ov` as the client command (`openviking` is an alias) and `openviking-server` as the server command.
 
+#### Windows: `openviking-server` is not recognized
+
+The Python wheel installs `openviking-server.exe` in Python's Scripts directory. If PowerShell or Command Prompt cannot find the command, first verify that the same Python interpreter can launch the server entry point directly:
+
+```powershell
+py -m openviking_cli.server_bootstrap --help
+```
+
+Then print the Scripts directory used by that interpreter:
+
+```powershell
+py -c "import sysconfig; print(sysconfig.get_path('scripts'))"
+```
+
+Add the printed directory to your user `PATH`, open a new terminal, and retry `openviking-server --help`. If the first command reports `No module named openviking_cli`, install OpenViking with the same interpreter and retry:
+
+```powershell
+py -m pip install openviking --upgrade --force-reinstall
+```
+
 ### Option 2: Start via Docker (As an independent service)
 
 If you prefer to run OpenViking as a standalone service, Docker is recommended.
