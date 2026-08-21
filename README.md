@@ -94,7 +94,7 @@ viking://resources/my_project/
 
 OpenViking 0.3.22 has been evaluated on long-conversation user memory (LoCoMo) and multi-turn agent tasks (tau2-bench). Full results and setup details, including knowledge-base QA, are in the [benchmark report](https://blog.openviking.ai/post/openviking-benchmark-results/); reproduction scripts live in [./benchmark](./benchmark).
 
-The memory evaluation used [Doubao 2.0 Pro](https://docs.volcengine.com/docs/82379/1593703) as the VLM and [Doubao Embedding](https://docs.volcengine.com/docs/82379/1593703) as the embedding model.
+The memory evaluation used [Doubao 2.0 Pro](https://console.volcengine.com/ark/region:cn-beijing/model/detail?Id=doubao-seed-2-0-pro) as the VLM and [Doubao Embedding](https://docs.volcengine.com/docs/82379/1593703) as the embedding model.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/benchmark-dark.svg">
