@@ -2,11 +2,9 @@ DeerFlow can use OpenViking as a long-term memory backend through MemoryManager.
 
 ## Step 1: Configure OpenViking credentials
 
-Edit the `.env` file in the DeerFlow project root and add the API key from this page:
+Edit the `.env` file in the DeerFlow project root and add the API key:
 
-```bash
-OPENVIKING_API_KEY={{OPENVIKING_API_KEY}}
-```
+{{OPENVIKING_API_KEY_BLOCK}}
 
 ## Step 2: Update DeerFlow memory configuration
 

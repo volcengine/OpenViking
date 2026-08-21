@@ -1,14 +1,14 @@
-## Install
+## Step 1: Install
 
 ```bash
 hermes memory setup openviking
 ```
 
-Keep **OpenViking Service (VolcEngine Cloud)**. Paste the API key from this page:
+Keep **OpenViking Service (VolcEngine Cloud)**. Paste the API key:
 
 {{OPENVIKING_API_KEY_BLOCK}}
 
-## Verify
+## Step 2: Verify
 
 ```bash
 hermes memory status
@@ -21,7 +21,7 @@ Expect `Provider: openviking` and `Status: available`. Start a new Hermes sessio
 | Problem | Fix |
 |---|---|
 | Provider is not openviking | Re-run `hermes memory setup openviking` |
-| Status is not available | Check the API key from this page |
+| Status is not available | Check the API key |
 
 ## Reference
 
