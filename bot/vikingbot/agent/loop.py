@@ -723,9 +723,16 @@ class AgentLoop:
                 context_payload,
                 provider_name=provider_name,
             )
+            unsynced_messages = get_unsynced_messages(session)
+            if not ov_history and len(unsynced_messages) < len(session.messages):
+                logger.warning(
+                    f"OpenViking returned no session context for {session_id}; "
+                    "falling back to complete local session history."
+                )
+                unsynced_messages = session.messages
             local_tail = self._format_history_messages(
                 session,
-                get_unsynced_messages(session),
+                unsynced_messages,
                 provider_name=provider_name,
             )
             combined_history = ov_history + local_tail

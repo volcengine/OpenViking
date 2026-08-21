@@ -14,6 +14,7 @@ from vikingbot.bus.queue import MessageBus
 from vikingbot.config.schema import AgentsConfig, Config, SessionKey
 from vikingbot.openviking_mount.session_state import make_openviking_storage_session_id
 from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from vikingbot.session.manager import SessionManager
 
 
 class _FakeProvider(LLMProvider):
@@ -441,6 +442,58 @@ async def test_agent_loop_build_prompt_history_uses_ov_context_plus_unsynced_tai
         "local unsynced user",
         "local unsynced assistant",
     ]
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_build_prompt_history_falls_back_to_loaded_local_history_when_ov_empty(
+    temp_dir: Path, monkeypatch
+):
+    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
+    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
+    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+
+    fake_ov_client = _FakeOVClient(context_payload={"messages": []})
+
+    async def fake_get_ov_client(self, session_key, openviking_connection=None, actor_peer_id=None):
+        del self, session_key, openviking_connection, actor_peer_id
+        return fake_ov_client
+
+    monkeypatch.setattr(AgentLoop, "_get_ov_client", fake_get_ov_client)
+
+    config = Config(
+        storage_workspace=str(temp_dir),
+        ov_server={"server_url": "http://127.0.0.1:1933"},
+        agents={"session_context_enabled": True, "session_context_token_budget": 321},
+    )
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_FakeProvider(),
+        workspace=temp_dir / "workspace",
+        config=config,
+    )
+
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="session-local-fallback")
+    session = loop.sessions.get_or_create(session_key, skip_heartbeat=True)
+    session.add_message("user", "persisted user")
+    session.add_message("assistant", "persisted assistant")
+    session.add_message("user", "current question")
+    session.metadata["openviking"] = {
+        "session_id": "ov-session-missing-context",
+        "last_synced_local_index": 1,
+    }
+    await loop.sessions.save(session)
+
+    restarted_sessions = SessionManager(config.bot_data_path)
+    loaded_session = restarted_sessions.get_or_create(session_key, skip_heartbeat=True)
+    history = await loop._build_prompt_history(loaded_session)
+
+    assert fake_ov_client.context_calls == [("ov-session-missing-context", 321)]
+    assert [message["content"] for message in history] == [
+        "persisted user",
+        "persisted assistant",
+        "current question",
+    ]
+    assert loaded_session.metadata["openviking"]["last_synced_local_index"] == 1
 
 
 @pytest.mark.asyncio
