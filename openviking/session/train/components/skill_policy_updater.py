@@ -19,6 +19,7 @@ from openviking.session.skill.session_skill_context_provider import (
     SESSION_SKILL_MEMORY_TYPE,
     load_skill_extract_registry,
 )
+from openviking.session.skill.skill_state_adapter import SkillStateAdapter
 from openviking.session.train.domain import (
     Policy,
     PolicyApplyResult,
@@ -38,10 +39,8 @@ logger = get_logger(__name__)
 class SkillPolicyUpdater:
     """PolicyUpdater that writes skill files to a skills directory.
 
-    For new skills (no existing file) the full ``SkillProcessor.process_skill``
-    pipeline is used (validation, privacy, overview, index).  For existing
-    skills, the merged content is serialized to SKILL.md and written via
-    ``ContentWriteCoordinator``.
+    New and existing skills both use the full ``SkillProcessor.process_skill``
+    pipeline (validation, privacy, SKILL.md/sidecars, and index refresh).
 
     ``delete`` operations remove the entire skill subdirectory.
     """
@@ -88,6 +87,7 @@ class SkillPolicyUpdater:
             registry=registry,
             skill_processor=processor,
             viking_fs=viking_fs,
+            transaction_handle=transaction_handle,
         )
         result = await updater.apply_operations(operations, ctx)
 
@@ -166,7 +166,8 @@ def _apply_items_to_snapshot(items: list[PolicyPlanItem], policy_set: PolicySet)
         )
         metadata = dict(existing.metadata) if existing is not None else {}
         metadata.update(item.metadata.get("patch_metadata", {}))
-        metadata.setdefault("memory_type", item.memory_type or "skills")
+        merge_memory_fields = item.metadata.get("merge_memory_fields", {})
+        metadata = SkillStateAdapter.merge_policy_metadata(metadata, merge_memory_fields)
         version = (existing.version + 1) if existing is not None else 1
         updated = Policy(
             name=item.target_name,
@@ -185,13 +186,7 @@ def _apply_items_to_snapshot(items: list[PolicyPlanItem], policy_set: PolicySet)
         policies_by_uri[uri] = updated
 
     result.sort(key=lambda policy: policy.uri)
-    return PolicySet(
-        root_uri=policy_set.root_uri,
-        policies=result,
-        metadata=dict(policy_set.metadata),
-        viking_fs=policy_set.viking_fs,
-        request_context=policy_set.request_context,
-    )
+    return policy_set.with_policies(result)
 
 
 def _find_policy(policy_set: PolicySet, *, uri: str | None, name: str) -> Policy | None:
@@ -243,16 +238,7 @@ def _plan_to_resolved_operations(
         old_mf = _policy_to_memory_file(current) if current is not None else None
         # Build memory_fields in the shape expected by SkillOperationUpdater.
         # Skill schema uses "skill_name" / "description" / "content" fields.
-        memory_fields: dict[str, Any] = {
-            "skill_name": updated.name,
-            "content": updated.content,
-            "description": updated.metadata.get("description", ""),
-        }
-        # Carry over other metadata
-        for key in ("allowed_tools", "tags"):
-            value = updated.metadata.get(key)
-            if value is not None:
-                memory_fields[key] = value
+        memory_fields = SkillStateAdapter.operation_fields(updated)
 
         upserts.append(
             ResolvedOperation(
@@ -275,13 +261,11 @@ def _policy_to_memory_file(policy: Policy | None) -> MemoryFile | None:
     if policy is None:
         return None
     # Serialize policy content + metadata into a SKILL.md-shaped MemoryFile.
-    skill_dict = {
-        "name": policy.name,
-        "description": policy.metadata.get("description", ""),
-        "content": policy.content,
-        "allowed_tools": policy.metadata.get("allowed_tools", []),
-        "tags": policy.metadata.get("tags", []),
-    }
+    skill_dict = SkillStateAdapter.skill_payload(
+        name=policy.name,
+        content=policy.content,
+        metadata=policy.metadata,
+    )
     serialized = SkillLoader.to_skill_md(skill_dict)
     return MemoryFile(
         uri=policy.uri,

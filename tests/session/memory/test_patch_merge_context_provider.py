@@ -13,6 +13,7 @@ from openviking.session.memory.dataclass import MemoryFile, MemoryTypeSchema
 from openviking.session.memory.patch_merge_context_provider import (
     PatchMergeContextProvider,
     PatchMergePatch,
+    PatchMergeSchemaBinding,
 )
 
 
@@ -77,6 +78,56 @@ async def test_patch_merge_context_provider_prefetch_reads_originals_and_renders
     assert "    +new line" in messages[1]["content"]
     assert "     keep line" in messages[1]["content"]  # n=1 context line
     assert "  status:" not in messages[1]["content"]
+
+
+async def test_patch_merge_context_provider_uses_seeded_typed_snapshot(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.session.memory.utils.resolve_output_language",
+        lambda _text: "en",
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.session_extract_context_provider.get_openviking_config",
+        lambda: SimpleNamespace(
+            memory=SimpleNamespace(eager_prefetch=True, prefetch_search_topn=5, link_enabled=False)
+        ),
+    )
+    uri = "viking://user/u/skills/code-review/SKILL.md"
+    provider = PatchMergeContextProvider(
+        memory_type="skills",
+        required_file_uris=[uri],
+        output_language="en",
+        patches=[
+            PatchMergePatch(
+                before_file=_memory_file(
+                    name="code-review",
+                    uri=uri,
+                    content="Read changed files.",
+                    memory_type="skills",
+                ),
+                after_file=_memory_file(
+                    name="code-review",
+                    uri=uri,
+                    content="Read changed files before commenting.",
+                    memory_type="skills",
+                ),
+            )
+        ],
+    )
+    provider._viking_fs = SimpleNamespace(
+        read_file=AsyncMock(side_effect=AssertionError("must not re-read storage format"))
+    )
+    provider.read_file_contents[uri] = _memory_file(
+        name="code-review",
+        uri=uri,
+        content="Read changed files.",
+        memory_type="skills",
+    )
+
+    result = await provider.read_file(uri)
+
+    provider._viking_fs.read_file.assert_not_awaited()
+    assert result["content"] == "1\tRead changed files."
+    assert result["page_id"] == 1
 
 
 @pytest.mark.asyncio
@@ -146,7 +197,9 @@ async def test_patch_merge_context_provider_skips_extra_candidates_for_existing_
             )
         ],
     )
-    provider.search_files = AsyncMock(return_value=["viking://user/u/memories/experiences/other.md"])
+    provider.search_files = AsyncMock(
+        return_value=["viking://user/u/memories/experiences/other.md"]
+    )
     provider.read_file = AsyncMock(
         return_value={
             "memory_type": "experiences",
@@ -340,6 +393,42 @@ def test_patch_merge_context_provider_get_memory_schema_single_type(monkeypatch)
     provider._registry = SimpleNamespace(get=lambda name: schema if name == "experiences" else None)
 
     assert provider.get_memory_schemas(ctx=None) == [schema]
+
+
+def test_patch_merge_context_provider_accepts_one_bound_schema_source(monkeypatch):
+    monkeypatch.setattr(PatchMergeContextProvider, "_detect_language", lambda self: "en")
+    monkeypatch.setattr(
+        "openviking.session.memory.session_extract_context_provider.get_openviking_config",
+        lambda: SimpleNamespace(memory=None),
+    )
+    schema = MemoryTypeSchema(
+        memory_type="session_skills",
+        description="Session skills",
+        directory="viking://user/{{ user_space }}/skills",
+        filename_template="{{ skill_name }}/SKILL.md",
+        fields=[],
+    )
+    binding = PatchMergeSchemaBinding(
+        memory_type="session_skills",
+        registry=SimpleNamespace(get=lambda name: schema if name == "session_skills" else None),
+    )
+
+    provider = PatchMergeContextProvider(
+        schema_binding=binding,
+        required_file_uris=[],
+        patches=[],
+        output_language="en",
+    )
+
+    assert provider.get_memory_schemas(ctx=None) == [schema]
+    with pytest.raises(ValueError, match="exactly one schema source"):
+        PatchMergeContextProvider(
+            memory_type="skills",
+            schema_binding=binding,
+            required_file_uris=[],
+            patches=[],
+            output_language="en",
+        )
 
 
 def test_patch_merge_context_provider_get_memory_schema_raises_for_missing_type():
