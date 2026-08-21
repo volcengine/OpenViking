@@ -1,0 +1,10 @@
+{
+  "features": {
+    "openviking.260610": {
+      "enable": true,
+      "minPluginVersion": "2026.6.10",
+      "minOpenclawVersion": "2026.4.8",
+      "editions": ["arkclaw_enterprise", "arkclaw"]
+    }
+  }
+}
