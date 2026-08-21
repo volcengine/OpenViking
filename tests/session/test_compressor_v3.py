@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import inspect
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -93,6 +94,19 @@ def test_factory_ignores_deprecated_memory_version():
         create_session_compressor(vikingdb=None, memory_version="unsupported"),
         SessionCompressorV3,
     )
+
+
+def test_extract_long_term_memories_preserves_legacy_positional_parameter_order():
+    parameter_names = list(
+        inspect.signature(SessionCompressorV3.extract_long_term_memories).parameters
+    )
+
+    assert parameter_names[-4:] == [
+        "allow_self_memory",
+        "allowed_peer_ids",
+        "event_search_tags",
+        "peer_memory_enabled",
+    ]
 
 
 @pytest.mark.asyncio

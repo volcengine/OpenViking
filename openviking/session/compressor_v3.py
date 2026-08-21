@@ -361,9 +361,9 @@ class SessionCompressorV3:
         allowed_memory_types: Optional[set[str]] = None,
         agent_evolution_enabled: bool = True,
         allow_self_memory: bool = True,
-        peer_memory_enabled: bool = True,
         allowed_peer_ids: Optional[set[str]] = None,
         event_search_tags: Optional[List[str]] = None,
+        peer_memory_enabled: bool = True,
     ):
         if not agent_evolution_enabled:
             effective_types = (

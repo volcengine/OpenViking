@@ -616,9 +616,9 @@ def split_request_by_merge_group(
             group_key = MemoryMergeGroupKey(peer_id=peer_id, memory_type=single_uri_op.memory_type)
             upsert_groups.setdefault(group_key, []).append(single_uri_op)
 
-    # Keep deletes in the same apply group as unresolved upserts. MemoryUpdater
-    # can then fail closed: an intentionally skipped replacement must not let
-    # its old file be deleted by a separate group.
+    # Keep deletes in the same apply group as unresolved upserts so MemoryUpdater
+    # can observe both operations and suppress delete execution when an upsert is
+    # intentionally skipped.
     if not passthrough_upserts:
         for file in list(operations.delete_file_contents or []):
             group_key = MemoryMergeGroupKey(
