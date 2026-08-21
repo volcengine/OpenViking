@@ -199,6 +199,7 @@ async def test_async_http_client_reindex_posts_content_reindex():
             "mode": "prune_orphans",
             "wait": False,
             "dry_run": True,
+            "recursive": True,
         },
     )
 
@@ -292,6 +293,7 @@ def test_sync_http_client_reindex_forwards_to_async_client():
         mode="prune_orphans",
         wait=False,
         dry_run=True,
+        recursive=True,
         options=None,
     )
 
