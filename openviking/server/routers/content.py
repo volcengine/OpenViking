@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Content endpoints for OpenViking HTTP Server."""
 
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, Query
@@ -94,6 +94,16 @@ class ReindexRequest(BaseModel):
     dry_run: bool = False
     tags: list[str] | None = None
     tag_mode: str = "replace"
+
+
+class IndexRepairRequest(BaseModel):
+    """Request to validate and apply an index repair plan."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    plan: dict[str, Any]
+    wait: bool = True
+    dry_run: bool = False
 
 
 router = APIRouter(prefix="/api/v1/content", tags=["content"])
@@ -327,5 +337,26 @@ async def reindex(
         reindex_kwargs["tag_mode"] = body.tag_mode
     result = await service.reindex(
         **reindex_kwargs,
+    )
+    return Response(status="ok", result=result)
+
+
+@router.post("/reindex/repair")
+async def apply_index_repair(
+    body: IndexRepairRequest = Body(...),
+    ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN, Role.USER),
+):
+    """Validate and execute a preconditioned resource index repair plan."""
+    root_uri = body.plan.get("root_uri") if isinstance(body.plan, dict) else None
+    if not isinstance(root_uri, str):
+        raise InvalidArgumentError("repair plan root_uri is required")
+    root_uri = _authorize_reindex_uri(_validate_reindex_uri(root_uri), ctx)
+    if root_uri != body.plan.get("root_uri"):
+        raise InvalidArgumentError("repair plan root_uri must be canonical")
+    result = await get_service().apply_index_repair_plan(
+        plan=body.plan,
+        wait=body.wait,
+        dry_run=body.dry_run,
+        ctx=ctx,
     )
     return Response(status="ok", result=result)

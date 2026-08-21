@@ -9,7 +9,6 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.service.core import OpenVikingService
-from openviking.storage.index_consistency import IndexConsistencyReport
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -91,15 +90,20 @@ async def test_check_consistency_preserves_directory_behavior() -> None:
     service, viking_fs = _service_with_fs({"isDir": True})
     viking_fs.tree.return_value = []
     ctx = RequestContext(user=service.user, role=Role.ROOT)
-    report = IndexConsistencyReport(expected=(), missing_records=())
+    report = {
+        "ok": True,
+        "expected_count": 0,
+        "missing_record_count": 0,
+        "missing_records": [],
+    }
 
     with patch(
-        "openviking.service.core.check_index_consistency",
+        "openviking.service.core.audit_index",
         new=AsyncMock(return_value=report),
     ) as check:
         result = await service.check_consistency(uri="viking://resources", ctx=ctx)
 
-    assert result == report.to_dict()
+    assert result == report
     viking_fs.stat.assert_awaited_once_with(
         "viking://resources",
         ctx=ctx,

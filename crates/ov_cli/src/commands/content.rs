@@ -87,6 +87,25 @@ pub async fn reindex(
     Ok(())
 }
 
+pub async fn apply_index_repair_plan(
+    client: &HttpClient,
+    plan_path: &str,
+    wait: bool,
+    dry_run: bool,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let content = std::fs::read_to_string(plan_path).map_err(|error| {
+        crate::error::Error::Client(format!("Failed to read repair plan {plan_path}: {error}"))
+    })?;
+    let plan: Value = serde_json::from_str(&content).map_err(|error| {
+        crate::error::Error::Client(format!("Invalid repair plan JSON: {error}"))
+    })?;
+    let result = client.apply_index_repair_plan(&plan, wait, dry_run).await?;
+    crate::output::output_success(result, output_format, compact);
+    Ok(())
+}
+
 pub async fn get(client: &HttpClient, uri: &str, local_path: &str) -> Result<()> {
     // Check if target path already exists
     let path = Path::new(local_path);

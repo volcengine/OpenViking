@@ -430,8 +430,28 @@ pub async fn handle_system(cmd: SystemCommands, ctx: CliContext) -> Result<()> {
             .await?;
             Ok(())
         }
-        SystemCommands::Consistency { uri } => {
-            commands::system::consistency(&client, &uri, ctx.output_format, ctx.compact).await
+        SystemCommands::Consistency {
+            uri,
+            issue_types,
+            limit,
+            cursor,
+            max_scan_records,
+            repair_plan,
+            force,
+        } => {
+            commands::system::consistency(
+                &client,
+                &uri,
+                issue_types,
+                limit,
+                cursor,
+                max_scan_records,
+                repair_plan,
+                force,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
         }
         SystemCommands::Crypto { action } => commands::crypto::handle_crypto(action).await,
         SystemCommands::Backend { action } => match action {
@@ -1352,7 +1372,8 @@ pub async fn handle_set_tags(
 }
 
 pub async fn handle_reindex(
-    uri: String,
+    uri: Option<String>,
+    apply_plan: Option<String>,
     mode: String,
     wait: bool,
     dry_run: bool,
@@ -1361,6 +1382,18 @@ pub async fn handle_reindex(
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
+    if let Some(plan_path) = apply_plan {
+        return commands::content::apply_index_repair_plan(
+            &client,
+            &plan_path,
+            wait,
+            dry_run,
+            ctx.output_format,
+            ctx.compact,
+        )
+        .await;
+    }
+    let uri = uri.ok_or_else(|| Error::Client("URI or --apply-plan is required".to_string()))?;
     commands::content::reindex(
         &client,
         &uri,

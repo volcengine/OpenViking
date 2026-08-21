@@ -500,3 +500,12 @@ ov add-resource --help
 - `--mode prune_orphans` — remove vector records whose source files no longer exist. Add `--dry-run` to preview the cleanup without applying it.
 
 There is no `semantic` or `full` mode alias.
+
+For a safer targeted repair, audit first and apply the generated plan. Existing
+plan files are not overwritten unless `--force` is supplied.
+
+```bash
+ov system consistency viking://resources/project --repair-plan repair-plan.json
+ov reindex --apply-plan repair-plan.json --dry-run
+ov reindex --apply-plan repair-plan.json --wait true
+```

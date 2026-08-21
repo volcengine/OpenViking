@@ -7,7 +7,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
@@ -229,7 +229,14 @@ class WaitRequest(BaseModel):
 class ConsistencyRequest(BaseModel):
     """Request model for filesystem/vector-index consistency checks."""
 
+    model_config = ConfigDict(extra="forbid")
+
     uri: str
+    issue_types: list[str] | None = None
+    limit: int = Field(default=100, ge=1, le=1000)
+    cursor: str | None = None
+    max_scan_records: int = Field(default=10000, ge=1, le=100000)
+    generate_repair_plan: bool = False
 
 
 class BackendSyncRequest(BaseModel):
@@ -259,6 +266,11 @@ async def check_consistency(
     uri = validate_request_viking_uri(resolve_path_variables(request.uri), ctx)
     result = await service.check_consistency(
         uri=uri,
+        issue_types=request.issue_types,
+        limit=request.limit,
+        cursor=request.cursor,
+        max_scan_records=request.max_scan_records,
+        generate_repair_plan=request.generate_repair_plan,
         ctx=ctx,
     )
     return Response(status="ok", result=result)

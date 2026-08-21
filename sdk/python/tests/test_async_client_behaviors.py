@@ -205,6 +205,52 @@ async def test_async_http_client_reindex_posts_content_reindex():
 
 
 @pytest.mark.asyncio
+async def test_async_http_client_index_audit_and_repair_plan():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response = lambda _response: {"status": "ok"}
+
+    await client.check_consistency(
+        "viking://resources/demo",
+        issue_types=["stale"],
+        limit=25,
+        generate_repair_plan=True,
+    )
+    plan = {"plan_version": "index-repair/v1"}
+    await client.apply_index_repair_plan(plan, wait=False, dry_run=True)
+
+    assert fake_http.post.await_args_list[0].args == ("/api/v1/system/consistency",)
+    assert fake_http.post.await_args_list[0].kwargs["json"] == {
+        "uri": "viking://resources/demo",
+        "issue_types": ["stale"],
+        "limit": 25,
+        "generate_repair_plan": True,
+    }
+    assert fake_http.post.await_args_list[1].args == ("/api/v1/content/reindex/repair",)
+    assert fake_http.post.await_args_list[1].kwargs["json"] == {
+        "plan": plan,
+        "wait": False,
+        "dry_run": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_default_consistency_keeps_legacy_payload():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response = lambda _response: {"ok": True}
+
+    await client.check_consistency("viking://resources/demo")
+
+    fake_http.post.assert_awaited_once_with(
+        "/api/v1/system/consistency",
+        json={"uri": "viking://resources/demo"},
+    )
+
+
+@pytest.mark.asyncio
 async def test_async_http_client_reindex_sends_explicit_empty_tags():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))

@@ -30,6 +30,24 @@ from openviking.service.task_tracker import get_task_tracker
 from openviking.service.task_work_index import bind_task_context
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage.expr import And, Eq, Or, PathScope
+from openviking.storage.index_audit import (
+    REPAIR_PLAN_VERSION,
+    index_records_fingerprint,
+)
+from openviking.storage.index_digest import canonical_digest
+from openviking.storage.index_source import ABSTRACT_NOT_READY_SUFFIX as _ABSTRACT_NOT_READY_SUFFIX
+from openviking.storage.index_source import OVERVIEW_NOT_READY_SUFFIX as _OVERVIEW_NOT_READY_SUFFIX
+from openviking.storage.index_source import (
+    IndexSourceFact,
+    SourceState,
+    build_index_sources,
+    directory_source,
+    file_summary,
+    parse_overview,
+    select_resource_file_vector_text,
+    summary_source_selected,
+)
+from openviking.storage.index_source import is_not_ready_sentinel as _is_not_ready_sentinel
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
@@ -37,7 +55,6 @@ from openviking.storage.semantic_sidecar import body_for_preview, embedding_text
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
-from openviking.utils.embedding_input import truncate_embedding_input
 from openviking.utils.embedding_utils import (
     _apply_ingest_options,
     _truncate_abstract_bytes,
@@ -45,42 +62,23 @@ from openviking.utils.embedding_utils import (
 )
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.skill_processor import SkillProcessor
-from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, OpenVikingError
+from openviking_cli.exceptions import (
+    FailedPreconditionError,
+    InvalidArgumentError,
+    NotFoundError,
+    OpenVikingError,
+)
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.config import get_openviking_config
-from openviking_cli.utils.config.embedding_config import SUMMARY_TEXT_SOURCES
 
 logger = get_logger(__name__)
 
 REINDEX_TASK_TYPE = "admin_reindex"
+INDEX_REPAIR_TASK_TYPE = "index_repair"
 PRUNE_ORPHAN_CANDIDATE_LIMIT = 100000
 PRUNE_OUTPUT_FIELDS = ["id", "uri", "level", "context_type", "account_id", "owner_user_id"]
 _MAX_FILE_VECTORIZATION_CONCURRENCY = 64
-
-
-# Trailing markers VikingFS appends when a directory has no generated .abstract.md/.overview.md
-# (see openviking/storage/viking_fs.py). The rendered value is a placeholder, not semantic
-# content, and must never be embedded as an ABSTRACT (L0) / OVERVIEW (L1) vector (issue #2434).
-_ABSTRACT_NOT_READY_SUFFIX = "[Directory abstract is not ready]"
-_OVERVIEW_NOT_READY_SUFFIX = "[Directory overview is not ready]"
-
-
-def _is_not_ready_sentinel(text: str, suffix: str) -> bool:
-    """Return True if *text* is a VikingFS not-ready directory placeholder.
-
-    VikingFS renders these as a single ``# <uri>`` header followed only by the not-ready marker.
-    Match that exact shape (a ``#`` header with no substantive body before the trailing marker)
-    so the check is uri-agnostic yet never drops real directory content that merely ends with,
-    or mentions, the user-facing marker phrase.
-    """
-    if not text:
-        return False
-    head = text.rstrip()
-    if not head.endswith(suffix):
-        return False
-    head = head[: -len(suffix)].strip()
-    return head.startswith("#") and "\n" not in head
 
 
 _reindex_executor: "ReindexExecutor | None" = None
@@ -246,6 +244,340 @@ class ReindexExecutor:
             "uri": uri,
             "object_type": object_type,
             "mode": mode,
+        }
+
+    async def apply_repair_plan(
+        self,
+        *,
+        plan: dict[str, Any],
+        wait: bool,
+        dry_run: bool,
+        ctx: RequestContext,
+    ) -> dict[str, Any]:
+        """Validate and apply a preconditioned resource index repair plan."""
+        root_uri = self._validate_repair_plan_envelope(plan, ctx)
+        if wait:
+            return await self._apply_repair_plan_locked(
+                plan=plan,
+                dry_run=dry_run,
+                ctx=ctx,
+            )
+
+        tracker = get_task_tracker()
+        task = await tracker.create_if_no_running(
+            INDEX_REPAIR_TASK_TYPE,
+            root_uri,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+        )
+        if task is None:
+            raise OpenVikingError(
+                f"URI {root_uri} already has an index repair in progress",
+                code="CONFLICT",
+                details={"uri": root_uri},
+            )
+        asyncio.create_task(
+            self._run_repair_tracked(
+                task.task_id,
+                plan=plan,
+                dry_run=dry_run,
+                ctx=ctx,
+            )
+        )
+        return {
+            "task_id": task.task_id,
+            "status": "accepted",
+            "uri": root_uri,
+            "mode": "repair_plan",
+        }
+
+    @staticmethod
+    def _validate_repair_plan_envelope(plan: dict[str, Any], ctx: RequestContext) -> str:
+        if not isinstance(plan, dict):
+            raise InvalidArgumentError("repair plan must be a JSON object")
+        allowed = {
+            "plan_version",
+            "account_id",
+            "root_uri",
+            "collection",
+            "root_fingerprint",
+            "actions",
+            "plan_digest",
+        }
+        if set(plan) != allowed:
+            raise InvalidArgumentError("repair plan contains missing or unknown fields")
+        if plan.get("plan_version") != REPAIR_PLAN_VERSION:
+            raise InvalidArgumentError("unsupported repair plan version")
+        supplied_digest = plan.get("plan_digest")
+        unsigned = {key: value for key, value in plan.items() if key != "plan_digest"}
+        if supplied_digest != canonical_digest(unsigned):
+            raise InvalidArgumentError("repair plan digest mismatch")
+        if plan.get("account_id") != ctx.account_id:
+            raise InvalidArgumentError("repair plan account does not match request context")
+        root_uri = plan.get("root_uri")
+        if not isinstance(root_uri, str) or not (
+            root_uri == "viking://resources" or root_uri.startswith("viking://resources/")
+        ):
+            raise InvalidArgumentError("repair plan root must be a resource subtree")
+        if not isinstance(plan.get("actions"), list):
+            raise InvalidArgumentError("repair plan actions must be a list")
+        return root_uri
+
+    async def _run_repair_tracked(
+        self,
+        task_id: str,
+        *,
+        plan: dict[str, Any],
+        dry_run: bool,
+        ctx: RequestContext,
+    ) -> None:
+        tracker = get_task_tracker()
+        tracker.register_running_task(task_id)
+        try:
+            await tracker.start(task_id, account_id=ctx.account_id, user_id=ctx.user.user_id)
+            with bind_task_context(task_id, ctx.account_id, ctx.user.user_id):
+                result = await self._apply_repair_plan_locked(
+                    plan=plan,
+                    dry_run=dry_run,
+                    ctx=ctx,
+                )
+            await tracker.complete(
+                task_id,
+                result,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+            )
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            await tracker.fail(
+                task_id,
+                str(exc),
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+            )
+        finally:
+            await tracker.unregister_running_task(task_id)
+
+    async def _apply_repair_plan_locked(
+        self,
+        *,
+        plan: dict[str, Any],
+        dry_run: bool,
+        ctx: RequestContext,
+    ) -> dict[str, Any]:
+        root_uri = self._validate_repair_plan_envelope(plan, ctx)
+        service = get_service()
+        if service.viking_fs is None or service.vikingdb_manager is None:
+            raise RuntimeError("OpenVikingService not initialized")
+        viking_fs = service.viking_fs
+        path = viking_fs._uri_to_path(root_uri, ctx=ctx)
+        lease = await viking_fs._async_agfs.pathlock_acquire_tree(path)
+        started_at = time.perf_counter()
+        telemetry_id = get_current_telemetry().telemetry_id
+        wait_tracker = get_request_wait_tracker()
+        if telemetry_id:
+            wait_tracker.register_request(telemetry_id)
+        try:
+            actions, facts = await self._prevalidate_repair_plan(plan, ctx=ctx)
+            results: list[dict[str, Any]] = []
+            rebuilt = 0
+            deleted = 0
+            for action, state in actions:
+                if state == "already_converged":
+                    results.append(self._repair_action_result(action, state))
+                    continue
+                if dry_run:
+                    results.append(self._repair_action_result(action, "would_apply"))
+                    continue
+                if action["action"] in {"delete", "delete_reindex"}:
+                    deleted += await self.delete_uri_level(
+                        uri=action["uri"], level=int(action["level"]), ctx=ctx
+                    )
+                if action["action"] in {"reindex", "delete_reindex"}:
+                    fact = facts.get((action["uri"], int(action["level"])))
+                    if fact is None:
+                        raise FailedPreconditionError(
+                            "stale repair plan",
+                            details={"reason": "stale_plan"},
+                        )
+                    await self._repair_reindex_fact(fact, ctx=ctx)
+                    rebuilt += 1
+                results.append(self._repair_action_result(action, "applied"))
+
+            if telemetry_id and rebuilt:
+                await wait_tracker.wait_for_request(telemetry_id)
+            status = "dry_run" if dry_run else "completed"
+            if all(item["status"] == "already_converged" for item in results):
+                status = "already_converged"
+            return {
+                "status": status,
+                "uri": root_uri,
+                "mode": "repair_plan",
+                "action_count": len(results),
+                "rebuilt_records": rebuilt,
+                "deleted_records": deleted,
+                "duration_ms": int((time.perf_counter() - started_at) * 1000),
+                "actions": results,
+            }
+        finally:
+            await viking_fs._async_agfs.pathlock_release(lease)
+            if telemetry_id:
+                wait_tracker.cleanup(telemetry_id)
+
+    async def _prevalidate_repair_plan(
+        self,
+        plan: dict[str, Any],
+        *,
+        ctx: RequestContext,
+    ) -> tuple[list[tuple[dict[str, Any], str]], dict[tuple[str, int], IndexSourceFact]]:
+        service = get_service()
+        assert service.viking_fs is not None
+        assert service.vikingdb_manager is not None
+        root_uri = str(plan["root_uri"])
+        collection = plan.get("collection")
+        if not isinstance(collection, dict) or set(collection) != {"name", "schema_fingerprint"}:
+            raise InvalidArgumentError("invalid repair plan collection descriptor")
+        if collection.get("name") != service.vikingdb_manager.collection_name:
+            raise FailedPreconditionError(
+                "stale repair plan", details={"reason": "active_collection_changed"}
+            )
+        meta = await service.vikingdb_manager.get_collection_meta(ctx=ctx)
+        if canonical_digest(meta or {}) != collection.get("schema_fingerprint"):
+            raise FailedPreconditionError(
+                "stale repair plan", details={"reason": "collection_schema_changed"}
+            )
+        stat = await service.viking_fs.stat(root_uri, ctx=ctx, skip_count=True)
+        if not stat.get("isDir", stat.get("is_dir", False)):
+            raise FailedPreconditionError("stale repair plan", details={"reason": "root_changed"})
+        entries = await self._tree_all(service.viking_fs, root_uri, show_all_hidden=True, ctx=ctx)
+        source_facts, unresolved = await build_index_sources(
+            service.viking_fs, root_uri, entries, ctx
+        )
+        if unresolved:
+            raise FailedPreconditionError(
+                "stale repair plan", details={"reason": "source_unverifiable"}
+            )
+        facts = {fact.key: fact for fact in source_facts}
+        root_fingerprint = canonical_digest(
+            [
+                {"uri": fact.uri, "level": fact.level, "source_digest": fact.digest}
+                for fact in source_facts
+            ]
+        )
+        if root_fingerprint != plan.get("root_fingerprint"):
+            raise FailedPreconditionError("stale repair plan", details={"reason": "root_changed"})
+
+        validated: list[tuple[dict[str, Any], str]] = []
+        for raw_action in plan["actions"]:
+            action = self._validate_repair_action(raw_action, root_uri)
+            level = int(action["level"])
+            fact = facts.get((action["uri"], level))
+            records = await service.vikingdb_manager.get_context_by_uri(
+                uri=action["uri"],
+                level=level,
+                limit=100,
+                ctx=ctx,
+            )
+            if self._repair_action_converged(action, fact, records, ctx):
+                validated.append((action, "already_converged"))
+                continue
+            if action.get("expected_source_digest") != (fact.digest if fact else None):
+                raise FailedPreconditionError(
+                    "stale repair plan", details={"reason": "source_changed"}
+                )
+            if action.get("expected_index_fingerprint") != index_records_fingerprint(records):
+                raise FailedPreconditionError(
+                    "stale repair plan", details={"reason": "index_changed"}
+                )
+            validated.append((action, "pending"))
+        return validated, facts
+
+    @staticmethod
+    def _validate_repair_action(action: Any, root_uri: str) -> dict[str, Any]:
+        allowed = {
+            "action",
+            "uri",
+            "level",
+            "reason",
+            "expected_source_digest",
+            "expected_index_fingerprint",
+        }
+        if not isinstance(action, dict) or set(action) != allowed:
+            raise InvalidArgumentError("invalid repair plan action")
+        if action.get("action") not in {"reindex", "delete", "delete_reindex"}:
+            raise InvalidArgumentError("unsupported repair plan action")
+        uri = action.get("uri")
+        if not isinstance(uri, str) or not (uri == root_uri or uri.startswith(root_uri + "/")):
+            raise InvalidArgumentError("repair action is outside the plan root")
+        level = action.get("level")
+        if not isinstance(level, int) or isinstance(level, bool):
+            raise InvalidArgumentError("repair action has an invalid level")
+        if action.get("action") != "delete" and level not in {0, 1, 2}:
+            raise InvalidArgumentError("repair reindex action has an invalid level")
+        return action
+
+    @staticmethod
+    def _repair_action_converged(
+        action: dict[str, Any],
+        fact: IndexSourceFact | None,
+        records: list[dict[str, Any]],
+        ctx: RequestContext,
+    ) -> bool:
+        if action["action"] == "delete":
+            return fact is None and not records
+        if fact is None or len(records) != 1:
+            return False
+        record = records[0]
+        expected_owner = owner_fields_for_uri(fact.uri, ctx=ctx).get("owner_user_id")
+        return (
+            record.get("uri") == fact.uri
+            and record.get("level") == fact.level
+            and record.get("context_type") == ContextType.RESOURCE.value
+            and record.get("account_id") == ctx.account_id
+            and record.get("owner_user_id") == expected_owner
+            and record.get("source_digest") == fact.digest
+        )
+
+    async def _repair_reindex_fact(self, fact: IndexSourceFact, *, ctx: RequestContext) -> None:
+        if fact.level in {int(ContextLevel.ABSTRACT), int(ContextLevel.OVERVIEW)}:
+            abstract = fact.vector_text
+            if fact.level == int(ContextLevel.OVERVIEW):
+                abstract = _truncate_abstract_bytes(fact.vector_text)
+            await self._upsert_context(
+                uri=fact.uri,
+                parent_uri=VikingURI(fact.uri).parent.uri,
+                abstract=abstract,
+                vector_text=fact.vector_text,
+                is_leaf=False,
+                context_type=ContextType.RESOURCE.value,
+                level=ContextLevel(fact.level),
+                ctx=ctx,
+            )
+            return
+        service = get_service()
+        assert service.viking_fs is not None
+        resolved_summary = await file_summary(service.viking_fs, fact.uri, ctx)
+        summary = resolved_summary.text if resolved_summary.state == SourceState.FOUND else ""
+        await self._upsert_context(
+            uri=fact.uri,
+            parent_uri=VikingURI(fact.uri).parent.uri,
+            abstract=self._prefer_non_empty(summary, fact.vector_text),
+            vector_text=fact.vector_text,
+            is_leaf=True,
+            context_type=ContextType.RESOURCE.value,
+            level=ContextLevel.DETAIL,
+            ctx=ctx,
+        )
+
+    @staticmethod
+    def _repair_action_result(action: dict[str, Any], status: str) -> dict[str, Any]:
+        return {
+            "action": action["action"],
+            "uri": action["uri"],
+            "level": action["level"],
+            "reason": action["reason"],
+            "status": status,
         }
 
     @staticmethod
@@ -1252,7 +1584,9 @@ class ReindexExecutor:
         finally:
             await viking_fs._async_agfs.pathlock_release(lease)
 
-    async def delete_uri_level(self, *, uri: str, level: ContextLevel, ctx: RequestContext) -> int:
+    async def delete_uri_level(
+        self, *, uri: str, level: ContextLevel | int, ctx: RequestContext
+    ) -> int:
         """Delete ONLY the vector record at ``(uri, level)``. Returns count.
 
         Used by git restore for both directory markers (dir + L0/L1) and
@@ -1746,25 +2080,22 @@ class ReindexExecutor:
         )
 
     async def _read_directory_abstract(self, uri: str, *, ctx: RequestContext) -> str:
-        try:
-            value = await get_viking_fs().abstract(uri, ctx=ctx)
-        except Exception:
-            return ""
-        return "" if _is_not_ready_sentinel(value, _ABSTRACT_NOT_READY_SUFFIX) else value
+        source = await directory_source(get_viking_fs(), uri, int(ContextLevel.ABSTRACT), ctx)
+        return source.text if source.state == SourceState.FOUND else ""
 
     async def _read_directory_overview(self, uri: str, *, ctx: RequestContext) -> str:
-        try:
-            value = await get_viking_fs().overview(uri, ctx=ctx)
-        except Exception:
+        source = await directory_source(get_viking_fs(), uri, int(ContextLevel.OVERVIEW), ctx)
+        if source.state != SourceState.FOUND:
             return ""
-        return "" if _is_not_ready_sentinel(value, _OVERVIEW_NOT_READY_SUFFIX) else value
+        abstract = await directory_source(get_viking_fs(), uri, int(ContextLevel.ABSTRACT), ctx)
+        return "" if source.text == abstract.text else source.text
 
     async def _best_file_summary(self, uri: str, *, ctx: RequestContext) -> str:
         parent_uri = VikingURI(uri).parent.uri
         file_name = uri.rsplit("/", 1)[-1]
         overviews = await self._safe_read_text(f"{parent_uri}/.overview.md", ctx=ctx)
         if overviews:
-            parsed = self._parse_overview_md(body_for_preview(overviews))
+            parsed = parse_overview(overviews)
             if file_name in parsed:
                 return parsed[file_name]
         existing = await self._fetch_existing_record(
@@ -1790,13 +2121,10 @@ class ReindexExecutor:
 
         if content_type == ResourceContentType.TEXT:
             embedding_config = get_openviking_config().embedding
-            text_source = embedding_config.text_source
-            if text_source in SUMMARY_TEXT_SOURCES and summary:
+            if summary and summary_source_selected(embedding_config):
                 return summary
             content = await self._safe_read_text(uri, ctx=ctx)
-            if content:
-                return truncate_embedding_input(content, embedding_config.max_input_tokens)
-            return summary or fallback
+            return select_resource_file_vector_text(content, summary, fallback, embedding_config)
 
         if summary:
             return summary
@@ -1946,18 +2274,4 @@ class ReindexExecutor:
 
     @staticmethod
     def _parse_overview_md(content: str) -> dict[str, str]:
-        parsed: dict[str, str] = {}
-        current_name: Optional[str] = None
-        current_lines: list[str] = []
-        for line in (content or "").splitlines():
-            if line.startswith("## "):
-                if current_name is not None:
-                    parsed[current_name] = "\n".join(current_lines).strip()
-                current_name = line[3:].strip()
-                current_lines = []
-                continue
-            if current_name is not None:
-                current_lines.append(line)
-        if current_name is not None:
-            parsed[current_name] = "\n".join(current_lines).strip()
-        return parsed
+        return parse_overview(content)
