@@ -26,7 +26,7 @@ Query → Intent Analysis → Hierarchical Retrieval → Rerank → Results
 # find(): Simple query
 results = await client.find(
     "OAuth authentication",
-    target_uri="viking://resources/"
+    {"target_uri": "viking://resources/"},
 )
 
 # search(): Complex task (needs session context)

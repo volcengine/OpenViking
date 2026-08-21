@@ -68,10 +68,13 @@ async def test():
     # add_resource 接收文件路径或 URL
     sample = Path("./encrypted-sample.txt")
     sample.write_text("Hello, encrypted world!", encoding="utf-8")
-    await client.add_resource(str(sample), reason="测试加密")
+    await client.add_resource(
+        path=str(sample),
+        options={"reason": "测试加密"},
+    )
 
     # 读取资源（自动解密）
-    results = await client.find("encrypted")
+    results = await client.find(query="encrypted")
     print(f"找到 {len(results)} 个结果")
 
     await client.close()

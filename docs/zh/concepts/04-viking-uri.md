@@ -302,7 +302,7 @@ parent = VikingURI(uri).parent.uri  # viking://resources/docs
 # 仅在资源中搜索
 results = client.find(
     "认证",
-    target_uri="viking://resources/"
+    {"target_uri": "viking://resources/"},
 )
 
 # 仅在自己的资源中搜索

@@ -314,7 +314,7 @@ parent = VikingURI(uri).parent.uri  # viking://resources/docs
 # Search only in resources
 results = client.find(
     "authentication",
-    target_uri="viking://resources/"
+    {"target_uri": "viking://resources/"},
 )
 
 # Search only in your own resources
@@ -338,7 +338,7 @@ results = client.find(
 # Search only in global agent skills
 results = client.find(
     "web search",
-    target_uri="viking://agent/skills/"
+    {"target_uri": "viking://agent/skills/"},
 )
 ```
 

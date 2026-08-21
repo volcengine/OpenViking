@@ -292,7 +292,7 @@ func main() {
 	fmt.Printf("   context=%v\n", sessionContext)
 
 	commit, err := client.CommitSession(ctx, sessionID, &openviking.CommitSessionOptions{
-		KeepRecentCount: 0,
+		KeepRecentCount: openviking.Int(0),
 	})
 	if err != nil {
 		log.Fatal(err)

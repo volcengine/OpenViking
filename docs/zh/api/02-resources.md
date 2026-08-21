@@ -338,49 +338,55 @@ client.initialize()
 
 ## 添加本地文件
 result = client.add_resource(
-    "./documents/guide.md",
-    reason="User guide documentation"
+    path="./documents/guide.md",
+    options={"reason": "User guide documentation"},
 )
 print(f"Added: {result['root_uri']}")
 
 ## 正常解析并转换为 Markdown，但每个文档正文不拆分
 result = client.add_resource(
-    "./documents",
-    args={"parse_mode": "no_split"},
+    path="./documents",
+    options={"args": {"parse_mode": "no_split"}},
 )
 
 ## 从 URL 添加到指定位置
 result = client.add_resource(
-    "https://example.com/api-docs.md",
+    path="https://example.com/api-docs.md",
     to="viking://resources/external/api-docs.md",
-    reason="External API docs"
+    options={"reason": "External API docs"},
 )
 
 ## 递归抓取网页（同域 BFS，depth 层数、max_pages 页数上限）
 result = client.add_resource(
-    "https://docs.openviking.ai/zh/getting-started/01-introduction",
+    path="https://docs.openviking.ai/zh/getting-started/01-introduction",
     wait=True,
     timeout=180,
-    args={"depth": 1, "max_pages": 10},
+    options={
+        "args": {"depth": 1, "max_pages": 10},
+    },
 )
 
 ## 递归抓取并按路径前缀过滤，同时下载页面中的文件链接
 result = client.add_resource(
-    "https://docs.openviking.ai/",
-    args={
-        "depth": 2,
-        "max_pages": 50,
-        "include_paths": ["/zh/"],
-        "exclude_paths": ["/changelog"],
-        "skip_download_links": False,
+    path="https://docs.openviking.ai/",
+    options={
+        "args": {
+            "depth": 2,
+            "max_pages": 50,
+            "include_paths": ["/zh/"],
+            "exclude_paths": ["/changelog"],
+            "skip_download_links": False,
+        },
     },
 )
 
 ## 添加到当前用户私有资源根
 result = client.add_resource(
-    "./documents/guide.md",
+    path="./documents/guide.md",
     parent="viking://~/resources/docs",
-    create_parent=True,
+    options={
+        "create_parent": True,
+    },
 )
 
 ## 等待处理完成
@@ -388,25 +394,29 @@ client.wait_processed()
 
 ## 开启定时更新
 client.add_resource(
-    "./documents/guide.md",
+    path="./documents/guide.md",
     to="viking://resources/guide.md",
-    watch_interval=60  # 每60分钟更新一次
+    options={
+        "watch_interval": 60,  # 每60分钟更新一次
+    },
 )
 
 # 使用一次性用户 access token 添加飞书文档
 client.add_resource(
-    "https://example.feishu.cn/docx/doc_token",
-    args={"feishu_access_token": "u-..."},
+    path="https://example.feishu.cn/docx/doc_token",
+    options={"args": {"feishu_access_token": "u-..."}},
 )
 
 # 使用用户 token 自动刷新添加飞书文档
 client.add_resource(
-    "https://example.feishu.cn/docx/doc_token",
+    path="https://example.feishu.cn/docx/doc_token",
     to="viking://resources/feishu/doc",
-    watch_interval=1440,
-    args={
-        "feishu_access_token": "u-...",
-        "feishu_refresh_token": "r-...",
+    options={
+        "watch_interval": 1440,
+        "args": {
+            "feishu_access_token": "u-...",
+            "feishu_refresh_token": "r-...",
+        },
     },
 )
 ```

@@ -99,7 +99,8 @@ curl -X POST http://localhost:1933/api/v1/sessions \
 import openviking as ov
 
 # Use HTTP client
-client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
+client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+await client.initialize()
 
 # Create new session (auto-generated ID)
 result = await client.create_session()
@@ -111,13 +112,15 @@ print(f"Session ID: {result['session_id']}")
 
 # Create new session with a custom auto-commit policy
 result = await client.create_session(
-    auto_commit_policy={
-        "pending_token_threshold": 8000,
-        "message_count_threshold": 40,
-        "idle_timeout_seconds": 600,
-        "keep_recent_count": 10,
-        "min_commit_interval_seconds": 0,
-    }
+    options={
+        "auto_commit_policy": {
+            "pending_token_threshold": 8000,
+            "message_count_threshold": 40,
+            "idle_timeout_seconds": 600,
+            "keep_recent_count": 10,
+            "min_commit_interval_seconds": 0,
+        },
+    },
 )
 print(result["auto_commit_policy"])
 ```
@@ -202,7 +205,8 @@ curl -X GET http://localhost:1933/api/v1/sessions \
 ```python
 import openviking as ov
 
-client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
+client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+await client.initialize()
 
 sessions = await client.list_sessions()
 for s in sessions:
@@ -303,16 +307,17 @@ curl -X GET http://localhost:1933/api/v1/sessions/a1b2c3d4 \
 ```python
 import openviking as ov
 
-client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
+client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+await client.initialize()
 
 # Get existing session (raises NotFoundError if not found)
-info = await client.get_session("a1b2c3d4")
+info = await client.get_session(session_id="a1b2c3d4")
 print(f"Live Messages: {info['message_count']}")
 print(f"Total Messages: {info.get('total_message_count', 'n/a')}")
 print(f"Commits: {info['commit_count']}")
 
 # Get or create session
-info = await client.get_session("a1b2c3d4", auto_create=True)
+info = await client.get_session(session_id="a1b2c3d4", auto_create=True)
 ```
 
 **TypeScript SDK**
@@ -461,11 +466,13 @@ curl -X PATCH http://localhost:1933/api/v1/sessions/a1b2c3d4/config \
 
 ```python
 result = client.update_session_config(
-    "a1b2c3d4",
-    memory_extraction_config={
-        "events": {"tags": ["team=search", "channel=app"]}
+    session_id="a1b2c3d4",
+    options={
+        "memory_extraction_config": {
+            "events": {"tags": ["team=search", "channel=app"]}
+        },
+        "auto_commit_policy": {"message_count_threshold": 25},
     },
-    auto_commit_policy={"message_count_threshold": 25},
 )
 ```
 
@@ -727,9 +734,10 @@ curl -X GET "http://localhost:1933/api/v1/sessions/a1b2c3d4/context?token_budget
 ```python
 import openviking as ov
 
-client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
+client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+await client.initialize()
 
-context = await client.get_session_context("a1b2c3d4", token_budget=128000)
+context = await client.get_session_context(session_id="a1b2c3d4", token_budget=128000)
 print(context["latest_archive_overview"])
 print(len(context["messages"]))
 ```
@@ -836,9 +844,13 @@ curl -X GET "http://localhost:1933/api/v1/sessions/a1b2c3d4/archives/archive_002
 ```python
 import openviking as ov
 
-client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
+client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+await client.initialize()
 
-archive = await client.get_session_archive("a1b2c3d4", "archive_002")
+archive = await client.get_session_archive(
+    session_id="a1b2c3d4",
+    archive_id="archive_002",
+)
 print(archive["archive_id"])
 print(archive["overview"])
 print(len(archive["messages"]))
@@ -950,10 +962,11 @@ curl -X DELETE http://localhost:1933/api/v1/sessions/a1b2c3d4 \
 ```python
 import openviking as ov
 
-client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
+client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+await client.initialize()
 
 # Delete session
-await client.delete_session("a1b2c3d4")
+await client.delete_session(session_id="a1b2c3d4")
 ```
 
 **TypeScript SDK**
@@ -1123,37 +1136,41 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
 import openviking as ov
 from openviking.message import TextPart, ImagePart, ContextPart
 
-client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
+client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+await client.initialize()
 
 # Simple mode: Add user message
 await client.add_message(
     session_id="a1b2c3d4",
-    role="user",
-    content="How do I authenticate users?"
+    message={"role": "user", "content": "How do I authenticate users?"},
 )
 
 # Parts mode: Add assistant message with context reference
 await client.add_message(
     session_id="a1b2c3d4",
-    role="assistant",
-    parts=[
-        TextPart(text="Based on the documentation, you can configure embedding..."),
-        ContextPart(
-            uri="viking://resources/docs/auth/",
-            context_type="resource",
-            abstract="Authentication guide"
-        )
-    ]
+    message={
+        "role": "assistant",
+        "parts": [
+            TextPart(text="Based on the documentation, you can configure embedding..."),
+            ContextPart(
+                uri="viking://resources/docs/auth/",
+                context_type="resource",
+                abstract="Authentication guide"
+            )
+        ],
+    },
 )
 
 # Parts mode: Add user message with an image URL
 await client.add_message(
     session_id="a1b2c3d4",
-    role="user",
-    parts=[
-        TextPart(text="Remember this studio layout."),
-        ImagePart(url="https://example.com/studio.png", detail="auto"),
-    ]
+    message={
+        "role": "user",
+        "parts": [
+            TextPart(text="Remember this studio layout."),
+            ImagePart(url="https://example.com/studio.png", detail="auto"),
+        ],
+    },
 )
 ```
 
@@ -1252,7 +1269,8 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages/batch \
 ```python
 import openviking as ov
 
-client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
+client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+await client.initialize()
 
 # Add messages in batch
 result = await client.batch_add_messages(
@@ -1433,15 +1451,16 @@ curl -X GET http://localhost:1933/api/v1/tasks/{task_id} \
 ```python
 import openviking as ov
 
-client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
+client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+await client.initialize()
 
 # Commit returns immediately with task_id; summary + memory extraction runs in background
-result = await client.commit_session("a1b2c3d4")
+result = await client.commit_session(session_id="a1b2c3d4")
 print(f"Status: {result['status']}")
 print(f"Task ID: {result['task_id']}")
 
 # Poll background task status
-task = await client.get_task(result["task_id"])
+task = await client.get_task(task_id=result["task_id"])
 if task["status"] == "completed":
     memories = task["result"]["memories_extracted"]
     total = sum(memories.values())
@@ -1648,7 +1667,8 @@ import openviking as ov
 from openviking.message import TextPart, ContextPart
 
 # Initialize client
-client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
+client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+await client.initialize()
 
 # Create new session
 session_result = await client.create_session()
@@ -1658,33 +1678,37 @@ print(f"Session created: {session_id}")
 # Add user message
 await client.add_message(
     session_id=session_id,
-    role="user",
-    content="How do I configure embedding?"
+    message={"role": "user", "content": "How do I configure embedding?"},
 )
 
 # Search with session context
-results = await client.search("embedding configuration", session_id=session_id)
+results = await client.search(
+    query="embedding configuration",
+    session_id=session_id,
+)
 
 # Add assistant message with context reference
 if results.resources:
     await client.add_message(
         session_id=session_id,
-        role="assistant",
-        parts=[
-            TextPart(text="Based on the documentation, you can configure embedding..."),
-            ContextPart(
-                uri=results.resources[0].uri,
-                context_type="resource",
-                abstract=results.resources[0].abstract
-            )
-        ]
+        message={
+            "role": "assistant",
+            "parts": [
+                TextPart(text="Based on the documentation, you can configure embedding..."),
+                ContextPart(
+                    uri=results.resources[0].uri,
+                    context_type="resource",
+                    abstract=results.resources[0].abstract
+                )
+            ],
+        },
     )
 # Commit session (returns immediately; summary + memory extraction runs in background)
-commit_result = await client.commit_session(session_id)
+commit_result = await client.commit_session(session_id=session_id)
 print(f"Task ID: {commit_result['task_id']}")
 
 # Optional: poll for completion
-task = await client.get_task(commit_result["task_id"])
+task = await client.get_task(task_id=commit_result["task_id"])
 if task and task["status"] == "completed":
     memories = task["result"]["memories_extracted"]
     total = sum(memories.values())
@@ -1741,16 +1765,16 @@ curl -X GET http://localhost:1933/api/v1/tasks/uuid-xxx \
 
 ```python
 # Commit after significant interactions
-session_info = await client.get_session(session_id)
+session_info = await client.get_session(session_id=session_id)
 if session_info["message_count"] > 10:
-    await client.commit_session(session_id)
+    await client.commit_session(session_id=session_id)
 ```
 
 ### Use Session Context for Search
 
 ```python
 # Better search results with conversation context
-results = await client.search(query, session_id=session_id)
+results = await client.search(query=query, session_id=session_id)
 ```
 
 ---

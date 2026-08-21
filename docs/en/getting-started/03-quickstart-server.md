@@ -121,7 +121,7 @@ try:
     client.wait_processed()
 
     # Search
-    results = client.find("what is openviking", target_uri=root_uri)
+    results = client.find("what is openviking", {"target_uri": root_uri})
     for r in results.resources:
         print(f"  {r.uri} (score: {r.score:.4f})")
 

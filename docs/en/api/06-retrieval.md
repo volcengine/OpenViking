@@ -185,29 +185,31 @@ client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 # Basic search
-results = client.find("how to authenticate users")
+results = client.find(query="how to authenticate users")
 
 # Search with filter and time range
 recent_emails = client.find(
-    "invoice",
+    query="invoice",
     target_uri="viking://resources/email",
-    since="7d",
-    time_field="created_at",
+    options={
+        "since": "7d",
+        "time_field": "created_at",
+    },
 )
 
 # Search only memories and resources
 typed_results = client.find(
-    "authentication",
-    context_type=[ContextType.MEMORY, ContextType.RESOURCE],
+    query="authentication",
+    options={"context_type": [ContextType.MEMORY, ContextType.RESOURCE]},
 )
 
 # Search by local image, bytes, data URI, HTTP URL, or viking:// URI
-image_results = client.find(image="/path/to/photo.png")
+image_results = client.find(query="", options={"image": "/path/to/photo.png"})
 
 # Search by explicit retrieval tags. Multiple tags are AND-ed.
 tagged_results = client.find(
-    "rollback runbook",
-    tags=["env=prod", "team=search"],
+    query="rollback runbook",
+    options={"tags": ["env=prod", "team=search"]},
 )
 
 # Iterate through results
@@ -224,19 +226,19 @@ for ctx in results.resources:
 ```python
 # Search only in resources
 results = client.find(
-    "authentication",
-    target_uri="viking://resources"
+    query="authentication",
+    target_uri="viking://resources",
 )
 
 # Search only in user memories
 results = client.find(
-    "preferences",
+    query="preferences",
     target_uri="viking://~/memories"
 )
 
 # Search only in current-user resources
 results = client.find(
-    "private docs",
+    query="private docs",
     target_uri="viking://~/resources"
 )
 
@@ -246,18 +248,18 @@ peer_client = ov.SyncHTTPClient(
     api_key="your-key",
     actor_peer_id="web-visitor-alice",
 )
-peer_results = peer_client.find("invoice follow-up")
+peer_results = peer_client.find(query="invoice follow-up")
 
 # Search only in skills
 results = client.find(
-    "web search",
+    query="web search",
     target_uri="viking://~/skills"
 )
 
 # Search in specific project
 results = client.find(
-    "API endpoints",
-    target_uri="viking://resources/my-project"
+    query="API endpoints",
+    target_uri="viking://resources/my-project",
 )
 ```
 
@@ -460,20 +462,29 @@ client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 # Create session with conversation context
-session = client.session()
-session.add_message("user", [
-    TextPart(text="I'm building a login page with OAuth")
-])
-session.add_message("assistant", [
-    TextPart(text="I can help you with OAuth implementation.")
-])
+session_info = client.create_session()
+session = client.session(session_id=session_info["session_id"])
+session.add_message(
+    message={
+        "role": "user",
+        "parts": [TextPart(text="I'm building a login page with OAuth")],
+    }
+)
+session.add_message(
+    message={
+        "role": "assistant",
+        "parts": [TextPart(text="I can help you with OAuth implementation.")],
+    }
+)
 
 # Search understands conversation context
 results = client.search(
-    "best practices",
-    session=session,
-    context_type=ContextType.SKILL,
-    since="2h"
+    query="best practices",
+    session_id=session.session_id,
+    options={
+        "context_type": ContextType.SKILL,
+        "since": "2h",
+    },
 )
 
 for ctx in results.resources:
@@ -487,7 +498,7 @@ for ctx in results.resources:
 # search can also be used without session
 # It still performs intent analysis on the query
 results = client.search(
-    "how to implement OAuth 2.0 authorization code flow"
+    query="how to implement OAuth 2.0 authorization code flow"
 )
 
 for ctx in results.resources:
@@ -497,7 +508,10 @@ for ctx in results.resources:
 **Image Search**
 
 ```python
-results = client.search("similar poster", image="/path/to/poster.png")
+results = client.search(
+    query="similar poster",
+    options={"image": "/path/to/poster.png"},
+)
 ```
 
 **TypeScript SDK**
@@ -823,8 +837,8 @@ client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 results = client.grep(
-    "viking://resources",
-    "authentication",
+    uri="viking://resources",
+    pattern="authentication",
     case_insensitive=True,
     node_limit=1024,
 )
@@ -945,13 +959,17 @@ client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 # Find all markdown files (defaults to returning at most 256 matches)
-results = client.glob("**/*.md", "viking://resources")
+results = client.glob(pattern="**/*.md", uri="viking://resources")
 print(f"Found {results['count']} markdown files:")
 for uri in results['matches']:
     print(f"  {uri}")
 
 # Find all Python files with a higher explicit cap
-results = client.glob("**/*.py", "viking://resources", node_limit=1024)
+results = client.glob(
+    pattern="**/*.py",
+    uri="viking://resources",
+    node_limit=1024,
+)
 print(f"Found {results['count']} Python files")
 ```
 
@@ -1015,7 +1033,7 @@ import openviking as ov
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
-results = client.find("authentication")
+results = client.find(query="authentication")
 
 for ctx in results.resources:
     # Start with L0 (abstract) - already in ctx.abstract
@@ -1023,11 +1041,11 @@ for ctx in results.resources:
 
     if ctx.level < 2:
         # Get L1 (overview) for directories
-        overview = client.overview(ctx.uri)
+        overview = client.overview(uri=ctx.uri)
         print(f"Overview: {overview[:500]}...")
     else:
         # Load L2 (content) for files
-        content = client.read(ctx.uri)
+        content = client.read(uri=ctx.uri)
         print(f"File content: {content}")
 ```
 
@@ -1060,10 +1078,10 @@ client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 # Good - specific query
-results = client.find("OAuth 2.0 authorization code flow implementation")
+results = client.find(query="OAuth 2.0 authorization code flow implementation")
 
 # Less effective - too broad
-results = client.find("auth")
+results = client.find(query="auth")
 ```
 
 ### Scope Your Searches
@@ -1076,8 +1094,8 @@ client.initialize()
 
 # Search in relevant scope for better results
 results = client.find(
-    "error handling",
-    target_uri="viking://resources/my-project"
+    query="error handling",
+    target_uri="viking://resources/my-project",
 )
 ```
 
@@ -1091,13 +1109,20 @@ client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 # For conversational search, use session
-session = client.session()
-session.add_message("user", [
-    TextPart(text="I'm building a login page")
-])
+session_info = client.create_session()
+session = client.session(session_id=session_info["session_id"])
+session.add_message(
+    message={
+        "role": "user",
+        "parts": [TextPart(text="I'm building a login page")],
+    }
+)
 
 # Search understands context
-results = client.search("best practices", session=session)
+results = client.search(
+    query="best practices",
+    session_id=session.session_id,
+)
 ```
 
 ## Related Documentation

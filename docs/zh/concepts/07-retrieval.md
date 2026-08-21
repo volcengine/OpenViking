@@ -26,7 +26,7 @@ OpenViking 采用两阶段检索：意图分析 + 层级检索 + Rerank。
 # find(): 简单查询
 results = await client.find(
     "OAuth 认证",
-    target_uri="viking://resources/"
+    {"target_uri": "viking://resources/"},
 )
 
 # search(): 复杂任务（需要会话上下文）

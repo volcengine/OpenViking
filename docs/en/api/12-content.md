@@ -18,7 +18,7 @@ Read the L0 abstract (an approximately 100-token summary), excluding the OKF hea
 **Python SDK**
 
 ```python
-abstract = client.abstract("viking://resources/docs/")
+abstract = client.abstract(uri="viking://resources/docs/")
 print(f"Abstract: {abstract}")
 # Output: "Documentation for the project API, covering authentication, endpoints..."
 ```
@@ -84,7 +84,7 @@ Read the L1 overview for a directory, excluding the OKF header.
 **Python SDK**
 
 ```python
-overview = client.overview("viking://resources/docs/")
+overview = client.overview(uri="viking://resources/docs/")
 print(f"Overview:\n{overview}")
 ```
 
@@ -157,7 +157,7 @@ Read the complete text of an L0, L1, or L2 file.
 **Python SDK**
 
 ```python
-content = client.read("viking://resources/docs/api.md")
+content = client.read(uri="viking://resources/docs/api.md")
 print(f"Content:\n{content}")
 ```
 
@@ -235,8 +235,8 @@ Update an existing file, or create a new one when `mode="create"`, and automatic
 
 ```python
 result = client.write(
-    "viking://resources/docs/api.md",
-    "# Updated API\n\nFresh content.",
+    uri="viking://resources/docs/api.md",
+    content="# Updated API\n\nFresh content.",
     mode="replace",
     wait=True,
 )
@@ -476,8 +476,8 @@ Set explicit `k=v` tags used by retrieval filters. `replace` replaces existing t
 
 ```python
 result = client.set_tags(
-    "viking://resources/project/",
-    ["team=search", "env=prod"],
+    uri="viking://resources/project/",
+    tags=["team=search", "env=prod"],
     mode="replace",
     recursive=True,
 )
@@ -628,8 +628,10 @@ result = client.reindex(
     uri="viking://resources",
     mode="vectors_only",
     wait=True,
-    tags=["team=search", "env=prod"],
-    tag_mode="replace",
+    options={
+        "tags": ["team=search", "env=prod"],
+        "tag_mode": "replace",
+    },
 )
 print(result)
 ```
