@@ -19,6 +19,26 @@ from openviking.utils.image_search import build_multimodal_embedding_input
 from openviking_cli.exceptions import NotFoundError
 
 
+def _normalize_context_type(value: Any) -> Optional[Any]:
+    """Coerce an API context_type (str | list | enum) onto TypedQuery.context_type.
+
+    TypedQuery carries a single ContextType; multi-type requests stay on
+    the filter path (scope_dsl) and are left unclassified here. Values are
+    normalized the same way as resolve_context_types (strip + lower) so the
+    observer classification matches the filter behaviour.
+    """
+    from openviking_cli.retrieve import ContextType
+
+    if isinstance(value, ContextType):
+        return value
+    if isinstance(value, str):
+        try:
+            return ContextType(value.strip().lower())
+        except ValueError:
+            return None
+    return None
+
+
 class _SemanticMixin:
     """Abstract/overview/find/search semantic retrieval layer."""
 
@@ -190,6 +210,7 @@ class _SemanticMixin:
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
         image_url: Optional[str] = None,
+        context_type: Optional[Any] = None,
     ):
         """Semantic search.
 
@@ -235,7 +256,7 @@ class _SemanticMixin:
 
         typed_query = TypedQuery(
             query=query,
-            context_type=None,
+            context_type=_normalize_context_type(context_type),
             intent="",
             target_directories=retrieval_targets.target_directories,
             embedding_input=(
@@ -287,6 +308,7 @@ class _SemanticMixin:
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
         image_url: Optional[str] = None,
+        context_type: Optional[Any] = None,
     ):
         """Complex search with session context.
 
@@ -342,7 +364,7 @@ class _SemanticMixin:
             typed_queries = [
                 TypedQuery(
                     query=query,
-                    context_type=None,
+                    context_type=_normalize_context_type(context_type),
                     intent="",
                     priority=1,
                     target_directories=retrieval_targets.target_directories,
@@ -367,7 +389,7 @@ class _SemanticMixin:
             typed_queries = [
                 TypedQuery(
                     query=query,
-                    context_type=None,
+                    context_type=_normalize_context_type(context_type),
                     intent="",
                     priority=1,
                     target_directories=retrieval_targets.target_directories,
