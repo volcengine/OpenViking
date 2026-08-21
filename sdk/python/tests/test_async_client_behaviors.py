@@ -822,6 +822,105 @@ async def test_add_resource_sends_tags_and_tag_mode():
 
 
 @pytest.mark.asyncio
+async def test_add_resource_forwards_create_parent_and_source_name():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {
+        "result": {"root_uri": "viking://user/resources/docs/demo"}
+    }
+
+    await client.add_resource(
+        path="https://example.com/demo.md",
+        parent="viking://user/resources/docs",
+        create_parent=True,
+        source_name="custom-demo.md",
+    )
+
+    payload = fake_http.post.await_args.kwargs["json"]
+    assert payload["parent"] == "viking://user/resources/docs"
+    assert payload["create_parent"] is True
+    assert payload["source_name"] == "custom-demo.md"
+
+
+@pytest.mark.asyncio
+async def test_add_resource_omits_default_create_parent_for_legacy_servers():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {
+        "result": {"root_uri": "viking://resources/demo"}
+    }
+
+    await client.add_resource("https://example.com/demo.md")
+
+    payload = fake_http.post.await_args.kwargs["json"]
+    assert "create_parent" not in payload
+    assert "source_name" not in payload
+
+
+@pytest.mark.asyncio
+async def test_add_resource_explicit_source_name_overrides_local_filename(tmp_path):
+    resource_file = tmp_path / "demo.md"
+    resource_file.write_text("# Demo\n")
+
+    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._upload_temp_file = AsyncMock(return_value="upload_resource.md")
+    client._handle_response_data = lambda _response: {
+        "result": {"root_uri": "viking://resources/demo"}
+    }
+
+    await client.add_resource(str(resource_file), source_name="renamed.md")
+
+    payload = fake_http.post.await_args.kwargs["json"]
+    assert payload["temp_file_id"] == "upload_resource.md"
+    assert payload["source_name"] == "renamed.md"
+
+
+def test_sync_add_resource_accepts_and_forwards_create_parent():
+    client = SyncHTTPClient(url="http://localhost:1933")
+    with patch.object(
+        client._async_client,
+        "add_resource",
+        new=AsyncMock(return_value={"root_uri": "viking://resources/demo"}),
+    ) as mock_add_resource:
+        result = client.add_resource(
+            "https://example.com/demo.md",
+            parent="viking://user/resources/docs",
+            create_parent=True,
+            source_name="custom-demo.md",
+        )
+
+    assert result == {"root_uri": "viking://resources/demo"}
+    assert mock_add_resource.await_args.kwargs["create_parent"] is True
+    assert mock_add_resource.await_args.kwargs["source_name"] == "custom-demo.md"
+    assert mock_add_resource.await_args.kwargs["parent"] == "viking://user/resources/docs"
+
+
+@pytest.mark.asyncio
+async def test_add_skill_forwards_source_metadata():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {"result": {"status": "ok"}}
+
+    await client.add_skill(
+        {"name": "demo", "description": "demo"},
+        source_metadata={"type": "api", "source": "inline_content", "operation": "add"},
+    )
+
+    payload = fake_http.post.await_args.kwargs["json"]
+    assert payload["source_metadata"] == {
+        "type": "api",
+        "source": "inline_content",
+        "operation": "add",
+    }
+    assert payload["data"] == {"name": "demo", "description": "demo"}
+
+
+@pytest.mark.asyncio
 async def test_find_uses_node_limit_as_http_limit_and_normalizes_target_uri_list():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
