@@ -12,6 +12,7 @@ from vikingbot.agent.loop import AgentLoop
 from vikingbot.bus.events import InboundMessage, OutboundEventType
 from vikingbot.bus.queue import MessageBus
 from vikingbot.config.schema import AgentsConfig, Config, SessionKey
+from vikingbot.openviking_mount.session_state import make_openviking_storage_session_id
 from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 
@@ -656,7 +657,7 @@ async def test_agent_loop_submits_openviking_session_through_compact_hook(
     assert len(calls) == 1
     context, kwargs = calls[0]
     assert context.event_type == "message.compact"
-    assert context.session_id == session_key.safe_name()
+    assert context.session_id == make_openviking_storage_session_id(session_key.safe_name())
     assert kwargs == {"session": session, "force_commit": False}
 
 
@@ -1038,6 +1039,8 @@ async def test_agent_loop_post_turn_clears_local_session_after_openviking_commit
     persisted_session = loop.sessions.get_or_create(session_key, skip_heartbeat=True)
     assert calls[-1]["commit_message_threshold"] == 3
     assert persisted_session.messages == []
-    assert persisted_session.metadata["openviking"]["session_id"] == session_key.safe_name()
+    assert persisted_session.metadata["openviking"]["session_id"] == (
+        make_openviking_storage_session_id(session_key.safe_name())
+    )
     assert persisted_session.metadata["openviking"]["last_synced_local_index"] == -1
     assert persisted_session.metadata["openviking"]["last_commit_local_index"] == -1

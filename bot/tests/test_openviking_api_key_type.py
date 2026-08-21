@@ -24,7 +24,11 @@ from vikingbot.hooks.builtins import openviking_hooks as openviking_hooks_module
 from vikingbot.hooks.builtins.openviking_hooks import OpenVikingCompactHook
 from vikingbot.openviking_mount import ov_server as ov_server_module
 from vikingbot.openviking_mount.ov_server import VikingClient
-from vikingbot.openviking_mount.session_state import reset_openviking_state
+from vikingbot.openviking_mount.session_state import (
+    OPENVIKING_SESSION_ID_FORMAT,
+    make_openviking_storage_session_id,
+    reset_openviking_state,
+)
 from vikingbot.session.manager import SessionManager
 
 
@@ -1214,7 +1218,13 @@ async def test_compact_hook_session_context_commits_single_session_with_peer_mes
             pending_tokens = self.pending_tokens.pop(0) if self.pending_tokens else 0
             return {"session_id": session_id, "pending_tokens": pending_tokens}
 
-        async def commit_session(self, session_id, keep_recent_count=0, user_id=None):
+        async def commit_session(
+            self,
+            session_id,
+            keep_recent_count=0,
+            user_id=None,
+            **_retention_kwargs,
+        ):
             self.commit_calls.append((session_id, keep_recent_count, user_id))
             return {"session_id": session_id, "status": "accepted"}
 
@@ -1226,10 +1236,17 @@ async def test_compact_hook_session_context_commits_single_session_with_peer_mes
 
     monkeypatch.setattr(hook, "_get_client", _fake_get_client)
 
+    session_key = SessionKey(
+        type="cli",
+        channel_id="default",
+        chat_id="4ab668637bdb513f9384c8a8:order:123",
+    )
+    logical_session_id = session_key.safe_name()
+    storage_session_id = make_openviking_storage_session_id(logical_session_id)
     context = HookContext(
         event_type="message.compact",
         workspace_id="ws",
-        session_key=SessionKey(type="cli", channel_id="default", chat_id="chat-1"),
+        session_key=session_key,
     )
     session = SimpleNamespace(
         messages=[
@@ -1248,16 +1265,22 @@ async def test_compact_hook_session_context_commits_single_session_with_peer_mes
     assert result["users_count"] == 0
     assert fake_client.append_calls == [
         (
-            "cli__default__chat-1",
+            storage_session_id,
             ["admin answer", "u1 asks", "u1 reply", "u2 asks"],
             None,
             "admin",
         )
     ]
-    assert fake_client.commit_calls == [("cli__default__chat-1", 2, "admin")]
+    assert fake_client.commit_calls == [(storage_session_id, 0, "admin")]
+    assert {session_id for session_id, _user_id in fake_client.session_calls} == {
+        storage_session_id
+    }
+    assert ":" not in storage_session_id
 
     state = session.metadata["openviking"]
-    assert state["session_id"] == "cli__default__chat-1"
+    assert state["session_id"] == storage_session_id
+    assert state["logical_session_id"] == logical_session_id
+    assert state["session_id_format"] == OPENVIKING_SESSION_ID_FORMAT
     assert state["last_synced_local_index"] == len(session.messages) - 1
     assert state["last_pending_tokens"] == 0
     assert state["last_sync_status"] == "success"

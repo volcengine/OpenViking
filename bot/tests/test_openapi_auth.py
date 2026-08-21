@@ -19,6 +19,7 @@ from vikingbot.channels.openapi_models import ChatRequest, ChatResponse
 from vikingbot.compile.models import CompileAccepted
 from vikingbot.config.schema import BotChannelConfig, SessionKey
 from vikingbot.session.manager import Session
+from vikingbot.utils.session_paths import portable_session_name
 
 
 @pytest.fixture
@@ -220,7 +221,7 @@ class TestOpenAPIAuth:
         assert storage_key == f"{scope}:order:123"
         assert session_key.safe_name() == f"cli__default__{scope}:order:123"
         assert channel._session_manager._get_session_path(session_key).name == (
-            f"cli__default__{scope}%3Aorder%3A123.jsonl"
+            f"{portable_session_name(session_key)}.jsonl"
         )
 
     def test_delete_rotation_survives_restart_and_session_id_reuse(
@@ -1584,7 +1585,7 @@ class TestOpenAPIAuth:
 
         assert response.status_code == 200
 
-        session_path = temp_workspace / "sessions" / "cli__default__session-1.jsonl"
+        session_path = channel._session_manager._get_session_path(session_key)
         lines = session_path.read_text(encoding="utf-8").splitlines()
         metadata = json.loads(lines[0])
         messages = [json.loads(line) for line in lines[1:]]

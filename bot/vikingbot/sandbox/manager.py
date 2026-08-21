@@ -120,7 +120,7 @@ class SandboxManager:
         )
 
     def to_workspace_id(self, session_key: SessionKey):
-        return workspace_name(session_key, self.config.sandbox.mode, portable=True)
+        return workspace_name(session_key, self.config.sandbox.mode, portable=False)
 
     async def get_sandbox_cwd(self, session_key: SessionKey) -> str:
         sandbox: SandboxBackend = await self._get_or_create_sandbox(session_key)

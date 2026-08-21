@@ -14,7 +14,10 @@ from vikingbot.config.schema import SessionKey
 from vikingbot.providers.registry import find_by_name
 from vikingbot.sandbox.manager import SandboxManager
 from vikingbot.utils.helpers import ensure_dir, ensure_non_empty_assistant_content
-from vikingbot.utils.session_paths import portable_session_name
+from vikingbot.utils.session_paths import (
+    find_exact_child,
+    portable_session_name,
+)
 
 T = TypeVar("T")
 
@@ -164,14 +167,41 @@ class SessionManager:
             return None
         return path
 
+    def _find_legacy_session_path(self, session_key: SessionKey) -> Path | None:
+        """Find a legacy file without accepting another folded SessionKey."""
+        candidate = self._get_legacy_session_path(session_key)
+        if candidate is None:
+            return None
+
+        exact = find_exact_child(self.sessions_dir, candidate.name)
+        if exact is not None:
+            return exact
+        if not candidate.exists():
+            return None
+
+        # A normalizing filesystem may expose the same logical filename with a
+        # different spelling. Accept it only when its persisted identity agrees.
+        try:
+            with open(candidate, encoding="utf-8") as stream:
+                data = json.loads(stream.readline())
+            raw_session_key = data.get("session_key_fields")
+            persisted_key = (
+                SessionKey.model_validate(raw_session_key)
+                if isinstance(raw_session_key, dict)
+                else SessionKey.from_safe_name(data.get("session_key"))
+            )
+        except Exception:
+            return None
+        return candidate if persisted_key == session_key else None
+
     def _find_session_path(self, session_key: SessionKey) -> Path | None:
         """Prefer the portable path while accepting existing legacy files."""
         path = self._get_session_path(session_key)
         if path.exists():
             return path
         legacy_path = self._get_legacy_session_path(session_key)
-        if legacy_path is not None and legacy_path != path and legacy_path.exists():
-            return legacy_path
+        if legacy_path is not None and legacy_path != path:
+            return self._find_legacy_session_path(session_key)
         return None
 
     def has_persisted(self, session_key: SessionKey) -> bool:
@@ -302,8 +332,10 @@ class SessionManager:
             temporary.unlink(missing_ok=True)
 
         # A successful canonical write completes the lazy legacy migration.
-        legacy_path = self._get_legacy_session_path(session.key)
-        if legacy_path is not None and legacy_path != path and legacy_path.exists():
+        legacy_path = self._find_legacy_session_path(session.key)
+        if legacy_path == path:
+            legacy_path = None
+        if legacy_path is not None:
             legacy_path.unlink(missing_ok=True)
 
         self._cache[session.key] = session
@@ -362,7 +394,8 @@ class SessionManager:
 
         # Remove both representations in case migration was interrupted.
         deleted = False
-        paths = {self._get_session_path(key), self._get_legacy_session_path(key)}
+        legacy_path = self._find_legacy_session_path(key)
+        paths = {self._get_session_path(key), legacy_path}
         for path in paths:
             if path is not None and path.exists():
                 path.unlink()

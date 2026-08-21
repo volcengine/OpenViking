@@ -34,6 +34,7 @@ from vikingbot.config.schema import (
 from vikingbot.sandbox import SandboxManager
 from vikingbot.sandbox.backends.srt import SrtBackend
 from vikingbot.sandbox.base import SandboxFileInfo
+from vikingbot.utils.session_paths import portable_path_component
 
 from openviking.core.skill_loader import SkillLoader
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
@@ -2914,7 +2915,7 @@ async def test_srt_settings_created_by_manager_are_in_the_workspace_baseline(
         skills=[],
     )
     manager = SandboxManager(config, tmp_path / "workspaces", tmp_path / "source")
-    session_key = SessionKey(type="compile", channel_id="cmp", chat_id="cmp")
+    session_key = SessionKey(type="compile", channel_id="cmp", chat_id="cmp:windows")
 
     sandbox = await manager.get_sandbox(session_key)
     baseline = {
@@ -2923,7 +2924,10 @@ async def test_srt_settings_created_by_manager_are_in_the_workspace_baseline(
     }
 
     workspace_id = manager.to_workspace_id(session_key)
-    assert baseline == {f"sandboxes/{workspace_id}-srt-settings.json"}
+    settings_name = portable_path_component(workspace_id)
+    assert ":" in workspace_id
+    assert ":" not in settings_name
+    assert baseline == {f"sandboxes/{settings_name}-srt-settings.json"}
 
 
 @pytest.mark.asyncio
