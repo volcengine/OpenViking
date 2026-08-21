@@ -3,6 +3,11 @@ name: 15. _Build Distribution
 on:
   workflow_call:
     inputs:
+      version:
+        description: 'Release tag (e.g. v0.4.16)'
+        required: false
+        type: string
+        default: ''
       os_json:
         description: 'JSON string of runner labels to build on (ubuntu-24.04=x86_64, ubuntu-24.04-arm=aarch64, macos-14=arm64, macos-15-intel=x86_64, windows-latest=x86_64)'
         required: false
@@ -82,6 +87,11 @@ jobs:
         # For sdist, ensure local runtime binaries are not packaged even if present
         # Ignore uv.lock changes to avoid dirty state in setuptools_scm
         git update-index --assume-unchanged uv.lock || true
+
+    - name: Configure OpenViking version
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+      run: uv run --frozen python -m build_support.release_version
 
     - name: Debug Git and SCM
       shell: bash
@@ -227,14 +237,10 @@ jobs:
     - name: Install build dependencies
       run: uv pip install setuptools setuptools_scm cmake wheel build
 
-    - name: Resolve OpenViking version for Rust CLI (Linux)
-      shell: bash
-      run: |
-        OPENVIKING_VERSION=$(
-          uv run --frozen python -c "from build_support.versioning import resolve_openviking_version; print(resolve_openviking_version())"
-        )
-        echo "OPENVIKING_VERSION=$OPENVIKING_VERSION" >> "$GITHUB_ENV"
-        echo "Resolved OpenViking version: $OPENVIKING_VERSION"
+    - name: Configure OpenViking version (Linux)
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+      run: uv run --frozen python -m build_support.release_version
 
     - name: Build Rust CLI (Linux)
       run: cargo build --release --target ${{ matrix.arch == 'aarch64' && 'aarch64-unknown-linux-gnu' || 'x86_64-unknown-linux-gnu' }} -p ov_cli
@@ -302,6 +308,7 @@ jobs:
         "$PYTHON_BIN" -m pip install --force-reinstall dist/*.whl
 
         cd "$RUNNER_TEMP"
+        "$PYTHON_BIN" "$GITHUB_WORKSPACE/.github/scripts/smoke_test_wheel_version.py"
         "$PYTHON_BIN" - <<'PY'
         import importlib
         import importlib.util
@@ -461,14 +468,10 @@ jobs:
       shell: bash
       run: echo "OV_REQUIRE_RAGFS_BUILD=1" >> "$GITHUB_ENV"
 
-    - name: Resolve OpenViking version for Rust CLI (macOS/Windows)
-      shell: bash
-      run: |
-        OPENVIKING_VERSION=$(
-          uv run --frozen python -c "from build_support.versioning import resolve_openviking_version; print(resolve_openviking_version())"
-        )
-        echo "OPENVIKING_VERSION=$OPENVIKING_VERSION" >> "$GITHUB_ENV"
-        echo "Resolved OpenViking version: $OPENVIKING_VERSION"
+    - name: Configure OpenViking version (macOS/Windows)
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+      run: uv run --frozen python -m build_support.release_version
 
     - name: Build Rust CLI (macOS/Windows)
       shell: bash
@@ -528,6 +531,7 @@ jobs:
         python -m pip install --force-reinstall dist/*.whl
 
         cd "$RUNNER_TEMP"
+        python "$GITHUB_WORKSPACE/.github/scripts/smoke_test_wheel_version.py"
         python - <<'PY'
         import importlib.util
         from importlib.resources import files
@@ -565,6 +569,7 @@ jobs:
         python -m pip install --force-reinstall dist/*.whl
 
         cd "$RUNNER_TEMP"
+        python "$GITHUB_WORKSPACE/.github/scripts/smoke_test_wheel_version.py"
         python - <<'PY'
         import importlib.util
         from importlib.resources import files
