@@ -56,6 +56,16 @@ class _AsyncAppendAGFS:
         return len(data)
 
 
+class _AsyncContextAGFS:
+    """Async AGFS stub that records context-directory creation."""
+
+    def __init__(self):
+        self.mkdir_calls = []
+
+    async def mkdir(self, path, fs_ctx=None):
+        self.mkdir_calls.append((path, fs_ctx))
+
+
 class _AsyncMoveAGFS:
     """Async AGFS stub that records move lock ownership and release."""
 
@@ -190,6 +200,49 @@ async def test_append_file_holds_exact_lease_across_read_and_write(monkeypatch):
     )
     assert fake.events[3][3]["lease_ref"] == "lease-1"
     assert fake.events[4] == ("release", {"lease_ref": "lease-1"})
+
+
+async def test_write_context_propagates_outer_lease_to_directory_and_files(monkeypatch):
+    """Context writes must remain inside an outer policy tree-lock lease."""
+    fake = _AsyncContextAGFS()
+    fs = VikingFS(agfs=_FakeAGFS())
+    fs._async_agfs = fake  # type: ignore[assignment]
+    outer_lease = "skill-policy-lease"
+
+    ensure_parent_dirs = AsyncMock()
+    write_file = AsyncMock()
+    monkeypatch.setattr(fs, "_ensure_parent_dirs", ensure_parent_dirs)
+    monkeypatch.setattr(fs, "write_file", write_file)
+    monkeypatch.setattr(fs, "_ensure_mutable_access", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        fs,
+        "_uri_to_path",
+        lambda _uri, **_kwargs: "/local/default/user/default/skills/code-review",
+    )
+
+    await fs.write_context(
+        "viking://user/default/skills/code-review",
+        content="Skill body",
+        abstract="Skill abstract",
+        overview="Skill overview",
+        content_filename="SKILL.md",
+        ctx=_default_ctx(),
+        lease_ref=outer_lease,
+    )
+
+    ensure_parent_dirs.assert_awaited_once_with(
+        "/local/default/user/default/skills/code-review",
+        ctx=_default_ctx(),
+        lease_ref=outer_lease,
+    )
+    assert fake.mkdir_calls == [
+        (
+            "/local/default/user/default/skills/code-review",
+            {"account_id": "default", "lease_ref": outer_lease},
+        )
+    ]
+    assert write_file.await_count == 3
+    assert all(call.kwargs["lease_ref"] == outer_lease for call in write_file.await_args_list)
 
 
 @pytest.mark.asyncio

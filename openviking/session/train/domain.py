@@ -11,7 +11,7 @@ changing the current extraction pipeline.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal
 
 from openviking.message import Message
@@ -51,10 +51,10 @@ Experience = Policy
 class PolicySet:
     """Snapshot of all policies under a policy root directory.
 
-    ``viking_fs`` and ``request_context`` are runtime storage dependencies used
-    for concurrency-safe policy updates.  They are intentionally excluded from
-    equality/repr so the domain snapshot still behaves like policy data in
-    tests and diagnostics.
+    ``viking_fs``, ``request_context``, and ``loader`` are runtime storage
+    dependencies used for concurrency-safe policy updates.  They are
+    intentionally excluded from equality/repr so the domain snapshot still
+    behaves like policy data in tests and diagnostics.
     """
 
     root_uri: str
@@ -62,6 +62,16 @@ class PolicySet:
     metadata: dict[str, Any] = field(default_factory=dict)
     viking_fs: Any | None = field(default=None, repr=False, compare=False)
     request_context: Any | None = field(default=None, repr=False, compare=False)
+    loader: Any | None = field(default=None, repr=False, compare=False)
+
+    def with_policies(self, policies: list[Policy]) -> "PolicySet":
+        """Return a new snapshot while preserving its runtime dependencies."""
+
+        return replace(
+            self,
+            policies=list(policies),
+            metadata=dict(self.metadata),
+        )
 
     @asynccontextmanager
     async def lock(self):
@@ -95,9 +105,12 @@ class PolicySet:
         if self.request_context is None:
             raise RuntimeError("PolicySet.request_context is required for policy reload")
 
-        from openviking.session.train.components.memory_store import ExperienceSetLoader
+        loader = self.loader
+        if loader is None:
+            from openviking.session.train.components.memory_store import ExperienceSetLoader
 
-        return await ExperienceSetLoader(viking_fs=self.viking_fs).load(
+            loader = ExperienceSetLoader(viking_fs=self.viking_fs)
+        return await loader.load(
             self.root_uri,
             ctx=self.request_context,
         )
