@@ -125,6 +125,36 @@ class JsonlLogSource(LogSource):
             return None
         return None
 
+    @staticmethod
+    def _peek_first_timestamp(path: Path) -> Optional[str]:
+        """First record's top-level string ``timestamp`` (the session start).
+
+        Skips leading records that carry no usable timestamp — e.g. Claude Code's
+        ``summary`` / ``queue-operation`` header lines or OpenClaw's ``session``
+        record — and tolerates a malformed line rather than aborting. Only a
+        non-empty ``str`` is returned: a non-string ``timestamp`` is ignored so
+        ``started_at`` keeps its ``Optional[str]`` contract and the downstream
+        ``--since`` string comparison can't hit a ``TypeError``. Returns ``None``
+        when no record has one (prior every-session-included behavior preserved).
+        """
+        try:
+            with open(path, "rb") as f:
+                for raw in f:
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        obj = json.loads(raw)
+                    except ValueError:
+                        continue
+                    if isinstance(obj, dict):
+                        ts = obj.get("timestamp")
+                        if isinstance(ts, str) and ts:
+                            return ts
+        except OSError:
+            return None
+        return None
+
     def read_messages(
         self, ref: SessionRef, cursor: Optional[Cursor], limit: int = DEFAULT_READ_LIMIT
     ) -> Tuple[List[NormalizedMessage], Cursor]:
