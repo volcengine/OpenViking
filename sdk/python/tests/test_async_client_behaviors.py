@@ -131,6 +131,49 @@ async def test_async_http_client_sends_message_semantics_and_turn_retention():
 
 
 @pytest.mark.asyncio
+async def test_async_http_client_add_message_serializes_flattened_peer_id():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {"result": {"status": "ok"}}
+
+    await client.add_message(
+        "demo-session",
+        role="assistant",
+        content="checking",
+        peer_id="peer-alice",
+    )
+
+    fake_http.post.assert_awaited_once_with(
+        "/api/v1/sessions/demo-session/messages",
+        json={
+            "role": "assistant",
+            "content": "checking",
+            "peer_id": "peer-alice",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_add_message_rejects_duplicate_peer_id():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {"result": {"status": "ok"}}
+
+    with pytest.raises(ValueError, match="peer_id"):
+        await client.add_message(
+            "demo-session",
+            role="assistant",
+            content="checking",
+            peer_id="peer-alice",
+            options={"peer_id": "peer-bob"},
+        )
+
+    fake_http.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_async_http_client_sends_event_memory_tag_configuration():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(
