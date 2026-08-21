@@ -1552,7 +1552,7 @@ class VikingVectorIndexBackend:
         """Strictly load existing L2 abstracts for a bounded URI set."""
         requested_by_canonical: Dict[str, str] = {}
         for uri in uris:
-            requested_by_canonical.setdefault(canonicalize_uri(uri, ctx), uri)
+            requested_by_canonical.setdefault(resolve_uri(uri).uri, uri)
         canonical_uris = list(requested_by_canonical)
         if not canonical_uris:
             return {}

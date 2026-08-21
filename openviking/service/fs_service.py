@@ -608,8 +608,6 @@ class FSService:
         ctx: RequestContext,
     ) -> Dict[str, Any]:
         """Copy a resource and queue derived parent semantics after commit."""
-        from_uri = validate_viking_uri(from_uri, field_name="from_uri")
-        to_uri = validate_viking_uri(to_uri, field_name="to_uri")
         viking_fs = self._ensure_initialized()
         async with self._uri_mutation_coordinator.mutation(
             ctx.account_id,

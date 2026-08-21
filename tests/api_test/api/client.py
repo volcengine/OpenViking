@@ -492,6 +492,7 @@ class OpenVikingAPIClient:
                 "recursive": recursive,
             },
         )
+
     def session_used(
         self,
         session_id: str,
