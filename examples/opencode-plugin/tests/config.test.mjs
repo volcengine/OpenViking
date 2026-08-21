@@ -185,6 +185,33 @@ test("loadConfig supports hook-only mode without registering the bundled MCP ser
   })
 })
 
+test("loadConfig preserves an explicit null recall purpose", async () => {
+  const snapshot = { ...process.env }
+  await withTempDir("ov-oc-recall-purpose-", async (dir) => {
+    try {
+      for (const key of Object.keys(process.env)) {
+        if (key.startsWith("OPENVIKING_")) delete process.env[key]
+      }
+      const project = join(dir, "project")
+      process.env.OPENVIKING_CREDENTIAL_SOURCE = "env"
+      process.env.OPENVIKING_URL = "https://env.example.com"
+      await mkdir(join(project, ".opencode"), { recursive: true })
+      await writeFile(join(project, ".opencode", "openviking-config.json"), JSON.stringify({
+        recallPurpose: null,
+        autoRecall: { tokenBudget: 2000 },
+      }))
+
+      const cfg = loadConfig(dir, project)
+      assert.equal(cfg.recallPurpose, null)
+      assert.equal(cfg.recallLimitConfigured, false)
+      assert.equal(cfg.recallMaxTokensConfigured, true)
+      assert.equal(cfg.recallMaxTokens, 2000)
+    } finally {
+      restoreOpenVikingEnv(snapshot)
+    }
+  })
+})
+
 test("OpenVikingPlugin keeps lifecycle hooks without mutating MCP config in hook-only mode", async () => {
   const snapshot = { ...process.env }
   await withTempDir("ov-oc-hook-only-runtime-", async (dir) => {
