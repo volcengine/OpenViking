@@ -16,6 +16,7 @@ import pytest
 
 from openviking_cli.doctor import (
     _probe_embedding_provider,
+    _probe_vlm_function_calling,
     check_agfs,
     check_config,
     check_disk,
@@ -27,6 +28,7 @@ from openviking_cli.doctor import (
     check_vlm,
     run_doctor,
 )
+from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
 class TestCheckConfig:
@@ -500,7 +502,11 @@ class TestCheckVlm:
             )
         )
         with patch("openviking_cli.doctor._find_config", return_value=config):
-            ok, detail, fix = check_vlm()
+            with patch(
+                "openviking_cli.doctor._probe_vlm_function_calling",
+                return_value=("pass", "openai/gpt-4o-mini function-calling ok", None),
+            ):
+                ok, detail, fix = check_vlm()
         assert ok
 
     def test_fail_no_provider(self, tmp_path: Path):
@@ -576,6 +582,196 @@ class TestCheckVlm:
         assert ok
         assert "openai-codex/gpt-5.3-codex" in detail
         assert "oauth via openviking" in detail
+
+    def test_folds_probe_warn(self, tmp_path: Path):
+        # A valid-key config reaches the probe; check_vlm returns the probe's tri-state.
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {"vlm": {"provider": "openai", "model": "gpt-4o-mini", "api_key": "sk-test"}}
+            )
+        )
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            with patch(
+                "openviking_cli.doctor._probe_vlm_function_calling",
+                return_value=("warn", "openai/gpt-4o-mini does not support Function Calling", "fix"),
+            ):
+                status, detail, fix = check_vlm()
+        assert status == "warn"
+        assert "Function Calling" in detail
+        assert fix == "fix"
+
+    def test_check_vlm_drives_real_probe_20037(self, tmp_path: Path):
+        # Integration (§8b): exercise the real check_vlm -> _probe_vlm_function_calling
+        # -> VLMConfig.get_completion_async chain with ONLY the LLM boundary mocked.
+        # The probe is NOT stubbed, so a WARN here proves the live chain wires up.
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {"vlm": {"provider": "openai", "model": "gpt-4o-mini", "api_key": "sk-test"}}
+            )
+        )
+
+        async def raise_20037(self, *args, **kwargs):
+            raise Exception(
+                "Error code: 400 - {'code': 20037, 'message': "
+                "'Function call is not supported for this model.', 'data': None}"
+            )
+
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            with patch.object(VLMConfig, "get_completion_async", raise_20037):
+                status, detail, fix = check_vlm()
+        assert status == "warn"
+        assert "does not support Function Calling" in detail
+        assert "Function-Calling-capable" in fix
+
+    def test_config_fail_skips_probe(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(json.dumps({"vlm": {}}))
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            with patch("openviking_cli.doctor._probe_vlm_function_calling") as probe:
+                status, detail, fix = check_vlm()
+        assert status is False
+        probe.assert_not_called()
+
+    def test_codex_and_ollama_paths_skip_probe(self, tmp_path: Path):
+        # Early-return paths (codex-oauth :361, ollama-via-litellm :385) never probe.
+        codex = tmp_path / "codex.conf"
+        codex.write_text(
+            json.dumps({"vlm": {"provider": "openai-codex", "model": "gpt-5.3-codex"}})
+        )
+        with patch("openviking_cli.doctor._find_config", return_value=codex):
+            with patch(
+                "openviking.models.vlm.backends.codex_auth.resolve_codex_runtime_credentials",
+                return_value={"source": "openviking"},
+            ):
+                with patch("openviking_cli.doctor._probe_vlm_function_calling") as probe:
+                    ok, _, _ = check_vlm()
+        assert ok
+        probe.assert_not_called()
+
+        ollama = tmp_path / "ollama.conf"
+        ollama.write_text(
+            json.dumps({"vlm": {"provider": "litellm", "model": "ollama/llama3"}})
+        )
+        with patch("openviking_cli.doctor._find_config", return_value=ollama):
+            with patch("openviking_cli.doctor._probe_vlm_function_calling") as probe:
+                ok, _, _ = check_vlm()
+        assert ok
+        probe.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "fc_return, fc_raises, expect_warn, expect_probe_called",
+        [
+            (False, False, True, False),  # registry says False -> WARN, no live request
+            (True, False, False, True),  # registry says True -> fall through to live probe
+            (None, True, False, True),  # registry raises (unknown) -> fall through
+        ],
+    )
+    def test_litellm_registry_prefilter_warns(
+        self, tmp_path: Path, fc_return, fc_raises, expect_warn, expect_probe_called
+    ):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {"vlm": {"provider": "litellm", "model": "gpt-4o", "api_key": "sk-test"}}
+            )
+        )
+
+        def supports_fc(*args, **kwargs):
+            if fc_raises:
+                raise Exception("unknown model")
+            return fc_return
+
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            with patch("litellm.supports_function_calling", side_effect=supports_fc):
+                with patch(
+                    "openviking_cli.doctor._probe_vlm_function_calling",
+                    return_value=("pass", "litellm/gpt-4o function-calling ok", None),
+                ) as probe:
+                    status, detail, fix = check_vlm()
+
+        if expect_warn:
+            assert status == "warn"
+            assert "Function Calling" in detail
+        else:
+            assert status == "pass"
+        assert probe.called is expect_probe_called
+
+
+def _fc_probe_config() -> VLMConfig:
+    return VLMConfig(provider="openai", model="gpt-4o-mini", api_key="sk-test")
+
+
+def _patch_completion(async_fn):
+    """Patch VLMConfig.get_completion_async with an async replacement."""
+    return patch.object(VLMConfig, "get_completion_async", async_fn)
+
+
+class TestProbeVlmFunctionCalling:
+    """Live Function-Calling probe (§5 rows 1-5, 11)."""
+
+    def test_passes_on_fc_model(self):
+        async def ok(self, *args, **kwargs):
+            return SimpleNamespace(content="ok")
+
+        with _patch_completion(ok):
+            status, detail, fix = _probe_vlm_function_calling(_fc_probe_config())
+        assert status == "pass"
+        assert "function-calling ok" in detail
+        assert fix is None
+
+    def test_detects_missing_fc_20037(self):
+        # The faithful repro: exact 400 / code 20037 body raised at tool-call time.
+        async def raise_20037(self, *args, **kwargs):
+            raise Exception(
+                "Error code: 400 - {'code': 20037, 'message': "
+                "'Function call is not supported for this model.', 'data': None}"
+            )
+
+        with _patch_completion(raise_20037):
+            status, detail, fix = _probe_vlm_function_calling(_fc_probe_config())
+        assert status == "warn"
+        assert "Function Calling" in detail
+        assert "Function-Calling-capable" in fix
+
+    def test_detects_missing_fc_by_phrase(self):
+        async def raise_phrase(self, *args, **kwargs):
+            raise Exception("function call is not supported")
+
+        with _patch_completion(raise_phrase):
+            status, detail, fix = _probe_vlm_function_calling(_fc_probe_config())
+        assert status == "warn"
+        assert "Function Calling" in detail
+
+    def test_timeout_warns_not_fails(self):
+        async def raise_timeout(self, *args, **kwargs):
+            raise TimeoutError()
+
+        with _patch_completion(raise_timeout):
+            status, detail, fix = _probe_vlm_function_calling(_fc_probe_config())
+        assert status == "warn"
+        assert "timed out" in detail
+
+    def test_other_error_warns(self):
+        async def raise_conn(self, *args, **kwargs):
+            raise RuntimeError("connection refused")
+
+        with _patch_completion(raise_conn):
+            status, detail, fix = _probe_vlm_function_calling(_fc_probe_config())
+        assert status == "warn"
+        assert "could not complete" in detail
+
+    def test_transient_error_not_mislabeled(self):
+        # A transient outage must never be reported as an FC verdict (row 11).
+        async def raise_conn(self, *args, **kwargs):
+            raise RuntimeError("connection refused")
+
+        with _patch_completion(raise_conn):
+            status, detail, fix = _probe_vlm_function_calling(_fc_probe_config())
+        assert status == "warn"
+        assert "could not complete" in detail
+        assert "does not support Function Calling" not in detail
 
 
 class TestCheckOllama:
@@ -1018,7 +1214,11 @@ class TestRunDoctor:
                 "openviking_cli.doctor._probe_embedding_provider",
                 return_value=(True, "openai/m probe ok", None),
             ):
-                code = run_doctor()
+                with patch(
+                    "openviking_cli.doctor._probe_vlm_function_calling",
+                    return_value=("pass", "openai/m function-calling ok", None),
+                ):
+                    code = run_doctor()
         captured = capsys.readouterr()
         assert "OpenViking Doctor" in captured.out
         # May not be 0 if native engine is missing, but the function should complete
@@ -1030,6 +1230,30 @@ class TestRunDoctor:
         assert code == 1
         captured = capsys.readouterr()
         assert "FAIL" in captured.out
+
+    def test_vlm_probe_warn_formats_and_exit_zero(self, tmp_path: Path, capsys):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {"vlm": {"provider": "openai", "model": "gpt-4o-mini", "api_key": "sk-test"}}
+            )
+        )
+        with patch("openviking_cli.doctor._CHECKS", [("VLM", check_vlm)]):
+            with patch("openviking_cli.doctor._find_config", return_value=config):
+                with patch(
+                    "openviking_cli.doctor._probe_vlm_function_calling",
+                    return_value=(
+                        "warn",
+                        "openai/gpt-4o-mini does not support Function Calling (tool use)",
+                        "Configure a Function-Calling-capable vlm.model",
+                    ),
+                ):
+                    code = run_doctor()
+        assert code == 0
+        captured = capsys.readouterr()
+        assert "WARN" in captured.out
+        assert "Fix:" in captured.out
+        assert "Function Calling" in captured.out
 
     def test_returns_zero_on_warning_only(self, capsys):
         with patch(
