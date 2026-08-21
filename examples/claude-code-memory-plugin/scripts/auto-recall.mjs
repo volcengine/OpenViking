@@ -119,7 +119,7 @@ function dedupeItems(items) {
 // User URI space resolution
 // ---------------------------------------------------------------------------
 
-const USER_RESERVED_DIRS = new Set(["memories", "skills"]);
+const USER_RESERVED_DIRS = new Set(["memories", "skills", "peers"]);
 let _userSpaceCache = "";
 
 async function resolveUserSpace(actorPeerId = "") {
@@ -169,7 +169,7 @@ async function resolveTargetUri(targetUri, actorPeerId = "") {
 // cross-namespace leakage; use MCP search(scope="resources") explicitly)
 // ---------------------------------------------------------------------------
 
-const SOURCES = [
+const USER_SOURCES = [
   { type: "memory", uri: "viking://user/memories",  bucket: "memories" },
   { type: "skill",  uri: "viking://user/skills",    bucket: "skills"   },
 ];
@@ -186,11 +186,23 @@ async function searchOneSource(query, source, limit, actorPeerId = "") {
   return items.map(item => ({ ...item, _sourceType: source.type }));
 }
 
-async function searchAllSources(query, perSourceLimit, actorPeerId = "") {
-  const results = await Promise.all(SOURCES.map(src => searchOneSource(query, src, perSourceLimit, actorPeerId)));
+function buildFallbackSources(actorPeerId = "", peerScope = "") {
+  const peerId = String(actorPeerId).trim();
+  const peerSources = peerId
+    ? USER_SOURCES.map((source) => ({
+      ...source,
+      uri: `viking://user/peers/${peerId}/${source.bucket}`,
+    }))
+    : [];
+  return peerScope === "actor" && peerId ? peerSources : [...USER_SOURCES, ...peerSources];
+}
+
+async function searchAllSources(query, perSourceLimit, actorPeerId = "", peerScope = "") {
+  const sources = buildFallbackSources(actorPeerId, peerScope);
+  const results = await Promise.all(sources.map(src => searchOneSource(query, src, perSourceLimit, actorPeerId)));
   const all = results.flat();
   log("search_summary", {
-    counts: SOURCES.map((src, i) => ({ type: src.type, uri: src.uri, count: results[i].length })),
+    counts: sources.map((src, i) => ({ type: src.type, uri: src.uri, count: results[i].length })),
     total: all.length,
   });
   return all;
@@ -407,7 +419,12 @@ async function main() {
   }
 
   const perSourceLimit = Math.max(cfg.recallLimit * 2, 8);
-  const raw = await searchAllSources(userPrompt, perSourceLimit, effectivePeer.peerId);
+  const raw = await searchAllSources(
+    userPrompt,
+    perSourceLimit,
+    effectivePeer.peerId,
+    cfg.recallPeerScope,
+  );
   if (raw.length === 0) {
     log("skip", { reason: "no results" });
     writeRecallState({ count: 0, reason: "no_results", cc_session_id: sessionId });
