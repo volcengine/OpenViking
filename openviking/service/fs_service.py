@@ -7,7 +7,7 @@ Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, 
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import classify_uri, context_type_for_uri, uri_leaf_name
@@ -537,8 +537,9 @@ class FSService:
         copied_uri: str,
         context_type: str,
         ctx: RequestContext,
+        change_kind: Literal["added", "deleted"] = "added",
     ) -> str:
-        """Queue a parent-only semantic refresh after a committed copy."""
+        """Queue a parent-only semantic refresh after a committed transfer."""
         await mark_semantic_sidecars_pending(
             viking_fs=self._viking_fs,
             dir_uri=root_uri,
@@ -570,7 +571,7 @@ class FSService:
                 user_id=ctx.user.user_id,
                 peer_id=ctx.user.user_id,
             ),
-            changes={"added": [copied_uri]},
+            changes={change_kind: [copied_uri]},
             generation_trigger="content_copy",
             copy_source_uri=source_uri,
         )
@@ -655,15 +656,15 @@ class FSService:
         watch_manager = self._get_watch_manager()
         if not watch_manager or context_type_for_uri(from_uri) != "resource":
             await viking_fs.mv(from_uri, to_uri, ctx=ctx)
-            await self._refresh_move_target_parent(from_uri=from_uri, to_uri=to_uri, ctx=ctx)
+            await self._refresh_move_parents(from_uri=from_uri, to_uri=to_uri, ctx=ctx)
             return
         if context_type_for_uri(to_uri) != "resource":
             await viking_fs.mv(from_uri, to_uri, ctx=ctx)
-            await self._refresh_move_target_parent(from_uri=from_uri, to_uri=to_uri, ctx=ctx)
+            await self._refresh_move_parents(from_uri=from_uri, to_uri=to_uri, ctx=ctx)
             return
         if is_watch_task_control_uri(from_uri) or is_watch_task_control_uri(to_uri):
             await viking_fs.mv(from_uri, to_uri, ctx=ctx)
-            await self._refresh_move_target_parent(from_uri=from_uri, to_uri=to_uri, ctx=ctx)
+            await self._refresh_move_parents(from_uri=from_uri, to_uri=to_uri, ctx=ctx)
             return
 
         transaction_task = asyncio.create_task(
@@ -695,36 +696,47 @@ class FSService:
                     exc_info=True,
                 )
             raise
-        await self._refresh_move_target_parent(from_uri=from_uri, to_uri=to_uri, ctx=ctx)
+        await self._refresh_move_parents(from_uri=from_uri, to_uri=to_uri, ctx=ctx)
 
-    async def _refresh_move_target_parent(
+    async def _refresh_move_parents(
         self,
         *,
         from_uri: str,
         to_uri: str,
         ctx: RequestContext,
     ) -> None:
-        """Queue the same target-parent semantic refresh used by cp after mv commits."""
+        """Queue transfer refreshes for both affected parents after mv commits."""
         if is_watch_task_control_uri(from_uri) or is_watch_task_control_uri(to_uri):
             return
-        context_type = context_type_for_uri(to_uri)
-        refresh_parent_uri = self._semantic_refresh_parent_uri(to_uri, context_type)
-        if not refresh_parent_uri:
-            return
-        try:
-            await self._enqueue_copy_refresh(
-                root_uri=refresh_parent_uri,
-                source_uri=from_uri,
-                copied_uri=to_uri,
-                context_type=context_type,
-                ctx=ctx,
-            )
-        except Exception as exc:
-            logger.warning(
-                "Move committed but target parent semantic refresh failed for %s: %s",
-                to_uri,
-                exc,
-            )
+
+        source_context_type = context_type_for_uri(from_uri)
+        target_context_type = context_type_for_uri(to_uri)
+        source_parent_uri = self._semantic_refresh_parent_uri(from_uri, source_context_type)
+        target_parent_uri = self._semantic_refresh_parent_uri(to_uri, target_context_type)
+
+        refreshes: List[tuple[str, str, Literal["added", "deleted"], str]] = []
+        if source_parent_uri and source_parent_uri != target_parent_uri:
+            refreshes.append((source_parent_uri, from_uri, "deleted", source_context_type))
+        if target_parent_uri:
+            refreshes.append((target_parent_uri, to_uri, "added", target_context_type))
+
+        for parent_uri, changed_uri, change_kind, context_type in refreshes:
+            try:
+                await self._enqueue_copy_refresh(
+                    root_uri=parent_uri,
+                    source_uri=from_uri,
+                    copied_uri=changed_uri,
+                    change_kind=change_kind,
+                    context_type=context_type,
+                    ctx=ctx,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Move committed but %s parent semantic refresh failed for %s: %s",
+                    change_kind,
+                    parent_uri,
+                    exc,
+                )
 
     async def _move_resource_with_watch_transaction(
         self,

@@ -571,7 +571,7 @@ class SemanticDagExecutor:
             pending_snapshot=pending_snapshot,
             total_entries=len(candidates),
             missing_summary_entries=missing_count,
-            transfer_inputs_ready=bool(selected),
+            transfer_inputs_ready=not candidates or bool(selected),
             dispatched=True,
         )
 

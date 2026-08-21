@@ -784,6 +784,7 @@ async def test_resource_mv_validates_then_moves_then_rewrites_watch_tasks(reques
             "root_uri": "viking://resources/codeask",
             "source_uri": "viking://resources/codeask/wiki",
             "copied_uri": "viking://resources/codeask/wiki-renamed",
+            "change_kind": "added",
             "context_type": "resource",
             "ctx": request_context,
         }
@@ -842,34 +843,47 @@ async def test_resource_mv_without_watch_scheduler_moves_resource_directly(reque
     events = []
     viking_fs = _FakeVikingFS(events=events)
     service = FSService(viking_fs=viking_fs)
+    refresh_calls = []
 
     async def enqueue_refresh(**kwargs):
         events.append(("refresh", kwargs["root_uri"]))
-        assert kwargs == {
-            "root_uri": "viking://resources/codeask",
-            "source_uri": "viking://resources/codeask/wiki",
-            "copied_uri": "viking://resources/codeask/wiki-renamed",
-            "context_type": "resource",
-            "ctx": request_context,
-        }
+        refresh_calls.append(kwargs)
         return "queued"
 
     service._enqueue_copy_refresh = enqueue_refresh
 
     await service.mv(
         "viking://resources/codeask/wiki",
-        "viking://resources/codeask/wiki-renamed",
+        "viking://resources/archive/wiki",
         ctx=request_context,
     )
 
     assert viking_fs.mv_calls == [
         {
             "from_uri": "viking://resources/codeask/wiki",
-            "to_uri": "viking://resources/codeask/wiki-renamed",
+            "to_uri": "viking://resources/archive/wiki",
             "ctx": request_context,
         }
     ]
-    assert [event[0] for event in events] == ["mv", "refresh"]
+    assert refresh_calls == [
+        {
+            "root_uri": "viking://resources/codeask",
+            "source_uri": "viking://resources/codeask/wiki",
+            "copied_uri": "viking://resources/codeask/wiki",
+            "change_kind": "deleted",
+            "context_type": "resource",
+            "ctx": request_context,
+        },
+        {
+            "root_uri": "viking://resources/archive",
+            "source_uri": "viking://resources/codeask/wiki",
+            "copied_uri": "viking://resources/archive/wiki",
+            "change_kind": "added",
+            "context_type": "resource",
+            "ctx": request_context,
+        },
+    ]
+    assert [event[0] for event in events] == ["mv", "refresh", "refresh"]
 
 
 @pytest.mark.asyncio
@@ -1009,6 +1023,35 @@ async def test_copy_refresh_message_only_rebuilds_parent_semantics(
     assert msg.changes == {"added": ["viking://resources/archive/copied.md"]}
     assert msg.generation_trigger == "content_copy"
     assert msg.copy_source_uri == "viking://resources/source.md"
+
+
+@pytest.mark.asyncio
+async def test_transfer_refresh_message_records_deleted_source_entry(
+    request_context,
+    monkeypatch,
+):
+    service = FSService(viking_fs=_FakeVikingFS())
+    queue_manager = _FakeQueueManager()
+    monkeypatch.setattr(
+        "openviking.service.fs_service.get_queue_manager",
+        lambda: queue_manager,
+    )
+    monkeypatch.setattr(
+        "openviking.service.fs_service.mark_semantic_sidecars_pending",
+        AsyncMock(),
+    )
+
+    status = await service._enqueue_copy_refresh(
+        root_uri="viking://resources/source",
+        source_uri="viking://resources/source/moved.md",
+        copied_uri="viking://resources/source/moved.md",
+        change_kind="deleted",
+        context_type="resource",
+        ctx=request_context,
+    )
+
+    assert status == "queued"
+    assert queue_manager.messages[0].changes == {"deleted": ["viking://resources/source/moved.md"]}
 
 
 @pytest.mark.asyncio
