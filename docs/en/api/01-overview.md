@@ -366,6 +366,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/api/v1/fs/attrs/set_tags` | Set retrieval tags (compatibility alias) |
 | POST | `/api/v1/fs/mkdir` | Create a directory |
 | DELETE | `/api/v1/fs` | Delete a resource |
+| POST | `/api/v1/fs/cp` | Copy a file or directory together with its vector records |
 | POST | `/api/v1/fs/mv` | Move or rename a resource |
 
 ### [ACL](12-acl.md)

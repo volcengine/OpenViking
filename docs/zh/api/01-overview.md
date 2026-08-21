@@ -361,6 +361,7 @@ JSON 输出 - 错误：
 | POST | `/api/v1/fs/attrs/set_tags` | 设置检索标签（兼容别名） |
 | POST | `/api/v1/fs/mkdir` | 创建目录 |
 | DELETE | `/api/v1/fs` | 删除资源 |
+| POST | `/api/v1/fs/cp` | 复制文件或目录及其向量记录 |
 | POST | `/api/v1/fs/mv` | 移动或重命名资源 |
 
 ### [ACL](12-acl.md)

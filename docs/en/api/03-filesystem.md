@@ -622,6 +622,90 @@ When deleting `viking://resources/...`, the response may include `memory_cleanup
 
 ---
 
+### cp()
+
+Copy a file or directory to a new Viking URI. The source remains unchanged. Existing vector records under the source URI are copied and rewritten for the destination, so the copied content does not need to be parsed, described by a VLM, or embedded again.
+
+The destination parent directory must already exist, and the destination itself must not exist. Copying a directory requires `recursive=true` (or `-r` in the CLI). The destination cannot equal the source or be inside the source directory tree.
+
+**Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| from_uri | str | Yes | - | Source Viking URI |
+| to_uri | str | Yes | - | Destination Viking URI, including the new file or directory name |
+| recursive | bool | No | False | Required when the source is a directory |
+
+**HTTP API**
+
+```
+POST /api/v1/fs/cp
+```
+
+```bash
+# Copy one file
+curl -X POST http://localhost:1933/api/v1/fs/cp \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "from_uri": "viking://resources/docs/guide.md",
+    "to_uri": "viking://resources/archive/guide-copy.md",
+    "recursive": false
+  }'
+
+# Copy a directory recursively
+curl -X POST http://localhost:1933/api/v1/fs/cp \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "from_uri": "viking://resources/docs",
+    "to_uri": "viking://resources/docs-backup",
+    "recursive": true
+  }'
+```
+
+**CLI**
+
+```bash
+# Copy one file
+ov cp viking://resources/docs/guide.md viking://resources/archive/guide-copy.md
+
+# Copy a directory recursively
+ov cp -r viking://resources/docs viking://resources/docs-backup
+```
+
+**Response**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "operation_id": "61ec2a80bf5f46a28aa3497fbdcb56dd",
+    "operation": "copy",
+    "from": "viking://resources/docs/guide.md",
+    "to": "viking://resources/archive/guide-copy.md",
+    "recursive": false,
+    "phase": "completed",
+    "files_created": 1,
+    "vectors": {
+      "scanned": 3,
+      "written": 3,
+      "deleted": 0,
+      "restored": 0,
+      "batches": 1
+    },
+    "semantic_root_uri": "viking://resources/archive",
+    "semantic_status": "queued"
+  }
+}
+```
+
+`semantic_status: "queued"` means the copy has already committed and the destination parent's overview and abstract will be rebuilt asynchronously from summaries available at the destination. The API does not wait for that refresh. A refresh enqueue failure may return `semantic_status: "failed"` and `semantic_error`; it does not roll back the completed file and vector copy.
+
+Common errors include `NOT_FOUND` when the source or destination parent is missing, `CONFLICT` when the destination already exists or a path lock is busy, `FAILED_PRECONDITION` when a directory is copied without `recursive=true`, and `INVALID_ARGUMENT` for invalid source/destination relationships.
+
+---
+
 ### mv()
 
 Move file or directory.

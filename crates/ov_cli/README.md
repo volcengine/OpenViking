@@ -130,10 +130,17 @@ Run `ov --help` and `ov <command> --help` for the exact command surface of your 
 - `tree` - Show a hierarchical tree.
 - `mkdir` - Create a directory.
 - `rm` - Remove a resource or directory.
+- `cp` - Copy a file, or copy a directory recursively with `-r`.
 - `mv` - Move or rename a resource.
 - `stat` - Show resource metadata.
 - `attrs` - Get logical extended attributes.
 - `get` - Download a file to a local path.
+
+```bash
+# The destination parent must exist and the destination itself must not exist.
+ov cp viking://resources/docs/guide.md viking://resources/archive/guide-copy.md
+ov cp -r viking://resources/docs viking://resources/docs-backup
+```
 
 ### Content Access
 

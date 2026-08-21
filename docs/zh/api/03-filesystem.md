@@ -652,6 +652,90 @@ openviking rm viking://resources/old.md [--recursive]
 
 ---
 
+### cp()
+
+把文件或目录复制到新的 Viking URI，源内容保持不变。源 URI 下已有的向量记录会同步复制并改写为目标 URI，因此无需重新解析复制内容，也无需重新执行文件级 VLM 或 embedding。
+
+目标父目录必须已经存在，目标本身必须不存在。复制目录时必须设置 `recursive=true`（CLI 中使用 `-r`）。目标不能与源相同，也不能位于源目录子树内。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| from_uri | str | 是 | - | 源 Viking URI |
+| to_uri | str | 是 | - | 目标 Viking URI，必须包含新的文件名或目录名 |
+| recursive | bool | 否 | False | 源为目录时必须设为 `true` |
+
+**HTTP API**
+
+```
+POST /api/v1/fs/cp
+```
+
+```bash
+# 复制单个文件
+curl -X POST http://localhost:1933/api/v1/fs/cp \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "from_uri": "viking://resources/docs/guide.md",
+    "to_uri": "viking://resources/archive/guide-copy.md",
+    "recursive": false
+  }'
+
+# 递归复制目录
+curl -X POST http://localhost:1933/api/v1/fs/cp \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "from_uri": "viking://resources/docs",
+    "to_uri": "viking://resources/docs-backup",
+    "recursive": true
+  }'
+```
+
+**CLI**
+
+```bash
+# 复制单个文件
+ov cp viking://resources/docs/guide.md viking://resources/archive/guide-copy.md
+
+# 递归复制目录
+ov cp -r viking://resources/docs viking://resources/docs-backup
+```
+
+**响应**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "operation_id": "61ec2a80bf5f46a28aa3497fbdcb56dd",
+    "operation": "copy",
+    "from": "viking://resources/docs/guide.md",
+    "to": "viking://resources/archive/guide-copy.md",
+    "recursive": false,
+    "phase": "completed",
+    "files_created": 1,
+    "vectors": {
+      "scanned": 3,
+      "written": 3,
+      "deleted": 0,
+      "restored": 0,
+      "batches": 1
+    },
+    "semantic_root_uri": "viking://resources/archive",
+    "semantic_status": "queued"
+  }
+}
+```
+
+`semantic_status: "queued"` 表示复制已经提交，目标父目录的 overview 和 abstract 将根据目标目录中已有的摘要异步重建，接口不会等待刷新完成。若语义刷新入队失败，响应可能包含 `semantic_status: "failed"` 和 `semantic_error`；已经完成的文件和向量复制不会因此回滚。
+
+常见错误包括：源或目标父目录不存在时返回 `NOT_FOUND`；目标已存在或路径锁繁忙时返回 `CONFLICT`；复制目录但未设置 `recursive=true` 时返回 `FAILED_PRECONDITION`；源和目标关系非法时返回 `INVALID_ARGUMENT`。
+
+---
+
 ### mv()
 
 移动文件或目录。
