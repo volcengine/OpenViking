@@ -131,6 +131,11 @@ client.session(session_id="demo-session").add_message(
     role="user",
     content="hello from sdk",
 )
+client.session(session_id="demo-session").add_message(
+    role="assistant",
+    content="hello from a specific peer",
+    peer_id="peer-alice",
+)
 context = client.session(session_id="demo-session").get_session_context(token_budget=4096)
 print("context:", context)
 
@@ -284,7 +289,9 @@ print(result)
 Frequently used fields are explicit parameters. For readability, prefer named
 arguments such as `to` and `wait` with `add_resource`; `target_uri`
 and `limit` with retrieval; and `role`, `content`, and `parts` with
-`add_message`. Positional calls remain supported.
+`add_message`. `add_message` also accepts `peer_id` as an explicit message
+field. For batch writes, place `peer_id` in each message dictionary. Positional
+calls remain supported.
 
 Use the method's typed `options` dictionary for advanced fields, such as
 `processing_mode`, retrieval filters, session extraction configuration, or

@@ -128,6 +128,11 @@ client.session(session_id="demo-session").add_message(
     role="user",
     content="hello from sdk",
 )
+client.session(session_id="demo-session").add_message(
+    role="assistant",
+    content="hello from a specific peer",
+    peer_id="peer-alice",
+)
 context = client.session(session_id="demo-session").get_session_context(token_budget=4096)
 print("context:", context)
 
@@ -279,7 +284,8 @@ print(result)
 
 高频字段使用显式参数。为保证可读性，推荐使用参数名，例如 `add_resource` 的
 `to`、`wait`，检索的 `target_uri`、`limit`，以及 `add_message` 的
-`role`、`content`、`parts`；位置参数调用仍然支持。
+`role`、`content`、`parts`、`peer_id`；位置参数调用仍然支持。批量写入时，
+请在每条消息字典中传入 `peer_id`。
 
 进阶字段统一放入带类型提示的 `options` 字典，例如 `processing_mode`、检索
 过滤条件、Session 提取配置和 `telemetry`。不要把进阶字段作为裸关键字参数传入。同一个字段

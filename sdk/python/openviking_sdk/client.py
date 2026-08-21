@@ -162,14 +162,17 @@ class Session:
         content: Optional[str] = None,
         parts: Optional[List[Dict[str, Any]]] = None,
         options: Optional[AddMessageOptions] = None,
+        peer_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        return await self._client.add_message(
-            self.session_id,
-            role=role,
-            content=content,
-            parts=parts,
-            options=options,
-        )
+        kwargs: Dict[str, Any] = {
+            "role": role,
+            "content": content,
+            "parts": parts,
+            "options": options,
+        }
+        if peer_id is not None:
+            kwargs["peer_id"] = peer_id
+        return await self._client.add_message(self.session_id, **kwargs)
 
     async def batch_add_messages(self, messages: list[dict]) -> Dict[str, Any]:
         return await self._client.batch_add_messages(self.session_id, messages)
@@ -209,14 +212,17 @@ class SyncSession:
         content: Optional[str] = None,
         parts: Optional[List[Dict[str, Any]]] = None,
         options: Optional[AddMessageOptions] = None,
+        peer_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        return self._client.add_message(
-            self.session_id,
-            role=role,
-            content=content,
-            parts=parts,
-            options=options,
-        )
+        kwargs: Dict[str, Any] = {
+            "role": role,
+            "content": content,
+            "parts": parts,
+            "options": options,
+        }
+        if peer_id is not None:
+            kwargs["peer_id"] = peer_id
+        return self._client.add_message(self.session_id, **kwargs)
 
     def batch_add_messages(self, messages: list[dict]) -> Dict[str, Any]:
         return self._client.batch_add_messages(self.session_id, messages)
@@ -1484,15 +1490,21 @@ class AsyncHTTPClient:
         content: Optional[str] = None,
         parts: Optional[List[Dict[str, Any]]] = None,
         options: Optional[AddMessageOptions] = None,
+        peer_id: Optional[str] = None,
     ) -> Dict[str, Any]:
+        if peer_id is not None and options and "peer_id" in options:
+            raise ValueError("options cannot override 'peer_id'")
+        fixed = {
+            "role": role,
+            "content": content,
+            "parts": parts,
+        }
+        if peer_id is not None:
+            fixed["peer_id"] = peer_id
         payload = self._build_options_payload(
             options,
             AddMessageOptions,
-            fixed={
-                "role": role,
-                "content": content,
-                "parts": parts,
-            },
+            fixed=fixed,
             protected={"role", "content", "parts"},
         )
         payload = self._normalize_message_payload(payload)
@@ -2453,12 +2465,17 @@ class SyncHTTPClient:
         content: Optional[str] = None,
         parts: Optional[List[Dict[str, Any]]] = None,
         options: Optional[AddMessageOptions] = None,
+        peer_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        return run_async(
-            self._async_client.add_message(
-                session_id, role=role, content=content, parts=parts, options=options
-            )
-        )
+        kwargs: Dict[str, Any] = {
+            "role": role,
+            "content": content,
+            "parts": parts,
+            "options": options,
+        }
+        if peer_id is not None:
+            kwargs["peer_id"] = peer_id
+        return run_async(self._async_client.add_message(session_id, **kwargs))
 
     def export_ovpack(
         self,

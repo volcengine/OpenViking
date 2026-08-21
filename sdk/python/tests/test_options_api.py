@@ -279,6 +279,7 @@ async def test_add_message_keeps_content_when_parts_is_null():
         role="assistant",
         content="fallback text",
         parts=None,
+        peer_id="peer-alice",
     )
 
     post.assert_awaited_once_with(
@@ -286,8 +287,25 @@ async def test_add_message_keeps_content_when_parts_is_null():
         json={
             "role": "assistant",
             "content": "fallback text",
+            "peer_id": "peer-alice",
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_add_message_rejects_peer_id_from_flattened_argument_and_options():
+    client, post = _client()
+
+    with pytest.raises(ValueError, match="peer_id"):
+        await client.add_message(
+            "session-1",
+            role="assistant",
+            content="fallback text",
+            peer_id="peer-alice",
+            options={"peer_id": "peer-bob"},
+        )
+
+    post.assert_not_awaited()
 
 
 @pytest.mark.asyncio

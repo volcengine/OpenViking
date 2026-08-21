@@ -348,7 +348,11 @@ def test_sync_session_add_message_wraps_async_client():
             "openviking_sdk.client.run_async",
             return_value={"message_id": "msg-1"},
         ) as mock_run:
-            result = session.add_message(role="user", content="hello")
+            result = session.add_message(
+                role="user",
+                content="hello",
+                peer_id="peer-alice",
+            )
 
     assert result == {"message_id": "msg-1"}
     assert mock_run.called
@@ -358,6 +362,7 @@ def test_sync_session_add_message_wraps_async_client():
         content="hello",
         parts=None,
         options=None,
+        peer_id="peer-alice",
     )
 
 
