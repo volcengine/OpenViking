@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Placeholder helpers for skill privacy values."""
 
+import re
 from dataclasses import dataclass, field
 
 
@@ -21,18 +22,6 @@ def _replace_structured_value(content: str, raw_value: str, placeholder: str) ->
     replacements = (
         (f'"{raw_value}"', f'"{placeholder}"'),
         (f"'{raw_value}'", f"'{placeholder}'"),
-        (f": {raw_value}\n", f": {placeholder}\n"),
-        (f": {raw_value}\r\n", f": {placeholder}\r\n"),
-        (f":{raw_value}\n", f":{placeholder}\n"),
-        (f":{raw_value}\r\n", f":{placeholder}\r\n"),
-        (f": {raw_value}", f": {placeholder}"),
-        (f":{raw_value}", f":{placeholder}"),
-        (f"= {raw_value}\n", f"= {placeholder}\n"),
-        (f"= {raw_value}\r\n", f"= {placeholder}\r\n"),
-        (f"={raw_value}\n", f"={placeholder}\n"),
-        (f"={raw_value}\r\n", f"={placeholder}\r\n"),
-        (f"= {raw_value}", f"= {placeholder}"),
-        (f"={raw_value}", f"={placeholder}"),
     )
 
     replaced = False
@@ -40,7 +29,20 @@ def _replace_structured_value(content: str, raw_value: str, placeholder: str) ->
         if old in content:
             content = content.replace(old, new)
             replaced = True
-    return content, replaced
+
+    bare_value_pattern = re.compile(
+        rf"(?P<separator>[:=])(?P<leading>[ \t]*){re.escape(raw_value)}"
+        r"(?P<trailing>[ \t]*)(?=\r?$)",
+        re.MULTILINE,
+    )
+    content, bare_replacement_count = bare_value_pattern.subn(
+        lambda match: (
+            f"{match.group('separator')}{match.group('leading')}"
+            f"{placeholder}{match.group('trailing')}"
+        ),
+        content,
+    )
+    return content, replaced or bare_replacement_count > 0
 
 
 def placeholderize_skill_content_with_blocks(
