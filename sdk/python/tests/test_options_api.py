@@ -35,6 +35,9 @@ def test_options_are_public_typed_dicts():
 
 
 def test_core_options_are_explicit_without_legacy_kwargs():
+    async_add_resource_parameters = inspect.signature(AsyncHTTPClient.add_resource).parameters
+    sync_add_resource_parameters = inspect.signature(SyncHTTPClient.add_resource).parameters
+
     assert inspect.Parameter.VAR_KEYWORD not in {
         parameter.kind for parameter in inspect.signature(AsyncHTTPClient.add_resource).parameters.values()
     }
@@ -43,6 +46,12 @@ def test_core_options_are_explicit_without_legacy_kwargs():
     }
 
     assert "to" not in AddResourceOptions.__optional_keys__
+    assert "reason" in AddResourceOptions.__optional_keys__
+    assert "instruction" in AddResourceOptions.__optional_keys__
+    assert "reason" not in async_add_resource_parameters
+    assert "instruction" not in async_add_resource_parameters
+    assert "reason" not in sync_add_resource_parameters
+    assert "instruction" not in sync_add_resource_parameters
     assert "limit" not in FindOptions.__optional_keys__
     assert "wait" not in WriteOptions.__optional_keys__
 
@@ -83,16 +92,18 @@ async def test_core_methods_accept_positional_parameters_and_options():
 
 
 @pytest.mark.asyncio
-async def test_core_resource_and_retrieval_fields_remain_flattened():
+async def test_core_resource_and_retrieval_fields_use_options_for_advanced_fields():
     client, post = _client()
 
     await client.add_resource(
         "https://example.com/guide.md",
         to="viking://resources/docs",
-        reason="import guide",
-        instruction="extract API references",
         wait=True,
         timeout=60,
+        options={
+            "reason": "import guide",
+            "instruction": "extract API references",
+        },
     )
     await client.find(
         "authentication",

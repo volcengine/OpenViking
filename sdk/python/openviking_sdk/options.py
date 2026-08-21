@@ -58,6 +58,8 @@ class SearchContextOptions(_ExtraOptions, total=False):
 
 
 class AddResourceOptions(_ExtraOptions, total=False):
+    reason: str
+    instruction: str
     create_parent: bool
     strict: bool
     ignore_dirs: str

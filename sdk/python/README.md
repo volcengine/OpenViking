@@ -231,9 +231,9 @@ client.initialize()
 result = client.add_resource(
     path="/path/to/notes.md",
     to="viking://resources/demo-notes",
-    reason="knowledge import",
     wait=True,
     options={
+        "reason": "knowledge import",
     },
 )
 print(result)
@@ -282,7 +282,7 @@ print(result)
 ### Core Parameters and Options
 
 Frequently used fields are explicit parameters. For readability, prefer named
-arguments such as `to`, `reason`, and `wait` with `add_resource`; `target_uri`
+arguments such as `to` and `wait` with `add_resource`; `target_uri`
 and `limit` with retrieval; and `role`, `content`, and `parts` with
 `add_message`. Positional calls remain supported.
 

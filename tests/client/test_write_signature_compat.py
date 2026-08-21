@@ -10,7 +10,7 @@ from openviking_sdk.client import (
 
 def test_async_http_client_core_methods_allow_positional_options():
     inspect.signature(AsyncHTTPClient.add_resource).bind_partial(
-        object(), "source.md", "viking://resources/", None, "import", True, 60, {}
+        object(), "source.md", "viking://resources/", None, True, 60, {}
     )
     inspect.signature(AsyncHTTPClient.find).bind_partial(
         object(), "query", "viking://resources/", 5, {"level": [1]}
@@ -24,22 +24,10 @@ def test_async_http_client_core_methods_allow_positional_options():
     inspect.signature(AsyncHTTPClient.add_message).bind_partial(
         object(), "session-1", "user", "hello", None, {}
     )
-    inspect.signature(AsyncHTTPClient.add_resource).bind_partial(
-        object(),
-        "source.md",
-        "viking://resources/",
-        None,
-        "import",
-        "extract",
-        True,
-        60,
-        {},
-    )
-
 
 def test_sync_http_client_core_methods_allow_positional_options():
     inspect.signature(SyncHTTPClient.add_resource).bind_partial(
-        object(), "source.md", "viking://resources/", None, "import", True, 60, {}
+        object(), "source.md", "viking://resources/", None, True, 60, {}
     )
     inspect.signature(SyncHTTPClient.find).bind_partial(
         object(), "query", "viking://resources/", 5, {"level": [1]}

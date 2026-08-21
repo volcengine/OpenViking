@@ -228,9 +228,9 @@ client.initialize()
 result = client.add_resource(
     path="/path/to/notes.md",
     to="viking://resources/demo-notes",
-    reason="knowledge import",
     wait=True,
     options={
+        "reason": "knowledge import",
     },
 )
 print(result)
@@ -278,7 +278,7 @@ print(result)
 ### 高频参数与 Options
 
 高频字段使用显式参数。为保证可读性，推荐使用参数名，例如 `add_resource` 的
-`to`、`reason`、`wait`，检索的 `target_uri`、`limit`，以及 `add_message` 的
+`to`、`wait`，检索的 `target_uri`、`limit`，以及 `add_message` 的
 `role`、`content`、`parts`；位置参数调用仍然支持。
 
 进阶字段统一放入带类型提示的 `options` 字典，例如 `processing_mode`、检索
